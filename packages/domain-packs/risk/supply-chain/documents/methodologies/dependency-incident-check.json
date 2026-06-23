@@ -1,0 +1,11 @@
+{
+  "ref_id": "methodology:supply_chain:dependency-incident-check",
+  "type": "methodology",
+  "description": "When a dependency appears risky, find exposure and mitigation path.",
+  "body": "Steps: identify installed version; locate usage; inspect advisories; decide update, pin, remove, or isolate.\n\nDerived from local skill survey outputs under /Users/xiuranli/code/agent/skill, especially reviewed canonical rules, coverage reports, and trusted local skill notes. Paraphrased into domain-pack seed form.\n\nSource rule: this is a generalized, paraphrased seed from local skill survey material; apply only with current repository evidence and more specific pack precedence. Use when software supply-chain risk work touches lockfile deltas, registry provenance, install scripts, dependency ownership, licenses, and build artifacts. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: follow the ordered review, edit, and validation sequence; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include lockfile review, package metadata checks, reproducible install output, license scan evidence, and CI artifact comparison. Risk boundary: escalate or stop when the task involves untrusted install scripts, typosquatting, broad upgrades, license surprises, and unverifiable generated artifacts, missing owner evidence, or live external state.",
+  "domain": "supply_chain",
+  "scope_hint": "risk.supply-chain:methodologies",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:risk.supply-chain:skill_survey",
+  "pack_id": "risk.supply-chain"
+}

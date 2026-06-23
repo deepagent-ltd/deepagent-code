@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:rlang:pin-dependencies-with-renv",
+  "type": "strategy",
+  "title": "Pin dependencies with renv",
+  "description": "Lock every package version in a project library so an analysis reproduces on another machine.",
+  "body": "Use when an R analysis must run the same later or elsewhere. Do not rely on whatever package versions happen to be installed globally — a CRAN update can change defaults or results between runs. Actions: initialize renv per project, snapshot to write renv.lock pinning each version, and restore on other machines from the lockfile. Validation signals include renv.lock listing every dependency with an exact version and a clean restore reproducing the result. Risk boundary: an unpinned package makes results non-reproducible — treat a missing lockfile entry as a reproducibility defect before sharing.",
+  "domain": "r_lang",
+  "scope_hint": "code.r:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.r",
+  "pack_id": "code.r"
+}

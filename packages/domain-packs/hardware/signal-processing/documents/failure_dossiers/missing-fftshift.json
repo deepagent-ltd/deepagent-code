@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure_dossier:sigproc:missing-fftshift",
+  "type": "failure_dossier",
+  "description": "Spectrum appears mirrored or DC-centered wrong because the zero-frequency bin was never shifted to the display center.",
+  "body": "Failure mode: a magnitude spectrum is plotted directly from FFT output so the zero-frequency bin sits at index zero and negative frequencies wrap to the top, making the plot look mirrored. Detection signals: a large component at both the first and last bins, symmetry about the array midpoint instead of about zero, and peaks at unexpected mirrored locations. Do not interpret bin positions as physical frequencies until the spectrum is shifted. Safer fallback: apply an fftshift before plotting or measuring, and map bin indices through the signed-frequency convention.",
+  "domain": "signal_processing",
+  "scope_hint": "hardware.signal-processing:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.signal-processing:human_authored",
+  "pack_id": "hardware.signal-processing"
+}

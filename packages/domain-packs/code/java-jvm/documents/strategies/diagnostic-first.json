@@ -1,0 +1,11 @@
+{
+  "ref_id": "strategy:java_jvm:diagnostic-first",
+  "type": "strategy",
+  "description": "In Java/JVM, read the first javac error or the root-cause stack-trace frame in your package before making speculative edits.",
+  "body": "In Java/JVM, the toolchain already points at the real problem, so the first javac error or the root-cause stack-trace frame in your package should guide the edit rather than a guess. Use when javac at the configured --release with -Xlint warnings or SpotBugs, Error Prone, and Checkstyle reports reports an error or warning. Do not start editing before reading the diagnostic, and avoid changing code you have not confirmed is implicated. Actions: read the first actionable diagnostic and the owned frame, inspect that location, make the smallest fix, then rerun the module's JUnit suite on the affected classpath. Validation signals include the resolved diagnostic, a passing focused test, and no new warnings from SpotBugs, Error Prone, and Checkstyle reports. Risk boundary: if the diagnostic exposes a deeper design fault, escalate rather than papering over it.",
+  "domain": "java_jvm",
+  "scope_hint": "code.java-jvm:strategies",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.java-jvm:skill_survey",
+  "pack_id": "code.java-jvm"
+}

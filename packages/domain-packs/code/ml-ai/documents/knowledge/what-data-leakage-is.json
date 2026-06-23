@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:mlai:what-data-leakage-is",
+  "type": "knowledge",
+  "title": "How data leakage inflates metrics",
+  "description": "Leakage is any information from outside the training fold reaching the model, making offline metrics far better than production reality.",
+  "body": "Use when an offline metric looks too good or production underperforms validation. Leakage forms include preprocessing fit before the split, features computed using the future or the target, duplicate rows across splits, and time-series shuffled instead of split chronologically. Do not trust a metric without auditing how each feature and transform was produced. Actions: trace each feature's provenance, split temporally when time matters, and deduplicate across folds. Validation signals include a metric that survives a strict temporal/group split. Risk boundary: leakage is the most common cause of models that pass offline and fail live; treat a suspiciously high score as guilty until audited.",
+  "domain": "ml",
+  "scope_hint": "code.ml-ai:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.ml-ai",
+  "pack_id": "code.ml-ai"
+}

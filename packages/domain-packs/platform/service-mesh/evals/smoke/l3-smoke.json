@@ -1,0 +1,71 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "platform.service-mesh",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "service_mesh",
+      "istio",
+      "linkerd",
+      "traffic_policy",
+      "sidecar"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "L3 smoke for platform.service-mesh: sidecar injection, VirtualService DestinationRule traffic management, mTLS, retries timeouts circuit breaking, canary traffic split, golden signals, mesh overhead"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "render a fragment shader"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "retrieval_query": "service mesh istio linkerd sidecar injection virtualservice destinationrule mtls retry timeout circuit breaker canary traffic split golden signals",
+  "expected_pack_id": "platform.service-mesh",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "platform.service-mesh L3 validation smoke",
+    "signals": [
+      "Injected pods show two containers and the proxy config dump lists the expected listeners and clusters",
+      "A traffic split sends the configured percentage to the canary subset, confirmed by per-subset request metrics",
+      "mTLS STRICT mode rejects plaintext calls and accepts mesh-internal calls with the issued workload certificates",
+      "An injected 5xx triggers the configured retry/circuit-breaker and the caller sees the outlier host ejected"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "platform.service-mesh diagnosis smoke",
+    "signals": [
+      "Requests bypass mesh policy because the sidecar was not injected (namespace label or annotation missing)",
+      "A VirtualService route never matches because host/gateway/port fields don't line up with the DestinationRule subsets",
+      "mTLS connection failures traced to a PeerAuthentication STRICT mode without a matching DestinationRule trafficPolicy tls mode",
+      "Retries amplify load during an outage because retry budget/timeout interplay was not bounded",
+      "Latency regression attributed to per-hop proxy overhead and excessive telemetry rather than the application"
+    ]
+  },
+  "source_refs": [
+    "istio-docs:traffic-management-routing-rules",
+    "istio-docs:mutual-tls-and-peer-authentication"
+  ]
+}

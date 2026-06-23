@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:net:retry-with-backoff-and-jitter",
+  "type": "strategy",
+  "title": "Retry transient failures with capped backoff and jitter",
+  "description": "Retry only retryable errors a bounded number of times with exponential backoff and randomized jitter to avoid synchronized storms.",
+  "body": "Use when a call can fail transiently (timeouts, 503, connection reset). Do not retry immediately in a tight loop or retry non-retryable errors (4xx like 400/401/404), and do not let many clients retry in lockstep. Actions: classify errors as retryable or not, cap the attempt count and total time, use exponential backoff with full jitter, and respect Retry-After when present. Validation signals include a test showing bounded attempts, growing randomized delays, and no retry on a 400. Risk boundary: unbounded or un-jittered retries can amplify an outage into a thundering herd; combine with a circuit breaker and escalate if a dependency is failing widely.",
+  "domain": "networking",
+  "scope_hint": "code.networking:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.networking",
+  "pack_id": "code.networking"
+}

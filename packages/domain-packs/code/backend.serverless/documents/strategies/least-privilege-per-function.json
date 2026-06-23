@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:sls:least-privilege-per-function",
+  "type": "strategy",
+  "title": "Scope IAM to one function's needs",
+  "description": "Give each function its own execution role with only the permissions that handler uses, never a shared wildcard role.",
+  "body": "Use when a function accesses cloud resources (tables, queues, buckets, secrets). Do not attach a broad shared role or wildcard actions/resources, and do not reuse one admin role across functions. Actions: create a dedicated execution role per function, grant only the specific actions on the specific resource ARNs it touches, and add deny-by-default. Validation signals include an IAM policy with no wildcards in action or resource and the function still passing its tests. Risk boundary: an over-permissioned function becomes a lateral-movement foothold if compromised; wildcard permissions on a function are a security finding requiring tightening.",
+  "domain": "serverless",
+  "scope_hint": "code.backend.serverless:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.serverless",
+  "pack_id": "code.backend.serverless"
+}

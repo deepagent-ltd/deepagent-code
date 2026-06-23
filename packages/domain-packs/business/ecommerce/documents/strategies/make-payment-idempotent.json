@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:ecom:make-payment-idempotent",
+  "type": "strategy",
+  "title": "Make payment submission idempotent",
+  "description": "Key each payment attempt by an idempotency token so retries and double-clicks charge exactly once.",
+  "body": "Use when submitting a payment that may be retried by the client, a proxy, or a network timeout. Do not treat each request as a fresh charge — a retried or double-clicked submission then charges the customer twice. Actions: generate an idempotency key per logical attempt, record it before calling the processor, and return the original result on a repeat key. Validation signals include a duplicate request producing one charge and one order. Risk boundary: money movement is advisory here and defers to business.finance under a human gate — never auto-retry a charge without an idempotency key and approval.",
+  "domain": "ecommerce",
+  "scope_hint": "business.ecommerce:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:business.ecommerce",
+  "pack_id": "business.ecommerce"
+}

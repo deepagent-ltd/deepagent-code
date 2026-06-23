@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:python:bare-except-swallows-errors",
+  "type": "failure_dossier",
+  "description": "A bare `except:` or `except Exception` with no handling that hides real bugs, including KeyboardInterrupt and SystemExit.",
+  "body": "Failure mode: a broad except catches everything and silently continues (or only logs), so genuine failures, typos in attribute names, and even Ctrl-C are swallowed and the program limps along in a corrupt state. Detection signals: errors vanish with no traceback; the process ignores KeyboardInterrupt; ruff/flake8 flags E722 bare-except. Do not use a bare `except:` to make code 'robust'. Safer fallback: catch the narrowest exception type you can actually handle, re-raise or chain with `raise ... from e` otherwise, and never catch BaseException; add a test asserting the unexpected error propagates.",
+  "domain": "python",
+  "scope_hint": "code.python:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.python:human_authored",
+  "pack_id": "code.python"
+}

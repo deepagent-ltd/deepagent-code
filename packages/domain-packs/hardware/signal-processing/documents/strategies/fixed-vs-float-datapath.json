@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:sigproc:fixed-vs-float-datapath",
+  "type": "strategy",
+  "title": "Decide fixed-point versus floating-point datapath",
+  "description": "Prototype the chain in floating point, then move to fixed point only where power or area demands it and the error budget allows.",
+  "body": "Use when targeting an embedded DSP or FPGA where floating-point units are scarce. Do not begin in fixed point, because debugging quantization and algorithm bugs together obscures both. Actions: build the floating reference first, inspect the dynamic range at each stage, then assign integer word lengths from the measured headroom. Validation signals include the fixed-point output tracking the float reference within the budgeted SNR and no saturation events in a long stimulus run. Risk boundary: if measured quantization noise approaches the signal of interest, escalate to a wider word length rather than accepting silent degradation.",
+  "domain": "signal_processing",
+  "scope_hint": "hardware.signal-processing:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.signal-processing",
+  "pack_id": "hardware.signal-processing"
+}

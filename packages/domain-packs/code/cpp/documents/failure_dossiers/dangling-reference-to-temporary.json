@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:cpp:dangling-reference-to-temporary",
+  "type": "failure_dossier",
+  "description": "Binding a reference or string_view/span to a temporary that is destroyed at the end of the full expression.",
+  "body": "Failure mode: code stores a const ref, std::string_view, or std::span pointing into a temporary (e.g. a function returning by value or a std::string built inline), so after the statement the view dangles and reads freed memory. Detection signals: ASan reports stack/heap-use-after-scope; garbage or intermittent data from a view member; -Wdangling-gsl warns. Do not store a view/reference into an unnamed temporary. Safer fallback: keep the owning object alive (name it in an outer scope or store the owned value), or copy into an owned type, then confirm with an ASan run that the use-after-scope is gone.",
+  "domain": "cpp",
+  "scope_hint": "code.cpp:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.cpp:human_authored",
+  "pack_id": "code.cpp"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:mon:alertmanager-routing-model",
+  "type": "knowledge",
+  "title": "Alertmanager routing model",
+  "description": "Alertmanager groups, routes, inhibits, and silences alerts via a routing tree keyed on labels.",
+  "body": "Use when reasoning about how alerts become notifications. Alertmanager takes alerts from Prometheus and applies a routing tree: it groups by labels, routes to receivers by matchers, inhibits alerts when a higher-priority one is active, and honors silences. Do not assume one alert equals one page — grouping and inhibition shape the output. Actions: design the routing tree and inhibition rules deliberately. Validation signals include grouped notifications per incident. Risk boundary: a broad inhibition or silence can suppress an unrelated real alert, so scope matchers tightly.",
+  "domain": "monitoring",
+  "scope_hint": "platform.monitoring:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.monitoring",
+  "pack_id": "platform.monitoring"
+}

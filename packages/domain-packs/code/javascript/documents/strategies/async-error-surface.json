@@ -1,0 +1,11 @@
+{
+  "ref_id": "strategy:runtime_javascript:async-error-surface",
+  "type": "strategy",
+  "description": "Make async failures observable at the awaited boundary instead of hidden in callbacks or detached promises.",
+  "body": "Use for promise chains, async handlers, event callbacks, timers, and fire-and-forget work. Avoid broad catch blocks that swallow errors or convert them into silent undefined values. Return or await promises at ownership boundaries, attach rejection handling for detached work, and keep error shape compatible with callers. Verify with negative tests or runner output that rejection paths fail as expected. Risk increases in servers, CLIs, and test hooks where unhandled rejection policy differs by Node version. Use when JavaScript Runtime and Tooling work touches repository conventions, toolchain files, changed symbols, validation commands, and runtime output. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: choose the smallest direction that preserves the domain contract; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include package-local checks, focused tests, build output, smoke runs, and command logs. Risk boundary: escalate or stop when the task involves broad rewrites, generated-file drift, stale assumptions, and unvalidated behavior changes, missing owner evidence, or live external state.",
+  "domain": "javascript",
+  "scope_hint": "code.javascript:strategys",
+  "evidence_strength": "medium",
+  "provenance_tag": "code.javascript:seed:official_docs_and_common_tooling_behavior:paraphrased",
+  "pack_id": "code.javascript"
+}

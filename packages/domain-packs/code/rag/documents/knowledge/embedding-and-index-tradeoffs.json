@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:rag:embedding-and-index-tradeoffs",
+  "type": "knowledge",
+  "title": "Embedding and index tradeoffs",
+  "description": "Dense embeddings capture semantics but miss exact terms; sparse/keyword matches exact tokens; index types trade recall for speed.",
+  "body": "Use when choosing how to represent and search the corpus. Dense embeddings retrieve by semantic similarity but can miss rare exact terms (names, codes); sparse/keyword retrieval matches exact tokens but misses paraphrase; hybrid combines both. Index types differ too: flat is exact but slow at scale, HNSW and IVF approximate for speed at some recall cost. Do not assume dense alone covers exact-match queries, and avoid an approximate index without measuring its recall. Actions: pick dense, sparse, or hybrid by query type and tune the index to the latency/recall budget. Validation signals include a recall comparison across configurations on a labeled set. Risk boundary: an approximate index silently lowering recall starves grounding; measure recall, do not assume it.",
+  "domain": "rag",
+  "scope_hint": "code.rag:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.rag",
+  "pack_id": "code.rag"
+}

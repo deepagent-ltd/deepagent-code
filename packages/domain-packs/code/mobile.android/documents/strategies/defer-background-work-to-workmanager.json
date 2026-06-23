@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:android:defer-background-work-to-workmanager",
+  "type": "strategy",
+  "title": "Defer guaranteed work to WorkManager",
+  "description": "Schedule deferrable, guaranteed background work through WorkManager with constraints, not raw threads that die with the process.",
+  "body": "Use when work must complete eventually even across process death or reboot (sync, upload, cleanup). Do not start a bare thread or rely on the process staying alive, and do not use WorkManager for immediate in-screen UI work. Actions: enqueue a Worker with constraints (network, charging) and a backoff policy, make the work idempotent and resumable, and let the system run it when conditions are met. Validation signals include work completing after the app is backgrounded/killed and surviving a reboot. Risk boundary: a raw thread or one-off coroutine for guaranteed work is lost the moment the OS kills the process, silently dropping the task — durable background work needs a system-managed scheduler, while misusing it for foreground-immediate work adds latency.",
+  "domain": "android",
+  "scope_hint": "code.mobile.android:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.mobile.android",
+  "pack_id": "code.mobile.android"
+}

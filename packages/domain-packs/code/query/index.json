@@ -1,0 +1,502 @@
+[
+  {
+    "ref_id": "knowledge:query:model-text-is-not-data",
+    "type": "knowledge",
+    "title": "Model Text Is Not Data",
+    "summary": "Model-generated text is not a data source for deterministic facts; only tool, runner, filesystem, git, SQL, or log output can verify facts.",
+    "domains": [
+      "query",
+      "code",
+      "deterministic",
+      "read_only"
+    ],
+    "triggers": [
+      "model",
+      "generated",
+      "text",
+      "data",
+      "source",
+      "deterministic",
+      "facts",
+      "only"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.query"
+  },
+  {
+    "ref_id": "knowledge:query:query-results-need-scope",
+    "type": "knowledge",
+    "title": "Query Results Need Scope",
+    "summary": "A deterministic result is only valid for the path, query, command, filters, branch, and time at which it was collected.",
+    "domains": [
+      "query",
+      "code",
+      "deterministic",
+      "read_only"
+    ],
+    "triggers": [
+      "deterministic",
+      "result",
+      "only",
+      "valid",
+      "path",
+      "query",
+      "command",
+      "filters"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.query"
+  },
+  {
+    "ref_id": "knowledge:query:read-only-query-is-not-mutation",
+    "type": "knowledge",
+    "title": "Read Only Query Is Not Mutation",
+    "summary": "SELECT, status, diff, list, and read operations inspect state; write, update, delete, migrate, deploy, and drop operations mutate state and require different gates.",
+    "domains": [
+      "query",
+      "code",
+      "deterministic",
+      "read_only"
+    ],
+    "triggers": [
+      "select",
+      "status",
+      "diff",
+      "list",
+      "read",
+      "operations",
+      "inspect",
+      "state"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.query"
+  },
+  {
+    "ref_id": "knowledge:query:read-only-query-tasks-require-source-backed-scope-and-no-working-tre",
+    "type": "knowledge",
+    "title": "Read Only Query Tasks Require Source Backed Scope And No Working Tre",
+    "summary": "Read-only query tasks require source-backed scope and no working-tree mutation",
+    "domains": [
+      "query",
+      "code",
+      "deterministic",
+      "read_only"
+    ],
+    "triggers": [
+      "read",
+      "only",
+      "query",
+      "tasks",
+      "require",
+      "source",
+      "backed",
+      "scope"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.query"
+  },
+  {
+    "ref_id": "methodology:query:artifact-backed-answer",
+    "type": "methodology",
+    "title": "Artifact Backed Answer",
+    "summary": "Answer deterministic facts from a bounded result summary or artifact ref; if no result exists, mark the answer unverified.",
+    "domains": [
+      "query",
+      "code",
+      "deterministic",
+      "read_only"
+    ],
+    "triggers": [
+      "answer",
+      "deterministic",
+      "facts",
+      "from",
+      "bounded",
+      "result",
+      "summary",
+      "artifact"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.query"
+  },
+  {
+    "ref_id": "methodology:query:count-list-filter-check",
+    "type": "methodology",
+    "title": "Count List Filter Check",
+    "summary": "When counting or listing, preserve the filter and path/query used, and do not extend the answer beyond that scope.",
+    "domains": [
+      "query",
+      "code",
+      "deterministic",
+      "read_only"
+    ],
+    "triggers": [
+      "when",
+      "counting",
+      "listing",
+      "preserve",
+      "filter",
+      "path",
+      "query",
+      "used"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.query"
+  },
+  {
+    "ref_id": "methodology:query:plan-execute-summarize",
+    "type": "methodology",
+    "title": "Plan Execute Summarize",
+    "summary": "For deterministic tasks, identify the read-only source, execute the tool, summarize bounded results, then answer from the result.",
+    "domains": [
+      "query",
+      "code",
+      "deterministic",
+      "read_only"
+    ],
+    "triggers": [
+      "deterministic",
+      "tasks",
+      "identify",
+      "read",
+      "only",
+      "source",
+      "execute",
+      "tool"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.query"
+  },
+  {
+    "ref_id": "skill:query:answer-with-source-ref",
+    "type": "skill",
+    "title": "Answer With Source Ref",
+    "summary": "When answering deterministic facts, cite the result source or say the answer is unverified if no source exists.",
+    "domains": [
+      "query",
+      "code",
+      "deterministic",
+      "read_only"
+    ],
+    "triggers": [
+      "when",
+      "answering",
+      "deterministic",
+      "facts",
+      "cite",
+      "result",
+      "source",
+      "answer"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.query"
+  },
+  {
+    "ref_id": "skill:query:extract-count-from-tool-output",
+    "type": "skill",
+    "title": "Extract Count From Tool Output",
+    "summary": "Extract counts from explicit tool output and preserve the command, query, path, or filter that produced the count.",
+    "domains": [
+      "query",
+      "code",
+      "deterministic",
+      "read_only"
+    ],
+    "triggers": [
+      "extract",
+      "counts",
+      "from",
+      "explicit",
+      "tool",
+      "output",
+      "preserve",
+      "command"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.query"
+  },
+  {
+    "ref_id": "skill:query:run-readonly-query",
+    "type": "skill",
+    "title": "Run Readonly Query",
+    "summary": "Use read-only tools for status, count, list, inspect, SELECT, log, config, and file queries without mutating state.",
+    "domains": [
+      "query",
+      "code",
+      "deterministic",
+      "read_only"
+    ],
+    "triggers": [
+      "read",
+      "only",
+      "tools",
+      "status",
+      "count",
+      "list",
+      "inspect",
+      "select"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.query"
+  },
+  {
+    "ref_id": "skill:query:summarize-query-result",
+    "type": "skill",
+    "title": "Summarize Query Result",
+    "summary": "Summarize large deterministic outputs into a bounded result summary without injecting raw logs or large tables into prompt context.",
+    "domains": [
+      "query",
+      "code",
+      "deterministic",
+      "read_only"
+    ],
+    "triggers": [
+      "summarize",
+      "large",
+      "deterministic",
+      "outputs",
+      "into",
+      "bounded",
+      "result",
+      "summary"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.query"
+  },
+  {
+    "ref_id": "strategy:query:do-not-answer-count-from-memory",
+    "type": "strategy",
+    "title": "Do Not Answer Count From Memory",
+    "summary": "Counts and enumerations require fresh tool evidence; stale context or model memory is not a data source.",
+    "domains": [
+      "query",
+      "code",
+      "deterministic",
+      "read_only"
+    ],
+    "triggers": [
+      "counts",
+      "enumerations",
+      "require",
+      "fresh",
+      "tool",
+      "evidence",
+      "stale",
+      "context"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.query"
+  },
+  {
+    "ref_id": "strategy:query:preserve-result-scope",
+    "type": "strategy",
+    "title": "Preserve Result Scope",
+    "summary": "Report the scope, filter, command, query, or path behind a deterministic result so the answer is not overgeneralized.",
+    "domains": [
+      "query",
+      "code",
+      "deterministic",
+      "read_only"
+    ],
+    "triggers": [
+      "report",
+      "scope",
+      "filter",
+      "command",
+      "query",
+      "path",
+      "behind",
+      "deterministic"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.query"
+  },
+  {
+    "ref_id": "strategy:query:read-only-first",
+    "type": "strategy",
+    "title": "Read Only First",
+    "summary": "A query, count, list, inspect, or status request defaults to read-only tools and must not drift into edits or mutations.",
+    "domains": [
+      "query",
+      "code",
+      "deterministic",
+      "read_only"
+    ],
+    "triggers": [
+      "query",
+      "count",
+      "list",
+      "inspect",
+      "status",
+      "request",
+      "defaults",
+      "read"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.query"
+  },
+  {
+    "ref_id": "strategy:query:tool-result-is-authority",
+    "type": "strategy",
+    "title": "Tool Result Is Authority",
+    "summary": "For deterministic query tasks, facts come from tool or runner results; model text remains a claim until tied to evidence.",
+    "domains": [
+      "query",
+      "code",
+      "deterministic",
+      "read_only"
+    ],
+    "triggers": [
+      "deterministic",
+      "query",
+      "tasks",
+      "facts",
+      "come",
+      "from",
+      "tool",
+      "runner"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.query"
+  },
+  {
+    "ref_id": "strategy:query:use-exact-source-evidence-before-answering-deterministic-query-count",
+    "type": "strategy",
+    "title": "Use Exact Source Evidence Before Answering Deterministic Query Count",
+    "summary": "Use exact source evidence before answering deterministic query counts",
+    "domains": [
+      "query",
+      "code",
+      "deterministic",
+      "read_only"
+    ],
+    "triggers": [
+      "exact",
+      "source",
+      "evidence",
+      "before",
+      "answering",
+      "deterministic",
+      "query",
+      "counts"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.query"
+  }
+]

@@ -1,0 +1,47 @@
+{
+  "schema_version": "domain_pack.v1",
+  "id": "hardware.pcb",
+  "name": "PCB Layout & Signal Integrity",
+  "version": "1.0.0",
+  "scope": "system",
+  "risk": "medium",
+  "domains": [
+    "pcb",
+    "layout",
+    "signal_integrity",
+    "emi",
+    "thermal"
+  ],
+  "provides": [
+    "knowledge",
+    "strategy",
+    "methodology",
+    "skill",
+    "diagnosis",
+    "validation"
+  ],
+  "depends_on": [
+    "hardware.protocols",
+    "hardware.hdl"
+  ],
+  "conflicts_with": [],
+  "knowledge_store": "document_store",
+  "allowed_tools": [
+    "read",
+    "shell:test"
+  ],
+  "denied_tools": [
+    "shell:deploy-production"
+  ],
+  "data_policy": {
+    "sensitivity": [
+      "source_code"
+    ],
+    "default_admission": "summary_only",
+    "secret_policy": "deny"
+  },
+  "detector": {
+    "inline": "profile.code_domains.some(d=>['pcb','layout','signal_integrity','emi','thermal'].includes(d)) || profile.repo_signals.some(s=>/\\b(pcb layout|trace impedance|signal integrity|ground plane|decoupling cap|differential pair|via stitch|emi|erc|drc)\\b/i.test(s)) ? 0.9 : 0",
+    "threshold": 0.5
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:dist:non-deterministic-apply-diverges-replicas",
+  "type": "failure_dossier",
+  "description": "A state machine whose apply step depends on local time, RNG, or map iteration order produces different state on each replica from the same log.",
+  "body": "Failure mode: replicas agree on the ordered log but the apply function reads wall-clock time, a local random source, or iterates an unordered map, so identical inputs yield different committed state across nodes. Detection signals: replicas diverge at the same commit index despite identical logs; divergence is non-reproducible and correlates with timing; the apply path calls now(), rand(), or unordered iteration. Do not allow any non-deterministic input into the apply path. Safer fallback: make apply pure and deterministic by threading required time/randomness through the log entry itself, use ordered iteration, and add a cross-replica state-hash check at committed indices to catch divergence early.",
+  "domain": "distributed",
+  "scope_hint": "code.distributed:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.distributed:human_authored",
+  "pack_id": "code.distributed"
+}

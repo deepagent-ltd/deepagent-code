@@ -1,0 +1,45 @@
+{
+  "schema_version": "domain_pack.v1",
+  "id": "code.frontend.performance",
+  "name": "Frontend Performance",
+  "version": "1.0.0",
+  "scope": "system",
+  "risk": "medium",
+  "domains": [
+    "frontend",
+    "performance",
+    "browser"
+  ],
+  "provides": [
+    "knowledge",
+    "strategy",
+    "methodology",
+    "skill",
+    "diagnosis",
+    "validation"
+  ],
+  "depends_on": [
+    "code.frontend.web",
+    "code.performance"
+  ],
+  "conflicts_with": [],
+  "knowledge_store": "document_store",
+  "allowed_tools": [
+    "read",
+    "shell:test"
+  ],
+  "denied_tools": [
+    "shell:deploy-production"
+  ],
+  "data_policy": {
+    "sensitivity": [
+      "source_code"
+    ],
+    "default_admission": "summary_only",
+    "secret_policy": "deny"
+  },
+  "detector": {
+    "inline": "profile.code_domains.includes('frontend_performance') || profile.repo_signals.some(s=>/\\b(lighthouse|web vitals|core web vitals|bundle size|hydration cost|long task|layout shift|render profiling)\\b/i.test(s)) ? 0.86 : 0",
+    "threshold": 0.5
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:edge:edge-runtime-constraints",
+  "type": "knowledge",
+  "title": "Edge runtime constraints",
+  "description": "Edge function runtimes cap CPU time and memory, forbid persistent filesystem, and limit bundle size — unlike origin servers.",
+  "body": "Use when authoring or porting edge functions. Cloudflare Workers and Lambda@Edge run in constrained sandboxes: hard CPU-ms ceilings, small memory, no writable disk, restricted APIs, and bundle-size limits. Do not assume a full Node/POSIX environment. Actions: keep functions short and stateless, avoid large dependencies, and use edge KV/cache for state rather than disk. Validation signals include staying under the documented CPU/memory caps. Risk boundary: exceeding limits kills the request globally, so heavy work belongs at the origin.",
+  "domain": "cdn",
+  "scope_hint": "platform.cdn-edge:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.cdn-edge",
+  "pack_id": "platform.cdn-edge"
+}

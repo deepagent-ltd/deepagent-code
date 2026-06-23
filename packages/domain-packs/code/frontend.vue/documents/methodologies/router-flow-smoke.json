@@ -1,0 +1,11 @@
+{
+  "ref_id": "methodology:frontend_vue:router-flow-smoke",
+  "type": "methodology",
+  "description": "Validate route-driven Vue behavior with params, query, guards, and browser history.",
+  "body": "Use when editing router config, route links, guards, or components reading route state. Avoid testing only initial render. Steps: navigate by link and direct URL, check params/query decoding, guard redirects, and back/forward behavior. Verify no console/navigation failures. Risk boundary: auth guard behavior needs security review if access changes. Use when Vue Frontend Engineering work touches visible UI behavior, browser console output, DOM state, assets, viewport behavior, and interaction evidence. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: follow the ordered review, edit, and validation sequence; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include browser smoke, component tests, viewport screenshots, console/network checks, and accessibility assertions. Risk boundary: escalate or stop when the task involves visual regressions, inaccessible interaction, hydration mismatch, and browser-only failures, missing owner evidence, or live external state.",
+  "domain": "frontend_vue",
+  "scope_hint": "code.frontend.vue:methodologys",
+  "evidence_strength": "medium",
+  "provenance_tag": "code.frontend.vue:seed:vue_nuxt_pinia_vite_docs:paraphrased",
+  "pack_id": "code.frontend.vue"
+}

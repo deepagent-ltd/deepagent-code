@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:glci:protect-and-mask-variables",
+  "type": "strategy",
+  "title": "Protect and mask sensitive CI/CD variables",
+  "description": "Mark secret variables protected so only protected branches/tags see them, and masked so they are scrubbed from logs.",
+  "body": "Use when adding a credential or token as a CI/CD variable, or reviewing variable settings. Do not store a secret as an unprotected, unmasked variable, because unprotected variables are exposed to pipelines on any branch (including attacker MR branches) and unmasked values print in job logs. Actions: set the variable Protected so it is available only to protected branches/tags, set it Masked so GitLab scrubs it from logs, and scope it to the right environment. Validation signals include the secret being unavailable on a feature-branch pipeline and absent from job log output. Risk boundary: exposing a protected variable to an unprotected branch or a fork MR is a secret-exposure finding requiring a human gate.",
+  "domain": "ci_gitlab",
+  "scope_hint": "platform.ci-gitlab:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.ci-gitlab",
+  "pack_id": "platform.ci-gitlab"
+}

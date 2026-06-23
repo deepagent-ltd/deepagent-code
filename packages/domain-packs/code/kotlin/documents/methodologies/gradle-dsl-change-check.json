@@ -1,0 +1,11 @@
+{
+  "ref_id": "methodology:kotlin:gradle-dsl-change-check",
+  "type": "methodology",
+  "description": "Validate build script edits through configuration and the affected task, not syntax reading alone.",
+  "body": "Use when modifying build.gradle.kts, settings.gradle.kts, version catalogs, convention plugins, KSP/KAPT, or Android plugin config. Do not assume Kotlin DSL compiles because IDE syntax looks valid. Steps: inspect existing conventions, patch DSL, run Gradle help/tasks or affected compile task, then run tests. Verify no configuration errors. Risk boundary is CI-only plugin resolution or configuration cache issues. Use when Kotlin Engineering work touches repository conventions, toolchain files, changed symbols, validation commands, and runtime output. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: follow the ordered review, edit, and validation sequence; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include package-local checks, focused tests, build output, smoke runs, and command logs. Risk boundary: escalate or stop when the task involves broad rewrites, generated-file drift, stale assumptions, and unvalidated behavior changes, missing owner evidence, or live external state.",
+  "domain": "kotlin",
+  "scope_hint": "code.kotlin:methodologys",
+  "evidence_strength": "medium",
+  "provenance_tag": "code.kotlin:seed:kotlin_gradle_coroutines_docs:paraphrased",
+  "pack_id": "code.kotlin"
+}

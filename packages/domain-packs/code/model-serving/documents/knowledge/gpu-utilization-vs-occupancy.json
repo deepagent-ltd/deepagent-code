@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:serving:gpu-utilization-vs-occupancy",
+  "type": "knowledge",
+  "title": "GPU utilization and where time goes",
+  "description": "Reported GPU utilization can be high while the accelerator stalls on data transfer or small kernels; throughput, not the utilization number, is the truth.",
+  "body": "Use when a GPU shows busy but throughput is low. The utilization metric often means 'a kernel was running', not 'the compute units were saturated' — a memory-bound or transfer-bound workload reports high utilization while stalling. Small per-request kernels and host-device copies waste cycles. Do not trust the utilization percent as efficiency. Actions: batch to enlarge kernels, keep data on-device, and profile to find memory-bound stalls. Validation signals include throughput rising when batches grow and copies shrink. Risk boundary: chasing the utilization number instead of throughput optimizes the wrong thing; measure actual requests-per-second.",
+  "domain": "model_serving",
+  "scope_hint": "code.model-serving:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.model-serving",
+  "pack_id": "code.model-serving"
+}

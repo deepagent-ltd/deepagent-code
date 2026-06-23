@@ -1,0 +1,452 @@
+[
+  {
+    "ref_id": "strategy:scala:make-matches-exhaustive",
+    "type": "strategy",
+    "title": "Make pattern matches exhaustive over sealed types",
+    "summary": "Match on sealed traits/enums so the compiler enforces every case, turning missing branches into compile errors not MatchErrors.",
+    "domains": [
+      "scala",
+      "sbt",
+      "jvm"
+    ],
+    "triggers": [
+      "pattern",
+      "match",
+      "exhaustive",
+      "sealed",
+      "enum",
+      "case"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.scala"
+  },
+  {
+    "ref_id": "strategy:scala:keep-effects-as-values",
+    "type": "strategy",
+    "title": "Keep effects as values, run them at the edge",
+    "summary": "Describe side effects as IO/effect values and compose them, deferring execution to a single run at the program boundary.",
+    "domains": [
+      "scala",
+      "sbt",
+      "jvm"
+    ],
+    "triggers": [
+      "effect",
+      "io",
+      "lazy",
+      "referential",
+      "compose",
+      "edge"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.scala"
+  },
+  {
+    "ref_id": "strategy:scala:never-construct-future-eagerly-in-pure-code",
+    "type": "strategy",
+    "title": "Control Future eagerness and execution context",
+    "summary": "A Future runs as soon as it is created, so defer or wrap it and pass the ExecutionContext deliberately.",
+    "domains": [
+      "scala",
+      "sbt",
+      "jvm"
+    ],
+    "triggers": [
+      "future",
+      "eager",
+      "executioncontext",
+      "async",
+      "thread",
+      "blocking"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.scala"
+  },
+  {
+    "ref_id": "strategy:scala:scope-implicits-narrowly",
+    "type": "strategy",
+    "title": "Scope implicits/givens narrowly and unambiguously",
+    "summary": "Place implicit instances where resolution is predictable and avoid importing competing instances into one scope.",
+    "domains": [
+      "scala",
+      "sbt",
+      "jvm"
+    ],
+    "triggers": [
+      "implicit",
+      "given",
+      "resolution",
+      "scope",
+      "ambiguous",
+      "typeclass"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.scala"
+  },
+  {
+    "ref_id": "strategy:scala:model-with-the-type-system",
+    "type": "strategy",
+    "title": "Make illegal states unrepresentable in types",
+    "summary": "Use ADTs, opaque types, and refined types so invalid data cannot be constructed rather than validated late.",
+    "domains": [
+      "scala",
+      "sbt",
+      "jvm"
+    ],
+    "triggers": [
+      "type",
+      "adt",
+      "opaque",
+      "invariant",
+      "modeling",
+      "sealed"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.scala"
+  },
+  {
+    "ref_id": "strategy:scala:pin-the-sbt-build",
+    "type": "strategy",
+    "title": "Pin the sbt build for reproducibility",
+    "summary": "Fix sbt, Scala, plugin, and dependency versions so the build resolves identically across machines and CI.",
+    "domains": [
+      "scala",
+      "sbt",
+      "jvm"
+    ],
+    "triggers": [
+      "sbt",
+      "build",
+      "version",
+      "pin",
+      "reproducible",
+      "plugin"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.scala"
+  },
+  {
+    "ref_id": "methodology:scala:set-up-sbt-and-tests",
+    "type": "methodology",
+    "title": "Set up the sbt build and test task",
+    "summary": "Structure build.sbt, wire ScalaTest/MUnit, and run the project through sbt's task model.",
+    "domains": [
+      "scala",
+      "sbt",
+      "jvm"
+    ],
+    "triggers": [
+      "sbt",
+      "test",
+      "scalatest",
+      "munit",
+      "build",
+      "task"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.scala"
+  },
+  {
+    "ref_id": "methodology:scala:compose-an-effect-program",
+    "type": "methodology",
+    "title": "Compose an effect program and run it once",
+    "summary": "Build a side-effecting workflow as composed IO/Future values and execute it only at the boundary.",
+    "domains": [
+      "scala",
+      "sbt",
+      "jvm"
+    ],
+    "triggers": [
+      "effect",
+      "io",
+      "compose",
+      "for-comprehension",
+      "run",
+      "boundary"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.scala"
+  },
+  {
+    "ref_id": "methodology:scala:debug-an-implicit-resolution",
+    "type": "methodology",
+    "title": "Debug an implicit/given resolution",
+    "summary": "Find which instance the compiler selected and why, then fix ambiguity or a missing instance.",
+    "domains": [
+      "scala",
+      "sbt",
+      "jvm"
+    ],
+    "triggers": [
+      "implicit",
+      "given",
+      "resolution",
+      "ambiguous",
+      "debug",
+      "scope"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.scala"
+  },
+  {
+    "ref_id": "methodology:scala:tame-a-blocking-call-in-async",
+    "type": "methodology",
+    "title": "Tame a blocking call inside async code",
+    "summary": "Locate blocking work running on a compute pool and move it onto a bounded blocking executor.",
+    "domains": [
+      "scala",
+      "sbt",
+      "jvm"
+    ],
+    "triggers": [
+      "blocking",
+      "async",
+      "executioncontext",
+      "threadpool",
+      "starvation",
+      "future"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.scala"
+  },
+  {
+    "ref_id": "knowledge:scala:implicit-resolution-model",
+    "type": "knowledge",
+    "title": "How implicit/given resolution works",
+    "summary": "The compiler searches lexical scope then implicit scope (companion objects) for a unique matching instance, failing on ambiguity.",
+    "domains": [
+      "scala",
+      "sbt",
+      "jvm"
+    ],
+    "triggers": [
+      "implicit",
+      "given",
+      "resolution",
+      "companion",
+      "scope",
+      "priority"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.scala"
+  },
+  {
+    "ref_id": "knowledge:scala:future-vs-io-semantics",
+    "type": "knowledge",
+    "title": "Future vs IO semantics",
+    "summary": "scala.concurrent.Future is eager and memoized; Cats-Effect IO is a lazy, referentially transparent description run on demand.",
+    "domains": [
+      "scala",
+      "sbt",
+      "jvm"
+    ],
+    "triggers": [
+      "future",
+      "io",
+      "eager",
+      "lazy",
+      "referential",
+      "cancellation"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.scala"
+  },
+  {
+    "ref_id": "knowledge:scala:variance-and-type-classes",
+    "type": "knowledge",
+    "title": "Variance and type classes",
+    "summary": "Declaration-site variance (+A/-A) governs subtyping of generic types, and type classes add ad-hoc polymorphism via implicits.",
+    "domains": [
+      "scala",
+      "sbt",
+      "jvm"
+    ],
+    "triggers": [
+      "variance",
+      "covariant",
+      "contravariant",
+      "typeclass",
+      "subtyping",
+      "generic"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.scala"
+  },
+  {
+    "ref_id": "knowledge:scala:for-comprehension-desugaring",
+    "type": "knowledge",
+    "title": "For-comprehensions desugar to map/flatMap",
+    "summary": "A for-comprehension is sugar over flatMap/map/withFilter, so its behavior depends entirely on the monad it runs over.",
+    "domains": [
+      "scala",
+      "sbt",
+      "jvm"
+    ],
+    "triggers": [
+      "for-comprehension",
+      "flatmap",
+      "map",
+      "monad",
+      "desugar",
+      "option"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.scala"
+  },
+  {
+    "ref_id": "skill:scala:review-match-and-effect-safety",
+    "type": "skill",
+    "title": "Review match exhaustiveness and effect safety",
+    "summary": "Read Scala code and report non-exhaustive matches, eager effects, and blocking calls on compute pools.",
+    "domains": [
+      "scala",
+      "sbt",
+      "jvm"
+    ],
+    "triggers": [
+      "review",
+      "match",
+      "exhaustive",
+      "effect",
+      "blocking",
+      "inspect"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.scala"
+  },
+  {
+    "ref_id": "skill:scala:audit-implicit-and-build-determinism",
+    "type": "skill",
+    "title": "Audit implicit scope and build determinism",
+    "summary": "Check for ambiguous/surprising implicits and unpinned sbt/dependency versions.",
+    "domains": [
+      "scala",
+      "sbt",
+      "jvm"
+    ],
+    "triggers": [
+      "audit",
+      "implicit",
+      "given",
+      "sbt",
+      "version",
+      "determinism"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.scala"
+  }
+]

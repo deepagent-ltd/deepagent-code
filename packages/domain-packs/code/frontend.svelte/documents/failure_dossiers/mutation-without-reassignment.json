@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:svelte:mutation-without-reassignment",
+  "type": "failure_dossier",
+  "description": "An array or object is mutated in place in legacy mode, so the compiler never re-renders and the UI goes stale.",
+  "body": "Failure mode: code calls arr.push(x) or sets obj.field in a legacy (non-runes) component and expects the view to update, but Svelte's compiler only reacts to assignments, so the DOM never refreshes. Detection signals: the value visibly changes in logs but the template is stale; the update uses push/splice/sort or nested field assignment with no following reassignment; the component is not in runes mode. Do not rely on in-place mutation to drive reactivity in legacy components. Safer fallback: reassign (arr = [...arr, x]) so the dependency is tracked, or migrate the component to $state whose proxy tracks deep mutation, and add a render test.",
+  "domain": "svelte",
+  "scope_hint": "code.frontend.svelte:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.frontend.svelte:human_authored",
+  "pack_id": "code.frontend.svelte"
+}

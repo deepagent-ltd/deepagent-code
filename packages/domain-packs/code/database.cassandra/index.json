@@ -1,0 +1,451 @@
+[
+  {
+    "ref_id": "strategy:cass:model-one-table-per-query",
+    "type": "strategy",
+    "title": "Model one table per query pattern",
+    "summary": "Design tables from the read queries you must serve, denormalizing data into each table rather than normalizing.",
+    "domains": [
+      "cassandra",
+      "wide_column",
+      "scylladb",
+      "cql"
+    ],
+    "triggers": [
+      "query first",
+      "one table per query",
+      "denormalization",
+      "data modelling",
+      "no joins"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.cassandra"
+  },
+  {
+    "ref_id": "strategy:cass:choose-a-partition-key-that-bounds-size",
+    "type": "strategy",
+    "title": "Choose a partition key that bounds partition size",
+    "summary": "Pick a partition key with enough cardinality that each partition stays small and traffic spreads across the ring.",
+    "domains": [
+      "cassandra",
+      "wide_column",
+      "scylladb",
+      "cql"
+    ],
+    "triggers": [
+      "partition key",
+      "cardinality",
+      "partition size",
+      "bucketing",
+      "hotspot"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.cassandra"
+  },
+  {
+    "ref_id": "strategy:cass:use-clustering-columns-for-order-and-range",
+    "type": "strategy",
+    "title": "Use clustering columns for on-disk order and range scans",
+    "summary": "Define clustering columns to control row order within a partition and to serve efficient range slices.",
+    "domains": [
+      "cassandra",
+      "wide_column",
+      "scylladb",
+      "cql"
+    ],
+    "triggers": [
+      "clustering column",
+      "clustering order",
+      "range query",
+      "time series",
+      "row order"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.cassandra"
+  },
+  {
+    "ref_id": "strategy:cass:tune-consistency-per-operation",
+    "type": "strategy",
+    "title": "Tune consistency level per operation",
+    "summary": "Pick ONE, QUORUM, or ALL per query so that read and write consistency together guarantee the freshness you need.",
+    "domains": [
+      "cassandra",
+      "wide_column",
+      "scylladb",
+      "cql"
+    ],
+    "triggers": [
+      "consistency level",
+      "quorum",
+      "local_quorum",
+      "r plus w",
+      "read after write"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.cassandra"
+  },
+  {
+    "ref_id": "strategy:cass:avoid-lwt-on-hot-paths",
+    "type": "strategy",
+    "title": "Avoid lightweight transactions on hot paths",
+    "summary": "LWT compare-and-set runs a Paxos round per operation, so reserve it for rare contention rather than routine writes.",
+    "domains": [
+      "cassandra",
+      "wide_column",
+      "scylladb",
+      "cql"
+    ],
+    "triggers": [
+      "lwt",
+      "lightweight transaction",
+      "paxos",
+      "compare and set",
+      "if not exists"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.cassandra"
+  },
+  {
+    "ref_id": "strategy:cass:manage-tombstones-with-the-right-compaction",
+    "type": "strategy",
+    "title": "Manage tombstones with the right compaction strategy",
+    "summary": "Match compaction strategy to the workload and avoid delete-heavy patterns that accumulate tombstones.",
+    "domains": [
+      "cassandra",
+      "wide_column",
+      "scylladb",
+      "cql"
+    ],
+    "triggers": [
+      "tombstone",
+      "compaction strategy",
+      "twcs",
+      "gc_grace_seconds",
+      "ttl",
+      "delete pattern"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.cassandra"
+  },
+  {
+    "ref_id": "methodology:cass:design-a-schema-from-access-patterns",
+    "type": "methodology",
+    "title": "Design a schema from access patterns",
+    "summary": "Drive the table design from a written list of queries, mapping each to a partition key and clustering order.",
+    "domains": [
+      "cassandra",
+      "wide_column",
+      "scylladb",
+      "cql"
+    ],
+    "triggers": [
+      "access patterns",
+      "schema design",
+      "query to table",
+      "fan-out writes",
+      "backfill"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.cassandra"
+  },
+  {
+    "ref_id": "methodology:cass:diagnose-a-wide-partition",
+    "type": "methodology",
+    "title": "Diagnose a wide or hot partition",
+    "summary": "Use nodetool to find partitions exceeding size thresholds and trace the queries concentrating on them.",
+    "domains": [
+      "cassandra",
+      "wide_column",
+      "scylladb",
+      "cql"
+    ],
+    "triggers": [
+      "wide partition",
+      "nodetool tablehistograms",
+      "hot partition",
+      "rebucketing",
+      "partition size"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.cassandra"
+  },
+  {
+    "ref_id": "methodology:cass:run-repair-to-maintain-consistency",
+    "type": "methodology",
+    "title": "Run repair to maintain replica consistency",
+    "summary": "Schedule anti-entropy repair within gc_grace_seconds so deleted data does not resurrect across replicas.",
+    "domains": [
+      "cassandra",
+      "wide_column",
+      "scylladb",
+      "cql"
+    ],
+    "triggers": [
+      "nodetool repair",
+      "anti-entropy",
+      "gc_grace_seconds",
+      "zombie data",
+      "reaper"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.cassandra"
+  },
+  {
+    "ref_id": "methodology:cass:plan-multi-datacenter-replication",
+    "type": "methodology",
+    "title": "Plan multi-datacenter replication",
+    "summary": "Use NetworkTopologyStrategy with per-DC replication and LOCAL_QUORUM to keep reads local and survive a DC outage.",
+    "domains": [
+      "cassandra",
+      "wide_column",
+      "scylladb",
+      "cql"
+    ],
+    "triggers": [
+      "multi datacenter",
+      "networktopologystrategy",
+      "local_quorum",
+      "dc aware",
+      "disaster recovery"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.cassandra"
+  },
+  {
+    "ref_id": "knowledge:cass:tombstones-explained",
+    "type": "knowledge",
+    "title": "Why deletes create tombstones",
+    "summary": "A delete writes a tombstone marker rather than removing data, and reads must skip tombstones until compaction reclaims them.",
+    "domains": [
+      "cassandra",
+      "wide_column",
+      "scylladb",
+      "cql"
+    ],
+    "triggers": [
+      "tombstone explained",
+      "delete marker",
+      "gc_grace",
+      "compaction reclaim"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.cassandra"
+  },
+  {
+    "ref_id": "knowledge:cass:no-secondary-index-substitute-for-key-design",
+    "type": "knowledge",
+    "title": "Secondary indexes do not replace partition key design",
+    "summary": "Native secondary indexes scan all nodes and scale poorly, so they are not a substitute for modelling the right table.",
+    "domains": [
+      "cassandra",
+      "wide_column",
+      "scylladb",
+      "cql"
+    ],
+    "triggers": [
+      "secondary index",
+      "scatter gather",
+      "high cardinality",
+      "materialized view",
+      "lookup table"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.cassandra"
+  },
+  {
+    "ref_id": "knowledge:cass:last-write-wins-conflict-resolution",
+    "type": "knowledge",
+    "title": "Last-write-wins and clock skew",
+    "summary": "Cassandra resolves conflicting writes by cell timestamp, so clock skew across clients can silently drop the newer write.",
+    "domains": [
+      "cassandra",
+      "wide_column",
+      "scylladb",
+      "cql"
+    ],
+    "triggers": [
+      "last write wins",
+      "cell timestamp",
+      "clock skew",
+      "conflict resolution",
+      "ntp"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.cassandra"
+  },
+  {
+    "ref_id": "knowledge:cass:hinted-handoff-and-write-availability",
+    "type": "knowledge",
+    "title": "How hinted handoff preserves write availability",
+    "summary": "When a replica is down, the coordinator stores a hint and replays it later, which keeps writes available but is not a consistency guarantee.",
+    "domains": [
+      "cassandra",
+      "wide_column",
+      "scylladb",
+      "cql"
+    ],
+    "triggers": [
+      "hinted handoff",
+      "write availability",
+      "hint replay",
+      "node down"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.cassandra"
+  },
+  {
+    "ref_id": "skill:cass:write-a-cql-table-for-a-query",
+    "type": "skill",
+    "title": "Write a CQL table for a specific query",
+    "summary": "Translate a read query into a CREATE TABLE with the right PRIMARY KEY partition and clustering structure.",
+    "domains": [
+      "cassandra",
+      "wide_column",
+      "scylladb",
+      "cql"
+    ],
+    "triggers": [
+      "cql table",
+      "primary key",
+      "create table",
+      "clustering order by",
+      "partition design"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.cassandra"
+  },
+  {
+    "ref_id": "skill:cass:batch-writes-correctly",
+    "type": "skill",
+    "title": "Use BATCH only for single-partition atomicity",
+    "summary": "Scope a CQL BATCH to one partition for atomicity; never use multi-partition batches as a performance shortcut.",
+    "domains": [
+      "cassandra",
+      "wide_column",
+      "scylladb",
+      "cql"
+    ],
+    "triggers": [
+      "cql batch",
+      "single partition",
+      "atomic write",
+      "coordinator pressure",
+      "async writes"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.cassandra"
+  }
+]

@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:llm:stream-with-incremental-validation",
+  "type": "strategy",
+  "title": "Stream output without trusting partials",
+  "description": "Streaming responses are accumulated and only validated/acted on at well-defined boundaries, never on incomplete fragments.",
+  "body": "Use when consuming a streamed completion for display or parsing. Do not parse or act on a partial JSON fragment, and avoid treating a mid-stream stop as a complete answer. Actions: accumulate chunks, render display text progressively but defer structured parsing until the stream signals completion, and detect truncation (length finish-reason) explicitly. Validation signals include a test that a truncated stream is flagged rather than parsed and that structured parsing runs only on the final buffer. Risk boundary: acting on a truncated structured payload can corrupt downstream state; treat truncation as a failure, not a partial success.",
+  "domain": "llm_app",
+  "scope_hint": "code.llm-app:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.llm-app",
+  "pack_id": "code.llm-app"
+}

@@ -1,0 +1,79 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "business.healthcare",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "business"
+    ],
+    "business_domains": [
+      "healthcare"
+    ],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [
+      "pii",
+      "personal_data"
+    ],
+    "risk_markers": [
+      "privacy"
+    ],
+    "repo_signals": [
+      "L3 smoke for business.healthcare: PII/PHI/PCI, consent, retention, redaction, exports, deletion paths, audit logs, and external processors"
+    ],
+    "round_signals": [
+      "l3_validation_smoke"
+    ],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "round_signals": [],
+    "user_overrides": [],
+    "repo_signals": [
+      "optimize a Postgres query plan and add a covering index"
+    ]
+  },
+  "retrieval_query": "PHI handling consent audit logging clinical safety human gate de-identification",
+  "expected_pack_id": "business.healthcare",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "healthcare engineering safety L3 validation smoke",
+    "signals": [
+      "data inventory",
+      "redaction tests",
+      "retention checks",
+      "export/delete tests",
+      "access-control evidence",
+      "and human approval where regulated"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "healthcare engineering safety diagnosis smoke",
+    "signals": [
+      "separate data discovery",
+      "storage",
+      "logging",
+      "prompt/artifact",
+      "processor",
+      "and user-rights paths"
+    ]
+  },
+  "source_refs": [
+    "source:official-tooling-docs:paraphrased",
+    "source:engineering-practice:paraphrased"
+  ]
+}

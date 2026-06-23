@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:tsdb:bound-tag-cardinality",
+  "type": "strategy",
+  "title": "Bound tag/label cardinality",
+  "description": "Keep tag value sets bounded; never put unbounded identifiers (user id, request id) in tags/labels.",
+  "body": "Use when designing the measurement/series schema. Do not tag points with high-cardinality values (user id, UUID, full URL) — each unique combination creates a new series and cardinality grows multiplicatively. Actions: keep ids in fields (not tags), enumerate expected tag values, and inspect series cardinality after a representative load. Validation signals include total series count staying within the engine's tested budget and stable memory. Risk boundary: cardinality explosion degrades the whole instance, not one query — treat an unbounded tag as a blocking design defect.",
+  "domain": "timeseries_db",
+  "scope_hint": "code.database.timeseries:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.timeseries",
+  "pack_id": "code.database.timeseries"
+}

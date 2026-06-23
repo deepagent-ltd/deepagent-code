@@ -1,0 +1,1092 @@
+[
+  {
+    "ref_id": "knowledge:privacy:aggregation-can-still-identify",
+    "type": "knowledge",
+    "title": "Aggregation Can Still Identify",
+    "summary": "Aggregated statistics can identify people when groups are small, unique, or combined with other attributes.",
+    "domains": [
+      "privacy",
+      "pii",
+      "phi",
+      "pci",
+      "data_minimization"
+    ],
+    "triggers": [
+      "aggregated",
+      "statistics",
+      "identify",
+      "people",
+      "when",
+      "groups",
+      "small",
+      "unique"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.privacy"
+  },
+  {
+    "ref_id": "knowledge:privacy:consent-needs-specificity",
+    "type": "knowledge",
+    "title": "Consent Needs Specificity",
+    "summary": "A user preference or consent for one purpose should not be assumed to cover unrelated analytics, sharing, marketing, or model training.",
+    "domains": [
+      "privacy",
+      "pii",
+      "phi",
+      "pci",
+      "data_minimization"
+    ],
+    "triggers": [
+      "user",
+      "preference",
+      "consent",
+      "purpose",
+      "should",
+      "assumed",
+      "cover",
+      "unrelated"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.privacy"
+  },
+  {
+    "ref_id": "knowledge:privacy:data-export-should-be-complete-and-safe",
+    "type": "knowledge",
+    "title": "Data Export Should Be Complete And Safe",
+    "summary": "User data export paths must balance completeness with redaction of other users, secrets, internal abuse signals, and system-only metadata.",
+    "domains": [
+      "privacy",
+      "pii",
+      "phi",
+      "pci",
+      "data_minimization"
+    ],
+    "triggers": [
+      "user",
+      "data",
+      "export",
+      "paths",
+      "must",
+      "balance",
+      "completeness",
+      "with"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.privacy"
+  },
+  {
+    "ref_id": "knowledge:privacy:deletion-must-include-derived-copies",
+    "type": "knowledge",
+    "title": "Deletion Must Include Derived Copies",
+    "summary": "Deleting a primary row is incomplete if caches, indexes, analytics, exports, embeddings, or denormalized records keep personal data.",
+    "domains": [
+      "privacy",
+      "pii",
+      "phi",
+      "pci",
+      "data_minimization"
+    ],
+    "triggers": [
+      "deleting",
+      "primary",
+      "incomplete",
+      "caches",
+      "indexes",
+      "analytics",
+      "exports",
+      "embeddings"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.privacy"
+  },
+  {
+    "ref_id": "knowledge:privacy:external-processors-change-risk",
+    "type": "knowledge",
+    "title": "External Processors Change Risk",
+    "summary": "Sending personal data to third-party APIs, analytics, storage, support, or model providers changes exposure, retention, and deletion assumptions.",
+    "domains": [
+      "privacy",
+      "pii",
+      "phi",
+      "pci",
+      "data_minimization"
+    ],
+    "triggers": [
+      "sending",
+      "personal",
+      "data",
+      "third",
+      "party",
+      "apis",
+      "analytics",
+      "storage"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.privacy"
+  },
+  {
+    "ref_id": "knowledge:privacy:hashing-is-not-anonymization",
+    "type": "knowledge",
+    "title": "Hashing Is Not Anonymization",
+    "summary": "Hashing identifiers can remain linkable or reversible by dictionary attack, especially for emails, phones, IDs, and small domains.",
+    "domains": [
+      "privacy",
+      "pii",
+      "phi",
+      "pci",
+      "data_minimization"
+    ],
+    "triggers": [
+      "hashing",
+      "identifiers",
+      "remain",
+      "linkable",
+      "reversible",
+      "dictionary",
+      "attack",
+      "especially"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.privacy"
+  },
+  {
+    "ref_id": "knowledge:privacy:logs-are-processing",
+    "type": "knowledge",
+    "title": "Logs Are Processing",
+    "summary": "Logging personal data is collection, processing, retention, and possible disclosure, not a harmless debug side effect.",
+    "domains": [
+      "privacy",
+      "pii",
+      "phi",
+      "pci",
+      "data_minimization"
+    ],
+    "triggers": [
+      "logging",
+      "personal",
+      "data",
+      "collection",
+      "processing",
+      "retention",
+      "possible",
+      "disclosure"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.privacy"
+  },
+  {
+    "ref_id": "knowledge:privacy:personal-data-includes-indirect-identifiers",
+    "type": "knowledge",
+    "title": "Personal Data Includes Indirect Identifiers",
+    "summary": "Email, phone, account IDs, device IDs, IP addresses, location, unique event IDs, and combinations of attributes can identify a person.",
+    "domains": [
+      "pii",
+      "privacy",
+      "phi",
+      "pci",
+      "data_minimization"
+    ],
+    "triggers": [
+      "email",
+      "phone",
+      "account",
+      "device",
+      "addresses",
+      "location",
+      "unique",
+      "event"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.privacy"
+  },
+  {
+    "ref_id": "knowledge:privacy:phi-and-pci-need-stricter-handling",
+    "type": "knowledge",
+    "title": "Phi And Pci Need Stricter Handling",
+    "summary": "Health information tied to a person and payment card data require stricter engineering controls than ordinary profile fields.",
+    "domains": [
+      "phi",
+      "privacy",
+      "pii",
+      "pci",
+      "data_minimization"
+    ],
+    "triggers": [
+      "health",
+      "information",
+      "tied",
+      "person",
+      "payment",
+      "card",
+      "data",
+      "require"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.privacy"
+  },
+  {
+    "ref_id": "knowledge:privacy:privacy-tests-need-negative-sinks",
+    "type": "knowledge",
+    "title": "Privacy Tests Need Negative Sinks",
+    "summary": "A privacy test should assert that disallowed personal data is absent from logs, exports, analytics, prompts, or deletion remnants.",
+    "domains": [
+      "privacy",
+      "pii",
+      "phi",
+      "pci",
+      "data_minimization"
+    ],
+    "triggers": [
+      "privacy",
+      "test",
+      "should",
+      "assert",
+      "that",
+      "disallowed",
+      "personal",
+      "data"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.privacy"
+  },
+  {
+    "ref_id": "knowledge:privacy:prompts-and-artifacts-are-data-sinks",
+    "type": "knowledge",
+    "title": "Prompts And Artifacts Are Data Sinks",
+    "summary": "Model prompts, tool transcripts, screenshots, generated fixtures, and exported artifacts can persist personal data outside the application boundary.",
+    "domains": [
+      "privacy",
+      "pii",
+      "phi",
+      "pci",
+      "data_minimization"
+    ],
+    "triggers": [
+      "model",
+      "prompts",
+      "tool",
+      "transcripts",
+      "screenshots",
+      "generated",
+      "fixtures",
+      "exported"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.privacy"
+  },
+  {
+    "ref_id": "knowledge:privacy:redaction-must-handle-structure",
+    "type": "knowledge",
+    "title": "Redaction Must Handle Structure",
+    "summary": "Redaction that only masks top-level strings misses nested objects, arrays, serialized JSON, headers, query strings, and exception causes.",
+    "domains": [
+      "privacy",
+      "pii",
+      "phi",
+      "pci",
+      "data_minimization"
+    ],
+    "triggers": [
+      "redaction",
+      "that",
+      "only",
+      "masks",
+      "level",
+      "strings",
+      "misses",
+      "nested"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.privacy"
+  },
+  {
+    "ref_id": "knowledge:privacy:retention-needs-trigger-and-owner",
+    "type": "knowledge",
+    "title": "Retention Needs Trigger And Owner",
+    "summary": "A retention rule is actionable only when it has a start point, expiry trigger, owner, cleanup mechanism, and evidence path.",
+    "domains": [
+      "privacy",
+      "pii",
+      "phi",
+      "pci",
+      "data_minimization"
+    ],
+    "triggers": [
+      "retention",
+      "rule",
+      "actionable",
+      "only",
+      "when",
+      "start",
+      "point",
+      "expiry"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.privacy"
+  },
+  {
+    "ref_id": "methodology:privacy:data-flow-map",
+    "type": "methodology",
+    "title": "Data Flow Map",
+    "summary": "Trace personal data from collection through storage, processing, logs, sharing, export, deletion, and backups.",
+    "domains": [
+      "privacy",
+      "pii",
+      "phi",
+      "pci",
+      "data_minimization"
+    ],
+    "triggers": [
+      "trace",
+      "personal",
+      "data",
+      "from",
+      "collection",
+      "through",
+      "storage",
+      "processing"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.privacy"
+  },
+  {
+    "ref_id": "methodology:privacy:deletion-propagation-check",
+    "type": "methodology",
+    "title": "Deletion Propagation Check",
+    "summary": "Check deletion across primary records, derived tables, caches, indexes, queues, analytics, exports, and external processors.",
+    "domains": [
+      "privacy",
+      "pii",
+      "phi",
+      "pci",
+      "data_minimization"
+    ],
+    "triggers": [
+      "check",
+      "deletion",
+      "across",
+      "primary",
+      "records",
+      "derived",
+      "tables",
+      "caches"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.privacy"
+  },
+  {
+    "ref_id": "methodology:privacy:pii-phi-pci-classification-pass",
+    "type": "methodology",
+    "title": "Pii Phi Pci Classification Pass",
+    "summary": "Classify direct identifiers, indirect identifiers, sensitive attributes, health data, payment data, credentials, and derived identifiers before changing flows.",
+    "domains": [
+      "pii",
+      "privacy",
+      "phi",
+      "pci",
+      "data_minimization"
+    ],
+    "triggers": [
+      "classify",
+      "direct",
+      "identifiers",
+      "indirect",
+      "sensitive",
+      "attributes",
+      "health"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.privacy"
+  },
+  {
+    "ref_id": "methodology:privacy:privacy-release-gate",
+    "type": "methodology",
+    "title": "Privacy Release Gate",
+    "summary": "Before shipping privacy-impacting changes, confirm inventory, minimization, redaction, retention, user-rights impact, and human approval when required.",
+    "domains": [
+      "privacy",
+      "pii",
+      "phi",
+      "pci",
+      "data_minimization"
+    ],
+    "triggers": [
+      "before",
+      "shipping",
+      "privacy",
+      "impacting",
+      "changes",
+      "confirm",
+      "inventory",
+      "minimization"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.privacy"
+  },
+  {
+    "ref_id": "methodology:privacy:redaction-review",
+    "type": "methodology",
+    "title": "Redaction Review",
+    "summary": "Verify personal data is removed or transformed before logs, errors, telemetry, support bundles, prompts, and exports.",
+    "domains": [
+      "privacy",
+      "pii",
+      "phi",
+      "pci",
+      "data_minimization"
+    ],
+    "triggers": [
+      "verify",
+      "personal",
+      "data",
+      "removed",
+      "transformed",
+      "before",
+      "logs",
+      "errors"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.privacy"
+  },
+  {
+    "ref_id": "methodology:privacy:retention-and-expiry-check",
+    "type": "methodology",
+    "title": "Retention And Expiry Check",
+    "summary": "Verify personal data has an owner, purpose, retention period, deletion trigger, and observable cleanup evidence.",
+    "domains": [
+      "privacy",
+      "pii",
+      "phi",
+      "pci",
+      "data_minimization"
+    ],
+    "triggers": [
+      "verify",
+      "personal",
+      "data",
+      "owner",
+      "purpose",
+      "retention",
+      "period",
+      "deletion"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.privacy"
+  },
+  {
+    "ref_id": "skill:risk.privacy:pii-data-flow-audit",
+    "type": "skill",
+    "title": "Pii Data Flow Audit",
+    "summary": "Trace personal data through source, transformation, stores, logs, exports, deletion, and external processors.",
+    "domains": [
+      "pii",
+      "privacy",
+      "phi",
+      "pci",
+      "data_minimization"
+    ],
+    "triggers": [
+      "trace",
+      "personal",
+      "data",
+      "through",
+      "source",
+      "transformation",
+      "stores",
+      "logs"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.privacy"
+  },
+  {
+    "ref_id": "skill:risk.privacy:privacy-human-gate-escalation",
+    "type": "skill",
+    "title": "Privacy Human Gate Escalation",
+    "summary": "Prepare escalation for data exposure, regulated data, secondary use, retention ambiguity, or user-rights risk.",
+    "domains": [
+      "privacy",
+      "pii",
+      "phi",
+      "pci",
+      "data_minimization"
+    ],
+    "triggers": [
+      "prepare",
+      "escalation",
+      "data",
+      "exposure",
+      "regulated",
+      "secondary",
+      "retention"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.privacy"
+  },
+  {
+    "ref_id": "skill:risk.privacy:privacy-impact-triage",
+    "type": "skill",
+    "title": "Privacy Impact Triage",
+    "summary": "Classify data classes, sinks, purposes, retention, and human-gate requirements for a proposed change.",
+    "domains": [
+      "privacy",
+      "pii",
+      "phi",
+      "pci",
+      "data_minimization"
+    ],
+    "triggers": [
+      "classify",
+      "data",
+      "classes",
+      "sinks",
+      "purposes",
+      "retention",
+      "human",
+      "gate"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.privacy"
+  },
+  {
+    "ref_id": "skill:risk.privacy:redaction-fixture-review",
+    "type": "skill",
+    "title": "Redaction Fixture Review",
+    "summary": "Create or inspect synthetic fixtures that prove PII/PHI/PCI is absent from operational sinks.",
+    "domains": [
+      "privacy",
+      "pii",
+      "phi",
+      "pci",
+      "data_minimization"
+    ],
+    "triggers": [
+      "create",
+      "inspect",
+      "synthetic",
+      "fixtures",
+      "that",
+      "prove",
+      "absent",
+      "from"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.privacy"
+  },
+  {
+    "ref_id": "skill:risk.privacy:retention-delete-verification",
+    "type": "skill",
+    "title": "Retention Delete Verification",
+    "summary": "Plan and run focused checks for expiry and deletion propagation across primary and derived stores.",
+    "domains": [
+      "privacy",
+      "pii",
+      "phi",
+      "pci",
+      "data_minimization"
+    ],
+    "triggers": [
+      "plan",
+      "focused",
+      "checks",
+      "expiry",
+      "deletion",
+      "propagation",
+      "across",
+      "primary"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.privacy"
+  },
+  {
+    "ref_id": "strategy:privacy:consent-and-preference-preservation",
+    "type": "strategy",
+    "title": "Consent And Preference Preservation",
+    "summary": "Privacy-sensitive processing must respect existing consent, opt-out, regional, and account preferences instead of bypassing them for convenience.",
+    "domains": [
+      "privacy",
+      "pii",
+      "phi",
+      "pci",
+      "data_minimization"
+    ],
+    "triggers": [
+      "privacy",
+      "sensitive",
+      "processing",
+      "must",
+      "respect",
+      "existing",
+      "consent",
+      "regional"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.privacy"
+  },
+  {
+    "ref_id": "strategy:privacy:data-inventory-first",
+    "type": "strategy",
+    "title": "Data Inventory First",
+    "summary": "Identify personal-data fields, sources, stores, processors, logs, exports, and deletion paths before editing privacy-sensitive behavior.",
+    "domains": [
+      "privacy",
+      "pii",
+      "phi",
+      "pci",
+      "data_minimization"
+    ],
+    "triggers": [
+      "identify",
+      "personal",
+      "data",
+      "fields",
+      "sources",
+      "stores",
+      "processors",
+      "logs"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.privacy"
+  },
+  {
+    "ref_id": "strategy:privacy:export-delete-as-product-contract",
+    "type": "strategy",
+    "title": "Export Delete As Product Contract",
+    "summary": "Data export and deletion behavior must include primary, derived, cached, indexed, and external-copy boundaries.",
+    "domains": [
+      "privacy",
+      "pii",
+      "phi",
+      "pci",
+      "data_minimization"
+    ],
+    "triggers": [
+      "data",
+      "export",
+      "deletion",
+      "behavior",
+      "must",
+      "include",
+      "primary",
+      "derived"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.privacy"
+  },
+  {
+    "ref_id": "strategy:privacy:minimize-collection",
+    "type": "strategy",
+    "title": "Minimize Collection",
+    "summary": "Collect, persist, and transmit only personal data that is necessary for the stated product or operational purpose.",
+    "domains": [
+      "data_minimization",
+      "privacy",
+      "pii",
+      "phi",
+      "pci"
+    ],
+    "triggers": [
+      "collect",
+      "persist",
+      "transmit",
+      "only",
+      "personal",
+      "data",
+      "that",
+      "necessary"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.privacy"
+  },
+  {
+    "ref_id": "strategy:privacy:privacy-default-deny-for-new-sinks",
+    "type": "strategy",
+    "title": "Privacy Default Deny For New Sinks",
+    "summary": "New storage, analytics, export, logging, prompt, or third-party sinks for personal data are denied until purpose, minimization, retention, and review are clear.",
+    "domains": [
+      "privacy",
+      "pii",
+      "phi",
+      "pci",
+      "data_minimization"
+    ],
+    "triggers": [
+      "storage",
+      "analytics",
+      "export",
+      "logging",
+      "prompt",
+      "third",
+      "party",
+      "sinks"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.privacy"
+  },
+  {
+    "ref_id": "strategy:privacy:privacy-human-gate",
+    "type": "strategy",
+    "title": "Privacy Human Gate",
+    "summary": "Escalate ambiguous data class, regulated data, secondary use, cross-border sharing, or user-rights behavior.",
+    "domains": [
+      "privacy",
+      "pii",
+      "phi",
+      "pci",
+      "data_minimization"
+    ],
+    "triggers": [
+      "escalate",
+      "ambiguous",
+      "data",
+      "class",
+      "regulated",
+      "secondary",
+      "cross"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.privacy"
+  },
+  {
+    "ref_id": "strategy:privacy:privacy-preserving-debugging",
+    "type": "strategy",
+    "title": "Privacy Preserving Debugging",
+    "summary": "Debugging should use synthetic, minimized, redacted, or locally generated data instead of copying real personal data into tools or prompts.",
+    "domains": [
+      "privacy",
+      "pii",
+      "phi",
+      "pci",
+      "data_minimization"
+    ],
+    "triggers": [
+      "debugging",
+      "should",
+      "synthetic",
+      "minimized",
+      "redacted",
+      "locally",
+      "generated",
+      "data"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.privacy"
+  },
+  {
+    "ref_id": "strategy:privacy:purpose-limitation",
+    "type": "strategy",
+    "title": "Purpose Limitation",
+    "summary": "Do not reuse personal data for unrelated workflows without explicit review and evidence of user-facing purpose.",
+    "domains": [
+      "privacy",
+      "pii",
+      "phi",
+      "pci",
+      "data_minimization"
+    ],
+    "triggers": [
+      "reuse",
+      "personal",
+      "data",
+      "unrelated",
+      "workflows",
+      "without",
+      "explicit",
+      "review"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.privacy"
+  },
+  {
+    "ref_id": "strategy:privacy:redact-before-operational-sinks",
+    "type": "strategy",
+    "title": "Redact Before Operational Sinks",
+    "summary": "Logs, errors, traces, metrics labels, analytics, crash dumps, support bundles, and prompts must receive redacted data before emission.",
+    "domains": [
+      "privacy",
+      "pii",
+      "phi",
+      "pci",
+      "data_minimization"
+    ],
+    "triggers": [
+      "logs",
+      "errors",
+      "traces",
+      "metrics",
+      "labels",
+      "analytics",
+      "crash",
+      "dumps"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.privacy"
+  },
+  {
+    "ref_id": "strategy:privacy:retention-explicit",
+    "type": "strategy",
+    "title": "Retention Explicit",
+    "summary": "Personal data changes need a retention period, deletion trigger, backup/archive behavior, and audit evidence.",
+    "domains": [
+      "privacy",
+      "pii",
+      "phi",
+      "pci",
+      "data_minimization"
+    ],
+    "triggers": [
+      "personal",
+      "data",
+      "changes",
+      "need",
+      "retention",
+      "period",
+      "deletion",
+      "trigger"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.privacy"
+  }
+]

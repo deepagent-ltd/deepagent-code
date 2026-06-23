@@ -1,0 +1,11 @@
+{
+  "ref_id": "skill:frontend_vue:vue-component-browser-smoke",
+  "type": "skill",
+  "description": "Run or drive a browser smoke for changed Vue component states and console errors.",
+  "body": "Inputs: route/component, changed files, dev command. Actions: run existing build/test first, start dev server if required, load affected route, interact with changed controls, inspect console/network errors, and sample relevant viewport. Do not treat compile success as UI proof. Verification is visible state update and clean console. Risk boundary: use code.frontend.web for broader a11y/layout audits. Use when Vue Frontend Engineering work touches visible UI behavior, browser console output, DOM state, assets, viewport behavior, and interaction evidence. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: run the documented inspection and validation workflow; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include browser smoke, component tests, viewport screenshots, console/network checks, and accessibility assertions. Risk boundary: escalate or stop when the task involves visual regressions, inaccessible interaction, hydration mismatch, and browser-only failures, missing owner evidence, or live external state.",
+  "domain": "frontend_vue",
+  "scope_hint": "code.frontend.vue:skills",
+  "evidence_strength": "medium",
+  "provenance_tag": "code.frontend.vue:seed:vue_nuxt_pinia_vite_docs:paraphrased",
+  "pack_id": "code.frontend.vue"
+}

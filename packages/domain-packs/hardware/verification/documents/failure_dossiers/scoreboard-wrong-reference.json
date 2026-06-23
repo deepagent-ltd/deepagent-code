@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure_dossier:hwverif:scoreboard-wrong-reference",
+  "type": "failure_dossier",
+  "description": "Real design bugs slip through because the scoreboard's reference model encoded the same wrong assumption as the design.",
+  "body": "Failure mode: the reference model and the RTL were written from the same misreading of the spec, so the scoreboard compares against an equally wrong expectation and reports a match. Detection signals: clean scoreboard results contradicted by a spec review, a behavior both model and design get wrong, and failures appearing only when the reference is corrected. Do not trust scoreboard passes when the reference derives from the same source as the design. Safer fallback: derive the reference model independently from the specification and re-run, treating new mismatches as the real signal.",
+  "domain": "hw_verification",
+  "scope_hint": "hardware.verification:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.verification:human_authored",
+  "pack_id": "hardware.verification"
+}

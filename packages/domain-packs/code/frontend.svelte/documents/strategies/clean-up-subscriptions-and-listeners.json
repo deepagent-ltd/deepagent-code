@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:svelte:clean-up-subscriptions-and-listeners",
+  "type": "strategy",
+  "title": "Clean up manual subscriptions and listeners",
+  "description": "Auto-subscription via $store cleans itself up, but manual subscribe, timers, and listeners must be torn down.",
+  "body": "Use when you call store.subscribe manually, add an event listener, or start a timer in a component. Do not assume Svelte tears these down for you. Actions: prefer the $store auto-subscription which unsubscribes on destroy; for manual cases capture the returned unsubscribe and call it in onDestroy or an $effect cleanup return; remove listeners and clear intervals the same way. Validation signals include a test that destroying the component stops further callbacks and no leak/duplicate-subscription warning appears. Risk boundary: leaked subscriptions accumulate across navigations in a SvelteKit SPA and cause memory growth and duplicate side effects.",
+  "domain": "svelte",
+  "scope_hint": "code.frontend.svelte:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.frontend.svelte",
+  "pack_id": "code.frontend.svelte"
+}

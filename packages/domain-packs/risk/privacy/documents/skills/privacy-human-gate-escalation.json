@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:risk.privacy:privacy-human-gate-escalation",
+  "type": "skill",
+  "title": "Privacy Human Gate Escalation",
+  "description": "Prepare escalation for data exposure, regulated data, secondary use, retention ambiguity, or user-rights risk.",
+  "body": "Inputs: proposed change, data classes, sink list, validation evidence, and missing policy decisions. Use when automation cannot prove the change is conservative. Do not continue by assuming consent or legal basis. Procedure: state affected data, purpose, new exposure, evidence gap, safer alternative, and exact approval needed. Output: approval request or blocked finding. Validation signal: explicit human decision before implementation or release. Use when Privacy Risk Controls work touches personal-data classes, sinks, retention, consent, logs, prompts, and exports. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: run the documented inspection and validation workflow; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include data inventory, redaction tests, retention checks, export/delete tests, and approval evidence. Risk boundary: escalate or stop when the task involves PII disclosure, consent bypass, retention drift, and unapproved processor expansion, missing owner evidence, or live external state.",
+  "domain": "privacy",
+  "scope_hint": "risk.privacy:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.privacy",
+  "pack_id": "risk.privacy"
+}

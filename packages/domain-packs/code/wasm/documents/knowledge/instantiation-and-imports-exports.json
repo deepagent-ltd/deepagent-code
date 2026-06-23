@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:wasm:instantiation-and-imports-exports",
+  "type": "knowledge",
+  "title": "Module instantiation, imports, and exports",
+  "description": "A module declares imports it needs and exports it provides; instantiation binds an import object to it and returns callable exports.",
+  "body": "Use when loading a module or resolving an instantiation failure. A WASM module is first compiled, then instantiated by supplying an import object whose shape must match the module's declared imports (functions, memory, tables, globals); instantiation returns an instance whose exports are the callable functions/memory the module exposes. instantiateStreaming compiles while fetching and requires the application/wasm MIME type. If the import object is missing a function the module imports, instantiation throws. Do not call an export before instantiation completes or omit a required import. Actions: build the import object to match declared imports and await instantiation. Validation signals include a resolved instance with all imports satisfied and exports callable. Risk boundary: a mismatched import object aborts loading entirely; align it with the module's import list for the deployment.",
+  "domain": "wasm",
+  "scope_hint": "code.wasm:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.wasm",
+  "pack_id": "code.wasm"
+}

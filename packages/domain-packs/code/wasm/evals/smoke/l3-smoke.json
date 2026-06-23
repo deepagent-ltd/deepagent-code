@@ -1,0 +1,70 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "code.wasm",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "wasm",
+      "webassembly",
+      "abi",
+      "browser_runtime"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "L3 smoke for code.wasm: webassembly build target and toolchain, js to wasm interop and abi via wasm-bindgen, linear memory model, bundling and loading the module, browser vs wasi runtime, and debugging a wasm module"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "plain prose note with no repository or domain signal"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "retrieval_query": "wasm webassembly build target wasm-bindgen wasi emscripten linear memory abi interop bundling browser runtime debugging module instantiate",
+  "expected_pack_id": "code.wasm",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "code.wasm L3 validation smoke",
+    "signals": [
+      "build target matches the runtime (wasm32-unknown-unknown for browser vs wasm32-wasi for server)",
+      "JS<->WASM values cross through a generated typed binding layer, not hand-decoded pointers",
+      "memory ownership across the boundary is explicit with no double-free or leak",
+      "the module is fetched and instantiated with streaming and the right import object"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "code.wasm diagnosis smoke",
+    "signals": [
+      "wrong build target so the module needs imports the runtime cannot supply",
+      "passing strings/structs as raw pointers and mis-decoding linear memory",
+      "holding a JS view of WASM memory across a grow, reading a detached/stale buffer",
+      "MIME type or bundler config breaking instantiateStreaming",
+      "no source maps/DWARF so the WASM trap is undebuggable"
+    ]
+  },
+  "source_refs": [
+    "source:webassembly-spec:paraphrased",
+    "source:wasm-bindgen-guide:paraphrased"
+  ]
+}

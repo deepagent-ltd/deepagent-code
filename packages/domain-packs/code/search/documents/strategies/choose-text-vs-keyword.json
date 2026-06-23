@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:search:choose-text-vs-keyword",
+  "type": "strategy",
+  "title": "Choose text vs keyword per field intent",
+  "description": "Map fields for full-text search as text (analyzed) and fields for filtering, sorting, faceting, or exact match as keyword (not analyzed).",
+  "body": "Use when defining field mappings. Do not type an identifier, status, or facet field as analyzed text (it gets tokenized and exact match/sort/aggregation break) and do not type prose as keyword (full-text relevance is lost). Actions: map free text as text for relevance, map codes/enums/IDs/facets as keyword, and use a multi-field (text + keyword sub-field) when both are needed. Validation signals include exact filters and aggregations working on keyword fields and relevance scoring on text fields. Risk boundary: the wrong field type silently disables filtering or search and requires a reindex to fix; decide type by how the field is queried, not its content.",
+  "domain": "search",
+  "scope_hint": "code.search:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.search",
+  "pack_id": "code.search"
+}

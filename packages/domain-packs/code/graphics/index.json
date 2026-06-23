@@ -1,0 +1,468 @@
+[
+  {
+    "ref_id": "strategy:gfx:keep-transforms-in-one-space-chain",
+    "type": "strategy",
+    "title": "Track every vector's coordinate space",
+    "summary": "Be explicit about object, world, view, and clip space and apply the model-view-projection chain in the right order so geometry lands where intended.",
+    "domains": [
+      "graphics",
+      "rendering",
+      "shader",
+      "gpu_graphics"
+    ],
+    "triggers": [
+      "coordinate space",
+      "model view projection",
+      "transform",
+      "matrix",
+      "clip space",
+      "world space"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.graphics"
+  },
+  {
+    "ref_id": "strategy:gfx:minimize-state-changes-and-draws",
+    "type": "strategy",
+    "title": "Batch by state to cut draw overhead",
+    "summary": "Sort and batch draws by pipeline/material/texture so the CPU issues fewer state changes and the GPU front end is not starved.",
+    "domains": [
+      "graphics",
+      "rendering",
+      "shader",
+      "gpu_graphics"
+    ],
+    "triggers": [
+      "draw call",
+      "state change",
+      "batching",
+      "pipeline",
+      "material",
+      "instancing"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.graphics"
+  },
+  {
+    "ref_id": "strategy:gfx:synchronize-resource-hazards",
+    "type": "strategy",
+    "title": "Insert barriers for read-after-write hazards",
+    "summary": "Use pipeline barriers and correct layout transitions so a resource is never read while a prior write is still in flight on the GPU.",
+    "domains": [
+      "graphics",
+      "rendering",
+      "shader",
+      "gpu_graphics"
+    ],
+    "triggers": [
+      "barrier",
+      "synchronization",
+      "layout transition",
+      "hazard",
+      "render target",
+      "memory"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.graphics"
+  },
+  {
+    "ref_id": "strategy:gfx:choose-correct-depth-and-blend-state",
+    "type": "strategy",
+    "title": "Set depth and blend state deliberately",
+    "summary": "Pick depth test/write and blend equations to match opaque vs transparent geometry, and draw transparency in the right order.",
+    "domains": [
+      "graphics",
+      "rendering",
+      "shader",
+      "gpu_graphics"
+    ],
+    "triggers": [
+      "depth test",
+      "depth write",
+      "blending",
+      "transparency",
+      "alpha",
+      "z-buffer"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.graphics"
+  },
+  {
+    "ref_id": "strategy:gfx:layout-vertex-data-for-the-gpu",
+    "type": "strategy",
+    "title": "Lay out vertex and buffer data for the GPU",
+    "summary": "Pack attributes and uniforms to honor alignment rules and cache locality so the GPU fetches data efficiently and correctly.",
+    "domains": [
+      "graphics",
+      "rendering",
+      "shader",
+      "gpu_graphics"
+    ],
+    "triggers": [
+      "vertex layout",
+      "alignment",
+      "std140",
+      "std430",
+      "interleaved",
+      "buffer"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.graphics"
+  },
+  {
+    "ref_id": "strategy:gfx:write-portable-defensible-shaders",
+    "type": "strategy",
+    "title": "Write shaders that are defined on every driver",
+    "summary": "Avoid undefined behavior and driver-specific assumptions in shader code so output is consistent across GPUs and APIs.",
+    "domains": [
+      "graphics",
+      "rendering",
+      "shader",
+      "gpu_graphics"
+    ],
+    "triggers": [
+      "shader",
+      "undefined behavior",
+      "precision",
+      "derivative",
+      "portability",
+      "uniform control flow"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.graphics"
+  },
+  {
+    "ref_id": "methodology:gfx:debug-a-black-or-wrong-frame",
+    "type": "methodology",
+    "title": "Debug a black or visibly-wrong frame",
+    "summary": "Isolate where the pipeline breaks by checking, in order, geometry submission, transforms, shaders, and output state.",
+    "domains": [
+      "graphics",
+      "rendering",
+      "shader",
+      "gpu_graphics"
+    ],
+    "triggers": [
+      "black screen",
+      "debug",
+      "wrong output",
+      "pipeline",
+      "isolate",
+      "frame"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.graphics"
+  },
+  {
+    "ref_id": "methodology:gfx:profile-and-fix-frame-time",
+    "type": "methodology",
+    "title": "Profile and fix a frame-time spike",
+    "summary": "Determine whether the frame is CPU- or GPU-bound and which stage dominates before optimizing.",
+    "domains": [
+      "graphics",
+      "rendering",
+      "shader",
+      "gpu_graphics"
+    ],
+    "triggers": [
+      "frame time",
+      "profile",
+      "gpu-bound",
+      "cpu-bound",
+      "bottleneck",
+      "timeline"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.graphics"
+  },
+  {
+    "ref_id": "methodology:gfx:diagnose-shader-compile-failure",
+    "type": "methodology",
+    "title": "Diagnose a shader compile or link failure",
+    "summary": "Read the compiler/validation diagnostics and reconcile interface mismatches between pipeline stages.",
+    "domains": [
+      "graphics",
+      "rendering",
+      "shader",
+      "gpu_graphics"
+    ],
+    "triggers": [
+      "compile error",
+      "link",
+      "shader",
+      "interface",
+      "varying",
+      "validation"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.graphics"
+  },
+  {
+    "ref_id": "methodology:gfx:add-reference-image-tests",
+    "type": "methodology",
+    "title": "Add reference-image regression tests",
+    "summary": "Render known scenes to an offscreen target and compare against approved reference images within a tolerance.",
+    "domains": [
+      "graphics",
+      "rendering",
+      "shader",
+      "gpu_graphics"
+    ],
+    "triggers": [
+      "reference image",
+      "golden",
+      "regression",
+      "offscreen",
+      "tolerance",
+      "perceptual"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.graphics"
+  },
+  {
+    "ref_id": "knowledge:gfx:rasterization-pipeline-stages",
+    "type": "knowledge",
+    "title": "Stages of the rasterization pipeline",
+    "summary": "Vertices flow through vertex shading, primitive assembly and clipping, rasterization to fragments, fragment shading, and per-fragment depth/blend tests.",
+    "domains": [
+      "graphics",
+      "rendering",
+      "shader",
+      "gpu_graphics"
+    ],
+    "triggers": [
+      "pipeline",
+      "rasterization",
+      "vertex",
+      "fragment",
+      "primitive",
+      "stages"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.graphics"
+  },
+  {
+    "ref_id": "knowledge:gfx:shader-execution-is-massively-parallel",
+    "type": "knowledge",
+    "title": "Shaders run in lockstep parallel groups",
+    "summary": "GPUs execute shader invocations in SIMD groups (warps/wavefronts), so divergent branches and per-invocation order assumptions hurt or break correctness.",
+    "domains": [
+      "graphics",
+      "rendering",
+      "shader",
+      "gpu_graphics"
+    ],
+    "triggers": [
+      "warp",
+      "wavefront",
+      "simd",
+      "divergence",
+      "parallel",
+      "invocation"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.graphics"
+  },
+  {
+    "ref_id": "knowledge:gfx:textures-samplers-and-filtering",
+    "type": "knowledge",
+    "title": "Textures, samplers, and filtering",
+    "summary": "Texture sampling depends on format, wrap mode, and filtering (nearest/linear/mipmapped); mismatches cause aliasing, seams, or wrong colors.",
+    "domains": [
+      "graphics",
+      "rendering",
+      "shader",
+      "gpu_graphics"
+    ],
+    "triggers": [
+      "texture",
+      "sampler",
+      "mipmap",
+      "filtering",
+      "wrap",
+      "format"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.graphics"
+  },
+  {
+    "ref_id": "knowledge:gfx:graphics-apis-compared",
+    "type": "knowledge",
+    "title": "OpenGL vs Vulkan vs WebGPU",
+    "summary": "OpenGL hides state and synchronization; Vulkan exposes explicit pipelines, memory, and barriers; WebGPU is a safer explicit middle ground for the web.",
+    "domains": [
+      "graphics",
+      "rendering",
+      "shader",
+      "gpu_graphics"
+    ],
+    "triggers": [
+      "opengl",
+      "vulkan",
+      "webgpu",
+      "api",
+      "explicit",
+      "state machine"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.graphics"
+  },
+  {
+    "ref_id": "skill:gfx:capture-and-inspect-a-frame",
+    "type": "skill",
+    "title": "Capture and inspect a GPU frame",
+    "summary": "Use a GPU debugger to capture a frame and report bound state, inputs, and outputs at the failing pipeline stage.",
+    "domains": [
+      "graphics",
+      "rendering",
+      "shader",
+      "gpu_graphics"
+    ],
+    "triggers": [
+      "renderdoc",
+      "capture",
+      "frame debug",
+      "inspect",
+      "pix",
+      "gpu debugger"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.graphics"
+  },
+  {
+    "ref_id": "skill:gfx:run-shader-validation",
+    "type": "skill",
+    "title": "Validate and reflect shaders offline",
+    "summary": "Compile shaders through the validation/SPIR-V toolchain and report errors, interface mismatches, and binding layouts.",
+    "domains": [
+      "graphics",
+      "rendering",
+      "shader",
+      "gpu_graphics"
+    ],
+    "triggers": [
+      "validate",
+      "spir-v",
+      "glslang",
+      "reflection",
+      "compile",
+      "binding"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.graphics"
+  }
+]

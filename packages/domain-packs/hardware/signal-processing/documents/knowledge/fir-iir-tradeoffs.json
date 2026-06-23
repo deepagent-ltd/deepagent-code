@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:sigproc:fir-iir-tradeoffs",
+  "type": "knowledge",
+  "title": "FIR versus IIR filter tradeoffs",
+  "description": "FIR filters are always stable with linear phase but need many taps, while IIR filters reach sharp cutoffs at low order with nonlinear phase.",
+  "body": "Use when choosing a filter family for a constrained target. Do not assume IIR is always cheaper, because its feedback complicates fixed-point stability and parallelization. Actions: compare order against attenuation for both families, inspect the phase response, and record which constraint dominates. Validation signals include an FIR group-delay flatness check and an IIR pole-location test confirming stability margins. Risk boundary: IIR feedback can amplify quantization into limit cycles, so escalate to FIR or higher precision when limit cycles appear in fixed point.",
+  "domain": "signal_processing",
+  "scope_hint": "hardware.signal-processing:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.signal-processing",
+  "pack_id": "hardware.signal-processing"
+}

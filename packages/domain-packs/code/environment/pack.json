@@ -1,0 +1,44 @@
+{
+  "schema_version": "domain_pack.v1",
+  "id": "code.environment",
+  "name": "Development Environment",
+  "version": "1.0.0",
+  "scope": "system",
+  "risk": "low",
+  "domains": [
+    "code",
+    "environment",
+    "local_dev"
+  ],
+  "provides": [
+    "knowledge",
+    "strategy",
+    "methodology",
+    "skill",
+    "diagnosis",
+    "validation"
+  ],
+  "depends_on": [
+    "code.core"
+  ],
+  "conflicts_with": [],
+  "knowledge_store": "document_store",
+  "allowed_tools": [
+    "read",
+    "shell:test"
+  ],
+  "denied_tools": [
+    "shell:deploy-production"
+  ],
+  "data_policy": {
+    "sensitivity": [
+      "source_code"
+    ],
+    "default_admission": "summary_only",
+    "secret_policy": "deny"
+  },
+  "detector": {
+    "inline": "profile.code_domains.includes('environment') || profile.repo_signals.some(s=>/\\b(env var|environment variable|\\.env file|env doctor|dependency install fail|runtime missing|container restart|bootstrap the (project|environment|workspace)|version mismatch)\\b/i.test(s)) ? 0.86 : 0",
+    "threshold": 0.5
+  }
+}

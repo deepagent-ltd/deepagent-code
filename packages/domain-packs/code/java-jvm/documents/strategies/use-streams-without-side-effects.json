@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:java_jvm:use-streams-without-side-effects",
+  "type": "strategy",
+  "title": "Use streams for pure transformations, not side effects",
+  "description": "Express data transformations as side-effect-free stream pipelines with collectors, and fall back to loops when mutation or early exit fits better.",
+  "body": "Use when transforming or aggregating collections in Java. Do not mutate external state inside map/forEach, run a parallelStream over a non-thread-safe accumulator, or chain streams where a plain loop reads clearer. Actions: keep lambdas pure, terminate with collectors (toList, groupingBy, toMap with a merge function), use the three-arg reduce only when associative, and reserve parallelStream for large CPU-bound, stateless workloads measured to benefit. Validation signals include identical results between sequential and parallel runs and no ConcurrentModificationException. Risk boundary: a side-effecting parallel stream produces nondeterministic or corrupted results; if ordering or shared mutation matters, deny parallelism and use an explicit loop or a thread-safe collector.",
+  "domain": "java",
+  "scope_hint": "code.java-jvm:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.java-jvm",
+  "pack_id": "code.java-jvm"
+}

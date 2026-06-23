@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:sls:synchronous-fanout-exhausts-concurrency",
+  "type": "failure_dossier",
+  "description": "Fanning out work via synchronous invocations that multiply into the account concurrency limit, throttling unrelated functions.",
+  "body": "Failure mode: a function synchronously invokes many child functions (or a burst triggers thousands of instances), consuming the account/function concurrency ceiling and throttling every function sharing it, including unrelated workloads. Detection signals: throttling errors across multiple functions during a burst; a downstream database overwhelmed by sudden parallelism; cascading timeouts. Do not synchronously fan out into shared concurrency. Safer fallback: publish to a queue/topic and let consumers scale with reserved concurrency and batching, apply backpressure, and protect downstreams with concurrency limits and a DLQ.",
+  "domain": "serverless",
+  "scope_hint": "code.backend.serverless:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.serverless:human_authored",
+  "pack_id": "code.backend.serverless"
+}

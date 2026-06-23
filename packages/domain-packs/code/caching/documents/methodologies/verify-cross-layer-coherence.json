@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:cache:verify-cross-layer-coherence",
+  "type": "methodology",
+  "title": "Verify cross-layer coherence",
+  "description": "Trace one update through every cache layer and document the converged staleness window.",
+  "body": "Steps: 1. List every layer holding a copy (browser, CDN, app, DB buffer). 2. Trace a single update and confirm each layer refreshes or expires. 3. Identify any layer that cannot be purged on demand and record its TTL as the staleness floor. 4. Update a value and read back through every layer. 5. Document the end-to-end worst-case staleness. Rollback point: before shortening a layer's TTL under load. Validation: a post-update read through all layers converges within the documented window.",
+  "domain": "caching",
+  "scope_hint": "code.caching:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.caching",
+  "pack_id": "code.caching"
+}

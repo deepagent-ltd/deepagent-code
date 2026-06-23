@@ -1,0 +1,11 @@
+{
+  "ref_id": "knowledge:frontend_web:keyboard-is-primary-input",
+  "type": "knowledge",
+  "description": "Keyboard operation is a core browser interaction path.",
+  "body": "Interactive UI should be reachable and operable without a mouse unless the experience is inherently pointer-only and has an alternative.\n\nEvidence boundary: apply only when current task, repository, or validation evidence matches this pack boundary. Do not override a more specific pack or explicit project contract. Use when Frontend Web work touches visible UI behavior, browser console output, DOM state, assets, viewport behavior, and interaction evidence. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: use the fact to constrain the change and test plan; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include browser smoke, component tests, viewport screenshots, console/network checks, and accessibility assertions. Risk boundary: escalate or stop when the task involves visual regressions, inaccessible interaction, hydration mismatch, and browser-only failures, missing owner evidence, or live external state.",
+  "domain": "web",
+  "scope_hint": "code.frontend.web:knowledge",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.frontend.web",
+  "pack_id": "code.frontend.web"
+}

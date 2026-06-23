@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:redis:audit-cache-correctness",
+  "type": "skill",
+  "title": "Audit cache correctness",
+  "description": "Read cache read/write paths and report on miss fallback, write invalidation, TTL, and stampede protection.",
+  "body": "Use when asked whether a cache is correct. Actions: inspect the read path to confirm a miss falls back to the source and repopulates with a TTL; inspect every write to the source to confirm it invalidates the derived keys; check TTLs have jitter and hot keys have stampede protection; verify the cache is not load-bearing for correctness. Do not assume TTL alone keeps data fresh. Report and record the read/write paths and classify gaps as no-fallback, no-invalidation, un-jittered-expiry, or no-stampede-guard. This skill is read-only and must not flush production. Validation signals include a confirmed flush-still-correct path. Risk boundary: a cache that returns wrong data on miss or never invalidates on write is a correctness finding to flag.",
+  "domain": "redis",
+  "scope_hint": "code.database.redis:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.redis",
+  "pack_id": "code.database.redis"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:sys:read-code-for-resource-and-durability-gaps",
+  "type": "skill",
+  "title": "Read code for resource and durability gaps",
+  "description": "Inspect systems code and report unclosed resources, missing fsync, unchecked syscalls, and unsafe signal handlers.",
+  "body": "Use when asked whether systems-level code is correct and robust. Actions: read the code and verify each acquired fd/lock/mapping/child has a deterministic close on all paths, durability-critical writes use temp-fsync-rename-fsync-dir, syscall returns and errno are checked (with EINTR/short-write handling), signal handlers do only async-signal-safe work, and memory/fd use is bounded. Do not assume a returned write is durable or that the happy-path close is enough. Record each gap with the file/line and classify as durability, resource-leak, syscall-handling, signal-safety, or memory. This skill is read-only and must not change behavior without runtime permission and a test. Validation signals include a concrete list of sites and their risk class. Risk boundary: report any missing fsync on a durability path or leaked resource under load as a blocking finding and recommend a crash/leak test.",
+  "domain": "systems",
+  "scope_hint": "code.systems:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.systems",
+  "pack_id": "code.systems"
+}

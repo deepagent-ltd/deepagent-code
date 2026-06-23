@@ -1,0 +1,71 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "platform.cloud.gcp",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "gcp",
+      "cloud_run",
+      "gke",
+      "bigquery",
+      "gcp_iam"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "L3 smoke for platform.cloud.gcp: Cloud Run concurrency and min-instances, GKE autopilot, BigQuery slots and partitioning cost, service accounts and workload identity, IAM bindings, GCS, Cloud Functions"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "write a Postgres migration"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "retrieval_query": "gcp cloud run concurrency min instances gke bigquery slots partitioning workload identity iam binding service account gcs",
+  "expected_pack_id": "platform.cloud.gcp",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "platform.cloud.gcp L3 validation smoke",
+    "signals": [
+      "gcloud run services describe shows the tuned concurrency and minScale and the service reports no overload 429s",
+      "BigQuery dry-run reports bytes-scanned within the partition pruning budget for the target query",
+      "Workload Identity binding lets a GKE/Cloud Run workload call an API with no exported key present",
+      "IAM policy analyzer shows the principal holds only the documented predefined roles at the intended scope"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "platform.cloud.gcp diagnosis smoke",
+    "signals": [
+      "Cloud Run cold starts traced to minScale 0 plus heavy container init rather than CPU throttling",
+      "BigQuery query slow or costly because it scans unpartitioned data or SELECTs * across a wide table",
+      "Permission error resolved to a missing role at the right resource node in the IAM hierarchy, not a broad grant",
+      "GKE pod stuck because Workload Identity is not bound or the node pool lacks the metadata server config",
+      "Cloud Run 429s traced to per-instance concurrency too low or maxScale clamping under burst"
+    ]
+  },
+  "source_refs": [
+    "gcp-iam-docs:policy-inheritance-and-resource-hierarchy",
+    "gcp-bigquery-docs:partitioning-clustering-and-cost-controls"
+  ]
+}

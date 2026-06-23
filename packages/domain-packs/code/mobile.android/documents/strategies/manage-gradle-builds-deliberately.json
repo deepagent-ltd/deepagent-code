@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:android:manage-gradle-builds-deliberately",
+  "type": "strategy",
+  "title": "Manage Gradle builds deliberately",
+  "description": "Pin SDK/dependency versions, use build variants for environments, and keep secrets out of the build instead of guessing config.",
+  "body": "Use when configuring the Android build. Do not use dynamic '+' dependency versions, and do not commit signing keys or API secrets into Gradle/source. Actions: pin compileSdk/targetSdk/minSdk intentionally, lock dependency versions (use the version catalog/BOM), separate environments with build variants/flavors, and inject secrets via Gradle properties or the environment, not committed files. Validation signals include reproducible builds across machines and CI, and no secret literals in the repo. Risk boundary: dynamic versions make builds non-reproducible and can pull a breaking transitive update, while a committed signing key or secret is a security incident and a release-integrity risk — treat build config and secrets as release-critical.",
+  "domain": "android",
+  "scope_hint": "code.mobile.android:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.mobile.android",
+  "pack_id": "code.mobile.android"
+}

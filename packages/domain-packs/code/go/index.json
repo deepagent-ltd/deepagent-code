@@ -1,0 +1,460 @@
+[
+  {
+    "ref_id": "knowledge:go:context-cancellation",
+    "type": "knowledge",
+    "title": "Context Cancellation",
+    "summary": "Go context propagation controls cancellation and deadlines.",
+    "domains": [
+      "go",
+      "code"
+    ],
+    "triggers": [
+      "context",
+      "propagation",
+      "controls",
+      "cancellation",
+      "deadlines",
+      "long",
+      "running",
+      "goroutines"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.go"
+  },
+  {
+    "ref_id": "knowledge:go:generated-code-drift",
+    "type": "knowledge",
+    "title": "Generated Code Drift",
+    "summary": "In Go, never hand-edit go generate output and code emitted by stringer/protoc-gen-go; change the source and rerun the generator.",
+    "domains": [
+      "go",
+      "code"
+    ],
+    "triggers": [
+      "generated",
+      "code",
+      "must",
+      "tied",
+      "regeneration",
+      "commands",
+      "hand",
+      "edit"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.go"
+  },
+  {
+    "ref_id": "knowledge:go:runtime-errors-differ",
+    "type": "knowledge",
+    "title": "Runtime Errors Differ",
+    "summary": "In Go, a clean build does not prevent data races, goroutine leaks, and nil-map writes that panic at runtime.",
+    "domains": [
+      "go",
+      "code"
+    ],
+    "triggers": [
+      "compile",
+      "success",
+      "does",
+      "guarantee",
+      "runtime",
+      "behavior",
+      "representative",
+      "tests"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.go"
+  },
+  {
+    "ref_id": "knowledge:go:toolchain-is-contract",
+    "type": "knowledge",
+    "title": "Toolchain Is Contract",
+    "summary": "In Go, the Go toolchain version (go.mod go directive) and module mode are part of the contract and changing them changes behavior.",
+    "domains": [
+      "go",
+      "code"
+    ],
+    "triggers": [
+      "compiler",
+      "formatter",
+      "package",
+      "manager",
+      "test",
+      "runner",
+      "part",
+      "language"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.go"
+  },
+  {
+    "ref_id": "methodology:go:dependency-update-check",
+    "type": "methodology",
+    "title": "Dependency Update Check",
+    "summary": "In Go, when go.mod / go.sum, the module graph, and indirect requirements change, verify the lockfile, generated artifacts, and a runtime smoke.",
+    "domains": [
+      "go",
+      "code"
+    ],
+    "triggers": [
+      "when",
+      "dependencies",
+      "change",
+      "inspect",
+      "lockfile",
+      "generated",
+      "artifacts",
+      "runtime"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.go"
+  },
+  {
+    "ref_id": "methodology:go:interop-boundary-check",
+    "type": "methodology",
+    "title": "Interop Boundary Check",
+    "summary": "In Go, validate the json.Unmarshal targets, channel close semantics, and io.Reader handling where external data crosses in.",
+    "domains": [
+      "go",
+      "code"
+    ],
+    "triggers": [
+      "validate",
+      "module",
+      "shell",
+      "serialization",
+      "boundaries",
+      "steps",
+      "identify",
+      "boundary"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.go"
+  },
+  {
+    "ref_id": "methodology:go:language-gate-loop",
+    "type": "methodology",
+    "title": "Language Gate Loop",
+    "summary": "In Go, run the package-local gate, fix the first owned diagnostic, rerun, then broaden.",
+    "domains": [
+      "go",
+      "code"
+    ],
+    "triggers": [
+      "package",
+      "local",
+      "gate",
+      "first",
+      "owned",
+      "diagnostic",
+      "rerun",
+      "then"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.go"
+  },
+  {
+    "ref_id": "skill:go:run-language-gate",
+    "type": "skill",
+    "title": "Run Language Gate",
+    "summary": "In Go, run the package-local validation gate (go build ./... with the module's build tags and GOOS/GOARCH) and summarize the diagnostics.",
+    "domains": [
+      "go",
+      "code"
+    ],
+    "triggers": [
+      "package",
+      "local",
+      "language",
+      "validation",
+      "gate",
+      "summarize",
+      "diagnostics",
+      "inputs"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.go"
+  },
+  {
+    "ref_id": "strategy:go:boundary-validation",
+    "type": "strategy",
+    "title": "Boundary Validation",
+    "summary": "In Go, validate external input at the json.Unmarshal targets, channel close semantics, and io.Reader handling before internal use.",
+    "domains": [
+      "go",
+      "code"
+    ],
+    "triggers": [
+      "validate",
+      "external",
+      "input",
+      "language",
+      "runtime",
+      "boundaries",
+      "parsing",
+      "serialization"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.go"
+  },
+  {
+    "ref_id": "strategy:go:diagnostic-first",
+    "type": "strategy",
+    "title": "Diagnostic First",
+    "summary": "In Go, read the first compiler or vet message with package path and line before making speculative edits.",
+    "domains": [
+      "go",
+      "code"
+    ],
+    "triggers": [
+      "compiler",
+      "runtime",
+      "diagnostics",
+      "before",
+      "speculative",
+      "edits",
+      "read",
+      "first"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.go"
+  },
+  {
+    "ref_id": "strategy:go:idiom-preserving-change",
+    "type": "strategy",
+    "title": "Idiom Preserving Change",
+    "summary": "In Go, prefer established idioms (explicit error wrapping (fmt.Errorf with %w), context propagation, and small interfaces) over generic rewrites.",
+    "domains": [
+      "go",
+      "code"
+    ],
+    "triggers": [
+      "prefer",
+      "local",
+      "idioms",
+      "standard",
+      "tooling",
+      "over",
+      "generic",
+      "rewrites"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.go"
+  },
+  {
+    "ref_id": "strategy:go:package-local-command",
+    "type": "strategy",
+    "title": "Package Local Command",
+    "summary": "In Go, use the package-local commands (go build ./... with the module's build tags and GOOS/GOARCH) rather than a root or generic command.",
+    "domains": [
+      "go",
+      "code"
+    ],
+    "triggers": [
+      "package",
+      "local",
+      "build",
+      "test",
+      "typecheck",
+      "commands",
+      "this",
+      "language"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.go"
+  },
+  {
+    "ref_id": "strategy:go:propagate-context-deadline",
+    "type": "strategy",
+    "title": "Propagate context for cancellation and deadlines",
+    "summary": "Thread a context.Context as the first parameter through call chains so cancellation, deadlines, and request scope flow to every blocking operation.",
+    "domains": [
+      "go",
+      "code"
+    ],
+    "triggers": [
+      "context",
+      "context.Context",
+      "cancel",
+      "deadline",
+      "timeout",
+      "ctx"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.go"
+  },
+  {
+    "ref_id": "strategy:go:wrap-errors-with-context",
+    "type": "strategy",
+    "title": "Wrap errors with %w and inspect with errors.Is/As",
+    "summary": "Add context to errors using fmt.Errorf with %w so callers can unwrap and match sentinel or typed errors instead of comparing strings.",
+    "domains": [
+      "go",
+      "code"
+    ],
+    "triggers": [
+      "error",
+      "errors.Is",
+      "errors.As",
+      "%w",
+      "wrap",
+      "sentinel"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.go"
+  },
+  {
+    "ref_id": "methodology:go:benchmark-with-testing-b",
+    "type": "methodology",
+    "title": "Measure performance with go test -bench and pprof",
+    "summary": "Write a stable BenchmarkXxx, capture allocations and CPU profiles, and compare with benchstat before claiming a speedup.",
+    "domains": [
+      "go",
+      "code"
+    ],
+    "triggers": [
+      "benchmark",
+      "go test -bench",
+      "pprof",
+      "benchstat",
+      "allocs",
+      "b.N"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.go"
+  },
+  {
+    "ref_id": "skill:go:run-race-detector",
+    "type": "skill",
+    "title": "Run the race detector and report data races",
+    "summary": "Execute the test suite under -race and report each detected data race with the conflicting goroutine stacks.",
+    "domains": [
+      "go",
+      "code"
+    ],
+    "triggers": [
+      "race",
+      "go test -race",
+      "data race",
+      "goroutine",
+      "concurrency",
+      "detector"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.go"
+  }
+]

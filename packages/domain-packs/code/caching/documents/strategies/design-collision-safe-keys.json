@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:cache:design-collision-safe-keys",
+  "type": "strategy",
+  "title": "Design collision-safe cache keys",
+  "description": "Derive keys from every value-affecting input with a version prefix so distinct requests never collide.",
+  "body": "Use when defining how a cache key is built from a request. Do not concatenate raw user input into keys — collisions return another user's data and unbounded variants explode the key space. Actions: include every parameter that changes the value plus a schema/version prefix, normalize ordering and casing, and namespace by entity type. Validation signals include no observed cross-tenant leakage and a bounded distinct-key count under load. Risk boundary: a key that omits a varying input serves wrong data silently — treat key correctness as a security invariant and require review.",
+  "domain": "caching",
+  "scope_hint": "code.caching:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.caching",
+  "pack_id": "code.caching"
+}

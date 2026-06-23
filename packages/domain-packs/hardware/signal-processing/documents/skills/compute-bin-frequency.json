@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:sigproc:compute-bin-frequency",
+  "type": "skill",
+  "title": "Compute FFT bin center frequency",
+  "description": "Convert a bin index into its center frequency using the sample rate and transform length.",
+  "body": "Use when interpreting which physical frequency an FFT bin represents. Do not forget that bins above N over two represent negative frequencies in a real-input transform. Actions: multiply the bin index by sample rate divided by N, verify a known tone lands at its predicted index, and record the Nyquist bin position. Validation signals include a test tone appearing at the computed bin and symmetry of the spectrum about Nyquist for real input. Risk boundary: misreading negative-frequency bins as high positive frequencies corrupts measurements, so flag any peak above the Nyquist bin for sign interpretation.",
+  "domain": "signal_processing",
+  "scope_hint": "hardware.signal-processing:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.signal-processing",
+  "pack_id": "hardware.signal-processing"
+}

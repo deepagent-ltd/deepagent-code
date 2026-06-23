@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:comp:make-the-trail-tamper-evident",
+  "type": "strategy",
+  "title": "Make the audit trail tamper-evident",
+  "description": "Protect audit records so that deletion or modification is detectable, not merely discouraged.",
+  "body": "Use when designing or changing where audit evidence is stored. Do not store audit records in a table the application can UPDATE/DELETE freely. Actions: use append-only storage (WORM bucket, hash-chained records, or a separate-account log sink) so that any alteration breaks a verifiable chain or is blocked by storage policy, and restrict write/delete permissions away from the audited application's role. Validation signals include a test that attempting to modify or delete a record fails or is detected by chain verification. Risk boundary: a mutable audit store undermines every other control; treat lack of tamper-evidence as blocking and escalate before relying on the trail.",
+  "domain": "compliance",
+  "scope_hint": "risk.compliance:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.compliance",
+  "pack_id": "risk.compliance"
+}

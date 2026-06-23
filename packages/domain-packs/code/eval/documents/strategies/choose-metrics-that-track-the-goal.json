@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:eval:choose-metrics-that-track-the-goal",
+  "type": "strategy",
+  "title": "Choose metrics that track the real goal",
+  "description": "Select metrics that move only when the user-facing quality moves, and reject proxies a system can game without improving.",
+  "body": "Use when deciding how to score a system. Do not optimize a convenient proxy (exact-match, token overlap) when the goal is semantic correctness, and avoid a metric that can rise while real quality falls. Actions: state the user-facing goal, pick metrics that demonstrably correlate with it, and pair an automatic metric with a human-labeled check on a sample. Validation signals include a correlation check between the metric and human judgments on the same cases. Risk boundary: optimizing a gameable proxy ships a regression that the metric hides; if a metric and human judgment diverge, trust the human and flag the metric.",
+  "domain": "eval",
+  "scope_hint": "code.eval:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.eval",
+  "pack_id": "code.eval"
+}

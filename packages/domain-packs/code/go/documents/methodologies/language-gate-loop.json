@@ -1,0 +1,11 @@
+{
+  "ref_id": "methodology:go:language-gate-loop",
+  "type": "methodology",
+  "description": "In Go, run the package-local gate, fix the first owned diagnostic, rerun, then broaden.",
+  "body": "In Go, the fastest path through errors is to let go vet ./... and the compiler's unused-variable/import errors and go vet, staticcheck, and the race detector (go test -race) drive one fix at a time rather than guessing. Use when go build ./... with the module's build tags and GOOS/GOARCH or the analyzers report multiple diagnostics. Do not batch speculative edits across files, and avoid suppressing diagnostics to move on. Actions: inspect the package, run the gate, fix only the first compiler or vet message with package path and line, rerun go test ./... -race on the changed package, then widen to go build ./... with the module's build tags and GOOS/GOARCH for the whole package. Validation signals include a shrinking diagnostic count, a passing focused test, and a clean package-wide gate. Risk boundary: if a diagnostic implies a design or API change, stop and escalate instead of forcing the gate green.",
+  "domain": "go",
+  "scope_hint": "code.go:methodologies",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.go:skill_survey",
+  "pack_id": "code.go"
+}

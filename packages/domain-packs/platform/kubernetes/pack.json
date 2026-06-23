@@ -1,0 +1,51 @@
+{
+  "schema_version": "domain_pack.v1",
+  "id": "platform.kubernetes",
+  "name": "Kubernetes Workloads & Cluster Operations",
+  "version": "1.0.0",
+  "scope": "system",
+  "risk": "high",
+  "domains": [
+    "kubernetes",
+    "k8s",
+    "helm",
+    "rollout",
+    "rbac"
+  ],
+  "provides": [
+    "knowledge",
+    "strategy",
+    "methodology",
+    "skill",
+    "diagnosis",
+    "validation"
+  ],
+  "depends_on": [
+    "platform.docker",
+    "risk.production",
+    "risk.security"
+  ],
+  "conflicts_with": [],
+  "knowledge_store": "document_store",
+  "allowed_tools": [
+    "read",
+    "shell:test"
+  ],
+  "denied_tools": [
+    "shell:deploy-production",
+    "shell:kubectl-apply-production"
+  ],
+  "data_policy": {
+    "sensitivity": [
+      "source_code",
+      "infrastructure",
+      "secret_adjacent"
+    ],
+    "default_admission": "summary_only",
+    "secret_policy": "deny"
+  },
+  "detector": {
+    "inline": "profile.code_domains.some(d=>['kubernetes','k8s','helm','rollout','rbac'].includes(d)) || profile.repo_signals.some(s=>/\\b(kubernetes|k8s|kubectl|helm chart|deployment manifest|ingress|pod spec|readiness probe|namespace|rbac role)\\b/i.test(s)) ? 0.9 : 0",
+    "threshold": 0.5
+  }
+}

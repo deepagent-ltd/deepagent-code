@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:ecom:leaked-reservations",
+  "type": "failure_dossier",
+  "description": "Abandoned carts never release their reserved stock, so inventory shows sold-out while units sit unsold.",
+  "body": "Failure mode: reservations have no expiry, so abandoned carts pin stock indefinitely and the SKU appears sold-out while real units remain unsold. Detection signals: reserved quantity far exceeding active payable carts; available stock at zero with healthy on-hand; reservations far older than the cart TTL. Do not hold reservations without a release path. Safer fallback: attach a TTL to every reservation, release on expiry or abandonment, and reconcile on-hand against available plus reserved plus sold.",
+  "domain": "ecommerce",
+  "scope_hint": "business.ecommerce:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:business.ecommerce:human_authored",
+  "pack_id": "business.ecommerce"
+}

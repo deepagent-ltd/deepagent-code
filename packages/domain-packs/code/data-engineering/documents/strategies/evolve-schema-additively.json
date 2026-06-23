@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:dataeng:evolve-schema-additively",
+  "type": "strategy",
+  "title": "Evolve schemas additively and versioned",
+  "description": "Add nullable columns and new fields rather than renaming or retyping, so existing consumers keep working through the change.",
+  "body": "Use when a source or table schema must change. Do not rename, drop, or retype a column in place — every downstream reader that expects the old shape breaks at once. Actions: add new columns as nullable with defaults, dual-write during a transition, migrate consumers, then retire the old field; coordinate with the data contract. Validation signals include downstream jobs parsing both old and new records and a schema registry accepting the change as backward-compatible. Risk boundary: a breaking schema change cascades across every consumer; for shared tables, require consumer sign-off and a rollback path before deploying.",
+  "domain": "data_engineering",
+  "scope_hint": "code.data-engineering:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.data-engineering",
+  "pack_id": "code.data-engineering"
+}

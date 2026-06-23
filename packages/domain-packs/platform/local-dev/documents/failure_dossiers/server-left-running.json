@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:local_dev:server-left-running",
+  "type": "failure_dossier",
+  "description": "Leaving unmanaged dev servers can conflict with later runs.",
+  "body": "Record session or stop when done.\n\nDerived from local skill survey outputs under /Users/xiuranli/code/agent/skill, especially reviewed canonical rules, coverage reports, and trusted local skill notes. Paraphrased into domain-pack seed form.\n\nDiagnostic use only: keep this out of index.json and use it only as a blocked/do-not-use signal.",
+  "domain": "local_dev",
+  "scope_hint": "platform.local-dev:failure_dossiers",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:platform.local-dev:skill_survey",
+  "pack_id": "platform.local-dev"
+}

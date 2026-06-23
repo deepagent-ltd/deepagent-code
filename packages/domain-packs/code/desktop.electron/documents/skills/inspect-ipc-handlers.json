@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:electron:inspect-ipc-handlers",
+  "type": "skill",
+  "title": "Inspect IPC handlers for input validation",
+  "description": "Review ipcMain handlers for unvalidated payloads, path traversal, and privileged actions taken on renderer-supplied data.",
+  "body": "Use when reviewing the main-process IPC surface. Actions: read each ipcMain.handle/on handler, check whether it validates argument types and shapes, constrains file paths to allowed directories, and verifies the sender where it matters before doing file/shell/network work. Report handlers that act on raw renderer input with location and the privileged operation at risk. Do not modify handlers. This skill exposes capability only and must not execute privileged operations without runtime permission. Validation signals include every handler validating its input. Risk boundary: a handler that performs file or command operations on unvalidated IPC input is a blocking path-traversal/injection finding; recommend validation and path constraints rather than leaving it open.",
+  "domain": "electron",
+  "scope_hint": "code.desktop.electron:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.desktop.electron",
+  "pack_id": "code.desktop.electron"
+}

@@ -1,0 +1,42 @@
+{
+  "schema_version": "domain_pack.v1",
+  "id": "code.review",
+  "name": "Code Review",
+  "version": "1.0.0",
+  "scope": "system",
+  "risk": "low",
+  "domains": [
+    "code",
+    "review"
+  ],
+  "provides": [
+    "knowledge",
+    "strategy",
+    "methodology",
+    "skill",
+    "diagnosis"
+  ],
+  "depends_on": [
+    "code.core"
+  ],
+  "conflicts_with": [],
+  "knowledge_store": "document_store",
+  "allowed_tools": [
+    "read"
+  ],
+  "denied_tools": [
+    "edit",
+    "shell:deploy-production"
+  ],
+  "data_policy": {
+    "sensitivity": [
+      "source_code"
+    ],
+    "default_admission": "summary_only",
+    "secret_policy": "deny"
+  },
+  "detector": {
+    "inline": "profile.task_kind === 'review' || profile.code_domains.includes('review') || profile.repo_signals.some(s => /\\b(review|audit|findings|severity|regression risk)\\b/i.test(s)) ? 0.9 : 0",
+    "threshold": 0.5
+  }
+}

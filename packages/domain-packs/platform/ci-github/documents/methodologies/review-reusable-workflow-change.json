@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:ghci:review-reusable-workflow-change",
+  "type": "methodology",
+  "title": "Review a reusable or composite workflow change",
+  "description": "Trace inputs, secrets, and permissions across the caller/callee boundary before changing a shared workflow.",
+  "body": "Steps: 1. Identify every caller of the reusable workflow (workflow_call) or composite action. 2. Map declared inputs and secrets: passed explicitly vs inherited via secrets: inherit. 3. Check the permissions the called workflow assumes and whether callers grant more than needed. 4. Assess blast radius: a change here ships to all callers at once. 5. Stage the change behind a versioned ref and update callers deliberately. Rollback point: pin callers to the prior SHA/tag of the reusable workflow. Validation: each caller still runs with least-privilege token and only the secrets it requires.",
+  "domain": "ci_github",
+  "scope_hint": "platform.ci-github:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.ci-github",
+  "pack_id": "platform.ci-github"
+}

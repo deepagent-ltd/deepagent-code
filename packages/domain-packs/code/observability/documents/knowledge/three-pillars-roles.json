@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:observability:three-pillars-roles",
+  "type": "knowledge",
+  "title": "Logs, metrics, and traces answer different questions",
+  "description": "Metrics tell you something is wrong and how much, traces show where in the request path, and logs explain why — using one for another's job is costly or blind.",
+  "body": "Use when choosing which signal to add or query. Metrics are cheap aggregates good for alerting and trends but lack per-request detail; traces reconstruct a single request's path across services to localize latency/errors; logs carry rich per-event context for root cause. Do not page on logs, search traces for aggregate trends, or store high-cardinality detail in metrics. Actions: alert on metrics, localize with traces, confirm cause with correlated logs sharing a trace/request id. Validation signals include a trace id linking a metric anomaly to the explanatory log line. Risk boundary: relying on a single pillar leaves blind spots; flag missing correlation ids that prevent pivoting between them.",
+  "domain": "code",
+  "scope_hint": "code.observability:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.observability",
+  "pack_id": "code.observability"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:ghci:scope-github-token-permissions",
+  "type": "strategy",
+  "title": "Scope GITHUB_TOKEN to least privilege",
+  "description": "Declare an explicit permissions block defaulting to read and grant write only on the specific jobs that need it.",
+  "body": "Use when authoring or reviewing any workflow, especially one that pushes commits, comments on PRs, or publishes packages. Do not leave the token at the repository default (often write-all) or grant packages:write on a job that only runs tests. Actions: add a top-level permissions: with contents: read, then override per-job with the narrowest scope (e.g. pull-requests: write only on the labeling job); inspect each step for what API calls it actually makes. Validation signals include a permissions block present at workflow or job level and a token that cannot push to protected branches. Risk boundary: widening GITHUB_TOKEN to write on a workflow triggered by untrusted input requires a human gate and a review of what the token can reach.",
+  "domain": "ci_github",
+  "scope_hint": "platform.ci-github:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.ci-github",
+  "pack_id": "platform.ci-github"
+}

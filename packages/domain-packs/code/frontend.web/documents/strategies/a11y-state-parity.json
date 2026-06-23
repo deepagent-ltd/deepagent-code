@@ -1,0 +1,11 @@
+{
+  "ref_id": "strategy:frontend_web:a11y-state-parity",
+  "type": "strategy",
+  "description": "Accessible state should match visual and interactive state.",
+  "body": "Disabled, expanded, selected, invalid, loading, and modal states need accessible representation and keyboard behavior, not only CSS classes.\n\nEvidence boundary: apply only when current task, repository, or validation evidence matches this pack boundary. Do not override a more specific pack or explicit project contract. Use when Frontend Web work touches visible UI behavior, browser console output, DOM state, assets, viewport behavior, and interaction evidence. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: choose the smallest direction that preserves the domain contract; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include browser smoke, component tests, viewport screenshots, console/network checks, and accessibility assertions. Risk boundary: escalate or stop when the task involves visual regressions, inaccessible interaction, hydration mismatch, and browser-only failures, missing owner evidence, or live external state.",
+  "domain": "web",
+  "scope_hint": "code.frontend.web:strategies",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.frontend.web",
+  "pack_id": "code.frontend.web"
+}

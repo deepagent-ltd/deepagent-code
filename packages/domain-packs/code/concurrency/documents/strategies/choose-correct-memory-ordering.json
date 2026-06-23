@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:conc:choose-correct-memory-ordering",
+  "type": "strategy",
+  "title": "Choose memory ordering deliberately, default to strongest",
+  "description": "Use sequential-consistency unless a benchmark justifies relaxed/acquire-release, and pair atomics with the right fences.",
+  "body": "Use when writing lock-free code or sharing flags/counters via atomics. Do not reach for relaxed ordering for performance without proving the weaker guarantee is still correct. Actions: start with sequentially-consistent atomics; only weaken to acquire/release (or relaxed) when a benchmark shows it matters and the happens-before edges still hold; pair a release store with an acquire load on the same location. Validation signals include a race detector clean run, a stress test passing, and a documented happens-before argument for any relaxed use. Risk boundary: relaxed ordering that assumes ordering the model does not provide is a heisenbug; require an explicit ordering argument and detector evidence before merging.",
+  "domain": "concurrency",
+  "scope_hint": "code.concurrency:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.concurrency",
+  "pack_id": "code.concurrency"
+}

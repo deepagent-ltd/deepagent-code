@@ -1,0 +1,11 @@
+{
+  "ref_id": "knowledge:typescript:module-resolution-config",
+  "type": "knowledge",
+  "description": "TypeScript module resolution depends on tsconfig, package.json exports/type, file extension, and runtime loader.",
+  "body": "Use this when imports fail, declarations are missing, or runtime cannot load compiled output. The same import can resolve differently under NodeNext, Bundler, CommonJS, path aliases, package exports, typesVersions, or Bun/Node loaders. Execution action: inspect tsconfig module/moduleResolution, package.json type/exports/types, file extensions, build output, and the package manager runner. Do not fix by adding random path aliases or declaration shims without matching runtime behavior. Verification signals include package-local typecheck, build output import paths, node/bun test runtime success, and downstream consumer compilation. Risk boundary: a type-only pass can still hide runtime ESM/CJS mismatch. Use when TypeScript / JavaScript work touches repository conventions, toolchain files, changed symbols, validation commands, and runtime output. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: use the fact to constrain the change and test plan; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include package-local checks, focused tests, build output, smoke runs, and command logs. Risk boundary: escalate or stop when the task involves broad rewrites, generated-file drift, stale assumptions, and unvalidated behavior changes, missing owner evidence, or live external state.",
+  "domain": "typescript",
+  "scope_hint": "code.typescript:knowledge",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.typescript:human_authored",
+  "pack_id": "code.typescript"
+}

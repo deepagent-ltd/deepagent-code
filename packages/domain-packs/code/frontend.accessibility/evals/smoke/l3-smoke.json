@@ -1,0 +1,73 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "code.frontend.accessibility",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "frontend",
+      "accessibility"
+    ],
+    "business_domains": [],
+    "platforms": [
+      "web"
+    ],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "L3 smoke for code.frontend.accessibility: keyboard flow, focus, ARIA, semantic names, contrast, screen-reader paths, and form errors"
+    ],
+    "round_signals": [
+      "l3_validation_smoke"
+    ],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "round_signals": [],
+    "user_overrides": [],
+    "repo_signals": [
+      "optimize a CUDA kernel for shared memory bank conflicts"
+    ]
+  },
+  "retrieval_query": "ARIA role focus management keyboard navigation contrast screen reader semantic HTML form label",
+  "expected_pack_id": "code.frontend.accessibility",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "accessibility behavior L3 validation smoke",
+    "signals": [
+      "keyboard-only smoke",
+      "axe or equivalent checks",
+      "accessible-name assertions",
+      "focus order review",
+      "and contrast evidence"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "accessibility behavior diagnosis smoke",
+    "signals": [
+      "separate semantic markup gaps",
+      "ARIA misuse",
+      "focus traps",
+      "missing names",
+      "and visual-only state"
+    ]
+  },
+  "source_refs": [
+    "source:mdn-web-docs:paraphrased",
+    "source:web.dev:paraphrased"
+  ]
+}

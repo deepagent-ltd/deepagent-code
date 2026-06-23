@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:finance:non-idempotent-charge-double-bills",
+  "type": "failure_dossier",
+  "description": "A payment endpoint without idempotency that double-charges a customer when a client retries a timed-out request.",
+  "body": "Failure mode: a charge request times out at the client, the client retries, and because the server has no idempotency key it executes a second charge, billing the customer twice and creating two ledger entries. Detection signals: duplicate charges with near-identical timestamps; two ledger entries for one order; customer disputes from retries. Do not assume the network delivers each request exactly once. Safer fallback: require an idempotency key, persist it with the result before responding, and return the original result on repeat. Risk boundary: advisory only; resolve a suspected double charge by escalating to a human for refund review, never by automatically issuing or reversing money without the approval gate.",
+  "domain": "finance",
+  "scope_hint": "business.finance:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:business.finance:human_authored",
+  "pack_id": "business.finance"
+}

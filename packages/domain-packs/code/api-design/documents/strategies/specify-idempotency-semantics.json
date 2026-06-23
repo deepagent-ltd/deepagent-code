@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:apidesign:specify-idempotency-semantics",
+  "type": "strategy",
+  "title": "Specify idempotency for unsafe operations",
+  "description": "Define how clients can safely retry writes, typically with an idempotency key, so a retried request never produces a duplicate effect.",
+  "body": "Use when designing create or other non-idempotent operations clients may retry. Do not leave retry behavior undefined for writes. Actions: accept an idempotency key on unsafe operations; specify that a repeated key returns the original result; document the key's scope and retention window. Validation signals include a retried create returning the first result with no duplicate resource created. Risk boundary: undefined retry semantics cause duplicate orders or charges on network retries, so make idempotency an explicit part of the contract and defer money movement to the finance domain.",
+  "domain": "api_design",
+  "scope_hint": "code.api-design:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.api-design",
+  "pack_id": "code.api-design"
+}

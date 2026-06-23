@@ -1,0 +1,11 @@
+{
+  "ref_id": "methodology:cpp:dependency-update-check",
+  "type": "methodology",
+  "description": "In C++, when find_package targets, vcpkg/Conan manifests, and transitive include paths change, verify the lockfile, generated artifacts, and a runtime smoke.",
+  "body": "In C++, a dependency change ripples through find_package targets, vcpkg/Conan manifests, and transitive include paths, generated bindings, and runtime behavior, so it needs more than a recompile. Use when find_package targets, vcpkg/Conan manifests, and transitive include paths are added, removed, or version-bumped. Do not merge a dependency bump on a green compile alone, and avoid editing the lockfile by hand. Actions: inspect the dependency delta, re-resolve and review find_package targets, vcpkg/Conan manifests, and transitive include paths, regenerate affected Protobuf/Qt MOC output, template-instantiation stubs, and configure_file headers, then run the ctest suite plus a sanitized build of the touched target and smoke the import/runtime path. Validation signals include a reviewed lockfile diff, a clean clang-tidy, include-what-you-use, and -Wpedantic diagnostics pass, and a passing runtime smoke. Risk boundary: escalate on a major-version bump, a transitive conflict you cannot resolve, or a license/security flag.",
+  "domain": "cpp",
+  "scope_hint": "code.cpp:methodologies",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.cpp:skill_survey",
+  "pack_id": "code.cpp"
+}

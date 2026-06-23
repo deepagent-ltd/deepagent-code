@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:git:detached-head-state",
+  "type": "knowledge",
+  "title": "What detached HEAD means for new commits",
+  "description": "When HEAD points directly at a commit instead of a branch, new commits are reachable only by hash and are lost once you check out elsewhere.",
+  "body": "Use when git warns about a detached HEAD after checking out a tag or raw commit. Do not commit substantial work while detached without a branch. In this state HEAD references a commit, not a branch ref, so commits you make are unreferenced and become garbage-collection candidates after you switch away. Inspect with git status, which names the state explicitly. Validation signals include creating a branch with git switch -c before leaving, so the commits gain a permanent ref. Risk boundary: leaving detached HEAD without a branch risks silent loss of work, so attach a ref before checking out anything else.",
+  "domain": "git_workflow",
+  "scope_hint": "code.git-workflow:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.git-workflow",
+  "pack_id": "code.git-workflow"
+}

@@ -1,0 +1,11 @@
+{
+  "ref_id": "strategy:frontend_web:text-fit-is-contract",
+  "type": "strategy",
+  "description": "Text fitting and non-overlap are part of the UI contract, not cosmetic polish.",
+  "body": "Apply this when labels, localized text, dynamic names, badges, buttons, cards, sidebars, tables, or fixed-size controls change. Prefer CSS constraints such as minmax tracks, overflow wrapping, max-width, line-height, and stable button/icon dimensions before shrinking everything globally. This does not decide product copy or localization policy; it only guards the visible container relationship. Execution actions include testing longest plausible strings, narrow mobile widths, hover/focus states, and text expansion from loaded data. Validation signals include no clipped words, no unreadable ellipsis where content is required, no overlap with adjacent controls, no layout jump on hover, and readable text at mobile and desktop viewports. Risk boundary: do not hide required content to make a screenshot pass; escalate when the product layout cannot fit required strings without a design decision. Use when Frontend Web work touches visible UI behavior, browser console output, DOM state, assets, viewport behavior, and interaction evidence. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: choose the smallest direction that preserves the domain contract; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include browser smoke, component tests, viewport screenshots, console/network checks, and accessibility assertions. Risk boundary: escalate or stop when the task involves visual regressions, inaccessible interaction, hydration mismatch, and browser-only failures, missing owner evidence, or live external state.",
+  "domain": "web",
+  "scope_hint": "code.frontend.web:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.frontend.web:responsive_layout_practice",
+  "pack_id": "code.frontend.web"
+}

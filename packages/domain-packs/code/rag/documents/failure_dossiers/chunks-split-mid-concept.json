@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:rag:chunks-split-mid-concept",
+  "type": "failure_dossier",
+  "description": "Fixed-size chunking cuts sentences or separates a claim from its context, so no single chunk contains a complete answer.",
+  "body": "Failure mode: documents are split on a character count with no overlap, slicing a claim away from the qualifier or context that makes it interpretable, so retrieval returns fragments that cannot ground an answer. Detection signals: chunk boundaries fall mid-sentence; no overlap; answers that span a boundary retrieve incomplete passages; a boundary-spanning query test is missing. Do not split on raw length ignoring structure. Safer fallback: split on semantic/structural boundaries with overlap, size to the embedding range, and test that boundary-spanning answers still retrieve a self-contained chunk.",
+  "domain": "rag",
+  "scope_hint": "code.rag:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.rag:human_authored",
+  "pack_id": "code.rag"
+}

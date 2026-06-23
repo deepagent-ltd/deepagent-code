@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:ng:standalone-vs-ngmodule",
+  "type": "knowledge",
+  "title": "Standalone components vs NgModules",
+  "description": "Standalone components declare their own imports and replace much NgModule boilerplate, changing how features are composed and lazy-loaded.",
+  "body": "Use when structuring an app or migrating module-based code. NgModules group declarations, imports, and providers and historically were the unit of compilation and lazy loading. Standalone components set standalone: true and list their own imports directly, so they can be used and lazy-loaded without a wrapping module, and apps bootstrap with bootstrapApplication and route-level loadComponent. Do not mix the two inconsistently or assume a standalone component is auto-available without importing it. Actions: import standalone components/directives/pipes where used, and migrate modules incrementally. Validation signals include the app building and a lazy route loading the standalone component. Risk boundary: a half-migrated graph with missing imports fails at compile or runtime; finish or revert a migration rather than leaving it partial.",
+  "domain": "angular",
+  "scope_hint": "code.frontend.angular:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.frontend.angular",
+  "pack_id": "code.frontend.angular"
+}

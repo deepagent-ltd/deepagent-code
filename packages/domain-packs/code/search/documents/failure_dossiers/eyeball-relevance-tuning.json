@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:search:eyeball-relevance-tuning",
+  "type": "failure_dossier",
+  "description": "Tuning boosts or analyzers against a single query by eye, regressing the broader query distribution.",
+  "body": "Failure mode: a relevance change is made to fix one observed query and shipped without measuring others, so it improves that anecdote while quietly degrading nDCG across the real query mix. Detection signals: no judgment set or offline metric exists; tuning is justified by one example; user-reported relevance gets worse after a 'fix'. Do not tune ranking by single-query feel. Safer fallback: build a judgment set, compute nDCG/precision@k before and after, and keep only changes that improve the aggregate metric.",
+  "domain": "search",
+  "scope_hint": "code.search:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.search:human_authored",
+  "pack_id": "code.search"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:svelte:debug-a-non-updating-view",
+  "type": "methodology",
+  "title": "Debug a view that will not update",
+  "description": "Trace a stale UI back to a mutation the compiler cannot see or a missing reactive declaration.",
+  "body": "Steps: 1. Confirm the underlying value actually changed (log it at the mutation site). 2. Check whether the change was an in-place mutation (push/splice/obj.field=) rather than an assignment. 3. In legacy mode, convert to a reassignment; in runes mode, confirm the value is $state and the proxy is intact. 4. Verify the template reads the same variable that changed, not a stale destructured copy. 5. Re-test the render. Rollback point: before refactoring the state model. Validation: a component test asserts the DOM updates after the state change.",
+  "domain": "svelte",
+  "scope_hint": "code.frontend.svelte:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.frontend.svelte",
+  "pack_id": "code.frontend.svelte"
+}

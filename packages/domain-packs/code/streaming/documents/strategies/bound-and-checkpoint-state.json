@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:stream:bound-and-checkpoint-state",
+  "type": "strategy",
+  "title": "Bound and checkpoint operator state",
+  "description": "Give stateful operators TTLs and reliable checkpoints so state neither grows without limit nor is lost on restart.",
+  "body": "Use when an operator keeps keyed state such as joins, dedup, or session aggregates. Do not let keyed state accumulate forever — unbounded state eventually exhausts memory or disk and stalls the job. Actions: set state TTL or explicit cleanup on inactive keys, checkpoint state to durable storage on an interval, and verify a restart restores the same state. Validation signals include a flat or bounded state-size metric over time and a restart that resumes from the last checkpoint with consistent results. Risk boundary: state that grows unbounded crashes the job under load; if state cannot be bounded by TTL, escalate to redesign the keying before it reaches production scale.",
+  "domain": "streaming",
+  "scope_hint": "code.streaming:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.streaming",
+  "pack_id": "code.streaming"
+}

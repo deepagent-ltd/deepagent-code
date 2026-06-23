@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:observability:red-use-method-coverage",
+  "type": "strategy",
+  "title": "Instrument services with RED and resources with USE",
+  "description": "Apply Rate/Errors/Duration to request-driven services and Utilization/Saturation/Errors to resources so every component has a small, actionable metric set.",
+  "body": "Use when deciding what metrics a new service or resource needs. Do not emit dozens of vanity gauges, and avoid leaving a service with no error or latency signal. Actions: for request handlers record request rate, error rate, and duration histograms; for resources (CPU, pool, queue, disk) record utilization, saturation, and errors; tie each to an alert or dashboard. Record which RED/USE signals exist per component. Validation signals include a dashboard showing all three RED series per endpoint and a test that an induced error moves the error metric. Risk boundary: a service with no error/latency signal is operationally blind — flag it as a gap rather than shipping uninstrumented.",
+  "domain": "code",
+  "scope_hint": "code.observability:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.observability",
+  "pack_id": "code.observability"
+}

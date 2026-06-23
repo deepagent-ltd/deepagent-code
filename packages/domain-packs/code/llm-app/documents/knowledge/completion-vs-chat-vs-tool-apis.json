@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:llm:completion-vs-chat-vs-tool-apis",
+  "type": "knowledge",
+  "title": "Completion, chat, and tool-calling APIs",
+  "description": "Providers expose raw completion, role-structured chat, and tool/function-calling surfaces that differ in how instructions and outputs are framed.",
+  "body": "Use when choosing or migrating which API surface a call uses. Raw text completion takes one prompt and returns text; chat APIs structure input as system/user/assistant messages so instructions and data can be separated; tool-calling lets the model emit structured calls against declared schemas instead of free text. Do not assume behavior transfers unchanged when migrating surfaces, and avoid stuffing system rules into a user message where injection can reach them. Actions: pick the surface that lets you separate instructions from data and obtain structure natively; verify how each frames stop sequences and max-tokens. Validation signals include tests that the chosen surface keeps system instructions isolated and returns parseable structure. Risk boundary: migrating surfaces changes output distribution and injection exposure, so route it through evaluation, not a silent swap.",
+  "domain": "llm_app",
+  "scope_hint": "code.llm-app:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.llm-app",
+  "pack_id": "code.llm-app"
+}

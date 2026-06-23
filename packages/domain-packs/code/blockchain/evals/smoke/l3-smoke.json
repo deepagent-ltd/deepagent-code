@@ -1,0 +1,71 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "code.blockchain",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "blockchain",
+      "smart_contract",
+      "solidity",
+      "web3"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "L3 smoke for code.blockchain: a Solidity ERC-20 contract, checks-effects-interactions to prevent reentrancy, gas-limit aware loops, on-chain versus off-chain storage, and Foundry adversarial tests"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "add input validation to a server-side form handler and write tests"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "retrieval_query": "solidity smart contract evm gas reentrancy checks-effects-interactions erc-20 erc-721 on-chain off-chain wallet signing transaction nonce upgrade proxy ethereum web3",
+  "expected_pack_id": "code.blockchain",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "code.blockchain L3 validation smoke",
+    "signals": [
+      "adversarial tests pass (reentrancy, overflow, access-control bypass attempts fail)",
+      "external calls follow checks-effects-interactions ordering",
+      "gas usage bounded and loops cannot exceed the block gas limit",
+      "no secret or private data placed in on-chain storage",
+      "access control enforced on every state-changing and privileged function"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "code.blockchain diagnosis smoke",
+    "signals": [
+      "state updated after an external call (reentrancy exposure)",
+      "unbounded loop over a user-growable array can exceed block gas limit",
+      "privileged function missing an access-control modifier",
+      "trusting tx.origin or an external contract's returned value for authorization",
+      "secret stored on-chain as if private storage were hidden"
+    ]
+  },
+  "source_refs": [
+    "source:ethereum-evm-yellowpaper:paraphrased",
+    "source:smart-contract-security-patterns:paraphrased"
+  ]
+}

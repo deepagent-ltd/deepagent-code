@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:review:untested-claim-accepted",
+  "type": "failure_dossier",
+  "description": "Accepting a test claim without command or coverage evidence can miss regressions.",
+  "body": "If the review says tests pass but cannot name what ran or what path was covered, record it as residual risk.\n\nUse only as a diagnostic do-not-use signal; do not expose this as positive strategy, methodology, or memory. Use when a proposed approach skips diff hunks, line evidence, tests, contracts, and blast radius or claims success without domain evidence. Do not use this dossier as a positive implementation strategy; it is a do-not-use signal. Actions: block the shortcut, name the missing evidence, and switch to a safer methodology or ask for human approval. Validation signals include absence or contradiction in file/line citations, failing or missing tests, reproduced behavior, and residual-risk notes. Risk boundary: treat repeated recurrence as a blocker when it can cause unsupported findings, severity inflation, hidden fixes, and ignoring user constraints.",
+  "domain": "review",
+  "scope_hint": "code.review:failure_dossiers",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.review",
+  "pack_id": "code.review"
+}

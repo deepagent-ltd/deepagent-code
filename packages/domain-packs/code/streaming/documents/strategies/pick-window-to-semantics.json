@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:stream:pick-window-to-semantics",
+  "type": "strategy",
+  "title": "Match window type to the aggregation intent",
+  "description": "Choose tumbling, sliding, or session windows to fit whether periods are disjoint, overlapping, or activity-driven.",
+  "body": "Use when defining how events group into windows. Do not default to a sliding window when you want disjoint periods — overlap double-counts events across windows. Actions: use tumbling windows for non-overlapping fixed intervals, sliding windows for moving averages where overlap is intended, and session windows keyed on inactivity gaps for user activity; verify an event lands in the expected window count. Validation signals include each event appearing in exactly the intended number of windows and aggregates matching a hand-computed reference. Risk boundary: a wrong window type silently inflates or splits aggregates; if results disagree with a manual check, treat the window choice as the defect before tuning anything else.",
+  "domain": "streaming",
+  "scope_hint": "code.streaming:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.streaming",
+  "pack_id": "code.streaming"
+}

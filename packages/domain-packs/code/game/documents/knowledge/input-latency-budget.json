@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:game:input-latency-budget",
+  "type": "knowledge",
+  "title": "Input latency is a frame-by-frame budget",
+  "description": "Player-perceived responsiveness is the sum of input sampling, simulation, render, and display latencies, each measured in frames.",
+  "body": "Use when tuning game feel or competitive responsiveness. The motion-to-photon latency is the chain: input poll, processed in a sim tick, rendered, then scanned out by the display; each stage can add a frame, and reading input late or buffering frames adds more. Do not treat input lag as a single fixed number. Actions: sample input as late as safely possible before the sim step, minimize render queue depth, and measure end-to-end latency. Validation signals include a measured motion-to-photon time and consistent action timing. Risk boundary: hidden buffering (triple buffering, queued frames) can add lag that players feel even at high FPS — measure the full chain, not just frame rate.",
+  "domain": "game",
+  "scope_hint": "code.game:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.game",
+  "pack_id": "code.game"
+}

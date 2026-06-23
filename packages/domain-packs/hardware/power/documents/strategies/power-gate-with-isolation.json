@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:hwpwr:power-gate-with-isolation",
+  "type": "strategy",
+  "title": "Power-gate domains with isolation and retention",
+  "description": "Shut off a domain only after adding isolation cells on its outputs and retention on state that must survive.",
+  "body": "Use when a block can be fully powered down during idle periods. Do not power-gate a domain whose outputs feed live logic without isolation, because floating outputs propagate unknowns. Actions: place isolation cells to clamp outputs during power-down, add retention to registers that must keep state, and verify the power-up sequence restores operation. Validation signals include power-aware simulation showing clean isolation and correct state restore after wake. Risk boundary: a missing isolation cell corrupts the always-on side, so treat any ungated domain crossing as a blocking defect.",
+  "domain": "power_design",
+  "scope_hint": "hardware.power:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.power",
+  "pack_id": "hardware.power"
+}

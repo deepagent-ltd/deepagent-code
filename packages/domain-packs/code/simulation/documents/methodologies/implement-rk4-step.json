@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:sim:implement-rk4-step",
+  "type": "methodology",
+  "title": "Implement and verify an RK4 integration step",
+  "description": "Code the four-stage Runge-Kutta update and verify its fourth-order accuracy on a test problem.",
+  "body": "Use when implementing a fixed-step RK4 integrator. Do not trust the implementation until its order is confirmed, since stage-weight mistakes are easy and silent. Actions: code the four stage evaluations and the weighted combination, run it on a problem with a known solution, and confirm error drops by sixteen each time the step halves. Validation signals include a measured fourth-order convergence rate and agreement with the analytical solution within tolerance. Risk boundary: an incorrect stage weighting degrades the order silently, so escalate to a convergence check whenever the integrator is modified.",
+  "domain": "simulation",
+  "scope_hint": "code.simulation:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.simulation",
+  "pack_id": "code.simulation"
+}

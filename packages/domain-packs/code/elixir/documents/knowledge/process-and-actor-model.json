@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:elixir:process-and-actor-model",
+  "type": "knowledge",
+  "title": "The BEAM process and actor model",
+  "description": "BEAM processes are cheap, isolated, and share nothing; they communicate only by asynchronous message passing.",
+  "body": "Use when reasoning about concurrency on the BEAM. A process is a lightweight VM-scheduled entity (not an OS thread) with its own heap and mailbox; processes share no memory and interact only by sending messages, which are copied into the receiver's mailbox and processed one at a time. A process can hold state in its loop and is addressed by pid or a registered name. Do not imagine shared-memory concurrency or assume messages are processed in parallel within one process. Actions: model independent concurrent work as separate processes and serialize state behind the process that owns it. Validation signals include tests showing isolation (a crash in one process does not corrupt another). Risk boundary: piling hot-path work into one process serializes it, and sending huge messages copies large data per send, so design message size and process granularity deliberately.",
+  "domain": "elixir",
+  "scope_hint": "code.elixir:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.elixir",
+  "pack_id": "code.elixir"
+}

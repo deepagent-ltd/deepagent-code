@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:sys:file-descriptor-leak-emfile",
+  "type": "failure_dossier",
+  "description": "An error path skips close, so descriptors accumulate until the process hits its limit and new opens fail with EMFILE.",
+  "body": "Failure mode: a resource is opened but only closed on the success path, so every error or early return leaks a descriptor; under load the count climbs until RLIMIT_NOFILE is reached and open/accept/socket fail with EMFILE, breaking the whole process including unrelated work. Detection signals: 'too many open files' errors; an fd count (lsof, /proc/<pid>/fd) that climbs and never recovers; failures correlated with elevated error rates upstream. Do not raise the fd limit to mask it. Safer fallback: release every resource with deterministic cleanup (defer/finally/RAII) on all paths, set CLOEXEC where appropriate, and verify the fd count stays flat across repeated runs of the path.",
+  "domain": "systems",
+  "scope_hint": "code.systems:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.systems:human_authored",
+  "pack_id": "code.systems"
+}

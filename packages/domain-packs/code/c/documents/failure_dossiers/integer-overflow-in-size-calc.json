@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:c:integer-overflow-in-size-calc",
+  "type": "failure_dossier",
+  "description": "An unchecked integer overflow in a size or index computation, producing a too-small allocation or out-of-bounds index.",
+  "body": "Failure mode: a multiplication like malloc(count * size) overflows size_t and wraps to a small value, so a later loop writes far past the tiny allocation; signed overflow is additionally UB. Detection signals: UBSan reports signed-integer-overflow; a huge count yields a small allocation then a heap overflow; allocations succeed but writes corrupt the heap. Do not compute allocation sizes without overflow checks. Safer fallback: use calloc (which checks count*size) or check for overflow before multiplying (count > SIZE_MAX / size), use unsigned types for sizes, and verify with UBSan on large inputs.",
+  "domain": "c",
+  "scope_hint": "code.c:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.c:human_authored",
+  "pack_id": "code.c"
+}

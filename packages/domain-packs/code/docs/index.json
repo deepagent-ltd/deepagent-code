@@ -1,0 +1,458 @@
+[
+  {
+    "ref_id": "knowledge:docs:audience-changes-detail",
+    "type": "knowledge",
+    "title": "Audience Changes Detail",
+    "summary": "Operator, contributor, API user, and maintainer docs need different detail levels.",
+    "domains": [
+      "docs",
+      "code"
+    ],
+    "triggers": [
+      "operator",
+      "contributor",
+      "user",
+      "maintainer",
+      "docs",
+      "need",
+      "different",
+      "detail"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.docs"
+  },
+  {
+    "ref_id": "knowledge:docs:diagram-needs-source",
+    "type": "knowledge",
+    "title": "Diagram Needs Source",
+    "summary": "A diagram should be grounded in actual components and paths.",
+    "domains": [
+      "docs",
+      "code"
+    ],
+    "triggers": [
+      "diagram",
+      "should",
+      "grounded",
+      "actual",
+      "components",
+      "paths",
+      "architecture",
+      "diagrams"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.docs"
+  },
+  {
+    "ref_id": "knowledge:docs:docs-drift-fast",
+    "type": "knowledge",
+    "title": "Docs Drift Fast",
+    "summary": "Docs that duplicate executable truth drift faster than docs that link to it.",
+    "domains": [
+      "docs",
+      "code"
+    ],
+    "triggers": [
+      "docs",
+      "that",
+      "duplicate",
+      "executable",
+      "truth",
+      "drift",
+      "faster",
+      "than"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.docs"
+  },
+  {
+    "ref_id": "methodology:docs:adr-writing-flow",
+    "type": "methodology",
+    "title": "Adr Writing Flow",
+    "summary": "Capture context, alternatives, decision, consequences, and revisit trigger.",
+    "domains": [
+      "docs",
+      "code"
+    ],
+    "triggers": [
+      "capture",
+      "context",
+      "alternatives",
+      "decision",
+      "consequences",
+      "revisit",
+      "trigger",
+      "steps"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.docs"
+  },
+  {
+    "ref_id": "methodology:docs:doc-consistency-pass",
+    "type": "methodology",
+    "title": "Doc Consistency Pass",
+    "summary": "Check docs against code, config, and tests before finalizing.",
+    "domains": [
+      "docs",
+      "code"
+    ],
+    "triggers": [
+      "check",
+      "docs",
+      "against",
+      "code",
+      "config",
+      "tests",
+      "before",
+      "finalizing"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.docs"
+  },
+  {
+    "ref_id": "methodology:docs:documentation-materialization",
+    "type": "methodology",
+    "title": "Documentation Materialization",
+    "summary": "Produce docs, diagrams, and PR summaries as declared evidence-linked artifacts.",
+    "domains": [
+      "docs",
+      "code"
+    ],
+    "triggers": [
+      "produce",
+      "docs",
+      "diagrams",
+      "summaries",
+      "declared",
+      "evidence",
+      "linked",
+      "artifacts"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.docs"
+  },
+  {
+    "ref_id": "skill:docs:validate-doc-example",
+    "type": "skill",
+    "title": "Validate Doc Example",
+    "summary": "Check documentation examples, commands, paths, and links against the repository.",
+    "domains": [
+      "docs",
+      "code"
+    ],
+    "triggers": [
+      "check",
+      "documentation",
+      "examples",
+      "commands",
+      "paths",
+      "links",
+      "against",
+      "repository"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.docs"
+  },
+  {
+    "ref_id": "strategy:docs:changelog-impact",
+    "type": "strategy",
+    "title": "Changelog Impact",
+    "summary": "Changelog entries should state user-visible impact, not just implementation detail.",
+    "domains": [
+      "docs",
+      "code"
+    ],
+    "triggers": [
+      "changelog",
+      "entries",
+      "should",
+      "state",
+      "user",
+      "visible",
+      "impact",
+      "just"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.docs"
+  },
+  {
+    "ref_id": "strategy:docs:docs-as-artifact",
+    "type": "strategy",
+    "title": "Docs As Artifact",
+    "summary": "Treat generated docs as declared artifacts tied to source evidence.",
+    "domains": [
+      "docs",
+      "code"
+    ],
+    "triggers": [
+      "treat",
+      "generated",
+      "docs",
+      "declared",
+      "artifacts",
+      "tied",
+      "source",
+      "evidence"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.docs"
+  },
+  {
+    "ref_id": "strategy:docs:examples-must-run",
+    "type": "strategy",
+    "title": "Examples Must Run",
+    "summary": "Code examples should be validated or marked illustrative.",
+    "domains": [
+      "docs",
+      "code"
+    ],
+    "triggers": [
+      "code",
+      "examples",
+      "should",
+      "validated",
+      "marked",
+      "illustrative",
+      "stale",
+      "snippets"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.docs"
+  },
+  {
+    "ref_id": "strategy:docs:reader-task-first",
+    "type": "strategy",
+    "title": "Reader Task First",
+    "summary": "Organize docs around what the reader needs to do.",
+    "domains": [
+      "docs",
+      "code"
+    ],
+    "triggers": [
+      "organize",
+      "docs",
+      "around",
+      "what",
+      "reader",
+      "needs",
+      "setup",
+      "usage"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.docs"
+  },
+  {
+    "ref_id": "strategy:docs:version-docs-with-the-code",
+    "type": "strategy",
+    "title": "Version documentation alongside the code",
+    "summary": "Tie each doc set to a release so readers on an older version see matching docs and breaking changes are isolated per version.",
+    "domains": [
+      "code",
+      "docs"
+    ],
+    "triggers": [
+      "versioned docs",
+      "release",
+      "version",
+      "snapshot",
+      "migration",
+      "branch"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.docs"
+  },
+  {
+    "ref_id": "strategy:docs:getting-started-must-reach-success",
+    "type": "strategy",
+    "title": "Make getting-started reach first success",
+    "summary": "Design the getting-started path so a new reader goes from zero to a working result with copyable, verified steps and no hidden prerequisites.",
+    "domains": [
+      "code",
+      "docs"
+    ],
+    "triggers": [
+      "getting started",
+      "onboarding",
+      "quickstart",
+      "tutorial",
+      "first success",
+      "prerequisites"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.docs"
+  },
+  {
+    "ref_id": "methodology:docs:detect-doc-code-drift",
+    "type": "methodology",
+    "title": "Detect and reconcile doc-code drift",
+    "summary": "Cross-check documented signatures, flags, defaults, and outputs against the current code and fix or flag every mismatch.",
+    "domains": [
+      "code",
+      "docs"
+    ],
+    "triggers": [
+      "drift",
+      "signature",
+      "flag",
+      "default",
+      "out-of-date",
+      "reconcile"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.docs"
+  },
+  {
+    "ref_id": "knowledge:docs:examples-are-tested-contracts",
+    "type": "knowledge",
+    "title": "Runnable examples are tested contracts",
+    "summary": "An example that is executed in CI is a contract that catches drift, while an unverified snippet rots silently into a wrong instruction.",
+    "domains": [
+      "code",
+      "docs"
+    ],
+    "triggers": [
+      "example",
+      "runnable",
+      "doctest",
+      "ci",
+      "snippet",
+      "verified"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.docs"
+  },
+  {
+    "ref_id": "skill:docs:verify-doc-links-and-anchors",
+    "type": "skill",
+    "title": "Verify documentation links and anchors",
+    "summary": "Check internal and external links, anchors, and referenced file paths in changed docs and report every broken or stale target.",
+    "domains": [
+      "code",
+      "docs"
+    ],
+    "triggers": [
+      "link check",
+      "anchor",
+      "broken link",
+      "path",
+      "reference",
+      "404"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.docs"
+  }
+]

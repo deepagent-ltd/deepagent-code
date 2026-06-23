@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:migration:batch-large-table-backfill",
+  "type": "methodology",
+  "title": "Backfill a large table in throttled batches",
+  "description": "Backfill or transform a huge table in bounded, resumable batches that respect replication lag and locks instead of one massive UPDATE.",
+  "body": "Steps: 1. Estimate row count and pick a batch size (e.g. by primary-key range) small enough to commit quickly without long locks. 2. Loop over key ranges, updating one batch per transaction and recording the last processed key so the job is resumable. 3. Throttle between batches and monitor replication lag, lock waits, and CPU; back off when they rise. 4. Make the transform idempotent so a retried batch is safe. 5. Verify counts and a sample of transformed rows at the end. Rollback point: after each committed batch (the checkpoint), not at the end. Validation: progress checkpoints advance, replication lag stays bounded, and final row counts/sample checks match expectations. Risk boundary: one giant UPDATE locks the table and blows up replication lag; if lag or lock waits spike, pause and reduce batch size rather than pushing through, and escalate on a hot OLTP table.",
+  "domain": "code",
+  "scope_hint": "code.migration:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.migration",
+  "pack_id": "code.migration"
+}

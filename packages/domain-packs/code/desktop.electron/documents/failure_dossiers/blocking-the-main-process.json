@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:electron:blocking-the-main-process",
+  "type": "failure_dossier",
+  "description": "Running heavy synchronous work on the main process, freezing every window and the whole application at once.",
+  "body": "Failure mode: CPU-heavy or synchronous I/O (large file parse, crypto, blocking DB call) runs on the main process, blocking its event loop so all windows stop responding simultaneously. Detection signals: the entire app freezes during an operation, not just one window; main-process profile shows a long synchronous stall; the OS shows the app as not responding. Do not block the main process. Safer fallback: move heavy work to a utility process, worker thread, or renderer, use async APIs, and keep the main process orchestrating so all windows stay interactive.",
+  "domain": "electron",
+  "scope_hint": "code.desktop.electron:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.desktop.electron:human_authored",
+  "pack_id": "code.desktop.electron"
+}

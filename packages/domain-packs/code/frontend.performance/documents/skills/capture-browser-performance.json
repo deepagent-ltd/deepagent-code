@@ -1,0 +1,11 @@
+{
+  "ref_id": "skill:frontend_performance:capture-browser-performance",
+  "type": "skill",
+  "description": "Capture browser performance evidence for a changed route or interaction.",
+  "body": "Inputs: URL and flow. Output: trace summary, long tasks, network and layout risks.\n\nDerived from local skill survey outputs under /Users/xiuranli/code/agent/skill, especially reviewed canonical rules, coverage reports, and trusted local skill notes. Paraphrased into domain-pack seed form.\n\nSkill contract: expose this as an index-visible capability for high/max/ultra, but load body only when triggers and permissions match. Use when Frontend Performance work touches visible UI behavior, browser console output, DOM state, assets, viewport behavior, and interaction evidence. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: run the documented inspection and validation workflow; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include browser smoke, component tests, viewport screenshots, console/network checks, and accessibility assertions. Risk boundary: escalate or stop when the task involves visual regressions, inaccessible interaction, hydration mismatch, and browser-only failures, missing owner evidence, or live external state.",
+  "domain": "performance",
+  "scope_hint": "code.frontend.performance:skills",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.frontend.performance:skill_survey",
+  "pack_id": "code.frontend.performance"
+}

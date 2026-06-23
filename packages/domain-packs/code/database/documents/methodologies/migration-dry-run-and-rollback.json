@@ -1,0 +1,11 @@
+{
+  "ref_id": "methodology:database:migration-dry-run-and-rollback",
+  "type": "methodology",
+  "description": "Dry-run migrations against disposable data, verify invariants, and prove rollback or roll-forward handling.",
+  "body": "Steps: identify migration files and generated SQL; classify each statement as additive, data rewrite, constraint validation, index operation, or destructive cleanup; run the migration on an isolated database or fixture snapshot; record timing, row counts, constraint failures, and lock warnings; run application tests or smoke queries against the migrated schema; execute down migration or roll-forward recovery where supported; compare key counts and checksums before and after. Do not use this as approval to touch production data. Validation signals are successful dry-run, expected schema diff, preserved critical rows, no unexpected nulls or duplicates, and a tested rollback path or explicit irreversible-change approval. Rollback point: stop before destructive cleanup if any compatibility or count check fails. Use when Database Engineering work touches schema deltas, query shape, transaction ownership, constraints, locks, and data volume. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: follow the ordered review, edit, and validation sequence; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include migration dry-runs, rollback checks, EXPLAIN output, constraint tests, and fixture data comparisons. Risk boundary: escalate or stop when the task involves data loss, long locks, non-rollbackable writes, silent query-plan regressions, and unsafe backfills, missing owner evidence, or live external state.",
+  "domain": "sql",
+  "scope_hint": "code.database:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database:migration_dry_run_method",
+  "pack_id": "code.database"
+}

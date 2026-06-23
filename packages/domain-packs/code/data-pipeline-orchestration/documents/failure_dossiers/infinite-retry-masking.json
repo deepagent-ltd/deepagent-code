@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure_dossier:orch:infinite-retry-masking",
+  "type": "failure_dossier",
+  "description": "A task retries indefinitely on a deterministic error, hiding a real outage behind constant churn.",
+  "body": "Failure mode: a task is configured with unlimited or excessive retries and retries a non-transient failure (a schema break or bad credential), so it churns continuously, masks the real breakage, and wastes resources while no alert fires. Detection signals: a task stuck retrying for a long time with the same error, and resource usage from constant restarts without a final-failure notification. Do not raise the retry count further. Safer fallback: bound retries with backoff for transient faults only, fail fast on deterministic errors, wire a final-failure alert with context, and treat retry exhaustion as a real incident to investigate rather than auto-reset.",
+  "domain": "orchestration",
+  "scope_hint": "code.data-pipeline-orchestration:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.data-pipeline-orchestration:human_authored",
+  "pack_id": "code.data-pipeline-orchestration"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:cmake:transitive-usage-requirements",
+  "type": "knowledge",
+  "title": "How usage requirements propagate transitively",
+  "description": "INTERFACE and PUBLIC properties on a target flow to anything that links it, so consumers inherit includes, definitions, and dependencies automatically.",
+  "body": "Use when reasoning about why a consumer compiles without restating a dependency's settings. Do not assume each target must re-declare what it links. A target's INTERFACE_* properties attach to consumers at link time, and PUBLIC merges INTERFACE with the build-time PRIVATE effect; chains of links propagate these transitively. Inspect with the target's INTERFACE properties to see what consumers receive. Validation signals include a deep consumer building correctly through several link layers. Risk boundary: marking implementation deps PUBLIC leaks them down the whole chain, so scope visibility carefully.",
+  "domain": "cmake",
+  "scope_hint": "code.build.cmake:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.build.cmake",
+  "pack_id": "code.build.cmake"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:mongo:create-a-ttl-index-for-expiry",
+  "type": "skill",
+  "title": "Create a TTL index for automatic expiry",
+  "description": "Use a TTL index on a date field so MongoDB removes expired documents in the background without a cron job.",
+  "body": "Use when documents should expire automatically (sessions, tokens, ephemeral events). Actions: create an index on a BSON date field with expireAfterSeconds so a background task deletes documents once the field's time plus the interval has passed; for a fixed wall-clock expiry, set the date field to the target time and expireAfterSeconds to 0. Verify by inserting a soon-to-expire document and confirming it disappears after the next sweep. Validation signals include the document being gone within roughly a minute of expiry and the TTLMonitor metric advancing. Risk boundary: the TTL sweep runs about once a minute and is best-effort, so do not rely on it for precise timing or for hard security cutoffs that need immediate deletion.",
+  "domain": "mongodb",
+  "scope_hint": "code.database.mongodb:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.mongodb",
+  "pack_id": "code.database.mongodb"
+}

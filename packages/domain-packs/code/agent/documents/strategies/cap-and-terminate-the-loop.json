@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:agent:cap-and-terminate-the-loop",
+  "type": "strategy",
+  "title": "Cap and terminate the agent loop",
+  "description": "Every agent loop has an explicit step cap, a terminal-state check, and a defined behavior when the cap is hit.",
+  "body": "Use when implementing or changing an agent's control loop. Do not run a while-true that exits only when the model says it is done, and avoid relying on the model to choose to stop. Actions: set a maximum step count, check an explicit terminal condition each iteration, and define what happens at the cap (return partial, escalate, fail). Validation signals include a test that a non-converging task halts at the cap rather than looping forever and a trace showing the terminal check each step. Risk boundary: an uncapped loop that can call side-effecting tools is a blocking finding; cap it and gate the side effects.",
+  "domain": "agent",
+  "scope_hint": "code.agent:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.agent",
+  "pack_id": "code.agent"
+}

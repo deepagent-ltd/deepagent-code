@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:game:simulation-vs-rendering",
+  "type": "knowledge",
+  "title": "Simulation and rendering are separate clocks",
+  "description": "Game logic advances in discrete simulation ticks while rendering draws as fast as it can; conflating them ties physics to frame rate.",
+  "body": "Use when reasoning about loop structure. The simulation should advance in fixed, discrete ticks (deterministic, frame-rate independent) while rendering presents the latest interpolated state at whatever rate the display allows; they are two clocks, not one. Do not advance physics by the render delta. Actions: keep a fixed-dt update and interpolate visuals between sim states. Validation signals include consistent gameplay at any frame rate and smooth visuals via interpolation. Risk boundary: binding simulation to the render rate makes behavior depend on hardware speed and breaks determinism, replays, and multiplayer sync — the decoupling is foundational, not optional.",
+  "domain": "game",
+  "scope_hint": "code.game:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.game",
+  "pack_id": "code.game"
+}

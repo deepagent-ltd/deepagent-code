@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:sls:respect-execution-limits",
+  "type": "strategy",
+  "title": "Design within execution limits",
+  "description": "Account for timeout, memory, payload-size, and concurrency limits explicitly instead of discovering them under load.",
+  "body": "Use when a function calls downstreams, processes large inputs, or runs under bursty load. Do not set a timeout shorter than the slowest downstream call, and do not push large payloads through invocation limits. Actions: set the timeout above worst-case downstream latency with margin, size memory to the work (CPU scales with memory on Lambda), stream or offload large payloads to object storage, and reserve/limit concurrency to protect downstreams. Validation signals include functions completing before timeout under load tests and no throttling errors. Risk boundary: a timeout shorter than a downstream call causes silent partial work and retries; an unbounded concurrency burst can overwhelm a database — set reserved concurrency on risky paths.",
+  "domain": "serverless",
+  "scope_hint": "code.backend.serverless:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.serverless",
+  "pack_id": "code.backend.serverless"
+}

@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:conc:lock-order-inversion-deadlock",
+  "type": "failure_dossier",
+  "description": "Two code paths acquire the same two locks in opposite orders, wedging under concurrency.",
+  "body": "Failure mode: path one locks A then B while path two locks B then A, so when they run concurrently each holds one lock and waits forever for the other, hanging the threads (and often the whole process). Detection signals: the process hangs under load; a thread dump shows a cycle in the wait-for graph; two stacks each hold one lock and block on the other. Do not add a second lock to a path without placing it in the global order. Safer fallback: define a total lock order by rank, acquire strictly in increasing rank everywhere, or use try-lock with backoff, then confirm an acyclic wait-for graph and a non-hanging stress test.",
+  "domain": "concurrency",
+  "scope_hint": "code.concurrency:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.concurrency:human_authored",
+  "pack_id": "code.concurrency"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:bazel:pin-dependencies-with-bzlmod",
+  "type": "strategy",
+  "title": "Manage external dependencies with bzlmod",
+  "description": "Declare external modules in MODULE.bazel with explicit versions so the dependency set is reproducible and resolvable.",
+  "body": "Use when adding or upgrading an external dependency in a modern Bazel project. Do not mix ad hoc WORKSPACE rules with bzlmod for the same dependency. Actions: add the module and version to MODULE.bazel; let resolution pick compatible versions; commit the lock so the graph is reproducible. Validation signals include a clean checkout resolving the same versions and a build that does not depend on host-installed packages. Risk boundary: unpinned or duplicated dependency declarations cause version skew and supply-chain ambiguity, so keep one source of truth and review version bumps.",
+  "domain": "bazel",
+  "scope_hint": "code.build.bazel:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.build.bazel",
+  "pack_id": "code.build.bazel"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:vsearch:rerank-the-shortlist",
+  "type": "strategy",
+  "title": "Re-rank a retrieved shortlist precisely",
+  "description": "Retrieve a wider candidate set with cheap ANN, then re-rank the top candidates with a cross-encoder for precision.",
+  "body": "Use when first-stage retrieval has decent recall but the top results are not precisely ordered. Do not push the cross-encoder over the whole corpus — it is far too slow; and do not skip it when ordering quality matters. Actions: retrieve a larger top-N with the ANN index, re-rank that shortlist with a cross-encoder or late-interaction model, and measure precision@k before and after. Validation signals include a precision@k gain from re-ranking on the eval set and a latency within budget for the shortlist size. Risk boundary: re-ranking a too-small shortlist caps recall the reranker can recover; if the first stage already dropped the answer, fix recall first and escalate the retrieval budget.",
+  "domain": "vector_search",
+  "scope_hint": "code.vector-search:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.vector-search",
+  "pack_id": "code.vector-search"
+}
