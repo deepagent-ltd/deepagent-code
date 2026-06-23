@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:comp:scope-a-sod-matrix",
+  "type": "methodology",
+  "title": "Scope a segregation-of-duties matrix",
+  "description": "Enumerate conflicting capability pairs and detect any principal holding both halves.",
+  "body": "Steps: 1. List sensitive workflows and decompose each into initiate vs authorize vs execute steps. 2. Define conflicting pairs (request+approve payout, grant+use access, write+deploy prod). 3. Map current roles/permissions to those steps. 4. Detect any principal or role bundle that holds both halves of a pair. 5. Report each toxic combination with the affected principals. Rollback point: before changing any role assignment. Validation: the matrix lists every conflicting pair and the scan surfaces all violating principals; clean state has no principal owning both halves.",
+  "domain": "compliance",
+  "scope_hint": "risk.compliance:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.compliance",
+  "pack_id": "risk.compliance"
+}

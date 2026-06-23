@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:cmake:depend-via-imported-targets",
+  "type": "strategy",
+  "title": "Depend on imported targets, not raw paths",
+  "description": "Link against the namespaced imported target a package exports rather than hardcoding library file paths and include directories.",
+  "body": "Use when consuming an external library through find_package or FetchContent. Do not hardcode absolute library paths or guessed include directories. Actions: call find_package and link the documented imported target such as Foo::foo; let its INTERFACE properties carry includes and transitive deps. Validation signals include a build that relocates to another machine without editing paths, and missing dependencies surfacing at configure time rather than link time. Risk boundary: hardcoded paths break on other platforms and toolchains, so always prefer the package's exported target.",
+  "domain": "cmake",
+  "scope_hint": "code.build.cmake:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.build.cmake",
+  "pack_id": "code.build.cmake"
+}

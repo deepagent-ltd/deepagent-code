@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:sys:keep-signal-handlers-async-safe",
+  "type": "strategy",
+  "title": "Keep signal handlers async-signal-safe and minimal",
+  "description": "Do only async-signal-safe work in a handler; set a flag or write to a self-pipe and handle the real work in the main loop.",
+  "body": "Use when handling SIGTERM/SIGINT/SIGCHLD or implementing graceful shutdown. Do not call malloc, printf, locks, or most library functions in a signal handler, because the handler interrupts arbitrary code and those functions are not async-signal-safe (reentrancy deadlock or corruption). Actions: set a volatile sig_atomic_t flag or write a byte to a self-pipe/eventfd, return, and do the real shutdown/reaping work in the main loop where it is safe; block signals around critical sections as needed. Validation signals include a shutdown test where a signal during work leads to clean teardown with no deadlock. Risk boundary: doing unsafe work in a handler can wedge the process at the worst time; keep handlers trivial and review any handler that calls non-trivial functions.",
+  "domain": "systems",
+  "scope_hint": "code.systems:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.systems",
+  "pack_id": "code.systems"
+}

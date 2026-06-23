@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:bazel:workspace-vs-bzlmod",
+  "type": "knowledge",
+  "title": "WORKSPACE versus bzlmod dependency management",
+  "description": "Legacy WORKSPACE declares external repos imperatively, while bzlmod resolves a versioned module graph from MODULE.bazel.",
+  "body": "Use when reading how a project pulls external code. Do not assume both systems can manage the same dependency cleanly at once. WORKSPACE runs repository rules top-to-bottom with no version resolution, so order and overrides matter; bzlmod declares modules with versions in MODULE.bazel and resolves a consistent set. Inspect which file owns a dependency. Validation signals include a reproducible external graph from a clean checkout. Risk boundary: straddling both systems for one dependency causes version skew, so migrate a dependency fully to bzlmod rather than splitting it.",
+  "domain": "bazel",
+  "scope_hint": "code.build.bazel:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.build.bazel",
+  "pack_id": "code.build.bazel"
+}

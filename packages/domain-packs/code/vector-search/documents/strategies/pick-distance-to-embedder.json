@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:vsearch:pick-distance-to-embedder",
+  "type": "strategy",
+  "title": "Match the distance metric to the embedder",
+  "description": "Use the similarity metric the embedding model was trained for (cosine, dot, or L2) and normalize vectors consistently.",
+  "body": "Use when configuring an index's similarity function. Do not pick a metric arbitrarily — an embedder trained for cosine similarity behaves differently under raw dot product if vectors are not normalized. Actions: read the embedding model's intended metric, normalize vectors when cosine is expected, configure the index with the matching distance, and verify a known pair scores as most similar. Validation signals include a metric matching the model card and a sanity check where semantically close items rank closest. Risk boundary: a mismatched metric silently distorts ranking; if the model's intended metric is unknown, escalate rather than guessing, since wrong distance degrades every query.",
+  "domain": "vector_search",
+  "scope_hint": "code.vector-search:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.vector-search",
+  "pack_id": "code.vector-search"
+}

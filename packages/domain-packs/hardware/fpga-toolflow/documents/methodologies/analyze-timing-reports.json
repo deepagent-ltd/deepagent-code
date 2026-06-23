@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:fpgatf:analyze-timing-reports",
+  "type": "methodology",
+  "title": "Read static timing reports systematically",
+  "description": "Work from the worst-slack paths through clock relationships and exceptions to find the true cause of a violation.",
+  "body": "Use when a design fails timing and the cause is not obvious. Do not fix the first reported path blindly, since many violations share a common root such as a missing constraint. Actions: open the worst-slack paths, inspect the launch and capture clock relationship, and check for missing constraints or wrong exceptions. Validation signals include a root cause identified across grouped violations and slack improving after addressing it. Risk boundary: chasing symptoms instead of the root constraint wastes iterations, so escalate to a constraint audit when many unrelated paths fail together.",
+  "domain": "fpga_toolflow",
+  "scope_hint": "hardware.fpga-toolflow:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.fpga-toolflow",
+  "pack_id": "hardware.fpga-toolflow"
+}

@@ -1,0 +1,452 @@
+[
+  {
+    "ref_id": "strategy:ng:tear-down-every-subscription",
+    "type": "strategy",
+    "title": "Tear down every long-lived subscription",
+    "summary": "A manual subscribe outlives the component unless unsubscribed, so prefer the async pipe or takeUntilDestroyed.",
+    "domains": [
+      "angular",
+      "rxjs",
+      "frontend"
+    ],
+    "triggers": [
+      "subscription",
+      "unsubscribe",
+      "teardown",
+      "destroy",
+      "async",
+      "leak"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.angular"
+  },
+  {
+    "ref_id": "strategy:ng:flatten-instead-of-nesting-subscribes",
+    "type": "strategy",
+    "title": "Flatten streams instead of nesting subscribes",
+    "summary": "Use switchMap/mergeMap/concatMap to chain dependent observables rather than subscribing inside a subscribe.",
+    "domains": [
+      "angular",
+      "rxjs",
+      "frontend"
+    ],
+    "triggers": [
+      "flatten",
+      "switchmap",
+      "mergemap",
+      "nested",
+      "subscribe",
+      "operator"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.angular"
+  },
+  {
+    "ref_id": "strategy:ng:default-to-onpush-or-signals",
+    "type": "strategy",
+    "title": "Default components to OnPush or signals",
+    "summary": "Run change detection on explicit inputs and observable emissions rather than on every Zone-tracked event.",
+    "domains": [
+      "angular",
+      "rxjs",
+      "frontend"
+    ],
+    "triggers": [
+      "onpush",
+      "changedetection",
+      "signal",
+      "immutable",
+      "performance",
+      "strategy"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.angular"
+  },
+  {
+    "ref_id": "strategy:ng:scope-providers-deliberately",
+    "type": "strategy",
+    "title": "Scope providers deliberately",
+    "summary": "Declare where an injectable lives (root, route, or component) so instance count and lifetime are intentional.",
+    "domains": [
+      "angular",
+      "rxjs",
+      "frontend"
+    ],
+    "triggers": [
+      "provider",
+      "injectable",
+      "scope",
+      "singleton",
+      "root",
+      "di"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.angular"
+  },
+  {
+    "ref_id": "strategy:ng:keep-work-out-of-change-detection",
+    "type": "strategy",
+    "title": "Keep heavy work out of the change-detection path",
+    "summary": "Avoid expensive computation in templates and getters that re-run on every change-detection cycle.",
+    "domains": [
+      "angular",
+      "rxjs",
+      "frontend"
+    ],
+    "triggers": [
+      "template",
+      "getter",
+      "performance",
+      "purepipe",
+      "memoize",
+      "cd"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.angular"
+  },
+  {
+    "ref_id": "strategy:ng:build-forms-reactively",
+    "type": "strategy",
+    "title": "Build forms with the reactive forms model",
+    "summary": "Define form structure and validation in the component as a typed FormGroup rather than scattering logic in the template.",
+    "domains": [
+      "angular",
+      "rxjs",
+      "frontend"
+    ],
+    "triggers": [
+      "reactive",
+      "forms",
+      "formgroup",
+      "validator",
+      "control",
+      "typed"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.angular"
+  },
+  {
+    "ref_id": "methodology:ng:debug-a-leaking-subscription",
+    "type": "methodology",
+    "title": "Debug a leaking or duplicate subscription",
+    "summary": "Trace duplicated side effects or growing memory to a subscription that is never torn down.",
+    "domains": [
+      "angular",
+      "rxjs",
+      "frontend"
+    ],
+    "triggers": [
+      "debug",
+      "leak",
+      "subscription",
+      "duplicate",
+      "teardown",
+      "trace"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.angular"
+  },
+  {
+    "ref_id": "methodology:ng:diagnose-an-onpush-not-updating",
+    "type": "methodology",
+    "title": "Diagnose an OnPush component that will not update",
+    "summary": "Trace a stale OnPush view to an in-place mutation or a change that did not flow through an input or async pipe.",
+    "domains": [
+      "angular",
+      "rxjs",
+      "frontend"
+    ],
+    "triggers": [
+      "onpush",
+      "stale",
+      "diagnose",
+      "mutation",
+      "markforcheck",
+      "trace"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.angular"
+  },
+  {
+    "ref_id": "methodology:ng:trace-an-injection-instance",
+    "type": "methodology",
+    "title": "Trace where an injected instance comes from",
+    "summary": "Resolve which provider supplies a dependency and how many instances exist across the injector tree.",
+    "domains": [
+      "angular",
+      "rxjs",
+      "frontend"
+    ],
+    "triggers": [
+      "injection",
+      "provider",
+      "instance",
+      "injector",
+      "trace",
+      "scope"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.angular"
+  },
+  {
+    "ref_id": "methodology:ng:set-up-testbed-and-marble-tests",
+    "type": "methodology",
+    "title": "Set up TestBed and marble tests",
+    "summary": "Use Angular TestBed for components/DI and RxJS TestScheduler marbles for stream logic.",
+    "domains": [
+      "angular",
+      "rxjs",
+      "frontend"
+    ],
+    "triggers": [
+      "testbed",
+      "marble",
+      "test",
+      "testscheduler",
+      "spectator",
+      "setup"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.angular"
+  },
+  {
+    "ref_id": "knowledge:ng:rxjs-flattening-operators",
+    "type": "knowledge",
+    "title": "RxJS flattening operators and their semantics",
+    "summary": "switchMap, mergeMap, concatMap, and exhaustMap differ in how they handle overlapping inner subscriptions.",
+    "domains": [
+      "angular",
+      "rxjs",
+      "frontend"
+    ],
+    "triggers": [
+      "rxjs",
+      "switchmap",
+      "mergemap",
+      "concatmap",
+      "exhaustmap",
+      "concurrency"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.angular"
+  },
+  {
+    "ref_id": "knowledge:ng:change-detection-zone-onpush-signals",
+    "type": "knowledge",
+    "title": "Change detection: Zone, OnPush, and signals",
+    "summary": "Zone.js triggers checks on every async event; OnPush narrows checks to input/observable changes; signals track dependencies precisely.",
+    "domains": [
+      "angular",
+      "rxjs",
+      "frontend"
+    ],
+    "triggers": [
+      "changedetection",
+      "zone",
+      "onpush",
+      "signal",
+      "dirty",
+      "render"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.angular"
+  },
+  {
+    "ref_id": "knowledge:ng:di-hierarchy-and-provider-scope",
+    "type": "knowledge",
+    "title": "The DI hierarchy and provider scope",
+    "summary": "Angular resolves a dependency up a tree of injectors, so where a service is provided determines its instance count and lifetime.",
+    "domains": [
+      "angular",
+      "rxjs",
+      "frontend"
+    ],
+    "triggers": [
+      "di",
+      "injector",
+      "hierarchy",
+      "provider",
+      "singleton",
+      "scope"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.angular"
+  },
+  {
+    "ref_id": "knowledge:ng:standalone-vs-ngmodule",
+    "type": "knowledge",
+    "title": "Standalone components vs NgModules",
+    "summary": "Standalone components declare their own imports and replace much NgModule boilerplate, changing how features are composed and lazy-loaded.",
+    "domains": [
+      "angular",
+      "rxjs",
+      "frontend"
+    ],
+    "triggers": [
+      "standalone",
+      "ngmodule",
+      "imports",
+      "lazy",
+      "bootstrap",
+      "component"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.angular"
+  },
+  {
+    "ref_id": "skill:ng:audit-subscription-lifecycle",
+    "type": "skill",
+    "title": "Audit subscription lifecycle",
+    "summary": "Read a component and report every subscription's teardown status and any nested-subscribe race risk.",
+    "domains": [
+      "angular",
+      "rxjs",
+      "frontend"
+    ],
+    "triggers": [
+      "audit",
+      "subscription",
+      "lifecycle",
+      "teardown",
+      "review",
+      "rxjs"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.angular"
+  },
+  {
+    "ref_id": "skill:ng:review-change-detection-fitness",
+    "type": "skill",
+    "title": "Review change-detection fitness",
+    "summary": "Check components for OnPush correctness and template work that re-runs every detection cycle.",
+    "domains": [
+      "angular",
+      "rxjs",
+      "frontend"
+    ],
+    "triggers": [
+      "review",
+      "changedetection",
+      "onpush",
+      "performance",
+      "template",
+      "getter"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.angular"
+  }
+]

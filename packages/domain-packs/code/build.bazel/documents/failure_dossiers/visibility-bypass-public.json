@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:bazel:visibility-bypass-public",
+  "type": "failure_dossier",
+  "description": "Defaulting targets to public visibility erodes module boundaries, letting any package depend on internals that should be private.",
+  "body": "Failure mode: targets are declared with //visibility:public to silence access errors, so internal helpers become depend-able from anywhere. Detection signals: packages depend on libraries meant to be private; refactoring an internal target breaks distant consumers; the dependency graph has edges crossing intended boundaries. Do not make targets public to clear a visibility error. Safer fallback: set visibility to the specific packages or a package_group that should have access, keep helpers private, and review any change that widens visibility.",
+  "domain": "bazel",
+  "scope_hint": "code.build.bazel:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.build.bazel:human_authored",
+  "pack_id": "code.build.bazel"
+}

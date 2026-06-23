@@ -1,0 +1,11 @@
+{
+  "ref_id": "methodology:typescript:generated-type-refresh-loop",
+  "type": "methodology",
+  "description": "Validate schema or source changes by regenerating TypeScript artifacts and checking consumers.",
+  "body": "Use this methodology when source schemas, API contracts, SDK definitions, protobuf/OpenAPI/GraphQL files, or declaration generators change. First locate the canonical source and generator script. Next run the repository-approved generation command from the owning package. Then inspect generated diffs for expected contract changes and run package-local typecheck plus at least one consumer compile path when available. Do not manually patch generated output or ignore stale generated artifacts. Verification signals include generator command output, deterministic generated diff, updated declarations or SDK files, and consumer typecheck results. Rollback point: before changing checked-in generated artifacts without source input changes. Use when TypeScript / JavaScript work touches repository conventions, toolchain files, changed symbols, validation commands, and runtime output. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: follow the ordered review, edit, and validation sequence; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include package-local checks, focused tests, build output, smoke runs, and command logs. Risk boundary: escalate or stop when the task involves broad rewrites, generated-file drift, stale assumptions, and unvalidated behavior changes, missing owner evidence, or live external state.",
+  "domain": "typescript",
+  "scope_hint": "code.typescript:methodologies",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.typescript:human_authored",
+  "pack_id": "code.typescript"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:gcp:bigquery-cost-optimization",
+  "type": "methodology",
+  "title": "Cut a BigQuery query's cost with dry-runs and the query plan",
+  "description": "Measure bytes-scanned with --dry_run, read the execution plan stages, then add pruning, clustering, or materialization.",
+  "body": "Use when a BigQuery query is expensive or slow. Do not guess at fixes. Actions: run the query with --dry_run to capture bytes that would be billed, inspect the query plan stages for slot-heavy shuffles and full scans, then apply targeted fixes — add a partition filter, restrict columns, pre-aggregate into a materialized view, or cluster the source. Re-run the dry-run to confirm the drop. Validation signals include dry-run bytes-billed falling, plan shuffle bytes shrinking, and runtime dropping at the same slot reservation. Risk boundary: changing a production dataset's schema or partitioning is human-gated.",
+  "domain": "gcp",
+  "scope_hint": "platform.cloud.gcp:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.cloud.gcp",
+  "pack_id": "platform.cloud.gcp"
+}

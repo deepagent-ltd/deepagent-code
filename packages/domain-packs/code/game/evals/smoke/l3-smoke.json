@@ -1,0 +1,71 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "code.game",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "game",
+      "game_loop",
+      "physics",
+      "rendering_game"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "L3 smoke for code.game: fixed-timestep game loop, entity-component-system, collision detection and physics, per-frame budget, asset pipeline, and deterministic simulation for netcode"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "write a nightly batch ETL job that aggregates analytics into a warehouse"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "retrieval_query": "game loop fixed timestep entity component system physics collision frame budget asset pipeline input determinism netcode interpolation",
+  "expected_pack_id": "code.game",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "code.game L3 validation smoke",
+    "signals": [
+      "simulation step is fixed-timestep and frame-rate independent",
+      "frame time stays within budget at p99 (no dropped frames)",
+      "physics result is deterministic across runs given the same inputs",
+      "no per-frame heap allocation in the hot loop (no GC hitch)",
+      "input is sampled and applied within the same simulation tick"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "code.game diagnosis smoke",
+    "signals": [
+      "movement speed tied to frame rate (variable timestep)",
+      "frame stalls from garbage-collection or asset loading on the main thread",
+      "non-deterministic physics breaking replay or netcode",
+      "collision check is O(n^2) over all entities",
+      "input read at render time, causing one-frame lag or missed inputs"
+    ]
+  },
+  "source_refs": [
+    "source:fix-your-timestep-practice:paraphrased",
+    "source:ecs-architecture-practice:paraphrased"
+  ]
+}

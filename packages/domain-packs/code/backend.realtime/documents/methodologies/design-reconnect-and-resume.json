@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:rt:design-reconnect-and-resume",
+  "type": "methodology",
+  "title": "Design reconnect and resume",
+  "description": "Add sequence ids, client cursors, and server replay so a dropped connection recovers without lost or duplicate state.",
+  "body": "Steps: 1. Assign each message on a channel a monotonic id/sequence. 2. Have the client persist the last-applied id. 3. On reconnect the client sends last-seen id; the server replays buffered messages after it, or sends a fresh snapshot plus a new cursor if the gap is too large. 4. Make client apply idempotent so a replayed message is harmless. 5. Add jittered exponential reconnect backoff. Rollback point: fall back to full-snapshot-on-reconnect if replay is unavailable. Validation: a mid-stream kill test recovers every missed message exactly once after reconnect.",
+  "domain": "realtime",
+  "scope_hint": "code.backend.realtime:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.realtime",
+  "pack_id": "code.backend.realtime"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:svc:keep-service-boundaries-cohesive",
+  "type": "strategy",
+  "title": "Keep service boundaries cohesive",
+  "description": "A service owns its data and exposes intent-level operations; callers do not reach across into another service's storage.",
+  "body": "Use when adding an operation or deciding where logic lives. Do not let one service read or write another service's tables directly or leak internal models across the boundary. Actions: keep each write behind the owning service's operation, expose intent (placeOrder) not storage (insertRow), and version the contract. Validation signals include a check that no cross-service direct DB access exists and that the boundary is exercised by an integration test against the public operation. Risk boundary: shared-table coupling across services blocks independent deploys and is a structural finding to flag for review.",
+  "domain": "backend_service",
+  "scope_hint": "code.backend.service:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.service",
+  "pack_id": "code.backend.service"
+}

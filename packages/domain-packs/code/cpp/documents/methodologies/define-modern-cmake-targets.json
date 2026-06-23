@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:cpp:define-modern-cmake-targets",
+  "type": "methodology",
+  "title": "Model dependencies with target-based modern CMake",
+  "description": "Express include dirs, compile features, and link deps as PUBLIC/PRIVATE target properties so usage requirements propagate correctly.",
+  "body": "Steps: 1. Create targets with add_library/add_executable and attach requirements via target_include_directories / target_compile_features / target_link_libraries using PUBLIC (propagates to consumers), PRIVATE (this target only), or INTERFACE (consumers only). 2. Link by target name (not raw paths) so transitive usage requirements flow automatically. 3. Set the C++ standard with target_compile_features(tgt PUBLIC cxx_std_20) rather than global flags. 4. Configure and build with `cmake -S . -B build && cmake --build build`. 5. Verify with `cmake --build build --target help` and a clean consumer link. Rollback point: before changing a property's visibility (PUBLIC vs PRIVATE changes the consumer's flags). Validation: a downstream target compiles and links using only target_link_libraries with no manual include paths. Risk boundary: marking an internal dependency PUBLIC leaks it into every consumer's interface; record the intended visibility and verify with a minimal consumer build.",
+  "domain": "cpp",
+  "scope_hint": "code.cpp:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.cpp",
+  "pack_id": "code.cpp"
+}

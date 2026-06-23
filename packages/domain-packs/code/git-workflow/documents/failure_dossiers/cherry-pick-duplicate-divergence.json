@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:git:cherry-pick-duplicate-divergence",
+  "type": "failure_dossier",
+  "description": "Cherry-picking commits that a later merge also carries over produces duplicate commits and confusing divergence between branches.",
+  "body": "Failure mode: a commit is cherry-picked to another branch and the source branch is later merged into the same target, so the same change lands twice with different hashes. Detection signals: git log shows two commits with identical diffs; a merge raises conflicts on changes that look already applied; release notes list a fix twice. Do not cherry-pick a change that an upcoming merge will also bring. Safer fallback: prefer merging when the whole branch will integrate, reserve cherry-pick for isolated hotfixes, use -x to record origin, and plan how the divergence resolves.",
+  "domain": "git_workflow",
+  "scope_hint": "code.git-workflow:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.git-workflow:human_authored",
+  "pack_id": "code.git-workflow"
+}

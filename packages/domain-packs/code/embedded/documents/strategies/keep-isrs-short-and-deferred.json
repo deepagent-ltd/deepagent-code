@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:embed:keep-isrs-short-and-deferred",
+  "type": "strategy",
+  "title": "Keep ISRs short and defer work",
+  "description": "Do the minimum in an interrupt handler — clear the source, capture data, signal a task — and push real processing to the base level.",
+  "body": "Use when writing or reviewing any interrupt service routine. Do not do blocking work, heavy computation, logging, or dynamic allocation inside an ISR, and do not call blocking RTOS APIs from it. Actions: in the ISR clear the interrupt flag, read the time-critical register, and post a semaphore/queue to a worker task; inspect every ISR for hidden blocking calls. Validation signals include a measured worst-case ISR duration that fits the latency budget (GPIO-toggle on a logic analyzer) and no missed interrupts under load. Risk boundary: a long ISR delays or drops higher-priority interrupts and can violate a hard deadline; treat any unbounded work in an ISR as a blocking defect and escalate for a real-time review.",
+  "domain": "embedded",
+  "scope_hint": "code.embedded:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.embedded",
+  "pack_id": "code.embedded"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:search:bm25-scoring",
+  "type": "knowledge",
+  "title": "BM25 relevance scoring",
+  "description": "BM25 scores a match from term frequency (saturating), inverse document frequency, and field-length normalization, tunable via k1 and b.",
+  "body": "Use when reasoning about why documents rank as they do. BM25 rewards documents where a query term is frequent (but with diminishing returns past saturation, controlled by k1), weights rarer terms higher via inverse document frequency, and penalizes long fields via length normalization (controlled by b). Do not assume more term repetitions linearly raise the score, or that all terms count equally. Actions: use the explain API to see each term's contribution and tune k1/b only with judgment-set evidence. Validation signals include explain output matching expected term weights. Risk boundary: tuning BM25 parameters blind can globally distort ranking; change them only with measured relevance.",
+  "domain": "search",
+  "scope_hint": "code.search:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.search",
+  "pack_id": "code.search"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:cache:trace-key-collisions",
+  "type": "skill",
+  "title": "Trace cache key collisions",
+  "description": "Decode how keys derive from requests to find collisions or missing value-affecting inputs.",
+  "body": "Use when wrong or cross-tenant data is suspected from the cache. Actions: sample cache keys, decode how each was derived from its request, and check whether two distinct requests can map to one key or whether a varying input is absent from the key. Report any collision or missing-input finding with the offending key shape. Do not dismiss a data-leak report without inspecting key derivation. This skill is read-only and must not mutate keys without permission. Validation signals include a reproduced key derivation. Risk boundary: a collision that leaks another tenant's data is a security incident — escalate immediately.",
+  "domain": "caching",
+  "scope_hint": "code.caching:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.caching",
+  "pack_id": "code.caching"
+}

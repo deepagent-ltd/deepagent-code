@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:cli:exit-codes-are-the-contract",
+  "type": "knowledge",
+  "title": "Exit codes are the script contract",
+  "description": "The exit status is how programs signal success or failure to shells, pipelines, and CI; 0 means success and non-zero means a specific failure.",
+  "body": "Use when a CLI participates in scripts or CI. Shells branch on exit codes (`&&`, `||`, `if`, set -e) and CI marks a step failed on non-zero; the convention is 0 success, 1 general error, 2 misuse, and 126/127 for not-executable/not-found. Do not overload 0 to mean partial failure. Actions: assign and document distinct non-zero codes per failure class and always set the code before exit. Validation signals include shells correctly short-circuiting on failure. Risk boundary: returning 0 on failure defeats `set -e` and CI gates, letting broken steps pass silently — the exit code is a machine contract, not decoration.",
+  "domain": "cli",
+  "scope_hint": "code.cli:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.cli",
+  "pack_id": "code.cli"
+}

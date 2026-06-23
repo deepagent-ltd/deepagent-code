@@ -1,0 +1,11 @@
+{
+  "ref_id": "strategy:lang_csharp_dotnet:nuget-restore-determinism",
+  "type": "strategy",
+  "description": "Respect NuGet.config, lock files, central package management, and target framework constraints.",
+  "body": "Use when changing package references or restore behavior. Do not edit a single csproj version if the repo uses Central Package Management. Inspect NuGet.config, Directory.Packages.props, packages.lock.json, and target frameworks. Verify dotnet restore/build without broad lockfile churn. Risk boundary includes private feeds, credential requirements, and incompatible TFMs. Use when C# / .NET Engineering work touches repository conventions, toolchain files, changed symbols, validation commands, and runtime output. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: choose the smallest direction that preserves the domain contract; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include package-local checks, focused tests, build output, smoke runs, and command logs. Risk boundary: escalate or stop when the task involves broad rewrites, generated-file drift, stale assumptions, and unvalidated behavior changes, missing owner evidence, or live external state.",
+  "domain": "csharp_dotnet",
+  "scope_hint": "code.csharp-dotnet:strategys",
+  "evidence_strength": "medium",
+  "provenance_tag": "code.csharp-dotnet:seed:dotnet_cli_csharp_docs:paraphrased",
+  "pack_id": "code.csharp-dotnet"
+}

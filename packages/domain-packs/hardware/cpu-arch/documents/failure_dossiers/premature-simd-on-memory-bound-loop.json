@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:cpuarch:premature-simd-on-memory-bound-loop",
+  "type": "failure_dossier",
+  "description": "Hand-vectorizing a loop that is memory-bandwidth-bound, adding complexity and ISA lock-in for no speedup.",
+  "body": "Failure mode: a loop is limited by DRAM bandwidth, but it gets rewritten with AVX intrinsics expecting a lane-width speedup; the cores were already waiting on memory, so SIMD does nothing while adding portability and maintenance cost. Detection signals: profile shows back-end/memory-bound stalls before the change; near-zero speedup after vectorizing; bandwidth counters near peak. Do not vectorize a memory-bound loop. Safer fallback: first fix locality (layout, blocking/tiling, prefetch) to cut traffic, re-profile, and only vectorize once the loop is compute-bound with a scalar fallback retained.",
+  "domain": "cpu_arch",
+  "scope_hint": "hardware.cpu-arch:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.cpu-arch:human_authored",
+  "pack_id": "hardware.cpu-arch"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:elixir:audit-input-safety-and-deps",
+  "type": "skill",
+  "title": "Audit atom safety and Mix dependencies",
+  "description": "Scan for unsafe atom creation from input and check Mix dependency pinning and lock state.",
+  "body": "Use when validating an Elixir project's safety and reproducibility. Procedure: grep for String.to_atom / List.to_atom on request, JSON, or header data (unsafe) versus to_existing_atom (safe), and check decoders that auto-atomize keys; then read mix.exs and confirm mix.lock is committed and dependency versions are constrained. Report which paths can mint atoms from input and whether deps are pinned, with location. This skill exposes findings only and must not change deps or input handling without runtime permission. Validation signals include confirming mix deps.get reproduces from the lock and that no unbounded to_atom touches input. Risk boundary: flag any to_atom on untrusted input as a blocking VM-exhaustion (DoS) finding.",
+  "domain": "elixir",
+  "scope_hint": "code.elixir:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.elixir",
+  "pack_id": "code.elixir"
+}

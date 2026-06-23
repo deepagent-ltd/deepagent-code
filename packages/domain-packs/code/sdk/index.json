@@ -1,0 +1,473 @@
+[
+  {
+    "ref_id": "knowledge:sdk:defaults-are-contract",
+    "type": "knowledge",
+    "title": "Defaults Are Contract",
+    "summary": "SDK default timeouts, retries, and endpoints affect users.",
+    "domains": [
+      "api",
+      "sdk",
+      "code"
+    ],
+    "triggers": [
+      "default",
+      "timeouts",
+      "retries",
+      "endpoints",
+      "affect",
+      "users",
+      "changing",
+      "defaults"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.sdk"
+  },
+  {
+    "ref_id": "knowledge:sdk:generated-do-not-hand-edit",
+    "type": "knowledge",
+    "title": "Generated Do Not Hand Edit",
+    "summary": "Generated SDK files should be regenerated from source schema.",
+    "domains": [
+      "api",
+      "sdk",
+      "code"
+    ],
+    "triggers": [
+      "generated",
+      "files",
+      "should",
+      "regenerated",
+      "from",
+      "source",
+      "schema",
+      "manual"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.sdk"
+  },
+  {
+    "ref_id": "knowledge:sdk:sdk-errors-are-api",
+    "type": "knowledge",
+    "title": "Sdk Errors Are Api",
+    "summary": "SDK error classes, codes, and messages can be user contract.",
+    "domains": [
+      "api",
+      "sdk",
+      "code"
+    ],
+    "triggers": [
+      "error",
+      "classes",
+      "codes",
+      "messages",
+      "user",
+      "contract",
+      "consumers",
+      "catch"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.sdk"
+  },
+  {
+    "ref_id": "methodology:sdk:sdk-breaking-change-review",
+    "type": "methodology",
+    "title": "Sdk Breaking Change Review",
+    "summary": "Classify SDK changes as patch, feature, or breaking.",
+    "domains": [
+      "api",
+      "sdk",
+      "code"
+    ],
+    "triggers": [
+      "classify",
+      "changes",
+      "patch",
+      "feature",
+      "breaking",
+      "steps",
+      "inspect",
+      "exported"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.sdk"
+  },
+  {
+    "ref_id": "methodology:sdk:sdk-contract-test",
+    "type": "methodology",
+    "title": "Sdk Contract Test",
+    "summary": "Generate client, run examples, and compare server contract.",
+    "domains": [
+      "api",
+      "sdk",
+      "code"
+    ],
+    "triggers": [
+      "generate",
+      "client",
+      "examples",
+      "compare",
+      "server",
+      "contract",
+      "steps",
+      "regenerate"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.sdk"
+  },
+  {
+    "ref_id": "methodology:sdk:sdk-doc-example-pass",
+    "type": "methodology",
+    "title": "Sdk Doc Example Pass",
+    "summary": "Validate README and docs snippets against current SDK.",
+    "domains": [
+      "api",
+      "sdk",
+      "code"
+    ],
+    "triggers": [
+      "validate",
+      "readme",
+      "docs",
+      "snippets",
+      "against",
+      "current",
+      "steps",
+      "examples"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.sdk"
+  },
+  {
+    "ref_id": "skill:sdk:validate-sdk-contract",
+    "type": "skill",
+    "title": "Validate Sdk Contract",
+    "summary": "Validate generated SDK contract, examples, and public API diff.",
+    "domains": [
+      "api",
+      "sdk",
+      "code"
+    ],
+    "triggers": [
+      "validate",
+      "generated",
+      "contract",
+      "examples",
+      "public",
+      "diff",
+      "inputs",
+      "package"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.sdk"
+  },
+  {
+    "ref_id": "strategy:sdk:compat-shim-before-removal",
+    "type": "strategy",
+    "title": "Compat Shim Before Removal",
+    "summary": "Deprecate and shim before removing public SDK APIs.",
+    "domains": [
+      "api",
+      "sdk",
+      "code"
+    ],
+    "triggers": [
+      "deprecate",
+      "shim",
+      "before",
+      "removing",
+      "public",
+      "apis",
+      "users",
+      "need"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.sdk"
+  },
+  {
+    "ref_id": "strategy:sdk:example-as-test",
+    "type": "strategy",
+    "title": "Example As Test",
+    "summary": "SDK examples should run or be covered by tests.",
+    "domains": [
+      "api",
+      "sdk",
+      "code"
+    ],
+    "triggers": [
+      "examples",
+      "should",
+      "covered",
+      "tests",
+      "user",
+      "facing",
+      "contracts"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.sdk"
+  },
+  {
+    "ref_id": "strategy:sdk:generated-client-contract",
+    "type": "strategy",
+    "title": "Generated Client Contract",
+    "summary": "Generated clients must match server schema and examples.",
+    "domains": [
+      "api",
+      "sdk",
+      "code"
+    ],
+    "triggers": [
+      "generated",
+      "clients",
+      "must",
+      "match",
+      "server",
+      "schema",
+      "examples",
+      "drift"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.sdk"
+  },
+  {
+    "ref_id": "strategy:sdk:semver-surface",
+    "type": "strategy",
+    "title": "Semver Surface",
+    "summary": "Public SDK names, types, errors, and defaults are semver surface.",
+    "domains": [
+      "api",
+      "sdk",
+      "code"
+    ],
+    "triggers": [
+      "public",
+      "names",
+      "types",
+      "errors",
+      "defaults",
+      "semver",
+      "surface",
+      "changing"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.sdk"
+  },
+  {
+    "ref_id": "strategy:sdk:paginate-the-full-collection",
+    "type": "strategy",
+    "title": "Expose pagination as a complete iterator",
+    "summary": "Provide automatic page-following iteration in generated clients so callers traverse a whole collection without hand-managing cursors.",
+    "domains": [
+      "sdk",
+      "api",
+      "code"
+    ],
+    "triggers": [
+      "pagination",
+      "cursor",
+      "page token",
+      "iterator",
+      "auto-paginate",
+      "next page"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.sdk"
+  },
+  {
+    "ref_id": "strategy:sdk:idempotent-retry-policy",
+    "type": "strategy",
+    "title": "Retry only idempotent calls with backoff and keys",
+    "summary": "Retry safe/idempotent requests with bounded exponential backoff and idempotency keys, never blindly replaying non-idempotent writes.",
+    "domains": [
+      "sdk",
+      "api",
+      "code"
+    ],
+    "triggers": [
+      "retry",
+      "idempotency",
+      "backoff",
+      "jitter",
+      "idempotency-key",
+      "duplicate"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.sdk"
+  },
+  {
+    "ref_id": "methodology:sdk:deprecation-and-removal-flow",
+    "type": "methodology",
+    "title": "Run a staged deprecation and removal flow",
+    "summary": "Move a public SDK API through documented deprecation, runtime warnings, and a removal window before deleting it in a major release.",
+    "domains": [
+      "sdk",
+      "api",
+      "code"
+    ],
+    "triggers": [
+      "deprecation",
+      "removal",
+      "warning",
+      "major",
+      "migration",
+      "sunset"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.sdk"
+  },
+  {
+    "ref_id": "knowledge:sdk:semver-encodes-compatibility-promise",
+    "type": "knowledge",
+    "title": "Semver encodes a compatibility promise",
+    "summary": "Major signals a breaking change, minor adds backward-compatible features, and patch fixes bugs; the version is a contract, not a label.",
+    "domains": [
+      "sdk",
+      "api",
+      "code"
+    ],
+    "triggers": [
+      "semver",
+      "major",
+      "minor",
+      "patch",
+      "breaking",
+      "compatibility"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.sdk"
+  },
+  {
+    "ref_id": "skill:sdk:diff-public-api-surface",
+    "type": "skill",
+    "title": "Diff the public API surface of an SDK change",
+    "summary": "Compute the public symbol/type diff between two SDK versions and report additions, removals, and signature changes.",
+    "domains": [
+      "sdk",
+      "api",
+      "code"
+    ],
+    "triggers": [
+      "api diff",
+      "public surface",
+      "signature",
+      "breaking",
+      "export",
+      "type"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.sdk"
+  }
+]

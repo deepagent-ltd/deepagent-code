@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:crypto:review-code-for-crypto-misuse",
+  "type": "methodology",
+  "title": "Review code for cryptographic misuse",
+  "description": "Audit a change for the common misuse patterns: weak modes, nonce reuse, bad hashes, custom crypto, and timing leaks.",
+  "body": "Steps: 1. Find every crypto call and identify the construction and parameters. 2. Flag unauthenticated modes (ECB/raw CBC/CTR), missing tag verification, and hand-rolled ciphers/MACs. 3. Trace nonce/IV sources for reuse and randomness sources for non-CSPRNG use. 4. Check password storage for memory-hard salted KDFs and secret comparisons for constant time. 5. Confirm keys are managed (no hardcoded keys, rotation possible). Rollback point: before merging any change touching secrets. Validation: every finding maps to a named safer construction and tamper/timing tests pass; a clean self-test of one's own ciphertext is not evidence of security and must not end the review.",
+  "domain": "cryptography",
+  "scope_hint": "code.cryptography:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.cryptography",
+  "pack_id": "code.cryptography"
+}

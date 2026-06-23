@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:prompt:scrub-after-assembly",
+  "type": "failure_dossier",
+  "description": "Input is cleaned after the prompt is assembled, leaving a window where raw input already shaped the prompt structure.",
+  "body": "Failure mode: the pipeline assembles the prompt from raw input and then runs sanitization on the combined string, so raw delimiters or instructions have already altered the structure and may slip past a post-hoc clean. Detection signals: scrubbing operates on the assembled prompt, not the inputs; redaction and normalization run last; breakout payloads survive. Do not sanitize after assembly. Safer fallback: scrub, bound, and redact each untrusted input at the boundary before it enters the template, label it as data, and verify a delimiter-breakout payload cannot escape its region.",
+  "domain": "prompt_pipeline",
+  "scope_hint": "code.prompt-pipeline:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.prompt-pipeline:human_authored",
+  "pack_id": "code.prompt-pipeline"
+}

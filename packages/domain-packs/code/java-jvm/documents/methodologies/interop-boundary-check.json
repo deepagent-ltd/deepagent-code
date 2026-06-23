@@ -1,0 +1,11 @@
+{
+  "ref_id": "methodology:java_jvm:interop-boundary-check",
+  "type": "methodology",
+  "description": "In Java/JVM, validate the deserialization, reflection access, and JNI/native boundaries where external data crosses in.",
+  "body": "In Java/JVM, defects cluster at deserialization, reflection access, and JNI/native boundaries, where assumptions about types, ownership, or encoding stop holding. Use when a change crosses public API signatures, checked-exception contracts, and serialVersionUID or consumes data from outside the program. Do not assume the other side honors your contract, and avoid trusting input without checking it. Actions: identify the boundary, test both valid and malformed input, verify the error path, and record the assumptions you are relying on. Validation signals include tests for the failure path, a trace of rejected input, and a documented contract at public API signatures, checked-exception contracts, and serialVersionUID. Risk boundary: escalate when the boundary handles untrusted input, crosses a trust/security line, or feeds a system you cannot roll back.",
+  "domain": "java_jvm",
+  "scope_hint": "code.java-jvm:methodologies",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.java-jvm:skill_survey",
+  "pack_id": "code.java-jvm"
+}

@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:cache:missing-negative-cache",
+  "type": "failure_dossier",
+  "description": "Lookups for nonexistent keys are never cached, so repeated absent-key requests penetrate to the datastore.",
+  "body": "Failure mode: lookups for nonexistent keys are never cached, so repeated requests for absent data (often malicious) penetrate straight to the datastore on every call. Detection signals: high origin miss traffic for keys that never exist; datastore load from not-found queries; scanning patterns over random keys. Do not leave misses uncached on penetration-prone paths. Safer fallback: cache negative results with a short TTL or front the lookup with a Bloom filter, and invalidate the negative entry when the key is created.",
+  "domain": "caching",
+  "scope_hint": "code.caching:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.caching:human_authored",
+  "pack_id": "code.caching"
+}

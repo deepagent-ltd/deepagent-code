@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:asm:port-asm-across-architectures",
+  "type": "methodology",
+  "title": "Port an assembly routine across architectures",
+  "description": "Move a hand-asm routine between ISAs/ABIs by remapping the calling convention, registers, and addressing, validated against the original.",
+  "body": "Steps: 1. Identify the source and target ABI differences: argument/return registers, callee-saved sets, stack alignment, and red-zone/shadow-space rules. 2. Remap each argument and the return value to the target ABI's locations. 3. Translate instructions, addressing modes, and operand widths to the target ISA (x86-64 rich addressing vs AArch64 register/offset forms). 4. Rebuild prologue/epilogue for the target's callee-saved registers and alignment. 5. Validate the ported routine against the original (or a C reference) across many inputs on the target. Rollback point: keep the portable high-level fallback so the port is optional. Validation: the ported routine matches the reference across the input range on the target architecture and the disassembly shows correct register and alignment discipline; assuming the register mapping carries over unchanged is how ports silently corrupt arguments.",
+  "domain": "assembly",
+  "scope_hint": "code.assembly:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.assembly",
+  "pack_id": "code.assembly"
+}

@@ -1,0 +1,500 @@
+[
+  {
+    "ref_id": "knowledge:ci_triage:ci-is-evidence-source",
+    "type": "knowledge",
+    "title": "Ci Is Evidence Source",
+    "summary": "CI output is evidence only when command and artifact refs are preserved.",
+    "domains": [
+      "ci_triage",
+      "code",
+      "validation"
+    ],
+    "triggers": [
+      "output",
+      "evidence",
+      "only",
+      "when",
+      "command",
+      "artifact",
+      "refs",
+      "preserved"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.ci-triage"
+  },
+  {
+    "ref_id": "knowledge:ci_triage:skipped-checks-are-risk",
+    "type": "knowledge",
+    "title": "Skipped Checks Are Risk",
+    "summary": "A green run with skipped required checks may not validate the change.",
+    "domains": [
+      "ci_triage",
+      "code",
+      "validation"
+    ],
+    "triggers": [
+      "green",
+      "with",
+      "skipped",
+      "required",
+      "checks",
+      "validate",
+      "change"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.ci-triage"
+  },
+  {
+    "ref_id": "knowledge:ci_triage:workflow-changes-are-code",
+    "type": "knowledge",
+    "title": "Workflow Changes Are Code",
+    "summary": "CI workflow edits can break validation without source-code defects.",
+    "domains": [
+      "ci_triage",
+      "code",
+      "validation"
+    ],
+    "triggers": [
+      "workflow",
+      "edits",
+      "break",
+      "validation",
+      "without",
+      "source",
+      "code",
+      "defects"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.ci-triage"
+  },
+  {
+    "ref_id": "methodology:ci_triage:ci-evidence-adapter",
+    "type": "methodology",
+    "title": "Ci Evidence Adapter",
+    "summary": "Collect workflow status, logs, run URL, duration, artifact refs, and first failing command.",
+    "domains": [
+      "ci_triage",
+      "code",
+      "validation"
+    ],
+    "triggers": [
+      "collect",
+      "workflow",
+      "status",
+      "logs",
+      "duration",
+      "artifact",
+      "refs",
+      "first"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.ci-triage"
+  },
+  {
+    "ref_id": "methodology:ci_triage:matrix-failure-slice",
+    "type": "methodology",
+    "title": "Matrix Failure Slice",
+    "summary": "Reduce matrix failures to environment-specific or universal failures.",
+    "domains": [
+      "ci_triage",
+      "code",
+      "validation"
+    ],
+    "triggers": [
+      "reduce",
+      "matrix",
+      "failures",
+      "environment",
+      "specific",
+      "universal",
+      "steps"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.ci-triage"
+  },
+  {
+    "ref_id": "methodology:ci_triage:regression-classification",
+    "type": "methodology",
+    "title": "Regression Classification",
+    "summary": "Classify failures as regression, stale test, flake, new test, or infra.",
+    "domains": [
+      "ci_triage",
+      "code",
+      "validation"
+    ],
+    "triggers": [
+      "classify",
+      "failures",
+      "regression",
+      "stale",
+      "test",
+      "flake",
+      "infra"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.ci-triage"
+  },
+  {
+    "ref_id": "skill:ci_triage:classify-ci-failure",
+    "type": "skill",
+    "title": "Classify Ci Failure",
+    "summary": "Classify CI failure as regression, stale, flake, new, or infra.",
+    "domains": [
+      "ci_triage",
+      "code",
+      "validation"
+    ],
+    "triggers": [
+      "classify",
+      "failure",
+      "regression",
+      "stale",
+      "flake",
+      "infra",
+      "inputs"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.ci-triage"
+  },
+  {
+    "ref_id": "skill:ci_triage:parse-ci-log",
+    "type": "skill",
+    "title": "Parse Ci Log",
+    "summary": "Extract first failing command, job metadata, and artifact refs from CI output.",
+    "domains": [
+      "ci_triage",
+      "code",
+      "validation"
+    ],
+    "triggers": [
+      "extract",
+      "first",
+      "failing",
+      "command",
+      "metadata",
+      "artifact",
+      "refs",
+      "from"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.ci-triage"
+  },
+  {
+    "ref_id": "strategy:ci_triage:ci-diff-correlation",
+    "type": "strategy",
+    "title": "Ci Diff Correlation",
+    "summary": "Correlate failing checks with recent code, test, dependency, and workflow changes.",
+    "domains": [
+      "ci_triage",
+      "code",
+      "validation"
+    ],
+    "triggers": [
+      "correlate",
+      "failing",
+      "checks",
+      "with",
+      "recent",
+      "code",
+      "test",
+      "dependency"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.ci-triage"
+  },
+  {
+    "ref_id": "strategy:ci_triage:first-failing-command",
+    "type": "strategy",
+    "title": "First Failing Command",
+    "summary": "Normalize CI logs around the earliest actionable failing command.",
+    "domains": [
+      "ci_triage",
+      "code",
+      "validation"
+    ],
+    "triggers": [
+      "normalize",
+      "logs",
+      "around",
+      "earliest",
+      "actionable",
+      "failing",
+      "command"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.ci-triage"
+  },
+  {
+    "ref_id": "strategy:ci_triage:provider-neutral-status",
+    "type": "strategy",
+    "title": "Provider Neutral Status",
+    "summary": "Model CI state independent of GitHub, GitLab, Jenkins, or Azure syntax.",
+    "domains": [
+      "ci_triage",
+      "code",
+      "validation"
+    ],
+    "triggers": [
+      "model",
+      "state",
+      "independent",
+      "github",
+      "gitlab",
+      "jenkins",
+      "azure",
+      "syntax"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.ci-triage"
+  },
+  {
+    "ref_id": "strategy:ci_triage:retry-once-for-flake",
+    "type": "strategy",
+    "title": "Retry Once For Flake",
+    "summary": "Retry only when evidence points to infrastructure or nondeterminism.",
+    "domains": [
+      "ci_triage",
+      "code",
+      "validation"
+    ],
+    "triggers": [
+      "retry",
+      "only",
+      "when",
+      "evidence",
+      "points",
+      "infrastructure",
+      "nondeterminism",
+      "controlled"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.ci-triage"
+  },
+  {
+    "ref_id": "strategy:ci_triage:reproduce-locally-before-fixing",
+    "type": "strategy",
+    "title": "Reproduce the failure locally before fixing",
+    "summary": "Recreate the CI failure in a controlled local or container environment so the fix is validated against a real reproduction, not a guess.",
+    "domains": [
+      "code",
+      "ci_triage",
+      "validation"
+    ],
+    "triggers": [
+      "reproduce",
+      "local",
+      "container",
+      "environment",
+      "repro",
+      "deterministic"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.ci-triage"
+  },
+  {
+    "ref_id": "strategy:ci_triage:quarantine-flaky-tests",
+    "type": "strategy",
+    "title": "Quarantine and track flaky tests deliberately",
+    "summary": "Isolate a confirmed flaky test from the blocking signal with a tracking issue, rather than masking it with blanket retries.",
+    "domains": [
+      "code",
+      "ci_triage",
+      "validation"
+    ],
+    "triggers": [
+      "flaky",
+      "quarantine",
+      "intermittent",
+      "nondeterministic",
+      "tracking",
+      "isolate"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.ci-triage"
+  },
+  {
+    "ref_id": "methodology:ci_triage:bisect-failure-to-first-cause",
+    "type": "methodology",
+    "title": "Bisect a failure to its first cause",
+    "summary": "Walk commits or the log to find the earliest change or first failing step that introduced the failure, not the last error printed.",
+    "domains": [
+      "code",
+      "ci_triage",
+      "validation"
+    ],
+    "triggers": [
+      "bisect",
+      "first cause",
+      "regression",
+      "git bisect",
+      "earliest",
+      "log"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.ci-triage"
+  },
+  {
+    "ref_id": "knowledge:ci_triage:cache-can-poison-a-build",
+    "type": "knowledge",
+    "title": "A stale or poisoned cache can fail a clean build",
+    "summary": "CI caches for dependencies, build artifacts, and layers can serve stale or corrupt content, causing failures unrelated to the code change.",
+    "domains": [
+      "code",
+      "ci_triage",
+      "validation"
+    ],
+    "triggers": [
+      "cache",
+      "poison",
+      "stale",
+      "dependency",
+      "artifact",
+      "key"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.ci-triage"
+  },
+  {
+    "ref_id": "skill:ci_triage:diff-failing-and-passing-runs",
+    "type": "skill",
+    "title": "Diff a failing run against a passing run",
+    "summary": "Compare a failing CI run to the last passing one across commit, dependencies, environment, and config to localize the change.",
+    "domains": [
+      "code",
+      "ci_triage",
+      "validation"
+    ],
+    "triggers": [
+      "diff",
+      "passing run",
+      "compare",
+      "delta",
+      "environment",
+      "config"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.ci-triage"
+  }
+]

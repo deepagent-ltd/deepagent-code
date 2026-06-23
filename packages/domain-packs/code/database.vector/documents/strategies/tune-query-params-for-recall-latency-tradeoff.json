@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:vdb:tune-query-params-for-recall-latency-tradeoff",
+  "type": "strategy",
+  "title": "Tune query parameters for the recall-latency tradeoff",
+  "description": "Raise ef_search (HNSW) or nprobe (IVFFlat) until recall meets target, then stop, since both cost latency.",
+  "body": "Use when an ANN search returns too few correct neighbours or runs too slow. Do not leave the query-time search parameter at its default and assume recall is adequate; ef_search for HNSW and nprobe for IVFFlat directly trade recall for latency. Actions: build a recall@k benchmark against brute-force ground truth, sweep the parameter upward, and choose the smallest value meeting the recall target. Verify p99 latency at that setting fits the budget. Validation signals include recall@k crossing the threshold and latency staying within budget at the chosen value. Risk boundary: pushing the parameter very high to chase the last percent of recall can blow the latency budget, so set an explicit recall target and stop there rather than maximising blindly.",
+  "domain": "vector_db",
+  "scope_hint": "code.database.vector:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.vector",
+  "pack_id": "code.database.vector"
+}

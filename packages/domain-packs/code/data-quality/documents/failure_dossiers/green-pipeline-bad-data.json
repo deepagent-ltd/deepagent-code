@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:dq:green-pipeline-bad-data",
+  "type": "failure_dossier",
+  "description": "Treating a successful pipeline run as proof of good data, so wrong or stale data flows downstream unchecked.",
+  "body": "Failure mode: the only quality signal is whether the job exited zero, so a run that landed partial, stale, or malformed data is reported as healthy and the bad data propagates into every consumer. Detection signals: no data-level checks exist, only job status; downstream reports look off while pipelines are green; incidents are found by users, not monitors. Do not equate job success with data correctness. Safer fallback: add explicit schema, freshness, completeness, and uniqueness checks as a promotion gate separate from job status, and quarantine failures.",
+  "domain": "data_quality",
+  "scope_hint": "code.data-quality:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.data-quality:human_authored",
+  "pack_id": "code.data-quality"
+}

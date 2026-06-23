@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:cpuarch:run-perf-counter-profile",
+  "type": "skill",
+  "title": "Run a hardware-counter profile",
+  "description": "Collect PMU counters (cache misses, branch mispredicts, IPC, stalls) for a workload and report the dominant bottleneck class.",
+  "body": "Use when asked to find why a CPU-bound workload is slow. Actions: detect the available profiler (perf, VTune, Instruments), run a top-down collection on representative input, and report IPC, L1/LLC miss rates, branch-mispredict rate, and the dominant stall category with their values. Do not guess the bottleneck from source code alone. This skill exposes capability only and must not run profilers requiring elevated permissions without runtime approval. Validation signals include a counter breakdown that points to one bottleneck class. Risk boundary: if counters are unavailable (VM without PMU, denied perf_event_paranoid), report that the profile is unverified rather than inventing numbers.",
+  "domain": "cpu_arch",
+  "scope_hint": "hardware.cpu-arch:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.cpu-arch",
+  "pack_id": "hardware.cpu-arch"
+}

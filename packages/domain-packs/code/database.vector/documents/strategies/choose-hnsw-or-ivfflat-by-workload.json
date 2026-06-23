@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:vdb:choose-hnsw-or-ivfflat-by-workload",
+  "type": "strategy",
+  "title": "Choose HNSW or IVFFlat by workload shape",
+  "description": "Pick HNSW for high recall at query time and IVFFlat for fast builds and lower memory, matching the workload.",
+  "body": "Use when selecting an ANN index type for a vector column. Do not default to one index for every workload; HNSW gives high recall and low query latency but builds slowly and uses more memory, while IVFFlat builds fast and is memory-light but needs enough training data and a tuned probe count to reach the same recall. Actions: pick HNSW for read-heavy, recall-critical search; pick IVFFlat for large, frequently-rebuilt datasets where build cost dominates; benchmark recall@k for both on a sample. Validation signals include a recall@k curve meeting target and build time fitting the maintenance window. Risk boundary: HNSW build memory grows with graph degree, so confirm the maintenance_work_mem budget before building on a large table or escalate to a phased build.",
+  "domain": "vector_db",
+  "scope_hint": "code.database.vector:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.vector",
+  "pack_id": "code.database.vector"
+}

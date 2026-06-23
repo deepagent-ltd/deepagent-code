@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:elixir:review-process-and-supervision-design",
+  "type": "skill",
+  "title": "Review process and supervision design",
+  "description": "Read Elixir code and report unsupervised processes, blocking GenServer loops, and faked shared state.",
+  "body": "Use when asked whether Elixir concurrency code is sound. Actions: inspect spawned/started processes for supervision, check each GenServer handle_call/handle_cast for slow I/O or CPU work that blocks the serial loop, and look for shared state faked via the process dictionary, module attributes, or globals instead of a process/ETS. Do not assume a spawned process is supervised or that a cast avoids a backup. Report and record each unsupervised stateful process, blocking handler, and faked-global with file and line. This skill is read-only and must not restructure the supervision tree without runtime permission. Validation signals include confirming a killed process restarts to a clean state. Risk boundary: flag an unsupervised stateful process as a no-recovery defect and a blocking handle_call as a system-wide bottleneck.",
+  "domain": "elixir",
+  "scope_hint": "code.elixir:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.elixir",
+  "pack_id": "code.elixir"
+}

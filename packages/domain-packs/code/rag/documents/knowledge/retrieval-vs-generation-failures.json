@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:rag:retrieval-vs-generation-failures",
+  "type": "knowledge",
+  "title": "Retrieval vs generation failures",
+  "description": "A wrong answer can come from a missing passage (retrieval) or from ignoring a passage that was present (generation).",
+  "body": "Use when debugging a bad RAG answer. The two failure classes need different fixes: a retrieval failure means the supporting passage was never put in context (chunking split it, embedding missed it, or rerank dropped it); a generation failure means the passage was in context but the model ignored or contradicted it. Do not tune chunking when the passage was actually retrieved, and avoid blaming the model when retrieval missed. Actions: check whether a supporting passage was retrieved before deciding the fix. Validation signals include an attribution step that labels each failure retrieval or generation. Risk boundary: misattributing the failure wastes effort and leaves the real gap open; attribute before fixing.",
+  "domain": "rag",
+  "scope_hint": "code.rag:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.rag",
+  "pack_id": "code.rag"
+}

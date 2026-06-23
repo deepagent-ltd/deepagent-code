@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:mysql:covering-index-avoids-clustered-lookup",
+  "type": "knowledge",
+  "title": "Covering indexes avoid the clustered-index lookup",
+  "description": "When a secondary index contains every column a query needs, InnoDB serves it without a second read of the clustered index.",
+  "body": "Reference for index design on read-hot queries. Because secondary indexes store the primary key, a query whose selected and filtered columns all live in one secondary index is covered and skips the extra clustered-index lookup per row. Use when a hot SELECT touches few columns but many rows. Do not over-stuff an index with columns just to cover a rare query; each added column enlarges the index and slows writes. Validation signals include EXPLAIN showing Using index in the Extra column and a measured latency drop. Risk boundary: a very wide covering index trades write speed and space for read speed, so confirm the read path justifies it before adding columns.",
+  "domain": "mysql",
+  "scope_hint": "code.database.mysql:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.mysql",
+  "pack_id": "code.database.mysql"
+}

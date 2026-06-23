@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:agent:audit-tool-registry-permissions",
+  "type": "skill",
+  "title": "Audit tool registry permissions",
+  "description": "Execute or scaffold tests that confirm unregistered tools are denied and side-effecting tools require an explicit grant.",
+  "body": "Use when validating an agent's tool-access controls. Procedure: enumerate registered tools and their side-effect class, then run or scaffold tests that an unregistered tool name is rejected, a side-effecting tool without permission is denied, and malformed arguments are refused before execution. Report which denial cases pass and which side-effecting tools lack a gate. This skill exposes capability only and must not run side-effecting tools against real systems. Risk boundary: any side-effecting tool reachable without a passing denial test is unverified and must not be reported as safe.",
+  "domain": "agent",
+  "scope_hint": "code.agent:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.agent",
+  "pack_id": "code.agent"
+}

@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:conc:task-survives-cancellation",
+  "type": "failure_dossier",
+  "description": "An async task keeps running after its scope is cancelled, leaking resources and applying effects past shutdown.",
+  "body": "Failure mode: a fire-and-forget task or a long loop never checks the cancellation token, so when the parent request or scope is cancelled the task keeps running, holding connections, mutating state, and producing effects that should not happen after cancellation. Detection signals: work logged after a timeout/cancel; resource handles not released on shutdown; effects applied for a request the caller abandoned. Do not detach tasks or ignore cancellation in long operations. Safer fallback: use structured concurrency so children end with the parent, poll the token at loop iterations and await points, release resources in finally/defer, and verify a cancelled scope leaves no live tasks.",
+  "domain": "concurrency",
+  "scope_hint": "code.concurrency:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.concurrency:human_authored",
+  "pack_id": "code.concurrency"
+}

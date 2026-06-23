@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:ci_triage:reproduce-locally-before-fixing",
+  "type": "strategy",
+  "title": "Reproduce the failure locally before fixing",
+  "description": "Recreate the CI failure in a controlled local or container environment so the fix is validated against a real reproduction, not a guess.",
+  "body": "Use when a CI job fails and the cause is not obvious from the log. Do not push speculative fixes and re-run CI to test theories; that is slow and pollutes history. Actions: pin the same commit, dependencies, and environment (matching container/runner image where possible), run the failing command locally, and confirm you see the same failure before changing anything. Validation signals include a local reproduction of the exact error and the fix making it pass locally first. Risk boundary: if a failure cannot be reproduced locally it may be environment- or infrastructure-specific; record that and investigate the runner rather than blindly retrying.",
+  "domain": "code",
+  "scope_hint": "code.ci-triage:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.ci-triage",
+  "pack_id": "code.ci-triage"
+}

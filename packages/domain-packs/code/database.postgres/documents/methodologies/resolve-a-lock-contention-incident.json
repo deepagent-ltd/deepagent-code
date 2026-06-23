@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:pg:resolve-a-lock-contention-incident",
+  "type": "methodology",
+  "title": "Resolve a lock-contention incident",
+  "description": "Identify blocking transactions via pg_locks and pg_stat_activity and unblock without data loss.",
+  "body": "Steps: 1. Query pg_stat_activity for long-running and 'idle in transaction' sessions and pg_locks for the blocking/blocked pairs. 2. Identify the lock holder and what it waits on (often a forgotten open transaction or a slow DDL). 3. Address the root cause: commit/rollback the stuck transaction, or cancel it with pg_cancel_backend; reserve pg_terminate_backend for when cancel fails. 4. For repeated deadlocks, make transactions acquire locks in a consistent order and keep them short. Rollback point: cancel rather than terminate first. Validation: blocked queries drain, no orphaned transaction remains, and the deadlock pattern stops recurring. Risk boundary: terminating backends on production can roll back user work — confirm before doing so.",
+  "domain": "postgres",
+  "scope_hint": "code.database.postgres:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.postgres",
+  "pack_id": "code.database.postgres"
+}

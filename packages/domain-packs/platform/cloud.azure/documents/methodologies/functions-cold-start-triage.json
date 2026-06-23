@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:azure:functions-cold-start-triage",
+  "type": "methodology",
+  "title": "Diagnose Azure Functions cold starts and scaling stalls",
+  "description": "Separate plan scale-from-zero, dependency init, and the scale controller's decisions using Application Insights before changing plans.",
+  "body": "Use when an Azure Function has high tail latency or scales slowly. Do not switch to Premium before knowing the cause. Actions: use Application Insights to split cold-start (host startup) from dependency init and handler time, check whether the Consumption plan is scaling from zero, inspect the scale controller's instance count vs queue depth, and trim heavy startup work. Validation signals include App Insights showing cold-start frequency, instance count rising with load, and tail latency dropping after pre-warmed Premium instances or lighter init. Risk boundary: changing a production app's hosting plan is human-gated.",
+  "domain": "azure",
+  "scope_hint": "platform.cloud.azure:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.cloud.azure",
+  "pack_id": "platform.cloud.azure"
+}

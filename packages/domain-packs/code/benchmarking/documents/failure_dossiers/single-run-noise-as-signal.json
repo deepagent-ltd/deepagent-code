@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:benchmarking:single-run-noise-as-signal",
+  "type": "failure_dossier",
+  "description": "Declaring an improvement or regression from one run, mistaking environmental noise for a real performance change.",
+  "body": "Failure mode: baseline and candidate are each run once and the difference is reported as a result, but the gap is within run-to-run variance from scheduling, caches, thermal state, or background load. Detection signals: the delta vanishes or reverses on repeat; no variance reported; the difference is smaller than typical noise. Do not conclude from a single sample. Safer fallback: take multiple samples after warmup, compare distributions against the noise floor with a confidence statement, and only report a change that exceeds variance and repeats.",
+  "domain": "code",
+  "scope_hint": "code.benchmarking:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.benchmarking:human_authored",
+  "pack_id": "code.benchmarking"
+}

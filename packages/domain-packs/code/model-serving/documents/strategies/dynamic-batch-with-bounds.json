@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:serving:dynamic-batch-with-bounds",
+  "type": "strategy",
+  "title": "Batch dynamically with a bounded queue and timeout",
+  "description": "Coalesce concurrent requests into batches up to a max size or max wait, so the accelerator stays busy without starving latency.",
+  "body": "Use when serving a model on a GPU/accelerator that is more efficient per-batch than per-request. Do not serve one request at a time (the GPU idles between calls) and do not batch unboundedly (latency and memory blow up). Actions: set a max batch size and a max queue wait (e.g. a few milliseconds), form a batch when either limit is hit, and tune both against the latency SLO. Validation signals include high GPU utilization with p99 still under SLO and a queue that drains. Risk boundary: an unbounded batch window trades tail latency for throughput invisibly; if p99 regresses, cap the wait and escalate before raising it.",
+  "domain": "model_serving",
+  "scope_hint": "code.model-serving:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.model-serving",
+  "pack_id": "code.model-serving"
+}

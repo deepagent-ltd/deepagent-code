@@ -1,0 +1,11 @@
+{
+  "ref_id": "strategy:runtime_javascript:runtime-target-split",
+  "type": "strategy",
+  "description": "Separate Node, browser, worker, and edge assumptions before using globals or APIs.",
+  "body": "Use when code references process, window, document, Buffer, fetch, crypto, fs, or timers across runtime targets. Avoid assuming one runtime because tests pass in jsdom or Node. Read package scripts, bundler targets, and test environment settings, then gate code by runtime boundary or move it behind adapters. Verify in the target runner, not only static lint. Escalate if secrets or filesystem APIs would leak into browser bundles. Use when JavaScript Runtime and Tooling work touches repository conventions, toolchain files, changed symbols, validation commands, and runtime output. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: choose the smallest direction that preserves the domain contract; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include package-local checks, focused tests, build output, smoke runs, and command logs. Risk boundary: escalate or stop when the task involves broad rewrites, generated-file drift, stale assumptions, and unvalidated behavior changes, missing owner evidence, or live external state.",
+  "domain": "javascript",
+  "scope_hint": "code.javascript:strategys",
+  "evidence_strength": "medium",
+  "provenance_tag": "code.javascript:seed:official_docs_and_common_tooling_behavior:paraphrased",
+  "pack_id": "code.javascript"
+}

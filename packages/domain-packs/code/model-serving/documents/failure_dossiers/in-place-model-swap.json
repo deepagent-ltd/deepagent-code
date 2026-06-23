@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:serving:in-place-model-swap",
+  "type": "failure_dossier",
+  "description": "Replacing the served model version in place with no canary or rollback, turning a regression into a full outage.",
+  "body": "Failure mode: a new model artifact is swapped into the live server without health check, canary, or a retained previous version, so a corrupt or regressed model degrades every request and cannot be quickly reverted. Detection signals: quality or latency drops sharply right after a deploy; there is no prior version loaded to fall back to; no canary metrics exist. Do not swap models in place blindly. Safer fallback: health-check and canary the new version, ramp gradually while watching metrics, and keep the previous version loaded for instant rollback.",
+  "domain": "model_serving",
+  "scope_hint": "code.model-serving:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.model-serving:human_authored",
+  "pack_id": "code.model-serving"
+}

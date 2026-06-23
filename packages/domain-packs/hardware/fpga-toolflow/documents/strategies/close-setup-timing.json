@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:fpgatf:close-setup-timing",
+  "type": "strategy",
+  "title": "Close setup timing by attacking critical paths",
+  "description": "Reduce logic depth on the worst negative-slack paths through pipelining or restructuring before relaxing the clock.",
+  "body": "Use when STA reports negative setup slack at the target frequency. Do not lower the clock frequency as the first move, since that may mask a fixable logic-depth problem. Actions: inspect the worst-slack paths, count logic levels, and add pipeline registers or restructure the logic to shorten the path. Validation signals include rising worst-slack toward positive after each change and a critical-path logic depth within the achievable budget. Risk boundary: a path that cannot close even after pipelining may need an architecture change, so escalate rather than indefinitely tweaking placement.",
+  "domain": "fpga_toolflow",
+  "scope_hint": "hardware.fpga-toolflow:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.fpga-toolflow",
+  "pack_id": "hardware.fpga-toolflow"
+}

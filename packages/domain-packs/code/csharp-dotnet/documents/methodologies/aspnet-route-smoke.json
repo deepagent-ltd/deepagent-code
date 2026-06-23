@@ -1,0 +1,11 @@
+{
+  "ref_id": "methodology:csharp_dotnet:aspnet-route-smoke",
+  "type": "methodology",
+  "description": "Validate changed ASP.NET endpoints through request, model binding, status, and body evidence.",
+  "body": "Use when route handlers, middleware, DTOs, auth filters, or exception handling changed. Do not rely only on method-level tests for HTTP contract changes. Steps: run existing integration tests or local TestServer/WebApplicationFactory style tests, check status code, response shape, headers, and logs. Verify negative validation paths too. Risk boundary: auth/privacy/production packs override when user data or deployment is involved. Use when C# / .NET Engineering work touches repository conventions, toolchain files, changed symbols, validation commands, and runtime output. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: follow the ordered review, edit, and validation sequence; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include package-local checks, focused tests, build output, smoke runs, and command logs. Risk boundary: escalate or stop when the task involves broad rewrites, generated-file drift, stale assumptions, and unvalidated behavior changes, missing owner evidence, or live external state.",
+  "domain": "csharp_dotnet",
+  "scope_hint": "code.csharp-dotnet:methodologys",
+  "evidence_strength": "medium",
+  "provenance_tag": "code.csharp-dotnet:seed:dotnet_cli_csharp_docs:paraphrased",
+  "pack_id": "code.csharp-dotnet"
+}

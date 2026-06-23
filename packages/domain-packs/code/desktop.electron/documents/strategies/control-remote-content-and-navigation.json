@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:electron:control-remote-content-and-navigation",
+  "type": "strategy",
+  "title": "Control remote content and navigation",
+  "description": "Restrict which URLs renderers may load, block unexpected navigation and new windows, and never grant Node to remote pages.",
+  "body": "Use when an app loads any external URL or user-controlled links. Do not let a renderer navigate anywhere or open arbitrary new windows, and never load remote content into a Node-enabled renderer. Actions: handle will-navigate and setWindowOpenHandler to allow-list destinations, open external links in the system browser, set a strict Content-Security-Policy, and disable webview/webSecurity overrides. Validation signals include navigation to non-allow-listed URLs being blocked and external links opening in the OS browser. Risk boundary: uncontrolled navigation can load attacker content into your app's context and chain with any isolation weakness into RCE — treat navigation and window-open as a security surface to lock down.",
+  "domain": "electron",
+  "scope_hint": "code.desktop.electron:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.desktop.electron",
+  "pack_id": "code.desktop.electron"
+}

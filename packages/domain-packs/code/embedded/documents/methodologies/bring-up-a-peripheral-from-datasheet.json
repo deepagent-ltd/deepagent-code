@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:embed:bring-up-a-peripheral-from-datasheet",
+  "type": "methodology",
+  "title": "Bring up a peripheral from the datasheet",
+  "description": "Initialize a memory-mapped peripheral by following the reference manual's exact register sequence, verifying each step on hardware.",
+  "body": "Steps: 1. Read the reference manual section for the peripheral and note the required init order (clock enable, reset, config, enable). 2. Enable the peripheral clock and release reset first — many writes are ignored until clocked. 3. Configure registers in the documented order, respecting read-modify-write and write-once fields. 4. Verify each step by reading back status/ready bits, not by assuming the write took. 5. Exercise the peripheral and confirm with a logic analyzer/scope. Rollback point: before enabling interrupts from the peripheral. Validation: status bits confirm configuration and the bus signals match expectation on a scope; a write that 'looks right' but was issued before the clock was enabled silently does nothing.",
+  "domain": "embedded",
+  "scope_hint": "code.embedded:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.embedded",
+  "pack_id": "code.embedded"
+}

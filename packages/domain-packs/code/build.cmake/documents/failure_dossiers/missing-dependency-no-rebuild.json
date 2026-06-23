@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:cmake:missing-dependency-no-rebuild",
+  "type": "failure_dossier",
+  "description": "Failing to declare a dependency means CMake does not rebuild a target when an input changes, producing stale binaries.",
+  "body": "Failure mode: a generated header or data file is consumed by a target but not declared as a dependency, so changing the input does not trigger recompilation. Detection signals: a source change has no effect until a clean rebuild; the binary embeds outdated content; incremental builds disagree with clean ones. Do not rely on build order alone for generated inputs. Safer fallback: declare the dependency explicitly via target sources, add_custom_command outputs, or add_dependencies so the build graph rebuilds the target when its real inputs change.",
+  "domain": "cmake",
+  "scope_hint": "code.build.cmake:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.build.cmake:human_authored",
+  "pack_id": "code.build.cmake"
+}

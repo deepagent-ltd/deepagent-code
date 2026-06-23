@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:agent:review-loop-termination",
+  "type": "skill",
+  "title": "Review loop termination and guards",
+  "description": "Read an agent loop and report whether it has a step cap, terminal check, no-progress guard, and observed-evidence completion.",
+  "body": "Use when asked whether an agent loop is safe to run autonomously. Actions: inspect the loop for an explicit step cap and at-cap behavior; verify a terminal condition is checked each iteration; confirm a no-progress signature guard exists; trace whether completion is derived from observed tool results rather than model narration. Do not treat a converging happy-path run as proof the loop terminates. Report and record the exact file/line of each gap, classifying it as no-cap, no-terminal-check, no-progress-guard, or claim-trusting. This skill is read-only and must not change loop control without runtime permission. Validation signals include a confirmed halt at the cap and a halt on a forced stall. Risk boundary: an uncapped loop reaching side-effecting tools is a blocking finding.",
+  "domain": "agent",
+  "scope_hint": "code.agent:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.agent",
+  "pack_id": "code.agent"
+}

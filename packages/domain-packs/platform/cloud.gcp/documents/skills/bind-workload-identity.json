@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:gcp:bind-workload-identity",
+  "type": "skill",
+  "title": "Bind a workload to a service account via Workload Identity",
+  "description": "Wire a GKE KSA or Cloud Run service to a least-privilege Google service account so no key file is ever exported.",
+  "body": "Use when a workload must authenticate to Google APIs without a static key. Do not create and mount a JSON key. Actions: create a dedicated GSA with only the predefined roles it needs; on GKE enable Workload Identity on the cluster, annotate the KSA, and grant the KSA the iam.workloadIdentityUser role on the GSA; on Cloud Run set the service's runtime service account. Test by calling an API from inside the workload. Validation signals include the API call succeeding with no key file present and the GSA having zero user-managed keys. Risk boundary: if a static key seems unavoidable or a broad role is requested, stop and escalate for human approval.",
+  "domain": "gcp",
+  "scope_hint": "platform.cloud.gcp:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.cloud.gcp",
+  "pack_id": "platform.cloud.gcp"
+}

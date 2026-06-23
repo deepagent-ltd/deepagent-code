@@ -1,0 +1,11 @@
+{
+  "ref_id": "strategy:ui_frontend_vue:reactivity-owner-boundary",
+  "type": "strategy",
+  "description": "Keep mutable reactive ownership clear between props, local state, Pinia, and route/query state.",
+  "body": "Use when state moves across components, stores, or route params. Do not mutate props or duplicate store state locally without sync rules. Decide whether state is local, derived, store-owned, or URL-owned. Verify changed transitions and refresh/back navigation. Risk boundary: double sources of truth create hydration and navigation bugs. Use when Vue Frontend Engineering work touches visible UI behavior, browser console output, DOM state, assets, viewport behavior, and interaction evidence. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: choose the smallest direction that preserves the domain contract; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include browser smoke, component tests, viewport screenshots, console/network checks, and accessibility assertions. Risk boundary: escalate or stop when the task involves visual regressions, inaccessible interaction, hydration mismatch, and browser-only failures, missing owner evidence, or live external state.",
+  "domain": "frontend_vue",
+  "scope_hint": "code.frontend.vue:strategys",
+  "evidence_strength": "medium",
+  "provenance_tag": "code.frontend.vue:seed:vue_nuxt_pinia_vite_docs:paraphrased",
+  "pack_id": "code.frontend.vue"
+}

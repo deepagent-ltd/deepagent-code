@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:ci_triage:last-error-only",
+  "type": "failure_dossier",
+  "description": "Using the final log line can miss the first real failure.",
+  "body": "Wrapper failures often appear after the actionable command has already failed.\n\nDerived from local skill survey outputs under /Users/xiuranli/code/agent/skill, especially reviewed canonical rules, coverage reports, and trusted local skill notes. Paraphrased into domain-pack seed form.\n\nDiagnostic use only: keep this out of index.json and use it only as a blocked/do-not-use signal.",
+  "domain": "ci_triage",
+  "scope_hint": "code.ci-triage:failure_dossiers",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.ci-triage:skill_survey",
+  "pack_id": "code.ci-triage"
+}

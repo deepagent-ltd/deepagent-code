@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:analytics:model-history-with-scd",
+  "type": "strategy",
+  "title": "Preserve attribute history with SCD type 2",
+  "description": "Track changing dimension attributes as versioned rows with validity ranges so historical facts join to the values that were current then.",
+  "body": "Use when a dimension attribute (customer tier, region) changes and history matters for analysis. Do not overwrite the attribute in place (type 1) when past facts must reflect the value at their time — that rewrites history. Actions: implement SCD type 2 with effective-from/effective-to and a current flag, close the prior row and open a new one on change, and join facts on the date-valid version. Validation signals include non-overlapping validity ranges per key and a fact joining to the dimension version current at its event date. Risk boundary: overwriting history corrupts trend analysis; if facts join to the latest dimension value regardless of date, treat it as a modeling error and escalate to add versioning.",
+  "domain": "analytics",
+  "scope_hint": "code.analytics:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.analytics",
+  "pack_id": "code.analytics"
+}

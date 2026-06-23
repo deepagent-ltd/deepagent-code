@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:sls:make-handlers-idempotent",
+  "type": "strategy",
+  "title": "Make event handlers idempotent",
+  "description": "Assume at-least-once delivery and design handlers so processing the same event twice produces one effect, using an idempotency key.",
+  "body": "Use when a function processes events from a queue, stream, or webhook. Do not assume exactly-once delivery, and do not perform a non-idempotent side effect (charge, insert, send) without a dedup guard. Actions: derive a stable idempotency key from the event, record processed keys in a store with a conditional write, and short-circuit duplicates; make downstream writes upserts where possible. Validation signals include a replay test that delivers the same event twice and asserts a single effect. Risk boundary: a double-charge or duplicate side effect from a retry is a correctness and sometimes financial bug; treat missing idempotency on money/state-changing handlers as blocking.",
+  "domain": "serverless",
+  "scope_hint": "code.backend.serverless:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.serverless",
+  "pack_id": "code.backend.serverless"
+}

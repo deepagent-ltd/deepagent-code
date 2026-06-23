@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:ghci:run-workflow-lint-and-permission-check",
+  "type": "skill",
+  "title": "Lint and dry-check a workflow change",
+  "description": "Run a workflow linter and a static permission/trigger check to preview problems before pushing.",
+  "body": "Use when validating a workflow edit before it runs in CI. Procedure: run a YAML/workflow linter (e.g. actionlint) to catch syntax, shell, and expression errors; statically scan for unpinned actions, missing permissions blocks, and pull_request_target with checkout; if a local runner is available, execute the job in dry mode without secrets. Report linter findings and the permission/trigger summary. This skill exposes capability and analysis only and must not push to protected branches or run against production. Validation signals include a clean lint pass and a permission summary matching intent. Risk boundary: if the static check finds a secret-to-untrusted-code path, stop and escalate rather than pushing.",
+  "domain": "ci_github",
+  "scope_hint": "platform.ci-github:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.ci-github",
+  "pack_id": "platform.ci-github"
+}

@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure_dossier:vdb:hnsw-build-oom",
+  "type": "failure_dossier",
+  "description": "Building an HNSW index on a large table exceeds the memory budget and crashes the build.",
+  "body": "Failure mode: HNSW graph construction holds the growing graph in memory, and on a large table with a high connectivity parameter it exceeds maintenance_work_mem (or the container limit) and the build OOMs, sometimes taking the instance with it. Detection signals: the build is killed by the OOM killer, memory usage climbs steadily during CREATE INDEX, and a smaller subset builds fine. Do not start an unbounded full-table HNSW build without checking the memory estimate. Safer fallback: validate the index size on a subset, raise the maintenance memory budget deliberately or lower the connectivity parameter, and build in a controlled window with monitoring.",
+  "domain": "vector_db",
+  "scope_hint": "code.database.vector:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.vector:human_authored",
+  "pack_id": "code.database.vector"
+}

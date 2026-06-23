@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:architecture:detect-dependency-cycles",
+  "type": "skill",
+  "title": "Detect dependency cycles in the module graph",
+  "description": "Build the module import graph for the codebase and report any cycles with the participating modules and edges.",
+  "body": "Use when validating that a change did not introduce circular dependencies. Actions: construct the module/package import graph, run cycle detection, and report each cycle with its participating modules and the specific edges that close it. Do not judge acyclicity by reading imports in one file. This skill exposes capability only and must not run heavy static-analysis tooling without runtime permission. Validation signals include a graph report showing zero cycles or an explicit list of offending edges. Risk boundary: if the graph cannot be fully built, report cycle status as unverified rather than asserting the graph is clean.",
+  "domain": "code",
+  "scope_hint": "code.architecture:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.architecture",
+  "pack_id": "code.architecture"
+}

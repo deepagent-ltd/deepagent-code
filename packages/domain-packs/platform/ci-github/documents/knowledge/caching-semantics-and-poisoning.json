@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:ghci:caching-semantics-and-poisoning",
+  "type": "knowledge",
+  "title": "Cache semantics and cache poisoning",
+  "description": "Caches are immutable per key, scoped by branch with fallback to default branch, and writable from PR builds, enabling poisoning.",
+  "body": "Use when adding caching or reasoning about a stale/poisoned build. A cache entry is immutable once written for a key; reads fall back through restore-keys and from a branch to the default branch's caches. A workflow triggered by a PR can write a cache that later jobs on the default branch restore, so a malicious PR can poison a shared cache with crafted dependency artifacts. Do not key caches loosely or share them across trust boundaries. Actions: key on lockfile hash, scope caches to avoid untrusted writers, and validate restored contents (checksums) where integrity matters. Validation signals include cache busting on lockfile change and restored artifacts matching expected hashes. Risk boundary: a poisoned cache feeding a trusted build is a supply-chain compromise; isolate caches and escalate.",
+  "domain": "ci_github",
+  "scope_hint": "platform.ci-github:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.ci-github",
+  "pack_id": "platform.ci-github"
+}

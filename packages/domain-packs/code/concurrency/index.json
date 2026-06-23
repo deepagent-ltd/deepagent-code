@@ -1,0 +1,484 @@
+[
+  {
+    "ref_id": "strategy:conc:protect-shared-state-with-one-owner",
+    "type": "strategy",
+    "title": "Give shared mutable state a single synchronization owner",
+    "summary": "Confine mutable state behind one lock or one owning task so every access goes through the same guard.",
+    "domains": [
+      "concurrency",
+      "races",
+      "locks",
+      "async",
+      "deadlock"
+    ],
+    "triggers": [
+      "shared",
+      "state",
+      "mutex",
+      "owner",
+      "confine",
+      "guard"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.concurrency"
+  },
+  {
+    "ref_id": "strategy:conc:enforce-a-global-lock-order",
+    "type": "strategy",
+    "title": "Enforce a single global lock acquisition order",
+    "summary": "Define a total order over locks and always acquire them in that order to make classic deadlock impossible.",
+    "domains": [
+      "concurrency",
+      "races",
+      "locks",
+      "async",
+      "deadlock"
+    ],
+    "triggers": [
+      "lock",
+      "order",
+      "deadlock",
+      "acquire",
+      "hierarchy",
+      "nested"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.concurrency"
+  },
+  {
+    "ref_id": "strategy:conc:make-concurrent-ops-idempotent",
+    "type": "strategy",
+    "title": "Make concurrently-reachable operations idempotent",
+    "summary": "Design operations so a duplicate or retried concurrent execution produces the same end state, not a double effect.",
+    "domains": [
+      "concurrency",
+      "races",
+      "locks",
+      "async",
+      "deadlock"
+    ],
+    "triggers": [
+      "idempotent",
+      "retry",
+      "duplicate",
+      "concurrent",
+      "exactly-once",
+      "dedupe"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.concurrency"
+  },
+  {
+    "ref_id": "strategy:conc:prefer-message-passing-over-shared-memory",
+    "type": "strategy",
+    "title": "Prefer message passing to shared mutable memory",
+    "summary": "Move state into a single owning task that receives messages, so concurrency reduces to a serialized mailbox.",
+    "domains": [
+      "concurrency",
+      "races",
+      "locks",
+      "async",
+      "deadlock"
+    ],
+    "triggers": [
+      "message",
+      "channel",
+      "actor",
+      "queue",
+      "ownership",
+      "serialize"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.concurrency"
+  },
+  {
+    "ref_id": "strategy:conc:bound-async-lifetimes-with-cancellation",
+    "type": "strategy",
+    "title": "Bound async task lifetimes and honor cancellation",
+    "summary": "Tie spawned tasks to a parent scope and propagate cancellation so no task outlives or ignores its caller.",
+    "domains": [
+      "concurrency",
+      "races",
+      "locks",
+      "async",
+      "deadlock"
+    ],
+    "triggers": [
+      "async",
+      "cancellation",
+      "scope",
+      "structured",
+      "lifetime",
+      "timeout"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.concurrency"
+  },
+  {
+    "ref_id": "strategy:conc:choose-correct-memory-ordering",
+    "type": "strategy",
+    "title": "Choose memory ordering deliberately, default to strongest",
+    "summary": "Use sequential-consistency unless a benchmark justifies relaxed/acquire-release, and pair atomics with the right fences.",
+    "domains": [
+      "concurrency",
+      "races",
+      "locks",
+      "async",
+      "deadlock"
+    ],
+    "triggers": [
+      "memory",
+      "ordering",
+      "atomic",
+      "acquire",
+      "release",
+      "relaxed"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.concurrency"
+  },
+  {
+    "ref_id": "methodology:conc:reproduce-a-timing-dependent-flake",
+    "type": "methodology",
+    "title": "Reproduce a timing-dependent flaky failure",
+    "summary": "Amplify the interleaving with stress, scheduling jitter, and detectors until the intermittent failure becomes reliable.",
+    "domains": [
+      "concurrency",
+      "races",
+      "locks",
+      "async",
+      "deadlock"
+    ],
+    "triggers": [
+      "flaky",
+      "reproduce",
+      "stress",
+      "interleaving",
+      "timing",
+      "intermittent"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.concurrency"
+  },
+  {
+    "ref_id": "methodology:conc:diagnose-a-deadlock",
+    "type": "methodology",
+    "title": "Diagnose a deadlock or livelock",
+    "summary": "Capture stacks of the wedged threads, build the lock wait-for graph, and find the cycle or starvation.",
+    "domains": [
+      "concurrency",
+      "races",
+      "locks",
+      "async",
+      "deadlock"
+    ],
+    "triggers": [
+      "deadlock",
+      "livelock",
+      "wait-for",
+      "stacks",
+      "cycle",
+      "hang"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.concurrency"
+  },
+  {
+    "ref_id": "methodology:conc:add-a-concurrency-stress-test",
+    "type": "methodology",
+    "title": "Add a concurrency stress and interleaving test",
+    "summary": "Build a test that runs the operation under many concurrent workers and asserts an invariant, then run it under a detector.",
+    "domains": [
+      "concurrency",
+      "races",
+      "locks",
+      "async",
+      "deadlock"
+    ],
+    "triggers": [
+      "stress",
+      "test",
+      "concurrent",
+      "invariant",
+      "workers",
+      "detector"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.concurrency"
+  },
+  {
+    "ref_id": "methodology:conc:review-a-lock-free-or-atomic-change",
+    "type": "methodology",
+    "title": "Review a lock-free or atomic change",
+    "summary": "Verify the happens-before reasoning, ABA safety, and detector evidence before accepting clever lock-free code.",
+    "domains": [
+      "concurrency",
+      "races",
+      "locks",
+      "async",
+      "deadlock"
+    ],
+    "triggers": [
+      "lock-free",
+      "atomic",
+      "cas",
+      "aba",
+      "happens-before",
+      "review"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.concurrency"
+  },
+  {
+    "ref_id": "knowledge:conc:data-race-vs-race-condition",
+    "type": "knowledge",
+    "title": "Data race versus race condition",
+    "summary": "A data race is unsynchronized concurrent access to the same memory with a write; a race condition is any outcome-dependent-on-timing bug, which may have no data race.",
+    "domains": [
+      "concurrency",
+      "races",
+      "locks",
+      "async",
+      "deadlock"
+    ],
+    "triggers": [
+      "data race",
+      "race condition",
+      "synchronization",
+      "atomicity",
+      "memory",
+      "timing"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.concurrency"
+  },
+  {
+    "ref_id": "knowledge:conc:happens-before-and-memory-model",
+    "type": "knowledge",
+    "title": "Happens-before and the memory model",
+    "summary": "Visibility of one thread's writes to another is governed by happens-before edges from synchronization, not by wall-clock order.",
+    "domains": [
+      "concurrency",
+      "races",
+      "locks",
+      "async",
+      "deadlock"
+    ],
+    "triggers": [
+      "happens-before",
+      "memory model",
+      "visibility",
+      "ordering",
+      "fence",
+      "reorder"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.concurrency"
+  },
+  {
+    "ref_id": "knowledge:conc:deadlock-conditions-and-prevention",
+    "type": "knowledge",
+    "title": "The four deadlock conditions and prevention",
+    "summary": "Deadlock needs mutual exclusion, hold-and-wait, no preemption, and circular wait; breaking any one prevents it.",
+    "domains": [
+      "concurrency",
+      "races",
+      "locks",
+      "async",
+      "deadlock"
+    ],
+    "triggers": [
+      "deadlock",
+      "circular wait",
+      "hold-and-wait",
+      "preemption",
+      "prevention",
+      "lock"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.concurrency"
+  },
+  {
+    "ref_id": "knowledge:conc:cooperative-cancellation-model",
+    "type": "knowledge",
+    "title": "Cooperative cancellation and structured concurrency",
+    "summary": "Cancellation is usually cooperative: tasks must observe a token at checkpoints; structured scopes ensure children end with their parent.",
+    "domains": [
+      "concurrency",
+      "races",
+      "locks",
+      "async",
+      "deadlock"
+    ],
+    "triggers": [
+      "cancellation",
+      "cooperative",
+      "structured",
+      "scope",
+      "token",
+      "shutdown"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.concurrency"
+  },
+  {
+    "ref_id": "skill:conc:read-code-for-shared-state-hazards",
+    "type": "skill",
+    "title": "Read code for shared-state and locking hazards",
+    "summary": "Inspect a module and report unsynchronized shared access, inconsistent lock order, and cancellation leaks.",
+    "domains": [
+      "concurrency",
+      "races",
+      "locks",
+      "async",
+      "deadlock"
+    ],
+    "triggers": [
+      "read",
+      "review",
+      "shared",
+      "lock",
+      "inspect",
+      "hazards"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.concurrency"
+  },
+  {
+    "ref_id": "skill:conc:run-race-detector-and-stress",
+    "type": "skill",
+    "title": "Run a race detector and stress test",
+    "summary": "Execute the test suite under a race detector and a high-concurrency stress loop to surface races and hangs.",
+    "domains": [
+      "concurrency",
+      "races",
+      "locks",
+      "async",
+      "deadlock"
+    ],
+    "triggers": [
+      "race",
+      "detector",
+      "tsan",
+      "stress",
+      "run",
+      "verify"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.concurrency"
+  }
+]

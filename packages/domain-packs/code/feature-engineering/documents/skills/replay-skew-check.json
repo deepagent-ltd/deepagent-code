@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:feat:replay-skew-check",
+  "type": "skill",
+  "title": "Replay an entity to check offline/online skew",
+  "description": "Steps to pull an entity's offline and online feature vectors and diff them to catch skew before serving.",
+  "body": "Use when validating that a feature serves identically offline and online. Do not trust that one definition guarantees equality — materialization bugs and stale syncs cause divergence. Actions: pick a known entity, fetch its offline backfilled vector and its online-served vector at the same timestamp, diff field by field, and assert equality in a test. Validation signals include a passing skew test for the entity and a diff report showing zero mismatches. Risk boundary: undetected skew silently degrades production; if the diff is non-zero, treat the feature as unsafe to serve and escalate to fix materialization before release.",
+  "domain": "feature_engineering",
+  "scope_hint": "code.feature-engineering:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.feature-engineering",
+  "pack_id": "code.feature-engineering"
+}

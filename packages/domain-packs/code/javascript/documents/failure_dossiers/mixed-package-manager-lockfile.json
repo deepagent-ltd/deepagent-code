@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:javascript:mixed-package-manager-lockfile",
+  "type": "failure_dossier",
+  "description": "Mixing package managers during validation",
+  "body": "Running npm install in a pnpm or yarn workspace can create extra lockfiles and alter dependency resolution. Treat new lockfile churn as suspect unless requested. Safer path: use the repository manager indicated by packageManager and existing lockfiles.\n\nUse only as a diagnostic do-not-use signal; do not expose this as positive strategy, methodology, knowledge, skill, or memory.",
+  "domain": "javascript",
+  "scope_hint": "code.javascript:failure_dossiers",
+  "evidence_strength": "medium",
+  "provenance_tag": "code.javascript:failure_seed:paraphrased_common_failures",
+  "pack_id": "code.javascript"
+}

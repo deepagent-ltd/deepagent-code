@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:bazel:make-action-deterministic",
+  "type": "methodology",
+  "title": "Make a non-deterministic action reproducible",
+  "description": "A procedure to remove sources of non-determinism so an action produces identical outputs from identical inputs.",
+  "body": "Use when a target's output differs between builds despite unchanged inputs. Do not rerun until it happens to match. Steps: diff the outputs of two builds to locate the varying bytes; trace them to timestamps, nondeterministic ordering, embedded paths, or parallelism; fix by sorting, stripping timestamps, and using stable paths. Validation signals include byte-identical outputs across repeated and cross-machine builds. Risk boundary: non-determinism breaks caching and reproducibility, so eliminate the variance at its source and verify with repeated builds.",
+  "domain": "bazel",
+  "scope_hint": "code.build.bazel:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.build.bazel",
+  "pack_id": "code.build.bazel"
+}

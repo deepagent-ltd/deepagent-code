@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:sys:file-descriptors-and-limits",
+  "type": "knowledge",
+  "title": "File descriptors, the open file table, and limits",
+  "description": "An fd indexes a per-process table pointing to shared open-file descriptions; the soft RLIMIT_NOFILE caps how many a process can hold.",
+  "body": "Use when managing many open files/sockets or hitting EMFILE. A file descriptor is a small integer indexing a per-process table; each entry points to a shared open file description (holding offset and status flags), which points to an inode. dup and fork share the underlying description, so offsets are shared. The kernel limits descriptors via RLIMIT_NOFILE (a soft and hard limit); exceeding the soft limit fails open/socket/accept with EMFILE. Do not raise the limit to mask a leak. Actions: track open fds, close deterministically, set CLOEXEC, and size the limit for peak legitimate use. Validation signals include a stable fd count and headroom under the limit. Risk boundary: exhausting fds fails new connections and file opens process-wide, an availability incident.",
+  "domain": "systems",
+  "scope_hint": "code.systems:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.systems",
+  "pack_id": "code.systems"
+}

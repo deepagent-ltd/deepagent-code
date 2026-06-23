@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:sigproc:verify-fft-against-dft",
+  "type": "methodology",
+  "title": "Verify an FFT implementation against a reference DFT",
+  "description": "Cross-check a custom FFT against a naive DFT and an inverse round trip before trusting it in a pipeline.",
+  "body": "Use when integrating a hand-written or hardware FFT into a signal chain. Do not assume a fast transform is correct just because it runs. Actions: run the FFT and a direct DFT on identical random inputs, compare bin-by-bin within tolerance, then verify forward-then-inverse reconstructs the input. Validation signals include maximum bin error below the floating-point noise floor and an energy check confirming Parseval's relation holds. Risk boundary: a transform that fails Parseval feeds wrong spectra downstream, so block release and inspect twiddle-factor indexing before continuing.",
+  "domain": "signal_processing",
+  "scope_hint": "hardware.signal-processing:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.signal-processing",
+  "pack_id": "hardware.signal-processing"
+}

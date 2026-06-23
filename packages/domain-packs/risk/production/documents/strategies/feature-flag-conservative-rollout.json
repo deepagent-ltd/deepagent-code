@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:production:feature-flag-conservative-rollout",
+  "type": "strategy",
+  "title": "Feature flag conservative rollout",
+  "description": "Use flags to reduce blast radius only when defaults, targeting, monitoring, and rollback semantics are explicit.",
+  "body": "Use for risky behavior changes, migrations, UI/API exposure, or gradual rollout. Do not use a flag as a substitute for tests or as permission to ship unsafe code. Actions: keep the default conservative, define target cohorts, ensure old and new paths remain compatible, and document disablement. Validation signals include tests for both flag states and monitoring for key outcomes. Risk boundary: enabling a flag for broad or production traffic requires human approval. Use when Production Change Risk Controls work touches repository conventions, toolchain files, changed symbols, validation commands, and runtime output. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: choose the smallest direction that preserves the domain contract; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include package-local checks, focused tests, build output, smoke runs, and command logs. Risk boundary: escalate or stop when the task involves broad rewrites, generated-file drift, stale assumptions, and unvalidated behavior changes, missing owner evidence, or live external state.",
+  "domain": "deployment",
+  "scope_hint": "risk.production:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.production",
+  "pack_id": "risk.production"
+}

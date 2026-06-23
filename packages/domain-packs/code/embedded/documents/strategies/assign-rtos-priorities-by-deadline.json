@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:embed:assign-rtos-priorities-by-deadline",
+  "type": "strategy",
+  "title": "Assign RTOS priorities by deadline",
+  "description": "Set task priorities from real-time deadlines (rate-monotonic), keep high-priority tasks short, and prevent priority inversion.",
+  "body": "Use when structuring tasks on a preemptive RTOS with timing requirements. Do not assign priorities by 'importance' intuition or let a high-priority task block on a low-priority one holding a resource. Actions: derive priorities from periods/deadlines (shorter period = higher priority), keep high-priority tasks brief, and use priority-inheritance mutexes for shared resources. Validation signals include a scheduling trace showing every task meets its deadline under worst-case load and no observed priority inversion. Risk boundary: a missed hard deadline can cause physical harm or data loss; require a worst-case timing analysis and escalate if any task's deadline cannot be guaranteed.",
+  "domain": "embedded",
+  "scope_hint": "code.embedded:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.embedded",
+  "pack_id": "code.embedded"
+}

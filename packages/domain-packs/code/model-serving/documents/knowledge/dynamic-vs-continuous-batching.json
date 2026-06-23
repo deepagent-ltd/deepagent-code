@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:serving:dynamic-vs-continuous-batching",
+  "type": "knowledge",
+  "title": "Dynamic vs continuous batching",
+  "description": "Dynamic batching groups whole requests per step; continuous (in-flight) batching swaps finished sequences for new ones each iteration, key for generative models.",
+  "body": "Use when serving models with variable output length, especially generative ones. Static/dynamic batching forms a batch and runs it to completion, so a long sequence holds the whole batch hostage (head-of-line blocking). Continuous/in-flight batching (as in vLLM) evicts finished sequences and admits new ones each decoding step, keeping the accelerator full and cutting tail latency. Do not use whole-request batching for long, variable-length generation. Actions: pick continuous batching for token-by-token generation. Validation signals include sustained utilization with short requests not blocked by long ones. Risk boundary: whole-request batching for generation wastes capacity and spikes tail latency.",
+  "domain": "model_serving",
+  "scope_hint": "code.model-serving:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.model-serving",
+  "pack_id": "code.model-serving"
+}

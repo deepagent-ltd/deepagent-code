@@ -1,0 +1,50 @@
+{
+  "schema_version": "domain_pack.v1",
+  "id": "risk.compliance",
+  "name": "Regulated Compliance, Audit & Change Control",
+  "version": "1.0.0",
+  "scope": "system",
+  "risk": "regulated",
+  "domains": [
+    "compliance",
+    "audit",
+    "regulated",
+    "approval"
+  ],
+  "provides": [
+    "knowledge",
+    "strategy",
+    "methodology",
+    "skill",
+    "diagnosis",
+    "validation"
+  ],
+  "depends_on": [
+    "risk.privacy",
+    "risk.security",
+    "code.review"
+  ],
+  "conflicts_with": [],
+  "knowledge_store": "document_store",
+  "allowed_tools": [
+    "read",
+    "shell:test"
+  ],
+  "denied_tools": [
+    "shell:deploy-production",
+    "shell:disable-security-control"
+  ],
+  "data_policy": {
+    "sensitivity": [
+      "audit_evidence",
+      "regulated_data",
+      "secret_adjacent"
+    ],
+    "default_admission": "summary_only",
+    "secret_policy": "deny"
+  },
+  "detector": {
+    "inline": "profile.code_domains.some(d=>['compliance','audit','regulated','approval'].includes(d)) || profile.repo_signals.some(s=>/\\b(compliance|audit trail|soc2|gdpr|hipaa control|regulated|change approval|segregation of duties|evidence retention|attestation)\\b/i.test(s)) ? 0.9 : 0",
+    "threshold": 0.5
+  }
+}

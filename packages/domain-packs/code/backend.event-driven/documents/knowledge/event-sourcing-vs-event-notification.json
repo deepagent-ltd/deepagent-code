@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:evt:event-sourcing-vs-event-notification",
+  "type": "knowledge",
+  "title": "Event sourcing vs event notification",
+  "description": "Event notification signals that something happened; event sourcing makes the event log the system of record.",
+  "body": "Use when deciding how much to invest in events. Event notification publishes lightweight facts so others react, but current state still lives in tables. Event sourcing stores every change as an immutable event and derives state by replaying them, enabling audit and rebuildable projections at the cost of complexity (versioning, snapshots, replay discipline). Do not adopt full event sourcing just to emit notifications. Actions: choose notification for decoupling, sourcing only when an authoritative history and rebuildable projections are required. Validation signals include rebuilding a projection from the log and matching live state. Risk boundary: an immutable event store with breaking schema changes and no upcasting becomes unreplayable.",
+  "domain": "event_driven",
+  "scope_hint": "code.backend.event-driven:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.event-driven",
+  "pack_id": "code.backend.event-driven"
+}

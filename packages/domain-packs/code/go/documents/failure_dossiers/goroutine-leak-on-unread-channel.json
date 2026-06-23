@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:go:goroutine-leak-on-unread-channel",
+  "type": "failure_dossier",
+  "description": "Starting a goroutine that blocks forever sending on a channel nobody reads after the consumer returns early.",
+  "body": "Failure mode: a goroutine does `ch <- result` but the receiver returned (timeout, error) without draining, so the sender blocks permanently and the goroutine, its stack, and captured memory leak. Detection signals: goroutine count grows over time in pprof /debug/pprof/goroutine; memory creeps up under load; a deadline path abandons workers. Do not send on an unbuffered channel without a guaranteed receiver or cancellation. Safer fallback: use a buffered channel sized to the senders, select on ctx.Done() in the send, or use errgroup with a derived context, then verify goroutine count is stable across N requests.",
+  "domain": "go",
+  "scope_hint": "code.go:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.go:human_authored",
+  "pack_id": "code.go"
+}

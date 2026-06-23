@@ -1,0 +1,11 @@
+{
+  "ref_id": "knowledge:frontend_vue:watch-requires-cleanup-for-async",
+  "type": "knowledge",
+  "description": "Watchers that start async work need stale-result or cleanup handling.",
+  "body": "Use when search, fetch, timers, or subscriptions are triggered by watch/watchEffect. Do not let older responses overwrite newer state. Use cleanup hooks or request tokens following project style. Verify rapid input changes. Risk boundary: leaks on component unmount or route leave. Use when Vue Frontend Engineering work touches visible UI behavior, browser console output, DOM state, assets, viewport behavior, and interaction evidence. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: use the fact to constrain the change and test plan; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include browser smoke, component tests, viewport screenshots, console/network checks, and accessibility assertions. Risk boundary: escalate or stop when the task involves visual regressions, inaccessible interaction, hydration mismatch, and browser-only failures, missing owner evidence, or live external state.",
+  "domain": "frontend_vue",
+  "scope_hint": "code.frontend.vue:knowledges",
+  "evidence_strength": "strong",
+  "provenance_tag": "code.frontend.vue:seed:vue_nuxt_pinia_vite_docs:paraphrased",
+  "pack_id": "code.frontend.vue"
+}

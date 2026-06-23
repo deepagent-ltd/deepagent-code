@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:php:use-the-framework-seam-not-the-bypass",
+  "type": "strategy",
+  "title": "Use the framework's documented seam, not a bypass",
+  "description": "Reach framework behavior through the service container, events, and middleware rather than static back doors.",
+  "body": "Use when integrating with Laravel or Symfony. Do not instantiate framework services manually, reach into globals, or scatter logic that the container should inject. Actions: register and resolve services through the container (constructor injection or, in Laravel, behind facades that proxy the container), hook cross-cutting concerns via middleware/events, and keep business logic in testable services rather than controllers. Validation signals include a test that swaps a bound implementation via the container to exercise the seam in isolation. Risk boundary: bypassing the container produces untestable, tightly coupled code; security middleware (auth, CSRF) must run through the framework pipeline, never be hand-skipped.",
+  "domain": "php",
+  "scope_hint": "code.php:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.php",
+  "pack_id": "code.php"
+}

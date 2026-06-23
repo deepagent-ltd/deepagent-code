@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:hwverif:build-uvm-environment",
+  "type": "methodology",
+  "title": "Assemble a UVM verification environment",
+  "description": "Compose agents, scoreboard, and coverage into an environment with a configurable test layer on top.",
+  "body": "Use when standing up verification for a new block. Do not scatter checking and coverage across ad hoc code, since a structured environment is what makes tests reusable and measurable. Actions: instantiate the interface agents, connect the monitor to scoreboard and coverage, and expose configuration so tests can vary scenarios. Validation signals include tests reusing the same environment and coverage collected automatically from the monitors. Risk boundary: an environment without coverage collection cannot prove completeness, so deny sign-off until coverage flows from every monitor.",
+  "domain": "hw_verification",
+  "scope_hint": "hardware.verification:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.verification",
+  "pack_id": "hardware.verification"
+}

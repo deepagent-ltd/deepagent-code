@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:agent:reconcile-claim-with-result",
+  "type": "methodology",
+  "title": "Reconcile model claims with runner results",
+  "description": "Compare what the model says it did against what the runner observed, and resolve completion from observed evidence.",
+  "body": "Steps: 1. Capture the model's stated action and claimed outcome each step. 2. Capture the actual tool result and observed state change. 3. Compare claim against result and flag divergence. 4. Derive step completion from the observed result, not the claim. 5. Add a test where the model claims success on a failed tool and assert the runner records failure. Rollback point: before letting a claimed-but-unverified step mark a task done. Validation: divergence is detected and completion tracks observed evidence.",
+  "domain": "agent",
+  "scope_hint": "code.agent:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.agent",
+  "pack_id": "code.agent"
+}

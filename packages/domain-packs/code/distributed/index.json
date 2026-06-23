@@ -1,0 +1,468 @@
+[
+  {
+    "ref_id": "strategy:dist:replicate-the-log-not-the-state",
+    "type": "strategy",
+    "title": "Replicate the log, derive the state",
+    "summary": "Agree on an ordered log of commands via consensus and apply it deterministically on every replica, rather than shipping mutated state between nodes.",
+    "domains": [
+      "distributed",
+      "consensus",
+      "replication",
+      "consistency"
+    ],
+    "triggers": [
+      "replicated log",
+      "state machine",
+      "raft",
+      "deterministic",
+      "apply",
+      "command"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.distributed"
+  },
+  {
+    "ref_id": "strategy:dist:size-quorums-for-intersection",
+    "type": "strategy",
+    "title": "Size quorums so reads and writes intersect",
+    "summary": "Pick read and write quorums whose sizes guarantee overlap (R + W > N) so every read sees the latest acknowledged write.",
+    "domains": [
+      "distributed",
+      "consensus",
+      "replication",
+      "consistency"
+    ],
+    "triggers": [
+      "quorum",
+      "read quorum",
+      "write quorum",
+      "intersection",
+      "overlap",
+      "N R W"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.distributed"
+  },
+  {
+    "ref_id": "strategy:dist:prevent-split-brain-with-fencing",
+    "type": "strategy",
+    "title": "Prevent split-brain with terms and fencing",
+    "summary": "Use monotonic terms/epochs and fencing tokens so a stale leader cannot commit after a new leader is elected.",
+    "domains": [
+      "distributed",
+      "consensus",
+      "replication",
+      "consistency"
+    ],
+    "triggers": [
+      "split-brain",
+      "fencing",
+      "term",
+      "epoch",
+      "leader",
+      "stale"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.distributed"
+  },
+  {
+    "ref_id": "strategy:dist:design-for-idempotent-retries",
+    "type": "strategy",
+    "title": "Make every remote operation idempotent",
+    "summary": "Attach a dedup key to each request so the unavoidable retries from timeouts do not apply an operation twice.",
+    "domains": [
+      "distributed",
+      "consensus",
+      "replication",
+      "consistency"
+    ],
+    "triggers": [
+      "idempotent",
+      "retry",
+      "dedup",
+      "at-least-once",
+      "exactly-once",
+      "request id"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.distributed"
+  },
+  {
+    "ref_id": "strategy:dist:order-events-with-logical-clocks",
+    "type": "strategy",
+    "title": "Order events with logical, not wall, clocks",
+    "summary": "Use Lamport or vector clocks to capture causality between events, because wall-clock timestamps across nodes are unreliable for ordering.",
+    "domains": [
+      "distributed",
+      "consensus",
+      "replication",
+      "consistency"
+    ],
+    "triggers": [
+      "logical clock",
+      "lamport",
+      "vector clock",
+      "causality",
+      "ordering",
+      "happens-before"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.distributed"
+  },
+  {
+    "ref_id": "strategy:dist:bound-failure-detection",
+    "type": "strategy",
+    "title": "Treat failure detection as a suspicion, not a fact",
+    "summary": "Build failure detectors that report suspicion with timeouts and backoff, accepting that you cannot distinguish a slow node from a dead one.",
+    "domains": [
+      "distributed",
+      "consensus",
+      "replication",
+      "consistency"
+    ],
+    "triggers": [
+      "failure detector",
+      "heartbeat",
+      "timeout",
+      "suspicion",
+      "slow node",
+      "phi accrual"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.distributed"
+  },
+  {
+    "ref_id": "methodology:dist:implement-raft-leader-election",
+    "type": "methodology",
+    "title": "Implement and test Raft leader election",
+    "summary": "Bring up Raft terms, election timeouts, and vote rules so the cluster elects exactly one leader per term and recovers after partitions.",
+    "domains": [
+      "distributed",
+      "consensus",
+      "replication",
+      "consistency"
+    ],
+    "triggers": [
+      "raft",
+      "leader election",
+      "term",
+      "vote",
+      "election timeout",
+      "candidate"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.distributed"
+  },
+  {
+    "ref_id": "methodology:dist:tune-replication-consistency",
+    "type": "methodology",
+    "title": "Tune replication for a target consistency",
+    "summary": "Map a required consistency level to concrete replication factor and quorum settings, then verify the guarantee holds.",
+    "domains": [
+      "distributed",
+      "consensus",
+      "replication",
+      "consistency"
+    ],
+    "triggers": [
+      "replication",
+      "consistency level",
+      "tuning",
+      "quorum",
+      "staleness",
+      "guarantee"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.distributed"
+  },
+  {
+    "ref_id": "methodology:dist:diagnose-data-divergence",
+    "type": "methodology",
+    "title": "Diagnose replica data divergence",
+    "summary": "When two replicas disagree on a committed value, isolate the cause among non-deterministic apply, lost writes, and conflicting concurrent updates.",
+    "domains": [
+      "distributed",
+      "consensus",
+      "replication",
+      "consistency"
+    ],
+    "triggers": [
+      "divergence",
+      "conflict",
+      "anti-entropy",
+      "merkle",
+      "reconcile",
+      "stale"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.distributed"
+  },
+  {
+    "ref_id": "methodology:dist:run-partition-fault-injection",
+    "type": "methodology",
+    "title": "Run partition and fault-injection tests",
+    "summary": "Use a fault injector to partition, delay, and crash nodes while a consistency checker validates the cluster's promised invariants.",
+    "domains": [
+      "distributed",
+      "consensus",
+      "replication",
+      "consistency"
+    ],
+    "triggers": [
+      "fault injection",
+      "partition",
+      "jepsen",
+      "nemesis",
+      "chaos",
+      "linearizability"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.distributed"
+  },
+  {
+    "ref_id": "knowledge:dist:cap-and-its-real-tradeoff",
+    "type": "knowledge",
+    "title": "CAP and the partition-time tradeoff",
+    "summary": "During a network partition a system must choose between staying consistent (rejecting some requests) or staying available (risking stale data); it cannot have both.",
+    "domains": [
+      "distributed",
+      "consensus",
+      "replication",
+      "consistency"
+    ],
+    "triggers": [
+      "cap theorem",
+      "partition",
+      "availability",
+      "consistency",
+      "tradeoff",
+      "cp ap"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.distributed"
+  },
+  {
+    "ref_id": "knowledge:dist:consistency-models-spectrum",
+    "type": "knowledge",
+    "title": "The spectrum of consistency models",
+    "summary": "Linearizable, sequential, causal, and eventual consistency trade ordering strength for availability and latency, each with a precise observable definition.",
+    "domains": [
+      "distributed",
+      "consensus",
+      "replication",
+      "consistency"
+    ],
+    "triggers": [
+      "linearizable",
+      "sequential",
+      "causal",
+      "eventual",
+      "consistency model",
+      "ordering"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.distributed"
+  },
+  {
+    "ref_id": "knowledge:dist:why-time-is-hard",
+    "type": "knowledge",
+    "title": "Why distributed time is hard",
+    "summary": "Independent clocks drift and NTP only bounds skew loosely, so wall-clock ordering across nodes is unsafe; logical clocks capture causality instead.",
+    "domains": [
+      "distributed",
+      "consensus",
+      "replication",
+      "consistency"
+    ],
+    "triggers": [
+      "clock skew",
+      "ntp",
+      "time",
+      "drift",
+      "logical clock",
+      "happens-before"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.distributed"
+  },
+  {
+    "ref_id": "knowledge:dist:two-generals-and-message-loss",
+    "type": "knowledge",
+    "title": "Message loss and the impossibility of certainty",
+    "summary": "Over an unreliable network no finite exchange guarantees both sides agree; protocols cope with probabilistic acknowledgement, retries, and idempotency, not certainty.",
+    "domains": [
+      "distributed",
+      "consensus",
+      "replication",
+      "consistency"
+    ],
+    "triggers": [
+      "two generals",
+      "message loss",
+      "acknowledgement",
+      "flp",
+      "agreement",
+      "asynchronous"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.distributed"
+  },
+  {
+    "ref_id": "skill:dist:trace-replication-flow",
+    "type": "skill",
+    "title": "Trace a write through the replication path",
+    "summary": "Follow a single write from client to quorum ack to applied state across replicas and report where consistency is established or lost.",
+    "domains": [
+      "distributed",
+      "consensus",
+      "replication",
+      "consistency"
+    ],
+    "triggers": [
+      "trace",
+      "replication",
+      "write path",
+      "quorum ack",
+      "commit index",
+      "observe"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.distributed"
+  },
+  {
+    "ref_id": "skill:dist:check-linearizability-history",
+    "type": "skill",
+    "title": "Check a recorded history for linearizability",
+    "summary": "Feed a recorded operation history into a consistency checker and report any anomaly with the offending operations.",
+    "domains": [
+      "distributed",
+      "consensus",
+      "replication",
+      "consistency"
+    ],
+    "triggers": [
+      "linearizability",
+      "history",
+      "checker",
+      "knossos",
+      "anomaly",
+      "verify"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.distributed"
+  }
+]

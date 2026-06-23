@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:search:design-facets-as-aggregations",
+  "type": "strategy",
+  "title": "Build facets on keyword fields via aggregations",
+  "description": "Implement faceting with aggregations over keyword (doc-values) fields and apply filters as post-filters so counts stay consistent.",
+  "body": "Use when building filterable facets (category, brand, price range). Do not aggregate on analyzed text fields (tokens fragment the buckets) and do not let a selected facet filter remove the other facets' options. Actions: aggregate on keyword/numeric fields with doc values, and use post_filter (or filtered aggregations) so selecting one facet narrows results without zeroing out sibling facet counts. Validation signals include facet counts reconciling with filtered result totals and sibling facets remaining selectable. Risk boundary: aggregating on the wrong field type yields garbage buckets and a confusing UI; verify facets use keyword fields and that counts match the filtered set.",
+  "domain": "search",
+  "scope_hint": "code.search:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.search",
+  "pack_id": "code.search"
+}

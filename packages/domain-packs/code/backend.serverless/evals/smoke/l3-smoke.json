@@ -1,0 +1,71 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "code.backend.serverless",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "serverless",
+      "lambda",
+      "faas",
+      "functions"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "L3 smoke for code.backend.serverless: AWS Lambda handlers, cold start tuning, event-source triggers with fan-out, per-function IAM least privilege, idempotency keys, and execution timeout limits"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "tune JVM heap settings for a long-running monolith on a dedicated VM"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "retrieval_query": "serverless lambda faas cold start stateless event trigger fan-out idempotency timeout iam concurrency api gateway",
+  "expected_pack_id": "code.backend.serverless",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "code.backend.serverless L3 validation smoke",
+    "signals": [
+      "handler proven idempotent under duplicate event replay",
+      "cold-start latency measured at p99",
+      "per-function IAM policy scoped to least privilege",
+      "function exits before timeout under load",
+      "dead-letter queue receives unprocessable events"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "code.backend.serverless diagnosis smoke",
+    "signals": [
+      "handler stores state in a module global expecting persistence",
+      "no idempotency handling under at-least-once delivery",
+      "wildcard IAM permissions on a function",
+      "synchronous fan-out hitting concurrency limits",
+      "function timeout shorter than a downstream call"
+    ]
+  },
+  "source_refs": [
+    "source:aws-lambda-developer-guide:paraphrased",
+    "source:serverless-patterns-practice:paraphrased"
+  ]
+}

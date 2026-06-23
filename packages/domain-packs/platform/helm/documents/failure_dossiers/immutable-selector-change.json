@@ -1,0 +1,11 @@
+{
+  "ref_id": "fail:helm:immutable-selector-change",
+  "type": "failure_dossier",
+  "description": "Changing selectorLabels in a chart breaks the immutable Deployment selector on upgrade.",
+  "body": "Failure mode: a chart edit changes the labels feeding a Deployment/StatefulSet selector, and because the selector is immutable the upgrade fails or forces a destructive recreate. Detection signals: helm upgrade errors about an immutable field, a manifest diff shows selector label changes, and pods get recreated unexpectedly. Do not alter selector labels on an existing release casually. Safer fallback: keep selectorLabels stable and separate from cosmetic labels via _helpers, diff manifests before upgrade, and if a selector must change, plan a controlled recreate as a human-gated production change.",
+  "domain": "helm",
+  "scope_hint": "platform.helm:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.helm:human_authored",
+  "pack_id": "platform.helm"
+}

@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure_dossier:pcb:insufficient-decoupling-droop",
+  "type": "failure_dossier",
+  "description": "A device resets or misbehaves under load because inadequate decoupling lets the supply rail droop during current transients.",
+  "body": "Failure mode: too little local capacitance or excessive mounting inductance leaves the rail unable to supply transient current, so the voltage sags below the device minimum. Detection signals: glitches that correlate with high-activity bursts, a rail dip on a scope during load steps, and improvement when bench capacitance is added. Do not raise the supply voltage to mask the droop. Safer fallback: add local high-frequency and bulk capacitance close to the pins with short connections and verify the rail under a load step.",
+  "domain": "pcb",
+  "scope_hint": "hardware.pcb:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.pcb:human_authored",
+  "pack_id": "hardware.pcb"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:ruby:lock-down-mass-assignment",
+  "type": "strategy",
+  "title": "Lock down mass assignment with strong parameters",
+  "description": "Permit only the attributes a request may set so users cannot assign protected columns by passing extra params.",
+  "body": "Use when a controller builds or updates a model from request params. Do not pass raw params to create/update or permit a whole hash blindly. Actions: in the controller require the model key and permit an explicit allowlist of attributes (params.require(:user).permit(:name, :email)), and never permit role/admin/owner-style columns from user input. Validation signals include a request spec asserting that a forbidden attribute supplied by the client is ignored and the column is unchanged. Risk boundary: permitting all params lets a user escalate privilege or overwrite ownership columns; an over-broad permit on a security-relevant model is a blocking finding to tighten.",
+  "domain": "ruby",
+  "scope_hint": "code.ruby:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.ruby",
+  "pack_id": "code.ruby"
+}

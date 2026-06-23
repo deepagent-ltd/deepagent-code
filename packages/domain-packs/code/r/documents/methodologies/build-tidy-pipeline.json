@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:rlang:build-tidy-pipeline",
+  "type": "methodology",
+  "title": "Build a tidy data pipeline",
+  "description": "Reshape data to tidy form and compose dplyr verbs into an inspectable transformation chain.",
+  "body": "Steps: 1. Define the tidy target: one row per observation, one column per variable. 2. Pivot wide or long with tidyr to reach that shape. 3. Add filter, mutate, group_by, summarise verbs one at a time. 4. Inspect row count and column types after each verb. 5. Ungroup and confirm the final shape and types. Rollback point: keep the raw input frame untouched. Validation: each stage's row count and column classes match the documented expectation.",
+  "domain": "r_lang",
+  "scope_hint": "code.r:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.r",
+  "pack_id": "code.r"
+}

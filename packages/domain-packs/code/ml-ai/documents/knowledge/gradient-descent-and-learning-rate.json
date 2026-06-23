@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:mlai:gradient-descent-and-learning-rate",
+  "type": "knowledge",
+  "title": "Gradient descent and the learning rate",
+  "description": "Training follows the loss gradient scaled by the learning rate; too high diverges to NaN, too low stalls, and the schedule shapes convergence.",
+  "body": "Use when tuning optimization or diagnosing convergence. The learning rate is usually the highest-leverage hyperparameter: too high causes loss to oscillate or explode to NaN, too low causes painfully slow or stuck training. Adaptive optimizers (Adam) adjust per-parameter rates but still need a sane base rate and often a warmup/decay schedule. Do not assume a default rate transfers across datasets or batch sizes. Actions: sweep the rate logarithmically and watch the loss curve shape. Validation signals include a smooth descending loss and stable gradients. Risk boundary: a diverging run wastes the whole job; clip gradients and reduce the rate at the first sign of NaN.",
+  "domain": "ml",
+  "scope_hint": "code.ml-ai:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.ml-ai",
+  "pack_id": "code.ml-ai"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "failure_dossier:security:test-only-security-bypass-leaks",
+  "type": "failure_dossier",
+  "title": "Test-only security bypass leaks into runtime",
+  "description": "A helper intended for local tests becomes reachable in development, staging, or production builds.",
+  "body": "Failure mode: code adds environment flags, debug users, bypass tokens, or mock auth paths without hard isolation. Later packaging or configuration drift makes the bypass reachable outside tests. Detection signals include NODE_ENV checks around auth, shared fixtures in runtime modules, default debug credentials, or missing build-time assertions. Remediation is isolate bypasses in test-only code and add packaging checks. Human gate is required if the bypass has shipped or touched real data. Use when a proposed approach skips trust boundaries, authorization decisions, dangerous sinks, secrets, and dependency execution or claims success without domain evidence. Do not use this dossier as a positive implementation strategy; it is a do-not-use signal. Actions: block the shortcut, name the missing evidence, and switch to a safer methodology or ask for human approval. Validation signals include absence or contradiction in negative security tests, server-side checks, sink payload tests, and secret scans. Risk boundary: treat repeated recurrence as a blocker when it can cause client-only controls, injection, credential leakage, permissive fallback, and unsafe dependency changes.",
+  "domain": "security",
+  "scope_hint": "risk.security:failure_dossiers",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:risk.security",
+  "pack_id": "risk.security"
+}

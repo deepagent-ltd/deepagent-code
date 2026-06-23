@@ -1,0 +1,468 @@
+[
+  {
+    "ref_id": "strategy:sqlite:enable-wal-for-concurrent-reads",
+    "type": "strategy",
+    "title": "Enable WAL for concurrent reads",
+    "summary": "Switch to WAL mode so readers and a single writer proceed concurrently instead of blocking each other.",
+    "domains": [
+      "sqlite",
+      "database",
+      "sql",
+      "embedded"
+    ],
+    "triggers": [
+      "wal",
+      "journal",
+      "concurrency",
+      "readers",
+      "writer",
+      "mode"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.sqlite"
+  },
+  {
+    "ref_id": "strategy:sqlite:set-busy-timeout-to-handle-contention",
+    "type": "strategy",
+    "title": "Set busy_timeout to handle write contention",
+    "summary": "Configure busy_timeout so a connection waits for the writer lock instead of immediately failing with SQLITE_BUSY.",
+    "domains": [
+      "sqlite",
+      "database",
+      "sql",
+      "embedded"
+    ],
+    "triggers": [
+      "busy_timeout",
+      "sqlite_busy",
+      "lock",
+      "wait",
+      "contention",
+      "retry"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.sqlite"
+  },
+  {
+    "ref_id": "strategy:sqlite:set-pragmas-explicitly-per-connection",
+    "type": "strategy",
+    "title": "Set durability and integrity pragmas explicitly",
+    "summary": "Configure foreign_keys, synchronous, and journal pragmas on each connection rather than trusting defaults.",
+    "domains": [
+      "sqlite",
+      "database",
+      "sql",
+      "embedded"
+    ],
+    "triggers": [
+      "pragma",
+      "foreign_keys",
+      "synchronous",
+      "connection",
+      "durability",
+      "default"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.sqlite"
+  },
+  {
+    "ref_id": "strategy:sqlite:respect-the-single-writer-model",
+    "type": "strategy",
+    "title": "Design around the single-writer model",
+    "summary": "Serialize writes through one path and keep write transactions short, since SQLite allows only one writer at a time.",
+    "domains": [
+      "sqlite",
+      "database",
+      "sql",
+      "embedded"
+    ],
+    "triggers": [
+      "single-writer",
+      "serialize",
+      "transaction",
+      "write",
+      "concurrency",
+      "lock"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.sqlite"
+  },
+  {
+    "ref_id": "strategy:sqlite:back-up-with-the-online-api",
+    "type": "strategy",
+    "title": "Back up with the online backup API",
+    "summary": "Copy a live database with the backup API or VACUUM INTO, never a plain file copy, to avoid a corrupt snapshot.",
+    "domains": [
+      "sqlite",
+      "database",
+      "sql",
+      "embedded"
+    ],
+    "triggers": [
+      "backup",
+      "online",
+      "vacuum-into",
+      "copy",
+      "snapshot",
+      "corrupt"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.sqlite"
+  },
+  {
+    "ref_id": "strategy:sqlite:use-fts5-for-text-search",
+    "type": "strategy",
+    "title": "Use FTS5 for full-text search",
+    "summary": "Index searchable text in an FTS5 virtual table kept in sync with the base table rather than scanning with LIKE.",
+    "domains": [
+      "sqlite",
+      "database",
+      "sql",
+      "embedded"
+    ],
+    "triggers": [
+      "fts5",
+      "full-text",
+      "search",
+      "match",
+      "virtual",
+      "table"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.sqlite"
+  },
+  {
+    "ref_id": "methodology:sqlite:configure-a-new-connection",
+    "type": "methodology",
+    "title": "Configure a new connection correctly",
+    "summary": "Apply the standard pragma set on open so concurrency, durability, and integrity behave predictably.",
+    "domains": [
+      "sqlite",
+      "database",
+      "sql",
+      "embedded"
+    ],
+    "triggers": [
+      "connection",
+      "configure",
+      "pragma",
+      "open",
+      "setup",
+      "defaults"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.sqlite"
+  },
+  {
+    "ref_id": "methodology:sqlite:diagnose-sqlite-busy",
+    "type": "methodology",
+    "title": "Diagnose SQLITE_BUSY errors",
+    "summary": "Trace busy/locked errors to the writer contention or long transaction causing them and fix the root cause.",
+    "domains": [
+      "sqlite",
+      "database",
+      "sql",
+      "embedded"
+    ],
+    "triggers": [
+      "sqlite_busy",
+      "locked",
+      "diagnose",
+      "contention",
+      "transaction",
+      "deadlock"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.sqlite"
+  },
+  {
+    "ref_id": "methodology:sqlite:set-up-fts5-search",
+    "type": "methodology",
+    "title": "Set up FTS5 search end to end",
+    "summary": "Create the FTS5 table, keep it synced with triggers, and query with MATCH and bm25 ranking.",
+    "domains": [
+      "sqlite",
+      "database",
+      "sql",
+      "embedded"
+    ],
+    "triggers": [
+      "fts5",
+      "trigger",
+      "sync",
+      "match",
+      "bm25",
+      "tokenizer"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.sqlite"
+  },
+  {
+    "ref_id": "methodology:sqlite:verify-and-restore-a-backup",
+    "type": "methodology",
+    "title": "Verify and restore a backup",
+    "summary": "Produce a consistent backup, check its integrity, and rehearse restore so the file is known-good.",
+    "domains": [
+      "sqlite",
+      "database",
+      "sql",
+      "embedded"
+    ],
+    "triggers": [
+      "backup",
+      "restore",
+      "integrity_check",
+      "verify",
+      "consistent",
+      "rehearse"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.sqlite"
+  },
+  {
+    "ref_id": "knowledge:sqlite:wal-vs-rollback-journal",
+    "type": "knowledge",
+    "title": "WAL vs rollback journal",
+    "summary": "WAL lets readers and one writer run concurrently and is faster, but adds sidecar files and needs checkpointing.",
+    "domains": [
+      "sqlite",
+      "database",
+      "sql",
+      "embedded"
+    ],
+    "triggers": [
+      "wal",
+      "rollback",
+      "journal",
+      "checkpoint",
+      "concurrency",
+      "sidecar"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.sqlite"
+  },
+  {
+    "ref_id": "knowledge:sqlite:type-affinity-and-flexible-typing",
+    "type": "knowledge",
+    "title": "Type affinity and flexible typing",
+    "summary": "SQLite columns have affinity, not strict types, so a column can hold values of any type unless constrained.",
+    "domains": [
+      "sqlite",
+      "database",
+      "sql",
+      "embedded"
+    ],
+    "triggers": [
+      "type",
+      "affinity",
+      "flexible",
+      "storage",
+      "strict",
+      "check"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.sqlite"
+  },
+  {
+    "ref_id": "knowledge:sqlite:single-file-durability-and-portability",
+    "type": "knowledge",
+    "title": "Single-file durability and portability",
+    "summary": "The whole database is one file (plus WAL sidecars), which simplifies deployment but constrains backup and concurrency.",
+    "domains": [
+      "sqlite",
+      "database",
+      "sql",
+      "embedded"
+    ],
+    "triggers": [
+      "single-file",
+      "durability",
+      "portability",
+      "embedded",
+      "backup",
+      "fsync"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.sqlite"
+  },
+  {
+    "ref_id": "knowledge:sqlite:indexing-and-query-planning",
+    "type": "knowledge",
+    "title": "Indexing and the query planner",
+    "summary": "SQLite uses btree indexes and a cost-based planner; covering indexes and ANALYZE statistics drive plan quality.",
+    "domains": [
+      "sqlite",
+      "database",
+      "sql",
+      "embedded"
+    ],
+    "triggers": [
+      "index",
+      "query-plan",
+      "covering",
+      "analyze",
+      "explain",
+      "scan"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.sqlite"
+  },
+  {
+    "ref_id": "skill:sqlite:audit-connection-pragmas",
+    "type": "skill",
+    "title": "Audit connection pragmas",
+    "summary": "Read connection setup and report whether WAL, busy_timeout, and foreign_keys are configured for the workload.",
+    "domains": [
+      "sqlite",
+      "database",
+      "sql",
+      "embedded"
+    ],
+    "triggers": [
+      "audit",
+      "pragma",
+      "connection",
+      "wal",
+      "review",
+      "foreign_keys"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.sqlite"
+  },
+  {
+    "ref_id": "skill:sqlite:review-backup-procedure",
+    "type": "skill",
+    "title": "Review the backup procedure",
+    "summary": "Trace how the database is backed up and report whether the method yields a consistent, verifiable copy.",
+    "domains": [
+      "sqlite",
+      "database",
+      "sql",
+      "embedded"
+    ],
+    "triggers": [
+      "backup",
+      "review",
+      "consistent",
+      "integrity_check",
+      "copy",
+      "restore"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.sqlite"
+  }
+]

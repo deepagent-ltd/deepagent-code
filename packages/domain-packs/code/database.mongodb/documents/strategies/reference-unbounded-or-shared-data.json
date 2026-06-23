@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:mongo:reference-unbounded-or-shared-data",
+  "type": "strategy",
+  "title": "Reference unbounded or independently-updated data",
+  "description": "Store large, growing, or shared child sets in their own collection and link by id to avoid runaway document growth.",
+  "body": "Use when a related set is unbounded, grows over time, or is shared across many parents. Do not embed an ever-growing array (events, comments, log lines) into a parent document; it walks toward the 16MB limit and rewrites the whole document on every push. Actions: put the child set in its own collection keyed by the parent id, index that key, and join with $lookup only when a combined view is genuinely needed. Validation signals include parent documents staying small and stable in size and child inserts not rewriting the parent. Risk boundary: a $lookup across large unindexed collections is effectively a nested loop join, so confirm the foreign key is indexed before relying on it.",
+  "domain": "mongodb",
+  "scope_hint": "code.database.mongodb:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.mongodb",
+  "pack_id": "code.database.mongodb"
+}

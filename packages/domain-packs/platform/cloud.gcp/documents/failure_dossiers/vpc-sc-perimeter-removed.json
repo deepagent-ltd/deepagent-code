@@ -1,0 +1,11 @@
+{
+  "ref_id": "fail:gcp:vpc-sc-perimeter-removed",
+  "type": "failure_dossier",
+  "description": "Deleting or weakening a VPC Service Controls perimeter to unblock a call.",
+  "body": "Failure mode: a request fails with a VPC-SC violation and someone removes the service from the perimeter or deletes it outright, opening a data-exfiltration path. Detection signals: audit logs show the perimeter modified, previously blocked egress now succeeds broadly, and security review flags the perimeter gap. Do not disable the perimeter to make a call work. Safer fallback: read the violation's unique reason, add a narrowly scoped ingress/egress rule or access level for the specific identity and service, validate in dry-run mode, and treat any perimeter change as human-gated.",
+  "domain": "gcp",
+  "scope_hint": "platform.cloud.gcp:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.cloud.gcp:human_authored",
+  "pack_id": "platform.cloud.gcp"
+}

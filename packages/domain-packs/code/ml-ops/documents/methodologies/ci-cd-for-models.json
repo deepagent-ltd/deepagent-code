@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:mlops:ci-cd-for-models",
+  "type": "methodology",
+  "title": "Wire CI/CD that tests data, code, and the model",
+  "description": "Extend CI/CD to validate data schemas and model behavior, not just unit tests, before a pipeline change ships.",
+  "body": "Use when changes to training code or pipeline config can reach production retraining. Do not reuse a plain app CI that only runs unit tests — it misses data-contract breaks and model-quality regressions. Actions: in CI, validate input schemas, run a small training smoke, assert eval metrics against a floor, and check serving I/O contracts before merge. Validation signals include a CI log showing schema and metric-floor checks and a blocked merge on a seeded regression. Risk boundary: shipping a pipeline change that silently degrades models harms production; if metric-floor checks are missing, treat the pipeline as ungated and escalate.",
+  "domain": "mlops",
+  "scope_hint": "code.mlops:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.mlops",
+  "pack_id": "code.mlops"
+}

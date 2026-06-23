@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:robot:keep-the-control-loop-deterministic",
+  "type": "strategy",
+  "title": "Keep the control loop deterministic",
+  "description": "Run control at a fixed rate with bounded execution time, moving all heavy or blocking work out of the real-time path.",
+  "body": "Use when implementing or reviewing any periodic control loop driving actuators. Do not perform allocation, logging to disk, network I/O, or unbounded computation inside the loop, and avoid sharing locks with non-real-time threads. Actions: run the loop at a fixed period on a real-time-priority thread, preallocate buffers, do heavy work (planning, perception) in separate threads communicating via lock-free or bounded queues, and measure worst-case execution time against the period. Validation signals include a jitter histogram showing the loop meets its deadline under load and no missed cycles. Risk boundary: a control loop that misses its deadline produces unstable or unsafe actuator motion; treat blocking work in the real-time path as a critical timing defect and escalate before running on hardware.",
+  "domain": "robotics",
+  "scope_hint": "code.robotics:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.robotics",
+  "pack_id": "code.robotics"
+}

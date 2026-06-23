@@ -1,0 +1,468 @@
+[
+  {
+    "ref_id": "strategy:robot:keep-the-control-loop-deterministic",
+    "type": "strategy",
+    "title": "Keep the control loop deterministic",
+    "summary": "Run control at a fixed rate with bounded execution time, moving all heavy or blocking work out of the real-time path.",
+    "domains": [
+      "robotics",
+      "ros",
+      "control",
+      "sensors"
+    ],
+    "triggers": [
+      "control loop",
+      "real-time",
+      "deterministic",
+      "jitter",
+      "deadline",
+      "period"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.robotics"
+  },
+  {
+    "ref_id": "strategy:robot:always-respect-actuator-limits",
+    "type": "strategy",
+    "title": "Clamp every command to actuator limits",
+    "summary": "Enforce position, velocity, and torque limits at the lowest command layer so no upstream bug can drive hardware past its safe envelope.",
+    "domains": [
+      "robotics",
+      "ros",
+      "control",
+      "sensors"
+    ],
+    "triggers": [
+      "actuator",
+      "limit",
+      "clamp",
+      "saturation",
+      "torque",
+      "envelope"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.robotics"
+  },
+  {
+    "ref_id": "strategy:robot:design-a-tested-emergency-stop",
+    "type": "strategy",
+    "title": "Design an emergency stop that always wins",
+    "summary": "Provide a safety-stop path that halts all actuators within a bounded time regardless of software state, independent of the normal control flow.",
+    "domains": [
+      "robotics",
+      "ros",
+      "control",
+      "sensors"
+    ],
+    "triggers": [
+      "emergency stop",
+      "e-stop",
+      "safety",
+      "halt",
+      "watchdog",
+      "fail-safe"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.robotics"
+  },
+  {
+    "ref_id": "strategy:robot:get-coordinate-frames-right",
+    "type": "strategy",
+    "title": "Be explicit and consistent about frames",
+    "summary": "Tag every pose and measurement with its coordinate frame and timestamp, and transform through tf2 rather than assuming a common frame.",
+    "domains": [
+      "robotics",
+      "ros",
+      "control",
+      "sensors"
+    ],
+    "triggers": [
+      "coordinate frame",
+      "tf2",
+      "transform",
+      "pose",
+      "frame_id",
+      "timestamp"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.robotics"
+  },
+  {
+    "ref_id": "strategy:robot:fuse-sensors-with-time-and-uncertainty",
+    "type": "strategy",
+    "title": "Fuse sensors using time and uncertainty",
+    "summary": "Combine measurements with a state estimator that accounts for each sensor's timestamp, rate, and noise, and degrades safely when one drops.",
+    "domains": [
+      "robotics",
+      "ros",
+      "control",
+      "sensors"
+    ],
+    "triggers": [
+      "sensor fusion",
+      "kalman",
+      "ekf",
+      "uncertainty",
+      "timeout",
+      "estimator"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.robotics"
+  },
+  {
+    "ref_id": "strategy:robot:isolate-nodes-and-fail-safely",
+    "type": "strategy",
+    "title": "Isolate nodes so a failure degrades safely",
+    "summary": "Structure the ROS graph so one node crashing or stalling triggers a safe response instead of silent loss of control.",
+    "domains": [
+      "robotics",
+      "ros",
+      "control",
+      "sensors"
+    ],
+    "triggers": [
+      "node",
+      "isolation",
+      "watchdog",
+      "liveness",
+      "degraded",
+      "qos"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.robotics"
+  },
+  {
+    "ref_id": "methodology:robot:bring-up-a-control-loop",
+    "type": "methodology",
+    "title": "Bring up and tune a control loop safely",
+    "summary": "Stand up a control loop incrementally with limits and stop in place before tuning gains on real hardware.",
+    "domains": [
+      "robotics",
+      "ros",
+      "control",
+      "sensors"
+    ],
+    "triggers": [
+      "control loop",
+      "tuning",
+      "pid",
+      "gains",
+      "bring-up",
+      "step response"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.robotics"
+  },
+  {
+    "ref_id": "methodology:robot:debug-the-transform-tree",
+    "type": "methodology",
+    "title": "Debug a broken transform tree",
+    "summary": "Diagnose a missing, disconnected, or stale tf transform before trusting any pose that depends on it.",
+    "domains": [
+      "robotics",
+      "ros",
+      "control",
+      "sensors"
+    ],
+    "triggers": [
+      "tf2",
+      "transform tree",
+      "disconnected",
+      "stale",
+      "frame",
+      "extrapolation"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.robotics"
+  },
+  {
+    "ref_id": "methodology:robot:diagnose-control-loop-jitter",
+    "type": "methodology",
+    "title": "Diagnose control-loop timing jitter",
+    "summary": "Find why a loop misses its period by isolating blocking work, priority issues, and contention in the real-time path.",
+    "domains": [
+      "robotics",
+      "ros",
+      "control",
+      "sensors"
+    ],
+    "triggers": [
+      "jitter",
+      "timing",
+      "deadline",
+      "priority",
+      "blocking",
+      "latency"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.robotics"
+  },
+  {
+    "ref_id": "methodology:robot:simulate-before-hardware",
+    "type": "methodology",
+    "title": "Validate in simulation before hardware",
+    "summary": "Exercise behavior, faults, and the safety stop in a physics simulator so the first hardware run is not the first test.",
+    "domains": [
+      "robotics",
+      "ros",
+      "control",
+      "sensors"
+    ],
+    "triggers": [
+      "simulation",
+      "gazebo",
+      "fault injection",
+      "sim-to-real",
+      "validate",
+      "hardware"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.robotics"
+  },
+  {
+    "ref_id": "knowledge:robot:ros-node-topic-model",
+    "type": "knowledge",
+    "title": "The ROS node, topic, and QoS model",
+    "summary": "ROS systems are graphs of nodes communicating over named topics with publish/subscribe semantics and, in ROS2, configurable quality-of-service.",
+    "domains": [
+      "robotics",
+      "ros",
+      "control",
+      "sensors"
+    ],
+    "triggers": [
+      "ros",
+      "node",
+      "topic",
+      "publish",
+      "subscribe",
+      "qos"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.robotics"
+  },
+  {
+    "ref_id": "knowledge:robot:why-real-time-matters",
+    "type": "knowledge",
+    "title": "Why real-time determinism matters",
+    "summary": "Control stability depends on meeting deadlines consistently; in real-time systems a late-but-correct result is a failure, unlike ordinary software.",
+    "domains": [
+      "robotics",
+      "ros",
+      "control",
+      "sensors"
+    ],
+    "triggers": [
+      "real-time",
+      "determinism",
+      "deadline",
+      "stability",
+      "latency",
+      "wcet"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.robotics"
+  },
+  {
+    "ref_id": "knowledge:robot:coordinate-frames-and-transforms",
+    "type": "knowledge",
+    "title": "Coordinate frames and the transform tree",
+    "summary": "Every pose is meaningful only relative to a frame; tf2 maintains a time-stamped tree so data can be transformed between frames at the right moment.",
+    "domains": [
+      "robotics",
+      "ros",
+      "control",
+      "sensors"
+    ],
+    "triggers": [
+      "coordinate frame",
+      "tf2",
+      "transform",
+      "tree",
+      "pose",
+      "rigid"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.robotics"
+  },
+  {
+    "ref_id": "knowledge:robot:state-estimation-fundamentals",
+    "type": "knowledge",
+    "title": "State estimation and sensor fusion basics",
+    "summary": "Real sensors are noisy and partial, so a state estimator (Kalman/EKF) combines a motion model with measurements weighted by uncertainty to track true state.",
+    "domains": [
+      "robotics",
+      "ros",
+      "control",
+      "sensors"
+    ],
+    "triggers": [
+      "state estimation",
+      "kalman",
+      "ekf",
+      "noise",
+      "covariance",
+      "fusion"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.robotics"
+  },
+  {
+    "ref_id": "skill:robot:inspect-ros-graph-and-topics",
+    "type": "skill",
+    "title": "Inspect the ROS graph and topic health",
+    "summary": "Enumerate nodes, topics, rates, and QoS and report disconnects, rate drops, or QoS mismatches on critical paths.",
+    "domains": [
+      "robotics",
+      "ros",
+      "control",
+      "sensors"
+    ],
+    "triggers": [
+      "ros graph",
+      "topic",
+      "rate",
+      "qos",
+      "inspect",
+      "diagnostics"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.robotics"
+  },
+  {
+    "ref_id": "skill:robot:run-control-and-fusion-tests",
+    "type": "skill",
+    "title": "Run control and fusion tests in simulation",
+    "summary": "Execute the simulation/test suite for timing, transforms, fusion, and the safety stop, and report deadline and fault results.",
+    "domains": [
+      "robotics",
+      "ros",
+      "control",
+      "sensors"
+    ],
+    "triggers": [
+      "simulation",
+      "test",
+      "gazebo",
+      "timing",
+      "fault",
+      "run"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.robotics"
+  }
+]

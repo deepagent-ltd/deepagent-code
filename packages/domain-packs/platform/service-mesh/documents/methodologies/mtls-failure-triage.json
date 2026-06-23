@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:mesh:mtls-failure-triage",
+  "type": "methodology",
+  "title": "Triage mTLS handshake and certificate failures",
+  "description": "Correlate PeerAuthentication mode, DestinationRule TLS mode, and certificate issuance to find the mismatch causing connection resets.",
+  "body": "Use when meshed calls fail with connection resets or TLS errors after enabling mTLS. Do not disable mTLS to make it work. Actions: check the PeerAuthentication mode on the server side (STRICT vs PERMISSIVE), confirm the client's DestinationRule trafficPolicy.tls mode (ISTIO_MUTUAL vs DISABLE/SIMPLE) is consistent, verify the workload received a certificate from the mesh CA, and look for a plaintext caller hitting a STRICT server. Validation signals include telemetry showing the connection upgrade to mTLS and the handshake succeeding with workload identities. Risk boundary: changing mTLS mode in production is human-gated.",
+  "domain": "service_mesh",
+  "scope_hint": "platform.service-mesh:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.service-mesh",
+  "pack_id": "platform.service-mesh"
+}

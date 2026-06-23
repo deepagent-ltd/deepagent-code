@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:sql:read-the-query-plan",
+  "type": "methodology",
+  "title": "Diagnose a slow query by reading its execution plan",
+  "description": "Capture EXPLAIN ANALYZE, find the dominant operator and the estimate-vs-actual row gap, and target the real bottleneck before changing SQL.",
+  "body": "Steps: 1. Run EXPLAIN (ANALYZE, BUFFERS) on the actual query and parameters. 2. Find the operator consuming the most actual time (often a seq scan, nested loop, or sort/hash spill). 3. Compare estimated vs actual rows; a large gap means stale statistics or a non-sargable predicate misleading the planner. 4. Decide the fix: add/adjust an index, rewrite a non-sargable predicate (avoid functions on the indexed column), update statistics (ANALYZE), or restructure the join. 5. Re-run EXPLAIN ANALYZE and compare. Rollback point: before adding an index on a write-heavy table (it slows writes). Validation: the new plan removes the dominant scan/spill and total time drops with accurate row estimates. Risk boundary: an index that helps one query can degrade write throughput and bloat storage; record the write impact and escalate index changes on hot OLTP tables.",
+  "domain": "sql",
+  "scope_hint": "code.sql:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.sql",
+  "pack_id": "code.sql"
+}

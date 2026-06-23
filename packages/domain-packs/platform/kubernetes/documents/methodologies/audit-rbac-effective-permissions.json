@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:k8s:audit-rbac-effective-permissions",
+  "type": "methodology",
+  "title": "Audit effective RBAC for a subject",
+  "description": "Enumerate what a ServiceAccount or user can actually do and compare it to least-privilege intent.",
+  "body": "Steps: 1. Identify the subject (SA, user, group) and its RoleBindings/ClusterRoleBindings. 2. Run kubectl auth can-i --list --as=system:serviceaccount:<ns>:<sa> to enumerate effective verbs/resources. 3. Cross-check against what the workload actually needs. 4. Flag wildcards, cluster-scope grants, and secret access not justified by the workload. 5. Propose tightened Roles and re-run can-i to confirm removals. Rollback point: before editing bindings, snapshot current ones. Validation: can-i returns 'no' for newly removed permissions and 'yes' only for required ones.",
+  "domain": "kubernetes",
+  "scope_hint": "platform.kubernetes:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.kubernetes",
+  "pack_id": "platform.kubernetes"
+}

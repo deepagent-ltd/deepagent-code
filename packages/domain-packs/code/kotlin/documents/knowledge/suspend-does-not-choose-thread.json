@@ -1,0 +1,11 @@
+{
+  "ref_id": "knowledge:kotlin:suspend-does-not-choose-thread",
+  "type": "knowledge",
+  "description": "A suspend function can suspend without implying IO, background execution, or a dispatcher switch.",
+  "body": "Use when changing suspend APIs or performance behavior. Do not assume marking a function suspend moves blocking work off the caller thread. Keep blocking calls on appropriate dispatchers following project convention. Verify with tests or logs if threading matters. Risk boundary includes UI/main-thread blocking and server thread starvation. Use when Kotlin Engineering work touches repository conventions, toolchain files, changed symbols, validation commands, and runtime output. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: use the fact to constrain the change and test plan; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include package-local checks, focused tests, build output, smoke runs, and command logs. Risk boundary: escalate or stop when the task involves broad rewrites, generated-file drift, stale assumptions, and unvalidated behavior changes, missing owner evidence, or live external state.",
+  "domain": "kotlin",
+  "scope_hint": "code.kotlin:knowledges",
+  "evidence_strength": "strong",
+  "provenance_tag": "code.kotlin:seed:kotlin_gradle_coroutines_docs:paraphrased",
+  "pack_id": "code.kotlin"
+}

@@ -1,0 +1,11 @@
+{
+  "ref_id": "methodology:kotlin:kotlin-gradle-validation-loop",
+  "type": "methodology",
+  "description": "Map changed files to Gradle source sets and run compile/test tasks in widening order.",
+  "body": "Use for Kotlin implementation changes. Avoid starting with every Gradle task in a large build. Steps: identify module from path, inspect Kotlin/JVM/Android plugin, run compileKotlin or compileDebugKotlin-style task, run narrow test task, then aggregate check if needed. Verify with exact task paths. Risk boundary: generated sources or kapt/ksp may require clean regeneration if diagnostics point there. Use when Kotlin Engineering work touches repository conventions, toolchain files, changed symbols, validation commands, and runtime output. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: follow the ordered review, edit, and validation sequence; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include package-local checks, focused tests, build output, smoke runs, and command logs. Risk boundary: escalate or stop when the task involves broad rewrites, generated-file drift, stale assumptions, and unvalidated behavior changes, missing owner evidence, or live external state.",
+  "domain": "kotlin",
+  "scope_hint": "code.kotlin:methodologys",
+  "evidence_strength": "medium",
+  "provenance_tag": "code.kotlin:seed:kotlin_gradle_coroutines_docs:paraphrased",
+  "pack_id": "code.kotlin"
+}

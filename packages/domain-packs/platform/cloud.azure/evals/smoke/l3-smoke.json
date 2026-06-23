@@ -1,0 +1,70 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "platform.cloud.azure",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "azure",
+      "aks",
+      "azure_functions",
+      "azure_ad"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "L3 smoke for platform.cloud.azure: AKS, Azure Functions consumption vs premium, Entra ID and managed identity, RBAC role assignments, Blob storage, App Service, Bicep and ARM, resource groups"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "debug a deadlock in goroutines"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "retrieval_query": "azure aks managed identity entra id rbac role assignment azure functions premium plan blob storage app service bicep arm resource group",
+  "expected_pack_id": "platform.cloud.azure",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "platform.cloud.azure L3 validation smoke",
+    "signals": [
+      "az role assignment list shows the principal scoped to the resource group with a single built-in role, no Owner",
+      "An Azure Function bound to a managed identity calls a resource with no connection string or secret in config",
+      "Bicep what-if reports only the intended resource changes before any deployment is applied",
+      "Blob container access level reports Private and requests over HTTP are rejected by the storage firewall"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "platform.cloud.azure diagnosis smoke",
+    "signals": [
+      "AuthorizationFailed traced to a role assignment at the wrong scope in the management-group->subscription->RG->resource chain",
+      "Azure Functions cold start tied to the Consumption plan scale-from-zero rather than code, fixed by Premium pre-warmed instances",
+      "AKS pod cannot pull image or reach a service because the kubelet/workload managed identity lacks the AcrPull role",
+      "App Service slow or erroring after a swap because slot settings or warm-up were misconfigured",
+      "Entra ID token has the app role/scope missing, so the API returns 403 despite a valid token"
+    ]
+  },
+  "source_refs": [
+    "azure-rbac-docs:scope-and-role-assignment-inheritance",
+    "azure-functions-docs:hosting-plans-and-scaling-behavior"
+  ]
+}

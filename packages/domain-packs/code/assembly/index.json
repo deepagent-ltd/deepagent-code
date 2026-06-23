@@ -1,0 +1,484 @@
+[
+  {
+    "ref_id": "strategy:asm:follow-the-abi-exactly",
+    "type": "strategy",
+    "title": "Follow the target ABI exactly",
+    "summary": "Pass arguments, return values, and preserve registers precisely as the platform ABI dictates so hand-written code interoperates with compiled code.",
+    "domains": [
+      "assembly",
+      "asm",
+      "x86",
+      "arm",
+      "calling_convention"
+    ],
+    "triggers": [
+      "abi",
+      "calling convention",
+      "arguments",
+      "return",
+      "registers",
+      "interop"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.assembly"
+  },
+  {
+    "ref_id": "strategy:asm:preserve-callee-saved-registers",
+    "type": "strategy",
+    "title": "Preserve every callee-saved register you use",
+    "summary": "Save and restore the ABI's callee-saved registers in the prologue/epilogue so the caller's values survive the call.",
+    "domains": [
+      "assembly",
+      "asm",
+      "x86",
+      "arm",
+      "calling_convention"
+    ],
+    "triggers": [
+      "callee-saved",
+      "prologue",
+      "epilogue",
+      "preserve",
+      "registers",
+      "spill"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.assembly"
+  },
+  {
+    "ref_id": "strategy:asm:keep-the-stack-aligned",
+    "type": "strategy",
+    "title": "Keep the stack aligned and the frame correct",
+    "summary": "Maintain the ABI-required stack alignment at call boundaries and lay out the frame so locals, saved registers, and return address are correct.",
+    "domains": [
+      "assembly",
+      "asm",
+      "x86",
+      "arm",
+      "calling_convention"
+    ],
+    "triggers": [
+      "stack frame",
+      "alignment",
+      "16-byte",
+      "rsp",
+      "call",
+      "frame pointer"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.assembly"
+  },
+  {
+    "ref_id": "strategy:asm:declare-inline-asm-effects",
+    "type": "strategy",
+    "title": "Declare every inline-asm input, output, and clobber",
+    "summary": "Tell the compiler the full truth about an inline-asm block's operands, clobbered registers, memory, and flags so it does not reuse trashed state.",
+    "domains": [
+      "assembly",
+      "asm",
+      "x86",
+      "arm",
+      "calling_convention"
+    ],
+    "triggers": [
+      "inline asm",
+      "clobber",
+      "constraint",
+      "operand",
+      "memory",
+      "volatile"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.assembly"
+  },
+  {
+    "ref_id": "strategy:asm:prefer-the-compiler-unless-justified",
+    "type": "strategy",
+    "title": "Prefer compiler output unless hand-asm is justified",
+    "summary": "Write assembly by hand only for a measured, specific need the compiler cannot meet, keeping it small, isolated, and backed by a high-level fallback.",
+    "domains": [
+      "assembly",
+      "asm",
+      "x86",
+      "arm",
+      "calling_convention"
+    ],
+    "triggers": [
+      "hand-written",
+      "intrinsics",
+      "justification",
+      "fallback",
+      "isolate",
+      "maintainability"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.assembly"
+  },
+  {
+    "ref_id": "strategy:asm:read-disassembly-to-verify",
+    "type": "strategy",
+    "title": "Read the disassembly to verify behavior",
+    "summary": "Confirm what the machine actually does by reading the disassembly and stepping it, rather than trusting the source or mnemonics alone.",
+    "domains": [
+      "assembly",
+      "asm",
+      "x86",
+      "arm",
+      "calling_convention"
+    ],
+    "triggers": [
+      "disassembly",
+      "objdump",
+      "debugger",
+      "step",
+      "verify",
+      "machine code"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.assembly"
+  },
+  {
+    "ref_id": "methodology:asm:write-an-asm-function-callable-from-c",
+    "type": "methodology",
+    "title": "Write an assembly function callable from C",
+    "summary": "Implement a hand-asm routine that interoperates with C by matching the ABI, frame, and register discipline, validated against a C reference.",
+    "domains": [
+      "assembly",
+      "asm",
+      "x86",
+      "arm",
+      "calling_convention"
+    ],
+    "triggers": [
+      "interop",
+      "abi",
+      "prologue",
+      "epilogue",
+      "reference",
+      "c calling"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.assembly"
+  },
+  {
+    "ref_id": "methodology:asm:debug-a-corruption-from-asm",
+    "type": "methodology",
+    "title": "Debug state corruption from assembly",
+    "summary": "Trace a crash or wrong result caused by low-level code by checking register preservation, stack balance, and ABI compliance in the debugger.",
+    "domains": [
+      "assembly",
+      "asm",
+      "x86",
+      "arm",
+      "calling_convention"
+    ],
+    "triggers": [
+      "corruption",
+      "debugger",
+      "stack balance",
+      "register",
+      "crash",
+      "step"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.assembly"
+  },
+  {
+    "ref_id": "methodology:asm:embed-inline-asm-correctly",
+    "type": "methodology",
+    "title": "Embed an inline-asm block correctly",
+    "summary": "Add an inline-asm block to C/C++ by declaring its full operand, clobber, and volatility contract and testing across optimization levels.",
+    "domains": [
+      "assembly",
+      "asm",
+      "x86",
+      "arm",
+      "calling_convention"
+    ],
+    "triggers": [
+      "inline asm",
+      "clobber",
+      "constraint",
+      "volatile",
+      "optimization level",
+      "operand"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.assembly"
+  },
+  {
+    "ref_id": "methodology:asm:port-asm-across-architectures",
+    "type": "methodology",
+    "title": "Port an assembly routine across architectures",
+    "summary": "Move a hand-asm routine between ISAs/ABIs by remapping the calling convention, registers, and addressing, validated against the original.",
+    "domains": [
+      "assembly",
+      "asm",
+      "x86",
+      "arm",
+      "calling_convention"
+    ],
+    "triggers": [
+      "port",
+      "architecture",
+      "abi",
+      "x86",
+      "arm64",
+      "registers"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.assembly"
+  },
+  {
+    "ref_id": "knowledge:asm:registers-and-calling-conventions",
+    "type": "knowledge",
+    "title": "Register files and calling conventions",
+    "summary": "Each ABI splits registers into caller-saved (scratch) and callee-saved (preserved) and assigns specific registers to arguments and return values.",
+    "domains": [
+      "assembly",
+      "asm",
+      "x86",
+      "arm",
+      "calling_convention"
+    ],
+    "triggers": [
+      "registers",
+      "caller-saved",
+      "callee-saved",
+      "arguments",
+      "return",
+      "abi"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.assembly"
+  },
+  {
+    "ref_id": "knowledge:asm:stack-frames-and-alignment",
+    "type": "knowledge",
+    "title": "Stack frames and alignment rules",
+    "summary": "A frame holds the return address, saved registers, and locals; the ABI mandates an alignment at call boundaries that aligned instructions depend on.",
+    "domains": [
+      "assembly",
+      "asm",
+      "x86",
+      "arm",
+      "calling_convention"
+    ],
+    "triggers": [
+      "stack frame",
+      "alignment",
+      "return address",
+      "locals",
+      "red zone",
+      "sp"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.assembly"
+  },
+  {
+    "ref_id": "knowledge:asm:addressing-modes-and-operand-widths",
+    "type": "knowledge",
+    "title": "Addressing modes and operand widths",
+    "summary": "Instructions compute effective addresses from base/index/scale/displacement and operate on specific widths; mismatches read or write the wrong bytes.",
+    "domains": [
+      "assembly",
+      "asm",
+      "x86",
+      "arm",
+      "calling_convention"
+    ],
+    "triggers": [
+      "addressing mode",
+      "operand width",
+      "base index scale",
+      "displacement",
+      "load",
+      "store"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.assembly"
+  },
+  {
+    "ref_id": "knowledge:asm:inline-asm-contract",
+    "type": "knowledge",
+    "title": "The inline-asm contract with the compiler",
+    "summary": "Inline asm is opaque to the optimizer, so its operand constraints, clobbers, and volatility are the only information the compiler has about its effects.",
+    "domains": [
+      "assembly",
+      "asm",
+      "x86",
+      "arm",
+      "calling_convention"
+    ],
+    "triggers": [
+      "inline asm",
+      "constraint",
+      "clobber",
+      "volatile",
+      "optimizer",
+      "contract"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.assembly"
+  },
+  {
+    "ref_id": "skill:asm:disassemble-and-step",
+    "type": "skill",
+    "title": "Disassemble and single-step a function",
+    "summary": "Disassemble a target function and step it in a debugger, reporting register, flag, and stack state against expectation.",
+    "domains": [
+      "assembly",
+      "asm",
+      "x86",
+      "arm",
+      "calling_convention"
+    ],
+    "triggers": [
+      "disassemble",
+      "objdump",
+      "debugger",
+      "step",
+      "registers",
+      "gdb"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.assembly"
+  },
+  {
+    "ref_id": "skill:asm:audit-abi-and-clobbers",
+    "type": "skill",
+    "title": "Audit ABI compliance and inline-asm clobbers",
+    "summary": "Review an assembly function or inline-asm block and report ABI argument/return usage, callee-saved balance, alignment, and missing clobbers.",
+    "domains": [
+      "assembly",
+      "asm",
+      "x86",
+      "arm",
+      "calling_convention"
+    ],
+    "triggers": [
+      "abi",
+      "clobber",
+      "audit",
+      "callee-saved",
+      "alignment",
+      "constraints"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.assembly"
+  }
+]

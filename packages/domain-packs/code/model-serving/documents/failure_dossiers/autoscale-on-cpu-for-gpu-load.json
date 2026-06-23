@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:serving:autoscale-on-cpu-for-gpu-load",
+  "type": "failure_dossier",
+  "description": "Autoscaling a GPU-bound server on CPU utilization, so it never scales while the accelerator and queue saturate.",
+  "body": "Failure mode: autoscaling is keyed on CPU, but the workload is GPU-bound, so CPU stays low while the accelerator saturates and the request queue grows — and the scaler never triggers. Detection signals: queue depth and latency climb while CPU-based scaling stays flat; replicas do not increase under load; the GPU is saturated but CPU is idle. Do not scale GPU workloads on CPU. Safer fallback: scale on queue depth, batch latency, or accelerator utilization, set the target below saturation, and account for replica warm-up time.",
+  "domain": "model_serving",
+  "scope_hint": "code.model-serving:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.model-serving:human_authored",
+  "pack_id": "code.model-serving"
+}

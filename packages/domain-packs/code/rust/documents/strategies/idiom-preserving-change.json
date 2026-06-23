@@ -1,0 +1,11 @@
+{
+  "ref_id": "strategy:rust:idiom-preserving-change",
+  "type": "strategy",
+  "description": "In Rust, prefer established idioms (ownership and borrowing, Result/Option with ?, and RAII via Drop) over generic rewrites.",
+  "body": "In Rust, the ecosystem has settled idioms — ownership and borrowing, Result/Option with ?, and RAII via Drop — and changes that ignore them add risk and review friction. Use when adding or modifying Rust code near existing patterns. Do not impose a foreign style or rewrite working code into a generic shape, and avoid abandoning nearby conventions. Actions: read the surrounding code, follow its ownership and borrowing, Result/Option with ?, and RAII via Drop, keep the change minimal, then run cargo clippy -D warnings and rustc lint output and cargo test on the affected crate with the relevant features to confirm fit. Validation signals include a small diff consistent with neighbors, a clean lint pass, and passing tests. Risk boundary: a broad idiom migration is its own reviewed task; escalate rather than bundling it into an unrelated change.",
+  "domain": "rust",
+  "scope_hint": "code.rust:strategies",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.rust:skill_survey",
+  "pack_id": "code.rust"
+}

@@ -1,0 +1,484 @@
+[
+  {
+    "ref_id": "strategy:kernel:validate-every-user-boundary",
+    "type": "strategy",
+    "title": "Validate every value crossing the user boundary",
+    "summary": "Treat all data from user space as hostile: copy it in with the accessor APIs, bounds-check sizes and indices, and never trust a user pointer.",
+    "domains": [
+      "kernel",
+      "syscall",
+      "driver",
+      "scheduler",
+      "memory_management"
+    ],
+    "triggers": [
+      "copy_from_user",
+      "user space",
+      "validation",
+      "boundary",
+      "untrusted",
+      "bounds"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.os-kernel"
+  },
+  {
+    "ref_id": "strategy:kernel:pick-the-right-lock-for-context",
+    "type": "strategy",
+    "title": "Pick the right lock for the context",
+    "summary": "Choose spinlock vs mutex vs RCU by whether the path can sleep and whether it runs in interrupt context, never sleeping while atomic.",
+    "domains": [
+      "kernel",
+      "syscall",
+      "driver",
+      "scheduler",
+      "memory_management"
+    ],
+    "triggers": [
+      "spinlock",
+      "mutex",
+      "rcu",
+      "atomic context",
+      "sleep",
+      "irqsave"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.os-kernel"
+  },
+  {
+    "ref_id": "strategy:kernel:account-every-resource",
+    "type": "strategy",
+    "title": "Account for every allocation and reference",
+    "summary": "Balance allocations, references, and locks on all paths — especially error paths — so the kernel never leaks memory or refcounts.",
+    "domains": [
+      "kernel",
+      "syscall",
+      "driver",
+      "scheduler",
+      "memory_management"
+    ],
+    "triggers": [
+      "refcount",
+      "leak",
+      "error path",
+      "kfree",
+      "put",
+      "cleanup"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.os-kernel"
+  },
+  {
+    "ref_id": "strategy:kernel:split-interrupt-top-and-bottom-half",
+    "type": "strategy",
+    "title": "Split interrupt handling top and bottom half",
+    "summary": "Do minimal acknowledgement in the hard IRQ handler and defer real work to a softirq/tasklet/threaded handler so interrupts stay responsive.",
+    "domains": [
+      "kernel",
+      "syscall",
+      "driver",
+      "scheduler",
+      "memory_management"
+    ],
+    "triggers": [
+      "interrupt handler",
+      "top half",
+      "bottom half",
+      "tasklet",
+      "softirq",
+      "threaded irq"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.os-kernel"
+  },
+  {
+    "ref_id": "strategy:kernel:respect-kernel-user-separation",
+    "type": "strategy",
+    "title": "Respect kernel/user space separation",
+    "summary": "Keep policy and large/variable work in user space and only the privileged mechanism in the kernel, exposing a small, stable, validated interface.",
+    "domains": [
+      "kernel",
+      "syscall",
+      "driver",
+      "scheduler",
+      "memory_management"
+    ],
+    "triggers": [
+      "kernel space",
+      "user space",
+      "interface",
+      "policy",
+      "mechanism",
+      "abi"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.os-kernel"
+  },
+  {
+    "ref_id": "strategy:kernel:design-vm-mappings-deliberately",
+    "type": "strategy",
+    "title": "Design virtual-memory mappings deliberately",
+    "summary": "Set page protections, mapping lifetimes, and TLB flushes correctly so memory is no more permissive than needed and mappings stay coherent.",
+    "domains": [
+      "kernel",
+      "syscall",
+      "driver",
+      "scheduler",
+      "memory_management"
+    ],
+    "triggers": [
+      "page table",
+      "mapping",
+      "tlb",
+      "protection",
+      "mmap",
+      "vma"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.os-kernel"
+  },
+  {
+    "ref_id": "methodology:kernel:implement-a-syscall-safely",
+    "type": "methodology",
+    "title": "Implement a syscall safely",
+    "summary": "Add a system call by validating inputs at the boundary, performing the minimal privileged action, and returning proper errno codes.",
+    "domains": [
+      "kernel",
+      "syscall",
+      "driver",
+      "scheduler",
+      "memory_management"
+    ],
+    "triggers": [
+      "syscall",
+      "system call",
+      "errno",
+      "argument",
+      "validation",
+      "abi"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.os-kernel"
+  },
+  {
+    "ref_id": "methodology:kernel:write-a-character-device-driver",
+    "type": "methodology",
+    "title": "Write a character device driver",
+    "summary": "Implement a /dev driver by registering file operations, handling open/read/write/ioctl with validation, and cleaning up on unload.",
+    "domains": [
+      "kernel",
+      "syscall",
+      "driver",
+      "scheduler",
+      "memory_management"
+    ],
+    "triggers": [
+      "device driver",
+      "/dev/",
+      "ioctl",
+      "file operations",
+      "cdev",
+      "module"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.os-kernel"
+  },
+  {
+    "ref_id": "methodology:kernel:debug-a-kernel-oops-or-panic",
+    "type": "methodology",
+    "title": "Debug a kernel oops or panic",
+    "summary": "Turn a crash into a fix by decoding the stack trace, identifying the faulting access, and reproducing under sanitizers in a VM.",
+    "domains": [
+      "kernel",
+      "syscall",
+      "driver",
+      "scheduler",
+      "memory_management"
+    ],
+    "triggers": [
+      "oops",
+      "panic",
+      "stack trace",
+      "kasan",
+      "null deref",
+      "crash"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.os-kernel"
+  },
+  {
+    "ref_id": "methodology:kernel:audit-a-locking-hierarchy",
+    "type": "methodology",
+    "title": "Audit and fix a kernel locking hierarchy",
+    "summary": "Establish a global lock ordering, find paths that violate it, and resolve deadlocks surfaced by lockdep under stress.",
+    "domains": [
+      "kernel",
+      "syscall",
+      "driver",
+      "scheduler",
+      "memory_management"
+    ],
+    "triggers": [
+      "locking",
+      "deadlock",
+      "lock order",
+      "lockdep",
+      "inversion",
+      "hierarchy"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.os-kernel"
+  },
+  {
+    "ref_id": "knowledge:kernel:privilege-and-the-no-safety-net-rule",
+    "type": "knowledge",
+    "title": "Kernel privilege and the no-safety-net rule",
+    "summary": "Kernel code runs with full hardware privilege and no process isolation, so a fault panics the machine and any unchecked input is a system-wide exploit.",
+    "domains": [
+      "kernel",
+      "syscall",
+      "driver",
+      "scheduler",
+      "memory_management"
+    ],
+    "triggers": [
+      "privilege",
+      "panic",
+      "no safety net",
+      "exploit",
+      "kernel mode",
+      "trust"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.os-kernel"
+  },
+  {
+    "ref_id": "knowledge:kernel:virtual-memory-and-paging",
+    "type": "knowledge",
+    "title": "Virtual memory and paging",
+    "summary": "Page tables translate virtual to physical addresses with per-page protections; the TLB caches translations, so mapping changes need flushes to stay coherent.",
+    "domains": [
+      "kernel",
+      "syscall",
+      "driver",
+      "scheduler",
+      "memory_management"
+    ],
+    "triggers": [
+      "virtual memory",
+      "page table",
+      "tlb",
+      "paging",
+      "protection",
+      "fault"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.os-kernel"
+  },
+  {
+    "ref_id": "knowledge:kernel:scheduling-and-preemption",
+    "type": "knowledge",
+    "title": "Scheduling, preemption, and atomic context",
+    "summary": "The scheduler can preempt most kernel code, but atomic contexts (interrupt, spinlock held) must never sleep or the kernel deadlocks.",
+    "domains": [
+      "kernel",
+      "syscall",
+      "driver",
+      "scheduler",
+      "memory_management"
+    ],
+    "triggers": [
+      "scheduler",
+      "preemption",
+      "atomic context",
+      "sleep",
+      "interrupt",
+      "rt"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.os-kernel"
+  },
+  {
+    "ref_id": "knowledge:kernel:driver-model-and-lifetime",
+    "type": "knowledge",
+    "title": "Driver model, probing, and object lifetime",
+    "summary": "Drivers bind to devices via probe/remove and manage object lifetime with reference counts; a use-after-free from a stale reference is a classic exploit.",
+    "domains": [
+      "kernel",
+      "syscall",
+      "driver",
+      "scheduler",
+      "memory_management"
+    ],
+    "triggers": [
+      "driver model",
+      "probe",
+      "remove",
+      "refcount",
+      "lifetime",
+      "use-after-free"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.os-kernel"
+  },
+  {
+    "ref_id": "skill:kernel:run-kernel-sanitizers",
+    "type": "skill",
+    "title": "Run kernel sanitizers and lockdep",
+    "summary": "Build with KASAN/kmemleak/lockdep, run the workload in a VM, and report memory errors, leaks, and locking violations with their traces.",
+    "domains": [
+      "kernel",
+      "syscall",
+      "driver",
+      "scheduler",
+      "memory_management"
+    ],
+    "triggers": [
+      "kasan",
+      "kmemleak",
+      "lockdep",
+      "sanitizer",
+      "vm",
+      "run"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.os-kernel"
+  },
+  {
+    "ref_id": "skill:kernel:inspect-syscall-and-ioctl-validation",
+    "type": "skill",
+    "title": "Inspect syscall/ioctl input validation",
+    "summary": "Audit a syscall or ioctl path and report every user input that is copied, validated, or trusted, flagging missing checks.",
+    "domains": [
+      "kernel",
+      "syscall",
+      "driver",
+      "scheduler",
+      "memory_management"
+    ],
+    "triggers": [
+      "syscall",
+      "ioctl",
+      "validation",
+      "copy_from_user",
+      "audit",
+      "bounds"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.os-kernel"
+  }
+]

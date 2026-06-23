@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:php:autoload-via-psr4-not-require",
+  "type": "strategy",
+  "title": "Load classes via PSR-4 autoload, never manual require",
+  "description": "Map namespaces to directories in composer.json so classes load on demand instead of hand-written require chains.",
+  "body": "Use when adding a class or wiring a new directory of code. Do not include/require class files by path. Actions: declare the namespace-to-directory mapping under autoload.psr-4 in composer.json, name files to match the class and namespace, and run composer dump-autoload after changing the map. Validation signals include a new class resolving in a PHPUnit test with no manual require and composer's autoloader reporting no unmatched class. Risk boundary: hand-rolled require chains break ordering and duplicate definitions as the codebase grows; a class that only loads via an explicit require is a defect to convert to PSR-4.",
+  "domain": "php",
+  "scope_hint": "code.php:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.php",
+  "pack_id": "code.php"
+}

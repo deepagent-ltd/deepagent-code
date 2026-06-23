@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:eval:uncalibrated-judge-as-oracle",
+  "type": "failure_dossier",
+  "description": "An LLM-as-judge is trusted as ground truth without measuring its agreement with humans or controlling its biases.",
+  "body": "Failure mode: outputs are scored by another model and those scores drive decisions, but the judge has never been calibrated against human labels and the prompt exposes position and length biases, so the scores reflect the judge's quirks rather than quality. Detection signals: no judge-human agreement metric; unrandomized A-vs-B order; longer answers always win; decisions rest solely on judge scores. Do not treat judge output as an oracle. Safer fallback: calibrate against a human-labeled sample, randomize order, control length, report agreement, and require human verification where agreement is low or the decision matters.",
+  "domain": "eval",
+  "scope_hint": "code.eval:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.eval:human_authored",
+  "pack_id": "code.eval"
+}

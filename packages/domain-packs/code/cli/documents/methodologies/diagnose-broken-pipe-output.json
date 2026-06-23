@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:cli:diagnose-broken-pipe-output",
+  "type": "methodology",
+  "title": "Diagnose corrupted piped output",
+  "description": "When a tool works at the terminal but breaks in a pipe, isolate stream mixing, TTY assumptions, and buffering.",
+  "body": "Steps: 1. Reproduce: run `tool | cat` or `tool > file` and compare to terminal output. 2. Redirect streams independently (`tool 2>/dev/null` and `tool 1>/dev/null`) to see what each emits. 3. Check for diagnostics/color leaking into stdout and for code that assumed a TTY. 4. Check buffering: full-buffering can withhold output until exit, breaking interactive pipes. 5. Fix stream routing and TTY detection; flush or line-buffer as needed. Rollback point: before changing buffering mode. Validation: piped output contains only clean data and matches expectations; a tool that only behaves in a terminal but corrupts pipes has a stream-separation or TTY-detection bug.",
+  "domain": "cli",
+  "scope_hint": "code.cli:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.cli",
+  "pack_id": "code.cli"
+}

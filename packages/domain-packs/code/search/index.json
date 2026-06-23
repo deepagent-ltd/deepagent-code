@@ -1,0 +1,468 @@
+[
+  {
+    "ref_id": "strategy:search:match-query-and-index-analyzers",
+    "type": "strategy",
+    "title": "Match the query analyzer to the index analyzer",
+    "summary": "Ensure search-time analysis produces tokens compatible with how the field was analyzed at index time, or exact-looking queries return nothing.",
+    "domains": [
+      "search",
+      "elasticsearch",
+      "ranking",
+      "indexing"
+    ],
+    "triggers": [
+      "analyzer",
+      "tokenization",
+      "search analyzer",
+      "index analyzer",
+      "mismatch",
+      "match"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.search"
+  },
+  {
+    "ref_id": "strategy:search:choose-text-vs-keyword",
+    "type": "strategy",
+    "title": "Choose text vs keyword per field intent",
+    "summary": "Map fields for full-text search as text (analyzed) and fields for filtering, sorting, faceting, or exact match as keyword (not analyzed).",
+    "domains": [
+      "search",
+      "elasticsearch",
+      "ranking",
+      "indexing"
+    ],
+    "triggers": [
+      "text",
+      "keyword",
+      "mapping",
+      "exact match",
+      "filter",
+      "sort"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.search"
+  },
+  {
+    "ref_id": "strategy:search:measure-relevance-with-judgments",
+    "type": "strategy",
+    "title": "Measure relevance against judged queries",
+    "summary": "Tune ranking using a labeled set of queries with graded relevance and a metric like nDCG, not by inspecting one query's results.",
+    "domains": [
+      "search",
+      "elasticsearch",
+      "ranking",
+      "indexing"
+    ],
+    "triggers": [
+      "relevance",
+      "judgments",
+      "ndcg",
+      "precision",
+      "evaluation",
+      "tuning"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.search"
+  },
+  {
+    "ref_id": "strategy:search:balance-recall-and-precision",
+    "type": "strategy",
+    "title": "Balance recall against precision deliberately",
+    "summary": "Decide where on the recall/precision tradeoff a query type belongs and tune operators and matching accordingly rather than maximizing one.",
+    "domains": [
+      "search",
+      "elasticsearch",
+      "ranking",
+      "indexing"
+    ],
+    "triggers": [
+      "recall",
+      "precision",
+      "tradeoff",
+      "operator",
+      "minimum should match",
+      "fuzzy"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.search"
+  },
+  {
+    "ref_id": "strategy:search:plan-reindex-for-mapping-changes",
+    "type": "strategy",
+    "title": "Plan a reindex for any mapping or analyzer change",
+    "summary": "Treat analyzer and most field-type changes as requiring a full reindex via an alias, since they cannot apply to already-indexed documents.",
+    "domains": [
+      "search",
+      "elasticsearch",
+      "ranking",
+      "indexing"
+    ],
+    "triggers": [
+      "reindex",
+      "mapping",
+      "alias",
+      "analyzer change",
+      "zero downtime",
+      "migration"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.search"
+  },
+  {
+    "ref_id": "strategy:search:design-facets-as-aggregations",
+    "type": "strategy",
+    "title": "Build facets on keyword fields via aggregations",
+    "summary": "Implement faceting with aggregations over keyword (doc-values) fields and apply filters as post-filters so counts stay consistent.",
+    "domains": [
+      "search",
+      "elasticsearch",
+      "ranking",
+      "indexing"
+    ],
+    "triggers": [
+      "faceting",
+      "aggregation",
+      "keyword",
+      "doc values",
+      "post filter",
+      "counts"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.search"
+  },
+  {
+    "ref_id": "methodology:search:design-the-index-mapping",
+    "type": "methodology",
+    "title": "Design the index mapping and analyzers",
+    "summary": "Define field types, analyzers, and multi-fields up front from how each field will be queried, since changing them later forces a reindex.",
+    "domains": [
+      "search",
+      "elasticsearch",
+      "ranking",
+      "indexing"
+    ],
+    "triggers": [
+      "mapping",
+      "analyzer",
+      "multi-field",
+      "design",
+      "field type",
+      "index"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.search"
+  },
+  {
+    "ref_id": "methodology:search:tune-relevance-ranking",
+    "type": "methodology",
+    "title": "Tune relevance ranking",
+    "summary": "Improve ranking by adjusting analysis, field boosts, and BM25/function scoring, measured each step against a judgment set.",
+    "domains": [
+      "search",
+      "elasticsearch",
+      "ranking",
+      "indexing"
+    ],
+    "triggers": [
+      "relevance",
+      "ranking",
+      "boost",
+      "bm25",
+      "function score",
+      "tuning"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.search"
+  },
+  {
+    "ref_id": "methodology:search:debug-zero-or-wrong-results",
+    "type": "methodology",
+    "title": "Debug zero-result or wrong-result queries",
+    "summary": "Use the analyze and explain APIs to localize a missing or mis-ranked result to analysis, mapping, or query structure.",
+    "domains": [
+      "search",
+      "elasticsearch",
+      "ranking",
+      "indexing"
+    ],
+    "triggers": [
+      "zero results",
+      "debug",
+      "analyze api",
+      "explain",
+      "mismatch",
+      "query dsl"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.search"
+  },
+  {
+    "ref_id": "methodology:search:reindex-with-zero-downtime",
+    "type": "methodology",
+    "title": "Reindex with zero downtime via aliases",
+    "summary": "Migrate to a new mapping by reindexing into a new index and swapping a read alias atomically, with verification before cutover.",
+    "domains": [
+      "search",
+      "elasticsearch",
+      "ranking",
+      "indexing"
+    ],
+    "triggers": [
+      "reindex",
+      "alias",
+      "zero downtime",
+      "cutover",
+      "migration",
+      "verify"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.search"
+  },
+  {
+    "ref_id": "knowledge:search:how-inverted-index-works",
+    "type": "knowledge",
+    "title": "How an inverted index works",
+    "summary": "An inverted index maps each analyzed term to a posting list of documents, so search is a term lookup, not a scan — making analysis decisive.",
+    "domains": [
+      "search",
+      "elasticsearch",
+      "ranking",
+      "indexing"
+    ],
+    "triggers": [
+      "inverted index",
+      "posting list",
+      "term",
+      "lucene",
+      "segment",
+      "tokenization"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.search"
+  },
+  {
+    "ref_id": "knowledge:search:bm25-scoring",
+    "type": "knowledge",
+    "title": "BM25 relevance scoring",
+    "summary": "BM25 scores a match from term frequency (saturating), inverse document frequency, and field-length normalization, tunable via k1 and b.",
+    "domains": [
+      "search",
+      "elasticsearch",
+      "ranking",
+      "indexing"
+    ],
+    "triggers": [
+      "bm25",
+      "tf-idf",
+      "scoring",
+      "idf",
+      "term frequency",
+      "field length"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.search"
+  },
+  {
+    "ref_id": "knowledge:search:analyzers-and-tokenization",
+    "type": "knowledge",
+    "title": "Analyzers: tokenizer plus filters",
+    "summary": "An analyzer is a tokenizer followed by token filters (lowercase, stemming, synonyms, stop words); it runs at both index and query time and must be consistent.",
+    "domains": [
+      "search",
+      "elasticsearch",
+      "ranking",
+      "indexing"
+    ],
+    "triggers": [
+      "analyzer",
+      "tokenizer",
+      "stemming",
+      "synonyms",
+      "stop words",
+      "filter"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.search"
+  },
+  {
+    "ref_id": "knowledge:search:recall-precision-and-knobs",
+    "type": "knowledge",
+    "title": "Recall, precision, and the knobs that move them",
+    "summary": "Recall is the fraction of relevant docs found; precision is the fraction of returned docs that are relevant; operators, fuzziness, and stemming trade between them.",
+    "domains": [
+      "search",
+      "elasticsearch",
+      "ranking",
+      "indexing"
+    ],
+    "triggers": [
+      "recall",
+      "precision",
+      "fuzziness",
+      "operator",
+      "minimum should match",
+      "tradeoff"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.search"
+  },
+  {
+    "ref_id": "skill:search:run-analyze-and-explain",
+    "type": "skill",
+    "title": "Run analyze and explain to diagnose a query",
+    "summary": "Use the analyze and explain APIs against the index and report token alignment and per-term scoring for a query.",
+    "domains": [
+      "search",
+      "elasticsearch",
+      "ranking",
+      "indexing"
+    ],
+    "triggers": [
+      "analyze",
+      "explain",
+      "diagnose",
+      "tokens",
+      "scoring",
+      "report"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.search"
+  },
+  {
+    "ref_id": "skill:search:evaluate-relevance-on-judgments",
+    "type": "skill",
+    "title": "Evaluate relevance against a judgment set",
+    "summary": "Run a set of judged queries and report nDCG/precision@k/recall before and after a ranking change.",
+    "domains": [
+      "search",
+      "elasticsearch",
+      "ranking",
+      "indexing"
+    ],
+    "triggers": [
+      "evaluate",
+      "relevance",
+      "judgments",
+      "ndcg",
+      "precision",
+      "report"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.search"
+  }
+]

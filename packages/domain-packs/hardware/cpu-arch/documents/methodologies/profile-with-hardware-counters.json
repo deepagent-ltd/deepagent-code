@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:cpuarch:profile-with-hardware-counters",
+  "type": "methodology",
+  "title": "Profile with hardware performance counters",
+  "description": "Find the real bottleneck class (front-end, back-end, memory, branch) using PMU counters before changing any code.",
+  "body": "Steps: 1. Build with optimizations and symbols, run on representative input. 2. Collect a top-down breakdown (perf stat / VTune): IPC, cache miss rates, branch mispredicts, stalls. 3. Classify the bottleneck — front-end bound, back-end/memory bound, bad speculation, or retiring. 4. Pick the matching strategy (locality, vectorize, fix branches) and change one thing. 5. Re-measure on the same input. Rollback point: before each code change, record the baseline counters. Validation: the targeted counter must move in the right direction and wall-clock must improve on representative data; a faster synthetic microbenchmark with worse counters is not progress.",
+  "domain": "cpu_arch",
+  "scope_hint": "hardware.cpu-arch:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.cpu-arch",
+  "pack_id": "hardware.cpu-arch"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:rag:evaluate-retrieval-quality",
+  "type": "methodology",
+  "title": "Evaluate retrieval quality",
+  "description": "Use a labeled query-passage set to measure recall, precision, and grounding, separating retrieval failures from generation failures.",
+  "body": "Steps: 1. Build a labeled set of queries with their relevant passage ids. 2. Measure first-stage recall and rerank precision against the labels. 3. Measure answer grounding: does each claim trace to a retrieved passage. 4. Attribute each failure to retrieval (missing passage) or generation (passage present but ignored). 5. Track these metrics as a regression suite. Rollback point: before tuning chunking, embeddings, or rerank. Validation: failures are correctly attributed and a change that lowers recall is caught by the suite.",
+  "domain": "rag",
+  "scope_hint": "code.rag:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.rag",
+  "pack_id": "code.rag"
+}

@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure_dossier:hwpwr:glitchy-clock-gate",
+  "type": "failure_dossier",
+  "description": "Registers latch corrupt data because a hand-coded combinational clock gate glitched the gated clock.",
+  "body": "Failure mode: a clock gate built from combinational logic produces a brief glitch on the clock when the enable changes, clocking an unintended edge into the gated registers. Detection signals: spurious clock edges in the waveform, data corruption tied to enable transitions, and the gate implemented without an integrated clock-gating cell. Do not gate clocks with raw combinational logic. Safer fallback: replace the gate with a glitch-free integrated clock-gating cell and verify the gated clock has no spurious edges in simulation.",
+  "domain": "power_design",
+  "scope_hint": "hardware.power:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.power:human_authored",
+  "pack_id": "hardware.power"
+}

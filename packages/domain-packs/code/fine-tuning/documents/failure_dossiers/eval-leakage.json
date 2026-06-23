@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure_dossier:finetune:eval-leakage",
+  "type": "failure_dossier",
+  "description": "Fine-tuning data overlaps the evaluation set, so reported gains are memorization, not capability.",
+  "body": "Failure mode: examples from the evaluation set leak into the fine-tuning corpus, so the model memorizes test answers and the reported gain does not generalize to real inputs. Detection signals: an outsized eval gain that does not reproduce on a freshly collected holdout, and overlap found when deduplicating training data against the eval set. Do not trust the inflated benchmark. Safer fallback: deduplicate the training corpus against all eval sets before training, re-measure on a clean, never-trained holdout, and treat the contaminated eval result as invalid until the overlap is removed.",
+  "domain": "fine_tuning",
+  "scope_hint": "code.fine-tuning:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.fine-tuning:human_authored",
+  "pack_id": "code.fine-tuning"
+}

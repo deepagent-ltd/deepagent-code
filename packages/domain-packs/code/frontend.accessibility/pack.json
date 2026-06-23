@@ -1,0 +1,44 @@
+{
+  "schema_version": "domain_pack.v1",
+  "id": "code.frontend.accessibility",
+  "name": "Frontend Accessibility",
+  "version": "1.0.0",
+  "scope": "system",
+  "risk": "medium",
+  "domains": [
+    "frontend",
+    "accessibility",
+    "web"
+  ],
+  "provides": [
+    "knowledge",
+    "strategy",
+    "methodology",
+    "skill",
+    "diagnosis",
+    "validation"
+  ],
+  "depends_on": [
+    "code.frontend.web"
+  ],
+  "conflicts_with": [],
+  "knowledge_store": "document_store",
+  "allowed_tools": [
+    "read",
+    "shell:test"
+  ],
+  "denied_tools": [
+    "shell:deploy-production"
+  ],
+  "data_policy": {
+    "sensitivity": [
+      "source_code"
+    ],
+    "default_admission": "summary_only",
+    "secret_policy": "deny"
+  },
+  "detector": {
+    "inline": "profile.code_domains.includes('accessibility') || profile.repo_signals.some(s=>/\\b(a11y|aria|screen reader|keyboard|focus|contrast)\\b/i.test(s)) ? 0.88 : 0",
+    "threshold": 0.5
+  }
+}

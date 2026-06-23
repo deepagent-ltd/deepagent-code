@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:aws:cloudwatch-alarms-metrics",
+  "type": "strategy",
+  "title": "Alarm on CloudWatch metrics with the right statistic and period",
+  "description": "Choose statistic, period, and treatMissingData deliberately, use metric math for ratios, and emit structured EMF logs instead of scraping log text.",
+  "body": "Use when adding observability to an AWS workload or wiring an alarm. Do not alarm on Average when you need p99, and avoid treatMissingData:missing on a metric that goes silent during the very failure you care about. Actions: select the statistic (p99 via extended stats) and period that matches the SLO, use metric math (errors/requests) for ratio alarms, set treatMissingData explicitly, and publish custom metrics through Embedded Metric Format so cardinality stays controlled. Validation signals include the alarm flipping OK->ALARM on an injected fault, returning to OK on recovery, and dashboards reflecting the EMF dimensions. Risk boundary: deleting or silencing a production alarm is human-gated.",
+  "domain": "aws",
+  "scope_hint": "platform.cloud.aws:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.cloud.aws",
+  "pack_id": "platform.cloud.aws"
+}

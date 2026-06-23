@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:hwpwr:identify-domain-crossing-cell",
+  "type": "skill",
+  "title": "Identify the required cell for a domain crossing",
+  "description": "Given the source and destination power state and voltage, decide whether isolation, level shifting, or both are needed.",
+  "body": "Use when checking a signal that crosses between power or voltage domains. Do not place a single cell type by habit, since the right cell depends on both power state and voltage difference. Actions: compare the two domains' power states and voltages, choose isolation for a power-down crossing and a level shifter for a voltage crossing, and verify the power-intent declares it. Validation signals include the chosen cell matching the crossing condition and the power-intent file accepting it. Risk boundary: a wrong or missing cell leaves the crossing unprotected, so flag any crossing whose declared cell does not match its conditions.",
+  "domain": "power_design",
+  "scope_hint": "hardware.power:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.power",
+  "pack_id": "hardware.power"
+}

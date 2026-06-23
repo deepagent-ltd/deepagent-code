@@ -1,0 +1,11 @@
+{
+  "ref_id": "strategy:testing:runner-output-as-evidence",
+  "type": "strategy",
+  "description": "Treat exact runner command, exit code, and actionable diagnostics as the validation evidence.",
+  "body": "Use this when reporting validation status after a test, typecheck, lint, or coverage command. The action is to preserve the exact command, working directory, exit code, selected failing assertion or diagnostic, and whether the output belongs to a narrow or broad gate. Do not summarize a suite as passing when only collection, dry run, or a filtered subset ran. Verification signals include runner totals, failing test names, skipped counts, snapshot updates, coverage deltas, and stderr diagnostics. Risk boundary: if output is truncated, interrupted, or from the wrong package, mark validation inconclusive rather than pass. Use when Code Testing work touches test runner output, fixture intent, coverage boundaries, flake history, and negative paths. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: choose the smallest direction that preserves the domain contract; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include focused test output, regression tests, fixture assertions, and rerun evidence. Risk boundary: escalate or stop when the task involves testing implementation details only, masking flakes, and claiming coverage without behavior proof, missing owner evidence, or live external state.",
+  "domain": "testing",
+  "scope_hint": "code.testing:strategies",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.testing:human_authored",
+  "pack_id": "code.testing"
+}

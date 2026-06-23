@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:eval:treat-the-judge-as-a-biased-instrument",
+  "type": "strategy",
+  "title": "Treat the LLM judge as a biased instrument",
+  "description": "An LLM-as-judge is calibrated against human labels and its known biases are controlled before its scores are trusted.",
+  "body": "Use when scoring outputs with another model as judge. Do not treat judge scores as ground truth, and avoid prompts that expose position, length, or self-preference biases. Actions: calibrate the judge against a human-labeled sample to measure agreement, randomize option order, control for length, and report judge-human agreement alongside scores. Validation signals include an agreement metric (e.g. correlation or kappa) between judge and human on a held-out sample. Risk boundary: a judge with low human agreement is an uncalibrated instrument; do not base a quality claim on it without human verification.",
+  "domain": "eval",
+  "scope_hint": "code.eval:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.eval",
+  "pack_id": "code.eval"
+}

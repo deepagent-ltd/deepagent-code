@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:c:debug-with-gdb-and-core-dump",
+  "type": "skill",
+  "title": "Diagnose a C crash with gdb and a core dump",
+  "description": "Load a core file or attach gdb to capture the faulting backtrace, inspect frames and memory, and identify the bad access.",
+  "body": "Use when diagnosing a segfault or abort in a C program. Actions: build with -g, enable cores (ulimit -c unlimited), reproduce, then `gdb ./prog core` and run `bt full` to see the faulting stack with locals; use `frame N`, `print`, and `x/` to inspect the bad pointer, and set a watchpoint to catch the moment memory is corrupted. Report the faulting function, the dereferenced pointer's value, and the corrupting write. Do not guess from a bare 'Segmentation fault' without a backtrace. This skill exposes capability only and must not attach to production processes without runtime permission. Validation signals include a backtrace pinpointing the access and a clean rerun after the fix. Risk boundary: optimized builds give misleading frames; recommend a -O0 -g rebuild and pair with ASan when the gdb stack looks inconsistent.",
+  "domain": "c",
+  "scope_hint": "code.c:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.c",
+  "pack_id": "code.c"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:svelte:ssr-and-hydration-model",
+  "type": "knowledge",
+  "title": "SSR and the hydration model",
+  "description": "SvelteKit renders HTML on the server then hydrates it on the client, so the first client render must match the server's.",
+  "body": "Use when a route is server-rendered and behaves oddly on load. SvelteKit runs the component on the server to produce HTML, ships it, then the client hydrates by attaching behavior and rendering once more, expecting identical output. Browser-only APIs are undefined during SSR, and non-deterministic values (Date.now, Math.random) differ between server and client, causing a hydration mismatch that discards the server DOM. onMount runs only on the client, after hydration. Do not call browser APIs or render volatile values in code that runs on the server. Actions: defer browser-derived output to onMount or guard with the browser flag. Validation signals include no hydration-mismatch warning and matching markup. Risk boundary: secrets used during SSR must stay server-side; a mismatch can also leak or flash incorrect content.",
+  "domain": "svelte",
+  "scope_hint": "code.frontend.svelte:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.frontend.svelte",
+  "pack_id": "code.frontend.svelte"
+}

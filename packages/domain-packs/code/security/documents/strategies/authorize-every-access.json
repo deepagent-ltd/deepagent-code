@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:security:authorize-every-access",
+  "type": "strategy",
+  "title": "Authorize every resource access, not just the route",
+  "description": "Check that the authenticated principal owns or may act on the specific object on every data access, not only at login or route entry.",
+  "body": "Use when a handler reads or mutates a record keyed by a client-supplied id. Do not assume route-level auth implies object-level rights, and avoid trusting ids from the client as proof of ownership. Actions: load the resource, verify the current principal's permission against that object (tenant, owner, role), and run the check server-side before returning or writing; record the authorization predicate next to the query. Validation signals include a test where user A is denied access to user B's id and an audit log of denied attempts. Risk boundary: a missing object-level check is a direct IDOR vulnerability; deny by default and escalate any access path that cannot express ownership.",
+  "domain": "security",
+  "scope_hint": "code.security:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.security",
+  "pack_id": "code.security"
+}

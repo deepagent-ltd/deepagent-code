@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:mt:forged-tenant-from-request",
+  "type": "failure_dossier",
+  "description": "Reading the active tenant from a client-supplied field lets a caller impersonate another tenant and access its data.",
+  "body": "Failure mode: tenant context is taken from a request header, query parameter, or body field instead of the authenticated principal, so a caller can set it to any tenant. Detection signals: the tenant id comes from request input; changing the supplied tenant returns another tenant's data; the authenticated token's tenant is ignored. Do not trust client-supplied tenant identity. Safer fallback: resolve tenant from the verified token or session, reject mismatches between claimed and authenticated tenant, and add a test that a forged tenant id is ignored; escalate as a high-severity authorization leak.",
+  "domain": "multi_tenant",
+  "scope_hint": "code.backend.multi-tenant:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.multi-tenant:human_authored",
+  "pack_id": "code.backend.multi-tenant"
+}

@@ -1,0 +1,35 @@
+{
+  "schema_version": "domain_pack_quality.v1",
+  "pack_id": "code.typescript",
+  "maturity": "L3",
+  "counts": {
+    "strategy": 9,
+    "methodology": 6,
+    "knowledge": 9,
+    "skill": 3,
+    "memory": 0,
+    "failure_dossier": 6
+  },
+  "quality": {
+    "duplicate_ref": 0,
+    "weak_evidence": 0,
+    "failure_indexed": 0,
+    "thin_docs": 0
+  },
+  "l3_evidence": {
+    "activation_smoke": "evals/smoke/l3-smoke.json",
+    "retrieval_smoke": "pack-scoped activePackIds retrieval",
+    "validation_smoke": "TypeScript type and module behavior L3 validation smoke",
+    "diagnosis_smoke": "TypeScript type and module behavior diagnosis smoke"
+  },
+  "source_refs": [
+    "source:typescript-handbook:paraphrased",
+    "source:nodejs-docs:paraphrased"
+  ],
+  "structure_l3": true,
+  "validated_l3": true,
+  "activation_precision_checked": false,
+  "cross_pack_negative_checked": false,
+  "scaffold_ratio": 0,
+  "ablation_checked": false
+}

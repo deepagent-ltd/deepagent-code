@@ -1,0 +1,420 @@
+[
+  {
+    "ref_id": "strategy:apidesign:model-resources-around-nouns",
+    "type": "strategy",
+    "title": "Model resources around stable nouns",
+    "summary": "Shape the API around the domain's persistent entities and their relationships, not around the actions a particular screen needs today.",
+    "domains": [
+      "api_design",
+      "contract_design",
+      "versioning_design",
+      "resource_modeling"
+    ],
+    "triggers": [
+      "resource modeling",
+      "domain entities",
+      "noun-based"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.api-design"
+  },
+  {
+    "ref_id": "strategy:apidesign:enforce-naming-consistency",
+    "type": "strategy",
+    "title": "Enforce one naming and casing convention",
+    "summary": "Apply a single convention for field names, casing, plurality, and date formats across the whole surface so clients can predict shapes.",
+    "domains": [
+      "api_design",
+      "contract_design",
+      "versioning_design",
+      "resource_modeling"
+    ],
+    "triggers": [
+      "naming consistency",
+      "api style guide",
+      "casing"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.api-design"
+  },
+  {
+    "ref_id": "strategy:apidesign:plan-versioning-and-evolution",
+    "type": "strategy",
+    "title": "Plan versioning and prefer additive change",
+    "summary": "Choose a versioning scheme up front and evolve through additive, backward-compatible changes, reserving a new version for genuine breaks.",
+    "domains": [
+      "api_design",
+      "contract_design",
+      "versioning_design",
+      "resource_modeling"
+    ],
+    "triggers": [
+      "api versioning strategy",
+      "evolvability",
+      "backward compatible"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.api-design"
+  },
+  {
+    "ref_id": "strategy:apidesign:design-pagination-contract",
+    "type": "strategy",
+    "title": "Design an explicit pagination contract",
+    "summary": "Define how clients page through collections from the start, choosing cursor or offset semantics and a stable response envelope.",
+    "domains": [
+      "api_design",
+      "contract_design",
+      "versioning_design",
+      "resource_modeling"
+    ],
+    "triggers": [
+      "pagination design",
+      "cursor",
+      "page size"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.api-design"
+  },
+  {
+    "ref_id": "strategy:apidesign:standardize-error-envelope",
+    "type": "strategy",
+    "title": "Standardize one error envelope",
+    "summary": "Return all errors in a single structured shape with a stable machine-readable code, a message, and details, so clients handle them uniformly.",
+    "domains": [
+      "api_design",
+      "contract_design",
+      "versioning_design",
+      "resource_modeling"
+    ],
+    "triggers": [
+      "error envelope",
+      "error code",
+      "error shape"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.api-design"
+  },
+  {
+    "ref_id": "strategy:apidesign:specify-idempotency-semantics",
+    "type": "strategy",
+    "title": "Specify idempotency for unsafe operations",
+    "summary": "Define how clients can safely retry writes, typically with an idempotency key, so a retried request never produces a duplicate effect.",
+    "domains": [
+      "api_design",
+      "contract_design",
+      "versioning_design",
+      "resource_modeling"
+    ],
+    "triggers": [
+      "idempotency design",
+      "idempotency key",
+      "safe retry"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.api-design"
+  },
+  {
+    "ref_id": "methodology:apidesign:contract-first-with-openapi",
+    "type": "methodology",
+    "title": "Design contract-first with OpenAPI",
+    "summary": "A procedure to specify the contract in OpenAPI before implementation so consumers, mocks, and stubs derive from one source.",
+    "domains": [
+      "api_design",
+      "contract_design",
+      "versioning_design",
+      "resource_modeling"
+    ],
+    "triggers": [
+      "contract-first",
+      "openapi",
+      "spec-driven"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.api-design"
+  },
+  {
+    "ref_id": "methodology:apidesign:plan-a-deprecation",
+    "type": "methodology",
+    "title": "Plan a field or endpoint deprecation",
+    "summary": "A procedure to retire part of the contract without breaking clients, through announcement, overlap, and monitored removal.",
+    "domains": [
+      "api_design",
+      "contract_design",
+      "versioning_design",
+      "resource_modeling"
+    ],
+    "triggers": [
+      "deprecation",
+      "sunset",
+      "migration plan"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.api-design"
+  },
+  {
+    "ref_id": "methodology:apidesign:audit-cross-endpoint-consistency",
+    "type": "methodology",
+    "title": "Audit a surface for cross-endpoint consistency",
+    "summary": "A procedure to review an existing API for divergent naming, shapes, and error handling and to converge it.",
+    "domains": [
+      "api_design",
+      "contract_design",
+      "versioning_design",
+      "resource_modeling"
+    ],
+    "triggers": [
+      "consistency audit",
+      "style guide",
+      "convergence"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.api-design"
+  },
+  {
+    "ref_id": "methodology:apidesign:choose-versioning-scheme",
+    "type": "methodology",
+    "title": "Choose a versioning scheme for the surface",
+    "summary": "A decision procedure for selecting URI, header, or media-type versioning based on client needs and how the surface will evolve.",
+    "domains": [
+      "api_design",
+      "contract_design",
+      "versioning_design",
+      "resource_modeling"
+    ],
+    "triggers": [
+      "versioning scheme",
+      "uri versioning",
+      "header versioning"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.api-design"
+  },
+  {
+    "ref_id": "knowledge:apidesign:breaking-vs-additive-change",
+    "type": "knowledge",
+    "title": "Breaking versus additive contract changes",
+    "summary": "Adding optional fields or new resources is additive and safe, while removing fields, renaming, or tightening types is breaking and needs a new version.",
+    "domains": [
+      "api_design",
+      "contract_design",
+      "versioning_design",
+      "resource_modeling"
+    ],
+    "triggers": [
+      "breaking change",
+      "additive change",
+      "compatibility"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.api-design"
+  },
+  {
+    "ref_id": "knowledge:apidesign:cursor-vs-offset-pagination",
+    "type": "knowledge",
+    "title": "Cursor versus offset pagination",
+    "summary": "Offset paging is simple but skips or repeats items when the underlying data changes, while cursor paging stays stable across mutations.",
+    "domains": [
+      "api_design",
+      "contract_design",
+      "versioning_design",
+      "resource_modeling"
+    ],
+    "triggers": [
+      "cursor pagination",
+      "offset pagination",
+      "stable iteration"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.api-design"
+  },
+  {
+    "ref_id": "knowledge:apidesign:idempotency-semantics",
+    "type": "knowledge",
+    "title": "What idempotency means for an operation",
+    "summary": "An idempotent operation produces the same effect whether applied once or many times, which lets clients retry safely after uncertain failures.",
+    "domains": [
+      "api_design",
+      "contract_design",
+      "versioning_design",
+      "resource_modeling"
+    ],
+    "triggers": [
+      "idempotency",
+      "retry safety",
+      "exactly once effect"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.api-design"
+  },
+  {
+    "ref_id": "knowledge:apidesign:hateoas-and-discoverability",
+    "type": "knowledge",
+    "title": "Hypermedia links and discoverability",
+    "summary": "HATEOAS embeds links to related resources and available actions in responses so clients navigate by following links rather than hardcoding URLs.",
+    "domains": [
+      "api_design",
+      "contract_design",
+      "versioning_design",
+      "resource_modeling"
+    ],
+    "triggers": [
+      "hateoas",
+      "hypermedia",
+      "discoverability"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.api-design"
+  },
+  {
+    "ref_id": "skill:apidesign:design-a-resource-contract",
+    "type": "skill",
+    "title": "Design a resource and its operations",
+    "summary": "Model a new resource with consistent naming, standard methods, a paging contract for collections, and a defined error envelope.",
+    "domains": [
+      "api_design",
+      "contract_design",
+      "versioning_design",
+      "resource_modeling"
+    ],
+    "triggers": [
+      "resource contract",
+      "standard methods",
+      "design resource"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.api-design"
+  },
+  {
+    "ref_id": "skill:apidesign:add-idempotency-key-support",
+    "type": "skill",
+    "title": "Add idempotency-key support to a write",
+    "summary": "Define and document idempotency-key semantics for an unsafe operation so retries return the original result instead of duplicating effects.",
+    "domains": [
+      "api_design",
+      "contract_design",
+      "versioning_design",
+      "resource_modeling"
+    ],
+    "triggers": [
+      "idempotency key",
+      "safe retry",
+      "write contract"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.api-design"
+  }
+]

@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:mlai:run-training-with-validation",
+  "type": "skill",
+  "title": "Run training and report both curves",
+  "description": "Launch a training run with a validation pass per epoch and report loss/metric curves plus the best checkpoint.",
+  "body": "Use when validating an ML code change. Actions: detect the framework and entry point, run a short training job with per-epoch validation, and report training vs validation loss, the chosen metric, and the best-validation epoch. Compare the curves to spot overfitting or non-convergence and record the seed and config used. Do not declare success from training loss alone. This skill exposes capability only and must not launch large GPU jobs without runtime permission. Validation signals include both curves logged and a reproducible best metric. Risk boundary: if no validation split exists, report the result as unverified rather than claiming generalization.",
+  "domain": "ml",
+  "scope_hint": "code.ml-ai:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.ml-ai",
+  "pack_id": "code.ml-ai"
+}

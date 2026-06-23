@@ -1,0 +1,11 @@
+{
+  "ref_id": "skill:review:assemble-report",
+  "type": "skill",
+  "description": "Assemble a findings-first review report with severity order, open questions, and residual risk.",
+  "body": "Inputs: verified findings, inconclusive suspicions, inspected files, and validation artifacts. Procedure: sort confirmed findings by severity, cite the tightest file/line evidence, describe trigger and consequence, and avoid long summaries before issues. After findings, list open questions or assumptions only when they affect risk. If no issues are found, say that clearly and name remaining test gaps or uninspected surfaces. Do not include implementation patches unless the user requested a fix. Output: a review report that distinguishes blockers from residual risk and gives enough evidence for the owner to act. Failure handling: if evidence is missing, downgrade from finding to residual risk or ask for the missing artifact. Use when Code Review work touches diff hunks, line evidence, tests, contracts, and blast radius. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: run the documented inspection and validation workflow; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include file/line citations, failing or missing tests, reproduced behavior, and residual-risk notes. Risk boundary: escalate or stop when the task involves unsupported findings, severity inflation, hidden fixes, and ignoring user constraints, missing owner evidence, or live external state.",
+  "domain": "review",
+  "scope_hint": "code.review:skills",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.review:human_authored",
+  "pack_id": "code.review"
+}

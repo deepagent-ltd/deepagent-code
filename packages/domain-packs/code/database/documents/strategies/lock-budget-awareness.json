@@ -1,0 +1,11 @@
+{
+  "ref_id": "strategy:database:lock-budget-awareness",
+  "type": "strategy",
+  "description": "Treat lock duration and lock scope as design constraints for migrations and queries.",
+  "body": "Apply this when adding indexes, altering large tables, changing constraints, running backfills, or modifying high-traffic queries. A correct statement can still be unsafe if it blocks readers or writers for too long. This pack stays database-generic; use a concrete database pack for engine-specific lock syntax. Execution actions include estimating affected rows, identifying table or row locks, preferring online or concurrent operations where supported, batching writes, and testing with representative data volume. Validation signals include lock timeout configuration, observed migration timing in a dry-run, no long full-table locks in the plan, and no deadlock-prone ordering across transactions. Risk boundary: if the target is production-sized data and lock behavior is unknown, require human review and a rollback or maintenance-window plan. Use when Database Engineering work touches schema deltas, query shape, transaction ownership, constraints, locks, and data volume. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: choose the smallest direction that preserves the domain contract; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include migration dry-runs, rollback checks, EXPLAIN output, constraint tests, and fixture data comparisons. Risk boundary: escalate or stop when the task involves data loss, long locks, non-rollbackable writes, silent query-plan regressions, and unsafe backfills, missing owner evidence, or live external state.",
+  "domain": "sql",
+  "scope_hint": "code.database:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database:lock_safety_practice",
+  "pack_id": "code.database"
+}

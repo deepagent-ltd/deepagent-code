@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:vsearch:select-vector-db",
+  "type": "methodology",
+  "title": "Select a vector database for the workload",
+  "description": "Choose among pgvector, Qdrant, and Milvus based on scale, filtering needs, and operational fit.",
+  "body": "Use when picking where to store and search vectors. Do not default to a standalone vector DB when the corpus is small and already in Postgres — pgvector may suffice and cut operational load. Actions: estimate vector count and QPS, list metadata-filtering and hybrid needs, then match: pgvector for modest scale beside relational data, Qdrant/Milvus for large-scale ANN with rich filtering. Validation signals include a benchmark at expected scale meeting the recall and latency budget and a filtering test on real metadata. Risk boundary: outgrowing pgvector's index causes latency cliffs; if projected scale exceeds its comfort zone, escalate the decision before committing the storage layer.",
+  "domain": "vector_search",
+  "scope_hint": "code.vector-search:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.vector-search",
+  "pack_id": "code.vector-search"
+}

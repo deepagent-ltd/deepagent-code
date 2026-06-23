@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:sqlite:enable-wal-for-concurrent-reads",
+  "type": "strategy",
+  "title": "Enable WAL for concurrent reads",
+  "description": "Switch to WAL mode so readers and a single writer proceed concurrently instead of blocking each other.",
+  "body": "Use when more than one connection reads while another writes. Do not stay on the default rollback journal for a concurrent app, where a writer blocks all readers and vice versa. Actions: run PRAGMA journal_mode=WAL once (it persists in the database file); understand WAL lets many readers run during a write because the writer appends to a separate WAL file checkpointed later; keep the -wal and -shm sidecar files with the database. Validation signals include a test where readers return rows while a writer is mid-transaction. Risk boundary: WAL does not work over a network filesystem and still allows only one writer at a time; if writes are highly concurrent, that single-writer limit is the real ceiling to flag.",
+  "domain": "sqlite",
+  "scope_hint": "code.database.sqlite:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.sqlite",
+  "pack_id": "code.database.sqlite"
+}

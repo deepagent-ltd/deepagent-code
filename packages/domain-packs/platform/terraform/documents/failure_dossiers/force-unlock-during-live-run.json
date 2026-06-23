@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:tf:force-unlock-during-live-run",
+  "type": "failure_dossier",
+  "description": "Running terraform force-unlock to clear a state lock while another apply is actually in progress, racing two writers into state corruption.",
+  "body": "Failure mode: a run seems stuck, so an operator force-unlocks the state, but another apply is genuinely still running; both now write state and corrupt it or apply conflicting changes. Detection signals: state shows impossible/partial resource sets after two near-simultaneous runs; the 'stuck' lock belonged to a live job; later plans show phantom drift. Do not force-unlock without confirming no active run holds the lock. Safer fallback: back up state first, verify via the backend/CI that no run is active, force-unlock only the confirmed-abandoned lock id, then plan to validate state integrity.",
+  "domain": "terraform",
+  "scope_hint": "platform.terraform:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.terraform:human_authored",
+  "pack_id": "platform.terraform"
+}

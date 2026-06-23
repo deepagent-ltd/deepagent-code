@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:aws:cost-guardrails-region",
+  "type": "strategy",
+  "title": "Put cost guardrails on data transfer, NAT, and region choice",
+  "description": "Budget the silent cost drivers (NAT data processing, cross-AZ/cross-region transfer, idle provisioned capacity) and pin region/AZ topology to cut egress.",
+  "body": "Use when designing topology or investigating an AWS bill. Do not route all private traffic through a single NAT Gateway by reflex and avoid cross-region calls on a hot path. Actions: add AWS Budgets with alerts, replace NAT egress to AWS services with VPC Gateway/Interface endpoints, keep chatty components in the same AZ to dodge cross-AZ charges, and review Cost Explorer grouped by usage type. Validation signals include Cost Explorer showing reduced NAT DataProcessing-Bytes, lower DataTransfer-Regional-Bytes, and a budget alarm that fires before overspend. Risk boundary: a topology change that moves production traffic across AZ/region boundaries is human-gated.",
+  "domain": "aws",
+  "scope_hint": "platform.cloud.aws:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.cloud.aws",
+  "pack_id": "platform.cloud.aws"
+}

@@ -1,0 +1,11 @@
+{
+  "ref_id": "strategy:database:plan-before-index",
+  "type": "strategy",
+  "description": "Require query-plan evidence before adding, removing, or reshaping indexes.",
+  "body": "Use this when performance work proposes an index, removes an index, changes query predicates, or adds sorting/join requirements. Indexes are workload-specific and can harm writes, storage, and planner choices. This does not replace benchmark discipline from performance packs. Execution actions include capturing the representative query, parameters, current plan, estimated and actual row counts when available, and write-path impact; then compare after the change. Validation signals include lower scan cost or fewer rows read for the target query, no regression on critical sibling queries, and acceptable write overhead. Risk boundary: do not add broad indexes solely from column names or remove indexes without checking consumers and constraints. Use when Database Engineering work touches schema deltas, query shape, transaction ownership, constraints, locks, and data volume. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: choose the smallest direction that preserves the domain contract; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include migration dry-runs, rollback checks, EXPLAIN output, constraint tests, and fixture data comparisons. Risk boundary: escalate or stop when the task involves data loss, long locks, non-rollbackable writes, silent query-plan regressions, and unsafe backfills, missing owner evidence, or live external state.",
+  "domain": "sql",
+  "scope_hint": "code.database:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database:query_plan_practice",
+  "pack_id": "code.database"
+}

@@ -1,0 +1,448 @@
+[
+  {
+    "ref_id": "strategy:mongo:embed-data-that-is-read-together",
+    "type": "strategy",
+    "title": "Embed data that is read and written together",
+    "summary": "Model one-to-few relationships by embedding so a single document read serves the whole view without a join.",
+    "domains": [
+      "mongodb",
+      "document_db",
+      "aggregation",
+      "bson"
+    ],
+    "triggers": [
+      "embed",
+      "document model",
+      "one to few",
+      "denormalization",
+      "single read"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.mongodb"
+  },
+  {
+    "ref_id": "strategy:mongo:reference-unbounded-or-shared-data",
+    "type": "strategy",
+    "title": "Reference unbounded or independently-updated data",
+    "summary": "Store large, growing, or shared child sets in their own collection and link by id to avoid runaway document growth.",
+    "domains": [
+      "mongodb",
+      "document_db",
+      "aggregation",
+      "bson"
+    ],
+    "triggers": [
+      "reference",
+      "lookup",
+      "unbounded array",
+      "linked collection",
+      "document growth"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.mongodb"
+  },
+  {
+    "ref_id": "strategy:mongo:index-every-query-predicate-with-esr",
+    "type": "strategy",
+    "title": "Build compound indexes with the ESR rule",
+    "summary": "Order compound index keys Equality, then Sort, then Range so one index serves filter and sort together.",
+    "domains": [
+      "mongodb",
+      "document_db",
+      "aggregation",
+      "bson"
+    ],
+    "triggers": [
+      "compound index",
+      "esr rule",
+      "equality sort range",
+      "index order",
+      "sort stage"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.mongodb"
+  },
+  {
+    "ref_id": "strategy:mongo:choose-a-shard-key-for-even-distribution",
+    "type": "strategy",
+    "title": "Choose a shard key for even write distribution",
+    "summary": "Pick a high-cardinality, non-monotonic shard key so writes and data spread evenly instead of hotspotting one shard.",
+    "domains": [
+      "mongodb",
+      "document_db",
+      "aggregation",
+      "bson"
+    ],
+    "triggers": [
+      "shard key",
+      "sharding",
+      "hashed key",
+      "hot shard",
+      "chunk distribution"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.mongodb"
+  },
+  {
+    "ref_id": "strategy:mongo:set-write-concern-for-durability",
+    "type": "strategy",
+    "title": "Set write concern to match durability needs",
+    "summary": "Use w:majority for data that must survive a primary failover, accepting the latency it adds.",
+    "domains": [
+      "mongodb",
+      "document_db",
+      "aggregation",
+      "bson"
+    ],
+    "triggers": [
+      "write concern",
+      "w majority",
+      "durability",
+      "failover",
+      "read concern"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.mongodb"
+  },
+  {
+    "ref_id": "strategy:mongo:enforce-schema-with-json-validation",
+    "type": "strategy",
+    "title": "Enforce structure with JSON Schema validation",
+    "summary": "Attach a $jsonSchema validator so a flexible document model still guarantees required fields and types.",
+    "domains": [
+      "mongodb",
+      "document_db",
+      "aggregation",
+      "bson"
+    ],
+    "triggers": [
+      "schema validation",
+      "jsonschema",
+      "required fields",
+      "validationAction",
+      "document shape"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.mongodb"
+  },
+  {
+    "ref_id": "methodology:mongo:optimize-an-aggregation-pipeline",
+    "type": "methodology",
+    "title": "Optimize an aggregation pipeline",
+    "summary": "Reorder stages so $match and $project run before $group and $sort, letting indexes do the early filtering.",
+    "domains": [
+      "mongodb",
+      "document_db",
+      "aggregation",
+      "bson"
+    ],
+    "triggers": [
+      "aggregation optimization",
+      "pipeline stages",
+      "match early",
+      "allowDiskUse",
+      "explain pipeline"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.mongodb"
+  },
+  {
+    "ref_id": "methodology:mongo:size-the-working-set-against-ram",
+    "type": "methodology",
+    "title": "Size the working set against RAM",
+    "summary": "Keep the frequently-touched indexes and documents inside the WiredTiger cache so reads stay in memory.",
+    "domains": [
+      "mongodb",
+      "document_db",
+      "aggregation",
+      "bson"
+    ],
+    "triggers": [
+      "working set",
+      "wiredtiger cache",
+      "ram sizing",
+      "eviction",
+      "cache hit ratio"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.mongodb"
+  },
+  {
+    "ref_id": "methodology:mongo:diagnose-a-slow-query-with-explain",
+    "type": "methodology",
+    "title": "Diagnose a slow query with explain executionStats",
+    "summary": "Read totalDocsExamined versus nReturned to tell whether a query is index-bound or scanning the collection.",
+    "domains": [
+      "mongodb",
+      "document_db",
+      "aggregation",
+      "bson"
+    ],
+    "triggers": [
+      "explain executionStats",
+      "docs examined",
+      "collscan",
+      "slow query",
+      "selectivity"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.mongodb"
+  },
+  {
+    "ref_id": "methodology:mongo:configure-a-resilient-replica-set",
+    "type": "methodology",
+    "title": "Configure a resilient replica set",
+    "summary": "Use an odd number of voting members across failure domains so elections reach a clean majority.",
+    "domains": [
+      "mongodb",
+      "document_db",
+      "aggregation",
+      "bson"
+    ],
+    "triggers": [
+      "replica set",
+      "election",
+      "voting members",
+      "stepdown",
+      "availability zone"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.mongodb"
+  },
+  {
+    "ref_id": "knowledge:mongo:multikey-index-semantics",
+    "type": "knowledge",
+    "title": "How multikey indexes on arrays behave",
+    "summary": "Indexing an array field creates a multikey index with one index entry per element, which constrains compound use.",
+    "domains": [
+      "mongodb",
+      "document_db",
+      "aggregation",
+      "bson"
+    ],
+    "triggers": [
+      "multikey index",
+      "array index",
+      "isMultiKey",
+      "element query"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.mongodb"
+  },
+  {
+    "ref_id": "knowledge:mongo:bson-document-size-limit",
+    "type": "knowledge",
+    "title": "The 16MB BSON document size limit",
+    "summary": "A single document cannot exceed 16MB, which caps how much can be embedded before a redesign is forced.",
+    "domains": [
+      "mongodb",
+      "document_db",
+      "aggregation",
+      "bson"
+    ],
+    "triggers": [
+      "16mb limit",
+      "bson size",
+      "document too large",
+      "gridfs",
+      "embedding cap"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.mongodb"
+  },
+  {
+    "ref_id": "knowledge:mongo:read-preference-and-staleness",
+    "type": "knowledge",
+    "title": "Read preference trades freshness for scale",
+    "summary": "Reading from secondaries spreads load but can return stale data because replication is asynchronous.",
+    "domains": [
+      "mongodb",
+      "document_db",
+      "aggregation",
+      "bson"
+    ],
+    "triggers": [
+      "read preference",
+      "secondary read",
+      "replication lag",
+      "staleness",
+      "read scaling"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.mongodb"
+  },
+  {
+    "ref_id": "knowledge:mongo:no-cheap-server-side-join",
+    "type": "knowledge",
+    "title": "MongoDB has no cheap server-side join",
+    "summary": "$lookup is a per-document left-outer join that behaves like a nested loop, so it is not a substitute for relational joins.",
+    "domains": [
+      "mongodb",
+      "document_db",
+      "aggregation",
+      "bson"
+    ],
+    "triggers": [
+      "lookup join",
+      "nested loop",
+      "cross collection",
+      "join key index"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.mongodb"
+  },
+  {
+    "ref_id": "skill:mongo:write-an-aggregation-explain",
+    "type": "skill",
+    "title": "Profile an aggregation with explain",
+    "summary": "Run an aggregation in explain mode to see which stages used indexes and where the pipeline blocks or spills.",
+    "domains": [
+      "mongodb",
+      "document_db",
+      "aggregation",
+      "bson"
+    ],
+    "triggers": [
+      "aggregation explain",
+      "pipeline profiling",
+      "stage analysis",
+      "disk spill"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.mongodb"
+  },
+  {
+    "ref_id": "skill:mongo:create-a-ttl-index-for-expiry",
+    "type": "skill",
+    "title": "Create a TTL index for automatic expiry",
+    "summary": "Use a TTL index on a date field so MongoDB removes expired documents in the background without a cron job.",
+    "domains": [
+      "mongodb",
+      "document_db",
+      "aggregation",
+      "bson"
+    ],
+    "triggers": [
+      "ttl index",
+      "expireAfterSeconds",
+      "automatic expiry",
+      "session cleanup"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.mongodb"
+  }
+]

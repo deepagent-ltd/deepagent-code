@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:comp:assemble-an-evidence-package",
+  "type": "methodology",
+  "title": "Assemble an audit evidence package",
+  "description": "Collect the artifacts a control requires into a coherent, reviewable package keyed to the control.",
+  "body": "Steps: 1. List the in-scope controls for the assessment (access reviews, change approvals, backups, encryption). 2. For each control identify the artifact that proves it operated (approval records, log samples, config snapshots). 3. Collect a representative time-boxed sample plus the population it was drawn from. 4. Key each artifact to its control id and the period covered. 5. Verify completeness against the control list before handing to the assessor. Rollback point: before sharing externally, redact secrets and out-of-scope personal data. Validation: every in-scope control has at least one dated artifact and a defined sampling population.",
+  "domain": "compliance",
+  "scope_hint": "risk.compliance:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.compliance",
+  "pack_id": "risk.compliance"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:security:dangerous-sinks-need-structured-input",
+  "type": "knowledge",
+  "title": "Dangerous sinks need structured input",
+  "description": "Interpreters and external effect sinks should receive structured, constrained data instead of concatenated strings.",
+  "body": "Use for command execution, SQL, LDAP, XPath, template rendering, eval, filesystem paths, archive extraction, redirects, and SSRF-capable network calls. Do not use to block all string formatting in non-executing display paths. Actions: prefer argv arrays, prepared statements, path normalization with root checks, and allowlisted destinations. Validation signals include malicious input tests and no execution of payload syntax. Risk boundary: adding a new sink reachable from untrusted input requires human review. Use when Security Risk Controls work touches trust boundaries, authorization decisions, dangerous sinks, secrets, and dependency execution. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: use the fact to constrain the change and test plan; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include negative security tests, server-side checks, sink payload tests, and secret scans. Risk boundary: escalate or stop when the task involves client-only controls, injection, credential leakage, permissive fallback, and unsafe dependency changes, missing owner evidence, or live external state.",
+  "domain": "injection",
+  "scope_hint": "risk.security:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.security",
+  "pack_id": "risk.security"
+}

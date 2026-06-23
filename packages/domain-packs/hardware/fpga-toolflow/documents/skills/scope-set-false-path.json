@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:fpgatf:scope-set-false-path",
+  "type": "skill",
+  "title": "Scope a set_false_path exception narrowly",
+  "description": "Restrict a false-path exception with specific from and to points so it cannot accidentally untimed real logic.",
+  "body": "Use when a path is genuinely not timing-relevant and must be excluded from STA. Do not write a wildcard false path, since a broad pattern can disable timing on real functional paths. Actions: confirm the path is truly static, specify the exact from and to objects, and verify only the intended path is excluded. Validation signals include the exception affecting exactly the intended path and all functional paths remaining timed. Risk boundary: an over-broad false path ships untimed logic, so escalate any exception touching more paths than intended for review.",
+  "domain": "fpga_toolflow",
+  "scope_hint": "hardware.fpga-toolflow:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.fpga-toolflow",
+  "pack_id": "hardware.fpga-toolflow"
+}

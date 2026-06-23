@@ -1,0 +1,616 @@
+---
+title: CLI
+description: DeepAgent Code CLI Optionen und Befehle.
+---
+
+import { Tabs, TabItem } from "@astrojs/starlight/components"
+
+Der DeepAgent Code CLI startet standardmäßig das [TUI](/docs/tui), wenn er ohne Argumente ausgeführt wird.
+
+```bash
+deepagent-code
+```
+
+Es akzeptiert aber auch Befehle, wie auf dieser Seite dokumentiert. Dadurch können Sie programmgesteuert mit DeepAgent Code interagieren.
+
+```bash
+deepagent-code run "Explain how closures work in JavaScript"
+```
+
+---
+
+### tui
+
+Starten Sie die Terminalbenutzeroberfläche DeepAgent Code.
+
+```bash
+deepagent-code [project]
+```
+
+#### Optionen
+
+| Flag                                     | Kurz | Beschreibung                                                           |
+| ---------------------------------------- | ---- | ---------------------------------------------------------------------- |
+| <nobr><code>{"--continue"}</code></nobr> | `-c` | Setzen Sie die letzte Sitzung fort                                     |
+| <nobr><code>{"--session"}</code></nobr>  | `-s` | Session-ID zum Fortfahren                                              |
+| <nobr><code>{"--fork"}</code></nobr>     |      | Sitzung beim Fortsetzen verzweigen (mit `--continue` oder `--session`) |
+| <nobr><code>{"--prompt"}</code></nobr>   |      | Prompt zur Verwendung                                                  |
+| <nobr><code>{"--model"}</code></nobr>    | `-m` | Zu verwendendes Modell in der Form provider/model                      |
+| <nobr><code>{"--agent"}</code></nobr>    |      | Zu verwendender Agent                                                  |
+| <nobr><code>{"--port"}</code></nobr>     |      | Port zum Abhören                                                       |
+| <nobr><code>{"--hostname"}</code></nobr> |      | Hostname zum Abhören                                                   |
+
+---
+
+## Befehle
+
+Der DeepAgent Code CLI verfügt außerdem über die folgenden Befehle.
+
+---
+
+### agent
+
+Agenten für DeepAgent Code verwalten.
+
+```bash
+deepagent-code agent [command]
+```
+
+---
+
+### attach
+
+Schließen Sie ein Terminal an einen bereits laufenden DeepAgent Code-Backend-Server an, der über die Befehle `serve` oder `web` gestartet wurde.
+
+```bash
+deepagent-code attach [url]
+```
+
+Dies ermöglicht die Verwendung von TUI mit einem Remote-Backend DeepAgent Code. Zum Beispiel:
+
+```bash
+# Start the backend server for web/mobile access
+deepagent-code web --port 4096 --hostname 0.0.0.0
+
+# In another terminal, attach the TUI to the running backend
+deepagent-code attach http://10.20.30.40:4096
+```
+
+#### Optionen
+
+| Flag                                     | Kurz | Beschreibung                                                                       |
+| ---------------------------------------- | ---- | ---------------------------------------------------------------------------------- |
+| <nobr><code>{"--dir"}</code></nobr>      |      | Arbeitsverzeichnis zum Starten von TUI in                                          |
+| <nobr><code>{"--continue"}</code></nobr> | `-c` | Letzte Sitzung fortsetzen                                                          |
+| <nobr><code>{"--session"}</code></nobr>  | `-s` | Session-ID zum Fortfahren                                                          |
+| <nobr><code>{"--fork"}</code></nobr>     |      | Sitzung beim Fortsetzen abzweigen (mit `--continue` oder `--session` verwenden)    |
+| <nobr><code>{"--password"}</code></nobr> | `-p` | Basic-Auth-Passwort (standardmäßig `DEEPAGENT_CODE_SERVER_PASSWORD`)                     |
+| <nobr><code>{"--username"}</code></nobr> | `-u` | Basic-Auth-Benutzername (standardmäßig `DEEPAGENT_CODE_SERVER_USERNAME` oder `deepagent-code`) |
+
+---
+
+#### create
+
+Erstellen Sie einen neuen Agenten mit benutzerdefinierter Konfiguration.
+
+```bash
+deepagent-code agent create
+```
+
+Dieser Befehl führt Sie durch die Erstellung eines neuen Agenten mit einer benutzerdefinierten Systemeingabeaufforderung und Toolkonfiguration.
+
+---
+
+#### list
+
+Listen Sie alle verfügbaren Agenten auf.
+
+```bash
+deepagent-code agent list
+```
+
+---
+
+### auth
+
+Befehl zum Verwalten von Anmeldeinformationen und Anmelden für Anbieter.
+
+```bash
+deepagent-code auth [command]
+```
+
+---
+
+#### login
+
+DeepAgent Code wird von der Anbieterliste bei [Models.dev](https://models.dev) unterstützt, sodass Sie `deepagent-code auth login` verwenden können, um API-Schlüssel für jeden Anbieter zu konfigurieren, den Sie verwenden möchten. Dies wird in `~/.deepagent/code/auth.json` gespeichert.
+
+```bash
+deepagent-code auth login
+```
+
+Wenn DeepAgent Code startet, lädt es den Anbieter aus der Anmeldeinformationsdatei. Und ob in Ihren Umgebungen Schlüssel sind oder in Ihrem Projekt eine `.env`-Datei vorhanden ist.
+
+---
+
+#### list
+
+Listet alle authentifizierten Anbieter auf, wie in der Anmeldeinformationsdatei gespeichert.
+
+```bash
+deepagent-code auth list
+```
+
+Oder die Kurzversion.
+
+```bash
+deepagent-code auth ls
+```
+
+---
+
+#### logout
+
+Melden Sie sich von einem Anbieter ab, indem Sie ihn aus der Anmeldeinformationsdatei löschen.
+
+```bash
+deepagent-code auth logout
+```
+
+---
+
+### github
+
+Verwalten Sie den GitHub-Agenten für die Repository-Automatisierung.
+
+```bash
+deepagent-code github [command]
+```
+
+---
+
+#### install
+
+Installieren Sie den GitHub-Agenten in Ihrem Repository.
+
+```bash
+deepagent-code github install
+```
+
+Dadurch wird der erforderliche GitHub-Aktionsworkflow eingerichtet und Sie durch den Konfigurationsprozess geführt. [Learn more](/docs/github).
+
+---
+
+#### run
+
+Führen Sie den GitHub-Agenten aus. Dies wird normalerweise in GitHub-Aktionen verwendet.
+
+```bash
+deepagent-code github run
+```
+
+##### Optionen
+
+| Flag                                  | Beschreibung                                        |
+| ------------------------------------- | --------------------------------------------------- |
+| <nobr><code>{"--event"}</code></nobr> | GitHub Scheinereignis zum Ausführen des Agenten für |
+| <nobr><code>{"--token"}</code></nobr> | GitHub persönliches Zugriffstoken                   |
+
+---
+
+### mcp
+
+Verwalten Sie Model Context Protocol-Server.
+
+```bash
+deepagent-code mcp [command]
+```
+
+---
+
+#### add
+
+Fügen Sie Ihrer Konfiguration einen MCP-Server hinzu.
+
+```bash
+deepagent-code mcp add
+```
+
+Dieser Befehl führt Sie durch das Hinzufügen eines lokalen oder Remote-MCP-Servers.
+
+---
+
+#### list
+
+Listen Sie alle konfigurierten MCP-Server und deren Verbindungsstatus auf.
+
+```bash
+deepagent-code mcp list
+```
+
+Oder nutzen Sie die Kurzversion.
+
+```bash
+deepagent-code mcp ls
+```
+
+---
+
+#### auth
+
+Authentifizieren Sie sich mit einem OAuth-fähigen MCP-Server.
+
+```bash
+deepagent-code mcp auth [name]
+```
+
+Wenn Sie keinen Servernamen angeben, werden Sie aufgefordert, einen der verfügbaren OAuth-fähigen Server auszuwählen.
+
+Sie können auch OAuth-fähige Server und deren Authentifizierungsstatus auflisten.
+
+```bash
+deepagent-code mcp auth list
+```
+
+Oder nutzen Sie die Kurzversion.
+
+```bash
+deepagent-code mcp auth ls
+```
+
+---
+
+#### logout
+
+Entfernen Sie OAuth-Anmeldeinformationen für einen MCP-Server.
+
+```bash
+deepagent-code mcp logout [name]
+```
+
+---
+
+#### debug
+
+Beheben Sie OAuth-Verbindungsprobleme für einen MCP-Server.
+
+```bash
+deepagent-code mcp debug <name>
+```
+
+---
+
+### models
+
+Listen Sie alle verfügbaren Modelle der konfigurierten Anbieter auf.
+
+```bash
+deepagent-code models [provider]
+```
+
+Dieser Befehl zeigt alle bei Ihren konfigurierten Anbietern verfügbaren Modelle im Format `provider/model` an.
+
+Dies ist nützlich, um die genauen Modellnamen herauszufinden, die in [Ihrer Konfiguration](/docs/config/) verwendet werden sollen.
+
+Sie können optional eine Anbieter-ID übergeben, um Modelle nach diesem Anbieter zu filtern.
+
+```bash
+deepagent-code models anthropic
+```
+
+#### Optionen
+
+| Flag                                    | Beschreibung                                                                          |
+| --------------------------------------- | ------------------------------------------------------------------------------------- |
+| <nobr><code>{"--refresh"}</code></nobr> | Aktualisieren Sie den Modellcache von models.dev                                      |
+| <nobr><code>{"--verbose"}</code></nobr> | Verwenden Sie eine ausführlichere Modellausgabe (einschließlich Metadaten wie Kosten) |
+
+Verwenden Sie das Flag `--refresh`, um die zwischengespeicherte Modellliste zu aktualisieren. Dies ist nützlich, wenn einem Anbieter neue Modelle hinzugefügt wurden und Sie diese in DeepAgent Code sehen möchten.
+
+```bash
+deepagent-code models --refresh
+```
+
+---
+
+### run
+
+Führen Sie DeepAgent Code im nicht interaktiven Modus aus, indem Sie direkt eine Eingabeaufforderung übergeben.
+
+```bash
+deepagent-code run [message..]
+```
+
+Dies ist nützlich für die Skripterstellung, die Automatisierung oder wenn Sie eine schnelle Antwort wünschen, ohne das vollständige TUI zu starten. Zum Beispiel:
+
+```bash "deepagent-code run"
+deepagent-code run Explain the use of context in Go
+```
+
+Sie können auch eine Verbindung zu einer laufenden `deepagent-code serve`-Instanz herstellen, um bei jedem Lauf Kaltstartzeiten für den MCP-Server zu vermeiden:
+
+```bash
+# Start a headless server in one terminal
+deepagent-code serve
+
+# In another terminal, run commands that attach to it
+deepagent-code run --attach http://localhost:4096 "Explain async/await in JavaScript"
+```
+
+#### Optionen
+
+| Flag                                     | Kurz | Beschreibung                                                                                        |
+| ---------------------------------------- | ---- | --------------------------------------------------------------------------------------------------- |
+| <nobr><code>{"--command"}</code></nobr>  |      | Der auszuführende Befehl, Argumente als Nachricht verwenden                                         |
+| <nobr><code>{"--continue"}</code></nobr> | `-c` | Setzen Sie die letzte Sitzung fort                                                                  |
+| <nobr><code>{"--session"}</code></nobr>  | `-s` | Session-ID zum Fortfahren                                                                           |
+| <nobr><code>{"--fork"}</code></nobr>     |      | Sitzung beim Fortsetzen verzweigen (mit `--continue` oder `--session` verwenden)                    |
+| <nobr><code>{"--share"}</code></nobr>    |      | Teilen Sie die Sitzung                                                                              |
+| <nobr><code>{"--model"}</code></nobr>    | `-m` | Zu verwendendes Modell in der Form provider/model                                                   |
+| <nobr><code>{"--agent"}</code></nobr>    |      | Zu verwendender Agent                                                                               |
+| <nobr><code>{"--file"}</code></nobr>     | `-f` | Datei(en) zum Anhängen an die Nachricht                                                             |
+| <nobr><code>{"--format"}</code></nobr>   |      | Format: default (formatiert) oder json (rohe JSON-Ereignisse)                                       |
+| <nobr><code>{"--title"}</code></nobr>    |      | Titel für die Sitzung (verwendet eine verkürzte Eingabeaufforderung, wenn kein Wert angegeben wird) |
+| <nobr><code>{"--attach"}</code></nobr>   |      | An einen laufenden DeepAgent Code-Server anschließen (z.B. http://localhost:4096)                         |
+| <nobr><code>{"--password"}</code></nobr> | `-p` | Basic-Auth-Passwort (standardmäßig `DEEPAGENT_CODE_SERVER_PASSWORD`)                                      |
+| <nobr><code>{"--username"}</code></nobr> | `-u` | Basic-Auth-Benutzername (standardmäßig `DEEPAGENT_CODE_SERVER_USERNAME` oder `deepagent-code`)                  |
+| <nobr><code>{"--dir"}</code></nobr>      |      | Verzeichnis für die Ausführung, oder Pfad auf dem Remote-Server beim Anhängen                       |
+| <nobr><code>{"--variant"}</code></nobr>  |      | Modellvariante (anbieterspezifischer Reasoning-Aufwand)                                             |
+| <nobr><code>{"--thinking"}</code></nobr> |      | Denkblöcke anzeigen                                                                                 |
+| <nobr><code>{"--port"}</code></nobr>     |      | Port für den lokalen Server (standardmäßig zufälliger Port)                                         |
+
+---
+
+### serve
+
+Starten Sie einen Headless-DeepAgent Code-Server für den API-Zugriff. Sehen Sie sich die [Server-Dokumentation](/docs/server) für die vollständige HTTP-Schnittstelle an.
+
+```bash
+deepagent-code serve
+```
+
+Dadurch wird ein HTTP-Server gestartet, der API-Zugriff auf DeepAgent Code-Funktionalität ohne die TUI-Schnittstelle bietet. Legen Sie `DEEPAGENT_CODE_SERVER_PASSWORD` fest, um die HTTP-Basisauthentifizierung zu aktivieren (Benutzername ist standardmäßig `deepagent-code`).
+
+#### Optionen
+
+| Flag                                     | Beschreibung                                    |
+| ---------------------------------------- | ----------------------------------------------- |
+| <nobr><code>{"--port"}</code></nobr>     | Port zum Abhören                                |
+| <nobr><code>{"--hostname"}</code></nobr> | Hostname zum Abhören                            |
+| <nobr><code>{"--mdns"}</code></nobr>     | mDNS-Discovery aktivieren                       |
+| <nobr><code>{"--cors"}</code></nobr>     | Zusätzliche Browser-Ursprünge für CORS zulassen |
+
+---
+
+### session
+
+DeepAgent Code-Sitzungen verwalten.
+
+```bash
+deepagent-code session [command]
+```
+
+---
+
+#### list
+
+Listen Sie alle DeepAgent Code-Sitzungen auf.
+
+```bash
+deepagent-code session list
+```
+
+##### Optionen
+
+| Flag                                      | Kurz | Beschreibung                             |
+| ----------------------------------------- | ---- | ---------------------------------------- |
+| <nobr><code>{"--max-count"}</code></nobr> | `-n` | Beschränken auf die N neuesten Sitzungen |
+| <nobr><code>{"--format"}</code></nobr>    |      | Ausgabeformat: table oder json (table)   |
+
+---
+
+### stats
+
+Zeigen Sie Token-Nutzungs- und Kostenstatistiken für Ihre DeepAgent Code-Sitzungen an.
+
+```bash
+deepagent-code stats
+```
+
+#### Optionen
+
+| Flag                                    | Beschreibung                                                                                                                   |
+| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| <nobr><code>{"--days"}</code></nobr>    | Statistiken für die letzten N Tage anzeigen (alle Zeiten)                                                                      |
+| <nobr><code>{"--tools"}</code></nobr>   | Anzahl der angebotenen Werkzeuge (alle)                                                                                        |
+| <nobr><code>{"--models"}</code></nobr>  | Aufschlüsselung der Modellnutzung anzeigen (standardmäßig ausgeblendet). Übergeben Sie eine Zahl, um die obersten N anzuzeigen |
+| <nobr><code>{"--project"}</code></nobr> | Nach Projekt filtern (alle Projekte, leere Zeichenfolge: aktuelles Projekt)                                                    |
+
+---
+
+### export
+
+Sitzungsdaten als JSON exportieren.
+
+```bash
+deepagent-code export [sessionID]
+```
+
+Wenn Sie keine Sitzungs-ID angeben, werden Sie aufgefordert, eine der verfügbaren Sitzungen auszuwählen.
+
+---
+
+### import
+
+Importieren Sie Sitzungsdaten aus einer JSON-Datei oder einer DeepAgent Code-Freigabe-URL.
+
+```bash
+deepagent-code import <file>
+```
+
+Sie können aus einer lokalen Datei oder einer DeepAgent Code-Freigabe-URL importieren.
+
+```bash
+deepagent-code import session.json
+deepagent-code import https://opncd.ai/s/abc123
+```
+
+---
+
+### web
+
+Starten Sie einen Headless-DeepAgent Code-Server mit einer Weboberfläche.
+
+```bash
+deepagent-code web
+```
+
+Dadurch wird ein HTTP-Server gestartet und ein Webbrowser geöffnet, um über eine Webschnittstelle auf DeepAgent Code zuzugreifen. Legen Sie `DEEPAGENT_CODE_SERVER_PASSWORD` fest, um die HTTP-Basisauthentifizierung zu aktivieren (Benutzername ist standardmäßig `deepagent-code`).
+
+#### Optionen
+
+| Flag                                     | Beschreibung                                    |
+| ---------------------------------------- | ----------------------------------------------- |
+| <nobr><code>{"--port"}</code></nobr>     | Port zum Abhören                                |
+| <nobr><code>{"--hostname"}</code></nobr> | Hostname zum Abhören                            |
+| <nobr><code>{"--mdns"}</code></nobr>     | mDNS-Discovery aktivieren                       |
+| <nobr><code>{"--cors"}</code></nobr>     | Zusätzliche Browser-Ursprünge für CORS zulassen |
+
+---
+
+### acp
+
+Starten Sie einen ACP (Agent Client Protocol) Server.
+
+```bash
+deepagent-code acp
+```
+
+Dieser Befehl startet einen ACP-Server, der über stdin/stdout unter Verwendung von nd-JSON kommuniziert.
+
+#### Optionen
+
+| Flag                                     | Beschreibung         |
+| ---------------------------------------- | -------------------- |
+| <nobr><code>{"--cwd"}</code></nobr>      | Arbeitsverzeichnis   |
+| <nobr><code>{"--port"}</code></nobr>     | Port zum Abhören     |
+| <nobr><code>{"--hostname"}</code></nobr> | Hostname zum Abhören |
+
+---
+
+### uninstall
+
+Deinstallieren Sie DeepAgent Code und entfernen Sie alle zugehörigen Dateien.
+
+```bash
+deepagent-code uninstall
+```
+
+#### Optionen
+
+| Flag                                        | Kurz | Beschreibung                                        |
+| ------------------------------------------- | ---- | --------------------------------------------------- |
+| <nobr><code>{"--keep-config"}</code></nobr> | `-c` | Konfigurationsdateien behalten                      |
+| <nobr><code>{"--keep-data"}</code></nobr>   | `-d` | Sitzungsdaten und Snapshots aufbewahren             |
+| <nobr><code>{"--dry-run"}</code></nobr>     |      | Zeigt, was entfernt werden würde, ohne zu entfernen |
+| <nobr><code>{"--force"}</code></nobr>       | `-f` | Bestätigungsaufforderungen überspringen             |
+
+---
+
+### upgrade
+
+Aktualisiert DeepAgent Code auf die neueste Version oder eine bestimmte Version.
+
+```bash
+deepagent-code upgrade [target]
+```
+
+Um auf die neueste Version zu aktualisieren:
+
+```bash
+deepagent-code upgrade
+```
+
+Um auf eine bestimmte Version zu aktualisieren.
+
+```bash
+deepagent-code upgrade v0.1.48
+```
+
+#### Optionen
+
+| Flag                                   | Kurz | Beschreibung                                                        |
+| -------------------------------------- | ---- | ------------------------------------------------------------------- |
+| <nobr><code>{"--method"}</code></nobr> | `-m` | Die zu verwendende Installationsmethode; curl, npm, pnpm, bun, brew |
+
+---
+
+## Globale Flags
+
+Der DeepAgent Code CLI akzeptiert die folgenden globalen Flags.
+
+| Flag                                       | Kurz | Beschreibung                              |
+| ------------------------------------------ | ---- | ----------------------------------------- |
+| <nobr><code>{"--help"}</code></nobr>       | `-h` | Hilfe anzeigen                            |
+| <nobr><code>{"--version"}</code></nobr>    | `-v` | Versionsnummer drucken                    |
+| <nobr><code>{"--print-logs"}</code></nobr> |      | Protokolle nach stderr drucken            |
+| <nobr><code>{"--log-level"}</code></nobr>  |      | Protokollebene (DEBUG, INFO, WARN, ERROR) |
+
+---
+
+## Umgebungsvariablen
+
+DeepAgent Code kann mithilfe von Umgebungsvariablen konfiguriert werden.
+
+| Variable                              | Typ             | Beschreibung                                                                     |
+| ------------------------------------- | --------------- | -------------------------------------------------------------------------------- |
+| `DEEPAGENT_CODE_AUTO_SHARE`                 | boolescher Wert | Sitzungen automatisch teilen                                                     |
+| `DEEPAGENT_CODE_GIT_BASH_PATH`              | Zeichenfolge    | Pfad zur ausführbaren Git Bash-Datei unter Windows                               |
+| `DEEPAGENT_CODE_CONFIG`                     | Zeichenfolge    | Pfad zur Konfigurationsdatei                                                     |
+| `DEEPAGENT_CODE_CONFIG_DIR`                 | Zeichenfolge    | Pfad zum Konfigurationsverzeichnis                                               |
+| `DEEPAGENT_CODE_CONFIG_CONTENT`             | Zeichenfolge    | Inline-JSON-Konfigurationsinhalt                                                 |
+| `DEEPAGENT_CODE_DISABLE_AUTOUPDATE`         | boolescher Wert | Automatische Update-Prüfungen deaktivieren                                       |
+| `DEEPAGENT_CODE_DISABLE_PRUNE`              | boolescher Wert | Bereinigung alter Daten deaktivieren                                             |
+| `DEEPAGENT_CODE_DISABLE_TERMINAL_TITLE`     | boolescher Wert | Deaktivieren Sie die automatische Aktualisierung von Terminaltiteln              |
+| `DEEPAGENT_CODE_PERMISSION`                 | Zeichenfolge    | Inline-JSON-Berechtigungskonfiguration                                           |
+| `DEEPAGENT_CODE_DISABLE_DEFAULT_PLUGINS`    | boolescher Wert | Standard-Plugins deaktivieren                                                    |
+| `DEEPAGENT_CODE_DISABLE_LSP_DOWNLOAD`       | boolescher Wert | Automatische LSP-Server-Downloads deaktivieren                                   |
+| `DEEPAGENT_CODE_ENABLE_EXPERIMENTAL_MODELS` | boolescher Wert | Experimentelle Modelle aktivieren                                                |
+| `DEEPAGENT_CODE_DISABLE_AUTOCOMPACT`        | boolescher Wert | Automatische Kontextkomprimierung deaktivieren                                   |
+| `DEEPAGENT_CODE_DISABLE_CLAUDE_CODE`        | boolescher Wert | Deaktivieren Sie das Lesen von `.claude` (Prompt + Skills)                       |
+| `DEEPAGENT_CODE_DISABLE_CLAUDE_CODE_PROMPT` | boolescher Wert | Deaktivieren Sie das Lesen von `~/.claude/CLAUDE.md`                             |
+| `DEEPAGENT_CODE_DISABLE_CLAUDE_CODE_SKILLS` | boolescher Wert | Deaktivieren Sie das Laden von `.claude/skills`                                  |
+| `DEEPAGENT_CODE_DISABLE_MODELS_FETCH`       | boolescher Wert | Deaktivieren Sie das Abrufen von Modellen aus Remote-Quellen                     |
+| `DEEPAGENT_CODE_FAKE_VCS`                   | Zeichenfolge    | Gefälschter VCS-Anbieter zu Testzwecken                                          |
+| `DEEPAGENT_CODE_CLIENT`                     | Zeichenfolge    | Client-ID (standardmäßig `cli`)                                                  |
+| `DEEPAGENT_CODE_ENABLE_EXA`                 | boolescher Wert | Exa-Websuchtools aktivieren                                                      |
+| `DEEPAGENT_CODE_SERVER_PASSWORD`            | Zeichenfolge    | Aktivieren Sie die Basisauthentifizierung für `serve`/`web`                      |
+| `DEEPAGENT_CODE_SERVER_USERNAME`            | Zeichenfolge    | Benutzernamen für die Basisauthentifizierung überschreiben (Standard `deepagent-code`) |
+| `DEEPAGENT_CODE_MODELS_URL`                 | Zeichenfolge    | Benutzerdefinierte URL zum Abrufen der Modellkonfiguration                       |
+
+---
+
+### Experimentell
+
+Diese Umgebungsvariablen ermöglichen experimentelle Funktionen, die sich ändern oder entfernt werden können.
+
+| Variable                                        | Typ             | Beschreibung                                              |
+| ----------------------------------------------- | --------------- | --------------------------------------------------------- |
+| `DEEPAGENT_CODE_EXPERIMENTAL`                         | boolescher Wert | Experimentelle Funktionen unter dem Sammelflag aktivieren |
+| `DEEPAGENT_CODE_EXPERIMENTAL_ICON_DISCOVERY`          | boolescher Wert | Symbolerkennung aktivieren                                |
+| `DEEPAGENT_CODE_EXPERIMENTAL_DISABLE_COPY_ON_SELECT`  | boolescher Wert | Kopieren bei Auswahl in TUI deaktivieren                  |
+| `DEEPAGENT_CODE_EXPERIMENTAL_BASH_DEFAULT_TIMEOUT_MS` | Zahl            | Standard-Timeout für Bash-Befehle in ms                   |
+| `DEEPAGENT_CODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX`        | Zahl            | Maximale Ausgabetokens für LLM-Antworten                  |
+| `DEEPAGENT_CODE_EXPERIMENTAL_FILEWATCHER`             | boolescher Wert | Dateiüberwachung für das gesamte Verzeichnis aktivieren   |
+| `DEEPAGENT_CODE_EXPERIMENTAL_OXFMT`                   | boolescher Wert | Oxfmt-Formatierer aktivieren                              |
+| `DEEPAGENT_CODE_EXPERIMENTAL_LSP_TOOL`                | boolescher Wert | Experimentelles LSP-Tool aktivieren                       |
+| `DEEPAGENT_CODE_EXPERIMENTAL_DISABLE_FILEWATCHER`     | boolescher Wert | Dateiüberwachung deaktivieren                             |
+| `DEEPAGENT_CODE_EXPERIMENTAL_EXA`                     | boolescher Wert | Experimentelle Exa-Funktionen aktivieren                  |
+| `DEEPAGENT_CODE_EXPERIMENTAL_LSP_TY`                  | boolescher Wert | TY LSP für Python-Dateien aktivieren                      |
+| `DEEPAGENT_CODE_EXPERIMENTAL_PLAN_MODE`               | boolescher Wert | Planmodus aktivieren                                      |
+| `DEEPAGENT_CODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS`    | boolescher Wert | Hintergrundaufgaben für Subagenten aktivieren             |
+| `DEEPAGENT_CODE_EXPERIMENTAL_EVENT_SYSTEM`            | boolescher Wert | Experimentelles Ereignissystem aktivieren                 |
+| `DEEPAGENT_CODE_EXPERIMENTAL_NATIVE_LLM`              | boolescher Wert | Nativen LLM-Anfragepfad aktivieren                        |
+| `DEEPAGENT_CODE_EXPERIMENTAL_PARALLEL`                | boolescher Wert | Parallele Websuche aktivieren                             |
+| `DEEPAGENT_CODE_EXPERIMENTAL_SCOUT`                   | boolescher Wert | Scout-Subagent aktivieren                                 |
+| `DEEPAGENT_CODE_EXPERIMENTAL_WORKSPACES`              | boolescher Wert | Workspace-Unterstützung aktivieren                        |

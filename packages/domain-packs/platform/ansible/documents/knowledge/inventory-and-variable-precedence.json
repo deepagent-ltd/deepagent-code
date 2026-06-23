@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:ansible:inventory-and-variable-precedence",
+  "type": "knowledge",
+  "title": "Inventory and variable precedence",
+  "description": "Hosts and groups define scope, and variables resolve through a defined precedence from defaults to extra-vars.",
+  "body": "Use when a host ends up with an unexpected variable value. Inventory organizes hosts into groups; variables can be set at role defaults, group_vars, host_vars, play vars, and extra-vars, resolved by a fixed precedence where extra-vars win and defaults lose. Do not assume the nearest-looking definition wins — precedence, not proximity, decides. Actions: trace the value through the precedence order. Validation signals include the resolved value matching the intended source. Risk boundary: an unexpected override can point a play at the wrong environment, so confirm prod-versus-nonprod resolution.",
+  "domain": "ansible",
+  "scope_hint": "platform.ansible:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.ansible",
+  "pack_id": "platform.ansible"
+}

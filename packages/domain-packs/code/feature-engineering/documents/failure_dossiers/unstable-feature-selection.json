@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure_dossier:feat:unstable-feature-selection",
+  "type": "failure_dossier",
+  "description": "Features selected by full-dataset correlation overfit selection and fail to generalize.",
+  "body": "Failure mode: a feature subset is chosen by ranking correlations on the entire dataset and keeping the top-k, so the selection overfits noise and may include leaky or test-contaminated signals that do not hold on new data. Detection signals: a selected set that changes drastically between cross-validation folds, and a holdout metric well below the in-sample selection metric. Do not freeze the unstable subset for production. Safer fallback: compute importance and stability across folds, keep only features stable across folds, exclude any leaky candidates, and confirm the pruned set preserves metric on a fresh holdout.",
+  "domain": "feature_engineering",
+  "scope_hint": "code.feature-engineering:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.feature-engineering:human_authored",
+  "pack_id": "code.feature-engineering"
+}

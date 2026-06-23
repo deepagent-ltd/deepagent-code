@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:robot:fuse-sensors-with-time-and-uncertainty",
+  "type": "strategy",
+  "title": "Fuse sensors using time and uncertainty",
+  "description": "Combine measurements with a state estimator that accounts for each sensor's timestamp, rate, and noise, and degrades safely when one drops.",
+  "body": "Use when multiple sensors estimate the same state (pose, velocity). Do not average raw readings ignoring their noise and timing, and avoid trusting a single sensor without a fallback. Actions: use a Kalman/EKF-style estimator that predicts on the fast input and corrects on each measurement using its covariance and timestamp, and define timeout/outlier handling so a dropped or stale sensor widens uncertainty instead of corrupting the estimate. Validation signals include a fusion test where a dropped measurement degrades gracefully and the estimate tracks ground truth within its covariance. Risk boundary: a fusion that diverges on a dropped sensor can feed a bad state to control and cause unsafe motion; treat missing timeout/outlier handling as a high-severity gap.",
+  "domain": "robotics",
+  "scope_hint": "code.robotics:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.robotics",
+  "pack_id": "code.robotics"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:feat:choose-encoding-by-cardinality",
+  "type": "strategy",
+  "title": "Pick encodings by cardinality and model type",
+  "description": "Match categorical encoding to feature cardinality and the downstream model so representation does not waste capacity or leak.",
+  "body": "Use when turning categorical fields into model inputs. Do not one-hot a high-cardinality field for a linear model — it explodes dimensionality and starves the signal; and do not target-encode without out-of-fold computation. Actions: one-hot low-cardinality fields, use ordinal only for true orderings, learn embeddings for high-cardinality fields in neural models, and compute any target encoding out-of-fold. Validation signals include an encoded matrix whose width is sane for the model and a benchmark comparing encodings on validation. Risk boundary: leaky target encoding inflates metrics; if encoding statistics are fit on the full set, treat it as leakage and refit out-of-fold.",
+  "domain": "feature_engineering",
+  "scope_hint": "code.feature-engineering:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.feature-engineering",
+  "pack_id": "code.feature-engineering"
+}

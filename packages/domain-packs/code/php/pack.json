@@ -1,0 +1,45 @@
+{
+  "schema_version": "domain_pack.v1",
+  "id": "code.php",
+  "name": "PHP, Composer & Laravel/Symfony",
+  "version": "1.0.0",
+  "scope": "system",
+  "risk": "medium",
+  "domains": [
+    "php",
+    "composer",
+    "laravel"
+  ],
+  "provides": [
+    "knowledge",
+    "strategy",
+    "methodology",
+    "skill",
+    "diagnosis",
+    "validation"
+  ],
+  "depends_on": [
+    "code.core",
+    "code.backend.api"
+  ],
+  "conflicts_with": [],
+  "knowledge_store": "document_store",
+  "allowed_tools": [
+    "read",
+    "shell:test"
+  ],
+  "denied_tools": [
+    "shell:deploy-production"
+  ],
+  "data_policy": {
+    "sensitivity": [
+      "source_code"
+    ],
+    "default_admission": "summary_only",
+    "secret_policy": "deny"
+  },
+  "detector": {
+    "inline": "profile.code_domains.some(d=>['php','composer','laravel'].includes(d)) || profile.repo_signals.some(s=>/\\b(php|composer\\.json|phpunit|laravel|symfony|psr-4|artisan|\\.php|namespace App)\\b/i.test(s)) ? 0.9 : 0",
+    "threshold": 0.5
+  }
+}

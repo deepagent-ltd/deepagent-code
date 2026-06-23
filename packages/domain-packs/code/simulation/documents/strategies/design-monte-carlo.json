@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:sim:design-monte-carlo",
+  "type": "strategy",
+  "title": "Design a Monte Carlo estimator with variance control",
+  "description": "Estimate quantities by sampling and report confidence intervals, applying variance reduction where it pays off.",
+  "body": "Use when a quantity is easier to sample than to compute analytically. Do not report a Monte Carlo point estimate without its uncertainty, since the estimate is meaningless without a confidence interval. Actions: define the estimator, run enough samples for the target interval width, and apply variance reduction such as antithetic or stratified sampling where it helps. Validation signals include the estimate converging toward a known expectation and the confidence interval shrinking with sample count. Risk boundary: a high-variance estimator may never converge usefully, so escalate to variance reduction or a different estimator when the interval stays wide.",
+  "domain": "simulation",
+  "scope_hint": "code.simulation:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.simulation",
+  "pack_id": "code.simulation"
+}

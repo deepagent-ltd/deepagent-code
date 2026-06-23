@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:asm:embed-inline-asm-correctly",
+  "type": "methodology",
+  "title": "Embed an inline-asm block correctly",
+  "description": "Add an inline-asm block to C/C++ by declaring its full operand, clobber, and volatility contract and testing across optimization levels.",
+  "body": "Steps: 1. Decide the inputs and outputs and pick the correct operand constraints (register, memory, immediate) for each. 2. List every scratch register the block trashes, plus 'cc' if it touches flags and 'memory' if it reads/writes tracked memory. 3. Mark the block volatile if it has side effects or must not be optimized away or duplicated. 4. Build at -O0 and at -O2/-O3 and compare results against a pure-C reference. 5. Inspect the surrounding disassembly to confirm the compiler scheduled code consistently with the declared effects. Rollback point: keep the C reference as the fallback. Validation: results match the reference at every optimization level; passing only at -O0 means the clobber/constraint contract is understated and must be completed.",
+  "domain": "assembly",
+  "scope_hint": "code.assembly:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.assembly",
+  "pack_id": "code.assembly"
+}

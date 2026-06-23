@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:cpuarch:diagnose-poor-multicore-scaling",
+  "type": "methodology",
+  "title": "Diagnose poor multicore scaling",
+  "description": "When adding threads barely helps, isolate the cause among false sharing, lock contention, memory bandwidth, and NUMA.",
+  "body": "Steps: 1. Plot throughput vs thread count to see where it flattens. 2. Check for false sharing (perf c2c / HITM events) on hot shared lines. 3. Check lock contention (off-CPU / futex wait time) and memory bandwidth saturation. 4. On multi-socket, check remote-access ratio with numastat. 5. Fix the dominant cause first, then re-measure scaling. Rollback point: before restructuring shared data layout. Validation: throughput scales closer to linear and the implicated counter (HITM, bandwidth, remote access) drops; if scaling is bandwidth-bound, more threads cannot help and the fix must reduce traffic, not add parallelism.",
+  "domain": "cpu_arch",
+  "scope_hint": "hardware.cpu-arch:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.cpu-arch",
+  "pack_id": "hardware.cpu-arch"
+}

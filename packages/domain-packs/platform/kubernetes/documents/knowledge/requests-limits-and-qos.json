@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:k8s:requests-limits-and-qos",
+  "type": "knowledge",
+  "title": "Requests, limits, and QoS classes",
+  "description": "Requests drive scheduling and eviction order; CPU limits throttle while memory limits OOMKill; the pair determines QoS.",
+  "body": "Use when sizing containers or debugging eviction/OOM. Requests are what the scheduler reserves and what node pressure eviction protects; limits are hard ceilings. Exceeding a CPU limit throttles the container (latency, not death); exceeding a memory limit triggers OOMKill. With requests==limits for both, the pod is Guaranteed; with some set, Burstable; with none, BestEffort (evicted first). Do not leave memory limit below the real working set or you invite OOMKills. Actions: inspect actual usage, set requests at steady state, give memory limit headroom, verify the resulting QoS class. Validation signals include no OOMKills under load, stable scheduling, and an eviction order that matches priority. Risk boundary: tightening limits on a live workload can cause evictions; verify against metrics first.",
+  "domain": "kubernetes",
+  "scope_hint": "platform.kubernetes:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.kubernetes",
+  "pack_id": "platform.kubernetes"
+}

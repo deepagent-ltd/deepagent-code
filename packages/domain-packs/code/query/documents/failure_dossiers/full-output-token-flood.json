@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:query:full-output-token-flood",
+  "type": "failure_dossier",
+  "description": "Large raw query output was injected into model context instead of being summarized.",
+  "body": "Failure: raw logs, tables, search results, or command output were copied wholesale into the prompt. Impact: token cost increases, relevant facts are diluted, and the model may anchor on noise. Do not use: do not inject full output by default. Recovery: preserve source scope, summarize the answer-bearing facts, mark truncation, and keep raw output outside the model context unless the user explicitly asks for it.. Use when a query task is answered from memory, stale context, or an unbounded dump instead of source evidence. Do not use this dossier as a positive implementation strategy; it is a do-not-use signal. Actions: rerun the read-only query, cite the exact source, narrow the output, and verify the working tree stayed unchanged. Validation signals include command output, file references, count checks, and no edit/diff evidence. Risk boundary: block closure when the request was mutated into a write task or when sensitive data would be exposed.",
+  "domain": "query",
+  "scope_hint": "code.query:negative",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.query",
+  "pack_id": "code.query"
+}

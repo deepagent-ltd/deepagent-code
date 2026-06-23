@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:fpgatf:xdc-sdc-constraint-model",
+  "type": "knowledge",
+  "title": "How XDC and SDC constraints model timing",
+  "description": "Constraint languages declare clocks, input and output delays, and exceptions that define the timing problem STA solves.",
+  "body": "Use when writing or reading timing constraints. Do not treat constraints as suggestions, since they define the entire timing problem the tool optimizes against. Actions: declare clocks first, add input and output delays for I/O, and apply exceptions only where semantics justify. Validation signals include a constraint set that fully defines the timing problem and an STA run with no missing-constraint warnings. Risk boundary: a wrong delay value skews every related path, so flag unverified I/O delays as a source of false slack.",
+  "domain": "fpga_toolflow",
+  "scope_hint": "hardware.fpga-toolflow:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.fpga-toolflow",
+  "pack_id": "hardware.fpga-toolflow"
+}

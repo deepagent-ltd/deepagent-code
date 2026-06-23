@@ -1,0 +1,11 @@
+{
+  "ref_id": "strategy:rust:package-local-command",
+  "type": "strategy",
+  "description": "In Rust, use the package-local commands (cargo build (and cargo build --release) with the workspace's feature flags) rather than a root or generic command.",
+  "body": "In Rust, the real contract lives in the owning package's config; a root or generic command can use the wrong the toolchain channel (rust-toolchain.toml), edition, and enabled features or skip checks. Use when building, testing, or analyzing a specific Rust package, especially in a monorepo. Do not assume a top-level command covers the package, and avoid running a generic command that ignores its config. Actions: find the package's own targets, run cargo build (and cargo build --release) with the workspace's feature flags and cargo test on the affected crate with the relevant features scoped to it, and compare results against the package's configured gate. Validation signals include the package-scoped command log, its exit code, and a cargo clippy -D warnings and rustc lint output pass using the package config. Risk boundary: escalate if no package-local command exists or if it depends on environment you cannot safely provision.",
+  "domain": "rust",
+  "scope_hint": "code.rust:strategies",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.rust:skill_survey",
+  "pack_id": "code.rust"
+}

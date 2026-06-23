@@ -1,0 +1,484 @@
+[
+  {
+    "ref_id": "strategy:svc:make-retryable-operations-idempotent",
+    "type": "strategy",
+    "title": "Make retryable operations idempotent",
+    "summary": "Any operation a caller or queue may retry must produce the same end state whether run once or many times.",
+    "domains": [
+      "backend_service",
+      "service",
+      "queue",
+      "job",
+      "scheduler"
+    ],
+    "triggers": [
+      "idempotent",
+      "retry",
+      "operation",
+      "side",
+      "effect",
+      "exactly-once"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.service"
+  },
+  {
+    "ref_id": "strategy:svc:retry-with-capped-backoff-and-jitter",
+    "type": "strategy",
+    "title": "Retry with capped backoff and jitter",
+    "summary": "Retries use exponential backoff with full jitter, a max attempt count, and only on retryable errors.",
+    "domains": [
+      "backend_service",
+      "service",
+      "queue",
+      "job",
+      "scheduler"
+    ],
+    "triggers": [
+      "retry",
+      "backoff",
+      "jitter",
+      "exponential",
+      "max",
+      "attempts"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.service"
+  },
+  {
+    "ref_id": "strategy:svc:bound-worker-concurrency",
+    "type": "strategy",
+    "title": "Bound worker concurrency and queue depth",
+    "summary": "Workers process with an explicit concurrency limit and bounded queue so load sheds rather than exhausting resources.",
+    "domains": [
+      "backend_service",
+      "service",
+      "queue",
+      "job",
+      "scheduler"
+    ],
+    "triggers": [
+      "concurrency",
+      "limit",
+      "pool",
+      "queue",
+      "depth",
+      "backpressure"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.service"
+  },
+  {
+    "ref_id": "strategy:svc:drain-in-flight-work-on-shutdown",
+    "type": "strategy",
+    "title": "Drain in-flight work on shutdown",
+    "summary": "On SIGTERM the service stops accepting new work, finishes or re-queues in-flight items, then exits within the grace period.",
+    "domains": [
+      "backend_service",
+      "service",
+      "queue",
+      "job",
+      "scheduler"
+    ],
+    "triggers": [
+      "shutdown",
+      "graceful",
+      "sigterm",
+      "drain",
+      "lifecycle",
+      "deadline"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.service"
+  },
+  {
+    "ref_id": "strategy:svc:dead-letter-after-bounded-attempts",
+    "type": "strategy",
+    "title": "Dead-letter after bounded attempts",
+    "summary": "A message that keeps failing is routed to a dead-letter queue after a max-attempt count instead of redelivering forever.",
+    "domains": [
+      "backend_service",
+      "service",
+      "queue",
+      "job",
+      "scheduler"
+    ],
+    "triggers": [
+      "dead-letter",
+      "dlq",
+      "poison",
+      "max",
+      "attempts",
+      "redelivery"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.service"
+  },
+  {
+    "ref_id": "strategy:svc:keep-service-boundaries-cohesive",
+    "type": "strategy",
+    "title": "Keep service boundaries cohesive",
+    "summary": "A service owns its data and exposes intent-level operations; callers do not reach across into another service's storage.",
+    "domains": [
+      "backend_service",
+      "service",
+      "queue",
+      "job",
+      "scheduler"
+    ],
+    "triggers": [
+      "boundary",
+      "cohesion",
+      "ownership",
+      "service",
+      "coupling",
+      "contract"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.service"
+  },
+  {
+    "ref_id": "methodology:svc:add-idempotency-to-an-operation",
+    "type": "methodology",
+    "title": "Add idempotency to an existing operation",
+    "summary": "Introduce an idempotency key and dedup store so a repeated request produces one effect and a stable response.",
+    "domains": [
+      "backend_service",
+      "service",
+      "queue",
+      "job",
+      "scheduler"
+    ],
+    "triggers": [
+      "idempotency",
+      "key",
+      "dedup",
+      "store",
+      "operation",
+      "migrate"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.service"
+  },
+  {
+    "ref_id": "methodology:svc:design-a-retry-policy",
+    "type": "methodology",
+    "title": "Design a retry and timeout policy",
+    "summary": "Choose per-dependency timeouts, retryable error classes, backoff parameters, and an overall deadline budget.",
+    "domains": [
+      "backend_service",
+      "service",
+      "queue",
+      "job",
+      "scheduler"
+    ],
+    "triggers": [
+      "retry",
+      "timeout",
+      "policy",
+      "deadline",
+      "budget",
+      "backoff"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.service"
+  },
+  {
+    "ref_id": "methodology:svc:build-a-safe-queue-consumer",
+    "type": "methodology",
+    "title": "Build a safe queue consumer",
+    "summary": "Construct a consumer with bounded concurrency, idempotent handling, ack-on-success, and dead-lettering.",
+    "domains": [
+      "backend_service",
+      "service",
+      "queue",
+      "job",
+      "scheduler"
+    ],
+    "triggers": [
+      "consumer",
+      "queue",
+      "ack",
+      "concurrency",
+      "handler",
+      "dlq"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.service"
+  },
+  {
+    "ref_id": "methodology:svc:implement-graceful-shutdown",
+    "type": "methodology",
+    "title": "Implement graceful shutdown",
+    "summary": "Wire signal handling, work draining, and a bounded deadline so deploys and scale-downs lose no in-flight work.",
+    "domains": [
+      "backend_service",
+      "service",
+      "queue",
+      "job",
+      "scheduler"
+    ],
+    "triggers": [
+      "shutdown",
+      "signal",
+      "drain",
+      "deadline",
+      "lifecycle",
+      "deploy"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.service"
+  },
+  {
+    "ref_id": "knowledge:svc:delivery-guarantees-and-dedup",
+    "type": "knowledge",
+    "title": "At-least-once vs exactly-once delivery",
+    "summary": "Most queues guarantee at-least-once delivery; exactly-once is achieved by idempotent handlers, not by the transport.",
+    "domains": [
+      "backend_service",
+      "service",
+      "queue",
+      "job",
+      "scheduler"
+    ],
+    "triggers": [
+      "at-least-once",
+      "exactly-once",
+      "delivery",
+      "dedup",
+      "guarantee",
+      "redelivery"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.service"
+  },
+  {
+    "ref_id": "knowledge:svc:idempotency-keys-vs-natural-keys",
+    "type": "knowledge",
+    "title": "Idempotency keys vs natural keys",
+    "summary": "A client idempotency key dedups retries of the same intent; a natural key dedups by business uniqueness.",
+    "domains": [
+      "backend_service",
+      "service",
+      "queue",
+      "job",
+      "scheduler"
+    ],
+    "triggers": [
+      "idempotency",
+      "key",
+      "natural",
+      "unique",
+      "dedup",
+      "constraint"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.service"
+  },
+  {
+    "ref_id": "knowledge:svc:thundering-herd-and-backoff",
+    "type": "knowledge",
+    "title": "Thundering herd and backoff strategy",
+    "summary": "Synchronized retries amplify outages; full jitter spreads load so a recovering dependency is not re-overwhelmed.",
+    "domains": [
+      "backend_service",
+      "service",
+      "queue",
+      "job",
+      "scheduler"
+    ],
+    "triggers": [
+      "thundering",
+      "herd",
+      "backoff",
+      "jitter",
+      "retry",
+      "storm"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.service"
+  },
+  {
+    "ref_id": "knowledge:svc:queue-vs-scheduler-vs-cron",
+    "type": "knowledge",
+    "title": "Job queue vs scheduler vs cron",
+    "summary": "Queues handle event-driven work, schedulers fire time-based work, and naive cron risks overlap and missed runs.",
+    "domains": [
+      "backend_service",
+      "service",
+      "queue",
+      "job",
+      "scheduler"
+    ],
+    "triggers": [
+      "queue",
+      "scheduler",
+      "cron",
+      "job",
+      "interval",
+      "overlap"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.service"
+  },
+  {
+    "ref_id": "skill:svc:audit-job-for-retry-safety",
+    "type": "skill",
+    "title": "Audit a background job for retry safety",
+    "summary": "Read a job/consumer and report whether redelivery is safe, retries back off, and failures are dead-lettered.",
+    "domains": [
+      "backend_service",
+      "service",
+      "queue",
+      "job",
+      "scheduler"
+    ],
+    "triggers": [
+      "audit",
+      "job",
+      "retry",
+      "idempotent",
+      "consumer",
+      "review"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.service"
+  },
+  {
+    "ref_id": "skill:svc:review-graceful-shutdown",
+    "type": "skill",
+    "title": "Review graceful shutdown handling",
+    "summary": "Trace signal handling and draining to report whether in-flight work survives a deploy or scale-down.",
+    "domains": [
+      "backend_service",
+      "service",
+      "queue",
+      "job",
+      "scheduler"
+    ],
+    "triggers": [
+      "shutdown",
+      "drain",
+      "signal",
+      "review",
+      "lifecycle",
+      "deploy"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.service"
+  }
+]

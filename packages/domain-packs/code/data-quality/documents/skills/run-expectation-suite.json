@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:dq:run-expectation-suite",
+  "type": "skill",
+  "title": "Run an expectation suite and report results",
+  "description": "Execute a validation suite against landed data and report which expectations passed/failed with row-level detail.",
+  "body": "Use when checking a dataset's quality. Actions: detect the validation framework (Great Expectations or equivalent) and the target dataset, run the suite, and report each expectation's pass/fail, the failing rows or counts, and which quality dimension each covers. Compare results against the configured thresholds. Do not declare data clean from a partial or unrun suite. This skill exposes capability only and must not gate production promotion without runtime permission. Validation signals include a full suite result with thresholds. Risk boundary: if key dimensions (freshness, completeness, uniqueness) lack checks, report coverage gaps rather than calling the data validated.",
+  "domain": "data_quality",
+  "scope_hint": "code.data-quality:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.data-quality",
+  "pack_id": "code.data-quality"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:redis:bound-memory-with-ttl-and-eviction",
+  "type": "strategy",
+  "title": "Bound memory with TTL and an eviction policy",
+  "description": "Set maxmemory with an appropriate eviction policy and TTLs so the keyspace cannot grow until Redis OOMs.",
+  "body": "Use when keys are created continuously (sessions, cache entries). Do not run with no maxmemory or with noeviction on a pure cache, which lets memory grow until writes fail or the process is killed. Actions: set maxmemory to fit the instance, choose an eviction policy that matches usage (allkeys-lru/allkeys-lfu for a cache, volatile-* if some keys must persist), and give cache entries a TTL. Validation signals include a test under load showing memory plateaus at maxmemory and least-valuable keys are evicted rather than writes failing. Risk boundary: noeviction on a growing cache turns a memory spike into an outage; if some keys must never be evicted, isolate them on a separate instance and flag the mixing.",
+  "domain": "redis",
+  "scope_hint": "code.database.redis:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.redis",
+  "pack_id": "code.database.redis"
+}

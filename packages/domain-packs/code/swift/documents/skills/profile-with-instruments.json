@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:swift:profile-with-instruments",
+  "type": "skill",
+  "title": "Profile time and leaks with Instruments",
+  "description": "Run the Time Profiler and Leaks/Allocations instruments to locate a hotspot or retain cycle and report the responsible call tree.",
+  "body": "Use when an app is slow or memory grows. Actions: build for profiling and run Instruments (Time Profiler for CPU, Allocations/Leaks for memory), reproduce the workload, and read the heaviest stack frames in the call tree or the cycle Leaks reports; for retain cycles inspect strong references in closures and delegate properties. Report the top symbol by self-time or the leaked allocation's backtrace. Do not profile a debug build for timing (optimizations off skews results). This skill exposes capability only and must not attach to another user's process without runtime permission. Validation signals include a call tree where the named function dominates self-time and a Leaks run going clean after the fix. Risk boundary: a retain cycle (strong self in an escaping closure) leaks silently; if Leaks shows growth, recommend [weak self]/unowned and re-verify rather than ignoring the trend.",
+  "domain": "swift",
+  "scope_hint": "code.swift:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.swift",
+  "pack_id": "code.swift"
+}

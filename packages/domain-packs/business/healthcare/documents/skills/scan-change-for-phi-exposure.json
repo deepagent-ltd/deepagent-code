@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:healthcare:scan-change-for-phi-exposure",
+  "type": "skill",
+  "title": "Scan a change for PHI exposure paths",
+  "description": "Inspect a diff for PHI in logs, URLs, error output, unencrypted sinks, and unconsented uses, reporting each exposure with its channel.",
+  "body": "Use when reviewing code that handles patient data. Actions: scan for PHI written to logs or telemetry, identifiers placed in URLs or query strings, PHI in error/exception messages, new storage or transmission lacking encryption, and uses without a checked consent/basis; report each with the channel and a safer pattern. Do not approve a path that logs or transmits PHI in the clear. This skill exposes capability only and must not modify clinical systems or data without runtime permission. Validation signals include a findings list mapping each exposure to a remediation and clean log/URL scans. Risk boundary: advisory only; flag PHI exposures and missing human/clinical gates for human review, and never recommend relaxing privacy, audit, or clinical-safety controls, nor emit medical advice.",
+  "domain": "healthcare",
+  "scope_hint": "business.healthcare:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:business.healthcare",
+  "pack_id": "business.healthcare"
+}

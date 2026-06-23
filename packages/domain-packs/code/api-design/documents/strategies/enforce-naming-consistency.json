@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:apidesign:enforce-naming-consistency",
+  "type": "strategy",
+  "title": "Enforce one naming and casing convention",
+  "description": "Apply a single convention for field names, casing, plurality, and date formats across the whole surface so clients can predict shapes.",
+  "body": "Use when adding fields or endpoints to an existing API. Do not let each endpoint pick its own casing or pluralization. Actions: define a style guide for casing, collection naming, timestamps, and enums; check new fields against it; reuse existing names for the same concept rather than coining synonyms. Validation signals include a consistent shape a client can predict and a lint pass against the style guide. Risk boundary: inconsistent naming forces per-endpoint client code and is costly to unify later, so converge on one convention and apply it uniformly.",
+  "domain": "api_design",
+  "scope_hint": "code.api-design:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.api-design",
+  "pack_id": "code.api-design"
+}

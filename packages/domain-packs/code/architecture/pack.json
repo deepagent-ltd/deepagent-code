@@ -1,0 +1,43 @@
+{
+  "schema_version": "domain_pack.v1",
+  "id": "code.architecture",
+  "name": "Software Architecture",
+  "version": "1.0.0",
+  "scope": "system",
+  "risk": "medium",
+  "domains": [
+    "code",
+    "architecture"
+  ],
+  "provides": [
+    "knowledge",
+    "strategy",
+    "methodology",
+    "skill",
+    "diagnosis",
+    "validation"
+  ],
+  "depends_on": [
+    "code.core"
+  ],
+  "conflicts_with": [],
+  "knowledge_store": "document_store",
+  "allowed_tools": [
+    "read",
+    "shell:test"
+  ],
+  "denied_tools": [
+    "shell:deploy-production"
+  ],
+  "data_policy": {
+    "sensitivity": [
+      "source_code"
+    ],
+    "default_admission": "summary_only",
+    "secret_policy": "deny"
+  },
+  "detector": {
+    "inline": "profile.code_domains.includes('architecture') || profile.repo_signals.some(s=>/\\b(software architecture|architectural boundary|adr|architecture decision|service boundary|bounded context|layering violation)\\b/i.test(s)) ? 0.86 : 0",
+    "threshold": 0.5
+  }
+}

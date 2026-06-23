@@ -1,0 +1,73 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "code.networking",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "networking",
+      "tcp",
+      "http",
+      "retries",
+      "backpressure"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [
+      "performance"
+    ],
+    "repo_signals": [
+      "L3 smoke for code.networking: http client connection and read timeout, retry policy with backoff and idempotency, backpressure, connection pool keep-alive reuse, tls handshake, and partial failure handling"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "plain prose note with no repository or domain signal"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "retrieval_query": "networking http client connection read timeout retry backoff jitter idempotency backpressure connection pool keep-alive tls handshake partial failure",
+  "expected_pack_id": "code.networking",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "code.networking L3 validation smoke",
+    "signals": [
+      "every outbound call sets connect, read, and overall timeouts",
+      "retries are bounded with exponential backoff plus jitter and only for idempotent requests",
+      "client applies backpressure (bounded buffers/concurrency) instead of unbounded queueing",
+      "TLS certificate and hostname verification stay enabled"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "code.networking diagnosis smoke",
+    "signals": [
+      "request hangs because no read/overall timeout is set",
+      "retry storm amplifying load with no backoff or jitter",
+      "a non-idempotent POST retried, producing duplicate effects",
+      "connection pool exhausted or leaking sockets in CLOSE_WAIT",
+      "TLS verification disabled or hostname check skipped"
+    ]
+  },
+  "source_refs": [
+    "source:rfc7230-http:paraphrased",
+    "source:rfc9293-tcp:paraphrased"
+  ]
+}

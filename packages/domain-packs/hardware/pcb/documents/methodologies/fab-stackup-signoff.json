@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:pcb:fab-stackup-signoff",
+  "type": "methodology",
+  "title": "Sign off the fabrication stackup with the vendor",
+  "description": "Confirm the fabricator's actual layer heights and impedance results match the design intent before mass production.",
+  "body": "Use when moving from prototype to a production fabrication run. Do not assume the fab builds exactly the designed stackup, since material availability shifts dielectric heights. Actions: request the fab's proposed stackup, compare impedance results against the design target, and adjust trace geometry if the dielectric differs. Validation signals include a vendor impedance report within tolerance and a stackup drawing matching the design intent. Risk boundary: a silent dielectric substitution shifts impedance out of spec, so escalate any stackup deviation before authorizing the run.",
+  "domain": "pcb",
+  "scope_hint": "hardware.pcb:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.pcb",
+  "pack_id": "hardware.pcb"
+}

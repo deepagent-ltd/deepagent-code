@@ -1,0 +1,73 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "code.ruby",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "ruby",
+      "rails",
+      "bundler"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [
+      "ruby"
+    ],
+    "frameworks": [
+      "rails"
+    ],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "L3 smoke for code.ruby: bundler gemfile.lock, rspec tests, rails conventions and activerecord, strong parameters, and metaprogramming pitfalls"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "plain prose note with no repository or domain signal"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "retrieval_query": "ruby bundler gemfile gemfile.lock rspec rails activerecord migration strong parameters block proc metaprogramming method_missing n+1 includes",
+  "expected_pack_id": "code.ruby",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "code.ruby L3 validation smoke",
+    "signals": [
+      "bundle install reproduces gems from Gemfile.lock with no version drift",
+      "RSpec suite is green and a new model spec exercises validations",
+      "ActiveRecord query uses includes/preload to avoid N+1 verified by query count",
+      "controller permits only intended attributes via strong parameters in a request spec"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "code.ruby diagnosis smoke",
+    "signals": [
+      "Gemfile.lock not committed so machines resolve different gem versions",
+      "N+1 query from iterating an association without includes",
+      "mass-assignment exposure from permitting all params",
+      "method_missing/define_method magic with no test pinning behavior",
+      "block vs proc vs lambda return semantics causing an unexpected method return"
+    ]
+  },
+  "source_refs": [
+    "source:ruby-style-guide:paraphrased",
+    "source:rails-guides:paraphrased"
+  ]
+}

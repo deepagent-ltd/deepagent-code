@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:llm:bound-cost-latency-with-timeouts",
+  "type": "strategy",
+  "title": "Bound every call with timeout, retry, and cost ceilings",
+  "description": "Each model call carries an explicit timeout, a bounded retry policy with backoff, and a token/cost ceiling that fails closed.",
+  "body": "Use when adding or changing any code path that calls a model API. Do not issue a call with no timeout, and avoid retry loops that lack a cap or jittered backoff. Actions: set a per-call timeout; cap retries with exponential backoff and jitter; compute a max-token/max-cost ceiling and reject requests that would exceed it; distinguish retryable (429/5xx/timeout) from terminal (4xx) errors. Validation signals include a test that a hanging call aborts at the timeout and that the retry count and cost ceiling are honored. Risk boundary: an unbounded call or retry storm can exhaust budget or rate limits; treat its absence as a blocking finding.",
+  "domain": "llm_app",
+  "scope_hint": "code.llm-app:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.llm-app",
+  "pack_id": "code.llm-app"
+}

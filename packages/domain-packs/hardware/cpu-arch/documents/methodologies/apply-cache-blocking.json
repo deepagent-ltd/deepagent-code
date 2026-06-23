@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:cpuarch:apply-cache-blocking",
+  "type": "methodology",
+  "title": "Apply cache blocking to a memory-bound loop",
+  "description": "Restructure a nested loop into tiles sized to a cache level so reused data stays resident, cutting memory traffic.",
+  "body": "Steps: 1. Confirm the loop is memory-bound and shows poor reuse (high LLC miss rate in the profile). 2. Identify the reused dimension and the working set per iteration. 3. Tile the loops so each tile's working set fits in the target cache level (often L1/L2). 4. Sweep the tile size empirically and measure miss rates per size. 5. Lock in the size that minimizes misses on representative input. Rollback point: keep the untiled version as the reference. Validation: the LLC/L1 miss rate drops and wall-clock improves on representative data, and results match the untiled reference exactly; a tile size tuned on a tiny benchmark that does not fit production data is not validated.",
+  "domain": "cpu_arch",
+  "scope_hint": "hardware.cpu-arch:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.cpu-arch",
+  "pack_id": "hardware.cpu-arch"
+}

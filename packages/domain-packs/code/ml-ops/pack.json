@@ -1,0 +1,49 @@
+{
+  "schema_version": "domain_pack.v1",
+  "id": "code.mlops",
+  "name": "MLOps (lifecycle, registry, CI/CD for ML)",
+  "version": "1.0.0",
+  "scope": "system",
+  "risk": "medium",
+  "domains": [
+    "mlops",
+    "ml_pipeline",
+    "model_registry",
+    "experiment_tracking",
+    "ml_ci_cd"
+  ],
+  "provides": [
+    "knowledge",
+    "strategy",
+    "methodology",
+    "skill",
+    "diagnosis",
+    "validation"
+  ],
+  "depends_on": [
+    "code.ml-ai",
+    "code.data-engineering",
+    "platform.kubernetes",
+    "code.observability"
+  ],
+  "conflicts_with": [],
+  "knowledge_store": "document_store",
+  "allowed_tools": [
+    "read",
+    "shell:test"
+  ],
+  "denied_tools": [
+    "shell:deploy-production"
+  ],
+  "data_policy": {
+    "sensitivity": [
+      "source_code"
+    ],
+    "default_admission": "summary_only",
+    "secret_policy": "deny"
+  },
+  "detector": {
+    "inline": "profile.code_domains.some(d=>['mlops','ml_pipeline','model_registry','experiment_tracking','ml_ci_cd'].includes(d)) || profile.repo_signals.some(s=>/\\b(mlops|mlflow|weights.?and.?biases|wandb|model registry|experiment tracking|model versioning|data drift|retraining pipeline|ml pipeline|feature store)\\b/i.test(s)) ? 0.9 : 0",
+    "threshold": 0.5
+  }
+}

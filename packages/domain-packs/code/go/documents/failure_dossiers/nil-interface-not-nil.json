@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:go:nil-interface-not-nil",
+  "type": "failure_dossier",
+  "description": "Returning a typed nil pointer through an interface return value, so an `err != nil` check is unexpectedly true.",
+  "body": "Failure mode: a function returns a concrete *MyError that is nil but typed as the error interface; the interface holds a (type, nil-value) pair so `if err != nil` is true even though no error occurred. Detection signals: callers report an error with a nil-ish message; `errors.Is(err, nil)` confusion; the bug appears only when a custom error type is returned. Do not return a typed nil pointer as an interface. Safer fallback: declare the return as error and return literal nil (not a nil *T) on success, or check the concrete value before returning; add a test asserting the success path yields err == nil.",
+  "domain": "go",
+  "scope_hint": "code.go:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.go:human_authored",
+  "pack_id": "code.go"
+}

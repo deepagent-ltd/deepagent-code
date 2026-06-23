@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:wasm:review-an-interop-boundary-change",
+  "type": "methodology",
+  "title": "Review a JS<->WASM interop change",
+  "description": "Check type marshalling, memory ownership, and view lifetimes before accepting a change to the boundary.",
+  "body": "Steps: 1. List the functions and data crossing the boundary in the change. 2. For each non-numeric value, confirm it goes through generated bindings or has a correct, tested manual marshalling (pointer+length+encoding). 3. Verify the ownership contract: who allocates and who frees each linear-memory buffer, freed exactly once. 4. Check that no JS view of memory is cached across a call that can grow the heap. 5. Confirm imports/exports still line up with the loader's import object. Rollback point: the change is reversible per file. Validation: a round-trip test passes for each crossing value and a leak test shows bounded linear memory.",
+  "domain": "wasm",
+  "scope_hint": "code.wasm:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.wasm",
+  "pack_id": "code.wasm"
+}

@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:eval:happy-path-only-dataset",
+  "type": "failure_dossier",
+  "description": "The golden set contains only easy representative cases, so a high average score hides failures on hard and adversarial inputs.",
+  "body": "Failure mode: the eval set is built from typical, easy examples, so the system scores high on average while failing the rare-but-critical and adversarial cases that are never measured. Detection signals: no hard/adversarial/edge segments; a single blended average; production failures on cases absent from the set. Do not report one average over an easy-only set. Safer fallback: deliberately include known failure modes, adversarial inputs, and edge cases, segment scores by case type so weak categories surface, and require failure-case coverage before trusting an aggregate score.",
+  "domain": "eval",
+  "scope_hint": "code.eval:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.eval:human_authored",
+  "pack_id": "code.eval"
+}

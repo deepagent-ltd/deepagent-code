@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure_dossier:hwprot:spi-mode-mismatch",
+  "type": "failure_dossier",
+  "description": "SPI reads return data shifted by one bit or inverted because the controller clock polarity and phase do not match the peripheral.",
+  "body": "Failure mode: the controller samples on the opposite edge from where the peripheral drives data, so every bit lands in the wrong position. Detection signals: a known identity register reading as a shifted or doubled value, results that change when CPHA is toggled, and unstable reads at higher clock rates. Do not trust configuration writes while reads are misaligned. Safer fallback: set CPOL and CPHA to the datasheet values, confirm an identity-register read, and only then resume normal transactions.",
+  "domain": "hw_protocols",
+  "scope_hint": "hardware.protocols:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.protocols:human_authored",
+  "pack_id": "hardware.protocols"
+}

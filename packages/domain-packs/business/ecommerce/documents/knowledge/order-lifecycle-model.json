@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:ecom:order-lifecycle-model",
+  "type": "knowledge",
+  "title": "Order lifecycle model",
+  "description": "Orders move through pending, paid, shipped, delivered, and the terminal cancelled or refunded states.",
+  "body": "Use when reasoning about valid order progression. An order typically flows pending → paid → shipped → delivered, with cancelled reachable before shipment and refunded after payment; cancelled and refunded are terminal. Do not allow a terminal order to re-enter fulfilment or a shipped order to revert to pending. Actions: model these as a directed graph and guard each transition. Validation signals include every persisted status change being a legal edge. Risk boundary: money-affecting transitions (refund) are advisory and defer to business.finance, and backward transitions need human review.",
+  "domain": "ecommerce",
+  "scope_hint": "business.ecommerce:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:business.ecommerce",
+  "pack_id": "business.ecommerce"
+}

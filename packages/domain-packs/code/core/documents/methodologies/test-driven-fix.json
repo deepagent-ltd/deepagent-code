@@ -1,0 +1,11 @@
+{
+  "ref_id": "methodology:test-driven-fix",
+  "type": "methodology",
+  "description": "Run failing test → read error → identify root cause → apply minimal fix → rerun test.",
+  "body": "Run failing test → read error → identify root cause → apply minimal fix → rerun test. Never change tests to make them pass without understanding the root cause. Use when core engineering behavior work touches repository evidence, git state, user instructions, and focused validation output. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: follow the ordered review, edit, and validation sequence; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include git status, focused tests, typecheck output, command logs, and unchanged-user-work checks. Risk boundary: escalate or stop when the task involves overwriting user work, broad rewrites, stale assumptions, or unvalidated completion claims, missing owner evidence, or live external state.",
+  "domain": "code_repair",
+  "scope_hint": "code_repair",
+  "evidence_strength": "strong",
+  "provenance_tag": "deepagent_core",
+  "pack_id": "code.core"
+}

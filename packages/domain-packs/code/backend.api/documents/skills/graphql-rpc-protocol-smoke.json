@@ -1,0 +1,11 @@
+{
+  "ref_id": "skill:backend_api:graphql-rpc-protocol-smoke",
+  "type": "skill",
+  "description": "Run protocol-specific smoke checks for GraphQL resolvers or RPC procedures.",
+  "body": "Inputs: schema or procedure name, local execution command, representative query/mutation/procedure input, and expected output or error envelope. Procedure: for GraphQL, run introspection or schema diff when available, execute success and resolver-error cases, and check nullability plus partial errors; for RPC, execute procedure success and validation failure paths and inspect typed error codes. Do not flatten these protocols into REST-only status checks. Outputs: protocol surface tested, schema or procedure diff, observed success shape, observed error envelope, and client generation status if relevant. Validation signals include expected GraphQL errors array or RPC error code, no accidental nullability break, and generated types matching resolver output. Failure handling: if the test harness only covers internal services, mark external protocol behavior unverified. Use when Backend API work touches repository conventions, toolchain files, changed symbols, validation commands, and runtime output. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: run the documented inspection and validation workflow; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include package-local checks, focused tests, build output, smoke runs, and command logs. Risk boundary: escalate or stop when the task involves broad rewrites, generated-file drift, stale assumptions, and unvalidated behavior changes, missing owner evidence, or live external state.",
+  "domain": "api",
+  "scope_hint": "code.backend.api:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.api:protocol_smoke_skill",
+  "pack_id": "code.backend.api"
+}

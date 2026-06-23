@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:git:resolve-conflicts-by-understanding-both-sides",
+  "type": "strategy",
+  "title": "Resolve conflicts by reconciling intent, not by picking a side",
+  "description": "Read what each side changed and why before editing a conflict hunk, producing a result that preserves both intents rather than discarding one wholesale.",
+  "body": "Use when a merge or rebase stops on conflicting hunks. Do not blindly accept ours or theirs to make the conflict disappear. Actions: inspect both versions with the merge base for context; edit the hunk so both changes survive where they are compatible; remove every conflict marker; re-run the build and tests before continuing. Validation signals include a passing test suite and a diff that reflects both branches' intent. Risk boundary: silently dropping one side's change can reintroduce a fixed bug, so verify behavior with a test rather than trusting the merge.",
+  "domain": "git_workflow",
+  "scope_hint": "code.git-workflow:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.git-workflow",
+  "pack_id": "code.git-workflow"
+}

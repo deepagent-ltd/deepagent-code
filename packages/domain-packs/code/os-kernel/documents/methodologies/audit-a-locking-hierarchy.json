@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:kernel:audit-a-locking-hierarchy",
+  "type": "methodology",
+  "title": "Audit and fix a kernel locking hierarchy",
+  "description": "Establish a global lock ordering, find paths that violate it, and resolve deadlocks surfaced by lockdep under stress.",
+  "body": "Steps: 1. Enumerate the locks on the contended paths and the order each path acquires them. 2. Define one global lock ordering and document it. 3. Find any path that takes locks in a conflicting order (a classic AB-BA deadlock) and any sleeping-in-atomic case. 4. Refactor to acquire locks in the canonical order, or split/scope the lock to remove the inversion. 5. Run the workload under lockdep with stress to confirm no violation. Rollback point: before changing lock scope, which can widen races. Validation: lockdep reports no lock-order violations or deadlocks across the stress workload and the canonical order is documented; a single clean run without lockdep enabled does not prove the hierarchy is sound.",
+  "domain": "kernel",
+  "scope_hint": "code.os-kernel:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.os-kernel",
+  "pack_id": "code.os-kernel"
+}

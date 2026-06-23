@@ -1,0 +1,11 @@
+{
+  "ref_id": "skill:testing:parse-test-failure",
+  "type": "skill",
+  "description": "Extract failing test identity, assertion, expected/actual values, stack location, and fixture context from runner output.",
+  "body": "Inputs: runner output, command, and related test file. Procedure: identify the failing suite and case, copy the assertion or diagnostic that explains expected versus actual behavior, locate the first project-owned stack frame, and note fixture or setup state relevant to the failure. Do not infer root cause beyond what the runner output proves; hand deeper investigation to debugging. Output: a compact failure record with test identity, project location, observed mismatch, and suggested next validation step. Verification signals include stable failure names, file/line references, and whether the failure is assertion, compile, environment, timeout, or snapshot-related. Use when Code Testing work touches test runner output, fixture intent, coverage boundaries, flake history, and negative paths. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: run the documented inspection and validation workflow; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include focused test output, regression tests, fixture assertions, and rerun evidence. Risk boundary: escalate or stop when the task involves testing implementation details only, masking flakes, and claiming coverage without behavior proof, missing owner evidence, or live external state.",
+  "domain": "testing",
+  "scope_hint": "code.testing:skills",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.testing:human_authored",
+  "pack_id": "code.testing"
+}

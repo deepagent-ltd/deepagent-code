@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:lic:detect-incompatible-combinations",
+  "type": "strategy",
+  "title": "Detect incompatible license combinations",
+  "description": "Check pairwise compatibility of the combined license set, since some licenses cannot legally coexist in one distributed work.",
+  "body": "Use when multiple licenses are linked into a single distributed artifact. Do not assume two open-source licenses are automatically combinable. Actions: build the set of effective licenses in the artifact, check known one-way incompatibilities (e.g. Apache-2.0 code cannot be combined into a GPL-2.0-only work; GPL and proprietary cannot be statically linked), and flag the offending pair with the components. Validation signals include a compatibility check over the inventory that lists every conflicting pair, and a test that fails the build on a known-incompatible combination. Risk boundary: a detected incompatibility blocks distribution and is routed to counsel, not resolved by suppressing the warning.",
+  "domain": "license",
+  "scope_hint": "risk.license:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.license",
+  "pack_id": "risk.license"
+}

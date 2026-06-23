@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:scala:pin-the-sbt-build",
+  "type": "strategy",
+  "title": "Pin the sbt build for reproducibility",
+  "description": "Fix sbt, Scala, plugin, and dependency versions so the build resolves identically across machines and CI.",
+  "body": "Use when configuring or changing an sbt build. Do not use dynamic version ranges (latest.release, +) or float the sbt/Scala version. Actions: pin sbt in project/build.properties, set a single scalaVersion, fix plugin versions in project/plugins.sbt, and pin library dependency versions in build.sbt; let coursier cache resolve deterministically. Validation signals include a clean sbt compile/test on a fresh checkout producing the same resolved graph, verified by sbt dependencyTree or a lock plugin. Risk boundary: a dynamic version range makes the build non-reproducible and can pull a breaking release silently into CI or production; treat any latest/+ version as a defect to pin.",
+  "domain": "scala",
+  "scope_hint": "code.scala:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.scala",
+  "pack_id": "code.scala"
+}

@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:architecture:hidden-cycle-via-shared-util",
+  "type": "failure_dossier",
+  "description": "Two modules become mutually dependent through a shared utility, creating a hidden import cycle that couples them.",
+  "body": "Failure mode: module A and module B both grow to depend on a shared 'utils' module that in turn pulls from each, closing a cycle that is invisible in any single file. Detection signals: cycle-detection tool reports a loop through the util; changes in one module force rebuilds/retests of the other; lazy imports added to dodge load-order errors. Do not route cross-module coupling through a grab-bag utility. Safer fallback: split the shared util into focused lower-layer modules with no back-edges, or invert one dependency behind an interface, and confirm the graph is acyclic.",
+  "domain": "code",
+  "scope_hint": "code.architecture:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.architecture:human_authored",
+  "pack_id": "code.architecture"
+}

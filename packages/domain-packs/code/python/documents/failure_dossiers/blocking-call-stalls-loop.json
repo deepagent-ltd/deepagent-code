@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:python:blocking-call-stalls-loop",
+  "type": "failure_dossier",
+  "description": "Calling a synchronous blocking API inside an asyncio coroutine, freezing the entire event loop and all concurrent tasks.",
+  "body": "Failure mode: a coroutine calls requests.get, time.sleep, or a sync DB driver, so while one task blocks no other task on the loop can run and the service appears hung under concurrency. Detection signals: asyncio debug mode logs 'Executing <Task> took 0.5 seconds'; throughput collapses as concurrency rises; latency spikes are serialized. Do not use blocking IO or sleep inside async def. Safer fallback: switch to async clients (httpx/aiohttp), use asyncio.sleep, or wrap unavoidable sync work in asyncio.to_thread / run_in_executor, then confirm via debug-mode slow-callback logs going silent.",
+  "domain": "python",
+  "scope_hint": "code.python:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.python:human_authored",
+  "pack_id": "code.python"
+}

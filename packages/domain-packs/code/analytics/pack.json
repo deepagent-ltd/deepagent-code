@@ -1,0 +1,48 @@
+{
+  "schema_version": "domain_pack.v1",
+  "id": "code.analytics",
+  "name": "Analytics Engineering (OLAP, dbt, metrics layer)",
+  "version": "1.0.0",
+  "scope": "system",
+  "risk": "medium",
+  "domains": [
+    "analytics",
+    "olap",
+    "data_warehouse",
+    "dbt",
+    "metrics_layer"
+  ],
+  "provides": [
+    "knowledge",
+    "strategy",
+    "methodology",
+    "skill",
+    "diagnosis",
+    "validation"
+  ],
+  "depends_on": [
+    "code.data-engineering",
+    "code.sql",
+    "code.data-quality"
+  ],
+  "conflicts_with": [],
+  "knowledge_store": "document_store",
+  "allowed_tools": [
+    "read",
+    "shell:test"
+  ],
+  "denied_tools": [
+    "shell:deploy-production"
+  ],
+  "data_policy": {
+    "sensitivity": [
+      "source_code"
+    ],
+    "default_admission": "summary_only",
+    "secret_policy": "deny"
+  },
+  "detector": {
+    "inline": "profile.code_domains.some(d=>['analytics','olap','data_warehouse','dbt','metrics_layer'].includes(d)) || profile.repo_signals.some(s=>/\\b(dbt model|data warehouse|olap|star schema|snowflake schema|metrics layer|looker|cube\\.js|incremental model|slowly changing dimension|columnar store)\\b/i.test(s)) ? 0.9 : 0",
+    "threshold": 0.5
+  }
+}

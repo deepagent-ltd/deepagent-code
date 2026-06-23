@@ -1,0 +1,11 @@
+{
+  "ref_id": "strategy:lang_kotlin:android-jvm-boundary-check",
+  "type": "strategy",
+  "description": "Distinguish pure JVM Kotlin from Android source sets and lifecycle constraints.",
+  "body": "Use when a repo has Android Gradle Plugin, androidMain/androidTest, or app/library modules. Do not import Android APIs into common JVM modules or assume plain JUnit covers lifecycle behavior. Inspect source sets and Gradle plugins, then pick unit, instrumented, or Robolectric-style validation based on existing setup. Risk boundary includes SDK availability and device/emulator requirements. Use when Kotlin Engineering work touches repository conventions, toolchain files, changed symbols, validation commands, and runtime output. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: choose the smallest direction that preserves the domain contract; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include package-local checks, focused tests, build output, smoke runs, and command logs. Risk boundary: escalate or stop when the task involves broad rewrites, generated-file drift, stale assumptions, and unvalidated behavior changes, missing owner evidence, or live external state.",
+  "domain": "kotlin",
+  "scope_hint": "code.kotlin:strategys",
+  "evidence_strength": "medium",
+  "provenance_tag": "code.kotlin:seed:kotlin_gradle_coroutines_docs:paraphrased",
+  "pack_id": "code.kotlin"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:flutter:treat-state-as-immutable",
+  "type": "strategy",
+  "title": "Treat state as immutable and rebuild from it",
+  "description": "Change UI by producing new state and letting the framework rebuild, not by mutating widgets in place.",
+  "body": "Use when managing widget or app state. Do not mutate a model in place and expect the UI to update, or call setState with no actual state change. Actions: hold state immutably, update it by assigning new values inside setState (for local state) or through the chosen state-management solution (Provider/Riverpod/Bloc) for shared state, so the framework diffs and rebuilds the affected widgets. Validation signals include a widget test that pumping after a state update shows the new UI and that no update is silently dropped. Risk boundary: mutating state outside the framework's update path leaves a stale UI, and putting all state in one giant setState at the top rebuilds the whole tree; scope state to where it is used so rebuilds stay narrow.",
+  "domain": "dart",
+  "scope_hint": "code.dart-flutter:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.dart-flutter",
+  "pack_id": "code.dart-flutter"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:feat:guard-against-target-leakage",
+  "type": "strategy",
+  "title": "Exclude features derived from the target",
+  "description": "Audit each feature for hidden dependence on the label so the model does not learn a proxy for the answer it should predict.",
+  "body": "Use when adding features that are computed near or after the outcome being predicted. Avoid features built from post-outcome aggregates, IDs that encode the label, or fields populated only once the event resolved — they leak the target. Actions: trace each feature's data source and timing, drop any computed from or after the label, and verify by checking that removing a suspiciously strong feature does not collapse a sane baseline. Validation signals include a feature provenance audit and a near-perfect single-feature signal flagged for review. Risk boundary: target leakage produces models that fail completely in production; if a feature's timing relative to the label is unclear, deny its use and escalate for review.",
+  "domain": "feature_engineering",
+  "scope_hint": "code.feature-engineering:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.feature-engineering",
+  "pack_id": "code.feature-engineering"
+}

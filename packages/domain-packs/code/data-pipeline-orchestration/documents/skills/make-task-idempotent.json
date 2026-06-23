@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:orch:make-task-idempotent",
+  "type": "skill",
+  "title": "Make a pipeline task idempotent",
+  "description": "Steps to convert an append-mode task into a date-partitioned overwrite so retries and backfills are safe.",
+  "body": "Use when a task must become safe to retry or backfill. Do not leave it appending rows keyed only on insertion time. Actions: derive the target partition from the execution date, delete-and-replace or merge that partition on each run, key any external side effect by the date so it deduplicates, and verify a second run for the same date yields identical output. Validation signals include a rerun producing the same partition with no duplication and a backfill matching original output. Risk boundary: enabling retries on a still-non-idempotent task multiplies data; if the write cannot be made to overwrite its own date cleanly, deny auto-retry and escalate to redesign the sink before relying on backfills.",
+  "domain": "orchestration",
+  "scope_hint": "code.data-pipeline-orchestration:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.data-pipeline-orchestration",
+  "pack_id": "code.data-pipeline-orchestration"
+}

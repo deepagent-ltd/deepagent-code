@@ -1,0 +1,11 @@
+{
+  "ref_id": "strategy:backend_api:retry-and-timeout-contract",
+  "type": "strategy",
+  "description": "Make retryability, timeout, and duplicate-submit behavior explicit for API operations.",
+  "body": "Apply this when adding mutating endpoints, background-triggering APIs, webhooks, payment-like actions, batch jobs, or client retry logic. Network clients retry after timeouts and partial failures, so duplicate creation or repeated side effects must be considered at the API boundary. This is not a database transaction design rule, though it may require database support. Execution actions include defining idempotency keys or natural uniqueness where appropriate, returning stable outcomes for duplicates, documenting retry-safe status codes, and testing timeout or duplicate-submit paths. Validation signals include duplicate requests producing the same resource or a documented conflict, no double side effect, and clear client guidance from status/error shape. Risk boundary: do not claim idempotency if downstream side effects cannot be deduplicated. Use when Backend API work touches repository conventions, toolchain files, changed symbols, validation commands, and runtime output. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: choose the smallest direction that preserves the domain contract; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include package-local checks, focused tests, build output, smoke runs, and command logs. Risk boundary: escalate or stop when the task involves broad rewrites, generated-file drift, stale assumptions, and unvalidated behavior changes, missing owner evidence, or live external state.",
+  "domain": "api",
+  "scope_hint": "code.backend.api:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.api:idempotency_practice",
+  "pack_id": "code.backend.api"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:sim:estimate-monte-carlo-samples",
+  "type": "skill",
+  "title": "Estimate Monte Carlo samples for a target error",
+  "description": "Derive the sample count needed for a target standard error from the estimator's variance and the square-root law.",
+  "body": "Use when planning how many samples a Monte Carlo run needs. Do not pick a round number arbitrarily, since the error falls only as the square root of the sample count. Actions: estimate the estimator variance from a pilot run, apply the square-root relationship to find the count for the target error, and verify the achieved error after the full run. Validation signals include the achieved standard error meeting the target and the count consistent with the variance estimate. Risk boundary: underestimating the count reports false precision, so flag any sample count derived without a variance estimate.",
+  "domain": "simulation",
+  "scope_hint": "code.simulation:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.simulation",
+  "pack_id": "code.simulation"
+}

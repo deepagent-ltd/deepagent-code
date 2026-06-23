@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:ruby:manage-a-bundler-change",
+  "type": "methodology",
+  "title": "Manage a Bundler dependency change",
+  "description": "Add or upgrade a gem deliberately, regenerating Gemfile.lock and verifying the suite and Ruby version constraints.",
+  "body": "Steps: 1. Add the gem to the Gemfile with a ~> constraint and the right group (:development, :test). 2. Run bundle install (or bundle update <gem> for a targeted bump) and review the Gemfile.lock diff for transitive changes. 3. Confirm the gem supports the project's Ruby version. 4. Run the RSpec suite and any linters (RuboCop). 5. Commit Gemfile and Gemfile.lock together. Rollback point: before committing the lock, since reverting both files restores the prior graph. Validation: a clean bundle install reproduces the same gems and the suite stays green.",
+  "domain": "ruby",
+  "scope_hint": "code.ruby:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.ruby",
+  "pack_id": "code.ruby"
+}

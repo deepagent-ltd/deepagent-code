@@ -1,0 +1,11 @@
+{
+  "ref_id": "methodology:healthcare:healthcare-data-flow-review",
+  "type": "methodology",
+  "description": "Trace PHI from collection to storage, access, logging, export, and deletion.",
+  "body": "Steps: identify PHI fields; trace sinks; inspect access control; inspect audit; check retention/deletion. Use when healthcare engineering work touches PHI flows, patient identifiers, consent state, audit events, clinical workflow boundaries, and access logs. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: follow the ordered review, edit, and validation sequence; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include PHI minimization checks, access-control tests, audit-log assertions, consent-path review, and clinical owner approval where required. Risk boundary: escalate or stop when the task involves medical advice automation, PHI disclosure, unauthorized access, missing audit records, and regulated workflow ambiguity, missing owner evidence, or live external state.",
+  "domain": "healthcare",
+  "scope_hint": "business.healthcare:methodology",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:business.healthcare:skill_survey",
+  "pack_id": "business.healthcare"
+}

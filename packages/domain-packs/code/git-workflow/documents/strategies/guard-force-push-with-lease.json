@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:git:guard-force-push-with-lease",
+  "type": "strategy",
+  "title": "Force-push only with --force-with-lease",
+  "description": "When a push must rewrite remote history, use the lease variant so a teammate's intervening commits abort the push instead of being silently lost.",
+  "body": "Use when a rebase or amend means the remote branch must be updated to a rewritten history. Do not use a plain --force, which overwrites whatever is on the remote regardless of new commits. Actions: fetch first; verify the remote tip is the commit you expect; push with --force-with-lease so the push fails if someone else advanced the branch. Validation signals include a push that aborts when the remote moved, and a remote tip that matches your rebased branch afterward. Risk boundary: any history rewrite on a shared branch is destructive and needs explicit human confirmation before the push.",
+  "domain": "git_workflow",
+  "scope_hint": "code.git-workflow:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.git-workflow",
+  "pack_id": "code.git-workflow"
+}

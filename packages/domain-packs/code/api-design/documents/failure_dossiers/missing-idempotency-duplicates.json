@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:apidesign:missing-idempotency-duplicates",
+  "type": "failure_dossier",
+  "description": "Leaving retry semantics undefined for writes lets a client's network retry create duplicate resources or effects.",
+  "body": "Failure mode: a create operation has no idempotency contract, so when a client retries after a timeout the server processes the request twice and creates two resources. Detection signals: duplicate orders or records appear after transient network errors; clients cannot safely retry; reconciliation finds repeated effects. Do not leave write retry behavior implicit. Safer fallback: define an idempotency-key contract so a repeated key returns the original result within a retention window, and for payments defer the money-movement decision to the finance domain's human gate.",
+  "domain": "api_design",
+  "scope_hint": "code.api-design:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.api-design:human_authored",
+  "pack_id": "code.api-design"
+}

@@ -1,0 +1,11 @@
+{
+  "ref_id": "methodology:testing:reproduce-minimize-fix-verify",
+  "type": "methodology",
+  "description": "Reproduce the failure, minimize input, fix implementation, verify narrow then broad.",
+  "body": "Steps: run the failing command; read the first actionable diagnostic; minimize input or fixture; patch the implementation; rerun the narrow command; run the package gate. Rollback point: before editing shared fixtures.\n\nEvidence boundary: apply only when current task, repository, or validation evidence matches this pack boundary. Do not override a more specific pack or explicit project contract. Use when Code Testing work touches test runner output, fixture intent, coverage boundaries, flake history, and negative paths. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: follow the ordered review, edit, and validation sequence; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include focused test output, regression tests, fixture assertions, and rerun evidence. Risk boundary: escalate or stop when the task involves testing implementation details only, masking flakes, and claiming coverage without behavior proof, missing owner evidence, or live external state.",
+  "domain": "testing",
+  "scope_hint": "code.testing:methodologies",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.testing",
+  "pack_id": "code.testing"
+}

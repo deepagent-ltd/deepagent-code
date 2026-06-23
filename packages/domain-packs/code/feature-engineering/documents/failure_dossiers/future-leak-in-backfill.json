@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure_dossier:feat:future-leak-in-backfill",
+  "type": "failure_dossier",
+  "description": "A training backfill joins feature values recorded after the label, inflating offline metrics.",
+  "body": "Failure mode: a backfill uses a naive join on entity id that attaches the latest available feature value to a historical label, so future information leaks into past training rows and offline metrics look excellent. Detection signals: a model whose validation metric far exceeds any plausible baseline, and a join audit showing feature timestamps after their label timestamps. Do not deploy on the strength of the inflated metric. Safer fallback: rebuild the training set with a point-in-time as-of join that takes only features strictly before each label time, re-evaluate on a temporal holdout, and treat the previous metric as invalid.",
+  "domain": "feature_engineering",
+  "scope_hint": "code.feature-engineering:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.feature-engineering:human_authored",
+  "pack_id": "code.feature-engineering"
+}

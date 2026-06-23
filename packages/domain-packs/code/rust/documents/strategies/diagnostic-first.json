@@ -1,0 +1,11 @@
+{
+  "ref_id": "strategy:rust:diagnostic-first",
+  "type": "strategy",
+  "description": "In Rust, read the first rustc error code (Exxxx) and the borrow/lifetime explanation before making speculative edits.",
+  "body": "In Rust, the toolchain already points at the real problem, so the first rustc error code (Exxxx) and the borrow/lifetime explanation should guide the edit rather than a guess. Use when cargo check, where the borrow checker and trait resolution must pass or cargo clippy -D warnings and rustc lint output reports an error or warning. Do not start editing before reading the diagnostic, and avoid changing code you have not confirmed is implicated. Actions: read the first actionable diagnostic and the owned frame, inspect that location, make the smallest fix, then rerun cargo test on the affected crate with the relevant features. Validation signals include the resolved diagnostic, a passing focused test, and no new warnings from cargo clippy -D warnings and rustc lint output. Risk boundary: if the diagnostic exposes a deeper design fault, escalate rather than papering over it.",
+  "domain": "rust",
+  "scope_hint": "code.rust:strategies",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.rust:skill_survey",
+  "pack_id": "code.rust"
+}

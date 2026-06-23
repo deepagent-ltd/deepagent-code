@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:ansible:notify-handlers-for-side-effects",
+  "type": "strategy",
+  "title": "Notify handlers for service side effects",
+  "description": "Trigger restarts and reloads through handlers that fire only when the changing task reports changed.",
+  "body": "Use when a configuration change must restart or reload a service. Do not restart the service in a separate unconditional task — it then bounces the service on every run even when nothing changed. Actions: have the config task notify a handler, and define the handler to perform the restart; handlers run once at the end only if a notifying task reported changed. Validation signals include the handler firing only on runs where the config actually changed. Risk boundary: handlers do not run if the play fails before the flush — for critical restarts, consider meta: flush_handlers or escalate on partial convergence.",
+  "domain": "ansible",
+  "scope_hint": "platform.ansible:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.ansible",
+  "pack_id": "platform.ansible"
+}

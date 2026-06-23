@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:comp:generate-correct-code-first",
+  "type": "strategy",
+  "title": "Generate correct code before fast code",
+  "description": "Lower the IR to target code that is provably correct (calling convention, evaluation order, side effects) before applying performance-oriented codegen.",
+  "body": "Use when implementing the code-generation/back-end stage. Do not chase optimal instruction selection or register allocation before the straightforward lowering is correct, and do not reorder operations with side effects. Actions: emit a simple correct lowering first (respecting calling convention, evaluation order, and observable side effects), validate it against the source semantics, then layer optimizations behind the same correctness tests. Validation signals include generated programs producing the source-defined results across the corpus, both before and after optimization. Risk boundary: a codegen bug that reorders side effects or mis-handles the ABI corrupts results in ways that look like application bugs; keep the correctness corpus as a gate on every codegen change.",
+  "domain": "compiler",
+  "scope_hint": "code.compiler:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.compiler",
+  "pack_id": "code.compiler"
+}

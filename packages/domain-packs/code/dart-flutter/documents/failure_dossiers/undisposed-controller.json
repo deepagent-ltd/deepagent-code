@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:flutter:undisposed-controller",
+  "type": "failure_dossier",
+  "description": "A controller, subscription, or animation created by a State is never disposed, leaking memory and firing on dead widgets.",
+  "body": "Failure mode: a StatefulWidget's State creates a TextEditingController, AnimationController, StreamSubscription, or Timer but omits the dispose() teardown, so navigating away leaves it alive, growing memory and triggering setState-after-dispose exceptions when callbacks fire on the gone widget. Detection signals: a controller/subscription created in initState with no matching dispose; 'setState() called after dispose()' errors; memory growth across navigation; a ticker still running. Do not create State-owned resources without releasing them. Safer fallback: store each resource on the State, override dispose() to cancel/dispose every one, and add a widget test asserting disposal releases them.",
+  "domain": "dart",
+  "scope_hint": "code.dart-flutter:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.dart-flutter:human_authored",
+  "pack_id": "code.dart-flutter"
+}

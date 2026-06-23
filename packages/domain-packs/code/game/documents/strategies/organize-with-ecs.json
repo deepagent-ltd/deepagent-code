@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:game:organize-with-ecs",
+  "type": "strategy",
+  "title": "Organize game state with an ECS",
+  "description": "Model entities as ids, data as components, and behavior as systems iterating over component sets, instead of deep inheritance hierarchies.",
+  "body": "Use when entity behavior is combinatorial or cache performance matters. Do not build deep GameObject inheritance trees or scatter related data across pointer-chasing objects. Actions: give entities an id, store behavior-free data in components, and write systems that query and process all entities with a given component set; lay components out contiguously for cache-friendly iteration. Validation signals include adding a behavior by composing components without touching unrelated code, and improved cache locality in profiles. Risk boundary: forcing every problem into ECS (e.g. inherently hierarchical UI) adds complexity for no gain — apply ECS where iteration and composition dominate, not everywhere.",
+  "domain": "game",
+  "scope_hint": "code.game:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.game",
+  "pack_id": "code.game"
+}

@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure_dossier:vsearch:embedder-mismatch",
+  "type": "failure_dossier",
+  "description": "Queries are embedded with a different model than the index, collapsing recall with no error raised.",
+  "body": "Failure mode: an index built with one embedding model is queried using a different model or version (or different pooling/normalization), so query and document vectors occupy incomparable spaces and relevant results stop surfacing. Detection signals: a sharp recall drop with no exception, and a config or deploy diff showing the query-time embedder differs from the index-time embedder version. Do not retune ANN parameters to chase the lost recall. Safer fallback: pin the query and index embedding model to the same id and version, re-embed the corpus if the index model is unknown, and verify with a smoke query that a known item returns its known match.",
+  "domain": "vector_search",
+  "scope_hint": "code.vector-search:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.vector-search:human_authored",
+  "pack_id": "code.vector-search"
+}

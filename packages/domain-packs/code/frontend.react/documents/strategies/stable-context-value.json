@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:frontend_react:stable-context-value",
+  "type": "strategy",
+  "title": "Keep context values referentially stable",
+  "description": "Provide a memoized context value and split contexts by update frequency so unrelated consumers do not rerender on every provider render.",
+  "body": "Use when a React Context provider re-renders often or its value is built inline. Do not pass a fresh object/array literal as the provider value each render; every consumer rerenders even if the slice they read is unchanged. Actions: memoize the value with useMemo keyed on its real inputs, split high-churn state (e.g. mouse position) from low-churn config into separate contexts, and verify consumers with the profiler. Validation signals include a render trace where consumers commit only when their data changes. Risk boundary: large fan-out contexts can stall the main thread; escalate to a state library if splitting is insufficient.",
+  "domain": "react",
+  "scope_hint": "code.frontend.react:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.frontend.react",
+  "pack_id": "code.frontend.react"
+}

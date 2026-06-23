@@ -1,0 +1,11 @@
+{
+  "ref_id": "methodology:swift:interop-boundary-check",
+  "type": "methodology",
+  "description": "In Swift, validate the Codable decoding, actor isolation, and Objective-C interop bridging where external data crosses in.",
+  "body": "In Swift, defects cluster at Codable decoding, actor isolation, and Objective-C interop bridging, where assumptions about types, ownership, or encoding stop holding. Use when a change crosses public API, optional vs non-optional signatures, and protocol requirements or consumes data from outside the program. Do not assume the other side honors your contract, and avoid trusting input without checking it. Actions: identify the boundary, test both valid and malformed input, verify the error path, and record the assumptions you are relying on. Validation signals include tests for the failure path, a trace of rejected input, and a documented contract at public API, optional vs non-optional signatures, and protocol requirements. Risk boundary: escalate when the boundary handles untrusted input, crosses a trust/security line, or feeds a system you cannot roll back.",
+  "domain": "swift",
+  "scope_hint": "code.swift:methodologies",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.swift:skill_survey",
+  "pack_id": "code.swift"
+}

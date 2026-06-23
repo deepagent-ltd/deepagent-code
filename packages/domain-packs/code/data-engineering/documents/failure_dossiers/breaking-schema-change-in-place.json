@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:dataeng:breaking-schema-change-in-place",
+  "type": "failure_dossier",
+  "description": "Renaming, dropping, or retyping a column in place on a shared table, breaking every downstream consumer at once.",
+  "body": "Failure mode: a column is renamed or its type changed directly, so all jobs and queries expecting the old shape fail or silently misread on the next run. Detection signals: downstream parse/cast errors appear right after the change; a column referenced everywhere vanishes; the migration has no dual-write or transition. Do not mutate column names/types in place on shared tables. Safer fallback: add the new column as nullable, dual-write through a transition, migrate consumers, then drop the old column with a rollback path.",
+  "domain": "data_engineering",
+  "scope_hint": "code.data-engineering:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.data-engineering:human_authored",
+  "pack_id": "code.data-engineering"
+}

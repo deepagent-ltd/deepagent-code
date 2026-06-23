@@ -1,0 +1,71 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "code.rag",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "rag",
+      "retrieval",
+      "chunking",
+      "rerank",
+      "grounding"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "L3 smoke for code.rag: retrieval augmented generation, document chunking, embedding and vector index, rerank, grounding with citation, semantic search quality eval"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "plain prose note with no repository or domain signal"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "retrieval_query": "rag retrieval augmented generation chunking embedding vector index rerank grounding citation semantic search hallucination context stuffing eval recall",
+  "expected_pack_id": "code.rag",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "code.rag L3 validation smoke",
+    "signals": [
+      "retrieval recall measured on a labeled query set",
+      "every answer claim cites a retrieved passage",
+      "rerank improves top-k relevance over raw retrieval",
+      "context fits the window without dropping cited passages"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "code.rag diagnosis smoke",
+    "signals": [
+      "answer ungrounded in any retrieved passage",
+      "chunks split mid-concept losing context",
+      "embedding/index mismatch with query distribution",
+      "context stuffed past the window truncating evidence",
+      "no abstention when retrieval returns nothing relevant"
+    ]
+  },
+  "source_refs": [
+    "source:dpr-retrieval-paper:paraphrased",
+    "source:rag-survey:paraphrased"
+  ]
+}

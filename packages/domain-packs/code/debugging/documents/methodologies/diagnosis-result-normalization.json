@@ -1,0 +1,11 @@
+{
+  "ref_id": "methodology:debugging:diagnosis-result-normalization",
+  "type": "methodology",
+  "description": "Diagnosis Result Normalization",
+  "body": "Normalize symptoms, evidence refs, suspected cause, blocked refs, and next action.\n\nDerived from local skill survey outputs under /Users/xiuranli/code/agent/skill, especially reviewed canonical rules, coverage reports, and trusted local skill notes. Paraphrased into domain-pack seed form.\n\nSource rule: this is a generalized, paraphrased seed from local skill survey material; apply only with current repository evidence and more specific pack precedence. Use when Code Debugging work touches reproduction steps, stack traces, logs, state transitions, and controlled hypotheses. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: follow the ordered review, edit, and validation sequence; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include minimal repro, before/after trace, regression test, and command output. Risk boundary: escalate or stop when the task involves blind retries, wrapper fixes, broad rewrites, and unproven root cause, missing owner evidence, or live external state.",
+  "domain": "debugging",
+  "scope_hint": "code.debugging:methodologies",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.debugging:skill_survey",
+  "pack_id": "code.debugging"
+}

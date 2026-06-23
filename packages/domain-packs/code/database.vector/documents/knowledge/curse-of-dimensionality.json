@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:vdb:curse-of-dimensionality",
+  "type": "knowledge",
+  "title": "High dimensionality erodes distance contrast",
+  "description": "As dimensions grow, distances between points concentrate, making nearest-neighbour search less discriminative and indexes less effective.",
+  "body": "Reference for reasoning about embedding dimensionality. In very high-dimensional spaces, the ratio between nearest and farthest distances shrinks toward one, so neighbours become less distinguishable and ANN structures lose pruning power. Use when an embedding is unusually wide or recall is mediocre despite tuning. Do not assume more dimensions always means better retrieval; beyond what the model needs, extra dimensions add cost without signal. Validation signals include comparable recall at a reduced dimensionality after a dimensionality-reduction or a smaller model. Risk boundary: reducing dimensions changes the semantic space, so re-benchmark relevance, not just recall, before adopting a narrower embedding.",
+  "domain": "vector_db",
+  "scope_hint": "code.database.vector:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.vector",
+  "pack_id": "code.database.vector"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:healthcare:track-consent-and-authorization",
+  "type": "methodology",
+  "title": "Track consent and authorization for PHI use",
+  "description": "Verify that each use or disclosure of patient data is covered by a recorded consent or lawful basis, and enforce that scope in code.",
+  "body": "Steps: 1. Enumerate the purposes for which the data will be used or disclosed. 2. Confirm a recorded consent or lawful basis exists for each purpose and capture its scope and expiry. 3. Enforce purpose limitation in code so data is not used beyond its consented scope. 4. Honor withdrawal: stop the use and propagate deletion/restriction where required. 5. Audit every use against its basis. Rollback point: before enabling a new use of existing data. Validation: each use maps to a recorded consent/basis, and a test shows out-of-scope use is blocked and withdrawal is honored. Risk boundary: advisory only; a use lacking a recorded basis must be denied and escalated to a human, never enabled on assumption of consent.",
+  "domain": "healthcare",
+  "scope_hint": "business.healthcare:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:business.healthcare",
+  "pack_id": "business.healthcare"
+}

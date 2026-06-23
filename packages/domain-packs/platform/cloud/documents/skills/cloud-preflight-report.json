@@ -1,0 +1,11 @@
+{
+  "ref_id": "skill:cloud:cloud-preflight-report",
+  "type": "skill",
+  "description": "Produce a preflight report for cloud deployment readiness.",
+  "body": "Inputs: IaC/config and intended environment. Output: blockers, approval requirements, and evidence refs.\n\nDerived from local skill survey outputs under /Users/xiuranli/code/agent/skill, especially reviewed canonical rules, coverage reports, and trusted local skill notes. Paraphrased into domain-pack seed form.\n\nSkill contract: expose this as an index-visible capability for high/max/ultra, but load body only when triggers and permissions match. Use when Cloud Platform work touches environment state, artifacts, permissions, logs, deployment descriptors, and rollback evidence. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: run the documented inspection and validation workflow; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include dry-run output, local smoke, artifact checks, config diffs, and rollback notes. Risk boundary: escalate or stop when the task involves external state drift, secret exposure, irreversible changes, and unowned operational impact, missing owner evidence, or live external state.",
+  "domain": "cloud",
+  "scope_hint": "platform.cloud:skills",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:platform.cloud:skill_survey",
+  "pack_id": "platform.cloud"
+}

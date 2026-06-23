@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:helm:chart-versioning-release",
+  "type": "methodology",
+  "title": "Version a chart deliberately with SemVer and appVersion",
+  "description": "Bump the chart version on any template/values change and appVersion to track the shipped app, so consumers see meaningful upgrades.",
+  "body": "Use when releasing a new cut of a chart. Do not reuse a chart version after editing templates or conflate chart version with the app version. Actions: bump Chart.yaml version per SemVer (patch for fixes, minor for additive values, major for breaking value/selector changes), set appVersion to the application image tag it deploys, and document breaking changes in the chart's notes. Validation signals include consumers seeing a new version on helm repo update and a major bump accompanying any breaking values change. Risk boundary: shipping a breaking change as a non-major bump misleads operators and should be corrected before publishing.",
+  "domain": "helm",
+  "scope_hint": "platform.helm:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.helm",
+  "pack_id": "platform.helm"
+}

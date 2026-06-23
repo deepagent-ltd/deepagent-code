@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:sls:diagnose-cold-start-latency",
+  "type": "methodology",
+  "title": "Diagnose and reduce cold-start latency",
+  "description": "Separate init from execution duration in traces, find the dominant init cost, and reduce it before reaching for provisioned concurrency.",
+  "body": "Steps: 1. Pull traces/metrics and split init duration from invocation duration at p50/p99. 2. Confirm spikes correlate with new-instance (cold) starts. 3. Attribute init cost: package size/download, runtime startup, dependency loading, connection setup. 4. Reduce the dominant factor (trim deps, lazy-load, move client init to module scope, smaller runtime). 5. Re-measure; only if still insufficient and latency-critical, apply provisioned concurrency. Rollback point: before enabling provisioned concurrency (a cost change). Validation: measured init p99 drops and tail latency improves; enabling always-on concurrency without first reducing init cost masks the problem and adds spend.",
+  "domain": "serverless",
+  "scope_hint": "code.backend.serverless:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.serverless",
+  "pack_id": "code.backend.serverless"
+}

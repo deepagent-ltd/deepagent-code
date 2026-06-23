@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:bazel:non-deterministic-output-cache-poison",
+  "type": "failure_dossier",
+  "description": "An action embedding timestamps or unstable ordering produces different outputs from identical inputs, poisoning the shared cache.",
+  "body": "Failure mode: an output bakes in a build timestamp, absolute path, or nondeterministic iteration order, so two builds of the same inputs differ. Detection signals: byte diffs between repeated builds; cache never hits for the action; downstream targets rebuild needlessly. Do not accept outputs that vary without input changes. Safer fallback: strip timestamps, sort collections, use stable relative paths, and confirm byte-identical outputs across repeated and cross-machine builds before trusting the cache.",
+  "domain": "bazel",
+  "scope_hint": "code.build.bazel:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.build.bazel:human_authored",
+  "pack_id": "code.build.bazel"
+}

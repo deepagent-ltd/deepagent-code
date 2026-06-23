@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:sys:process-fork-exec-and-zombies",
+  "type": "knowledge",
+  "title": "Fork, exec, and zombie reaping",
+  "description": "fork duplicates the process and exec replaces its image; a child that exits stays a zombie until the parent waits for it.",
+  "body": "Use when spawning subprocesses. fork() creates a child copy of the process (copy-on-write memory, duplicated fds), and exec() replaces the child's image with a new program; the child inherits open fds unless they are marked close-on-exec. When a child exits, the kernel keeps its exit status as a zombie entry until the parent reaps it with wait/waitpid; failing to reap leaks process-table slots. Do not ignore SIGCHLD or forget to wait. Actions: set CLOEXEC on fds you do not want inherited, reap children in a loop (waitpid with WNOHANG), and handle SIGCHLD safely. Validation signals include no accumulating zombie/defunct processes and children not inheriting stray fds. Risk boundary: leaking fds into children can expose secrets or hold resources; leaking zombies eventually exhausts the process table.",
+  "domain": "systems",
+  "scope_hint": "code.systems:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.systems",
+  "pack_id": "code.systems"
+}

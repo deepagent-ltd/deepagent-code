@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:dist:why-time-is-hard",
+  "type": "knowledge",
+  "title": "Why distributed time is hard",
+  "description": "Independent clocks drift and NTP only bounds skew loosely, so wall-clock ordering across nodes is unsafe; logical clocks capture causality instead.",
+  "body": "Use when a design wants to order or expire events using time. Physical clocks on different nodes drift and NTP corrections can jump backward, so two events' wall-clock timestamps cannot reliably establish which happened first; bounded-uncertainty clocks (TrueTime) work only with explicit error intervals and waits. Lamport clocks give a consistent total order proxy and vector clocks detect true concurrency. Do not use timestamps as version numbers across nodes, and avoid expiry logic that assumes synchronized clocks. Actions: replace cross-node time comparisons with logical clocks or uncertainty-aware waits. Validation signals include correct causality classification under injected skew. Risk boundary: last-write-wins by wall clock silently drops writes under skew; treat it as data-loss-prone and prefer causal merge.",
+  "domain": "distributed",
+  "scope_hint": "code.distributed:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.distributed",
+  "pack_id": "code.distributed"
+}

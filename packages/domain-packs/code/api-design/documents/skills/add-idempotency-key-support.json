@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:apidesign:add-idempotency-key-support",
+  "type": "skill",
+  "title": "Add idempotency-key support to a write",
+  "description": "Define and document idempotency-key semantics for an unsafe operation so retries return the original result instead of duplicating effects.",
+  "body": "Use when a create or other non-idempotent operation needs safe retries in its contract. Do not leave the retry behavior implicit. Actions: specify the idempotency-key header on the operation; define that a repeated key returns the original response within a retention window; document conflicts when a key is reused with a different body. Validation signals include a retried request returning the first result with no duplicate created. Risk boundary: for money movement defer to the finance domain and require its gate; here, define the contract so clients can retry without duplicates.",
+  "domain": "api_design",
+  "scope_hint": "code.api-design:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.api-design",
+  "pack_id": "code.api-design"
+}

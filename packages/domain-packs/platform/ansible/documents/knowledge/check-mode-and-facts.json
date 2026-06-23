@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:ansible:check-mode-and-facts",
+  "type": "knowledge",
+  "title": "Check mode and facts",
+  "description": "Check mode predicts changes without applying them, and gathered facts describe each host's current state.",
+  "body": "Use when previewing changes or branching on host state. Check mode (--check) runs tasks in predict-only mode and reports what would change, best paired with --diff; gather_facts collects host attributes (OS, network, hardware) into variables you can condition on. Do not trust check mode blindly — some modules cannot simulate accurately and may understate impact. Actions: review the diff and confirm fact-based conditionals against real facts. Validation signals include the predicted changes matching the eventual apply. Risk boundary: disabling fact gathering for speed removes the data conditionals rely on, which can misroute tasks.",
+  "domain": "ansible",
+  "scope_hint": "platform.ansible:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.ansible",
+  "pack_id": "platform.ansible"
+}

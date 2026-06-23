@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:finance:idempotent-money-movement",
+  "type": "strategy",
+  "title": "Make money movement idempotent by key",
+  "description": "Require a caller-supplied idempotency key on payment and transfer operations so a retry settles the transaction at most once.",
+  "body": "Use when designing an endpoint that charges, refunds, or transfers money. Do not let a network retry or duplicate request create a second charge, and avoid keying idempotency on mutable fields. Actions: require a unique idempotency key per logical operation, persist the key with the result before responding, and return the original result on a repeat key rather than re-executing; inspect that concurrent duplicates collapse to one effect. Validation signals include a test where the same key sent twice produces one ledger entry and a stored idempotency record per operation. Risk boundary: this is advisory only and not a payment-compliance sign-off; actual money movement must still pass a human approval gate, and an ambiguous duplicate must be escalated, never auto-resolved by charging again.",
+  "domain": "finance",
+  "scope_hint": "business.finance:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:business.finance",
+  "pack_id": "business.finance"
+}

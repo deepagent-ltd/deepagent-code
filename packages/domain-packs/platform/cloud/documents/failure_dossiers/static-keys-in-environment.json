@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:cloud:static-keys-in-environment",
+  "type": "failure_dossier",
+  "description": "Long-lived static cloud access keys embedded in environment variables, images, or config instead of using a managed identity and secrets store.",
+  "body": "Failure mode: a workload authenticates with long-lived access keys baked into env vars or an image, so the keys never rotate, appear in logs and snapshots, and grant standing access if leaked. Detection signals: secret scanners find access keys in images/config; credentials lack rotation; the same key is reused across environments. Do not relocate the key to another plaintext store as a fix. Safer fallback: use a workload/managed identity or fetch short-lived credentials from the secrets manager with rotation, and scope access per identity. Risk boundary: rotate any exposed key immediately and escalate the disclosure rather than leaving it in place.",
+  "domain": "platform",
+  "scope_hint": "platform.cloud:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.cloud:human_authored",
+  "pack_id": "platform.cloud"
+}

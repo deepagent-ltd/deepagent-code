@@ -1,0 +1,70 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "code.backend.multi-tenant",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "multi_tenant",
+      "tenant_isolation",
+      "scoped_query",
+      "tenant_routing"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "L3 smoke for code.backend.multi-tenant: isolation models silo pool bridge, row-level security, scoped queries carrying tenant id, cross-tenant leak prevention, noisy neighbor, per-tenant config, tenant-aware caching"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "write a verilog testbench for the FSM"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "retrieval_query": "multi-tenant tenant isolation scoped query row-level security cross-tenant leak noisy neighbor tenant routing per-tenant cache",
+  "expected_pack_id": "code.backend.multi-tenant",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "code.backend.multi-tenant L3 validation smoke",
+    "signals": [
+      "every data-access path includes the tenant id in its filter, verified by a negative cross-tenant test",
+      "a request authenticated as tenant A cannot read or mutate tenant B data through any endpoint",
+      "row-level security policies reject a query whose tenant context does not match the row",
+      "a cache key includes the tenant so one tenant never receives another tenant's cached response"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "code.backend.multi-tenant diagnosis smoke",
+    "signals": [
+      "a query fetches by id without a tenant predicate, allowing access to another tenant's row",
+      "a cache entry is keyed without the tenant, returning tenant A's data to tenant B",
+      "a background job processes records across tenants without scoping to one",
+      "one tenant's heavy load degrades latency for all others sharing the pool",
+      "tenant context is read from a request field a client can forge rather than the authenticated principal"
+    ]
+  },
+  "source_refs": [
+    "aws-saas-lens:tenant-isolation-strategies",
+    "postgres-docs:row-level-security-policies"
+  ]
+}

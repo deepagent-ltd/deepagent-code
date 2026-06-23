@@ -1,0 +1,12 @@
+{
+  "ref_id": "failure_dossier:privacy:collect-just-in-case",
+  "type": "failure_dossier",
+  "title": "Collect just in case",
+  "description": "A feature stores optional personal fields because they may be useful later.",
+  "body": "Failure mode: code adds profile attributes, analytics payload fields, debug context, or support bundle content without a current purpose. The data then becomes leak, retention, and deletion surface. Detection signals include unused columns, broad object serialization, nullable personal fields never read by the feature, and tests that pass without the field. Remediation is remove or defer collection and use synthetic or aggregate alternatives. Human gate is required if product owners claim future use without documented purpose. Use when a proposed approach skips personal-data classes, sinks, retention, consent, logs, prompts, and exports or claims success without domain evidence. Do not use this dossier as a positive implementation strategy; it is a do-not-use signal. Actions: block the shortcut, name the missing evidence, and switch to a safer methodology or ask for human approval. Validation signals include absence or contradiction in data inventory, redaction tests, retention checks, export/delete tests, and approval evidence. Risk boundary: treat repeated recurrence as a blocker when it can cause PII disclosure, consent bypass, retention drift, and unapproved processor expansion.",
+  "domain": "data_minimization",
+  "scope_hint": "risk.privacy:failure_dossiers",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.privacy",
+  "pack_id": "risk.privacy"
+}

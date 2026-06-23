@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:robot:bring-up-a-control-loop",
+  "type": "methodology",
+  "title": "Bring up and tune a control loop safely",
+  "description": "Stand up a control loop incrementally with limits and stop in place before tuning gains on real hardware.",
+  "body": "Steps: 1. Implement the loop with actuator limits and an emergency stop active from the first command. 2. Validate timing in simulation: fixed period, bounded jitter, no missed cycles. 3. Tune gains in simulation against a model, checking step response for stability and overshoot. 4. Move to hardware at reduced authority (low speed/torque), verifying limits and stop work. 5. Increase authority gradually while watching for oscillation or saturation. Rollback point: before raising gains or actuator authority. Validation: the loop is stable in sim and on hardware at full authority with bounded jitter, and the stop halts motion at every stage; never tune aggressive gains directly on hardware without limits and a tested stop in place.",
+  "domain": "robotics",
+  "scope_hint": "code.robotics:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.robotics",
+  "pack_id": "code.robotics"
+}

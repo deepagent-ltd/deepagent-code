@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:cmake:register-tests-with-ctest",
+  "type": "strategy",
+  "title": "Register tests so ctest can drive them",
+  "description": "Enable testing and add each test through add_test so the suite runs uniformly under ctest in local and CI builds.",
+  "body": "Use when a project has tests that should run as part of the build workflow. Do not invoke test binaries by hand outside the build system. Actions: call enable_testing or include(CTest); register tests with add_test naming the command; set properties like labels and timeouts; run ctest from the build dir. Validation signals include ctest discovering and passing every test, and a non-zero exit on failure that CI can gate on. Risk boundary: tests not registered with ctest are easy to forget in CI, so wire them into the build rather than leaving them manual.",
+  "domain": "cmake",
+  "scope_hint": "code.build.cmake:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.build.cmake",
+  "pack_id": "code.build.cmake"
+}

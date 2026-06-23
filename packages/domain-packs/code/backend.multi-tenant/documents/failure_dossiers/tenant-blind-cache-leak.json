@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:mt:tenant-blind-cache-leak",
+  "type": "failure_dossier",
+  "description": "Caching tenant-scoped data under a key that omits the tenant serves one tenant's cached values to another.",
+  "body": "Failure mode: a cache key is built from a resource id or query without the tenant, so the first tenant to populate it determines what every tenant sees. Detection signals: tenant B receives tenant A's data on a cache hit; the cache key contains no tenant component; the leak appears only under cache hits. Do not cache tenant data with a tenant-blind key. Safer fallback: include the tenant id in every cache key, scope invalidation per tenant, verify with a test that values never cross tenants, and treat any occurrence as a leak requiring escalation.",
+  "domain": "multi_tenant",
+  "scope_hint": "code.backend.multi-tenant:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.multi-tenant:human_authored",
+  "pack_id": "code.backend.multi-tenant"
+}

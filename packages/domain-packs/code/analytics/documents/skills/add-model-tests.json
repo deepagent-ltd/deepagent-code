@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:analytics:add-model-tests",
+  "type": "skill",
+  "title": "Add data tests to a dbt model",
+  "description": "Steps to attach uniqueness, not-null, relationship, and freshness tests so bad data fails the build, not the dashboard.",
+  "body": "Use when a model lacks tests and feeds consumers. Do not rely on spot-checking output — silent failures surface as wrong dashboards days later. Actions: declare unique and not-null tests on the primary key, relationship tests to parent dimensions, accepted-values tests on enums, and source-freshness checks; wire them into CI and scheduled runs. Validation signals include a CI run executing the tests and a build that fails on seeded duplicate or orphaned keys. Risk boundary: an untested model lets a broken join propagate warehouse-wide; if key and relationship tests are missing, treat the model as unsafe to publish and add them before exposing it to consumers.",
+  "domain": "analytics",
+  "scope_hint": "code.analytics:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.analytics",
+  "pack_id": "code.analytics"
+}

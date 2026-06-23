@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:fpgatf:metastability-cdc-risk",
+  "type": "knowledge",
+  "title": "Metastability and clock-domain-crossing risk",
+  "description": "A flip-flop sampled near a clock edge can go metastable, so asynchronous crossings need synchronizers to bound the failure rate.",
+  "body": "Use when reasoning about why CDC needs special handling. Do not let STA time an asynchronous crossing as synchronous, because the launch and capture clocks have no fixed relationship. Actions: identify each crossing, ensure a multi-flop synchronizer or handshake bounds the metastability window, and apply asynchronous constraints. Validation signals include every crossing covered by a synchronizer and a CDC report free of unsynchronized crossings. Risk boundary: metastability failures are rare and intermittent, so treat any unsynchronized crossing as a latent field failure.",
+  "domain": "fpga_toolflow",
+  "scope_hint": "hardware.fpga-toolflow:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.fpga-toolflow",
+  "pack_id": "hardware.fpga-toolflow"
+}

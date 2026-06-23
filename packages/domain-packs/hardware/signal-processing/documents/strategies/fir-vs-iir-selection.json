@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:sigproc:fir-vs-iir-selection",
+  "type": "strategy",
+  "title": "Pick FIR or IIR by phase and stability needs",
+  "description": "Choose FIR for guaranteed stability and linear phase, IIR when low order and sharp cutoff matter more than phase linearity.",
+  "body": "Use when a filter spec lists both phase and order constraints. Do not reach for an IIR design when the signal carries timing-sensitive edges that phase distortion would smear. Actions: compare the required stopband attenuation against the order budget, run a linear-phase check on the FIR candidate, and record group-delay flatness. Validation signals include a measured constant group delay for the FIR path and a pole-radius test confirming every IIR pole sits inside the unit circle. Risk boundary: an unstable IIR ships oscillation into production, so deny any IIR design whose poles cannot be proven bounded.",
+  "domain": "signal_processing",
+  "scope_hint": "hardware.signal-processing:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.signal-processing",
+  "pack_id": "hardware.signal-processing"
+}

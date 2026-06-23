@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:electron:why-context-isolation-matters",
+  "type": "knowledge",
+  "title": "Why context isolation matters",
+  "description": "Context isolation runs preload and page scripts in separate JS contexts so a compromised page cannot tamper with privileged objects.",
+  "body": "Use when justifying isolation settings. Without context isolation, page scripts and preload share one JS context, so an XSS or malicious script can override prototypes and reach anything the preload touched (including Node if enabled); with isolation, the page and preload run in separate worlds and communicate only through the explicit contextBridge surface. Do not treat isolation as optional hardening. Actions: keep isolation on and expose only vetted functions. Validation signals include page scripts being unable to mutate or reach preload internals. Risk boundary: a single XSS in a non-isolated, Node-enabled renderer escalates to full machine compromise — isolation is the wall that contains a web-layer bug to the web layer.",
+  "domain": "electron",
+  "scope_hint": "code.desktop.electron:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.desktop.electron",
+  "pack_id": "code.desktop.electron"
+}

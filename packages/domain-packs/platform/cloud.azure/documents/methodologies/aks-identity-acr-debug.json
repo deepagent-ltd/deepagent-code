@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:azure:aks-identity-acr-debug",
+  "type": "methodology",
+  "title": "Debug AKS workload identity and ACR pull failures",
+  "description": "Trace ImagePullBackOff and API auth errors to the kubelet identity's AcrPull role or the workload identity federation, not the pod spec alone.",
+  "body": "Use when an AKS pod fails to pull an image or authenticate to Azure. Do not assume the manifest is wrong. Actions: for ImagePullBackOff confirm the kubelet (or AKS cluster) identity has the AcrPull role on the registry; for app auth confirm AKS Workload Identity is enabled, the federated credential maps the KSA to the user-assigned managed identity, and the pod has the right service-account annotation. Validation signals include the image pulling after AcrPull is granted and the pod fetching a token via the federated identity. Risk boundary: granting registry or data-plane roles in production is human-gated.",
+  "domain": "azure",
+  "scope_hint": "platform.cloud.azure:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.cloud.azure",
+  "pack_id": "platform.cloud.azure"
+}

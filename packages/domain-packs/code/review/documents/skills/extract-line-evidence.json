@@ -1,0 +1,11 @@
+{
+  "ref_id": "skill:review:extract-line-evidence",
+  "type": "skill",
+  "description": "Collect precise source locations and surrounding behavior evidence for review findings.",
+  "body": "Inputs: changed files, suspected behavior, and any test or log artifacts. Procedure: inspect the exact changed lines, then read enough surrounding code to understand preconditions and callers. Record the smallest line or symbol reference that proves the issue and one sentence describing the trigger. If command output is needed, use read-only commands such as diff, test listing, or focused test execution and retain the relevant diagnostic lines. Do not edit files or rewrite the patch while using this skill. Output: a finding-ready evidence record with location, trigger, consequence, severity candidate, and verification status. Failure handling: if the evidence is only a suspicion, mark it residual risk rather than a confirmed defect. Use when Code Review work touches diff hunks, line evidence, tests, contracts, and blast radius. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: run the documented inspection and validation workflow; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include file/line citations, failing or missing tests, reproduced behavior, and residual-risk notes. Risk boundary: escalate or stop when the task involves unsupported findings, severity inflation, hidden fixes, and ignoring user constraints, missing owner evidence, or live external state.",
+  "domain": "review",
+  "scope_hint": "code.review:skills",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.review:human_authored",
+  "pack_id": "code.review"
+}

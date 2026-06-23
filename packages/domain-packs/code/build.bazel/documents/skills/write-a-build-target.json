@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:bazel:write-a-build-target",
+  "type": "skill",
+  "title": "Write a BUILD target with correct deps and visibility",
+  "description": "Add a library or binary target to a BUILD file with precise srcs, deps, and visibility, then verify the graph with bazel query.",
+  "body": "Use when adding a component to a Bazel package. Do not over-broaden deps or default visibility to public. Actions: declare the target with its srcs; list only the deps it directly uses; set visibility to the packages that should consume it; run bazel build and bazel query to confirm edges. Validation signals include a successful build, a query graph matching intent, and a visibility error for unauthorized consumers. Risk boundary: broad deps or public visibility couple the graph and force large rebuilds, so keep both narrow and verify with query.",
+  "domain": "bazel",
+  "scope_hint": "code.build.bazel:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.build.bazel",
+  "pack_id": "code.build.bazel"
+}

@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:android:blocking-main-thread-anr",
+  "type": "failure_dossier",
+  "description": "Performing synchronous network, disk, or database work on the main thread, freezing the UI and triggering an ANR.",
+  "body": "Failure mode: a blocking call (sync HTTP, file/Room access, big decode) runs on the UI thread, so under slow conditions it exceeds the ANR threshold and the system shows the Not Responding dialog and may kill the app. Detection signals: ANR reports in Play vitals; StrictMode flags main-thread disk/network; the UI freezes during loads. Do not block the main thread. Safer fallback: move the work into a coroutine on Dispatchers.IO/Default (via viewModelScope), suspend instead of block, post results back to the main dispatcher, and verify under slow-network/large-data stress.",
+  "domain": "android",
+  "scope_hint": "code.mobile.android:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.mobile.android:human_authored",
+  "pack_id": "code.mobile.android"
+}

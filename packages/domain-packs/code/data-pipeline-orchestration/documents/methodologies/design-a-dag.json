@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:orch:design-a-dag",
+  "type": "methodology",
+  "title": "Design a DAG from dependencies and grain",
+  "description": "Lay out tasks by their true data dependencies with idempotent, date-parameterized units before wiring schedules.",
+  "body": "Use when building a new pipeline DAG. Do not chain tasks by convenient ordering — encode the real data dependencies so the scheduler can parallelize and recover correctly. Actions: identify each task's inputs and outputs, draw edges only for true dependencies, make each task idempotent and parameterized by execution date, and set fan-out where independent work can run in parallel. Validation signals include a DAG whose edges match real data dependencies and tasks that rerun cleanly for a given date. Risk boundary: false or missing dependencies cause races or wasted serialization; if two tasks share hidden state not expressed as an edge, treat it as a correctness risk and escalate to model the dependency explicitly.",
+  "domain": "orchestration",
+  "scope_hint": "code.data-pipeline-orchestration:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.data-pipeline-orchestration",
+  "pack_id": "code.data-pipeline-orchestration"
+}

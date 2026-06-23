@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:evt:version-event-schemas-compatibly",
+  "type": "strategy",
+  "title": "Evolve event schemas compatibly",
+  "description": "Event payloads change only in backward/forward-compatible ways so old and new producers and consumers coexist.",
+  "body": "Use when adding or changing fields on a published event. Do not rename or remove a field, change its type, or repurpose it in place, since in-flight and replayed events and lagging consumers will break. Actions: add new fields as optional with defaults, keep old fields until all consumers migrate, version the event type when a breaking change is unavoidable, and run a schema-compatibility check in CI. Validation signals include a compatibility test that a new consumer reads an old event and an old consumer ignores a new optional field. Risk boundary: a breaking schema change on a live topic can crash every consumer and replay; escalate before deploying.",
+  "domain": "event_driven",
+  "scope_hint": "code.backend.event-driven:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.event-driven",
+  "pack_id": "code.backend.event-driven"
+}

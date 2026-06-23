@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:feat:encoding-experiment",
+  "type": "methodology",
+  "title": "Compare encodings as a controlled experiment",
+  "description": "Benchmark candidate encodings on a fixed split with out-of-fold statistics so the choice is evidence-based, not habit.",
+  "body": "Use when the right categorical representation for a field is unclear. Avoid defaulting to one-hot everywhere — it is wrong for high-cardinality fields and tree models that handle categories natively. Actions: fix a split, compute each candidate encoding with out-of-fold target statistics where applicable, train the same model on each, and compare validation metrics and dimensionality. Validation signals include a benchmark table ranking encodings and a leakage-free out-of-fold target encoder. Risk boundary: an in-fold target encoding leaks the label; if the benchmark winner used full-set statistics, treat the result as invalid and refit out-of-fold.",
+  "domain": "feature_engineering",
+  "scope_hint": "code.feature-engineering:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.feature-engineering",
+  "pack_id": "code.feature-engineering"
+}

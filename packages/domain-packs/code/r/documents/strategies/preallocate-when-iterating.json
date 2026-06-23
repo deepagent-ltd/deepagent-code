@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:rlang:preallocate-when-iterating",
+  "type": "strategy",
+  "title": "Preallocate before iterating",
+  "description": "Size a result vector up front instead of growing it with c() or append inside a loop.",
+  "body": "Use when a loop is genuinely required and accumulates results. Do not grow a vector with c(x, new) or append inside the loop — each step copies the whole structure, turning the work quadratic. Actions: allocate the result to its final length (vector(mode, n) or numeric(n)), assign by index, or prefer vapply/map which preallocate internally. Validation signals include a benchmark that stays linear as n grows. Risk boundary: preallocating with the wrong mode silently coerces values — confirm the result type matches the assigned values.",
+  "domain": "r_lang",
+  "scope_hint": "code.r:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.r",
+  "pack_id": "code.r"
+}

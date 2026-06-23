@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:gcp:cloud-run-cold-start-triage",
+  "type": "methodology",
+  "title": "Diagnose Cloud Run cold starts and latency",
+  "description": "Separate scheduling cold start, container init time, and CPU-throttling-during-startup using request logs and the startup CPU boost.",
+  "body": "Use when Cloud Run requests have intermittent high latency. Do not jump straight to raising maxScale. Actions: check request logs for the cold-start flag, measure container startup time (image pull + app init), enable startup CPU boost to speed init, set minScale to keep instances warm, and confirm CPU is allocated during startup. Validation signals include the cold-start rate dropping after minScale, startup latency falling with CPU boost, and p99 stabilizing under steady load. Risk boundary: changing production scaling or revision traffic split is human-gated.",
+  "domain": "gcp",
+  "scope_hint": "platform.cloud.gcp:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.cloud.gcp",
+  "pack_id": "platform.cloud.gcp"
+}

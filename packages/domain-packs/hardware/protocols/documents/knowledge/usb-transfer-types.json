@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:hwprot:usb-transfer-types",
+  "type": "knowledge",
+  "title": "USB transfer types and endpoint roles",
+  "description": "USB defines control, bulk, interrupt, and isochronous transfers, each with different guarantees on bandwidth and delivery.",
+  "body": "Use when choosing endpoint types for a USB device. Do not pick bulk for time-critical data, since bulk gets no guaranteed bandwidth. Actions: map each data stream to the transfer type matching its latency and reliability needs, and verify the endpoint descriptors declare the right type and packet size. Validation signals include interrupt endpoints meeting their polling interval and isochronous streams holding their bandwidth without error retries. Risk boundary: an isochronous stream drops data silently under contention, so escalate to bulk-with-retry when delivery must be guaranteed.",
+  "domain": "hw_protocols",
+  "scope_hint": "hardware.protocols:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.protocols",
+  "pack_id": "hardware.protocols"
+}

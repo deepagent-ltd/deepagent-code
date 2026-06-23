@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:hdl:close-fpga-timing",
+  "type": "methodology",
+  "title": "Close FPGA timing on the critical path",
+  "description": "Read the timing report, find worst-negative-slack, and fix it by pipelining/retiming/constraints instead of just lowering the clock.",
+  "body": "Steps: 1. Run synthesis + place-and-route and open the timing report. 2. Identify the worst-negative-slack (WNS) path and its endpoints. 3. Decide the fix: pipeline the long combinational path, retime, restructure logic, or correct an over-tight constraint. 4. Re-run and confirm setup AND hold pass across corners. 5. Repeat until WNS >= 0. Rollback point: before adding pipeline stages that change latency. Validation: timing report shows met setup/hold at all corners; lowering Fmax to hide a real violation is not closure.",
+  "domain": "hdl",
+  "scope_hint": "hardware.hdl:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.hdl",
+  "pack_id": "hardware.hdl"
+}

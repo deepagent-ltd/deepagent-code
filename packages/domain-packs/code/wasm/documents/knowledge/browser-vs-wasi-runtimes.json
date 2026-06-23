@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:wasm:browser-vs-wasi-runtimes",
+  "type": "knowledge",
+  "title": "Browser versus WASI runtimes",
+  "description": "Browsers provide WASM with JS glue and no OS access; WASI provides a capability-scoped POSIX-like syscall interface for servers.",
+  "body": "Use when choosing a target or diagnosing missing imports. In the browser, WASM has no direct OS access: filesystem, network, and time come only through JS functions you import, and the module is driven by JS. WASI (WebAssembly System Interface) gives server/standalone runtimes a capability-scoped, POSIX-like set of imports (files, clocks, randomness) granted explicitly rather than ambient. A module compiled for one expects imports the other does not supply, so it fails to instantiate. Do not assume a module is portable across both without abstcaction. Actions: target the intended runtime and provide or shim the imports it needs. Validation signals include instantiation succeeding with every declared import satisfied. Risk boundary: a runtime/target mismatch surfaces as a missing-import instantiation error, not a subtle bug; match them up front.",
+  "domain": "wasm",
+  "scope_hint": "code.wasm:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.wasm",
+  "pack_id": "code.wasm"
+}

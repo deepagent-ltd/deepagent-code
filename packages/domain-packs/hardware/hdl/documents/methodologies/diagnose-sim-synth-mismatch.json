@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:hdl:diagnose-sim-synth-mismatch",
+  "type": "methodology",
+  "title": "Diagnose a simulation vs synthesis mismatch",
+  "description": "When gate-level behavior differs from RTL, isolate the cause among sensitivity lists, sim-only constructs, and X-propagation.",
+  "body": "Steps: 1. Reproduce both RTL and gate-level simulation on the same stimulus. 2. Compare the first divergent signal and cycle. 3. Check common causes: incomplete sensitivity list (use always_comb), initial/delay constructs ignored by synthesis, and X-pessimism/optimism at reset. 4. Fix the RTL construct, not the gate model. 5. Re-run gate-level and/or formal equivalence. Rollback point: before editing constraints. Validation: gate-level matches RTL and formal equivalence passes; never patch the gate netlist to match a buggy RTL.",
+  "domain": "hdl",
+  "scope_hint": "hardware.hdl:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.hdl",
+  "pack_id": "hardware.hdl"
+}

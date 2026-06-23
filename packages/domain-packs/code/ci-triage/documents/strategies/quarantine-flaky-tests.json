@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:ci_triage:quarantine-flaky-tests",
+  "type": "strategy",
+  "title": "Quarantine and track flaky tests deliberately",
+  "description": "Isolate a confirmed flaky test from the blocking signal with a tracking issue, rather than masking it with blanket retries.",
+  "body": "Use when a test fails intermittently without a code change explaining it. Do not paper over flakiness with global retries or by ignoring the suite. Actions: confirm flakiness by repeated runs on the same commit, quarantine the specific test from the merge-blocking gate, open a tracking issue with the failure evidence, and keep it visible until rooted out. Validation signals include repeated-run data showing nondeterminism and a tracking reference attached. Risk boundary: quarantining a test that is actually catching a real intermittent bug hides a defect; verify it is truly nondeterministic before removing it from the gate, and never quarantine a security or data-integrity check.",
+  "domain": "code",
+  "scope_hint": "code.ci-triage:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.ci-triage",
+  "pack_id": "code.ci-triage"
+}

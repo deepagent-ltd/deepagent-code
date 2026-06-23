@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:game:cache-locality-drives-ecs",
+  "type": "knowledge",
+  "title": "Cache locality drives data-oriented design",
+  "description": "Iterating contiguous component arrays is far faster than chasing pointers through scattered objects because of CPU cache behavior.",
+  "body": "Use when justifying ECS or data layout choices. Modern CPUs are bottlenecked on memory latency; iterating a packed array of the exact data a system needs keeps the cache hot, while object graphs scatter data and cause cache misses on every pointer hop. This is why ECS stores components contiguously. Do not assume an object-graph design is free. Actions: lay out hot per-frame data contiguously and iterate it linearly. Validation signals include reduced cache misses and faster system update times in a profiler. Risk boundary: a cache-hostile layout can dominate frame time invisibly (the CPU is stalled waiting on memory) — profile cache behavior, not just instruction counts.",
+  "domain": "game",
+  "scope_hint": "code.game:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.game",
+  "pack_id": "code.game"
+}

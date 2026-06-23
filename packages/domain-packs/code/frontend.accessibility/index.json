@@ -1,0 +1,472 @@
+[
+  {
+    "ref_id": "knowledge:frontend_accessibility:accessible-name-source",
+    "type": "knowledge",
+    "title": "Accessible Name Source",
+    "summary": "Accessible names come from text, labels, aria-label, or referenced content.",
+    "domains": [
+      "accessibility",
+      "frontend",
+      "web"
+    ],
+    "triggers": [
+      "accessible",
+      "names",
+      "come",
+      "from",
+      "text",
+      "labels",
+      "aria",
+      "label"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.accessibility"
+  },
+  {
+    "ref_id": "knowledge:frontend_accessibility:aria-does-not-add-behavior",
+    "type": "knowledge",
+    "title": "Aria Does Not Add Behavior",
+    "summary": "ARIA changes semantics but does not implement interaction.",
+    "domains": [
+      "accessibility",
+      "frontend",
+      "web"
+    ],
+    "triggers": [
+      "aria",
+      "changes",
+      "semantics",
+      "does",
+      "implement",
+      "interaction",
+      "keyboard",
+      "handlers"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.accessibility"
+  },
+  {
+    "ref_id": "knowledge:frontend_accessibility:focus-visible-required",
+    "type": "knowledge",
+    "title": "Focus Visible Required",
+    "summary": "Keyboard users need visible focus location.",
+    "domains": [
+      "accessibility",
+      "frontend",
+      "web"
+    ],
+    "triggers": [
+      "keyboard",
+      "users",
+      "need",
+      "visible",
+      "focus",
+      "location",
+      "removing",
+      "outlines"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.accessibility"
+  },
+  {
+    "ref_id": "methodology:frontend_accessibility:accessibility-runtime-pass",
+    "type": "methodology",
+    "title": "Accessibility Runtime Pass",
+    "summary": "Render page, inspect roles/names, navigate keyboard, and check states.",
+    "domains": [
+      "accessibility",
+      "frontend",
+      "web"
+    ],
+    "triggers": [
+      "render",
+      "page",
+      "inspect",
+      "roles",
+      "names",
+      "navigate",
+      "keyboard",
+      "check"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.accessibility"
+  },
+  {
+    "ref_id": "methodology:frontend_accessibility:contrast-and-motion-check",
+    "type": "methodology",
+    "title": "Contrast And Motion Check",
+    "summary": "Check contrast and reduced-motion behavior for changed surfaces.",
+    "domains": [
+      "accessibility",
+      "frontend",
+      "web"
+    ],
+    "triggers": [
+      "check",
+      "contrast",
+      "reduced",
+      "motion",
+      "behavior",
+      "changed",
+      "surfaces",
+      "steps"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.accessibility"
+  },
+  {
+    "ref_id": "methodology:frontend_accessibility:focus-management-check",
+    "type": "methodology",
+    "title": "Focus Management Check",
+    "summary": "Verify focus entry, movement, trap, restore, and visibility.",
+    "domains": [
+      "accessibility",
+      "frontend",
+      "web"
+    ],
+    "triggers": [
+      "verify",
+      "focus",
+      "entry",
+      "movement",
+      "trap",
+      "restore",
+      "visibility",
+      "steps"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.accessibility"
+  },
+  {
+    "ref_id": "skill:frontend_accessibility:run-a11y-smoke",
+    "type": "skill",
+    "title": "Run A11y Smoke",
+    "summary": "Perform a browser accessibility smoke pass for changed UI.",
+    "domains": [
+      "accessibility",
+      "frontend",
+      "web"
+    ],
+    "triggers": [
+      "perform",
+      "browser",
+      "accessibility",
+      "smoke",
+      "pass",
+      "changed",
+      "inputs"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.accessibility"
+  },
+  {
+    "ref_id": "strategy:frontend_accessibility:a11y-regression-in-browser",
+    "type": "strategy",
+    "title": "A11y Regression In Browser",
+    "summary": "A11y checks should run in actual rendered browser state.",
+    "domains": [
+      "accessibility",
+      "frontend",
+      "web"
+    ],
+    "triggers": [
+      "a11y",
+      "checks",
+      "should",
+      "actual",
+      "rendered",
+      "browser",
+      "state",
+      "static"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.accessibility"
+  },
+  {
+    "ref_id": "strategy:frontend_accessibility:keyboard-complete",
+    "type": "strategy",
+    "title": "Keyboard Complete",
+    "summary": "Interactive workflows must be reachable and operable by keyboard.",
+    "domains": [
+      "accessibility",
+      "frontend",
+      "web"
+    ],
+    "triggers": [
+      "interactive",
+      "workflows",
+      "must",
+      "reachable",
+      "operable",
+      "keyboard",
+      "access"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.accessibility"
+  },
+  {
+    "ref_id": "strategy:frontend_accessibility:name-role-state",
+    "type": "strategy",
+    "title": "Name Role State",
+    "summary": "Controls need correct accessible name, role, and state.",
+    "domains": [
+      "accessibility",
+      "frontend",
+      "web"
+    ],
+    "triggers": [
+      "controls",
+      "need",
+      "correct",
+      "accessible",
+      "name",
+      "role",
+      "state",
+      "aria"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.accessibility"
+  },
+  {
+    "ref_id": "strategy:frontend_accessibility:prefer-native-semantics",
+    "type": "strategy",
+    "title": "Prefer Native Semantics",
+    "summary": "Native controls carry semantics and keyboard behavior by default.",
+    "domains": [
+      "accessibility",
+      "frontend",
+      "web"
+    ],
+    "triggers": [
+      "native",
+      "controls",
+      "carry",
+      "semantics",
+      "keyboard",
+      "behavior",
+      "default",
+      "buttons"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.accessibility"
+  },
+  {
+    "ref_id": "strategy:frontend_accessibility:label-every-form-control",
+    "type": "strategy",
+    "title": "Give every form control a programmatic label",
+    "summary": "Associate each input with a real label element or aria-labelledby so the control's purpose is announced, never relying on placeholder text alone.",
+    "domains": [
+      "frontend",
+      "accessibility",
+      "web"
+    ],
+    "triggers": [
+      "form",
+      "label",
+      "input",
+      "placeholder",
+      "aria-labelledby",
+      "for"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.accessibility"
+  },
+  {
+    "ref_id": "strategy:frontend_accessibility:contrast-meets-threshold",
+    "type": "strategy",
+    "title": "Meet contrast thresholds for text and UI",
+    "summary": "Ensure text and meaningful UI elements meet WCAG contrast ratios and do not convey information by color alone.",
+    "domains": [
+      "frontend",
+      "accessibility",
+      "web"
+    ],
+    "triggers": [
+      "contrast",
+      "color",
+      "wcag",
+      "ratio",
+      "color-blind",
+      "luminance"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.accessibility"
+  },
+  {
+    "ref_id": "methodology:frontend_accessibility:screen-reader-walkthrough",
+    "type": "methodology",
+    "title": "Walk a changed flow with a screen reader",
+    "summary": "Navigate the changed UI with a real screen reader to confirm names, roles, states, and dynamic updates are announced in a sensible order.",
+    "domains": [
+      "frontend",
+      "accessibility",
+      "web"
+    ],
+    "triggers": [
+      "screen reader",
+      "voiceover",
+      "nvda",
+      "announce",
+      "live region",
+      "walkthrough"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.accessibility"
+  },
+  {
+    "ref_id": "knowledge:frontend_accessibility:semantic-html-carries-behavior",
+    "type": "knowledge",
+    "title": "Semantic HTML carries built-in behavior",
+    "summary": "Native elements like button, a, and input bring keyboard handling, focusability, and roles that a div with ARIA must reimplement by hand.",
+    "domains": [
+      "frontend",
+      "accessibility",
+      "web"
+    ],
+    "triggers": [
+      "semantic",
+      "native",
+      "button",
+      "div",
+      "role",
+      "keyboard"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.accessibility"
+  },
+  {
+    "ref_id": "skill:frontend_accessibility:inspect-accessibility-tree",
+    "type": "skill",
+    "title": "Inspect the accessibility tree for changed UI",
+    "summary": "Read the browser accessibility tree for a changed component and report each node's computed name, role, and state.",
+    "domains": [
+      "frontend",
+      "accessibility",
+      "web"
+    ],
+    "triggers": [
+      "accessibility tree",
+      "computed name",
+      "role",
+      "devtools",
+      "inspect",
+      "state"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.accessibility"
+  }
+]

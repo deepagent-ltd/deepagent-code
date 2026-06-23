@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:mongo:multikey-index-semantics",
+  "type": "knowledge",
+  "title": "How multikey indexes on arrays behave",
+  "description": "Indexing an array field creates a multikey index with one index entry per element, which constrains compound use.",
+  "body": "Reference for indexing array-valued fields. When an indexed field holds an array, MongoDB builds a multikey index with a separate entry per element, so a query matching any element can use it. Use when a document embeds an array you filter on. Do not put two array fields in the same compound index; MongoDB cannot build a compound multikey index over more than one array field and will reject it. Validation signals include explain reporting isMultiKey true and the query served by an IXSCAN. Risk boundary: multikey indexes can balloon when arrays are large, so bound array length and confirm index size stays reasonable before relying on element queries.",
+  "domain": "mongodb",
+  "scope_hint": "code.database.mongodb:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.mongodb",
+  "pack_id": "code.database.mongodb"
+}

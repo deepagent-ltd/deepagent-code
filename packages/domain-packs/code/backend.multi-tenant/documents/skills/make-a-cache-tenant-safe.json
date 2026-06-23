@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:mt:make-a-cache-tenant-safe",
+  "type": "skill",
+  "title": "Make a cache tenant-safe",
+  "description": "Rework a cache so keys and invalidation include the tenant, preventing one tenant from receiving another's cached data.",
+  "body": "Use when a cache serves tenant-scoped data with a tenant-blind key. Do not leave the tenant out of the key. Actions: compose the cache key with the resolved tenant id; ensure invalidation targets the tenant's entries; verify no shared key can collide across tenants. Validation signals include a test confirming tenant A's value is never returned to tenant B for the same logical key. Risk boundary: a tenant-blind cache leaks data across tenants, so treat the fix as a leak remediation and add a regression test that locks in the tenant-keyed behavior.",
+  "domain": "multi_tenant",
+  "scope_hint": "code.backend.multi-tenant:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.multi-tenant",
+  "pack_id": "code.backend.multi-tenant"
+}

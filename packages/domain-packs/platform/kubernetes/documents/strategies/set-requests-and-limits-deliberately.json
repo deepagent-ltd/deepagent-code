@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:k8s:set-requests-and-limits-deliberately",
+  "type": "strategy",
+  "title": "Set resource requests and limits to match real usage",
+  "description": "Requests drive scheduling and QoS; CPU limits throttle and memory limits OOMKill, so size them from observed usage, not guesses.",
+  "body": "Use when defining or tuning a workload's container resources. Do not leave requests unset (the pod becomes BestEffort and is evicted first) and do not set a memory limit below the real working set (it gets OOMKilled). Actions: measure actual CPU/memory under load; set requests at the steady working set and limits with headroom; consider omitting CPU limits where throttling hurts latency-sensitive work. Validation signals include no OOMKills, stable scheduling, and a Guaranteed/Burstable QoS class that matches intent. Risk boundary: changing limits on a production workload can trigger evictions or OOM; verify against usage metrics and roll out gradually.",
+  "domain": "kubernetes",
+  "scope_hint": "platform.kubernetes:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.kubernetes",
+  "pack_id": "platform.kubernetes"
+}

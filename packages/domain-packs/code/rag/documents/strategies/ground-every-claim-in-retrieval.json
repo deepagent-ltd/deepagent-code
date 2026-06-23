@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:rag:ground-every-claim-in-retrieval",
+  "type": "strategy",
+  "title": "Ground every claim in a retrieved passage",
+  "description": "Each factual statement in the answer must trace to a specific retrieved passage; unsupported claims are removed or abstained on.",
+  "body": "Use when generating an answer from retrieved context. Do not let the model add facts beyond the passages, and avoid presenting plausible-sounding statements with no source. Actions: require the generation to cite the passage backing each claim, verify the cited passage actually supports it, and drop or abstain on claims with no support. Validation signals include a test that an answer claim not present in any retrieved passage is flagged as ungrounded. Risk boundary: an answer that asserts facts with no retrieved support is a hallucination; abstain or escalate rather than emit it.",
+  "domain": "rag",
+  "scope_hint": "code.rag:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.rag",
+  "pack_id": "code.rag"
+}

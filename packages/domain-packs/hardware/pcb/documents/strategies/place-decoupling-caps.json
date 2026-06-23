@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:pcb:place-decoupling-caps",
+  "type": "strategy",
+  "title": "Place decoupling capacitors close to pins",
+  "description": "Position decoupling capacitors at supply pins with short, wide connections and matched values for the frequency range.",
+  "body": "Use when supplying power to any active device with switching current demand. Do not scatter decoupling caps far from the pins, since loop inductance defeats their purpose. Actions: place each cap adjacent to its supply pin, connect with short wide traces or vias to the planes, and verify the value mix covers the relevant frequency range. Validation signals include low supply impedance across the band and stable rails under a load step. Risk boundary: inadequate decoupling causes supply droop and intermittent faults, so escalate to added bulk or local capacitance when rails sag under load.",
+  "domain": "pcb",
+  "scope_hint": "hardware.pcb:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.pcb",
+  "pack_id": "hardware.pcb"
+}

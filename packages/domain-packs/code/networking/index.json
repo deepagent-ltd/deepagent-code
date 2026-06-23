@@ -1,0 +1,484 @@
+[
+  {
+    "ref_id": "strategy:net:bound-every-call-with-timeouts",
+    "type": "strategy",
+    "title": "Bound every network call with explicit timeouts",
+    "summary": "Set connect, read/write, and overall deadlines so a stalled peer cannot hang the caller indefinitely.",
+    "domains": [
+      "networking",
+      "tcp",
+      "http",
+      "retries",
+      "backpressure"
+    ],
+    "triggers": [
+      "timeout",
+      "deadline",
+      "connect",
+      "read",
+      "hang",
+      "bound"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.networking"
+  },
+  {
+    "ref_id": "strategy:net:retry-with-backoff-and-jitter",
+    "type": "strategy",
+    "title": "Retry transient failures with capped backoff and jitter",
+    "summary": "Retry only retryable errors a bounded number of times with exponential backoff and randomized jitter to avoid synchronized storms.",
+    "domains": [
+      "networking",
+      "tcp",
+      "http",
+      "retries",
+      "backpressure"
+    ],
+    "triggers": [
+      "retry",
+      "backoff",
+      "jitter",
+      "transient",
+      "exponential",
+      "cap"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.networking"
+  },
+  {
+    "ref_id": "strategy:net:gate-retries-on-idempotency",
+    "type": "strategy",
+    "title": "Retry only what is safe to repeat",
+    "summary": "Make retried requests idempotent via idempotency keys or conditional methods so a retry never double-applies an effect.",
+    "domains": [
+      "networking",
+      "tcp",
+      "http",
+      "retries",
+      "backpressure"
+    ],
+    "triggers": [
+      "idempotency",
+      "retry",
+      "key",
+      "post",
+      "duplicate",
+      "safe"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.networking"
+  },
+  {
+    "ref_id": "strategy:net:apply-backpressure-not-unbounded-buffering",
+    "type": "strategy",
+    "title": "Apply backpressure instead of unbounded buffering",
+    "summary": "Bound in-flight concurrency and queue depth so a slow downstream slows the producer rather than exhausting memory.",
+    "domains": [
+      "networking",
+      "tcp",
+      "http",
+      "retries",
+      "backpressure"
+    ],
+    "triggers": [
+      "backpressure",
+      "bounded",
+      "queue",
+      "concurrency",
+      "flow-control",
+      "buffer"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.networking"
+  },
+  {
+    "ref_id": "strategy:net:reuse-connections-via-pooling",
+    "type": "strategy",
+    "title": "Reuse connections through a properly sized pool",
+    "summary": "Use keep-alive and a bounded connection pool so calls avoid handshake cost without leaking or exhausting sockets.",
+    "domains": [
+      "networking",
+      "tcp",
+      "http",
+      "retries",
+      "backpressure"
+    ],
+    "triggers": [
+      "pool",
+      "keep-alive",
+      "reuse",
+      "connection",
+      "idle",
+      "exhaustion"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.networking"
+  },
+  {
+    "ref_id": "strategy:net:keep-tls-verification-strict",
+    "type": "strategy",
+    "title": "Keep TLS certificate and hostname verification strict",
+    "summary": "Verify the server certificate chain and hostname on every connection; never disable verification to silence an error.",
+    "domains": [
+      "networking",
+      "tcp",
+      "http",
+      "retries",
+      "backpressure"
+    ],
+    "triggers": [
+      "tls",
+      "certificate",
+      "verification",
+      "hostname",
+      "ca",
+      "mitm"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.networking"
+  },
+  {
+    "ref_id": "methodology:net:diagnose-a-hanging-or-slow-request",
+    "type": "methodology",
+    "title": "Diagnose a hanging or slow request",
+    "summary": "Localize the stall to DNS, connect, TLS, server processing, or body transfer using timings and a packet/trace view.",
+    "domains": [
+      "networking",
+      "tcp",
+      "http",
+      "retries",
+      "backpressure"
+    ],
+    "triggers": [
+      "hang",
+      "slow",
+      "diagnose",
+      "latency",
+      "stall",
+      "trace"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.networking"
+  },
+  {
+    "ref_id": "methodology:net:design-a-retry-and-timeout-budget",
+    "type": "methodology",
+    "title": "Design a coherent retry and timeout budget",
+    "summary": "Compose per-attempt timeouts, retry counts, and backoff so the total stays within the caller's deadline without amplifying load.",
+    "domains": [
+      "networking",
+      "tcp",
+      "http",
+      "retries",
+      "backpressure"
+    ],
+    "triggers": [
+      "budget",
+      "timeout",
+      "retry",
+      "deadline",
+      "compose",
+      "policy"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.networking"
+  },
+  {
+    "ref_id": "methodology:net:debug-connection-pool-exhaustion",
+    "type": "methodology",
+    "title": "Debug connection pool exhaustion or socket leak",
+    "summary": "Correlate pool metrics, socket states, and code paths to find connections that are never returned or closed.",
+    "domains": [
+      "networking",
+      "tcp",
+      "http",
+      "retries",
+      "backpressure"
+    ],
+    "triggers": [
+      "pool",
+      "exhaustion",
+      "leak",
+      "close_wait",
+      "sockets",
+      "debug"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.networking"
+  },
+  {
+    "ref_id": "methodology:net:review-a-network-client-change",
+    "type": "methodology",
+    "title": "Review a network client change for resilience",
+    "summary": "Check timeouts, retry safety, backpressure, pooling, and TLS before accepting a client-side change.",
+    "domains": [
+      "networking",
+      "tcp",
+      "http",
+      "retries",
+      "backpressure"
+    ],
+    "triggers": [
+      "review",
+      "client",
+      "resilience",
+      "timeout",
+      "retry",
+      "tls"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.networking"
+  },
+  {
+    "ref_id": "knowledge:net:tcp-connection-lifecycle-and-states",
+    "type": "knowledge",
+    "title": "TCP lifecycle, TIME_WAIT, and CLOSE_WAIT",
+    "summary": "TCP connections progress through handshake, established, and teardown states; CLOSE_WAIT signals the app forgot to close, TIME_WAIT is normal churn.",
+    "domains": [
+      "networking",
+      "tcp",
+      "http",
+      "retries",
+      "backpressure"
+    ],
+    "triggers": [
+      "tcp",
+      "time_wait",
+      "close_wait",
+      "handshake",
+      "teardown",
+      "states"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.networking"
+  },
+  {
+    "ref_id": "knowledge:net:idempotency-and-http-method-semantics",
+    "type": "knowledge",
+    "title": "HTTP method semantics and idempotency",
+    "summary": "GET/PUT/DELETE are defined idempotent and POST is not; safe retries depend on this plus idempotency keys for POST.",
+    "domains": [
+      "networking",
+      "tcp",
+      "http",
+      "retries",
+      "backpressure"
+    ],
+    "triggers": [
+      "idempotency",
+      "http",
+      "post",
+      "put",
+      "get",
+      "semantics"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.networking"
+  },
+  {
+    "ref_id": "knowledge:net:backpressure-and-flow-control",
+    "type": "knowledge",
+    "title": "Backpressure and flow control",
+    "summary": "When a consumer is slower than a producer, the system must slow the producer (backpressure) or it buffers without bound until it fails.",
+    "domains": [
+      "networking",
+      "tcp",
+      "http",
+      "retries",
+      "backpressure"
+    ],
+    "triggers": [
+      "backpressure",
+      "flow-control",
+      "producer",
+      "consumer",
+      "buffer",
+      "shed"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.networking"
+  },
+  {
+    "ref_id": "knowledge:net:tls-handshake-and-verification",
+    "type": "knowledge",
+    "title": "TLS handshake and certificate verification",
+    "summary": "The handshake negotiates keys and proves server identity via a certificate chain and hostname match; skipping verification enables MITM.",
+    "domains": [
+      "networking",
+      "tcp",
+      "http",
+      "retries",
+      "backpressure"
+    ],
+    "triggers": [
+      "tls",
+      "handshake",
+      "certificate",
+      "chain",
+      "hostname",
+      "sni"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.networking"
+  },
+  {
+    "ref_id": "skill:net:read-client-for-resilience-gaps",
+    "type": "skill",
+    "title": "Read a network client for resilience gaps",
+    "summary": "Inspect client code and report missing timeouts, unsafe retries, missing backpressure, pool leaks, and TLS weakening.",
+    "domains": [
+      "networking",
+      "tcp",
+      "http",
+      "retries",
+      "backpressure"
+    ],
+    "triggers": [
+      "read",
+      "client",
+      "review",
+      "inspect",
+      "resilience",
+      "gaps"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.networking"
+  },
+  {
+    "ref_id": "skill:net:run-fault-injection-against-client",
+    "type": "skill",
+    "title": "Run fault injection against a client in tests",
+    "summary": "Exercise the client against slow, failing, and resetting test servers to verify timeouts, retries, and backpressure hold.",
+    "domains": [
+      "networking",
+      "tcp",
+      "http",
+      "retries",
+      "backpressure"
+    ],
+    "triggers": [
+      "fault",
+      "injection",
+      "test",
+      "slow",
+      "reset",
+      "verify"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.networking"
+  }
+]

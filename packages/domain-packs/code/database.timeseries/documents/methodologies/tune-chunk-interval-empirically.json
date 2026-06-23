@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:tsdb:tune-chunk-interval-empirically",
+  "type": "methodology",
+  "title": "Tune chunk interval empirically",
+  "description": "Measure chunk count, size, and query pruning under real load, then adjust the interval rather than guessing.",
+  "body": "Steps: 1. Load representative data at target rate. 2. Inspect chunk sizes and total count. 3. Run typical queries and read the plan's chunk exclusion. 4. If queries touch too many chunks, enlarge the interval; if planning is slow from too many chunks, also enlarge. 5. Apply to new chunks and re-measure. Rollback point: interval only affects new chunks, so revert by setting it back. Validation: queries prune to few chunks and chunk size near target.",
+  "domain": "timeseries_db",
+  "scope_hint": "code.database.timeseries:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.timeseries",
+  "pack_id": "code.database.timeseries"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:comp:preserve-segregation-of-duties",
+  "type": "strategy",
+  "title": "Preserve segregation of duties",
+  "description": "Split the steps of a sensitive operation so no single principal can both initiate and authorize it.",
+  "body": "Use when one role could perform an entire sensitive workflow end to end (request and approve a payout, grant and use elevated access, write and deploy to prod). Do not collapse initiation and authorization into one permission. Actions: identify the conflicting capability pair, ensure the permission model forces two distinct principals, and detect role assignments that recombine them. Validation signals include a test that the same principal cannot both create and approve a given request, and a report of any user holding both halves of a conflicting pair. Risk boundary: a single principal able to complete a sensitive workflow alone is a control breach; flag the toxic role combination and escalate.",
+  "domain": "compliance",
+  "scope_hint": "risk.compliance:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.compliance",
+  "pack_id": "risk.compliance"
+}

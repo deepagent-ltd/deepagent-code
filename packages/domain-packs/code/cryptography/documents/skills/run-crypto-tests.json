@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:crypto:run-crypto-tests",
+  "type": "skill",
+  "title": "Run crypto correctness and tamper tests",
+  "description": "Execute the project's cryptographic tests and report round-trip, tamper-rejection, and parameter checks.",
+  "body": "Use when validating a cryptographic change. Actions: detect and run the project's test suite, ensuring it covers encrypt/decrypt round-trips, tamper rejection (a flipped ciphertext or tag byte must fail verification), wrong-key rejection, and known-answer test vectors where available; report pass/fail per case. Do not treat a passing round-trip alone as evidence of security without the tamper and wrong-key cases. This skill exposes capability only and must not run against production keys or data without runtime permission. Validation signals include tamper and wrong-key tests failing closed and KAT vectors matching. Risk boundary: if tamper tests are missing, report the change as unverified rather than secure, and recommend adding negative tests before release.",
+  "domain": "cryptography",
+  "scope_hint": "code.cryptography:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.cryptography",
+  "pack_id": "code.cryptography"
+}

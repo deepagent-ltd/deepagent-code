@@ -1,0 +1,49 @@
+{
+  "schema_version": "domain_pack.v1",
+  "id": "business.ecommerce",
+  "name": "E-Commerce Cart and Order Flow",
+  "version": "1.0.0",
+  "scope": "system",
+  "risk": "high",
+  "domains": [
+    "ecommerce",
+    "cart",
+    "inventory",
+    "order_state"
+  ],
+  "provides": [
+    "knowledge",
+    "strategy",
+    "methodology",
+    "skill",
+    "diagnosis",
+    "validation"
+  ],
+  "depends_on": [
+    "code.backend.api",
+    "business.finance",
+    "code.database"
+  ],
+  "conflicts_with": [],
+  "knowledge_store": "document_store",
+  "allowed_tools": [
+    "read",
+    "shell:test"
+  ],
+  "denied_tools": [
+    "shell:deploy-production"
+  ],
+  "data_policy": {
+    "sensitivity": [
+      "source_code",
+      "user_data",
+      "pii"
+    ],
+    "default_admission": "summary_only",
+    "secret_policy": "deny"
+  },
+  "detector": {
+    "inline": "profile.business_domains.some(d=>['ecommerce','cart','inventory'].includes(d)) || profile.repo_signals.some(s=>/\\b(shopping cart|inventory management|order state|checkout flow|stock reservation|order fulfillment|cart abandonment|\\bsku\\b|oversell)\\b/i.test(s)) ? 0.9 : 0",
+    "threshold": 0.5
+  }
+}

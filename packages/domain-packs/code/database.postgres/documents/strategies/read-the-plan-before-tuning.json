@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:pg:read-the-plan-before-tuning",
+  "type": "strategy",
+  "title": "Read the plan before tuning a query",
+  "description": "Diagnose slow queries with EXPLAIN (ANALYZE, BUFFERS) on real data before adding indexes or rewriting SQL.",
+  "body": "Use when a query is slow or before optimizing one. Do not add indexes by guessing column names or rewrite SQL without a plan. Actions: run EXPLAIN (ANALYZE, BUFFERS) on representative data; compare estimated vs actual rows to spot bad statistics; identify the costly node (seq scan, nested loop on large input, sort spilling to disk); check whether buffers show heavy heap reads. Validation signals include the plan switching from a sequential scan to an index/index-only scan and actual time dropping. Risk boundary: tuning from row counts alone or on tiny dev data misleads; if the plan differs from production stats, escalate to test against production-like data.",
+  "domain": "postgres",
+  "scope_hint": "code.database.postgres:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.postgres",
+  "pack_id": "code.database.postgres"
+}

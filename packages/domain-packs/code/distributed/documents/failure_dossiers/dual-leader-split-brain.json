@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:dist:dual-leader-split-brain",
+  "type": "failure_dossier",
+  "description": "A partition lets two nodes act as leader at once, so both accept writes and the replicated state diverges irreconcilably.",
+  "body": "Failure mode: a network partition isolates the current leader, a new leader is elected on the majority side, and the old leader keeps accepting and committing writes without fencing, producing two conflicting histories. Detection signals: logs show two nodes with leader role in overlapping wall-clock windows; clients on different sides see different committed values; reconciliation finds conflicting entries at the same log index. Do not rely on a leader's self-belief or on a single missed heartbeat to decide authority. Safer fallback: gate every leader action behind a monotonically increasing term, reject lower-term requests at followers and storage, and pass a fencing token to external resources so a deposed leader's writes are refused.",
+  "domain": "distributed",
+  "scope_hint": "code.distributed:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.distributed:human_authored",
+  "pack_id": "code.distributed"
+}

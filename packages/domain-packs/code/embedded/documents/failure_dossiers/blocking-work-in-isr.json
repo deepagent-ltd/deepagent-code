@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:embed:blocking-work-in-isr",
+  "type": "failure_dossier",
+  "description": "Performing long, blocking, or allocating work inside an interrupt handler, delaying or dropping higher-priority interrupts and missing deadlines.",
+  "body": "Failure mode: an ISR does heavy processing, logging, a blocking driver call, or malloc, so it runs for milliseconds; higher-priority interrupts are delayed or lost and real-time deadlines slip. Detection signals: measured ISR duration far exceeds budget; dropped interrupts or input under load; system jitter that disappears when the load drops. Do not do blocking or unbounded work in an ISR. Safer fallback: in the ISR only clear the source and post a semaphore/queue to a worker task, move processing to the base level, and verify worst-case ISR duration on a logic analyzer fits the latency budget.",
+  "domain": "embedded",
+  "scope_hint": "code.embedded:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.embedded:human_authored",
+  "pack_id": "code.embedded"
+}

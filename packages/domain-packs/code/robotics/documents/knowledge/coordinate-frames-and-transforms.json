@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:robot:coordinate-frames-and-transforms",
+  "type": "knowledge",
+  "title": "Coordinate frames and the transform tree",
+  "description": "Every pose is meaningful only relative to a frame; tf2 maintains a time-stamped tree so data can be transformed between frames at the right moment.",
+  "body": "Use when interpreting any pose, sensor reading, or command. A pose has no meaning without a frame (base_link, odom, map, sensor frames), and tf2 stores the time-varying rigid transforms between frames as a tree so any frame can be reached from any other at a given time. Transforms are time-stamped because the robot moves; using a transform from the wrong time misplaces the data. Do not assume two readings share a frame or that a transform is constant. Actions: stamp data with frame and time and always transform at the data's timestamp. Validation signals include a connected tree and correct ground-truth transforms. Risk boundary: a frame or time mismatch sends commands to the wrong physical location; verify both before acting on transformed data.",
+  "domain": "robotics",
+  "scope_hint": "code.robotics:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.robotics",
+  "pack_id": "code.robotics"
+}

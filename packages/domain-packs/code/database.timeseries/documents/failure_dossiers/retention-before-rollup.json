@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:tsdb:retention-before-rollup",
+  "type": "failure_dossier",
+  "description": "Enabling raw-data retention before the continuous aggregate covers the window, permanently losing fine-grained history.",
+  "body": "Failure mode: retention drops raw chunks before the downsampled rollup is materialized for that range, so neither raw nor aggregate has the data. Detection signals: gaps in long-range dashboards; aggregate buckets missing for periods just past raw retention. Do not enable raw retention without verifying aggregate coverage. Safer fallback: confirm the continuous aggregate is populated past the retention boundary, then enable retention; restore from backup if already lost.",
+  "domain": "timeseries_db",
+  "scope_hint": "code.database.timeseries:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.timeseries:human_authored",
+  "pack_id": "code.database.timeseries"
+}

@@ -1,0 +1,11 @@
+{
+  "ref_id": "methodology:frontend_web:viewport-interaction-matrix",
+  "type": "methodology",
+  "description": "Run a viewport matrix that combines size, interaction state, and diagnostics.",
+  "body": "Steps: identify the affected route and component surface; choose representative mobile, tablet or narrow desktop, and desktop sizes from the product's existing breakpoints; load each viewport in a real browser; exercise default, hover or focus, expanded, empty, loading, and error states that the change can affect; inspect console errors and failed network requests after each interaction; capture screenshots or DOM assertions for the changed surface. Do not use this for purely nonvisual backend changes unless a frontend route consumes the new behavior. Validation signals are stable layout, usable controls, expected responsive rearrangement, readable text, no hidden overflow, no unexpected scroll traps, and clean console/network output. Rollback point: before broad CSS rewrites, isolate the smallest selector, container constraint, or DOM attribute causing the matrix failure. Use when Frontend Web work touches visible UI behavior, browser console output, DOM state, assets, viewport behavior, and interaction evidence. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: follow the ordered review, edit, and validation sequence; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include browser smoke, component tests, viewport screenshots, console/network checks, and accessibility assertions. Risk boundary: escalate or stop when the task involves visual regressions, inaccessible interaction, hydration mismatch, and browser-only failures, missing owner evidence, or live external state.",
+  "domain": "web",
+  "scope_hint": "code.frontend.web:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.frontend.web:playwright_smoke_pattern",
+  "pack_id": "code.frontend.web"
+}

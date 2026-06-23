@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:flutter:hot-reload-vs-restart",
+  "type": "knowledge",
+  "title": "Hot reload vs hot restart and state",
+  "description": "Hot reload injects changed source and rebuilds the tree while keeping state; hot restart resets state, and neither reflects native or main() changes fully.",
+  "body": "Use when a code change does not appear during development. Hot reload pushes updated source into the running VM and rebuilds the widget tree while preserving existing State objects, so changes to build methods appear instantly but changes to initState, global/static initializers, main(), or const values may not take effect until a hot restart, which resets all state. Native (Kotlin/Swift) and pubspec changes need a full rebuild. Do not conclude code is wrong when a change simply was not picked up by hot reload. Actions: hot restart after changing initializers or main, full rebuild after native/pubspec changes. Validation signals include the change appearing after the correct reload level. Risk boundary: relying on hot reload can mask bugs that only manifest from a cold start, so verify behavior with a full restart before trusting it.",
+  "domain": "dart",
+  "scope_hint": "code.dart-flutter:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.dart-flutter",
+  "pack_id": "code.dart-flutter"
+}

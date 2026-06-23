@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:pg:seq-scan-from-non-sargable-predicate",
+  "type": "failure_dossier",
+  "description": "A query wraps an indexed column in a function or leading wildcard, so the planner ignores the index and scans the whole table.",
+  "body": "Failure mode: a predicate like lower(email) = $1 or col LIKE '%term%' cannot use a plain btree on the column, so Postgres falls back to a sequential scan that degrades as the table grows. Detection signals: EXPLAIN shows Seq Scan on a large table with a selective filter; latency scales with row count; the indexed column appears inside a function. Do not add more memory or retries to mask it. Safer fallback: make the predicate sargable or build a matching expression index (e.g. on lower(email)), or use a gin trigram index for substring search, and confirm the plan switches to an index scan.",
+  "domain": "postgres",
+  "scope_hint": "code.database.postgres:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.postgres:human_authored",
+  "pack_id": "code.database.postgres"
+}

@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:cloud:launch-into-hard-quota-limit",
+  "type": "failure_dossier",
+  "description": "Launching a workload whose peak load exceeds a non-raisable service quota, causing throttling or hard failure under real traffic.",
+  "body": "Failure mode: a service is launched without checking managed-service quotas, then hits a function-concurrency, connection, or API-rate hard cap at peak and starts throttling or erroring for users. Detection signals: 429/throttle errors and quota-exceeded events under load; quota utilization at 100%; the limit is documented as non-raisable. Do not assume quotas auto-scale with demand. Safer fallback: project peak load against each quota before launch, request increases for soft limits early, redesign around hard limits, and alarm on utilization. Risk boundary: when projected load exceeds a hard limit, escalate for an architecture change rather than launching into the cap.",
+  "domain": "platform",
+  "scope_hint": "platform.cloud:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.cloud:human_authored",
+  "pack_id": "platform.cloud"
+}

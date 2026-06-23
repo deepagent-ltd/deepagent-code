@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:hwprot:capture-bus-with-analyzer",
+  "type": "methodology",
+  "title": "Capture and decode a bus with a logic analyzer",
+  "description": "Probe the actual wires and decode the protocol before trusting any software-level interpretation of a transaction.",
+  "body": "Use when a peripheral link misbehaves and the cause is unclear. Do not debug from print statements alone, since they hide wire-level timing and acknowledgement. Actions: attach probes to clock and data lines, trigger on a start or chip-select event, and decode the captured frames against the protocol spec. Validation signals include a decoded trace whose phases match the spec and timing that meets setup and hold requirements. Risk boundary: probing a live high-speed bus can disturb signal integrity, so verify probe loading is acceptable before trusting the capture.",
+  "domain": "hw_protocols",
+  "scope_hint": "hardware.protocols:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.protocols",
+  "pack_id": "hardware.protocols"
+}

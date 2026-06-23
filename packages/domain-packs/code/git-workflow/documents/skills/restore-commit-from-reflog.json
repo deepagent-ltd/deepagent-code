@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:git:restore-commit-from-reflog",
+  "type": "skill",
+  "title": "Restore a commit found in the reflog",
+  "description": "Find a dangling commit in git reflog and reattach it to a branch so the work becomes reachable again.",
+  "body": "Use when a reset, aborted rebase, or branch deletion left a commit unreferenced. Do not run aggressive garbage collection while the commit is still missing. Actions: run git reflog and read entries for HEAD or the affected branch; identify the hash; inspect it with git show <hash>; recover with git branch recovered <hash> or git cherry-pick <hash>; verify the content. Validation signals include the recovered commit appearing in git log of a real branch and its diff matching the lost work. Risk boundary: reflog entries are pruned over time, so act before gc removes them.",
+  "domain": "git_workflow",
+  "scope_hint": "code.git-workflow:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.git-workflow",
+  "pack_id": "code.git-workflow"
+}

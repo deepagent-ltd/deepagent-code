@@ -1,0 +1,11 @@
+{
+  "ref_id": "methodology:security:secure-code-review",
+  "type": "methodology",
+  "description": "Trace input, validation, authorization, sink, and tests for a changed code path.",
+  "body": "Steps: identify untrusted input; inspect validation; inspect authz; inspect sink control; inspect denied tests. Use when secure coding work touches trusted boundaries, dangerous sinks, authorization checks, secret flows, and negative-path tests. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: follow the ordered review, edit, and validation sequence; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include server-side deny tests, sink-specific payload tests, secret redaction checks, dependency evidence, and audit notes. Risk boundary: escalate or stop when the task involves client-only enforcement, secret disclosure, injection, permissive fallback, and unsafe shortcuts, missing owner evidence, or live external state.",
+  "domain": "security",
+  "scope_hint": "code.security:methodology",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.security:skill_survey",
+  "pack_id": "code.security"
+}

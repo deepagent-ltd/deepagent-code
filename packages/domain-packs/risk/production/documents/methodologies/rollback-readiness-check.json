@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:production:rollback-readiness-check",
+  "type": "methodology",
+  "title": "Rollback readiness check",
+  "description": "Verify rollback or disablement exists, is tested enough for the risk, and does not create data incompatibility.",
+  "body": "Use for releases, migrations, feature flags, config changes, infrastructure changes, and hotfixes. Do not assume reverting code reverses data or external systems. Steps: name the rollback command or runbook, check version compatibility, define validation after rollback, and identify state that cannot be undone. Validation signals include both forward and rollback smoke checks or a documented manual gate. Risk boundary: irreversible changes require explicit human acceptance. Use when Production Change Risk Controls work touches repository conventions, toolchain files, changed symbols, validation commands, and runtime output. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: follow the ordered review, edit, and validation sequence; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include package-local checks, focused tests, build output, smoke runs, and command logs. Risk boundary: escalate or stop when the task involves broad rewrites, generated-file drift, stale assumptions, and unvalidated behavior changes, missing owner evidence, or live external state.",
+  "domain": "rollback",
+  "scope_hint": "risk.production:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.production",
+  "pack_id": "risk.production"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:hdl:rtl-is-concurrent-hardware",
+  "type": "knowledge",
+  "title": "RTL describes concurrent hardware",
+  "description": "Every always block and continuous assignment evaluates in parallel each cycle; RTL is not sequential software statements.",
+  "body": "Use when reasoning about why RTL behaves unlike software. Unlike imperative code, all always blocks and assign statements run concurrently and continuously; ordering within a clocked block matters only for blocking vs non-blocking semantics, not execution sequence across blocks. Do not read RTL top-to-bottom as steps. Actions: map each block to the hardware it infers (register, mux, adder) and verify exactly one driver per net. Validation signals include elaboration with no multi-driver errors. Risk boundary: assuming software-like ordering causes multi-driver and race bugs that synthesis or sim will flag — read the warnings.",
+  "domain": "hdl",
+  "scope_hint": "hardware.hdl:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.hdl",
+  "pack_id": "hardware.hdl"
+}

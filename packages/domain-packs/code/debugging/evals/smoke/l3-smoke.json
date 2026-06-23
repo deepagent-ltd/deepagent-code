@@ -1,0 +1,71 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "code.debugging",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "debug",
+    "code_domains": [
+      "code",
+      "debugging"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "L3 smoke for code.debugging: reproduction steps, stack traces, logs, state transitions, traces, crashes, and regression evidence"
+    ],
+    "round_signals": [
+      "l3_validation_smoke"
+    ],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "round_signals": [],
+    "user_overrides": [],
+    "repo_signals": [
+      "rename a public function and update all its call sites"
+    ]
+  },
+  "retrieval_query": "reproduce minimize stack trace log timeline root cause regression lock hypothesis",
+  "expected_pack_id": "code.debugging",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "debugging and root-cause behavior L3 validation smoke",
+    "signals": [
+      "minimal repro",
+      "before/after trace",
+      "controlled hypothesis result",
+      "regression test",
+      "and command output"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "debugging and root-cause behavior diagnosis smoke",
+    "signals": [
+      "separate symptom wrapper",
+      "root cause",
+      "environment variance",
+      "data condition",
+      "and concurrency/timing triggers"
+    ]
+  },
+  "source_refs": [
+    "source:official-tooling-docs:paraphrased",
+    "source:engineering-practice:paraphrased"
+  ]
+}

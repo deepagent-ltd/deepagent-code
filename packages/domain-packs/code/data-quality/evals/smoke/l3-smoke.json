@@ -1,0 +1,70 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "code.data-quality",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "data_quality",
+      "validation",
+      "freshness"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "L3 smoke for code.data-quality: Great Expectations validation suite, freshness and completeness checks, null and duplicate handling, data contract enforcement, schema checks, and data drift detection"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "set up a CI pipeline to build and publish a container image"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "retrieval_query": "data quality data validation freshness completeness null duplicate data contract schema check great expectations anomaly detection data drift threshold expectation",
+  "expected_pack_id": "code.data-quality",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "code.data-quality L3 validation smoke",
+    "signals": [
+      "expectation suite passes on landed data with thresholds met",
+      "freshness check confirms the latest partition is within SLA",
+      "completeness and uniqueness checks pass on key columns",
+      "schema check matches the data contract",
+      "drift metric compared to a baseline and within tolerance"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "code.data-quality diagnosis smoke",
+    "signals": [
+      "null rate on a key column jumps with no alert",
+      "duplicate keys appear after an upstream change",
+      "the latest partition is stale but the pipeline reported success",
+      "a new source column violates the contract silently",
+      "feature distribution drifts away from the training baseline"
+    ]
+  },
+  "source_refs": [
+    "source:data-contract-practice:paraphrased",
+    "source:data-validation-expectations:paraphrased"
+  ]
+}

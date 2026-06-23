@@ -1,0 +1,11 @@
+{
+  "ref_id": "strategy:frontend_web:visible-first-validation",
+  "type": "strategy",
+  "description": "Treat the rendered browser view as the primary evidence for UI changes.",
+  "body": "Use this when a task changes HTML, CSS, client-side routing, browser APIs, media, canvas, or interactive controls. Read source to understand the intended state, but close the loop in a real browser viewport with interaction, screenshot, and console/network inspection. Do not use this as a substitute for framework-specific state tests when a React, Vue, or similar pack is active. Execution changes include starting the local app path when needed, navigating to the affected route, exercising the changed control, and recording whether the visible result matches the source-level claim. Validation signals are nonblank rendering, expected text and controls, stable screenshots, no unexpected console errors, and no failed required network requests. Risk boundary: if rendering depends on live services or credentials, use fixtures or ask for approval before sending real traffic. Use when Frontend Web work touches visible UI behavior, browser console output, DOM state, assets, viewport behavior, and interaction evidence. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: choose the smallest direction that preserves the domain contract; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include browser smoke, component tests, viewport screenshots, console/network checks, and accessibility assertions. Risk boundary: escalate or stop when the task involves visual regressions, inaccessible interaction, hydration mismatch, and browser-only failures, missing owner evidence, or live external state.",
+  "domain": "web",
+  "scope_hint": "code.frontend.web:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.frontend.web:browser_validation_practice",
+  "pack_id": "code.frontend.web"
+}

@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:wasm:undebuggable-trap-no-symbols",
+  "type": "failure_dossier",
+  "description": "A release build strips symbols and panic messages, so a WASM trap surfaces as a bare 'unreachable' with no source location.",
+  "body": "Failure mode: the build strips debug info and disables panic messages, so when the module hits a trap (unreachable, out-of-bounds access) the only signal is an opaque 'unreachable executed' with no stack or source line, making the incident undiagnosable. Detection signals: production errors show only a bare WASM trap; no panic message or source mapping; a crash that cannot be traced to a line. Do not ship a build whose sole crash signal is 'unreachable'. Safer fallback: install a panic hook so panics print a message and stack, build dev with DWARF/source maps, and retain a symbol map for release so a deployed crash can be symbolized back to source.",
+  "domain": "wasm",
+  "scope_hint": "code.wasm:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.wasm:human_authored",
+  "pack_id": "code.wasm"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:ghci:harden-release-publish-pipeline",
+  "type": "methodology",
+  "title": "Harden a release/publish pipeline",
+  "description": "Add environment protection, provenance, and least-privilege publish so a tag push cannot silently ship malware.",
+  "body": "Steps: 1. Move the publish step into a job bound to a protected environment with required reviewers. 2. Scope GITHUB_TOKEN/registry creds to packages:write only on that job. 3. Generate build provenance/attestation (SLSA) and verify it on consume. 4. Ensure the publish trigger is a signed tag from a protected branch, not arbitrary push. 5. Confirm the published artifact hash matches the built artifact. Rollback point: yank/deprecate the published version and revert the workflow. Validation: a publish requires environment approval and produces a verifiable provenance record tied to the source commit.",
+  "domain": "ci_github",
+  "scope_hint": "platform.ci-github:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.ci-github",
+  "pack_id": "platform.ci-github"
+}

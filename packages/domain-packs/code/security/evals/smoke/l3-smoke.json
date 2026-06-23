@@ -1,0 +1,71 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "code.security",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "code"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [
+      "security"
+    ],
+    "repo_signals": [
+      "L3 smoke for code.security: input validation, dangerous sinks, auth checks, secret handling, and security-oriented tests"
+    ],
+    "round_signals": [
+      "l3_validation_smoke"
+    ],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "round_signals": [],
+    "user_overrides": [],
+    "repo_signals": [
+      "rename a CSS class and adjust the flexbox gap"
+    ]
+  },
+  "retrieval_query": "input validation sink authz check secret handling dependency CVE secure default threat model",
+  "expected_pack_id": "code.security",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "secure coding behavior L3 validation smoke",
+    "signals": [
+      "server-side deny tests",
+      "sink payload tests",
+      "secret scan/redaction checks",
+      "and code-path audit notes"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "secure coding behavior diagnosis smoke",
+    "signals": [
+      "separate trusted boundary",
+      "input encoding",
+      "command construction",
+      "storage/logging",
+      "and error disclosure failures"
+    ]
+  },
+  "source_refs": [
+    "source:owasp-wstg:paraphrased",
+    "source:github-security-advisories:paraphrased"
+  ]
+}

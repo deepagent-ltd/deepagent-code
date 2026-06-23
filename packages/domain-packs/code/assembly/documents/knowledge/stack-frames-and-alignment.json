@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:asm:stack-frames-and-alignment",
+  "type": "knowledge",
+  "title": "Stack frames and alignment rules",
+  "description": "A frame holds the return address, saved registers, and locals; the ABI mandates an alignment at call boundaries that aligned instructions depend on.",
+  "body": "Use when laying out a frame or reasoning about stack-related crashes. The call pushes a return address; the prologue saves registers and reserves locals, and the ABI requires the stack pointer to hold a specific alignment (16 bytes) at the point of a call so SSE/NEON aligned accesses in the callee work. x86-64 System V also has a 128-byte red zone below rsp usable without adjustment in leaf functions. Do not miscount pushes or ignore the alignment requirement. Actions: compute alignment including the return address and saved registers. Validation signals include sp aligned at call sites in the debugger. Risk boundary: misalignment crashes intermittently inside aligned-load instructions deep in a callee, far from the unaligned frame; treat alignment as mandatory.",
+  "domain": "assembly",
+  "scope_hint": "code.assembly:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.assembly",
+  "pack_id": "code.assembly"
+}

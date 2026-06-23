@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:conc:non-idempotent-op-double-applied",
+  "type": "failure_dossier",
+  "description": "A retried or duplicated operation applies its side effect twice because there is no uniqueness guard.",
+  "body": "Failure mode: an operation with a side effect (charge, increment, send, insert) can run concurrently or be retried, and a check-then-act guard lets two callers both pass, so the effect is applied twice. Detection signals: duplicate charges/messages under retry or load; counts higher than expected; the bug appears only when the same request arrives twice quickly. Do not rely on check-then-act under concurrency. Safer fallback: derive the effect from a unique operation key with an atomic insert-if-absent or compare-and-set, dedupe at the boundary, and verify with a concurrent test firing the same key many times that the effect lands exactly once.",
+  "domain": "concurrency",
+  "scope_hint": "code.concurrency:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.concurrency:human_authored",
+  "pack_id": "code.concurrency"
+}

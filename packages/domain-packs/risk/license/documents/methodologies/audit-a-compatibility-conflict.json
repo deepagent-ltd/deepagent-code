@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:lic:audit-a-compatibility-conflict",
+  "type": "methodology",
+  "title": "Audit a flagged compatibility conflict",
+  "description": "Confirm whether a flagged incompatible pair is real by examining linkage and distribution, then route it.",
+  "body": "Steps: 1. Take the flagged license pair and the components involved. 2. Determine how they combine: static link, dynamic link, separate process, or mere aggregation. 3. Decide whether the combination actually forms a single covered work (aggregation on a disk is usually fine; static linking usually is not). 4. If a real conflict, identify options: replace the dependency, isolate it behind a process boundary, or re-license your side. 5. Record the analysis and route to counsel. Rollback point: before changing how components are linked. Validation: the analysis documents linkage type and the obligation that the linkage triggers.",
+  "domain": "license",
+  "scope_hint": "risk.license:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.license",
+  "pack_id": "risk.license"
+}

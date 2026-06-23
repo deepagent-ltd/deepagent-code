@@ -1,0 +1,71 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "code.git-workflow",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "git_workflow",
+      "branching",
+      "merge",
+      "rebase",
+      "conflict"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "L3 smoke for code.git-workflow: rebase vs merge, conflict resolution, cherry-pick, force-push safety, bisect, reflog recovery"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "render a fragment shader for the lighting pass"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "retrieval_query": "git rebase merge conflict branch cherry-pick force-push bisect reflog squash",
+  "expected_pack_id": "code.git-workflow",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "code.git-workflow L3 validation smoke",
+    "signals": [
+      "git status shows a clean working tree and the target branch contains the expected commits",
+      "git log --graph confirms the integration produced the intended topology with no orphaned commits",
+      "a dry-run merge or rebase completes without unresolved conflict markers remaining in tracked files",
+      "the remote branch ref matches the local ref after a normal push, with no force required"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "code.git-workflow diagnosis smoke",
+    "signals": [
+      "conflict markers (<<<<<<<, =======, >>>>>>>) remain in committed files",
+      "git reflog shows a reset or rebase that dropped commits unexpectedly",
+      "the branch is in detached HEAD state and new commits are unreachable from any ref",
+      "a force-push overwrote remote commits that another author had pushed",
+      "cherry-picked changes appear twice in history after the source branch was later merged"
+    ]
+  },
+  "source_refs": [
+    "pro-git-book:branching-and-merging",
+    "git-scm:reset-rebase-reflog-reference"
+  ]
+}

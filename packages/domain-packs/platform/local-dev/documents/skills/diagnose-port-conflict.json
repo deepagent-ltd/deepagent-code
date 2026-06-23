@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:local_dev:diagnose-port-conflict",
+  "type": "skill",
+  "title": "Diagnose and resolve a dev port conflict",
+  "description": "Identify which process holds a needed local port and report it with the safe options to free or change the port.",
+  "body": "Use when a dev server fails to start with an address-in-use error. Actions: identify the port from the error, find the owning process (lsof/ss/netstat by port), and report the PID, command, and whether it is a stale instance of this project or an unrelated service. Offer options: stop the stale process, change the dev port via config, or use a different port. Do not blindly kill a PID you have not identified. This skill exposes capability only and must not terminate processes without runtime permission. Validation signals include the owning process named and the port confirmed free or reassigned before retrying startup. Risk boundary: do not kill an unidentified or system process to free a port; report it and let the human decide, escalating if it is not a dev artifact.",
+  "domain": "platform",
+  "scope_hint": "platform.local-dev:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.local-dev",
+  "pack_id": "platform.local-dev"
+}

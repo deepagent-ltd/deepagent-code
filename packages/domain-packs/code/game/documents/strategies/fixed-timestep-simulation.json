@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:game:fixed-timestep-simulation",
+  "type": "strategy",
+  "title": "Simulate on a fixed timestep",
+  "description": "Advance game logic in fixed-size steps decoupled from the render rate so physics is stable and frame-rate independent.",
+  "body": "Use when implementing the update loop for anything physical or time-sensitive. Do not multiply movement by a variable frame delta, and do not let a slow frame produce a giant step. Actions: accumulate real elapsed time, run the simulation in fixed dt increments (e.g. 1/60 s) while the accumulator allows, clamp the max steps per frame to avoid a spiral of death, and interpolate render state between the last two sim states. Validation signals include identical movement distance at 30 and 144 FPS and stable physics under frame spikes. Risk boundary: a variable timestep makes physics non-deterministic and frame-rate-dependent, breaking replays and netcode — treat it as a design defect, not a tuning choice.",
+  "domain": "game",
+  "scope_hint": "code.game:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.game",
+  "pack_id": "code.game"
+}

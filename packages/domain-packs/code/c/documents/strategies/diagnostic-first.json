@@ -1,0 +1,11 @@
+{
+  "ref_id": "strategy:c:diagnostic-first",
+  "type": "strategy",
+  "description": "In C, read the first compiler error with file:line and the caret-marked token before making speculative edits.",
+  "body": "In C, the toolchain already points at the real problem, so the first compiler error with file:line and the caret-marked token should guide the edit rather than a guess. Use when cc -Wall -Wextra -Werror with the same standard (-std=c11) the build uses or clang-tidy, cppcheck, and -fanalyzer warnings reports an error or warning. Do not start editing before reading the diagnostic, and avoid changing code you have not confirmed is implicated. Actions: read the first actionable diagnostic and the owned frame, inspect that location, make the smallest fix, then rerun the unit binary plus valgrind on the changed translation unit. Validation signals include the resolved diagnostic, a passing focused test, and no new warnings from clang-tidy, cppcheck, and -fanalyzer warnings. Risk boundary: if the diagnostic exposes a deeper design fault, escalate rather than papering over it.",
+  "domain": "c",
+  "scope_hint": "code.c:strategies",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.c:skill_survey",
+  "pack_id": "code.c"
+}

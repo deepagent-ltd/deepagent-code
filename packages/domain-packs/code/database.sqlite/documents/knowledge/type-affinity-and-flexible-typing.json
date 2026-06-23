@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:sqlite:type-affinity-and-flexible-typing",
+  "type": "knowledge",
+  "title": "Type affinity and flexible typing",
+  "description": "SQLite columns have affinity, not strict types, so a column can hold values of any type unless constrained.",
+  "body": "Use when data comes back the wrong type or a constraint seems ignored. SQLite uses dynamic typing: a column's declared type gives it an affinity (TEXT, NUMERIC, INTEGER, REAL, BLOB) that nudges conversion, but by default any column can store any type, so a string can land in an INTEGER column. Do not assume the declared type enforces storage type. Actions: use a STRICT table (modern SQLite) to enforce declared types, add CHECK constraints, and validate/convert in application code; know that INTEGER PRIMARY KEY aliases the rowid. Validation signals include a STRICT-table test rejecting a wrong-typed insert. Risk boundary: relying on affinity for data integrity lets malformed values persist silently — a correctness finding.",
+  "domain": "sqlite",
+  "scope_hint": "code.database.sqlite:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.sqlite",
+  "pack_id": "code.database.sqlite"
+}

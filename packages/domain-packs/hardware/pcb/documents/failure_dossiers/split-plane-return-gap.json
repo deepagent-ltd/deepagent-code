@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure_dossier:pcb:split-plane-return-gap",
+  "type": "failure_dossier",
+  "description": "Radiated emissions spike at clock harmonics because a fast net crosses a gap or split in its reference plane.",
+  "body": "Failure mode: a high-speed trace routes over a slot, plane split, or void, forcing its return current into a long detour that enlarges the radiating loop. Detection signals: emissions failing at specific clock harmonics, a plane review showing a gap beneath the net, and improvement when the net is rerouted over solid copper. Do not add shielding to mask emissions while the return path is broken. Safer fallback: reroute the net over a continuous plane or bridge the split with stitching capacitors and re-scan emissions.",
+  "domain": "pcb",
+  "scope_hint": "hardware.pcb:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.pcb:human_authored",
+  "pack_id": "hardware.pcb"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:serving:version-and-rollback-models",
+  "type": "strategy",
+  "title": "Gate model versions behind health checks and rollback",
+  "description": "Treat a model version as a deployable artifact: validate it on a canary before full traffic and keep the prior version ready to restore.",
+  "body": "Use when promoting a new model into serving. Do not swap the served model in place with no validation — a regressed or corrupt artifact then degrades every request at once. Actions: load the new version, run a health/shadow check on real traffic shape, route a small canary share, watch quality and latency metrics, then ramp; keep the previous version loaded for instant rollback. Validation signals include a passing health check and canary metrics within bounds before ramp. Risk boundary: a bad model rollout is a production incident; require a verified rollback path and confirm canary metrics before sending full traffic.",
+  "domain": "model_serving",
+  "scope_hint": "code.model-serving:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.model-serving",
+  "pack_id": "code.model-serving"
+}

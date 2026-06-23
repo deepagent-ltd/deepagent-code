@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:performance:set-regression-thresholds",
+  "type": "strategy",
+  "title": "Gate merges on explicit regression thresholds",
+  "description": "Define quantitative latency/throughput/allocation budgets and fail the change when a benchmark crosses them, rather than eyeballing numbers.",
+  "body": "Use when a change touches a hot path or a perf-sensitive component. Do not approve based on a single ad-hoc run or a 'looks fine' glance, and avoid thresholds so loose they never trip. Actions: pick the metric that matters (p99 latency, ops/sec, allocations/op), set a budget relative to the recorded baseline with a noise margin, and wire a benchmark that fails the build when the budget is exceeded; record baseline, threshold, and observed delta. Validation signals include a CI benchmark job comparing against a stored baseline and a failing run on a deliberately slowed path. Risk boundary: if results are within noise, do not claim improvement; escalate a real regression rather than relaxing the threshold to pass.",
+  "domain": "code",
+  "scope_hint": "code.performance:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.performance",
+  "pack_id": "code.performance"
+}

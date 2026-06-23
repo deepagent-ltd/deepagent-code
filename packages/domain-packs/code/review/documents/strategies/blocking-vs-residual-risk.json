@@ -1,0 +1,11 @@
+{
+  "ref_id": "strategy:review:blocking-vs-residual-risk",
+  "type": "strategy",
+  "description": "Separate release-blocking defects from residual risks that need disclosure but not necessarily rejection.",
+  "body": "Use this when reviewing a diff with possible production impact, test gaps, or migration risk. Classify an issue as blocking only when current evidence shows a plausible user-visible failure, data loss, security exposure, build break, or contract regression. Classify residual risk when the gap is real but unproven, such as missing negative tests or unverified edge coverage. Do not inflate style disagreements into blockers. The report should state the evidence, affected surface, severity, and whether the reviewer would block merge. Verification signals include failing tests, changed public contracts, missing guards on new negative paths, or absence of relevant runner output. Use when Code Review work touches diff hunks, line evidence, tests, contracts, and blast radius. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: choose the smallest direction that preserves the domain contract; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include file/line citations, failing or missing tests, reproduced behavior, and residual-risk notes. Risk boundary: escalate or stop when the task involves unsupported findings, severity inflation, hidden fixes, and ignoring user constraints, missing owner evidence, or live external state.",
+  "domain": "review",
+  "scope_hint": "code.review:strategies",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.review:human_authored",
+  "pack_id": "code.review"
+}

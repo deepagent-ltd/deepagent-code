@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:wasm:set-up-a-wasm-build-pipeline",
+  "type": "methodology",
+  "title": "Set up a WASM build and bundling pipeline",
+  "description": "Wire toolchain, target, binding generation, and bundler so the module and its JS glue load correctly.",
+  "body": "Steps: 1. Choose the target for the runtime (browser unknown vs WASI) and install the toolchain (wasm-pack/wasm-bindgen, or the WASI sdk). 2. Build the module and generate the JS binding glue. 3. Configure the bundler to treat .wasm as an asset and import the glue, ensuring the .wasm is served as application/wasm. 4. Load with instantiateStreaming and supply the import object. 5. Smoke-test a round-trip call. Rollback point: build config is reversible. Validation: the module instantiates in the target runtime and a binding call returns the expected value.",
+  "domain": "wasm",
+  "scope_hint": "code.wasm:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.wasm",
+  "pack_id": "code.wasm"
+}

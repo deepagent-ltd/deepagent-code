@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:release:reused-version-tag",
+  "type": "failure_dossier",
+  "description": "Re-tagging or re-publishing an already-released version with different content, so the same version number maps to two different artifacts.",
+  "body": "Failure mode: a fix is shipped by moving an existing tag or republishing the same version with new bits, so consumers who pinned that version silently get different code and caches serve inconsistent artifacts. Detection signals: registry rejects or warns on overwrite; two builds share a version but differ in hash; consumers report behavior changes without a version change. Do not mutate or reuse a published version. Safer fallback: publish a new incremented version for any content change, treat published versions as immutable, and if a bad version shipped, deprecate/yank it and release a successor. Risk boundary: escalate any request to overwrite a published version rather than complying.",
+  "domain": "code",
+  "scope_hint": "code.release:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.release:human_authored",
+  "pack_id": "code.release"
+}

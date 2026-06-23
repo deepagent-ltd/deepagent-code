@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:flutter:debug-jank-with-devtools",
+  "type": "methodology",
+  "title": "Debug jank with the performance profiler",
+  "description": "Find dropped frames by profiling and trace them to heavy build work or blocking on the UI isolate.",
+  "body": "Steps: 1. Reproduce the jank in profile mode (not debug, which is slower and misleading). 2. Open the Flutter DevTools performance view and record the interaction, finding frames over the 16ms budget. 3. Inspect the timeline: long build/layout phases point to heavy build methods or over-broad rebuilds; UI-isolate stalls point to synchronous CPU work. 4. Fix by offloading CPU work to an isolate, narrowing rebuilds (const/state placement), or precomputing. 5. Re-profile to confirm frames are within budget. Rollback point: before refactoring widget structure. Validation: the DevTools timeline shows frames back under budget and the rebuild counter shows fewer widgets rebuilding.",
+  "domain": "dart",
+  "scope_hint": "code.dart-flutter:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.dart-flutter",
+  "pack_id": "code.dart-flutter"
+}

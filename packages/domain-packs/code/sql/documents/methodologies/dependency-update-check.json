@@ -1,0 +1,11 @@
+{
+  "ref_id": "methodology:sql:dependency-update-check",
+  "type": "methodology",
+  "description": "In SQL, when object dependencies (views, foreign keys, triggers) and migration ordering change, verify the lockfile, generated artifacts, and a runtime smoke.",
+  "body": "In SQL, a dependency change ripples through object dependencies (views, foreign keys, triggers) and migration ordering, generated bindings, and runtime behavior, so it needs more than a recompile. Use when object dependencies (views, foreign keys, triggers) and migration ordering are added, removed, or version-bumped. Do not merge a dependency bump on a green compile alone, and avoid editing the lockfile by hand. Actions: inspect the dependency delta, re-resolve and review object dependencies (views, foreign keys, triggers) and migration ordering, regenerate affected ORM-generated DDL and migration files emitted by the schema tool, then run a transaction that runs the statement, asserts row counts, then rolls back and smoke the import/runtime path. Validation signals include a reviewed lockfile diff, a clean EXPLAIN ANALYZE, the query plan, and index-usage inspection pass, and a passing runtime smoke. Risk boundary: escalate on a major-version bump, a transitive conflict you cannot resolve, or a license/security flag.",
+  "domain": "sql",
+  "scope_hint": "code.sql:methodologies",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.sql:skill_survey",
+  "pack_id": "code.sql"
+}

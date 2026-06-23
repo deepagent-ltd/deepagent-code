@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:cpuarch:assumed-vectorization",
+  "type": "failure_dossier",
+  "description": "Assuming the compiler vectorized a loop because optimization flags were set, when aliasing or dependencies forced scalar code.",
+  "body": "Failure mode: -O3 and a target ISA are enabled and the loop is declared 'vectorized', but pointer aliasing, an unknown trip count, or a loop-carried dependency made the compiler emit scalar code; the expected speedup never materializes and nobody checked. Detection signals: no speedup despite -O3; vectorization remark says 'not vectorized: possible aliasing'; disassembly shows scalar ops. Do not assume vectorization from flags alone. Safer fallback: read the vectorization remarks, inspect the emitted assembly for packed instructions, remove the blocker (restrict, known bounds), and confirm the speedup tracks lane width.",
+  "domain": "cpu_arch",
+  "scope_hint": "hardware.cpu-arch:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.cpu-arch:human_authored",
+  "pack_id": "hardware.cpu-arch"
+}

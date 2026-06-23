@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:mlai:checkpoint-long-runs",
+  "type": "strategy",
+  "title": "Checkpoint training so a run is resumable",
+  "description": "Persist model weights, optimizer state, and epoch on a schedule so an interrupted run resumes instead of restarting.",
+  "body": "Use when a training run is long enough that losing it costs real time or money. Do not save weights alone — without optimizer state (momentum, Adam moments) and the epoch/step counter, resuming restarts the schedule and degrades results. Actions: checkpoint weights, optimizer state, scheduler state, and step on an interval and at best-validation; verify a resume reproduces the loss. Validation signals include a restored checkpoint that continues at the same loss and a best-metric checkpoint kept separate from the latest. Risk boundary: an un-resumable run on preemptible hardware can vanish; for multi-hour jobs, treat missing checkpoints as a blocking gap.",
+  "domain": "ml",
+  "scope_hint": "code.ml-ai:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.ml-ai",
+  "pack_id": "code.ml-ai"
+}

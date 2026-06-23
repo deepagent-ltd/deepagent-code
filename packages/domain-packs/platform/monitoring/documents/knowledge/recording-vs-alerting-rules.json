@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:mon:recording-vs-alerting-rules",
+  "type": "knowledge",
+  "title": "Recording versus alerting rules",
+  "description": "Recording rules precompute series on a schedule; alerting rules evaluate a condition and emit alerts.",
+  "body": "Use when deciding which rule type to author. A recording rule evaluates an expression on an interval and stores the result as a new series for cheap reuse; an alerting rule evaluates a condition and, once true for its 'for' duration, sends an alert to Alertmanager. Do not embed heavy expressions directly in alert rules — back them with recording rules. Actions: precompute with recording rules and reference them from alerts. Validation signals include alerts firing only after the 'for' window. Risk boundary: a missing 'for' duration makes alerts flap on transient spikes.",
+  "domain": "monitoring",
+  "scope_hint": "platform.monitoring:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.monitoring",
+  "pack_id": "platform.monitoring"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:dist:cap-and-its-real-tradeoff",
+  "type": "knowledge",
+  "title": "CAP and the partition-time tradeoff",
+  "description": "During a network partition a system must choose between staying consistent (rejecting some requests) or staying available (risking stale data); it cannot have both.",
+  "body": "Use when justifying a system's behavior under partition. CAP says that when a partition splits nodes, you either refuse to answer on the minority side to preserve consistency (CP) or answer with possibly-stale data to stay available (AP); the choice only bites during a partition, and when the network is healthy you can have both low latency and consistency. Do not claim a system is 'CA' as a steady-state property, and avoid treating CAP as a knob you set globally. Actions: classify each operation's partition behavior and document which side stops serving. Validation signals include a partition test that confirms the chosen CP-or-AP behavior on the minority side. Risk boundary: an AP system serving stale reads to a consistency-critical flow is a correctness gap; flag operations whose partition behavior contradicts their guarantee.",
+  "domain": "distributed",
+  "scope_hint": "code.distributed:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.distributed",
+  "pack_id": "code.distributed"
+}

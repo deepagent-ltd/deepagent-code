@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:asm:declare-inline-asm-effects",
+  "type": "strategy",
+  "title": "Declare every inline-asm input, output, and clobber",
+  "description": "Tell the compiler the full truth about an inline-asm block's operands, clobbered registers, memory, and flags so it does not reuse trashed state.",
+  "body": "Use when embedding assembly inside C/C++ via inline asm. Do not omit a clobbered register, the memory clobber, or the flags (cc) clobber, and do not assume the compiler knows what the block touches. Actions: list every input/output with correct constraints, add each scratch register and 'cc' to the clobber list, add 'memory' if the asm reads/writes memory the compiler tracks, and mark it volatile if it has side effects or must not be optimized away. Validation signals include correct results at -O2/-O3 (where the compiler aggressively reuses registers) matching a C reference. Risk boundary: a missing clobber lets the compiler keep a value in a register the asm trashed, producing a heisenbug that only appears at high optimization; treat the constraint/clobber list as a correctness contract.",
+  "domain": "assembly",
+  "scope_hint": "code.assembly:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.assembly",
+  "pack_id": "code.assembly"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:comp:verify-audit-trail-integrity",
+  "type": "methodology",
+  "title": "Verify audit-trail integrity",
+  "description": "Confirm the audit store is append-only and that its records cannot be silently altered or dropped.",
+  "body": "Steps: 1. Inspect the audit sink's write path and permissions to confirm the application role cannot UPDATE/DELETE. 2. If hash-chained, recompute the chain and confirm it is unbroken. 3. Attempt a modification/deletion in a test environment and confirm it fails or is detected. 4. Sample records and confirm each carries actor, time, action, and before/after. 5. Record gaps. Rollback point: test environment only, never production records. Validation: tampering is provably blocked or detectable, and required fields are present on sampled records.",
+  "domain": "compliance",
+  "scope_hint": "risk.compliance:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.compliance",
+  "pack_id": "risk.compliance"
+}

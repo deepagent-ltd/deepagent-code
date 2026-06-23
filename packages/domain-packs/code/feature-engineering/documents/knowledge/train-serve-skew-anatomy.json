@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:feat:train-serve-skew-anatomy",
+  "type": "knowledge",
+  "title": "Anatomy of train/serve skew",
+  "description": "The three skew sources — schema, distribution, and computation — and how each manifests between offline and online.",
+  "body": "Use when reasoning about why a model underperforms online despite strong offline metrics. Train/serve skew has three sources: schema skew (a feature present offline but missing/renamed online), distribution skew (training data sampled differently than live), and computation skew (the same feature computed by different code paths). Do not assume one cause — diagnose which applies. Actions: compare offline and online schemas, compare distributions, and replay an entity to compare computed values. Validation signals include a per-source skew check and a replay log diffing offline vs online features. Risk boundary: untreated skew silently caps production accuracy; if computation skew is found, unify the definition before re-evaluating.",
+  "domain": "feature_engineering",
+  "scope_hint": "code.feature-engineering:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.feature-engineering",
+  "pack_id": "code.feature-engineering"
+}

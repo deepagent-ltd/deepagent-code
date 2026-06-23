@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:kernel:write-a-character-device-driver",
+  "type": "methodology",
+  "title": "Write a character device driver",
+  "description": "Implement a /dev driver by registering file operations, handling open/read/write/ioctl with validation, and cleaning up on unload.",
+  "body": "Steps: 1. Register the device and its file_operations (open, read, write, ioctl, release). 2. In each op, validate user buffers/sizes with copy_to/from_user and check ioctl command numbers and arg sizes. 3. Protect shared device state with the right lock for the context. 4. Implement the module unload path to free every resource and unregister cleanly. 5. Test concurrent open/close, bad ioctls, and rmmod under load. Rollback point: before registering with the kernel (so a failed init unwinds). Validation: KASAN/kmemleak stay clean, bad ioctls return errors, and rmmod after stress leaves no leaked resources; a driver that works for one process but races on concurrent access is incomplete.",
+  "domain": "kernel",
+  "scope_hint": "code.os-kernel:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.os-kernel",
+  "pack_id": "code.os-kernel"
+}

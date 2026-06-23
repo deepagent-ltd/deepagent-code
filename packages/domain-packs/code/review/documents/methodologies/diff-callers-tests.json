@@ -1,0 +1,11 @@
+{
+  "ref_id": "methodology:review:diff-callers-tests",
+  "type": "methodology",
+  "description": "Read the diff, inspect callers, then inspect tests.",
+  "body": "Steps: inspect the changed diff; identify owned interfaces and invariants; inspect representative callers; inspect tests for success and failure paths; report only evidence-backed findings. Rollback point: stop before suggesting unrelated rewrites.\n\nEvidence boundary: apply only when current task, repository, or validation evidence matches this pack boundary. Do not override a more specific pack or explicit project contract. Use when Code Review work touches diff hunks, line evidence, tests, contracts, and blast radius. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: follow the ordered review, edit, and validation sequence; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include file/line citations, failing or missing tests, reproduced behavior, and residual-risk notes. Risk boundary: escalate or stop when the task involves unsupported findings, severity inflation, hidden fixes, and ignoring user constraints, missing owner evidence, or live external state.",
+  "domain": "review",
+  "scope_hint": "code.review:methodologies",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.review",
+  "pack_id": "code.review"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:pcb:decoupling-frequency-response",
+  "type": "knowledge",
+  "title": "Decoupling network frequency response",
+  "description": "Bulk, ceramic, and small-value capacitors cover different frequency bands, and their parasitics set a self-resonant frequency.",
+  "body": "Use when selecting a mix of decoupling capacitors for a supply rail. Do not rely on a single capacitor value, since each is only effective near its self-resonant frequency. Actions: combine bulk and high-frequency values, verify the network keeps supply impedance low across the band, and account for mounting inductance. Validation signals include a flat low supply impedance across the relevant frequencies and stable rails under transient load. Risk boundary: a gap in the impedance profile lets noise through at that frequency, so escalate to added values when a resonance falls in the operating band.",
+  "domain": "pcb",
+  "scope_hint": "hardware.pcb:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.pcb",
+  "pack_id": "hardware.pcb"
+}

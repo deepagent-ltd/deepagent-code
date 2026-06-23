@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:hwverif:close-coverage",
+  "type": "strategy",
+  "title": "Drive functional coverage to closure",
+  "description": "Define covergroups for the intended behaviors and direct stimulus until every meaningful bin is hit or waived.",
+  "body": "Use when measuring whether verification has actually exercised the design's features. Do not treat passing tests as coverage, since a test can pass without reaching the corner of interest. Actions: define covergroups and coverpoints for key behaviors, run regressions, and add directed tests for the holes random missed. Validation signals include coverage reaching the closure target and every unhit bin either exercised or formally waived. Risk boundary: an unjustified coverage hole means an unverified feature, so deny closure sign-off until each hole is hit or waived with rationale.",
+  "domain": "hw_verification",
+  "scope_hint": "hardware.verification:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.verification",
+  "pack_id": "hardware.verification"
+}

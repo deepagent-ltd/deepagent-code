@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:ios:configure-signing-and-provisioning",
+  "type": "strategy",
+  "title": "Get signing and provisioning right",
+  "description": "Match bundle id, capabilities, certificate, and provisioning profile so the app installs on devices and ships to the Store.",
+  "body": "Use when an app fails to install on device or archive for distribution. Do not mismatch the bundle id, entitlements, and provisioning profile, and do not ship with a development profile. Actions: align the bundle id across target and profile, ensure entitlements match the profile's capabilities, use a distribution certificate and profile for release archives, and prefer managed (automatic) signing unless a specific need requires manual. Validation signals include a clean archive that validates for the Store and installs on a registered device. Risk boundary: an expired certificate or wrong profile blocks all installs/releases and can interrupt shipping; treat signing config as release-critical and verify before a submission deadline.",
+  "domain": "ios",
+  "scope_hint": "code.mobile.ios:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.mobile.ios",
+  "pack_id": "code.mobile.ios"
+}

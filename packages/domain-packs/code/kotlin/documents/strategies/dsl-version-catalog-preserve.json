@@ -1,0 +1,11 @@
+{
+  "ref_id": "strategy:lang_kotlin:dsl-version-catalog-preserve",
+  "type": "strategy",
+  "description": "Follow existing build.gradle.kts and libs.versions.toml patterns when changing dependencies or plugins.",
+  "body": "Use when editing Gradle Kotlin DSL, plugin versions, or dependencies. Do not hardcode versions in one module if the repo uses version catalogs or convention plugins. Inspect buildSrc, convention plugins, and libs aliases, then make the smallest aligned change. Verify Gradle configuration and affected compile/test task. Risk boundary is configuration cache breakage or inconsistent dependency versions. Use when Kotlin Engineering work touches repository conventions, toolchain files, changed symbols, validation commands, and runtime output. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: choose the smallest direction that preserves the domain contract; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include package-local checks, focused tests, build output, smoke runs, and command logs. Risk boundary: escalate or stop when the task involves broad rewrites, generated-file drift, stale assumptions, and unvalidated behavior changes, missing owner evidence, or live external state.",
+  "domain": "kotlin",
+  "scope_hint": "code.kotlin:strategys",
+  "evidence_strength": "medium",
+  "provenance_tag": "code.kotlin:seed:kotlin_gradle_coroutines_docs:paraphrased",
+  "pack_id": "code.kotlin"
+}

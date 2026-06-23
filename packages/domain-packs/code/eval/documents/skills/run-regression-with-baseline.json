@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:eval:run-regression-with-baseline",
+  "type": "skill",
+  "title": "Run a regression against a baseline",
+  "description": "Execute or scaffold the regression suite, compare a candidate to a baseline with variance, and report per-segment deltas.",
+  "body": "Use when validating that a change does not regress quality. Procedure: run the frozen golden set through baseline and candidate, compute per-segment metrics with multiple seeds for variance, and compare each segment with a significance check; if no suite exists, scaffold the minimal harness. Report which segments moved, whether any regression is significant, and the dataset version used. This skill exposes capability only and must not run against production traffic without permission. Risk boundary: a change reported as safe without a per-segment significance comparison is unverified; a significant regression in any critical segment must block the change.",
+  "domain": "eval",
+  "scope_hint": "code.eval:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.eval",
+  "pack_id": "code.eval"
+}

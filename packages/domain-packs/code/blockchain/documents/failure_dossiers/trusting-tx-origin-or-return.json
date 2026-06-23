@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:chain:trusting-tx-origin-or-return",
+  "type": "failure_dossier",
+  "description": "Authorizing on tx.origin or acting on an unchecked external return value, enabling phishing relays and fake-token exploits.",
+  "body": "Failure mode: a contract authorizes a caller using tx.origin (so a malicious contract the user is tricked into calling passes the check) or assumes a token transfer returned true without checking, so non-standard or malicious tokens silently fail or lie. Detection signals: tx.origin appears in an authorization check; low-level call/transfer results are not checked; a malicious mock token returning false is not handled. Do not trust tx.origin or unchecked external return data. Safer fallback: authorize on msg.sender only, use SafeERC20 wrappers that verify transfer success, validate every external return value and oracle bound, and test against a malicious mock that reverts, returns false, or re-enters.",
+  "domain": "blockchain",
+  "scope_hint": "code.blockchain:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.blockchain:human_authored",
+  "pack_id": "code.blockchain"
+}

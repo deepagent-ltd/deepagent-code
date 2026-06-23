@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:hwpwr:manage-leakage",
+  "type": "strategy",
+  "title": "Manage static leakage with cell choice and gating",
+  "description": "Use high-threshold cells on non-critical paths and power-gate idle regions to cut leakage current.",
+  "body": "Use when static power matters on a design that idles in low-activity states. Do not use low-threshold fast cells everywhere, since they leak heavily even when idle. Actions: assign high-threshold cells to paths with timing slack, power-gate regions that sit idle, and verify leakage in power analysis. Validation signals include reduced static power in the report and timing still met after the cell swaps. Risk boundary: over-using slow cells can break timing on critical paths, so escalate to a mixed-threshold strategy when slack disappears.",
+  "domain": "power_design",
+  "scope_hint": "hardware.power:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.power",
+  "pack_id": "hardware.power"
+}

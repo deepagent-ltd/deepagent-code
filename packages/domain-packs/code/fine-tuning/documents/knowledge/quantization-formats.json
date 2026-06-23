@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:finetune:quantization-formats",
+  "type": "knowledge",
+  "title": "Quantization formats and their tradeoffs",
+  "description": "How fp16, bf16, int8, and int4 trade memory and speed against numerical precision and quality.",
+  "body": "Use when choosing a numeric format for training or inference. bf16 keeps fp32's exponent range with less mantissa, stabilizing training; fp16 risks overflow without loss scaling; int8 and int4 shrink memory sharply but need calibration and can degrade hard cases. Do not equate lower bits with free savings — quality loss is task-dependent and uneven. Actions: match format to stage (bf16 for training stability, int8/int4 for inference under a quality budget) and benchmark each. Validation signals include a precision-vs-quality benchmark and a chosen format inside the budget. Risk boundary: aggressive int4 can break long-context reasoning; if quality falls outside budget, escalate rather than accept silent degradation.",
+  "domain": "fine_tuning",
+  "scope_hint": "code.fine-tuning:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.fine-tuning",
+  "pack_id": "code.fine-tuning"
+}

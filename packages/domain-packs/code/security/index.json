@@ -1,0 +1,453 @@
+[
+  {
+    "ref_id": "knowledge:security:client-code-is-untrusted",
+    "type": "knowledge",
+    "title": "Client Code Is Untrusted",
+    "summary": "Client code can be modified by users and cannot enforce server resource protection.",
+    "domains": [
+      "security",
+      "code"
+    ],
+    "triggers": [
+      "client",
+      "code",
+      "modified",
+      "users",
+      "cannot",
+      "enforce",
+      "server",
+      "resource"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.security"
+  },
+  {
+    "ref_id": "knowledge:security:error-messages-leak",
+    "type": "knowledge",
+    "title": "Error Messages Leak",
+    "summary": "Detailed errors can reveal secrets, identifiers, existence, or internals.",
+    "domains": [
+      "security",
+      "code"
+    ],
+    "triggers": [
+      "detailed",
+      "errors",
+      "reveal",
+      "secrets",
+      "identifiers",
+      "existence",
+      "internals",
+      "security"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.security"
+  },
+  {
+    "ref_id": "methodology:security:secure-code-review",
+    "type": "methodology",
+    "title": "Secure Code Review",
+    "summary": "Trace input, validation, authorization, sink, and tests for a changed code path.",
+    "domains": [
+      "security",
+      "code"
+    ],
+    "triggers": [
+      "trace",
+      "input",
+      "validation",
+      "authorization",
+      "sink",
+      "tests",
+      "changed",
+      "code"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.security"
+  },
+  {
+    "ref_id": "methodology:security:security-negative-test-pass",
+    "type": "methodology",
+    "title": "Security Negative Test Pass",
+    "summary": "Add or run negative tests for malformed, unauthorized, cross-scope, and expired paths.",
+    "domains": [
+      "security",
+      "code"
+    ],
+    "triggers": [
+      "negative",
+      "tests",
+      "malformed",
+      "unauthorized",
+      "cross",
+      "scope",
+      "expired",
+      "paths"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.security"
+  },
+  {
+    "ref_id": "skill:security:secure-sink-audit",
+    "type": "skill",
+    "title": "Secure Sink Audit",
+    "summary": "Audit changed code for dangerous sinks and required controls.",
+    "domains": [
+      "security",
+      "code"
+    ],
+    "triggers": [
+      "audit",
+      "changed",
+      "code",
+      "dangerous",
+      "sinks",
+      "required",
+      "controls",
+      "inputs"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.security"
+  },
+  {
+    "ref_id": "strategy:code_security:server-side-enforcement",
+    "type": "strategy",
+    "title": "Server Side Enforcement",
+    "summary": "Security decisions must be enforced in trusted server/runtime code.",
+    "domains": [
+      "code_security",
+      "security",
+      "code"
+    ],
+    "triggers": [
+      "security",
+      "decisions",
+      "must",
+      "enforced",
+      "trusted",
+      "server",
+      "runtime",
+      "code"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.security"
+  },
+  {
+    "ref_id": "strategy:security:dangerous-sink-map",
+    "type": "strategy",
+    "title": "Dangerous Sink Map",
+    "summary": "Map untrusted input to SQL, shell, HTML, filesystem, URL, deserialization, and logs.",
+    "domains": [
+      "security",
+      "code"
+    ],
+    "triggers": [
+      "untrusted",
+      "input",
+      "shell",
+      "html",
+      "filesystem",
+      "deserialization",
+      "logs",
+      "secure"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.security"
+  },
+  {
+    "ref_id": "strategy:security:secret-redaction-in-code",
+    "type": "strategy",
+    "title": "Secret Redaction In Code",
+    "summary": "Code paths that handle secrets should redact before errors, logs, and telemetry.",
+    "domains": [
+      "security",
+      "code"
+    ],
+    "triggers": [
+      "code",
+      "paths",
+      "that",
+      "handle",
+      "secrets",
+      "should",
+      "redact",
+      "before"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.security"
+  },
+  {
+    "ref_id": "strategy:security:validate-untrusted-input",
+    "type": "strategy",
+    "title": "Validate and parameterize every untrusted input",
+    "summary": "Treat all external input as hostile and constrain it at the trust boundary with allowlists and parameterized APIs before it reaches a sink.",
+    "domains": [
+      "security",
+      "code"
+    ],
+    "triggers": [
+      "input validation",
+      "sanitize",
+      "parameterize",
+      "allowlist",
+      "injection",
+      "boundary"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.security"
+  },
+  {
+    "ref_id": "strategy:security:authorize-every-access",
+    "type": "strategy",
+    "title": "Authorize every resource access, not just the route",
+    "summary": "Check that the authenticated principal owns or may act on the specific object on every data access, not only at login or route entry.",
+    "domains": [
+      "security",
+      "code"
+    ],
+    "triggers": [
+      "authorization",
+      "authz",
+      "idor",
+      "object-level",
+      "ownership",
+      "access control"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.security"
+  },
+  {
+    "ref_id": "strategy:security:triage-dependency-cves",
+    "type": "strategy",
+    "title": "Triage dependency CVEs by reachability and fix path",
+    "summary": "When a vulnerability advisory hits a dependency, assess exploitability in this codebase and choose patch, pin, or mitigate rather than reflexively bumping or ignoring.",
+    "domains": [
+      "security",
+      "code"
+    ],
+    "triggers": [
+      "cve",
+      "advisory",
+      "dependency",
+      "vulnerability",
+      "patch",
+      "reachability"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.security"
+  },
+  {
+    "ref_id": "methodology:security:threat-model-the-change",
+    "type": "methodology",
+    "title": "Threat-model the change before implementing",
+    "summary": "Walk the data and trust flow of a change to enumerate who can reach the new surface, what they could abuse, and which controls block it.",
+    "domains": [
+      "security",
+      "code"
+    ],
+    "triggers": [
+      "threat model",
+      "attack surface",
+      "trust boundary",
+      "abuse case",
+      "stride",
+      "data flow"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.security"
+  },
+  {
+    "ref_id": "methodology:security:dependency-cve-triage-flow",
+    "type": "methodology",
+    "title": "Run a dependency CVE triage flow",
+    "summary": "Take a flagged advisory from detection to a recorded decision: scope the blast radius, test the fix, and document residual risk.",
+    "domains": [
+      "security",
+      "code"
+    ],
+    "triggers": [
+      "cve triage",
+      "advisory",
+      "sca",
+      "lockfile",
+      "upgrade",
+      "mitigation"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.security"
+  },
+  {
+    "ref_id": "knowledge:security:secure-defaults-fail-closed",
+    "type": "knowledge",
+    "title": "Secure defaults fail closed",
+    "summary": "A safe system denies, encrypts, and minimizes by default so that a missing or misconfigured control results in no access rather than full access.",
+    "domains": [
+      "security",
+      "code"
+    ],
+    "triggers": [
+      "secure default",
+      "fail closed",
+      "deny by default",
+      "least privilege",
+      "misconfiguration",
+      "default"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.security"
+  },
+  {
+    "ref_id": "knowledge:security:authn-vs-authz",
+    "type": "knowledge",
+    "title": "Authentication is not authorization",
+    "summary": "Authentication proves who a principal is; authorization decides what that principal may do — a valid session says nothing about access to a specific resource.",
+    "domains": [
+      "security",
+      "code"
+    ],
+    "triggers": [
+      "authentication",
+      "authorization",
+      "session",
+      "principal",
+      "permission",
+      "role"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.security"
+  },
+  {
+    "ref_id": "skill:security:scan-dependency-cves",
+    "type": "skill",
+    "title": "Scan dependencies for known CVEs",
+    "summary": "Run the ecosystem audit tool and report each advisory with severity, affected package, fixed version, and direct-vs-transitive status.",
+    "domains": [
+      "security",
+      "code"
+    ],
+    "triggers": [
+      "audit",
+      "scan",
+      "cve",
+      "sca",
+      "npm audit",
+      "vulnerability"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.security"
+  }
+]

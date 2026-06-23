@@ -1,0 +1,74 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "code.scala",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "scala",
+      "sbt",
+      "jvm"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [
+      "scala"
+    ],
+    "frameworks": [
+      "akka",
+      "cats-effect"
+    ],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "L3 smoke for code.scala: sbt build, implicits and givens, exhaustive pattern matching on sealed traits, futures and cats-effect, and the type system"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "plain prose note with no repository or domain signal"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "retrieval_query": "scala sbt build.sbt implicit given type class pattern match sealed exhaustive case class future cats effect IO akka variance for-comprehension",
+  "expected_pack_id": "code.scala",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "code.scala L3 validation smoke",
+    "signals": [
+      "sbt compile and sbt test pass with pinned scalaVersion and plugin versions",
+      "pattern match on a sealed hierarchy is exhaustive with no compiler warning",
+      "effectful code is a value composed in IO/Future and run once at the edge",
+      "implicit/given resolution is unambiguous with no ambiguous-implicit error"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "code.scala diagnosis smoke",
+    "signals": [
+      "non-exhaustive match warning ignored, leading to MatchError at runtime",
+      "Future started eagerly so side effects fire before composition",
+      "ambiguous or surprising implicit pulled from an unexpected scope",
+      "blocking call inside an async/IO context starving the thread pool",
+      "sbt build non-reproducible because versions are unpinned or dynamic"
+    ]
+  },
+  "source_refs": [
+    "source:scala-docs:paraphrased",
+    "source:cats-effect-docs:paraphrased"
+  ]
+}

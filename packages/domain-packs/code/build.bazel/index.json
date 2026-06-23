@@ -1,0 +1,420 @@
+[
+  {
+    "ref_id": "strategy:bazel:keep-actions-hermetic",
+    "type": "strategy",
+    "title": "Keep every action hermetic",
+    "summary": "Make each build action depend only on declared inputs and the toolchain Bazel controls, so results are reproducible and cacheable anywhere.",
+    "domains": [
+      "bazel",
+      "build_graph",
+      "hermetic_build",
+      "remote_cache"
+    ],
+    "triggers": [
+      "hermetic build",
+      "declared inputs",
+      "reproducible"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.build.bazel"
+  },
+  {
+    "ref_id": "strategy:bazel:declare-narrow-explicit-deps",
+    "type": "strategy",
+    "title": "Declare narrow, explicit dependencies",
+    "summary": "List exactly the targets a rule needs in deps so the action graph is precise and incremental rebuilds stay small.",
+    "domains": [
+      "bazel",
+      "build_graph",
+      "hermetic_build",
+      "remote_cache"
+    ],
+    "triggers": [
+      "deps",
+      "explicit dependencies",
+      "narrow target"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.build.bazel"
+  },
+  {
+    "ref_id": "strategy:bazel:gate-access-with-visibility",
+    "type": "strategy",
+    "title": "Gate target access with visibility",
+    "summary": "Set visibility so a target is reachable only by the packages meant to use it, enforcing module boundaries at build time.",
+    "domains": [
+      "bazel",
+      "build_graph",
+      "hermetic_build",
+      "remote_cache"
+    ],
+    "triggers": [
+      "visibility",
+      "package_group",
+      "module boundary"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.build.bazel"
+  },
+  {
+    "ref_id": "strategy:bazel:exploit-incrementality",
+    "type": "strategy",
+    "title": "Build for incrementality",
+    "summary": "Structure targets at a fine enough granularity that a change rebuilds only the affected slice of the graph.",
+    "domains": [
+      "bazel",
+      "build_graph",
+      "hermetic_build",
+      "remote_cache"
+    ],
+    "triggers": [
+      "incremental build",
+      "target granularity",
+      "rebuild scope"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.build.bazel"
+  },
+  {
+    "ref_id": "strategy:bazel:leverage-remote-cache-safely",
+    "type": "strategy",
+    "title": "Leverage the remote cache only with hermetic actions",
+    "summary": "Turn on remote caching after actions are hermetic, so cache entries are valid across machines instead of returning stale or wrong outputs.",
+    "domains": [
+      "bazel",
+      "build_graph",
+      "hermetic_build",
+      "remote_cache"
+    ],
+    "triggers": [
+      "remote cache",
+      "remote execution",
+      "cache hit"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.build.bazel"
+  },
+  {
+    "ref_id": "strategy:bazel:pin-dependencies-with-bzlmod",
+    "type": "strategy",
+    "title": "Manage external dependencies with bzlmod",
+    "summary": "Declare external modules in MODULE.bazel with explicit versions so the dependency set is reproducible and resolvable.",
+    "domains": [
+      "bazel",
+      "build_graph",
+      "hermetic_build",
+      "remote_cache"
+    ],
+    "triggers": [
+      "bzlmod",
+      "MODULE.bazel",
+      "external dependency"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.build.bazel"
+  },
+  {
+    "ref_id": "methodology:bazel:trace-deps-with-query",
+    "type": "methodology",
+    "title": "Trace dependencies with bazel query",
+    "summary": "A procedure to inspect the real dependency graph and explain why one target depends on another.",
+    "domains": [
+      "bazel",
+      "build_graph",
+      "hermetic_build",
+      "remote_cache"
+    ],
+    "triggers": [
+      "bazel query",
+      "somepath",
+      "rdeps"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.build.bazel"
+  },
+  {
+    "ref_id": "methodology:bazel:diagnose-cache-miss",
+    "type": "methodology",
+    "title": "Diagnose a persistent cache miss",
+    "summary": "A procedure to find why an action never hits the cache by isolating the input that changes between builds.",
+    "domains": [
+      "bazel",
+      "build_graph",
+      "hermetic_build",
+      "remote_cache"
+    ],
+    "triggers": [
+      "cache miss",
+      "execution log",
+      "action key"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.build.bazel"
+  },
+  {
+    "ref_id": "methodology:bazel:make-action-deterministic",
+    "type": "methodology",
+    "title": "Make a non-deterministic action reproducible",
+    "summary": "A procedure to remove sources of non-determinism so an action produces identical outputs from identical inputs.",
+    "domains": [
+      "bazel",
+      "build_graph",
+      "hermetic_build",
+      "remote_cache"
+    ],
+    "triggers": [
+      "non-deterministic",
+      "reproducible output",
+      "byte-identical"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.build.bazel"
+  },
+  {
+    "ref_id": "methodology:bazel:author-a-starlark-rule",
+    "type": "methodology",
+    "title": "Author a custom Starlark rule",
+    "summary": "A procedure to write a rule that declares inputs and outputs explicitly so its actions are hermetic and cacheable.",
+    "domains": [
+      "bazel",
+      "build_graph",
+      "hermetic_build",
+      "remote_cache"
+    ],
+    "triggers": [
+      "starlark rule",
+      "rule implementation",
+      "providers"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.build.bazel"
+  },
+  {
+    "ref_id": "knowledge:bazel:action-graph-and-keys",
+    "type": "knowledge",
+    "title": "How the action graph and action keys work",
+    "summary": "Bazel builds a graph of actions keyed by their inputs, command, and environment, and reuses a cached output whenever the key matches.",
+    "domains": [
+      "bazel",
+      "build_graph",
+      "hermetic_build",
+      "remote_cache"
+    ],
+    "triggers": [
+      "action graph",
+      "action key",
+      "cache key"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.build.bazel"
+  },
+  {
+    "ref_id": "knowledge:bazel:workspace-vs-bzlmod",
+    "type": "knowledge",
+    "title": "WORKSPACE versus bzlmod dependency management",
+    "summary": "Legacy WORKSPACE declares external repos imperatively, while bzlmod resolves a versioned module graph from MODULE.bazel.",
+    "domains": [
+      "bazel",
+      "build_graph",
+      "hermetic_build",
+      "remote_cache"
+    ],
+    "triggers": [
+      "WORKSPACE",
+      "bzlmod",
+      "module resolution"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.build.bazel"
+  },
+  {
+    "ref_id": "knowledge:bazel:visibility-and-package-groups",
+    "type": "knowledge",
+    "title": "Visibility rules and package groups",
+    "summary": "Visibility controls which packages may depend on a target, and package_group names a reusable set of packages to grant access to.",
+    "domains": [
+      "bazel",
+      "build_graph",
+      "hermetic_build",
+      "remote_cache"
+    ],
+    "triggers": [
+      "visibility",
+      "package_group",
+      "allowlist"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.build.bazel"
+  },
+  {
+    "ref_id": "knowledge:bazel:remote-execution-vs-cache",
+    "type": "knowledge",
+    "title": "Remote caching versus remote execution",
+    "summary": "Remote caching stores and reuses action outputs, while remote execution also runs the actions themselves on a remote cluster.",
+    "domains": [
+      "bazel",
+      "build_graph",
+      "hermetic_build",
+      "remote_cache"
+    ],
+    "triggers": [
+      "remote execution",
+      "remote cache",
+      "build cluster"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.build.bazel"
+  },
+  {
+    "ref_id": "skill:bazel:write-a-build-target",
+    "type": "skill",
+    "title": "Write a BUILD target with correct deps and visibility",
+    "summary": "Add a library or binary target to a BUILD file with precise srcs, deps, and visibility, then verify the graph with bazel query.",
+    "domains": [
+      "bazel",
+      "build_graph",
+      "hermetic_build",
+      "remote_cache"
+    ],
+    "triggers": [
+      "BUILD file",
+      "bazel target",
+      "deps visibility"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.build.bazel"
+  },
+  {
+    "ref_id": "skill:bazel:investigate-rebuild-scope",
+    "type": "skill",
+    "title": "Investigate why a change rebuilds so much",
+    "summary": "Use bazel query and the execution log to find the dependency edge that makes a small edit trigger a large rebuild.",
+    "domains": [
+      "bazel",
+      "build_graph",
+      "hermetic_build",
+      "remote_cache"
+    ],
+    "triggers": [
+      "rebuild scope",
+      "rdeps",
+      "execution log"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.build.bazel"
+  }
+]

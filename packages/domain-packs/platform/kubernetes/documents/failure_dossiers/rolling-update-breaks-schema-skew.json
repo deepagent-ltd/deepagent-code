@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:k8s:rolling-update-breaks-schema-skew",
+  "type": "failure_dossier",
+  "description": "A RollingUpdate runs old and new versions against an incompatible database schema, corrupting data during overlap.",
+  "body": "Failure mode: a backward-incompatible change ships as a RollingUpdate, so during the overlap window old pods write the old schema while new pods expect the new one, producing read errors, dropped writes, or corruption. Detection signals: errors only during the rollout window; data written by one version unreadable by the other; failures clear once all pods are on one version. Do not roll out schema-incompatible changes with simple RollingUpdate. Safer fallback: use an expand/contract migration so both versions tolerate the schema, deploy in ordered phases, and verify mixed-version traffic produces no read/write errors before contracting.",
+  "domain": "kubernetes",
+  "scope_hint": "platform.kubernetes:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.kubernetes:human_authored",
+  "pack_id": "platform.kubernetes"
+}

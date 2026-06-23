@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:prompt:never-echo-raw-input-into-instructions",
+  "type": "strategy",
+  "title": "Never echo raw input into instruction position",
+  "description": "Untrusted input is confined to a labeled data section and never concatenated into the system or instruction region.",
+  "body": "Use when a template mixes fixed instructions with variable input. Do not concatenate user text directly into the system prompt or an instruction sentence, and avoid templates where input can close a delimiter and open an instruction. Actions: place untrusted input only inside a clearly delimited, labeled data block, keep system instructions in a separate fixed region, and re-assert constraints after the data. Validation signals include an injection test where input containing instruction-like text does not change behavior. Risk boundary: input that reaches instruction position can hijack the model; treat any path where raw input lands in the system region as a blocking finding.",
+  "domain": "prompt_pipeline",
+  "scope_hint": "code.prompt-pipeline:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.prompt-pipeline",
+  "pack_id": "code.prompt-pipeline"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:asm:follow-the-abi-exactly",
+  "type": "strategy",
+  "title": "Follow the target ABI exactly",
+  "description": "Pass arguments, return values, and preserve registers precisely as the platform ABI dictates so hand-written code interoperates with compiled code.",
+  "body": "Use when writing an assembly function that is called from or calls into compiled code. Do not invent your own register usage or guess argument passing; the caller and callee must agree exactly. Actions: look up the target ABI (System V AMD64, Windows x64, AArch64 AAPCS), place integer/float args in the mandated registers (and overflow on the stack), return in the designated register, and honor the red zone / shadow space rules. Validation signals include the function returning correct results when called from C across many inputs and matching a reference in disassembly. Risk boundary: an ABI violation corrupts the caller's state and crashes far from the cause; treat any deviation from the documented convention as blocking and verify interop against compiled callers.",
+  "domain": "assembly",
+  "scope_hint": "code.assembly:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.assembly",
+  "pack_id": "code.assembly"
+}

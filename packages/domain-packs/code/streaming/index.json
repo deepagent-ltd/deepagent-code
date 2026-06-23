@@ -1,0 +1,468 @@
+[
+  {
+    "ref_id": "strategy:stream:process-on-event-time",
+    "type": "strategy",
+    "title": "Compute on event time, not processing time",
+    "summary": "Window and aggregate by the event's own timestamp so results are deterministic regardless of when records arrive or are reprocessed.",
+    "domains": [
+      "streaming",
+      "stream_processing",
+      "flink",
+      "kafka_streams",
+      "windowing",
+      "watermark"
+    ],
+    "triggers": [
+      "watermark",
+      "event time",
+      "windowing",
+      "stream processing"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.streaming"
+  },
+  {
+    "ref_id": "strategy:stream:bound-out-of-order-with-watermarks",
+    "type": "strategy",
+    "title": "Bound lateness with watermarks and allowed lateness",
+    "summary": "Configure watermark delay and allowed lateness to a measured out-of-order bound so windows fire correctly without waiting forever.",
+    "domains": [
+      "streaming",
+      "stream_processing",
+      "flink",
+      "kafka_streams",
+      "windowing",
+      "watermark"
+    ],
+    "triggers": [
+      "watermark",
+      "out of order",
+      "allowed lateness",
+      "windowing"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.streaming"
+  },
+  {
+    "ref_id": "strategy:stream:exactly-once-end-to-end",
+    "type": "strategy",
+    "title": "Make effects exactly-once end to end",
+    "summary": "Combine checkpointed source offsets with idempotent or transactional sinks so a recovery neither drops nor duplicates output.",
+    "domains": [
+      "streaming",
+      "stream_processing",
+      "flink",
+      "kafka_streams",
+      "windowing",
+      "watermark"
+    ],
+    "triggers": [
+      "exactly once",
+      "checkpoint",
+      "idempotent",
+      "sink"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.streaming"
+  },
+  {
+    "ref_id": "strategy:stream:bound-and-checkpoint-state",
+    "type": "strategy",
+    "title": "Bound and checkpoint operator state",
+    "summary": "Give stateful operators TTLs and reliable checkpoints so state neither grows without limit nor is lost on restart.",
+    "domains": [
+      "streaming",
+      "stream_processing",
+      "flink",
+      "kafka_streams",
+      "windowing",
+      "watermark"
+    ],
+    "triggers": [
+      "stateful operator",
+      "checkpoint",
+      "state ttl",
+      "recovery"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.streaming"
+  },
+  {
+    "ref_id": "strategy:stream:treat-backpressure-as-signal",
+    "type": "strategy",
+    "title": "Surface backpressure as a first-class signal",
+    "summary": "Monitor and bound buffering so a slow downstream applies measurable backpressure instead of silently growing latency or OOMing.",
+    "domains": [
+      "streaming",
+      "stream_processing",
+      "flink",
+      "kafka_streams",
+      "windowing",
+      "watermark"
+    ],
+    "triggers": [
+      "backpressure",
+      "stream processing",
+      "monitoring",
+      "latency"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.streaming"
+  },
+  {
+    "ref_id": "strategy:stream:pick-window-to-semantics",
+    "type": "strategy",
+    "title": "Match window type to the aggregation intent",
+    "summary": "Choose tumbling, sliding, or session windows to fit whether periods are disjoint, overlapping, or activity-driven.",
+    "domains": [
+      "streaming",
+      "stream_processing",
+      "flink",
+      "kafka_streams",
+      "windowing",
+      "watermark"
+    ],
+    "triggers": [
+      "tumbling window",
+      "sliding window",
+      "session window",
+      "windowing"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.streaming"
+  },
+  {
+    "ref_id": "methodology:stream:design-stateful-job",
+    "type": "methodology",
+    "title": "Design a stateful streaming job for recovery",
+    "summary": "A path from defining keys and state to checkpointing and recovery testing before the job carries production load.",
+    "domains": [
+      "streaming",
+      "stream_processing",
+      "flink",
+      "kafka_streams",
+      "windowing",
+      "watermark"
+    ],
+    "triggers": [
+      "stateful operator",
+      "checkpoint",
+      "recovery",
+      "flink"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.streaming"
+  },
+  {
+    "ref_id": "methodology:stream:configure-watermarks",
+    "type": "methodology",
+    "title": "Configure watermarks against real skew",
+    "summary": "Measure out-of-order behavior per source and set watermark and lateness policy so windows fire correctly.",
+    "domains": [
+      "streaming",
+      "stream_processing",
+      "flink",
+      "kafka_streams",
+      "windowing",
+      "watermark"
+    ],
+    "triggers": [
+      "watermark",
+      "out of order",
+      "allowed lateness",
+      "windowing"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.streaming"
+  },
+  {
+    "ref_id": "methodology:stream:verify-exactly-once",
+    "type": "methodology",
+    "title": "Verify exactly-once with a recovery drill",
+    "summary": "Prove the source-to-sink path neither drops nor duplicates by forcing failures and reconciling counts.",
+    "domains": [
+      "streaming",
+      "stream_processing",
+      "flink",
+      "kafka_streams",
+      "windowing",
+      "watermark"
+    ],
+    "triggers": [
+      "exactly once",
+      "checkpoint",
+      "recovery",
+      "idempotent"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.streaming"
+  },
+  {
+    "ref_id": "methodology:stream:tune-throughput-latency",
+    "type": "methodology",
+    "title": "Tune parallelism for throughput and latency",
+    "summary": "Balance operator parallelism, partitioning, and checkpoint interval so the job meets latency without skew or excessive overhead.",
+    "domains": [
+      "streaming",
+      "stream_processing",
+      "flink",
+      "kafka_streams",
+      "windowing",
+      "watermark"
+    ],
+    "triggers": [
+      "backpressure",
+      "parallelism",
+      "throughput",
+      "checkpoint"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.streaming"
+  },
+  {
+    "ref_id": "knowledge:stream:event-vs-processing-time",
+    "type": "knowledge",
+    "title": "Event time versus processing time",
+    "summary": "Why event time gives deterministic results and how watermarks track progress through event time.",
+    "domains": [
+      "streaming",
+      "stream_processing",
+      "flink",
+      "kafka_streams",
+      "windowing",
+      "watermark"
+    ],
+    "triggers": [
+      "event time",
+      "watermark",
+      "processing time",
+      "stream processing"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.streaming"
+  },
+  {
+    "ref_id": "knowledge:stream:window-types",
+    "type": "knowledge",
+    "title": "Tumbling, sliding, and session windows",
+    "summary": "How disjoint tumbling, overlapping sliding, and gap-driven session windows differ in coverage and event membership.",
+    "domains": [
+      "streaming",
+      "stream_processing",
+      "flink",
+      "kafka_streams",
+      "windowing",
+      "watermark"
+    ],
+    "triggers": [
+      "tumbling window",
+      "sliding window",
+      "session window",
+      "windowing"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.streaming"
+  },
+  {
+    "ref_id": "knowledge:stream:checkpoint-vs-savepoint",
+    "type": "knowledge",
+    "title": "Checkpoints versus savepoints",
+    "summary": "How automatic checkpoints enable failure recovery while manual savepoints enable planned upgrades and rescaling.",
+    "domains": [
+      "streaming",
+      "stream_processing",
+      "flink",
+      "kafka_streams",
+      "windowing",
+      "watermark"
+    ],
+    "triggers": [
+      "checkpoint",
+      "savepoint",
+      "recovery",
+      "flink"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.streaming"
+  },
+  {
+    "ref_id": "knowledge:stream:delivery-semantics",
+    "type": "knowledge",
+    "title": "At-most-once, at-least-once, exactly-once",
+    "summary": "What each delivery guarantee means and why exactly-once requires cooperation between source, state, and sink.",
+    "domains": [
+      "streaming",
+      "stream_processing",
+      "flink",
+      "kafka_streams",
+      "windowing",
+      "watermark"
+    ],
+    "triggers": [
+      "exactly once",
+      "at least once",
+      "idempotent",
+      "sink"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.streaming"
+  },
+  {
+    "ref_id": "skill:stream:write-event-time-window",
+    "type": "skill",
+    "title": "Write an event-time windowed aggregation",
+    "summary": "Steps to assign timestamps and watermarks and emit a correct tumbling aggregate tolerant of bounded lateness.",
+    "domains": [
+      "streaming",
+      "stream_processing",
+      "flink",
+      "kafka_streams",
+      "windowing",
+      "watermark"
+    ],
+    "triggers": [
+      "windowing",
+      "watermark",
+      "event time",
+      "tumbling window"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.streaming"
+  },
+  {
+    "ref_id": "skill:stream:run-recovery-drill",
+    "type": "skill",
+    "title": "Run a checkpoint recovery drill",
+    "summary": "Steps to force a failure, recover from a checkpoint, and reconcile output for loss and duplication.",
+    "domains": [
+      "streaming",
+      "stream_processing",
+      "flink",
+      "kafka_streams",
+      "windowing",
+      "watermark"
+    ],
+    "triggers": [
+      "checkpoint",
+      "recovery",
+      "exactly once",
+      "test"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.streaming"
+  }
+]

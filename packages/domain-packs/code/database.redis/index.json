@@ -1,0 +1,468 @@
+[
+  {
+    "ref_id": "strategy:redis:treat-cache-as-derived-and-lossy",
+    "type": "strategy",
+    "title": "Treat the cache as derived and lossy",
+    "summary": "Every cache read must tolerate a miss by falling back to the source, since Redis can evict or restart anytime.",
+    "domains": [
+      "redis",
+      "cache",
+      "keyvalue",
+      "ttl"
+    ],
+    "triggers": [
+      "cache",
+      "derived",
+      "miss",
+      "fallback",
+      "source",
+      "lossy"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.redis"
+  },
+  {
+    "ref_id": "strategy:redis:invalidate-on-write-deterministically",
+    "type": "strategy",
+    "title": "Invalidate cache on write deterministically",
+    "summary": "Writes to the source delete or update the affected cache keys so reads cannot serve indefinitely-stale data.",
+    "domains": [
+      "redis",
+      "cache",
+      "keyvalue",
+      "ttl"
+    ],
+    "triggers": [
+      "invalidation",
+      "write",
+      "delete",
+      "stale",
+      "consistency",
+      "key"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.redis"
+  },
+  {
+    "ref_id": "strategy:redis:bound-memory-with-ttl-and-eviction",
+    "type": "strategy",
+    "title": "Bound memory with TTL and an eviction policy",
+    "summary": "Set maxmemory with an appropriate eviction policy and TTLs so the keyspace cannot grow until Redis OOMs.",
+    "domains": [
+      "redis",
+      "cache",
+      "keyvalue",
+      "ttl"
+    ],
+    "triggers": [
+      "ttl",
+      "eviction",
+      "maxmemory",
+      "lru",
+      "lfu",
+      "memory"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.redis"
+  },
+  {
+    "ref_id": "strategy:redis:make-read-modify-write-atomic",
+    "type": "strategy",
+    "title": "Make read-modify-write atomic",
+    "summary": "Use atomic commands, MULTI/EXEC with WATCH, or a Lua script so concurrent updates do not lose writes.",
+    "domains": [
+      "redis",
+      "cache",
+      "keyvalue",
+      "ttl"
+    ],
+    "triggers": [
+      "atomic",
+      "lua",
+      "multi",
+      "watch",
+      "increment",
+      "race"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.redis"
+  },
+  {
+    "ref_id": "strategy:redis:choose-streams-vs-pubsub-by-durability",
+    "type": "strategy",
+    "title": "Choose streams vs pub/sub by durability need",
+    "summary": "Use Streams when messages must be retained, acked, and replayable; use pub/sub only for fire-and-forget fan-out.",
+    "domains": [
+      "redis",
+      "cache",
+      "keyvalue",
+      "ttl"
+    ],
+    "triggers": [
+      "streams",
+      "pubsub",
+      "durable",
+      "consumer-group",
+      "ack",
+      "fan-out"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.redis"
+  },
+  {
+    "ref_id": "strategy:redis:do-not-trust-distributed-locks-for-correctness",
+    "type": "strategy",
+    "title": "Do not trust distributed locks for correctness",
+    "summary": "Treat Redis locks as efficiency hints, not correctness guarantees; guard critical operations with fencing or idempotency.",
+    "domains": [
+      "redis",
+      "cache",
+      "keyvalue",
+      "ttl"
+    ],
+    "triggers": [
+      "lock",
+      "distributed",
+      "redlock",
+      "fencing",
+      "correctness",
+      "mutex"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.redis"
+  },
+  {
+    "ref_id": "methodology:redis:design-a-cache-aside-flow",
+    "type": "methodology",
+    "title": "Design a cache-aside flow",
+    "summary": "Implement read-through-on-miss with TTL plus write-time invalidation and stampede protection.",
+    "domains": [
+      "redis",
+      "cache",
+      "keyvalue",
+      "ttl"
+    ],
+    "triggers": [
+      "cache-aside",
+      "read-through",
+      "miss",
+      "invalidation",
+      "ttl",
+      "stampede"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.redis"
+  },
+  {
+    "ref_id": "methodology:redis:write-an-atomic-lua-operation",
+    "type": "methodology",
+    "title": "Write an atomic Lua operation",
+    "summary": "Move a multi-step read-modify-write into a Lua script so it executes atomically on the server.",
+    "domains": [
+      "redis",
+      "cache",
+      "keyvalue",
+      "ttl"
+    ],
+    "triggers": [
+      "lua",
+      "script",
+      "atomic",
+      "eval",
+      "multi-key",
+      "evalsha"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.redis"
+  },
+  {
+    "ref_id": "methodology:redis:build-a-stream-consumer-group",
+    "type": "methodology",
+    "title": "Build a stream consumer group",
+    "summary": "Consume a Redis Stream with a group, ack processed entries, and reclaim entries from dead consumers.",
+    "domains": [
+      "redis",
+      "cache",
+      "keyvalue",
+      "ttl"
+    ],
+    "triggers": [
+      "stream",
+      "consumer-group",
+      "xreadgroup",
+      "xack",
+      "xclaim",
+      "pending"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.redis"
+  },
+  {
+    "ref_id": "methodology:redis:choose-persistence-mode",
+    "type": "methodology",
+    "title": "Choose a persistence mode",
+    "summary": "Pick RDB, AOF, or both based on the acceptable data-loss window and restart-time tradeoffs.",
+    "domains": [
+      "redis",
+      "cache",
+      "keyvalue",
+      "ttl"
+    ],
+    "triggers": [
+      "persistence",
+      "rdb",
+      "aof",
+      "fsync",
+      "durability",
+      "snapshot"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.redis"
+  },
+  {
+    "ref_id": "knowledge:redis:cache-invalidation-and-stampede",
+    "type": "knowledge",
+    "title": "Cache invalidation and stampede",
+    "summary": "Stale reads and thundering-herd rebuilds are the two hard cache problems; TTL jitter and single-flight mitigate them.",
+    "domains": [
+      "redis",
+      "cache",
+      "keyvalue",
+      "ttl"
+    ],
+    "triggers": [
+      "invalidation",
+      "stampede",
+      "thundering-herd",
+      "ttl",
+      "jitter",
+      "single-flight"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.redis"
+  },
+  {
+    "ref_id": "knowledge:redis:eviction-policies-and-ttl",
+    "type": "knowledge",
+    "title": "Eviction policies and TTL semantics",
+    "summary": "maxmemory plus a policy decides what is dropped under pressure; TTL and eviction are distinct mechanisms.",
+    "domains": [
+      "redis",
+      "cache",
+      "keyvalue",
+      "ttl"
+    ],
+    "triggers": [
+      "eviction",
+      "maxmemory",
+      "lru",
+      "lfu",
+      "volatile",
+      "ttl"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.redis"
+  },
+  {
+    "ref_id": "knowledge:redis:streams-vs-pubsub-vs-lists",
+    "type": "knowledge",
+    "title": "Streams vs pub/sub vs lists",
+    "summary": "Pub/sub is fire-and-forget, lists are simple queues, and streams add persistence, groups, and replay.",
+    "domains": [
+      "redis",
+      "cache",
+      "keyvalue",
+      "ttl"
+    ],
+    "triggers": [
+      "streams",
+      "pubsub",
+      "lists",
+      "queue",
+      "consumer-group",
+      "durability"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.redis"
+  },
+  {
+    "ref_id": "knowledge:redis:persistence-rdb-vs-aof",
+    "type": "knowledge",
+    "title": "Persistence: RDB vs AOF tradeoffs",
+    "summary": "RDB snapshots are compact with a larger loss window; AOF logs writes for durability at higher cost.",
+    "domains": [
+      "redis",
+      "cache",
+      "keyvalue",
+      "ttl"
+    ],
+    "triggers": [
+      "rdb",
+      "aof",
+      "persistence",
+      "snapshot",
+      "fsync",
+      "loss-window"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.redis"
+  },
+  {
+    "ref_id": "skill:redis:audit-cache-correctness",
+    "type": "skill",
+    "title": "Audit cache correctness",
+    "summary": "Read cache read/write paths and report on miss fallback, write invalidation, TTL, and stampede protection.",
+    "domains": [
+      "redis",
+      "cache",
+      "keyvalue",
+      "ttl"
+    ],
+    "triggers": [
+      "audit",
+      "cache",
+      "invalidation",
+      "miss",
+      "review",
+      "stampede"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.redis"
+  },
+  {
+    "ref_id": "skill:redis:review-distributed-lock-usage",
+    "type": "skill",
+    "title": "Review distributed lock usage",
+    "summary": "Trace a Redis lock and report whether the protected operation stays correct if the lock fails or expires.",
+    "domains": [
+      "redis",
+      "cache",
+      "keyvalue",
+      "ttl"
+    ],
+    "triggers": [
+      "lock",
+      "review",
+      "fencing",
+      "ttl",
+      "redlock",
+      "correctness"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.redis"
+  }
+]

@@ -1,0 +1,70 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "code.api-design",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "api_design",
+      "contract_design",
+      "versioning_design",
+      "resource_modeling"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "L3 smoke for code.api-design: resource modeling, naming consistency, versioning strategy, pagination patterns, error envelope, idempotency keys, contract-first OpenAPI, evolvability"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "fix a Postgres deadlock in the migration"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "retrieval_query": "api design resource modeling versioning pagination idempotency error envelope contract-first openapi evolvability",
+  "expected_pack_id": "code.api-design",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "code.api-design L3 validation smoke",
+    "signals": [
+      "a consumer can navigate the resource model from names alone without reading implementation code",
+      "an additive change to the contract does not break an existing client's generated code",
+      "retrying a write with the same idempotency key returns the original result, not a duplicate",
+      "the OpenAPI document validates and round-trips to generated client and server stubs"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "code.api-design diagnosis smoke",
+    "signals": [
+      "two endpoints model the same concept with different field names or casing",
+      "a client breaks because a field's type changed within the same API version",
+      "a list endpoint returns the whole collection with no pagination contract",
+      "errors arrive in inconsistent shapes so clients cannot parse them uniformly",
+      "a duplicate order is created when a client retries a request after a timeout"
+    ]
+  },
+  "source_refs": [
+    "restful-web-apis:resource-and-hypermedia-design",
+    "openapi-spec:3.1-contract-first-guidance"
+  ]
+}

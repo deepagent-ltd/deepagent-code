@@ -1,0 +1,11 @@
+{
+  "ref_id": "methodology:query:count-list-filter-check",
+  "type": "methodology",
+  "description": "When counting or listing, preserve the filter and path/query used, and do not extend the answer beyond that scope.",
+  "body": "Use for list/count/enumeration tasks. First choose the exact scope: repository root, subdirectory, table, branch, log file, time window, or search pattern. Then run the narrow read-only command. If output is large, summarize with the total and a bounded sample only when the tool actually returned a total; otherwise say the sample is partial. Verify the answer does not claim more than the command measured. This avoids MoE routing variance turning an approximate list into a falsely complete answer. Use when a read-only query, count, list, status, diff, or inspection request must be answered from repository or tool evidence. Do not use when the user asks to edit, fix, deploy, migrate, delete, insert, update, or alter state. Actions: identify the exact scope, run read-only search or inspection tools, cite the source artifact, and preserve the command or file evidence used for the answer. Validation signals include matching counts against tool output, source references, scope labels, and no modified working-tree files. Risk boundary: stop or ask for confirmation if the task changes from query to mutation, if evidence is stale, or if the answer would expose secrets or excessive output.",
+  "domain": "query",
+  "scope_hint": "code.query:count-list",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.query",
+  "pack_id": "code.query"
+}

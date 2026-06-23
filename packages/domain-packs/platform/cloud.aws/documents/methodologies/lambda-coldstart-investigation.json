@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:aws:lambda-coldstart-investigation",
+  "type": "methodology",
+  "title": "Decompose Lambda latency into init, ENI, and execution",
+  "description": "Separate Init Duration, VPC ENI attach, and handler time using X-Ray and Duration metrics before reaching for provisioned concurrency.",
+  "body": "Use when a Lambda has unpredictable latency. Do not enable provisioned concurrency before knowing where the time goes. Actions: read Init Duration from the REPORT line to size cold-start cost, enable X-Ray to split SDK/downstream time from handler logic, check if the function is VPC-attached (Hyperplane ENI warm-up) and whether package size inflates init, and correlate spikes with ConcurrentExecutions. Validation signals include X-Ray segments attributing the latency, Init Duration shrinking after package trimming, and p99 stabilizing once provisioned concurrency matches the warm-pool need. Risk boundary: changing a production alias weight or VPC subnet is human-gated.",
+  "domain": "aws",
+  "scope_hint": "platform.cloud.aws:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.cloud.aws",
+  "pack_id": "platform.cloud.aws"
+}

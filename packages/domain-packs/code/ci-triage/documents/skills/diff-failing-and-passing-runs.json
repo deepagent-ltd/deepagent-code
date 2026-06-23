@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:ci_triage:diff-failing-and-passing-runs",
+  "type": "skill",
+  "title": "Diff a failing run against a passing run",
+  "description": "Compare a failing CI run to the last passing one across commit, dependencies, environment, and config to localize the change.",
+  "body": "Use when triaging why a previously-green pipeline now fails. Actions: pull the last passing and the failing run, and compare their commit range, resolved dependency versions, runner image, environment variables, and workflow config, reporting each difference. Do not assume the code diff is the only variable; infra and dependency drift fail green pipelines too. This skill exposes capability only and must not fetch from CI providers without runtime permission. Validation signals include a structured delta isolating the likely cause. Risk boundary: if the passing baseline cannot be retrieved, report the cause as unlocalized rather than blaming the latest code diff by default.",
+  "domain": "code",
+  "scope_hint": "code.ci-triage:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.ci-triage",
+  "pack_id": "code.ci-triage"
+}

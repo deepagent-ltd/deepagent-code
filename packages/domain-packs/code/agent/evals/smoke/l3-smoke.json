@@ -1,0 +1,71 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "code.agent",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "agent",
+      "agent_loop",
+      "tool_registry",
+      "memory",
+      "mcp"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "L3 smoke for code.agent: agent loop termination, tool registry and tool permission, context window budgeting, agent memory, MCP server integration, react agent no-progress guard"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "plain prose note with no repository or domain signal"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "retrieval_query": "agent loop termination step cap tool registry permission context window budget memory state mcp server client no progress guard runner truth",
+  "expected_pack_id": "code.agent",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "code.agent L3 validation smoke",
+    "signals": [
+      "loop terminates within the step cap on every path",
+      "no-progress guard halts a stalled loop",
+      "each tool requires a registered permission before execution",
+      "context budget enforced before each model call"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "code.agent diagnosis smoke",
+    "signals": [
+      "agent loop with no step cap or termination check",
+      "model narration trusted over runner result",
+      "tool invoked without a registry permission entry",
+      "context window overflow from unbounded history",
+      "memory grows without bound or eviction"
+    ]
+  },
+  "source_refs": [
+    "source:react-agent-paper:paraphrased",
+    "source:mcp-spec:paraphrased"
+  ]
+}

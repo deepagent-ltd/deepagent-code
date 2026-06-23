@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:php:write-and-run-phpunit-tests",
+  "type": "methodology",
+  "title": "Write and run PHPUnit tests",
+  "description": "Structure tests with PHPUnit, isolate framework dependencies, and run them through the project's configured command.",
+  "body": "Steps: 1. Place tests under the configured tests/ directory with a matching PSR-4 test namespace. 2. Extend the right base case (PHPUnit\\Framework\\TestCase for pure units, the framework's TestCase for integration). 3. Arrange with fixtures/factories, mock collaborators via createMock, and act on the unit. 4. Assert on outcomes and exception types. 5. Run via the project's command (vendor/bin/phpunit or php artisan test / bin/phpunit). Rollback point: before changing phpunit.xml. Validation: the suite runs green and a deliberately broken assertion fails, proving tests actually execute.",
+  "domain": "php",
+  "scope_hint": "code.php:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.php",
+  "pack_id": "code.php"
+}

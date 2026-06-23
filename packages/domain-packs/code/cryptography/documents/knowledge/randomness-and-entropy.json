@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:crypto:randomness-and-entropy",
+  "type": "knowledge",
+  "title": "Randomness, entropy, and the CSPRNG",
+  "description": "Security requires unpredictable values from a CSPRNG seeded by OS entropy; statistical randomness from a PRNG is not the same as unpredictability.",
+  "body": "Use when generating any value that must be unguessable. A general PRNG (Mersenne Twister, LCG) passes statistical tests but is fully predictable from its state or seed, so it must never produce keys, nonces, salts, or tokens; a CSPRNG is seeded from OS entropy and designed so past/future outputs cannot be inferred. Do not seed a CSPRNG from time/PID or fall back to a PRNG when entropy seems slow. Actions: always call the OS/library CSPRNG and request the full required width. Validation signals include every secret tracing to a CSPRNG. Risk boundary: predictable randomness silently breaks otherwise-correct crypto and is invisible in functional tests; treat any non-CSPRNG secret source as critical.",
+  "domain": "cryptography",
+  "scope_hint": "code.cryptography:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.cryptography",
+  "pack_id": "code.cryptography"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:vdb:exact-vs-approximate-search",
+  "type": "knowledge",
+  "title": "When exact search beats an ANN index",
+  "description": "Below a dataset size threshold, brute-force exact search is faster and simpler than maintaining an ANN index.",
+  "body": "Reference for deciding whether an ANN index is warranted at all. For small collections (often tens of thousands of vectors), a brute-force exact scan computes all distances quickly and gives perfect recall with no index to build, tune, or rebuild. Use when the dataset is small or recall must be exactly 100%. Do not add an HNSW or IVFFlat index reflexively; below the threshold it adds build cost and approximation error for no latency win. Validation signals include exact scan latency staying within budget and recall being 1.0 by definition. Risk boundary: as the dataset grows, exact search scales linearly and will eventually breach the latency budget, so set a row-count threshold that triggers the move to an ANN index.",
+  "domain": "vector_db",
+  "scope_hint": "code.database.vector:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.vector",
+  "pack_id": "code.database.vector"
+}

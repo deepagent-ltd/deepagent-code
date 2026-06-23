@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:svc:queue-vs-scheduler-vs-cron",
+  "type": "knowledge",
+  "title": "Job queue vs scheduler vs cron",
+  "description": "Queues handle event-driven work, schedulers fire time-based work, and naive cron risks overlap and missed runs.",
+  "body": "Use when choosing how to run background work. A job queue processes work pushed by events with retries and DLQ. A scheduler/cron fires work on a time interval. Do not run cron without overlap protection (a slow run still in progress when the next fires) or without catch-up handling for missed ticks during downtime. Actions: for time-based work add a lock so only one instance runs, make the job idempotent for re-runs, and decide whether missed ticks are skipped or caught up. Validation signals include a test where a long-running job blocks a second trigger and the lock prevents concurrent execution. Risk boundary: overlapping cron runs that double-process data are a correctness defect.",
+  "domain": "backend_service",
+  "scope_hint": "code.backend.service:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.service",
+  "pack_id": "code.backend.service"
+}

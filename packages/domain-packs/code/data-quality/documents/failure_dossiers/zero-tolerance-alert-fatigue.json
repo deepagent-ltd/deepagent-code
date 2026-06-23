@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:dq:zero-tolerance-alert-fatigue",
+  "type": "failure_dossier",
+  "description": "Asserting rigid exact rules (zero nulls, exact counts) that fire on benign variation, training the team to ignore alerts.",
+  "body": "Failure mode: checks demand exact values that real-world data never sustains, so they fire constantly, get muted or routed to a dead channel, and a genuine incident is then ignored along with the noise. Detection signals: a flood of quality alerts that are routinely dismissed; thresholds set to absolutes with no historical basis; the channel is muted. Do not set zero-tolerance rules on naturally variable data. Safer fallback: calibrate thresholds from historical distributions, reserve absolutes for true invariants like key uniqueness, and verify a low false-positive rate before paging.",
+  "domain": "data_quality",
+  "scope_hint": "code.data-quality:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.data-quality:human_authored",
+  "pack_id": "code.data-quality"
+}

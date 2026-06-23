@@ -1,0 +1,75 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "code.frontend.svelte",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "svelte",
+      "sveltekit",
+      "frontend"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [
+      "typescript",
+      "javascript"
+    ],
+    "frameworks": [
+      "svelte",
+      "sveltekit"
+    ],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "L3 smoke for code.frontend.svelte: svelte reactivity with runes and $: labels, stores, sveltekit load functions and routing, SSR hydration, and use actions"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "plain prose note with no repository or domain signal"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "retrieval_query": "svelte sveltekit reactivity runes state derived effect store load function ssr hydration use action transition compiler assignment",
+  "expected_pack_id": "code.frontend.svelte",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "code.frontend.svelte L3 validation smoke",
+    "signals": [
+      "component test renders and reacts to a state assignment via @testing-library/svelte",
+      "load function returns serializable data and the page renders it server-side",
+      "store subscriptions are cleaned up and no leak warning fires",
+      "hydration produces no mismatch warning in the console"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "code.frontend.svelte diagnosis smoke",
+    "signals": [
+      "array/object mutated in place so the compiler never re-renders",
+      "manual store.subscribe without unsubscribe causing a leak",
+      "browser-only API called during SSR in a universal load",
+      "state read in $effect that re-triggers itself in a loop",
+      "secret read in a universal load and leaked to the client"
+    ]
+  },
+  "source_refs": [
+    "source:svelte-docs:paraphrased",
+    "source:sveltekit-docs:paraphrased"
+  ]
+}

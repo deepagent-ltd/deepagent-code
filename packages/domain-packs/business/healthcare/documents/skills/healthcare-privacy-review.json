@@ -1,0 +1,11 @@
+{
+  "ref_id": "skill:healthcare:healthcare-privacy-review",
+  "type": "skill",
+  "description": "Review healthcare code changes for PHI flow, audit, access, and human gates.",
+  "body": "Inputs: changed flow. Output: PHI map, audit gaps, escalation needs. Use when healthcare engineering work touches PHI flows, patient identifiers, consent state, audit events, clinical workflow boundaries, and access logs. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: run the documented inspection and validation workflow; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include PHI minimization checks, access-control tests, audit-log assertions, consent-path review, and clinical owner approval where required. Risk boundary: escalate or stop when the task involves medical advice automation, PHI disclosure, unauthorized access, missing audit records, and regulated workflow ambiguity, missing owner evidence, or live external state.",
+  "domain": "healthcare",
+  "scope_hint": "business.healthcare:skill",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:business.healthcare:skill_survey",
+  "pack_id": "business.healthcare"
+}

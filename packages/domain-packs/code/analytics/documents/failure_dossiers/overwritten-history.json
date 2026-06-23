@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure_dossier:analytics:overwritten-history",
+  "type": "failure_dossier",
+  "description": "A type-1 dimension overwrite destroys history, corrupting time-based analysis of past facts.",
+  "body": "Failure mode: a dimension attribute that should track history is updated in place (SCD type 1), so historical facts now join to the current attribute value rather than the value that was true at their event time, silently rewriting trends. Detection signals: historical reports changing when a dimension attribute changes, and facts joining to a single current dimension row regardless of date. Do not accept the restated history as correct. Safer fallback: convert the dimension to SCD type 2 with effective-from/effective-to ranges and a current flag, backfill history where source data allows, and join facts to the dimension version valid at each fact's date.",
+  "domain": "analytics",
+  "scope_hint": "code.analytics:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.analytics:human_authored",
+  "pack_id": "code.analytics"
+}

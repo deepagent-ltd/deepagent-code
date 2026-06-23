@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:ecom:cart-checkout-state",
+  "type": "knowledge",
+  "title": "Cart and checkout state",
+  "description": "A cart progresses through mutable, reserved, and paying stages, each with distinct stock and price guarantees.",
+  "body": "Use when reasoning about what a cart guarantees at each stage. A mutable cart makes no stock or price promise; a reserved cart holds inventory for a bounded window; a paying cart locks the server-computed total. Do not assume a price shown in a mutable cart still holds at payment. Actions: re-validate stock and recompute totals server-side when transitioning to paying. Validation signals include the charged total matching the server computation and stock confirmed at payment. Risk boundary: a reservation may expire mid-checkout, so re-reserve atomically rather than trusting the earlier hold.",
+  "domain": "ecommerce",
+  "scope_hint": "business.ecommerce:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:business.ecommerce",
+  "pack_id": "business.ecommerce"
+}

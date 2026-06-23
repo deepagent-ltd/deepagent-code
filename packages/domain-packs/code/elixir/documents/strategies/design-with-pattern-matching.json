@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:elixir:design-with-pattern-matching",
+  "type": "strategy",
+  "title": "Design control flow with pattern matching",
+  "description": "Match on message and data shape in function heads, letting unexpected shapes crash rather than coding defensive branches.",
+  "body": "Use when handling messages, parsing data, or branching on shape. Do not write deep nested case/if defensive checks for inputs that should never occur. Actions: pattern-match expected shapes in function heads and handle_* clauses with guards, use the with construct to chain happy-path matches and surface the first failure, and let a truly unexpected shape raise so a supervisor resets state. Validation signals include tests for each matched clause and a confirmed crash-and-restart on an unhandled shape. Risk boundary: matching on data derived from untrusted input must validate it, and matching that silently falls through (a catch-all that swallows errors) reintroduces the defensive sprawl OTP avoids; let-it-crash applies to bugs, not to user-input validation.",
+  "domain": "elixir",
+  "scope_hint": "code.elixir:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.elixir",
+  "pack_id": "code.elixir"
+}

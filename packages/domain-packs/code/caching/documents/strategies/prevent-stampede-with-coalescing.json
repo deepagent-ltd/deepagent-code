@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:cache:prevent-stampede-with-coalescing",
+  "type": "strategy",
+  "title": "Coalesce recomputes to prevent stampede",
+  "description": "Serialize the refill of a hot key so one worker recomputes while others wait or serve stale.",
+  "body": "Use when a hot key expires and many concurrent requests would recompute it at once. Do not let every concurrent miss reach the origin — that turns a single expiry into a load spike that can topple the backend. Actions: add a per-key recompute lock (single-flight / request coalescing) so one worker refills while the rest wait or serve the prior value, and pair it with stale-while-revalidate. Validation signals include origin calls staying near one per expiry and bounded refill latency. Risk boundary: a recompute lock with no timeout can deadlock all readers behind a slow origin — set a fallback to serve stale or fail open.",
+  "domain": "caching",
+  "scope_hint": "code.caching:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.caching",
+  "pack_id": "code.caching"
+}

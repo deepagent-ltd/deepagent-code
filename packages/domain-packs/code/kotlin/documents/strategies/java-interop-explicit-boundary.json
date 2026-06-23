@@ -1,0 +1,11 @@
+{
+  "ref_id": "strategy:lang_kotlin:java-interop-explicit-boundary",
+  "type": "strategy",
+  "description": "Treat Java calls as nullable and exception-bearing until Kotlin annotations and tests prove otherwise.",
+  "body": "Use when Kotlin code consumes Java APIs or Java calls Kotlin. Do not rely on inferred platform types at public boundaries. Add explicit Kotlin types, handle checked-exception-like failures in adapters, and preserve JVM signatures when public. Verify compileJava/compileKotlin or mixed test tasks. Risk boundary is binary/source compatibility for Java callers. Use when Kotlin Engineering work touches repository conventions, toolchain files, changed symbols, validation commands, and runtime output. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: choose the smallest direction that preserves the domain contract; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include package-local checks, focused tests, build output, smoke runs, and command logs. Risk boundary: escalate or stop when the task involves broad rewrites, generated-file drift, stale assumptions, and unvalidated behavior changes, missing owner evidence, or live external state.",
+  "domain": "kotlin",
+  "scope_hint": "code.kotlin:strategys",
+  "evidence_strength": "medium",
+  "provenance_tag": "code.kotlin:seed:kotlin_gradle_coroutines_docs:paraphrased",
+  "pack_id": "code.kotlin"
+}

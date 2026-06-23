@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:mcp:overscoped-tool-permission",
+  "type": "failure_dossier",
+  "description": "A host auto-granting an MCP tool broad filesystem, network, or shell access beyond what its declared function needs.",
+  "body": "Failure mode: a tool that only needs to read one directory is granted full filesystem or arbitrary shell access because the host approved its request without scoping, so a buggy or malicious tool can reach far beyond its purpose. Detection signals: granted scope far exceeds the tool's declared inputs/effects; consent log shows blanket approval; an out-of-scope operation succeeds in testing. Do not auto-approve broad scopes for convenience. Safer fallback: map the tool's declared schema to the minimum rights, require explicit host consent for the narrow scope, and deny operations outside it. Risk boundary: escalate any tool requesting unrestricted shell or filesystem access to a human rather than granting it.",
+  "domain": "code",
+  "scope_hint": "code.mcp:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.mcp:human_authored",
+  "pack_id": "code.mcp"
+}

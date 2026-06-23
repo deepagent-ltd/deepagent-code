@@ -1,0 +1,47 @@
+{
+  "schema_version": "domain_pack.v1",
+  "id": "code.data-engineering",
+  "name": "Data Engineering (ETL/ELT, pipelines, warehouses)",
+  "version": "1.0.0",
+  "scope": "system",
+  "risk": "medium",
+  "domains": [
+    "data_engineering",
+    "etl",
+    "pipeline",
+    "warehouse"
+  ],
+  "provides": [
+    "knowledge",
+    "strategy",
+    "methodology",
+    "skill",
+    "diagnosis",
+    "validation"
+  ],
+  "depends_on": [
+    "code.python",
+    "code.sql",
+    "code.observability"
+  ],
+  "conflicts_with": [],
+  "knowledge_store": "document_store",
+  "allowed_tools": [
+    "read",
+    "shell:test"
+  ],
+  "denied_tools": [
+    "shell:deploy-production"
+  ],
+  "data_policy": {
+    "sensitivity": [
+      "source_code"
+    ],
+    "default_admission": "summary_only",
+    "secret_policy": "deny"
+  },
+  "detector": {
+    "inline": "profile.code_domains.some(d=>['data_engineering','etl','pipeline','warehouse'].includes(d)) || profile.repo_signals.some(s=>/\\b(etl|elt|data pipeline|kafka|spark|airflow|dagster|data warehouse|data lineage|batch job)\\b/i.test(s)) ? 0.9 : 0",
+    "threshold": 0.5
+  }
+}

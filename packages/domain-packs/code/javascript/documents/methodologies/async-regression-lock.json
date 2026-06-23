@@ -1,0 +1,11 @@
+{
+  "ref_id": "methodology:javascript:async-regression-lock",
+  "type": "methodology",
+  "description": "Add or select tests that fail on missing await, unhandled rejection, or callback ordering.",
+  "body": "Use when fixing async control flow or error handling. Avoid tests that only assert happy-path resolution. Steps: reproduce failure with a controlled promise/timer/event, patch ownership boundary, then assert rejection, cleanup, or ordering. Verify with the runner in a mode that reports unhandled rejections. Risk boundary is flaky timing; prefer fake timers or explicit synchronization when the project already uses them. Use when JavaScript Runtime and Tooling work touches repository conventions, toolchain files, changed symbols, validation commands, and runtime output. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: follow the ordered review, edit, and validation sequence; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include package-local checks, focused tests, build output, smoke runs, and command logs. Risk boundary: escalate or stop when the task involves broad rewrites, generated-file drift, stale assumptions, and unvalidated behavior changes, missing owner evidence, or live external state.",
+  "domain": "javascript",
+  "scope_hint": "code.javascript:methodologys",
+  "evidence_strength": "medium",
+  "provenance_tag": "code.javascript:seed:official_docs_and_common_tooling_behavior:paraphrased",
+  "pack_id": "code.javascript"
+}

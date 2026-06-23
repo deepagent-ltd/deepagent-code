@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:release:unverified-artifact-published",
+  "type": "failure_dossier",
+  "description": "Publishing a build artifact whose integrity, signature, or source provenance was never verified before release.",
+  "body": "Failure mode: an artifact is pushed to a registry or deploy target without checking its checksum, signature, or that it was built from the reviewed tagged commit, so a corrupted, tampered, or stale build can ship. Detection signals: no checksum/signature recorded; artifact source commit cannot be confirmed; the deployed hash differs from the build output. Do not publish an artifact you have not verified end to end. Safer fallback: verify checksum and signature, confirm the artifact maps to the tagged source commit, and record the provenance before publishing. Risk boundary: if integrity or provenance cannot be confirmed, deny the publish and escalate rather than shipping an unverified artifact.",
+  "domain": "code",
+  "scope_hint": "code.release:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.release:human_authored",
+  "pack_id": "code.release"
+}

@@ -1,0 +1,460 @@
+[
+  {
+    "ref_id": "knowledge:shell:generated-code-drift",
+    "type": "knowledge",
+    "title": "Generated Code Drift",
+    "summary": "In shell, never hand-edit generated completion scripts and here-doc / templated output; change the source and rerun the generator.",
+    "domains": [
+      "shell",
+      "code"
+    ],
+    "triggers": [
+      "generated",
+      "code",
+      "must",
+      "tied",
+      "regeneration",
+      "commands",
+      "hand",
+      "edit"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.shell"
+  },
+  {
+    "ref_id": "knowledge:shell:quoting-is-correctness",
+    "type": "knowledge",
+    "title": "Quoting Is Correctness",
+    "summary": "Shell quoting controls word splitting, globbing, and injection risk.",
+    "domains": [
+      "shell",
+      "code"
+    ],
+    "triggers": [
+      "shell",
+      "quoting",
+      "controls",
+      "word",
+      "splitting",
+      "globbing",
+      "injection",
+      "risk"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.shell"
+  },
+  {
+    "ref_id": "knowledge:shell:runtime-errors-differ",
+    "type": "knowledge",
+    "title": "Runtime Errors Differ",
+    "summary": "In shell, a clean build does not prevent unquoted-expansion word splitting, glob surprises, and ignored failures without set -e.",
+    "domains": [
+      "shell",
+      "code"
+    ],
+    "triggers": [
+      "compile",
+      "success",
+      "does",
+      "guarantee",
+      "runtime",
+      "behavior",
+      "representative",
+      "tests"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.shell"
+  },
+  {
+    "ref_id": "knowledge:shell:toolchain-is-contract",
+    "type": "knowledge",
+    "title": "Toolchain Is Contract",
+    "summary": "In shell, the target shell and the coreutils flavor (GNU vs BSD vs busybox) are part of the contract and changing them changes behavior.",
+    "domains": [
+      "shell",
+      "code"
+    ],
+    "triggers": [
+      "compiler",
+      "formatter",
+      "package",
+      "manager",
+      "test",
+      "runner",
+      "part",
+      "language"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.shell"
+  },
+  {
+    "ref_id": "methodology:shell:dependency-update-check",
+    "type": "methodology",
+    "title": "Dependency Update Check",
+    "summary": "In shell, when external binaries on PATH and their version/flag differences (GNU vs BSD) change, verify the lockfile, generated artifacts, and a runtime smoke.",
+    "domains": [
+      "shell",
+      "code"
+    ],
+    "triggers": [
+      "when",
+      "dependencies",
+      "change",
+      "inspect",
+      "lockfile",
+      "generated",
+      "artifacts",
+      "runtime"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.shell"
+  },
+  {
+    "ref_id": "methodology:shell:interop-boundary-check",
+    "type": "methodology",
+    "title": "Interop Boundary Check",
+    "summary": "In shell, validate the argument parsing, IFS handling, and piping/redirection of untrusted input where external data crosses in.",
+    "domains": [
+      "shell",
+      "code"
+    ],
+    "triggers": [
+      "validate",
+      "module",
+      "shell",
+      "serialization",
+      "boundaries",
+      "steps",
+      "identify",
+      "boundary"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.shell"
+  },
+  {
+    "ref_id": "methodology:shell:language-gate-loop",
+    "type": "methodology",
+    "title": "Language Gate Loop",
+    "summary": "In shell, run the package-local gate, fix the first owned diagnostic, rerun, then broaden.",
+    "domains": [
+      "shell",
+      "code"
+    ],
+    "triggers": [
+      "package",
+      "local",
+      "gate",
+      "first",
+      "owned",
+      "diagnostic",
+      "rerun",
+      "then"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.shell"
+  },
+  {
+    "ref_id": "skill:shell:run-language-gate",
+    "type": "skill",
+    "title": "Run Language Gate",
+    "summary": "In shell, run the package-local validation gate (the script under its declared shell (#!/usr/bin/env bash vs POSIX sh)) and summarize the diagnostics.",
+    "domains": [
+      "shell",
+      "code"
+    ],
+    "triggers": [
+      "package",
+      "local",
+      "language",
+      "validation",
+      "gate",
+      "summarize",
+      "diagnostics",
+      "inputs"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.shell"
+  },
+  {
+    "ref_id": "strategy:shell:boundary-validation",
+    "type": "strategy",
+    "title": "Boundary Validation",
+    "summary": "In shell, validate external input at the argument parsing, IFS handling, and piping/redirection of untrusted input before internal use.",
+    "domains": [
+      "shell",
+      "code"
+    ],
+    "triggers": [
+      "validate",
+      "external",
+      "input",
+      "language",
+      "runtime",
+      "boundaries",
+      "parsing",
+      "serialization"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.shell"
+  },
+  {
+    "ref_id": "strategy:shell:diagnostic-first",
+    "type": "strategy",
+    "title": "Diagnostic First",
+    "summary": "In shell, read the first line from bash -x trace or shellcheck's SC code before making speculative edits.",
+    "domains": [
+      "shell",
+      "code"
+    ],
+    "triggers": [
+      "compiler",
+      "runtime",
+      "diagnostics",
+      "before",
+      "speculative",
+      "edits",
+      "read",
+      "first"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.shell"
+  },
+  {
+    "ref_id": "strategy:shell:idiom-preserving-change",
+    "type": "strategy",
+    "title": "Idiom Preserving Change",
+    "summary": "In shell, prefer established idioms (set -euo pipefail, quoting every expansion, and [[ ]] over [ ]) over generic rewrites.",
+    "domains": [
+      "shell",
+      "code"
+    ],
+    "triggers": [
+      "prefer",
+      "local",
+      "idioms",
+      "standard",
+      "tooling",
+      "over",
+      "generic",
+      "rewrites"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.shell"
+  },
+  {
+    "ref_id": "strategy:shell:package-local-command",
+    "type": "strategy",
+    "title": "Package Local Command",
+    "summary": "In shell, use the package-local commands (the script under its declared shell (#!/usr/bin/env bash vs POSIX sh)) rather than a root or generic command.",
+    "domains": [
+      "shell",
+      "code"
+    ],
+    "triggers": [
+      "package",
+      "local",
+      "build",
+      "test",
+      "typecheck",
+      "commands",
+      "this",
+      "language"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.shell"
+  },
+  {
+    "ref_id": "strategy:shell:cleanup-with-trap",
+    "type": "strategy",
+    "title": "Guarantee cleanup with trap on EXIT",
+    "summary": "Register a trap on EXIT (and signals) so temp files, locks, and background jobs are released even when the script errors or is interrupted.",
+    "domains": [
+      "shell",
+      "code"
+    ],
+    "triggers": [
+      "trap",
+      "cleanup",
+      "EXIT",
+      "mktemp",
+      "signal",
+      "tmpdir"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.shell"
+  },
+  {
+    "ref_id": "strategy:shell:parallelize-with-xargs-p",
+    "type": "strategy",
+    "title": "Parallelize batch work with xargs -P safely",
+    "summary": "Fan out independent work across cores with xargs -P or GNU parallel using NUL-delimited input, bounded concurrency, and per-item failure handling.",
+    "domains": [
+      "shell",
+      "code"
+    ],
+    "triggers": [
+      "xargs",
+      "parallel",
+      "concurrency",
+      "-P",
+      "-0",
+      "find -print0"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.shell"
+  },
+  {
+    "ref_id": "methodology:shell:write-portable-posix-scripts",
+    "type": "methodology",
+    "title": "Write portable scripts and verify with shellcheck",
+    "summary": "Decide bash-vs-POSIX-sh deliberately, avoid bashisms when targeting /bin/sh, and lint with shellcheck before shipping.",
+    "domains": [
+      "shell",
+      "code"
+    ],
+    "triggers": [
+      "posix",
+      "portability",
+      "shellcheck",
+      "bashism",
+      "shebang",
+      "dash"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.shell"
+  },
+  {
+    "ref_id": "skill:shell:trace-with-set-x-and-bash-debug",
+    "type": "skill",
+    "title": "Trace a misbehaving script with set -x and debug tools",
+    "summary": "Turn on execution tracing with rich PS4, narrow it to the suspect region, and report the exact command and variable values at the failure.",
+    "domains": [
+      "shell",
+      "code"
+    ],
+    "triggers": [
+      "set -x",
+      "xtrace",
+      "PS4",
+      "debug",
+      "BASH_XTRACEFD",
+      "trace"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.shell"
+  }
+]

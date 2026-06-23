@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:security:missing-object-level-authz",
+  "type": "failure_dossier",
+  "description": "A handler authenticates the user but never checks ownership of the client-supplied resource id, allowing one user to read or modify another's data (IDOR).",
+  "body": "Failure mode: an endpoint trusts a valid session as sufficient and fetches/updates a record by an id taken straight from the request, so any authenticated user can substitute another id and access foreign data. Detection signals: a test where user A passes user B's id succeeds; no ownership/tenant predicate near the query; access logs show cross-account ids. Do not treat route-level auth as object-level authorization. Safer fallback: load the object, verify the principal's permission against it server-side, deny by default, and add a negative cross-user test.",
+  "domain": "security",
+  "scope_hint": "code.security:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.security:human_authored",
+  "pack_id": "code.security"
+}

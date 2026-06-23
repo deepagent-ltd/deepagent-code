@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:java_jvm:microbenchmark-with-jmh",
+  "type": "skill",
+  "title": "Microbenchmark with JMH and report honest numbers",
+  "description": "Run a JMH benchmark with warmup, forks, and Blackhole to defeat JIT dead-code elimination, then report throughput with error bounds.",
+  "body": "Use when validating a JVM performance change. Actions: write a @Benchmark method, consume results via Blackhole (or return them) so the JIT cannot eliminate the work, configure @Warmup and @Measurement iterations and @Fork(>=2) to escape one-VM bias, run with `java -jar benchmarks.jar`, and report the score, unit, and ± error. Do not benchmark in a plain main() (no warmup means you measure the interpreter/C1, not steady state). This skill exposes capability only and must not run on a noisy shared host without runtime permission. Validation signals include overlapping error bars indicating no real change, or a clear non-overlapping improvement, and stable numbers across forks. Risk boundary: a missing Blackhole lets the JIT delete the loop yielding impossibly fast times; flag near-zero or implausible results rather than reporting them as wins.",
+  "domain": "java",
+  "scope_hint": "code.java-jvm:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.java-jvm",
+  "pack_id": "code.java-jvm"
+}

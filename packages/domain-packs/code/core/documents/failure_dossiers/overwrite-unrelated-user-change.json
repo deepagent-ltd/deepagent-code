@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:core:overwrite-unrelated-user-change",
+  "type": "failure_dossier",
+  "description": "Overwriting or reverting a user's unrelated in-progress edit while making a scoped change, because the working tree was not inspected first.",
+  "body": "Failure mode: the agent edits a file (or runs a formatter/codemod) and in doing so discards uncommitted user changes that were unrelated to the task, because it treated the file as if the committed version were ground truth.\n\nDetection signals: git status showed modified files before editing that the change did not account for; a diff touches lines the task never mentioned; a user edit present at session start is absent afterward.\n\nDo not use: do not edit a file without first reading its current working-tree state; do not run repo-wide formatters or codemods over files with uncommitted user work; do not assume the committed version is what the user is looking at.\n\nSafer fallback: collect git ground truth first (git status + diff), scope the edit to only the lines the task requires, and if unrelated user changes are present, preserve them and surface them rather than overwriting.",
+  "domain": "code",
+  "scope_hint": "code.core:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.core:human_authored",
+  "pack_id": "code.core"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:pg:tune-autovacuum-for-a-hot-table",
+  "type": "methodology",
+  "title": "Tune autovacuum for a hot table",
+  "description": "Adjust per-table autovacuum settings and monitor bloat so dead tuples are reclaimed before they hurt.",
+  "body": "Steps: 1. Measure dead tuples and last vacuum via pg_stat_user_tables and bloat estimates. 2. If a high-churn table accumulates dead tuples faster than the global default reclaims, lower its autovacuum_vacuum_scale_factor and threshold per-table so it triggers sooner. 3. Watch for long-running transactions or replication slots holding back the xmin horizon (vacuum cannot remove tuples newer than the oldest transaction). 4. Run a manual VACUUM (ANALYZE) if stats are stale; reserve VACUUM FULL for a maintenance window since it takes an exclusive lock. Rollback point: revert per-table settings. Validation: dead tuple count stabilizes and index/seq scan plans stop degrading.",
+  "domain": "postgres",
+  "scope_hint": "code.database.postgres:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.postgres",
+  "pack_id": "code.database.postgres"
+}

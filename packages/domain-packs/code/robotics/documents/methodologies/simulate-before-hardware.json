@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:robot:simulate-before-hardware",
+  "type": "methodology",
+  "title": "Validate in simulation before hardware",
+  "description": "Exercise behavior, faults, and the safety stop in a physics simulator so the first hardware run is not the first test.",
+  "body": "Steps: 1. Build a simulation with the robot model, sensors, and realistic noise/latency. 2. Run nominal behavior and confirm frames, fusion, and control work end-to-end. 3. Inject faults: dropped sensors, delayed messages, a killed node, and out-of-range commands, and confirm safe responses. 4. Test the emergency stop under each fault. 5. Note known sim-to-real gaps (unmodeled dynamics, latency) before moving to hardware at reduced authority. Rollback point: before the first real-hardware motion. Validation: nominal and fault scenarios behave safely in sim and the stop always works; passing once in sim is necessary but not sufficient, so still ramp authority on hardware carefully.",
+  "domain": "robotics",
+  "scope_hint": "code.robotics:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.robotics",
+  "pack_id": "code.robotics"
+}

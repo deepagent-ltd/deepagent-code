@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:glci:decompose-with-child-pipelines",
+  "type": "strategy",
+  "title": "Decompose large pipelines with child pipelines",
+  "description": "Split monorepo or multi-component builds into triggered child pipelines for isolation, parallelism, and clearer rules.",
+  "body": "Use when a single .gitlab-ci.yml grows unwieldy or a monorepo needs per-component pipelines. Do not cram unrelated components into one giant pipeline where every change runs everything, and do not let a child pipeline inherit secrets it does not need. Actions: use trigger: with an include to spawn child pipelines per component, gate each with rules:changes on that component's paths, and pass only required variables down. Validation signals include only the changed component's child pipeline running and child jobs lacking unrelated secrets. Risk boundary: a child pipeline that inherits broad protected variables widens exposure; pass the minimum and review inheritance.",
+  "domain": "ci_gitlab",
+  "scope_hint": "platform.ci-gitlab:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.ci-gitlab",
+  "pack_id": "platform.ci-gitlab"
+}

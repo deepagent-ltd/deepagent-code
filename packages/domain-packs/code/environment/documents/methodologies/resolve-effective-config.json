@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:environment:resolve-effective-config",
+  "type": "methodology",
+  "title": "Resolve the effective runtime configuration",
+  "description": "Determine the actual value the running process uses for a setting by tracing every source layer and confirming against live state, not source files alone.",
+  "body": "Steps: 1. Identify the setting key and every layer that can define it (flags, env, .env, config files, defaults). 2. Read each layer's current value and note which are present. 3. Apply the documented precedence to compute the expected effective value. 4. Confirm against the live process (startup log, admin endpoint, or in-process dump) rather than trusting the file. 5. Record the effective value and its winning source. Rollback point: before changing any layer. Validation: the live process reports the same value you computed; a discrepancy means a layer was missed. Risk boundary: never print secret values during inspection — reference by key and escalate if a credential resolves from an unexpected layer.",
+  "domain": "code",
+  "scope_hint": "code.environment:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.environment",
+  "pack_id": "code.environment"
+}

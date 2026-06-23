@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:apidesign:plan-versioning-and-evolution",
+  "type": "strategy",
+  "title": "Plan versioning and prefer additive change",
+  "description": "Choose a versioning scheme up front and evolve through additive, backward-compatible changes, reserving a new version for genuine breaks.",
+  "body": "Use when changing an existing contract or launching a v1. Do not change a field's type or remove it within a published version. Actions: pick a scheme such as a URI major version or a header; make changes additive by adding optional fields and new resources; introduce a new major version only for unavoidable breaks and plan deprecation. Validation signals include existing clients continuing to work after an additive change. Risk boundary: a breaking change inside a live version silently breaks clients, so gate any non-additive change behind a version and a migration plan.",
+  "domain": "api_design",
+  "scope_hint": "code.api-design:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.api-design",
+  "pack_id": "code.api-design"
+}

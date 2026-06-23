@@ -1,0 +1,473 @@
+[
+  {
+    "ref_id": "knowledge:mcp:external-tool-supply-chain",
+    "type": "knowledge",
+    "title": "External Tool Supply Chain",
+    "summary": "External tools carry dependency and script risk.",
+    "domains": [
+      "mcp",
+      "code",
+      "tooling"
+    ],
+    "triggers": [
+      "external",
+      "tools",
+      "carry",
+      "dependency",
+      "script",
+      "risk",
+      "enable",
+      "tool"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.mcp"
+  },
+  {
+    "ref_id": "knowledge:mcp:tool-output-needs-structure",
+    "type": "knowledge",
+    "title": "Tool Output Needs Structure",
+    "summary": "Structured tool output enables validation and replay.",
+    "domains": [
+      "mcp",
+      "code",
+      "tooling"
+    ],
+    "triggers": [
+      "structured",
+      "tool",
+      "output",
+      "enables",
+      "validation",
+      "replay",
+      "free",
+      "form"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.mcp"
+  },
+  {
+    "ref_id": "knowledge:mcp:tool-schema-is-contract",
+    "type": "knowledge",
+    "title": "Tool Schema Is Contract",
+    "summary": "Tool schemas are executable contracts between model and runtime.",
+    "domains": [
+      "mcp",
+      "code",
+      "tooling"
+    ],
+    "triggers": [
+      "tool",
+      "schemas",
+      "executable",
+      "contracts",
+      "between",
+      "model",
+      "runtime",
+      "ambiguous"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.mcp"
+  },
+  {
+    "ref_id": "methodology:mcp:external-tool-review",
+    "type": "methodology",
+    "title": "External Tool Review",
+    "summary": "Review provenance, license, dependencies, scripts, and permissions before enabling external tools.",
+    "domains": [
+      "mcp",
+      "code",
+      "tooling"
+    ],
+    "triggers": [
+      "review",
+      "provenance",
+      "license",
+      "dependencies",
+      "scripts",
+      "permissions",
+      "before",
+      "enabling"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.mcp"
+  },
+  {
+    "ref_id": "methodology:mcp:mcp-server-validation",
+    "type": "methodology",
+    "title": "Mcp Server Validation",
+    "summary": "Validate schema, fixture calls, errors, and permission behavior.",
+    "domains": [
+      "mcp",
+      "code",
+      "tooling"
+    ],
+    "triggers": [
+      "validate",
+      "schema",
+      "fixture",
+      "calls",
+      "errors",
+      "permission",
+      "behavior",
+      "steps"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.mcp"
+  },
+  {
+    "ref_id": "methodology:mcp:tool-audit-flow",
+    "type": "methodology",
+    "title": "Tool Audit Flow",
+    "summary": "Record tool invocation, inputs summary, permission decision, output refs, and errors.",
+    "domains": [
+      "mcp",
+      "code",
+      "tooling"
+    ],
+    "triggers": [
+      "record",
+      "tool",
+      "invocation",
+      "inputs",
+      "summary",
+      "permission",
+      "decision",
+      "output"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.mcp"
+  },
+  {
+    "ref_id": "skill:mcp:validate-mcp-tool",
+    "type": "skill",
+    "title": "Validate Mcp Tool",
+    "summary": "Run fixture validation for an MCP tool contract and permissions.",
+    "domains": [
+      "mcp",
+      "code",
+      "tooling"
+    ],
+    "triggers": [
+      "fixture",
+      "validation",
+      "tool",
+      "contract",
+      "permissions",
+      "inputs",
+      "manifest"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.mcp"
+  },
+  {
+    "ref_id": "strategy:mcp:artifact-backed-tools",
+    "type": "strategy",
+    "title": "Artifact Backed Tools",
+    "summary": "Tool calls should return structured artifacts or evidence refs, not vague prose.",
+    "domains": [
+      "mcp",
+      "code",
+      "tooling"
+    ],
+    "triggers": [
+      "tool",
+      "calls",
+      "should",
+      "return",
+      "structured",
+      "artifacts",
+      "evidence",
+      "refs"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.mcp"
+  },
+  {
+    "ref_id": "strategy:mcp:lazy-load-external-tools",
+    "type": "strategy",
+    "title": "Lazy Load External Tools",
+    "summary": "Load external tools only when activated and permitted.",
+    "domains": [
+      "mcp",
+      "code",
+      "tooling"
+    ],
+    "triggers": [
+      "load",
+      "external",
+      "tools",
+      "only",
+      "when",
+      "activated",
+      "permitted",
+      "skill"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.mcp"
+  },
+  {
+    "ref_id": "strategy:mcp:permission-minimal-tools",
+    "type": "strategy",
+    "title": "Permission Minimal Tools",
+    "summary": "Grant tools the smallest filesystem, network, and shell scope needed.",
+    "domains": [
+      "mcp",
+      "code",
+      "tooling"
+    ],
+    "triggers": [
+      "grant",
+      "tools",
+      "smallest",
+      "filesystem",
+      "network",
+      "shell",
+      "scope",
+      "needed"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.mcp"
+  },
+  {
+    "ref_id": "strategy:mcp:tool-contract-first",
+    "type": "strategy",
+    "title": "Tool Contract First",
+    "summary": "Define tool input/output schema before implementation.",
+    "domains": [
+      "mcp",
+      "code",
+      "tooling"
+    ],
+    "triggers": [
+      "define",
+      "tool",
+      "input",
+      "output",
+      "schema",
+      "before",
+      "implementation",
+      "tools"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.mcp"
+  },
+  {
+    "ref_id": "strategy:mcp:negotiate-capabilities-explicitly",
+    "type": "strategy",
+    "title": "Negotiate capabilities before invoking server features",
+    "summary": "Advertise and check the capabilities each side declared during initialization, and degrade gracefully instead of calling features the peer never offered.",
+    "domains": [
+      "code",
+      "mcp",
+      "tooling"
+    ],
+    "triggers": [
+      "capability negotiation",
+      "initialize",
+      "handshake",
+      "capabilities",
+      "feature detection",
+      "mcp"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.mcp"
+  },
+  {
+    "ref_id": "strategy:mcp:scope-host-permissions-per-tool",
+    "type": "strategy",
+    "title": "Scope host-granted permissions to each tool's real need",
+    "summary": "Grant each MCP tool only the filesystem, network, and command rights its declared function requires, gated by host consent, not a blanket allow.",
+    "domains": [
+      "code",
+      "mcp",
+      "tooling"
+    ],
+    "triggers": [
+      "permission scope",
+      "host consent",
+      "least privilege",
+      "tool grant",
+      "sandbox",
+      "allowlist"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.mcp"
+  },
+  {
+    "ref_id": "methodology:mcp:design-tool-shutdown-lifecycle",
+    "type": "methodology",
+    "title": "Design the server lifecycle and clean shutdown",
+    "summary": "Define how an MCP server starts, signals readiness, drains in-flight calls, and releases resources so the host never leaks processes or hangs on exit.",
+    "domains": [
+      "code",
+      "mcp",
+      "tooling"
+    ],
+    "triggers": [
+      "lifecycle",
+      "shutdown",
+      "drain",
+      "cleanup",
+      "server process",
+      "graceful"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.mcp"
+  },
+  {
+    "ref_id": "knowledge:mcp:transport-stdio-vs-sse",
+    "type": "knowledge",
+    "title": "stdio vs SSE/HTTP transports trade off coupling and reach",
+    "summary": "stdio binds a server to one local host process lifecycle; SSE/HTTP transports allow remote, multi-client servers but add auth, network, and connection-lifetime concerns.",
+    "domains": [
+      "code",
+      "mcp",
+      "tooling"
+    ],
+    "triggers": [
+      "transport",
+      "stdio",
+      "sse",
+      "http",
+      "streaming",
+      "connection"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.mcp"
+  },
+  {
+    "ref_id": "skill:mcp:lint-tool-schema-contract",
+    "type": "skill",
+    "title": "Lint an MCP tool's input/output schema contract",
+    "summary": "Inspect a tool definition's JSON Schema for required fields, types, constraints, and a structured result shape, reporting gaps that make the contract ambiguous.",
+    "domains": [
+      "code",
+      "mcp",
+      "tooling"
+    ],
+    "triggers": [
+      "schema",
+      "json schema",
+      "tool definition",
+      "validate",
+      "contract",
+      "lint"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.mcp"
+  }
+]

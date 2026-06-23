@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:database:constraint-added-before-cleanup",
+  "type": "failure_dossier",
+  "description": "A stricter constraint was added before existing data was cleaned or application errors were mapped.",
+  "body": "Failure mode: migration fails on existing nulls, duplicates, or orphan records, or live writes start throwing raw database errors. Diagnostic trigger: schema diff adds not-null, unique, check, or foreign key constraints with no preflight query or cleanup plan. Do-not-use signal: do not treat a constraint as safe merely because it encodes the desired invariant. Recovery: query for violations, clean or backfill data, add compatible application handling for violations, and validate the constraint in a staged migration if supported. Risk boundary: uniqueness and foreign keys may reveal hidden concurrency or delete semantics; verify affected write and delete paths.",
+  "domain": "sql",
+  "scope_hint": "code.database:failure_dossiers",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database:constraint_rollout_failure",
+  "pack_id": "code.database"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:dist:consistency-models-spectrum",
+  "type": "knowledge",
+  "title": "The spectrum of consistency models",
+  "description": "Linearizable, sequential, causal, and eventual consistency trade ordering strength for availability and latency, each with a precise observable definition.",
+  "body": "Use when specifying or auditing what a read may observe. Linearizable means every operation appears to take effect atomically at a single point between its call and return, giving a real-time total order; sequential drops the real-time requirement; causal preserves only happens-before relationships and allows concurrent operations to be seen in different orders; eventual only promises convergence given no new writes. Do not conflate 'strong' marketing terms with linearizability, and avoid assuming causal+ gives read-your-writes without session guarantees. Actions: pick the weakest model that satisfies the use case and write a checker for it. Validation signals include a model-specific history check (e.g. Knossos for linearizability). Risk boundary: assuming a stronger model than the store provides causes subtle anomalies; verify the documented model against an actual checker.",
+  "domain": "distributed",
+  "scope_hint": "code.distributed:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.distributed",
+  "pack_id": "code.distributed"
+}

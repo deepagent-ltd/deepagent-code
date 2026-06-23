@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:sqlite:verify-and-restore-a-backup",
+  "type": "methodology",
+  "title": "Verify and restore a backup",
+  "description": "Produce a consistent backup, check its integrity, and rehearse restore so the file is known-good.",
+  "body": "Steps: 1. Create the backup with VACUUM INTO or the online backup API while the app runs. 2. Open the backup and run PRAGMA integrity_check (and PRAGMA foreign_key_check). 3. Restore into a scratch location and run application smoke queries against it. 4. Record the backup's row counts/checksums to compare against the source at backup time. 5. Automate the verify step so a bad backup is caught immediately. Rollback point: keep the previous known-good backup until the new one verifies. Validation: integrity_check returns ok, foreign_key_check is empty, and the restored database serves smoke queries.",
+  "domain": "sqlite",
+  "scope_hint": "code.database.sqlite:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.sqlite",
+  "pack_id": "code.database.sqlite"
+}

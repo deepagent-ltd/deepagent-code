@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:sigproc:window-for-leakage",
+  "type": "strategy",
+  "title": "Select a window to control spectral leakage",
+  "description": "Match the analysis window to whether you need to resolve close tones or measure amplitude accurately, trading main-lobe width against side-lobe level.",
+  "body": "Use when computing a spectrum from a non-periodic block where tones do not land on exact bins. Do not leave a rectangular window in place when amplitude accuracy matters, because its high side lobes smear energy. Actions: compare a Hann or Blackman-Harris window against the rectangular case, inspect side-lobe suppression, and record the scalloping loss. Validation signals include a synthetic two-tone test where the chosen window resolves both peaks and amplitude error stays within the spec. Risk boundary: when both resolution and amplitude are critical, escalate to multi-window or flat-top analysis rather than overclaiming a single window's accuracy.",
+  "domain": "signal_processing",
+  "scope_hint": "hardware.signal-processing:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.signal-processing",
+  "pack_id": "hardware.signal-processing"
+}

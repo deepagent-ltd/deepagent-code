@@ -1,0 +1,213 @@
+---
+title: Go
+description: Povoljna pretplata za otvorene modele za programiranje.
+---
+
+import config from "../../../../config.mjs"
+export const console = config.console
+export const email = `mailto:${config.email}`
+
+DeepAgent Code Go je povoljna pretplata — **$5 za vaš prvi mjesec**, a zatim **$10/mjesečno** — koja vam pruža pouzdan pristup popularnim otvorenim modelima za programiranje.
+
+Go radi kao bilo koji drugi provajder u DeepAgent Code-u. Pretplatite se na DeepAgent Code Go i
+dobijete svoj API ključ. On je **potpuno opcionalan** i ne morate ga koristiti da
+biste koristili DeepAgent Code.
+
+Dizajniran je prvenstveno za međunarodne korisnike, sa modelima hostovanim u SAD-u, EU i Singapuru za stabilan globalni pristup.
+
+---
+
+## Pozadina
+
+Otvoreni modeli su postali zaista dobri. Sada dostižu performanse bliske
+vlasničkim modelima za zadatke programiranja. A pošto ih mnogi provajderi mogu nuditi
+konkurentno, obično su znatno jeftiniji.
+
+Međutim, dobiti pouzdan pristup s niskom latencijom do njih može biti teško. Provajderi
+variraju u pogledu kvaliteta i dostupnosti.
+
+:::tip
+Testirali smo odabranu grupu modela i provajdera koji dobro rade sa DeepAgent Code-om.
+:::
+
+Da bismo to popravili, uradili smo nekoliko stvari:
+
+1. Testirali smo odabranu grupu otvorenih modela i razgovarali s njihovim timovima o tome kako da ih
+   najbolje pokrenemo.
+2. Zatim smo sarađivali s nekoliko provajdera kako bismo bili sigurni da se oni ispravno
+   poslužuju.
+3. Na kraju smo benchmarkovali kombinaciju modela/provajdera i osmislili
+   listu koju rado preporučujemo.
+
+DeepAgent Code Go vam daje pristup ovim modelima za **$5 za vaš prvi mjesec**, a zatim **$10/mjesečno**.
+
+---
+
+## Kako funkcioniše
+
+DeepAgent Code Go radi kao bilo koji drugi provajder u DeepAgent Code-u.
+
+1. Prijavite se na **<a href={console}>DeepAgent Code Zen</a>**, pretplatite se na Go i
+   kopirajte svoj API ključ.
+2. Pokrenite komandu `/connect` u TUI-ju, odaberite `DeepAgent Code Go` i zalijepite
+   svoj API ključ.
+3. Pokrenite `/models` u TUI-ju da vidite listu modela dostupnih kroz Go.
+
+:::note
+Samo jedan član po radnom prostoru (workspace) može se pretplatiti na DeepAgent Code Go.
+:::
+
+Trenutna lista modela uključuje:
+
+- **GLM-5**
+- **GLM-5.1**
+- **Kimi K2.5**
+- **Kimi K2.6**
+- **MiMo-V2.5**
+- **MiMo-V2.5-Pro**
+- **MiniMax M2.5**
+- **MiniMax M2.7**
+- **MiniMax M3**
+- **Qwen3.6 Plus**
+- **Qwen3.7 Plus**
+- **Qwen3.7 Max**
+- **DeepSeek V4 Pro**
+- **DeepSeek V4 Flash**
+
+Lista modela se može mijenjati dok testiramo i dodajemo nove.
+
+---
+
+## Ograničenja upotrebe
+
+DeepAgent Code Go uključuje sljedeća ograničenja:
+
+- **Ograničenje od 5 sati** — $12 potrošnje
+- **Sedmično ograničenje** — $30 potrošnje
+- **Mjesečno ograničenje** — $60 potrošnje
+
+Ograničenja su definisana u dolarskoj vrijednosti. To znači da vaš stvarni broj zahtjeva zavisi od modela koji koristite. Jeftiniji modeli poput DeepSeek V4 Flash omogućavaju više zahtjeva, dok skuplji modeli poput GLM-5.1 omogućavaju manje.
+
+Tabela ispod pruža procijenjeni broj zahtjeva na osnovu tipičnih obrazaca korištenja Go pretplate:
+
+| Model             | zahtjeva na 5 sati | zahtjeva sedmično | zahtjeva mjesečno |
+| ----------------- | ------------------ | ----------------- | ----------------- |
+| GLM-5.1           | 880                | 2,150             | 4,300             |
+| GLM-5             | 1,150              | 2,880             | 5,750             |
+| Kimi K2.5         | 1,850              | 4,630             | 9,250             |
+| Kimi K2.6         | 1,150              | 2,880             | 5,750             |
+| MiMo-V2.5         | 30,100             | 75,200            | 150,400           |
+| MiMo-V2.5-Pro     | 3,250              | 8,150             | 16,300            |
+| MiniMax M3        | 1,400              | 3,500             | 7,000             |
+| MiniMax M2.7      | 3,400              | 8,500             | 17,000            |
+| MiniMax M2.5      | 6,300              | 15,900            | 31,800            |
+| Qwen3.7 Max       | 950                | 2,390             | 4,770             |
+| Qwen3.7 Plus      | 4,300              | 10,800            | 21,600            |
+| Qwen3.6 Plus      | 3,300              | 8,200             | 16,300            |
+| DeepSeek V4 Pro   | 3,450              | 8,550             | 17,150            |
+| DeepSeek V4 Flash | 31,650             | 79,050            | 158,150           |
+
+Procjene se zasnivaju na zapaženim prosječnim obrascima zahtjeva:
+
+- GLM-5/5.1 — 700 ulaznih (input), 52,000 keširanih, 150 izlaznih (output) tokena po zahtjevu
+- Kimi K2.5/K2.6 — 870 ulaznih, 55,000 keširanih, 200 izlaznih tokena po zahtjevu
+- DeepSeek V4 Pro — 750 ulaznih, 82,000 keširanih, 290 izlaznih tokena po zahtjevu
+- DeepSeek V4 Flash — 790 ulaznih, 68,000 keširanih, 280 izlaznih tokena po zahtjevu
+- MiniMax M3 — 810 ulaznih, 62,000 keširanih, 225 izlaznih tokena po zahtjevu
+- MiniMax M2.7/M2.5 — 300 ulaznih, 55,000 keširanih, 125 izlaznih tokena po zahtjevu
+- Qwen3.7 Max — 420 ulaznih, 66,000 keširanih, 200 izlaznih tokena po zahtjevu
+- Qwen3.7 Plus — 500 ulaznih, 57,000 keširanih, 190 izlaznih tokena po zahtjevu
+- Qwen3.6 Plus — 500 ulaznih, 57,000 keširanih, 190 izlaznih tokena po zahtjevu
+- MiMo-V2.5 — 830 ulaznih, 71,500 keširanih, 295 izlaznih tokena po zahtjevu
+- MiMo-V2.5-Pro — 790 ulaznih, 86,000 keširanih, 305 izlaznih tokena po zahtjevu
+
+Procjene se također zasnivaju na sljedećim cijenama po 1M tokena:
+
+| Model                        | Input | Output | Cached Read | Cached Write |
+| ---------------------------- | ----- | ------ | ----------- | ------------ |
+| GLM-5.1                      | $1.40 | $4.40  | $0.26       | -            |
+| GLM-5                        | $1.00 | $3.20  | $0.20       | -            |
+| Kimi K2.6                    | $0.95 | $4.00  | $0.16       | -            |
+| Kimi K2.5                    | $0.60 | $3.00  | $0.10       | -            |
+| MiMo V2.5                    | $0.14 | $0.28  | $0.0028     | -            |
+| MiMo V2.5 Pro                | $1.74 | $3.48  | $0.0145     | -            |
+| MiniMax M3                   | $0.60 | $2.40  | $0.12       | $0.75        |
+| MiniMax M2.7                 | $0.30 | $1.20  | $0.06       | $0.375       |
+| MiniMax M2.5                 | $0.30 | $1.20  | $0.06       | $0.375       |
+| Qwen3.7 Max                  | $2.50 | $7.50  | $0.50       | $3.125       |
+| Qwen3.7 Plus (≤ 256K tokens) | $0.40 | $1.60  | $0.04       | $0.50        |
+| Qwen3.7 Plus (> 256K tokens) | $1.20 | $4.80  | $0.12       | $1.50        |
+| Qwen3.6 Plus (≤ 256K tokens) | $0.50 | $3.00  | $0.05       | $0.625       |
+| Qwen3.6 Plus (> 256K tokens) | $2.00 | $6.00  | $0.20       | $2.50        |
+| DeepSeek V4 Pro              | $1.74 | $3.48  | $0.0145     | -            |
+| DeepSeek V4 Flash            | $0.14 | $0.28  | $0.0028     | -            |
+
+Svoju trenutnu potrošnju možete pratiti u **<a href={console}>konzoli</a>**.
+
+:::tip
+Ako dostignete ograničenje upotrebe, možete nastaviti koristiti besplatne modele.
+:::
+
+Ograničenja upotrebe mogu se promijeniti kako budemo učili iz rane upotrebe i povratnih informacija.
+
+---
+
+### Upotreba preko ograničenja
+
+Ako također imate kredite na svom Zen balansu, možete omogućiti **Use balance**
+opciju u konzoli. Kada je omogućeno, Go će preći na vaš Zen balans
+nakon što dostignete ograničenja upotrebe umjesto blokiranja zahtjeva.
+
+---
+
+## Endpointi
+
+Također možete pristupiti Go modelima putem sljedećih API endpointa.
+
+| Model             | Model ID          | Endpoint                                         | AI SDK Paket                |
+| ----------------- | ----------------- | ------------------------------------------------ | --------------------------- |
+| GLM-5.1           | glm-5.1           | `https://deepagent-code.ai/zen/go/v1/chat/completions` | `@ai-sdk/openai-compatible` |
+| GLM-5             | glm-5             | `https://deepagent-code.ai/zen/go/v1/chat/completions` | `@ai-sdk/openai-compatible` |
+| Kimi K2.5         | kimi-k2.5         | `https://deepagent-code.ai/zen/go/v1/chat/completions` | `@ai-sdk/openai-compatible` |
+| Kimi K2.6         | kimi-k2.6         | `https://deepagent-code.ai/zen/go/v1/chat/completions` | `@ai-sdk/openai-compatible` |
+| DeepSeek V4 Pro   | deepseek-v4-pro   | `https://deepagent-code.ai/zen/go/v1/chat/completions` | `@ai-sdk/openai-compatible` |
+| DeepSeek V4 Flash | deepseek-v4-flash | `https://deepagent-code.ai/zen/go/v1/chat/completions` | `@ai-sdk/openai-compatible` |
+| MiMo-V2.5         | mimo-v2.5         | `https://deepagent-code.ai/zen/go/v1/chat/completions` | `@ai-sdk/openai-compatible` |
+| MiMo-V2.5-Pro     | mimo-v2.5-pro     | `https://deepagent-code.ai/zen/go/v1/chat/completions` | `@ai-sdk/openai-compatible` |
+| MiniMax M3        | minimax-m3        | `https://deepagent-code.ai/zen/go/v1/messages`         | `@ai-sdk/anthropic`         |
+| MiniMax M2.7      | minimax-m2.7      | `https://deepagent-code.ai/zen/go/v1/messages`         | `@ai-sdk/anthropic`         |
+| MiniMax M2.5      | minimax-m2.5      | `https://deepagent-code.ai/zen/go/v1/messages`         | `@ai-sdk/anthropic`         |
+| Qwen3.7 Max       | qwen3.7-max       | `https://deepagent-code.ai/zen/go/v1/messages`         | `@ai-sdk/anthropic`         |
+| Qwen3.7 Plus      | qwen3.7-plus      | `https://deepagent-code.ai/zen/go/v1/messages`         | `@ai-sdk/anthropic`         |
+| Qwen3.6 Plus      | qwen3.6-plus      | `https://deepagent-code.ai/zen/go/v1/messages`         | `@ai-sdk/anthropic`         |
+
+[Model id](/docs/config/#models) u vašoj DeepAgent Code konfiguraciji
+koristi format `deepagent-code-go/<model-id>`. Na primjer, za Kimi K2.6, koristili biste
+`deepagent-code-go/kimi-k2.6` u svojoj konfiguraciji.
+
+---
+
+### Modeli
+
+Pun spisak dostupnih modela i njihovih metapodataka možete preuzeti na:
+
+```
+https://deepagent-code.ai/zen/go/v1/models
+```
+
+---
+
+## Privatnost
+
+Plan je prvenstveno namijenjen međunarodnim korisnicima, a modeli su smješteni u US, EU i Singaporeu radi stabilnog globalnog pristupa. Naši pružaoci usluga primjenjuju politiku nultog zadržavanja podataka i ne koriste vaše podatke za treniranje modela.
+
+---
+
+## Ciljevi
+
+Napravili smo DeepAgent Code Go da bismo:
+
+1. Učinili AI programiranje **dostupnim** većem broju ljudi putem povoljne pretplate.
+2. Pružili **pouzdan** pristup najboljim otvorenim modelima za programiranje.
+3. Odabrali modele koji su **testirani i benchmarkovani** za upotrebu od strane agenata za programiranje.
+4. Osigurali da **nema zaključavanja (no lock-in)**, omogućavajući vam da uz DeepAgent Code koristite i bilo kojeg drugog provajdera.

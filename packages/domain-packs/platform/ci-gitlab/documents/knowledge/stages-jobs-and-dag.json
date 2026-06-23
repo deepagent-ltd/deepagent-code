@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:glci:stages-jobs-and-dag",
+  "type": "knowledge",
+  "title": "Stages, jobs, and needs-based DAG ordering",
+  "description": "Jobs in a stage run in parallel and stages run in sequence, but needs: builds a DAG that lets jobs start before their stage.",
+  "body": "Use when structuring or speeding up a pipeline. By default jobs in the same stage run in parallel and a stage starts only after the previous stage's jobs succeed; needs: overrides this by declaring direct dependencies, forming a DAG so a job can start as soon as its specific upstream jobs finish rather than waiting for the whole stage. Do not assume stage order alone gives you the fastest path or that a needs job receives artifacts it did not request. Actions: use stages for coarse phases and needs for fine-grained ordering and artifact passing. Validation signals include the pipeline graph matching intended dependencies and jobs starting as early as their needs allow. Risk boundary: a needs edge that pulls a deploy job early past its gates can ship unverified code; keep gates explicit.",
+  "domain": "ci_gitlab",
+  "scope_hint": "platform.ci-gitlab:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.ci-gitlab",
+  "pack_id": "platform.ci-gitlab"
+}

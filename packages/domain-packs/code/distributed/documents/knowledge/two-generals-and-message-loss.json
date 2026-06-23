@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:dist:two-generals-and-message-loss",
+  "type": "knowledge",
+  "title": "Message loss and the impossibility of certainty",
+  "description": "Over an unreliable network no finite exchange guarantees both sides agree; protocols cope with probabilistic acknowledgement, retries, and idempotency, not certainty.",
+  "body": "Use when reasoning about why delivery and agreement are never absolute. The Two Generals result shows no fixed number of acknowledgements guarantees mutual agreement over a lossy channel, and FLP shows no deterministic protocol guarantees consensus in a fully asynchronous system with even one crash; real systems sidestep this with timeouts, randomization, and retries. Do not promise exactly-once delivery or guaranteed agreement in bounded time. Actions: design for at-least-once delivery plus idempotency and use timeouts to make progress in practice. Validation signals include an idempotency test under duplicated and dropped messages. Risk boundary: a protocol that assumes reliable delivery breaks under loss; require explicit retry/dedup handling before trusting any cross-node acknowledgement.",
+  "domain": "distributed",
+  "scope_hint": "code.distributed:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.distributed",
+  "pack_id": "code.distributed"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "failure_dossier:production:rollback-plan-is-git-revert-only",
+  "type": "failure_dossier",
+  "title": "Rollback plan is git revert only",
+  "description": "Rollback is described only as reverting source code while data, config, or external effects remain changed.",
+  "body": "Failure mode: a release changes schema, caches, queues, third-party state, or user-visible data and assumes source revert fixes it. Detection signals include migrations or config changes with no compensation path and no compatibility tests. Remediation is explicit state rollback, disablement, or forward-fix plan. Human gate is required when state cannot be undone. Use when a proposed approach skips repository conventions, toolchain files, changed symbols, validation commands, and runtime output or claims success without domain evidence. Do not use this dossier as a positive implementation strategy; it is a do-not-use signal. Actions: block the shortcut, name the missing evidence, and switch to a safer methodology or ask for human approval. Validation signals include absence or contradiction in package-local checks, focused tests, build output, smoke runs, and command logs. Risk boundary: treat repeated recurrence as a blocker when it can cause broad rewrites, generated-file drift, stale assumptions, and unvalidated behavior changes.",
+  "domain": "rollback",
+  "scope_hint": "risk.production:failure_dossiers",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.production",
+  "pack_id": "risk.production"
+}

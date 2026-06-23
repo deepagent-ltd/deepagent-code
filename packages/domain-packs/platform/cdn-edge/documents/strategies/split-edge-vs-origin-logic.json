@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:edge:split-edge-vs-origin-logic",
+  "type": "strategy",
+  "title": "Split edge-vs-origin logic deliberately",
+  "description": "Put only fast, stateless, request-shaping logic at the edge; keep stateful and heavy work at the origin.",
+  "body": "Use when deciding where a piece of logic runs. Do not move database-backed or stateful logic to the edge — the edge has no consistent shared state and high fan-out. Actions: place auth checks, redirects, header rewrites, A/B routing, and cache-key normalization at the edge; keep transactions and writes at the origin; record why each piece lives where it does. Validation signals include reduced origin load and unchanged correctness. Risk boundary: stateful logic at the edge causes inconsistency across PoPs — confirm statelessness before edge placement.",
+  "domain": "cdn",
+  "scope_hint": "platform.cdn-edge:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.cdn-edge",
+  "pack_id": "platform.cdn-edge"
+}

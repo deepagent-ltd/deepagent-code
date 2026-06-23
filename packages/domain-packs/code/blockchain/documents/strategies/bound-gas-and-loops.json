@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:chain:bound-gas-and-loops",
+  "type": "strategy",
+  "title": "Bound gas so transactions cannot get stuck",
+  "description": "Avoid unbounded loops and storage growth that can push a transaction past the block gas limit and permanently brick a function.",
+  "body": "Use when a function iterates over an array or mapping that users can grow. Do not loop over a list whose length attackers control, and avoid pushing all of a batch operation into one transaction. Actions: cap loop lengths, paginate large operations across transactions, and prefer a pull-payment pattern (users withdraw individually) over pushing to many recipients in one call. Validation signals include a gas test where the worst-case array size still fits under the block gas limit and a withdrawal path independent of list size. Risk boundary: an unbounded loop that grows past the block gas limit makes the function permanently uncallable (a denial of service that immutability cannot fix); treat user-growable loops as a blocking design flaw.",
+  "domain": "blockchain",
+  "scope_hint": "code.blockchain:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.blockchain",
+  "pack_id": "code.blockchain"
+}

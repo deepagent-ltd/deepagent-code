@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:redis:choose-persistence-mode",
+  "type": "methodology",
+  "title": "Choose a persistence mode",
+  "description": "Pick RDB, AOF, or both based on the acceptable data-loss window and restart-time tradeoffs.",
+  "body": "Steps: 1. Define the acceptable data-loss window on a crash. 2. RDB takes periodic point-in-time snapshots — compact and fast to restore but loses everything since the last snapshot. 3. AOF logs every write and replays on restart — far smaller loss window (especially appendfsync everysec or always) but a larger file and slower load. 4. For durability, enable AOF (often with RDB for fast restore); for a pure cache, persistence may be off entirely. 5. Verify restart actually reloads the expected data. Rollback point: revert config and restart. Validation: a kill-and-restart test loses no more than the chosen window and the instance reloads the dataset; risk boundary — RDB-only on a datastore role can lose minutes of writes.",
+  "domain": "redis",
+  "scope_hint": "code.database.redis:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.redis",
+  "pack_id": "code.database.redis"
+}

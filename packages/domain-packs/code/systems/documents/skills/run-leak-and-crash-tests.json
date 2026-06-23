@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:sys:run-leak-and-crash-tests",
+  "type": "skill",
+  "title": "Run leak and crash-consistency tests",
+  "description": "Exercise the path under repetition and injected crashes to confirm resources stay bounded and writes stay consistent.",
+  "body": "Use when validating a systems change. Procedure: run the target path many times while sampling fd/handle and RSS counts to confirm they stay flat (leak test), and inject crashes (kill -9 or fault injection) at each step of a durable write to confirm the file is always old-complete or new-complete (crash-consistency test); for signals, send repeated SIGTERM/SIGCHLD and confirm clean shutdown and reaping. Report which invariants held and which leaked, lost data, or hung. This skill runs local tests only and must not run against production hosts or shared storage. Validation signals include flat resource counts and consistent files across all crash points. Risk boundary: if resources grow without bound or a crash exposes a partial file, treat it as a blocking defect rather than loosening the check.",
+  "domain": "systems",
+  "scope_hint": "code.systems:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.systems",
+  "pack_id": "code.systems"
+}

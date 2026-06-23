@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:bazel:remote-execution-vs-cache",
+  "type": "knowledge",
+  "title": "Remote caching versus remote execution",
+  "description": "Remote caching stores and reuses action outputs, while remote execution also runs the actions themselves on a remote cluster.",
+  "body": "Use when choosing how to scale a build. Do not conflate the two: caching reuses results, execution offloads the work. Remote caching uploads and downloads outputs keyed by action key so unchanged work is skipped; remote execution dispatches the action's command to worker machines, which also requires strict hermeticity. Inspect the build's remote flags to see which is active. Validation signals include cache reuse across machines and, with execution, work running off the local host. Risk boundary: remote execution magnifies any non-hermeticity into cross-machine failures, so hermeticity is a precondition.",
+  "domain": "bazel",
+  "scope_hint": "code.build.bazel:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.build.bazel",
+  "pack_id": "code.build.bazel"
+}

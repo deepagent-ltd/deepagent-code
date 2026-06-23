@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:benchmarking:isolate-the-measured-unit",
+  "type": "strategy",
+  "title": "Isolate exactly the unit you measure",
+  "description": "Ensure the benchmark times only the code under test, excluding setup, I/O, and harness overhead that distort microbenchmark results.",
+  "body": "Use when writing a microbenchmark for a function or hot path. Do not include allocation, fixture setup, or logging inside the timed region, and do not let the compiler optimize the work away. Actions: move setup outside the timed loop, consume the result (e.g. a sink/blackhole) so it is not dead-code-eliminated, and measure harness overhead separately. Validation signals include a stable per-iteration time and a control run of an empty loop to quantify overhead. Risk boundary: a microbenchmark that times setup or gets optimized away produces confident but meaningless numbers; if the measured unit cannot be isolated, prefer a realistic macrobenchmark over a misleading micro one.",
+  "domain": "code",
+  "scope_hint": "code.benchmarking:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.benchmarking",
+  "pack_id": "code.benchmarking"
+}

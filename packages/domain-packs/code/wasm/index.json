@@ -1,0 +1,468 @@
+[
+  {
+    "ref_id": "strategy:wasm:match-build-target-to-runtime",
+    "type": "strategy",
+    "title": "Match the build target to the runtime",
+    "summary": "Pick the compilation target (browser unknown vs WASI vs emscripten) for where the module runs so its imports are satisfiable.",
+    "domains": [
+      "wasm",
+      "webassembly",
+      "abi",
+      "browser_runtime"
+    ],
+    "triggers": [
+      "target",
+      "wasm32",
+      "wasi",
+      "browser",
+      "runtime",
+      "toolchain"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.wasm"
+  },
+  {
+    "ref_id": "strategy:wasm:cross-the-boundary-through-bindings",
+    "type": "strategy",
+    "title": "Cross the JS boundary through generated bindings",
+    "summary": "Pass strings, structs, and arrays via a binding layer (wasm-bindgen) that marshals them, not as raw integers you decode by hand.",
+    "domains": [
+      "wasm",
+      "webassembly",
+      "abi",
+      "browser_runtime"
+    ],
+    "triggers": [
+      "bindings",
+      "wasm-bindgen",
+      "marshal",
+      "interop",
+      "boundary",
+      "types"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.wasm"
+  },
+  {
+    "ref_id": "strategy:wasm:manage-linear-memory-ownership",
+    "type": "strategy",
+    "title": "Make linear-memory ownership explicit across the boundary",
+    "summary": "Define who allocates and frees each buffer so data crossing the boundary is neither leaked nor freed twice.",
+    "domains": [
+      "wasm",
+      "webassembly",
+      "abi",
+      "browser_runtime"
+    ],
+    "triggers": [
+      "linear memory",
+      "ownership",
+      "alloc",
+      "free",
+      "leak",
+      "double-free"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.wasm"
+  },
+  {
+    "ref_id": "strategy:wasm:revalidate-memory-views-after-grow",
+    "type": "strategy",
+    "title": "Re-fetch memory views after the heap can grow",
+    "summary": "Treat any JS TypedArray view of WASM memory as invalidated whenever the module may call memory.grow.",
+    "domains": [
+      "wasm",
+      "webassembly",
+      "abi",
+      "browser_runtime"
+    ],
+    "triggers": [
+      "memory",
+      "grow",
+      "detached",
+      "view",
+      "typedarray",
+      "buffer"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.wasm"
+  },
+  {
+    "ref_id": "strategy:wasm:load-module-with-streaming-instantiation",
+    "type": "strategy",
+    "title": "Load the module with streaming instantiation",
+    "summary": "Fetch and compile the .wasm with instantiateStreaming and the correct MIME/import object so loading is fast and correct.",
+    "domains": [
+      "wasm",
+      "webassembly",
+      "abi",
+      "browser_runtime"
+    ],
+    "triggers": [
+      "instantiate",
+      "streaming",
+      "fetch",
+      "mime",
+      "load",
+      "imports"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.wasm"
+  },
+  {
+    "ref_id": "strategy:wasm:keep-modules-debuggable",
+    "type": "strategy",
+    "title": "Keep WASM builds debuggable",
+    "summary": "Ship DWARF/source maps in dev and keep panic/trap messages so a WASM fault maps back to source.",
+    "domains": [
+      "wasm",
+      "webassembly",
+      "abi",
+      "browser_runtime"
+    ],
+    "triggers": [
+      "debug",
+      "dwarf",
+      "source-map",
+      "trap",
+      "panic",
+      "symbols"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.wasm"
+  },
+  {
+    "ref_id": "methodology:wasm:set-up-a-wasm-build-pipeline",
+    "type": "methodology",
+    "title": "Set up a WASM build and bundling pipeline",
+    "summary": "Wire toolchain, target, binding generation, and bundler so the module and its JS glue load correctly.",
+    "domains": [
+      "wasm",
+      "webassembly",
+      "abi",
+      "browser_runtime"
+    ],
+    "triggers": [
+      "build",
+      "pipeline",
+      "bundler",
+      "wasm-pack",
+      "glue",
+      "setup"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.wasm"
+  },
+  {
+    "ref_id": "methodology:wasm:debug-a-wasm-trap-or-panic",
+    "type": "methodology",
+    "title": "Debug a WASM trap or panic",
+    "summary": "Turn an opaque trap into a source-level diagnosis using panic hooks, symbols, and boundary inspection.",
+    "domains": [
+      "wasm",
+      "webassembly",
+      "abi",
+      "browser_runtime"
+    ],
+    "triggers": [
+      "trap",
+      "panic",
+      "unreachable",
+      "debug",
+      "stack",
+      "diagnose"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.wasm"
+  },
+  {
+    "ref_id": "methodology:wasm:review-an-interop-boundary-change",
+    "type": "methodology",
+    "title": "Review a JS<->WASM interop change",
+    "summary": "Check type marshalling, memory ownership, and view lifetimes before accepting a change to the boundary.",
+    "domains": [
+      "wasm",
+      "webassembly",
+      "abi",
+      "browser_runtime"
+    ],
+    "triggers": [
+      "review",
+      "interop",
+      "boundary",
+      "marshal",
+      "ownership",
+      "abi"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.wasm"
+  },
+  {
+    "ref_id": "methodology:wasm:port-code-to-a-wasm-target",
+    "type": "methodology",
+    "title": "Port existing code to a WASM target",
+    "summary": "Identify host dependencies that do not exist in WASM and replace them with imports or runtime-appropriate shims.",
+    "domains": [
+      "wasm",
+      "webassembly",
+      "abi",
+      "browser_runtime"
+    ],
+    "triggers": [
+      "port",
+      "target",
+      "wasi",
+      "filesystem",
+      "threads",
+      "shim"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.wasm"
+  },
+  {
+    "ref_id": "knowledge:wasm:linear-memory-model",
+    "type": "knowledge",
+    "title": "The linear memory model",
+    "summary": "WASM memory is a single growable byte array shared with the host; it is manually managed and can be reallocated by grow.",
+    "domains": [
+      "wasm",
+      "webassembly",
+      "abi",
+      "browser_runtime"
+    ],
+    "triggers": [
+      "linear memory",
+      "grow",
+      "arraybuffer",
+      "bytes",
+      "heap",
+      "model"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.wasm"
+  },
+  {
+    "ref_id": "knowledge:wasm:abi-and-value-marshalling",
+    "type": "knowledge",
+    "title": "The WASM ABI and value marshalling",
+    "summary": "WASM functions natively pass only numeric types; strings, structs, and arrays must be encoded into linear memory and described by pointer+length.",
+    "domains": [
+      "wasm",
+      "webassembly",
+      "abi",
+      "browser_runtime"
+    ],
+    "triggers": [
+      "abi",
+      "marshalling",
+      "pointer",
+      "length",
+      "string",
+      "numeric"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.wasm"
+  },
+  {
+    "ref_id": "knowledge:wasm:browser-vs-wasi-runtimes",
+    "type": "knowledge",
+    "title": "Browser versus WASI runtimes",
+    "summary": "Browsers provide WASM with JS glue and no OS access; WASI provides a capability-scoped POSIX-like syscall interface for servers.",
+    "domains": [
+      "wasm",
+      "webassembly",
+      "abi",
+      "browser_runtime"
+    ],
+    "triggers": [
+      "browser",
+      "wasi",
+      "runtime",
+      "imports",
+      "syscalls",
+      "capabilities"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.wasm"
+  },
+  {
+    "ref_id": "knowledge:wasm:instantiation-and-imports-exports",
+    "type": "knowledge",
+    "title": "Module instantiation, imports, and exports",
+    "summary": "A module declares imports it needs and exports it provides; instantiation binds an import object to it and returns callable exports.",
+    "domains": [
+      "wasm",
+      "webassembly",
+      "abi",
+      "browser_runtime"
+    ],
+    "triggers": [
+      "instantiate",
+      "imports",
+      "exports",
+      "module",
+      "import object",
+      "compile"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.wasm"
+  },
+  {
+    "ref_id": "skill:wasm:read-interop-for-memory-and-abi-gaps",
+    "type": "skill",
+    "title": "Read interop code for memory and ABI gaps",
+    "summary": "Inspect the boundary code and report raw-pointer misuse, ownership errors, detached views, and target mismatches.",
+    "domains": [
+      "wasm",
+      "webassembly",
+      "abi",
+      "browser_runtime"
+    ],
+    "triggers": [
+      "read",
+      "interop",
+      "review",
+      "inspect",
+      "abi",
+      "gaps"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.wasm"
+  },
+  {
+    "ref_id": "skill:wasm:run-roundtrip-and-instantiation-tests",
+    "type": "skill",
+    "title": "Run round-trip and instantiation tests",
+    "summary": "Instantiate the module and exercise boundary calls to verify marshalling, memory safety, and import resolution.",
+    "domains": [
+      "wasm",
+      "webassembly",
+      "abi",
+      "browser_runtime"
+    ],
+    "triggers": [
+      "roundtrip",
+      "test",
+      "instantiate",
+      "verify",
+      "leak",
+      "run"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.wasm"
+  }
+]

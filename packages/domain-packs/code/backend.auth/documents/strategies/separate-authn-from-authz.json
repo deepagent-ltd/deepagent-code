@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:auth:separate-authn-from-authz",
+  "type": "strategy",
+  "title": "Separate authentication from authorization",
+  "description": "Proving who the principal is (authn) is kept distinct from what they may do (authz); a valid login is not access.",
+  "body": "Use when a bug or feature blurs login and permission, e.g. 'logged-in users can reach admin'. Do not treat a valid session as sufficient for a privileged action. Actions: confirm the authz check runs after authn on every protected path; ensure elevation requires an explicit permission, not just a session. Validation signals include a test where an authenticated low-privilege user is denied a privileged action. Risk boundary: conflating authn and authz on a sensitive path is a blocking finding.",
+  "domain": "backend_auth",
+  "scope_hint": "code.backend.auth:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.auth",
+  "pack_id": "code.backend.auth"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:finetune:distill-with-teacher-eval",
+  "type": "strategy",
+  "title": "Distill toward a measured teacher gap",
+  "description": "When distilling to a smaller student, track the student-teacher quality gap on real tasks so size reduction stays principled.",
+  "body": "Use when compressing a capable teacher into a cheaper student model. Do not assume matching soft labels guarantees task quality — distillation loss can fall while task accuracy lags. Actions: train the student on teacher outputs (and task labels where available), measure the student-teacher gap on the real task and capability evals, and iterate on student size or data until the gap fits the budget. Validation signals include a benchmark of student vs teacher on the target task and a gap within the accepted bound. Risk boundary: a student that mimics style but not capability fails on hard cases; if the gap exceeds the budget, escalate to a larger student rather than ship.",
+  "domain": "fine_tuning",
+  "scope_hint": "code.fine-tuning:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.fine-tuning",
+  "pack_id": "code.fine-tuning"
+}

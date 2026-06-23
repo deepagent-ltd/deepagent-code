@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:prompt:redact-pii-before-the-model",
+  "type": "strategy",
+  "title": "Redact PII before the prompt reaches the model",
+  "description": "Personal data is detected and redacted or tokenized during preparation so raw PII never enters the model request.",
+  "body": "Use when prompt inputs may contain personal data. Do not send raw emails, names, ids, or payment data to the model, and avoid relying on the model to ignore PII. Actions: run a redaction/tokenization pass during preparation, replace detected PII with stable placeholders, keep the mapping outside the prompt, and re-hydrate only in trusted post-processing if needed. Validation signals include a test that seeded PII is redacted before the assembled request and never appears in the outbound payload. Risk boundary: PII reaching the model is a privacy violation; defer the policy to risk.privacy, fail closed on detection uncertainty, and escalate.",
+  "domain": "prompt_pipeline",
+  "scope_hint": "code.prompt-pipeline:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.prompt-pipeline",
+  "pack_id": "code.prompt-pipeline"
+}

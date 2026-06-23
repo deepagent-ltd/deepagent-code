@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:security:validate-untrusted-input",
+  "type": "strategy",
+  "title": "Validate and parameterize every untrusted input",
+  "description": "Treat all external input as hostile and constrain it at the trust boundary with allowlists and parameterized APIs before it reaches a sink.",
+  "body": "Use when handling any request body, query param, header, file, or upstream-service payload that crosses a trust boundary. Do not pass raw input into SQL, shell, template, path, or deserialization sinks, and avoid denylist filtering that attackers route around. Actions: validate type/length/range/format against an allowlist at the edge, then use parameterized queries, prepared statements, or escaping APIs at each sink; record which fields are validated where. Validation signals include negative tests with injection payloads that are rejected and a schema/contract test on the input shape. Risk boundary: if input flows to a sink with no parameterization available, escalate rather than hand-rolling escaping.",
+  "domain": "security",
+  "scope_hint": "code.security:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.security",
+  "pack_id": "code.security"
+}

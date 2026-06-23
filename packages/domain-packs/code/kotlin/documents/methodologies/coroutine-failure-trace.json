@@ -1,0 +1,11 @@
+{
+  "ref_id": "methodology:kotlin:coroutine-failure-trace",
+  "type": "methodology",
+  "description": "Trace coroutine failures through scope, dispatcher, exception handler, and cancellation.",
+  "body": "Use when async Kotlin behavior fails, flakes, or hangs. Do not add arbitrary delays as a fix. Steps: locate scope owner, dispatcher, launch/async call, exception propagation, timeout/cancellation, and test scheduler usage. Patch ownership or synchronization. Verify with existing coroutine test utilities or deterministic timeout. Risk boundary is hiding deadlocks or lifecycle leaks. Use when Kotlin Engineering work touches repository conventions, toolchain files, changed symbols, validation commands, and runtime output. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: follow the ordered review, edit, and validation sequence; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include package-local checks, focused tests, build output, smoke runs, and command logs. Risk boundary: escalate or stop when the task involves broad rewrites, generated-file drift, stale assumptions, and unvalidated behavior changes, missing owner evidence, or live external state.",
+  "domain": "kotlin",
+  "scope_hint": "code.kotlin:methodologys",
+  "evidence_strength": "medium",
+  "provenance_tag": "code.kotlin:seed:kotlin_gradle_coroutines_docs:paraphrased",
+  "pack_id": "code.kotlin"
+}

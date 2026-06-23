@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:scala:ambiguous-implicit",
+  "type": "failure_dossier",
+  "description": "Two instances of the same type class are in scope, so resolution is ambiguous or silently picks the wrong one.",
+  "body": "Failure mode: two implicit/given instances for the same type (two Orderings, two JSON Encoders) are visible in one scope, so the compiler either errors on ambiguity or, when one is more specific, silently selects an instance the author did not intend, changing behavior with no call-site change. Detection signals: 'ambiguous implicit values' compile error; behavior differs depending on imports; a type class has multiple importable instances. Do not import competing instances into the same scope. Safer fallback: keep the canonical instance in the type's companion object, import alternative instances only locally and explicitly, and confirm with summon which instance resolves.",
+  "domain": "scala",
+  "scope_hint": "code.scala:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.scala:human_authored",
+  "pack_id": "code.scala"
+}

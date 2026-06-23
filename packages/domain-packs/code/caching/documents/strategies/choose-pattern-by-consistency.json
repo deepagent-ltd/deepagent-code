@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:cache:choose-pattern-by-consistency",
+  "type": "strategy",
+  "title": "Choose the cache pattern by consistency need",
+  "description": "Match cache-aside, read/write-through, or write-behind to the workload's durability and latency tolerance.",
+  "body": "Use when introducing a cache in front of a datastore and deciding the read/write flow. Do not pick write-behind for data that must survive a crash — its asynchronous flush window can drop unacknowledged writes. Actions: classify the workload as read-heavy (cache-aside), needing a synchronous abstraction (read-through/write-through), or tolerant of async durability (write-behind), then compare each pattern's consistency against its latency. Validation signals include a measured hit rate and a documented staleness bound per pattern. Risk boundary: write-behind trades durability for throughput — escalate before applying it to order or payment state.",
+  "domain": "caching",
+  "scope_hint": "code.caching:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.caching",
+  "pack_id": "code.caching"
+}

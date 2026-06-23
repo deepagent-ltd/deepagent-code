@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:tsdb:default-chunk-interval-on-high-ingest",
+  "type": "failure_dossier",
+  "description": "Leaving the default chunk interval on a high-ingest table, producing either giant working sets or millions of tiny chunks.",
+  "body": "Failure mode: the default interval is left unchanged on a table whose ingest rate is far from the default assumption, so chunks are either too large (working set won't fit memory) or too many (planning time explodes). Detection signals: high memory use from one active chunk, or slow query planning from excessive chunk count. Do not assume the default fits every ingest rate. Safer fallback: measure chunk size and count under real load and set the interval so recent data fits 1-2 chunks and typical queries touch few.",
+  "domain": "timeseries_db",
+  "scope_hint": "code.database.timeseries:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.timeseries:human_authored",
+  "pack_id": "code.database.timeseries"
+}

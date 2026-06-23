@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:mon:promql-rate-and-counters",
+  "type": "knowledge",
+  "title": "PromQL rate and counters",
+  "description": "rate() and increase() compute per-second and total change of counters, handling resets, over a window.",
+  "body": "Use when querying counter metrics in PromQL. rate() returns the per-second average increase of a counter over the range window and transparently handles counter resets; increase() gives the total over the window. They require a counter and a window spanning several scrape samples. Do not apply rate() to a gauge or use a window near the scrape interval. Actions: pick a window of at least four intervals and confirm the metric type. Validation signals include a stable, gap-free rate. Risk boundary: a too-short window silently yields empty results, blinding alerts that depend on it.",
+  "domain": "monitoring",
+  "scope_hint": "platform.monitoring:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.monitoring",
+  "pack_id": "platform.monitoring"
+}

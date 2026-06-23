@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:pcb:characteristic-impedance-geometry",
+  "type": "knowledge",
+  "title": "How trace geometry sets characteristic impedance",
+  "description": "Characteristic impedance depends on trace width, dielectric height to the reference plane, and the dielectric constant.",
+  "body": "Use when reasoning about why a controlled net needs specific geometry. Do not treat impedance as a free property, since it is fixed by the cross-section the fab builds. Actions: relate width and dielectric height to the target impedance, verify against the stackup, and record the sensitivity to manufacturing tolerance. Validation signals include a calculated impedance matching the fab report and tolerance analysis staying within spec. Risk boundary: a thinner-than-expected dielectric raises impedance error, so flag any stackup change as an impedance risk before routing.",
+  "domain": "pcb",
+  "scope_hint": "hardware.pcb:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.pcb",
+  "pack_id": "hardware.pcb"
+}
