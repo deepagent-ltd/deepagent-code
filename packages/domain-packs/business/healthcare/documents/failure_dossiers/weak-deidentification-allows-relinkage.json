@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:healthcare:weak-deidentification-allows-relinkage",
+  "type": "failure_dossier",
+  "description": "Sharing 'anonymized' data that retains quasi-identifiers, allowing individuals to be re-identified by linkage.",
+  "body": "Failure mode: a dataset is shared for analytics after removing names but keeping birth date, ZIP, gender, and rare attributes, so records can be re-identified by linking to external data despite being labeled anonymous. Detection signals: quasi-identifiers remain in the export; no re-identification risk assessment was done; small cells uniquely identify individuals. Do not equate name removal with anonymization. Safer fallback: generalize/suppress quasi-identifiers, run a re-identification risk check, and have privacy review the dataset before release. Risk boundary: advisory only; escalate borderline de-identification to a human privacy decision and never weaken de-identification to preserve analytic detail.",
+  "domain": "healthcare",
+  "scope_hint": "business.healthcare:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:business.healthcare:human_authored",
+  "pack_id": "business.healthcare"
+}

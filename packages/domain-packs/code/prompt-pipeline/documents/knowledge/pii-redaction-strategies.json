@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:prompt:pii-redaction-strategies",
+  "type": "knowledge",
+  "title": "PII redaction strategies",
+  "description": "PII can be removed, masked, or reversibly tokenized; reversible tokenization preserves utility but needs a protected mapping.",
+  "body": "Use when deciding how to handle personal data in prompts. Removal drops the data entirely (simplest, lowest utility); masking replaces it with a type placeholder (keeps shape, irreversible); tokenization swaps it for a stable token with a mapping kept outside the prompt so post-processing can re-hydrate (highest utility, requires protecting the map). Do not send raw PII to the model, and avoid storing the token map alongside the prompt. Actions: choose by whether downstream needs the real value and protect any mapping. Validation signals include a test that seeded PII never appears in the outbound request under each strategy. Risk boundary: detection is imperfect, so fail closed on uncertainty and defer the policy to risk.privacy.",
+  "domain": "prompt_pipeline",
+  "scope_hint": "code.prompt-pipeline:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.prompt-pipeline",
+  "pack_id": "code.prompt-pipeline"
+}

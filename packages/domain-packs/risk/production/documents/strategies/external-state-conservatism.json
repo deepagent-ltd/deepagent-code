@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:production:external-state-conservatism",
+  "type": "strategy",
+  "title": "External state conservatism",
+  "description": "Treat databases, queues, caches, object stores, cloud resources, third-party systems, and user-visible configuration as external state.",
+  "body": "Use when changes write outside the local workspace or modify durable state beyond source files. Do not treat local dry-runs or generated plans as permission to apply real changes. Actions: identify the target environment, state owner, blast radius, backup or snapshot status, and whether the action is reversible. Validation signals include plan output, dry-run evidence, schema diff, and no live write without approval. Risk boundary: destructive or cross-environment state changes require human gate. Use when Production Change Risk Controls work touches repository conventions, toolchain files, changed symbols, validation commands, and runtime output. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: choose the smallest direction that preserves the domain contract; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include package-local checks, focused tests, build output, smoke runs, and command logs. Risk boundary: escalate or stop when the task involves broad rewrites, generated-file drift, stale assumptions, and unvalidated behavior changes, missing owner evidence, or live external state.",
+  "domain": "production",
+  "scope_hint": "risk.production:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.production",
+  "pack_id": "risk.production"
+}

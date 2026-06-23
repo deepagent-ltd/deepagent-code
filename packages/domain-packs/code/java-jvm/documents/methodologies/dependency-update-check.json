@@ -1,0 +1,11 @@
+{
+  "ref_id": "methodology:java_jvm:dependency-update-check",
+  "type": "methodology",
+  "description": "In Java/JVM, when the dependency tree (mvn dependency:tree), version conflicts, and classpath/module-path ordering change, verify the lockfile, generated artifacts, and a runtime smoke.",
+  "body": "In Java/JVM, a dependency change ripples through the dependency tree (mvn dependency:tree), version conflicts, and classpath/module-path ordering, generated bindings, and runtime behavior, so it needs more than a recompile. Use when the dependency tree (mvn dependency:tree), version conflicts, and classpath/module-path ordering are added, removed, or version-bumped. Do not merge a dependency bump on a green compile alone, and avoid editing the lockfile by hand. Actions: inspect the dependency delta, re-resolve and review the dependency tree (mvn dependency:tree), version conflicts, and classpath/module-path ordering, regenerate affected annotation-processor output (Lombok, Dagger, MapStruct) and generated-sources, then run the module's JUnit suite on the affected classpath and smoke the import/runtime path. Validation signals include a reviewed lockfile diff, a clean SpotBugs, Error Prone, and Checkstyle reports pass, and a passing runtime smoke. Risk boundary: escalate on a major-version bump, a transitive conflict you cannot resolve, or a license/security flag.",
+  "domain": "java_jvm",
+  "scope_hint": "code.java-jvm:methodologies",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.java-jvm:skill_survey",
+  "pack_id": "code.java-jvm"
+}

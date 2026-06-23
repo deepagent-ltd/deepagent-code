@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:agent:make-memory-writes-deliberate",
+  "type": "strategy",
+  "title": "Make memory writes deliberate",
+  "description": "Durable memory stores only validated, scoped facts with eviction, not an append-everything log of raw model output.",
+  "body": "Use when an agent persists state across steps or sessions. Do not append every raw model utterance to long-term memory, and avoid unbounded growth with no eviction or scoping. Actions: write only validated facts, scope each entry (session/project/user), set an eviction or summarization policy, and treat stored memory as untrusted input on read. Validation signals include a test that memory size is bounded over a long run and that a stored entry is re-validated rather than trusted blindly on retrieval. Risk boundary: persisting unvalidated or cross-scope data is a privacy finding; defer to risk.privacy and escalate.",
+  "domain": "agent",
+  "scope_hint": "code.agent:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.agent",
+  "pack_id": "code.agent"
+}

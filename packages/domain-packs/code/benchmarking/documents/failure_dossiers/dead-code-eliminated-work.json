@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:benchmarking:dead-code-eliminated-work",
+  "type": "failure_dossier",
+  "description": "A microbenchmark whose result is unused, so the compiler optimizes the work away and the timing measures nothing.",
+  "body": "Failure mode: the benchmarked computation's result is never consumed, so the JIT/compiler eliminates it as dead code and the loop times an empty body, reporting implausibly fast results. Detection signals: near-zero or impossibly fast per-iteration times; results that do not scale with input size; assembly/profile shows the work removed. Do not leave benchmark results unconsumed. Safer fallback: sink the result to a volatile/blackhole, vary inputs so work cannot be precomputed, and sanity-check that timings scale with problem size.",
+  "domain": "code",
+  "scope_hint": "code.benchmarking:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.benchmarking:human_authored",
+  "pack_id": "code.benchmarking"
+}

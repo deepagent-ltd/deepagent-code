@@ -1,0 +1,130 @@
+name: desktop-build
+
+# Internal-beta packaging: builds the desktop app for download as workflow artifacts.
+# Does NOT publish, version-bump, or create releases. Manual trigger only.
+#
+# macOS signing/notarization is opt-in: if the APPLE_* / CSC_* secrets are present it
+# signs, otherwise it builds an UNSIGNED package (testers right-click → Open to launch).
+# Windows/Linux packages are unsigned here.
+
+on:
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: "Build channel"
+        required: false
+        default: "beta"
+        type: choice
+        options:
+          - beta
+          - prod
+      platforms:
+        description: "Which platforms to build"
+        required: false
+        default: "mac+linux"
+        type: choice
+        options:
+          - mac+linux
+          - mac
+          - linux
+          - all
+
+permissions:
+  contents: read
+
+jobs:
+  # Build the matrix from the `platforms` input. Job-level `if` cannot read the matrix
+  # context, so the selection happens here and the build job consumes the JSON.
+  setup:
+    runs-on: ubuntu-24.04
+    outputs:
+      matrix: ${{ steps.gen.outputs.matrix }}
+    steps:
+      - id: gen
+        shell: bash
+        env:
+          PLATFORMS: ${{ github.event.inputs.platforms || 'mac+linux' }}
+        run: |
+          mac='{"host":"macos-14","target":"mac-arm64","platform_flag":"--mac --arm64","group":"mac"},{"host":"macos-13","target":"mac-x64","platform_flag":"--mac --x64","group":"mac"}'
+          linux='{"host":"ubuntu-24.04","target":"linux-x64","platform_flag":"--linux --x64","group":"linux"},{"host":"ubuntu-24.04-arm","target":"linux-arm64","platform_flag":"--linux --arm64","group":"linux"}'
+          win='{"host":"windows-2025","target":"win-x64","platform_flag":"--win --x64","group":"win"}'
+          case "$PLATFORMS" in
+            mac)       items="$mac" ;;
+            linux)     items="$linux" ;;
+            all)       items="$mac,$linux,$win" ;;
+            *)         items="$mac,$linux" ;;  # mac+linux (default)
+          esac
+          echo "matrix={\"include\":[$items]}" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: setup
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.setup.outputs.matrix) }}
+    runs-on: ${{ matrix.host }}
+    env:
+      # Mapped here so step-level `if` can test them (the `secrets` context is not
+      # available in `if`, but `env` is).
+      HAS_APPLE_CERT: ${{ secrets.APPLE_CERTIFICATE != '' }}
+      HAS_APPLE_NOTARY: ${{ secrets.APPLE_API_KEY != '' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup-bun
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      # rpm tooling for the Linux rpm target (deb/AppImage need no extra tools).
+      - name: Install rpm (linux)
+        if: matrix.group == 'linux'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends rpm
+
+      # Import the Developer ID cert only when the secret is configured; otherwise the
+      # build proceeds unsigned (DEEPAGENT_CODE_ALLOW_UNSIGNED below).
+      - name: Import Apple signing certificate
+        if: matrix.group == 'mac' && env.HAS_APPLE_CERT == 'true'
+        uses: apple-actions/import-codesign-certs@v3
+        with:
+          p12-file-base64: ${{ secrets.APPLE_CERTIFICATE }}
+          p12-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+
+      - name: Prebuild
+        working-directory: packages/desktop
+        env:
+          DEEPAGENT_CODE_CHANNEL: ${{ github.event.inputs.channel || 'beta' }}
+        run: bun run prebuild
+
+      - name: Build renderer
+        working-directory: packages/desktop
+        env:
+          DEEPAGENT_CODE_CHANNEL: ${{ github.event.inputs.channel || 'beta' }}
+        run: bun run build
+
+      - name: Package
+        working-directory: packages/desktop
+        timeout-minutes: 60
+        env:
+          DEEPAGENT_CODE_CHANNEL: ${{ github.event.inputs.channel || 'beta' }}
+          # Sign on macOS only when the notarization key is present; otherwise build
+          # unsigned instead of failing.
+          DEEPAGENT_CODE_ALLOW_UNSIGNED: ${{ (matrix.group == 'mac' && env.HAS_APPLE_NOTARY == 'true') && '0' || '1' }}
+          CSC_LINK: ${{ secrets.APPLE_CERTIFICATE }}
+          CSC_KEY_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: npx electron-builder ${{ matrix.platform_flag }} --publish never --config electron-builder.config.ts
+
+      - name: Upload package artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: deepagent-code-desktop-${{ matrix.target }}
+          if-no-files-found: error
+          path: |
+            packages/desktop/dist/*.dmg
+            packages/desktop/dist/*.zip
+            packages/desktop/dist/*.AppImage
+            packages/desktop/dist/*.deb
+            packages/desktop/dist/*.rpm
+            packages/desktop/dist/*.exe

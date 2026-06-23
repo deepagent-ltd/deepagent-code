@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:aws:lambda-execution-model",
+  "type": "knowledge",
+  "title": "Lambda execution environments, concurrency, and limits",
+  "description": "Covers the warm execution environment lifecycle, reserved vs provisioned concurrency, burst limits, and how throttling surfaces as 429/TooManyRequests.",
+  "body": "Use when reasoning about Lambda scaling behavior. Do not conflate reserved concurrency (a cap and guarantee) with provisioned concurrency (pre-warmed environments). Actions: remember each environment handles one request at a time, account concurrency is shared and bursts then scales by a fixed step, reserved concurrency both guarantees and caps a function, and exceeding it returns Throttles/429. Inspect ConcurrentExecutions and Throttles to confirm. Validation signals include Throttles at zero under load and ConcurrentExecutions tracking the reserved value. Risk boundary: altering account-wide concurrency starves other functions and is human-gated.",
+  "domain": "aws",
+  "scope_hint": "platform.cloud.aws:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.cloud.aws",
+  "pack_id": "platform.cloud.aws"
+}

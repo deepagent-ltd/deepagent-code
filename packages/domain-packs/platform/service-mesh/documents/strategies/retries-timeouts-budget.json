@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:mesh:retries-timeouts-budget",
+  "type": "strategy",
+  "title": "Bound mesh retries with timeouts and a retry budget",
+  "description": "Set per-try timeouts inside an overall request timeout and limit retry attempts/budget so retries don't amplify load during an outage.",
+  "body": "Use when configuring resilience for a route. Do not set unlimited retries or a per-try timeout larger than the overall timeout (retries never fire). Actions: set an overall route timeout, a smaller per-try timeout, a bounded number of attempts with retryOn for idempotent failures only, and cap concurrency so a failing dependency can't be hammered by retry storms. Validation signals include an injected 5xx retried up to the limit then failing fast, and total in-flight load staying bounded during a dependency outage. Risk boundary: enabling retries on non-idempotent production routes risks duplicate effects and is human-gated.",
+  "domain": "service_mesh",
+  "scope_hint": "platform.service-mesh:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.service-mesh",
+  "pack_id": "platform.service-mesh"
+}

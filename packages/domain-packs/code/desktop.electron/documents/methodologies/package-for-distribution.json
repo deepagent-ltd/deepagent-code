@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:electron:package-for-distribution",
+  "type": "methodology",
+  "title": "Package and sign for distribution",
+  "description": "Produce signed, platform-correct installers with electron-builder and validate auto-update before release.",
+  "body": "Steps: 1. Configure electron-builder (or forge) targets per platform (dmg/nsis/AppImage) and architectures. 2. Set up code-signing certificates and macOS notarization in the build. 3. Build and verify each installer launches without OS security warnings. 4. Configure the auto-update feed over HTTPS and verify the updater downloads, verifies, and applies a signed update. 5. Test update from the previous version to the new one. Rollback point: before publishing the update feed (a bad release auto-installs widely). Validation: signed installers pass OS gatekeeping and an end-to-end update from the prior version succeeds with signature verification; publishing unsigned or unverified updates is the risk this process closes.",
+  "domain": "electron",
+  "scope_hint": "code.desktop.electron:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.desktop.electron",
+  "pack_id": "code.desktop.electron"
+}

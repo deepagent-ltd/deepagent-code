@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:electron:enforce-context-isolation",
+  "type": "strategy",
+  "title": "Enforce context isolation on every renderer",
+  "description": "Keep contextIsolation enabled and nodeIntegration disabled so page scripts cannot reach Node or Electron internals directly.",
+  "body": "Use when creating any BrowserWindow or webview. Do not set nodeIntegration:true or contextIsolation:false to make `require` work in the page, and do not disable the sandbox for convenience. Actions: set contextIsolation:true, nodeIntegration:false, and sandbox:true in webPreferences for every renderer; expose needed capability only through a preload contextBridge. Validation signals include a security audit confirming isolation on all windows and the page being unable to call require or access process. Risk boundary: a renderer with Node access that loads any untrusted or remote content gives an attacker full code execution on the user's machine — disabling isolation is a critical security defect, not a workaround.",
+  "domain": "electron",
+  "scope_hint": "code.desktop.electron:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.desktop.electron",
+  "pack_id": "code.desktop.electron"
+}

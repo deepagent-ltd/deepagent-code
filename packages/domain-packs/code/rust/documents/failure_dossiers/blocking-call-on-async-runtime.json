@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:rust:blocking-call-on-async-runtime",
+  "type": "failure_dossier",
+  "description": "Running CPU-bound or blocking std calls directly on a tokio worker thread, starving other tasks on that thread.",
+  "body": "Failure mode: a tokio task does heavy computation or std::fs/std::net blocking IO inline, monopolizing a runtime worker so other tasks scheduled on it cannot progress and latency spikes. Detection signals: tokio-console shows tasks with long poll times; throughput drops as load rises; a thread is pinned at 100% while others idle. Do not block a tokio worker thread. Safer fallback: move blocking/CPU work to tokio::task::spawn_blocking (or a dedicated rayon pool) and await its handle, then verify worker poll times stay short under load.",
+  "domain": "rust",
+  "scope_hint": "code.rust:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.rust:human_authored",
+  "pack_id": "code.rust"
+}

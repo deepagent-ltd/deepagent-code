@@ -1,0 +1,11 @@
+{
+  "ref_id": "methodology:rust:language-gate-loop",
+  "type": "methodology",
+  "description": "In Rust, run the package-local gate, fix the first owned diagnostic, rerun, then broaden.",
+  "body": "In Rust, the fastest path through errors is to let cargo check, where the borrow checker and trait resolution must pass and cargo clippy -D warnings and rustc lint output drive one fix at a time rather than guessing. Use when cargo build (and cargo build --release) with the workspace's feature flags or the analyzers report multiple diagnostics. Do not batch speculative edits across files, and avoid suppressing diagnostics to move on. Actions: inspect the package, run the gate, fix only the first rustc error code (Exxxx) and the borrow/lifetime explanation, rerun cargo test on the affected crate with the relevant features, then widen to cargo build (and cargo build --release) with the workspace's feature flags for the whole package. Validation signals include a shrinking diagnostic count, a passing focused test, and a clean package-wide gate. Risk boundary: if a diagnostic implies a design or API change, stop and escalate instead of forcing the gate green.",
+  "domain": "rust",
+  "scope_hint": "code.rust:methodologies",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.rust:skill_survey",
+  "pack_id": "code.rust"
+}

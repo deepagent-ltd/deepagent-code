@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:finetune:prefer-peft-first",
+  "type": "strategy",
+  "title": "Reach for PEFT before full fine-tuning",
+  "description": "Try parameter-efficient methods like LoRA before updating all weights, since they cost far less and forget less of the base.",
+  "body": "Use when adapting a large pretrained model to a task with limited compute. Do not full-fine-tune by default — updating all weights is expensive and overwrites general capabilities. Actions: start with LoRA/PEFT on attention and MLP projections, sweep rank and learning rate, and compare against the base before considering full tuning. Validation signals include a LoRA run that matches or beats full fine-tuning on the task eval at a fraction of the cost, and a capability holdout that holds. Risk boundary: full fine-tuning a frontier-scale model risks catastrophic forgetting and large spend; if PEFT meets the target, do not escalate to full tuning without explicit justification.",
+  "domain": "fine_tuning",
+  "scope_hint": "code.fine-tuning:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.fine-tuning",
+  "pack_id": "code.fine-tuning"
+}

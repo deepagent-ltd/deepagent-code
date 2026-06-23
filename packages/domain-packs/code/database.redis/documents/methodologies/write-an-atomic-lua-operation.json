@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:redis:write-an-atomic-lua-operation",
+  "type": "methodology",
+  "title": "Write an atomic Lua operation",
+  "description": "Move a multi-step read-modify-write into a Lua script so it executes atomically on the server.",
+  "body": "Steps: 1. Identify the read-modify-write that races (e.g. check-then-decrement a quota). 2. Express it as a Lua script taking keys via KEYS and constants via ARGV, returning the result. 3. Keep the script short and deterministic (no nondeterministic commands), since it blocks the server while running. 4. Load it with SCRIPT LOAD and call EVALSHA, falling back to EVAL on NOSCRIPT. 5. Test the atomicity under concurrency. Rollback point: revert to the previous non-atomic path behind a flag. Validation: a concurrency test shows the operation never oversells/overcounts and the script runs in microseconds without blocking the server noticeably.",
+  "domain": "redis",
+  "scope_hint": "code.database.redis:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.redis",
+  "pack_id": "code.database.redis"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:wasm:read-interop-for-memory-and-abi-gaps",
+  "type": "skill",
+  "title": "Read interop code for memory and ABI gaps",
+  "description": "Inspect the boundary code and report raw-pointer misuse, ownership errors, detached views, and target mismatches.",
+  "body": "Use when asked whether WASM interop code is correct. Actions: read the binding and loader code and verify non-numeric values cross via generated bindings or correct pointer+length marshalling, each linear-memory buffer has a clear allocate/free owner freed exactly once, no JS memory view is cached across a grow, the build target matches the runtime, and the import object matches declared imports. Do not assume host GC frees WASM buffers or that cached views survive growth. Record each gap with the file/line and classify as abi-marshalling, memory-ownership, detached-view, target-mismatch, or loader-imports. This skill is read-only and must not change the build or run against production without permission. Validation signals include a concrete list of boundary sites and their risk class. Risk boundary: report any double-free, detached-view read, or target/runtime mismatch as a blocking finding and recommend a round-trip and leak test.",
+  "domain": "wasm",
+  "scope_hint": "code.wasm:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.wasm",
+  "pack_id": "code.wasm"
+}

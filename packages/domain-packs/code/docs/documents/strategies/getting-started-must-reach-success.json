@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:docs:getting-started-must-reach-success",
+  "type": "strategy",
+  "title": "Make getting-started reach first success",
+  "description": "Design the getting-started path so a new reader goes from zero to a working result with copyable, verified steps and no hidden prerequisites.",
+  "body": "Use when writing or revising onboarding/quickstart docs. Do not assume unstated prerequisites, skip setup, or leave steps that only work in the author's environment. Actions: state prerequisites up front, give copy-paste commands in order, show expected output at each step, and end at a concrete working result. Validation signals include running the quickstart from a clean environment and reaching the stated success state. Risk boundary: a quickstart that fails on a clean machine erodes trust immediately; verify it end-to-end from scratch rather than trusting that the steps look right.",
+  "domain": "code",
+  "scope_hint": "code.docs:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.docs",
+  "pack_id": "code.docs"
+}

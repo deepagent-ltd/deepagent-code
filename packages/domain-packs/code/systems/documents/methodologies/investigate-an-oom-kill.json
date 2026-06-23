@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:sys:investigate-an-oom-kill",
+  "type": "methodology",
+  "title": "Investigate an OOM kill",
+  "description": "Correlate the kernel OOM log, RSS growth, and allocation paths to find the unbounded consumer.",
+  "body": "Steps: 1. Confirm an OOM kill from the kernel log (dmesg/journal: 'Out of memory: Killed process') and note which process was killed. 2. Reconstruct memory growth (RSS over time, heap profiler) to see whether it is a leak, unbounded buffer, or large single allocation. 3. Identify the allocation site and whether input size drives it. 4. Bound it: stream the input, cap the cache, or add backpressure. 5. Re-run the load to confirm RSS plateaus. Rollback point: read-only diagnosis; the bounding change is reversible. Validation: RSS stays flat under the load that previously triggered the kill and no further OOM events occur.",
+  "domain": "systems",
+  "scope_hint": "code.systems:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.systems",
+  "pack_id": "code.systems"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:mlai:bias-variance-tradeoff",
+  "type": "knowledge",
+  "title": "Bias, variance, and the generalization gap",
+  "description": "Underfitting is high bias (model too simple), overfitting is high variance (model memorizes); the goal is the balance that minimizes test error.",
+  "body": "Use when reasoning about why a model fails to generalize. High bias shows as poor training AND validation performance (too little capacity); high variance shows as excellent training but poor validation (memorization). The train/validation gap measures variance; the training error floor measures bias. Do not fix high variance by adding capacity or high bias by regularizing. Actions: read both curves, identify the regime, and apply the matching remedy (more capacity/features vs more data/regularization). Validation signals include a shrinking gap with held validation accuracy. Risk boundary: misreading the regime makes the model worse; confirm with both curves before acting.",
+  "domain": "ml",
+  "scope_hint": "code.ml-ai:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.ml-ai",
+  "pack_id": "code.ml-ai"
+}

@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:rlang:na-corrupting-aggregate",
+  "type": "failure_dossier",
+  "description": "A single NA propagates through an aggregate without na.rm, returning NA and masking otherwise valid results.",
+  "body": "Failure mode: mean, sum, or another aggregate is called without na.rm on a column containing NA, so the whole result is NA and the missingness goes unnoticed downstream. Detection signals: an aggregate that is NA when most values are present; summaries with unexpected NA cells; == NA used as a missingness test returning NA. Do not aggregate NA-bearing columns without a decision. Safer fallback: inspect NA counts first, set na.rm or filter deliberately, and log how many rows were excluded.",
+  "domain": "r_lang",
+  "scope_hint": "code.r:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.r:human_authored",
+  "pack_id": "code.r"
+}

@@ -1,0 +1,11 @@
+{
+  "ref_id": "strategy:sql:diagnostic-first",
+  "type": "strategy",
+  "description": "In SQL, read the engine's error code and the offending clause it points to before making speculative edits.",
+  "body": "In SQL, the toolchain already points at the real problem, so the engine's error code and the offending clause it points to should guide the edit rather than a guess. Use when EXPLAIN on the statement to confirm it parses and the planner accepts it or EXPLAIN ANALYZE, the query plan, and index-usage inspection reports an error or warning. Do not start editing before reading the diagnostic, and avoid changing code you have not confirmed is implicated. Actions: read the first actionable diagnostic and the owned frame, inspect that location, make the smallest fix, then rerun a transaction that runs the statement, asserts row counts, then rolls back. Validation signals include the resolved diagnostic, a passing focused test, and no new warnings from EXPLAIN ANALYZE, the query plan, and index-usage inspection. Risk boundary: if the diagnostic exposes a deeper design fault, escalate rather than papering over it.",
+  "domain": "sql",
+  "scope_hint": "code.sql:strategies",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.sql:skill_survey",
+  "pack_id": "code.sql"
+}

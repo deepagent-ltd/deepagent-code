@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:risk.security:authz-negative-test-plan",
+  "type": "skill",
+  "title": "Authz Negative Test Plan",
+  "description": "Design focused deny tests for role, owner, tenant, unauthenticated, expired, and malformed access paths.",
+  "body": "Inputs: endpoint or service boundary, available fixtures, and current policy expectations. Use for authorization changes or reviews. Do not use when the task only changes authentication plumbing without resource access. Procedure: build a minimal matrix, select the highest-risk deny cells, add one allowed control case, assert both status and response body, and run the narrowest test command. Output: test cases and command evidence. Validation signals include denied access without sensitive payloads. Human gate: unresolved policy ambiguity or missing fixtures for tenant isolation.",
+  "domain": "authz",
+  "scope_hint": "risk.security:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.security",
+  "pack_id": "risk.security"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:search:how-inverted-index-works",
+  "type": "knowledge",
+  "title": "How an inverted index works",
+  "description": "An inverted index maps each analyzed term to a posting list of documents, so search is a term lookup, not a scan — making analysis decisive.",
+  "body": "Use when reasoning about why analysis matters so much. The engine analyzes each document into terms and stores, per term, a posting list of the documents containing it; a query analyzes its text into terms and intersects/unions those posting lists. Matching therefore happens on terms, not raw strings, so if index and query analysis differ, the terms never meet. Do not think of search as substring matching. Actions: reason in terms, and use the analyze API to see them. Validation signals include analyze-API tokens explaining match behavior. Risk boundary: ignoring that the index stores terms (not text) leads to analyzer-mismatch bugs that look inexplicable at the query level.",
+  "domain": "search",
+  "scope_hint": "code.search:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.search",
+  "pack_id": "code.search"
+}

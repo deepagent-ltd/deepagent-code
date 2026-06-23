@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:aws:s3-consistency-storage-classes",
+  "type": "knowledge",
+  "title": "S3 consistency, storage classes, and lifecycle economics",
+  "description": "Explains strong read-after-write consistency, storage-class tradeoffs (Standard/IA/Glacier), retrieval latency, and lifecycle transition costs.",
+  "body": "Use when choosing S3 storage or debugging retrieval cost/latency. Do not put hot, frequently-read objects in Glacier or assume IA is free to read. Actions: rely on S3 strong read-after-write consistency for new and overwritten objects, match access pattern to class (Standard for hot, Standard-IA for warm with a per-GB retrieval fee, Glacier/Deep Archive for cold with restore latency), and use lifecycle rules mindful of the minimum-storage-duration charge and per-object transition cost. Validation signals include retrieval latency matching the class and lifecycle metrics showing expected transitions. Risk boundary: a lifecycle rule that deletes or deep-archives production data is human-gated.",
+  "domain": "aws",
+  "scope_hint": "platform.cloud.aws:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.cloud.aws",
+  "pack_id": "platform.cloud.aws"
+}

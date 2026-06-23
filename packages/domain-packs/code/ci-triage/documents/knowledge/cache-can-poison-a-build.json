@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:ci_triage:cache-can-poison-a-build",
+  "type": "knowledge",
+  "title": "A stale or poisoned cache can fail a clean build",
+  "description": "CI caches for dependencies, build artifacts, and layers can serve stale or corrupt content, causing failures unrelated to the code change.",
+  "body": "Use when a build fails in ways that contradict the source. CI caches keyed on lockfiles or paths can serve stale dependencies, partially-written artifacts, or wrong-arch binaries, so a build fails or behaves oddly even though the code is correct; a too-broad cache key is the common cause. Do not assume a failure is in the code when the cache may be poisoned. Actions: try a cache-cleared run, inspect the cache key strategy, and compare a no-cache build. Validation signals include the failure vanishing on a clean cache and a key that includes the right invalidation inputs. Risk boundary: a poisoned shared cache can mask or fake passing builds; if results differ with and without cache, treat cached results as suspect.",
+  "domain": "code",
+  "scope_hint": "code.ci-triage:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.ci-triage",
+  "pack_id": "code.ci-triage"
+}

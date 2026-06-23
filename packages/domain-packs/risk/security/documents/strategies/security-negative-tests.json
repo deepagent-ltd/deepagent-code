@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:security:security-negative-tests",
+  "type": "strategy",
+  "title": "Require negative security tests",
+  "description": "Security fixes need tests for denied, malformed, cross-scope, replay, and bypass attempts, not only happy-path success.",
+  "body": "Use when implementing or reviewing security-sensitive changes where a regression could silently grant access or leak data. Do not use to demand exhaustive fuzzing for a tiny non-security edit. Actions: identify the old bypass or plausible attack path, add a focused test that fails without the fix, and keep at least one allowed control case. Validation signals include failing-before/passing-after evidence, clear denied status, and no sensitive body in error paths. Risk boundary: if negative tests cannot run locally, record the gap and escalate rather than marking security validation complete.",
+  "domain": "security",
+  "scope_hint": "risk.security:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.security",
+  "pack_id": "risk.security"
+}

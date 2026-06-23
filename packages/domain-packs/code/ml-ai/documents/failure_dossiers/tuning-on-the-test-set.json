@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:mlai:tuning-on-the-test-set",
+  "type": "failure_dossier",
+  "description": "Selecting hyperparameters, architectures, or early-stopping points using the test set, turning it into a leaked validation set.",
+  "body": "Failure mode: the test set is evaluated repeatedly during development and used to pick the best config, so the final test number reflects fitting to that specific set rather than generalization. Detection signals: the test split is read many times in the logs; the reported test metric is suspiciously close to validation despite many trials; production accuracy is far lower. Do not use the test set for any selection decision. Safer fallback: tune only on validation, touch the test set once at the end, and collect a fresh held-out set if it was already compromised.",
+  "domain": "ml",
+  "scope_hint": "code.ml-ai:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.ml-ai:human_authored",
+  "pack_id": "code.ml-ai"
+}

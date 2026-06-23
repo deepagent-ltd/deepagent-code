@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:tf:apply-is-not-atomic",
+  "type": "knowledge",
+  "title": "Apply is not transactional",
+  "description": "Terraform executes resource changes incrementally; a mid-apply failure leaves partially-applied infrastructure and updated state, with no automatic rollback.",
+  "body": "Use when an apply fails halfway. Unlike a database transaction, Terraform applies the graph node by node and commits each success to state; a failure midway leaves some resources created and others not, and there is no automatic rollback. Do not assume a failed apply changed nothing. Actions: read which resources the error reports as created, run plan to see remaining work, and re-apply or manually reconcile; use create_before_destroy to avoid downtime windows. Validation signals include a follow-up plan that converges and matches intent. Risk boundary: a partial apply on production can leave it in a broken intermediate state — treat a failed apply as an incident requiring deliberate recovery, not a retry-until-green loop.",
+  "domain": "terraform",
+  "scope_hint": "platform.terraform:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.terraform",
+  "pack_id": "platform.terraform"
+}

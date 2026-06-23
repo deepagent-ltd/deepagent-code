@@ -1,0 +1,482 @@
+[
+  {
+    "ref_id": "knowledge:environment:auto-fix-needs-retest",
+    "type": "knowledge",
+    "title": "Auto Fix Needs Retest",
+    "summary": "An automatic fix is not valid until the failing check passes afterward.",
+    "domains": [
+      "environment",
+      "code",
+      "local_dev"
+    ],
+    "triggers": [
+      "automatic",
+      "valid",
+      "until",
+      "failing",
+      "check",
+      "passes",
+      "afterward",
+      "then"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.environment"
+  },
+  {
+    "ref_id": "knowledge:environment:environment-evidence-local",
+    "type": "knowledge",
+    "title": "Environment Evidence Local",
+    "summary": "Environment diagnosis is tied to machine state and can drift quickly.",
+    "domains": [
+      "environment",
+      "code",
+      "local_dev"
+    ],
+    "triggers": [
+      "environment",
+      "diagnosis",
+      "tied",
+      "machine",
+      "state",
+      "drift",
+      "quickly",
+      "record"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.environment"
+  },
+  {
+    "ref_id": "knowledge:environment:skip-not-fail",
+    "type": "knowledge",
+    "title": "Skip Not Fail",
+    "summary": "Missing optional prerequisite is a skip, not a failed system.",
+    "domains": [
+      "environment",
+      "code",
+      "local_dev"
+    ],
+    "triggers": [
+      "missing",
+      "optional",
+      "prerequisite",
+      "skip",
+      "failed",
+      "system",
+      "health",
+      "checks"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.environment"
+  },
+  {
+    "ref_id": "methodology:environment:environment-drift-check",
+    "type": "methodology",
+    "title": "Environment Drift Check",
+    "summary": "Compare current runtime, dependency, and env state against project expectations.",
+    "domains": [
+      "environment",
+      "code",
+      "local_dev"
+    ],
+    "triggers": [
+      "compare",
+      "current",
+      "runtime",
+      "dependency",
+      "state",
+      "against",
+      "project",
+      "expectations"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.environment"
+  },
+  {
+    "ref_id": "methodology:environment:restart-health-check",
+    "type": "methodology",
+    "title": "Restart Health Check",
+    "summary": "After container or service restart, verify critical dependencies before coding.",
+    "domains": [
+      "environment",
+      "code",
+      "local_dev"
+    ],
+    "triggers": [
+      "after",
+      "container",
+      "service",
+      "restart",
+      "verify",
+      "critical",
+      "dependencies",
+      "before"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.environment"
+  },
+  {
+    "ref_id": "methodology:environment:smoke-test-loop",
+    "type": "methodology",
+    "title": "Smoke Test Loop",
+    "summary": "Check critical services, auto-fix known safe issues, then retest.",
+    "domains": [
+      "environment",
+      "code",
+      "local_dev"
+    ],
+    "triggers": [
+      "check",
+      "critical",
+      "services",
+      "auto",
+      "known",
+      "safe",
+      "issues",
+      "then"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.environment"
+  },
+  {
+    "ref_id": "skill:environment:run-smoke-check",
+    "type": "skill",
+    "title": "Run Smoke Check",
+    "summary": "Run a bounded environment smoke test and classify pass/fail/skip.",
+    "domains": [
+      "environment",
+      "code",
+      "local_dev"
+    ],
+    "triggers": [
+      "bounded",
+      "environment",
+      "smoke",
+      "test",
+      "classify",
+      "pass",
+      "fail",
+      "skip"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.environment"
+  },
+  {
+    "ref_id": "strategy:environment:doctor-before-fix",
+    "type": "strategy",
+    "title": "Doctor Before Fix",
+    "summary": "Run lightweight environment checks before editing code for setup failures.",
+    "domains": [
+      "environment",
+      "code",
+      "local_dev"
+    ],
+    "triggers": [
+      "lightweight",
+      "environment",
+      "checks",
+      "before",
+      "editing",
+      "code",
+      "setup",
+      "failures"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.environment"
+  },
+  {
+    "ref_id": "strategy:environment:idempotent-bootstrap",
+    "type": "strategy",
+    "title": "Idempotent Bootstrap",
+    "summary": "Bootstrap commands should be safe to repeat.",
+    "domains": [
+      "environment",
+      "code",
+      "local_dev"
+    ],
+    "triggers": [
+      "bootstrap",
+      "commands",
+      "should",
+      "safe",
+      "repeat",
+      "setup",
+      "scripts"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.environment"
+  },
+  {
+    "ref_id": "strategy:environment:test-before-auto-fix",
+    "type": "strategy",
+    "title": "Test Before Auto Fix",
+    "summary": "Confirm a setup check is broken before applying any automatic fix.",
+    "domains": [
+      "environment",
+      "code",
+      "local_dev"
+    ],
+    "triggers": [
+      "confirm",
+      "setup",
+      "check",
+      "broken",
+      "before",
+      "applying",
+      "automatic",
+      "smoke"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.environment"
+  },
+  {
+    "ref_id": "strategy:environment:timeout-external-checks",
+    "type": "strategy",
+    "title": "Timeout External Checks",
+    "summary": "Any environment check that can hang needs a timeout.",
+    "domains": [
+      "environment",
+      "code",
+      "local_dev"
+    ],
+    "triggers": [
+      "environment",
+      "check",
+      "that",
+      "hang",
+      "needs",
+      "timeout",
+      "network",
+      "process"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.environment"
+  },
+  {
+    "ref_id": "strategy:environment:current-state-before-answer",
+    "type": "strategy",
+    "title": "Current State Before Answer",
+    "summary": "Answer current environment, config, model, port, toolchain, and workspace questions from fresh local state.",
+    "domains": [
+      "environment",
+      "code",
+      "local_dev",
+      "deterministic"
+    ],
+    "triggers": [
+      "current",
+      "state",
+      "environment",
+      "config",
+      "model",
+      "port",
+      "toolchain",
+      "workspace"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.environment"
+  },
+  {
+    "ref_id": "knowledge:environment:current-config-can-drift",
+    "type": "knowledge",
+    "title": "Current Config Can Drift",
+    "summary": "Current configuration and runtime state can drift between turns, sessions, shells, and workspaces.",
+    "domains": [
+      "environment",
+      "code",
+      "local_dev",
+      "deterministic"
+    ],
+    "triggers": [
+      "current",
+      "config",
+      "drift",
+      "runtime",
+      "state",
+      "session",
+      "shell",
+      "workspace"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.environment"
+  },
+  {
+    "ref_id": "skill:environment:read-current-environment-state",
+    "type": "skill",
+    "title": "Read Current Environment State",
+    "summary": "Read a current environment value through a bounded, read-only check and report evidence scope.",
+    "domains": [
+      "environment",
+      "code",
+      "local_dev",
+      "deterministic"
+    ],
+    "triggers": [
+      "read",
+      "current",
+      "environment",
+      "state",
+      "config",
+      "provider",
+      "version",
+      "port"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.environment"
+  },
+  {
+    "ref_id": "strategy:environment:precedence-aware-config",
+    "type": "strategy",
+    "title": "Resolve config by documented precedence",
+    "summary": "When the same setting can come from flags, env vars, files, and defaults, resolve and report the effective value by the documented precedence order instead of guessing the source.",
+    "domains": [
+      "code",
+      "environment",
+      "local_dev"
+    ],
+    "triggers": [
+      "config precedence",
+      "env var",
+      "override",
+      "effective value",
+      "flag",
+      "defaults"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.environment"
+  },
+  {
+    "ref_id": "methodology:environment:resolve-effective-config",
+    "type": "methodology",
+    "title": "Resolve the effective runtime configuration",
+    "summary": "Determine the actual value the running process uses for a setting by tracing every source layer and confirming against live state, not source files alone.",
+    "domains": [
+      "code",
+      "environment",
+      "local_dev"
+    ],
+    "triggers": [
+      "effective config",
+      "resolve",
+      "runtime state",
+      "trace",
+      "precedence",
+      "inspect"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.environment"
+  }
+]

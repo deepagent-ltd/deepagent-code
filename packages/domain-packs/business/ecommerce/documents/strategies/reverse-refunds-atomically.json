@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:ecom:reverse-refunds-atomically",
+  "type": "strategy",
+  "title": "Reverse refunds atomically with restock",
+  "description": "Tie a refund's money reversal, order state change, and inventory restock into one consistent operation.",
+  "body": "Use when cancelling or refunding an order that already reserved or shipped stock. Do not reverse the payment without also updating order state and restocking — partial reversal leaves money and inventory disagreeing. Actions: perform the state transition, restock the returned units, and request the refund as one logical unit, recording each step idempotently. Validation signals include inventory restored, order marked refunded, and exactly one refund recorded. Risk boundary: the money reversal itself is advisory and defers to business.finance with a human gate — never auto-issue a refund without that approval.",
+  "domain": "ecommerce",
+  "scope_hint": "business.ecommerce:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:business.ecommerce",
+  "pack_id": "business.ecommerce"
+}

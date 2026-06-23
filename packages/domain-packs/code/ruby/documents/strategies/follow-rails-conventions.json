@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:ruby:follow-rails-conventions",
+  "type": "strategy",
+  "title": "Follow Rails conventions over configuration",
+  "description": "Name and place code where Rails expects so autoloading, routing, and associations work without manual wiring.",
+  "body": "Use when adding models, controllers, or routes. Do not fight Rails' naming and directory conventions or hand-wire what convention provides. Actions: name files and classes so Zeitwerk autoloads them (snake_case file, CamelCase class), place them in the expected app/ subdirectory, pluralize controllers and use RESTful resources routes, and rely on convention-based association/table naming. Validation signals include the class autoloading with no require and the route resolving in a request spec. Risk boundary: deviating from convention forces manual requires and brittle config that break on upgrade; a class that fails to autoload because it violates naming is a defect to rename, not to patch with eager requires.",
+  "domain": "ruby",
+  "scope_hint": "code.ruby:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.ruby",
+  "pack_id": "code.ruby"
+}

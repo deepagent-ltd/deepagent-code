@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:cass:tune-consistency-per-operation",
+  "type": "strategy",
+  "title": "Tune consistency level per operation",
+  "description": "Pick ONE, QUORUM, or ALL per query so that read and write consistency together guarantee the freshness you need.",
+  "body": "Use when deciding the consistency level for a read or write. Do not leave everything at ONE and assume reads see the latest write; with replication factor 3, QUORUM reads plus QUORUM writes guarantee overlap and strong consistency, while ONE trades that for latency and availability. Actions: choose write CL and read CL so they overlap (R + W > RF), prefer LOCAL_QUORUM in multi-DC to stay within one datacenter, and verify with a read-after-write test. Validation signals include a read at the chosen CL returning the just-written value and latency fitting the budget. Risk boundary: ALL gives strong consistency but loses availability the moment any replica is down, so reserve it for rare cases and document the availability tradeoff.",
+  "domain": "cassandra",
+  "scope_hint": "code.database.cassandra:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.cassandra",
+  "pack_id": "code.database.cassandra"
+}

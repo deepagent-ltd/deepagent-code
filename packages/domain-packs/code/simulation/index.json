@@ -1,0 +1,452 @@
+[
+  {
+    "ref_id": "strategy:sim:choose-ode-solver",
+    "type": "strategy",
+    "title": "Choose an ODE solver for stiffness and accuracy",
+    "summary": "Match the integrator to the system's stiffness and accuracy needs, preferring implicit methods for stiff dynamics.",
+    "domains": [
+      "simulation",
+      "numerical",
+      "physics_engine",
+      "ode_solver",
+      "monte_carlo"
+    ],
+    "triggers": [
+      "ode solver",
+      "stiffness",
+      "runge kutta",
+      "implicit"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.simulation"
+  },
+  {
+    "ref_id": "strategy:sim:control-step-size",
+    "type": "strategy",
+    "title": "Control step size for stability and accuracy",
+    "summary": "Set the time step from the stability region and accuracy target, using adaptive control where dynamics vary.",
+    "domains": [
+      "simulation",
+      "numerical",
+      "physics_engine",
+      "ode_solver",
+      "monte_carlo"
+    ],
+    "triggers": [
+      "step size",
+      "stability region",
+      "adaptive step",
+      "cfl"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.simulation"
+  },
+  {
+    "ref_id": "strategy:sim:design-monte-carlo",
+    "type": "strategy",
+    "title": "Design a Monte Carlo estimator with variance control",
+    "summary": "Estimate quantities by sampling and report confidence intervals, applying variance reduction where it pays off.",
+    "domains": [
+      "simulation",
+      "numerical",
+      "physics_engine",
+      "ode_solver",
+      "monte_carlo"
+    ],
+    "triggers": [
+      "monte carlo",
+      "variance reduction",
+      "confidence interval",
+      "sampling"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.simulation"
+  },
+  {
+    "ref_id": "strategy:sim:validate-against-analytical",
+    "type": "strategy",
+    "title": "Validate a simulation against analytical cases",
+    "summary": "Test the simulator on problems with closed-form solutions before trusting it on cases without one.",
+    "domains": [
+      "simulation",
+      "numerical",
+      "physics_engine",
+      "ode_solver",
+      "monte_carlo"
+    ],
+    "triggers": [
+      "analytical solution",
+      "validation",
+      "closed form",
+      "verification"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.simulation"
+  },
+  {
+    "ref_id": "strategy:sim:run-convergence-study",
+    "type": "strategy",
+    "title": "Run a convergence study to confirm order",
+    "summary": "Halve the step or refine the mesh repeatedly and confirm error shrinks at the method's theoretical rate.",
+    "domains": [
+      "simulation",
+      "numerical",
+      "physics_engine",
+      "ode_solver",
+      "monte_carlo"
+    ],
+    "triggers": [
+      "convergence study",
+      "order of accuracy",
+      "mesh refinement",
+      "discretization"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.simulation"
+  },
+  {
+    "ref_id": "strategy:sim:vectorize-sim-loop",
+    "type": "strategy",
+    "title": "Vectorize the inner simulation loop safely",
+    "summary": "Replace scalar inner loops with vectorized array operations only after the scalar reference is validated.",
+    "domains": [
+      "simulation",
+      "numerical",
+      "physics_engine",
+      "ode_solver",
+      "monte_carlo"
+    ],
+    "triggers": [
+      "vectorize",
+      "simulation loop",
+      "array operation",
+      "performance"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.simulation"
+  },
+  {
+    "ref_id": "methodology:sim:implement-rk4-step",
+    "type": "methodology",
+    "title": "Implement and verify an RK4 integration step",
+    "summary": "Code the four-stage Runge-Kutta update and verify its fourth-order accuracy on a test problem.",
+    "domains": [
+      "simulation",
+      "numerical",
+      "physics_engine",
+      "ode_solver",
+      "monte_carlo"
+    ],
+    "triggers": [
+      "rk4",
+      "runge kutta",
+      "integration step",
+      "order verification"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.simulation"
+  },
+  {
+    "ref_id": "methodology:sim:analyze-stability-region",
+    "type": "methodology",
+    "title": "Analyze a solver's stability region",
+    "summary": "Determine the step-size range that keeps a solver bounded for the system's eigenvalues.",
+    "domains": [
+      "simulation",
+      "numerical",
+      "physics_engine",
+      "ode_solver",
+      "monte_carlo"
+    ],
+    "triggers": [
+      "stability region",
+      "eigenvalue",
+      "explicit solver",
+      "step limit"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.simulation"
+  },
+  {
+    "ref_id": "methodology:sim:converge-monte-carlo",
+    "type": "methodology",
+    "title": "Assess Monte Carlo convergence and error",
+    "summary": "Track the running estimate and its standard error to decide when enough samples have been drawn.",
+    "domains": [
+      "simulation",
+      "numerical",
+      "physics_engine",
+      "ode_solver",
+      "monte_carlo"
+    ],
+    "triggers": [
+      "monte carlo",
+      "standard error",
+      "convergence",
+      "sample count"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.simulation"
+  },
+  {
+    "ref_id": "methodology:sim:ensure-reproducibility",
+    "type": "methodology",
+    "title": "Ensure reproducible simulation runs",
+    "summary": "Fix and record random seeds and control parallel reduction order so a run reproduces exactly.",
+    "domains": [
+      "simulation",
+      "numerical",
+      "physics_engine",
+      "ode_solver",
+      "monte_carlo"
+    ],
+    "triggers": [
+      "reproducibility",
+      "seed",
+      "deterministic",
+      "parallel reduction"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.simulation"
+  },
+  {
+    "ref_id": "knowledge:sim:euler-vs-rk4-tradeoff",
+    "type": "knowledge",
+    "title": "Explicit Euler versus RK4 accuracy tradeoff",
+    "summary": "Euler is first-order and cheap per step while RK4 is fourth-order, reaching far smaller error for the same step size.",
+    "domains": [
+      "simulation",
+      "numerical",
+      "physics_engine",
+      "ode_solver",
+      "monte_carlo"
+    ],
+    "triggers": [
+      "euler method",
+      "rk4",
+      "order of accuracy",
+      "tradeoff"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.simulation"
+  },
+  {
+    "ref_id": "knowledge:sim:numerical-stability-concept",
+    "type": "knowledge",
+    "title": "Numerical stability and error amplification",
+    "summary": "A scheme is stable when errors stay bounded over time rather than growing, which depends on step size and the method.",
+    "domains": [
+      "simulation",
+      "numerical",
+      "physics_engine",
+      "ode_solver",
+      "monte_carlo"
+    ],
+    "triggers": [
+      "numerical stability",
+      "error amplification",
+      "bounded",
+      "blow up"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.simulation"
+  },
+  {
+    "ref_id": "knowledge:sim:discretization-error",
+    "type": "knowledge",
+    "title": "Discretization error and order of accuracy",
+    "summary": "Replacing continuous operators with discrete approximations introduces error that shrinks with step size at the method's order.",
+    "domains": [
+      "simulation",
+      "numerical",
+      "physics_engine",
+      "ode_solver",
+      "monte_carlo"
+    ],
+    "triggers": [
+      "discretization error",
+      "order of accuracy",
+      "truncation",
+      "convergence"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.simulation"
+  },
+  {
+    "ref_id": "knowledge:sim:symplectic-integrators",
+    "type": "knowledge",
+    "title": "Symplectic integrators for conservative systems",
+    "summary": "Symplectic integrators preserve a system's energy structure over long times, unlike generic methods that drift.",
+    "domains": [
+      "simulation",
+      "numerical",
+      "physics_engine",
+      "ode_solver",
+      "monte_carlo"
+    ],
+    "triggers": [
+      "symplectic",
+      "energy conservation",
+      "leapfrog",
+      "physics engine"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.simulation"
+  },
+  {
+    "ref_id": "skill:sim:estimate-monte-carlo-samples",
+    "type": "skill",
+    "title": "Estimate Monte Carlo samples for a target error",
+    "summary": "Derive the sample count needed for a target standard error from the estimator's variance and the square-root law.",
+    "domains": [
+      "simulation",
+      "numerical",
+      "physics_engine",
+      "ode_solver",
+      "monte_carlo"
+    ],
+    "triggers": [
+      "monte carlo",
+      "sample count",
+      "standard error",
+      "variance"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.simulation"
+  },
+  {
+    "ref_id": "skill:sim:compute-stable-step",
+    "type": "skill",
+    "title": "Compute a stable explicit step size",
+    "summary": "Derive the maximum stable step for an explicit solver from the system's fastest time constant.",
+    "domains": [
+      "simulation",
+      "numerical",
+      "physics_engine",
+      "ode_solver",
+      "monte_carlo"
+    ],
+    "triggers": [
+      "stable step",
+      "explicit solver",
+      "time constant",
+      "step limit"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.simulation"
+  }
+]

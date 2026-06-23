@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:cpuarch:place-memory-numa-aware",
+  "type": "strategy",
+  "title": "Place memory NUMA-aware",
+  "description": "Allocate and touch memory on the node where the thread that uses it runs, so hot data avoids slow cross-socket access.",
+  "body": "Use when running on a multi-socket machine and profiling shows remote-memory latency or bandwidth limits. Do not allocate all memory on one node then spread threads across sockets. Actions: pin threads to cores, rely on first-touch by initializing data on the consuming thread, or use explicit NUMA allocation, and verify with numastat that remote accesses drop. Validation signals include lower remote-node memory traffic and improved scaling across sockets on representative load. Risk boundary: aggressive pinning can fight the OS scheduler and hurt other tenants; on shared hosts, confirm the affinity policy with the operator before enforcing it.",
+  "domain": "cpu_arch",
+  "scope_hint": "hardware.cpu-arch:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.cpu-arch",
+  "pack_id": "hardware.cpu-arch"
+}

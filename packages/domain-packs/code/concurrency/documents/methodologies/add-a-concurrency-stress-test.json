@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:conc:add-a-concurrency-stress-test",
+  "type": "methodology",
+  "title": "Add a concurrency stress and interleaving test",
+  "description": "Build a test that runs the operation under many concurrent workers and asserts an invariant, then run it under a detector.",
+  "body": "Steps: 1. Identify the invariant that must hold under concurrency (e.g. balance never negative, count equals applied ops). 2. Write a test that spawns many workers hammering the operation with overlapping inputs. 3. Assert the invariant after they join, and assert no lost updates by reconciling against expected. 4. Run it repeatedly and under a race detector (TSan, Go -race). 5. Tune worker count and iterations until it reliably exposes regressions. Rollback point: the test is additive. Validation: the test passes consistently with the fix and fails when the synchronization is reverted.",
+  "domain": "concurrency",
+  "scope_hint": "code.concurrency:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.concurrency",
+  "pack_id": "code.concurrency"
+}

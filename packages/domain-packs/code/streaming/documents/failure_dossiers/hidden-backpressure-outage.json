@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure_dossier:stream:hidden-backpressure-outage",
+  "type": "failure_dossier",
+  "description": "A slow sink causes unbounded buffering that ends in an out-of-memory outage with no early signal.",
+  "body": "Failure mode: a downstream sink slows down but buffers are allowed to grow unboundedly, so end-to-end latency creeps up unnoticed until the job exhausts memory and crashes, presenting as a sudden outage rather than gradual degradation. Detection signals: rising end-to-end latency with growing buffer/heap usage before the crash, and a backpressure metric that was never monitored. Do not just restart and enlarge buffers. Safer fallback: enable and alert on the engine's backpressure metric, bound buffer sizes so backpressure propagates, identify the slow operator, and scale or optimize the bottleneck rather than masking it with larger buffers.",
+  "domain": "streaming",
+  "scope_hint": "code.streaming:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.streaming:human_authored",
+  "pack_id": "code.streaming"
+}

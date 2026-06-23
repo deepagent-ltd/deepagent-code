@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:embed:validate-low-power-current",
+  "type": "methodology",
+  "title": "Validate low-power current draw on hardware",
+  "description": "Measure actual current in each operating and sleep mode against the battery budget, and confirm wake timing, on real hardware.",
+  "body": "Steps: 1. List each mode (active, idle, each sleep/stop level) and its expected current and duty cycle. 2. Instrument current draw with a power analyzer or shunt on the real board. 3. Drive the firmware through each mode and record actual current, not the datasheet typical. 4. Compute average current from the duty cycle and compare to the battery-life budget. 5. Confirm wake latency and state retention from each sleep mode meet the timing budget. Rollback point: before enabling a deeper sleep mode in production. Validation: measured average current meets the budget and the device wakes correctly and on time from every mode; a bench estimate or datasheet number is not a validated power profile.",
+  "domain": "embedded",
+  "scope_hint": "code.embedded:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.embedded",
+  "pack_id": "code.embedded"
+}

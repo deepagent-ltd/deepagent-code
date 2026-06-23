@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:robot:diagnose-control-loop-jitter",
+  "type": "methodology",
+  "title": "Diagnose control-loop timing jitter",
+  "description": "Find why a loop misses its period by isolating blocking work, priority issues, and contention in the real-time path.",
+  "body": "Steps: 1. Record per-cycle execution time and inter-cycle period to build a jitter histogram. 2. Correlate spikes with events: logging, allocation, garbage collection, network I/O, or lock contention. 3. Check thread priority and scheduling (is the loop on a real-time policy, is it preempted). 4. Move offending work out of the loop into a separate thread with a bounded queue. 5. Re-measure to confirm worst-case time fits the period. Rollback point: before changing scheduling priorities on hardware. Validation: the jitter histogram shows no deadline misses under representative load; an average-case timing that hides occasional misses is not acceptable for a safety-relevant loop.",
+  "domain": "robotics",
+  "scope_hint": "code.robotics:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.robotics",
+  "pack_id": "code.robotics"
+}

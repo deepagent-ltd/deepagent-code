@@ -1,0 +1,11 @@
+{
+  "ref_id": "methodology:csharp_dotnet:dotnet-build-test-loop",
+  "type": "methodology",
+  "description": "Run restore/build/test at the narrow project or solution scope, widening after evidence.",
+  "body": "Use for C# implementation changes. Avoid starting with IDE-only or OS-specific commands. Steps: locate project/solution, inspect target frameworks and test projects, run dotnet restore if dependency graph changed, run dotnet build, run dotnet test for affected test project, then widen to solution if needed. Verify exact command and TFM. Risk boundary: private NuGet feeds may require credentials; report that separately. Use when C# / .NET Engineering work touches repository conventions, toolchain files, changed symbols, validation commands, and runtime output. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: follow the ordered review, edit, and validation sequence; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include package-local checks, focused tests, build output, smoke runs, and command logs. Risk boundary: escalate or stop when the task involves broad rewrites, generated-file drift, stale assumptions, and unvalidated behavior changes, missing owner evidence, or live external state.",
+  "domain": "csharp_dotnet",
+  "scope_hint": "code.csharp-dotnet:methodologys",
+  "evidence_strength": "medium",
+  "provenance_tag": "code.csharp-dotnet:seed:dotnet_cli_csharp_docs:paraphrased",
+  "pack_id": "code.csharp-dotnet"
+}

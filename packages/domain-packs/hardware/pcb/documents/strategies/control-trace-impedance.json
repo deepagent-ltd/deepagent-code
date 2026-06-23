@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:pcb:control-trace-impedance",
+  "type": "strategy",
+  "title": "Route controlled-impedance traces to spec",
+  "description": "Set trace width and spacing from the stackup so high-speed nets hit their target impedance and stay continuous.",
+  "body": "Use when routing nets that specify a characteristic impedance such as fifty or one hundred ohms differential. Do not use a default trace width for impedance-controlled nets, since width and dielectric height set the impedance. Actions: compute width from the stackup, keep the geometry constant along the route, and verify with the fab's impedance report. Validation signals include measured impedance within tolerance and no necking or width changes that create discontinuities. Risk boundary: an impedance discontinuity reflects energy and corrupts fast edges, so flag any geometry change on a controlled net for review.",
+  "domain": "pcb",
+  "scope_hint": "hardware.pcb:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.pcb",
+  "pack_id": "hardware.pcb"
+}

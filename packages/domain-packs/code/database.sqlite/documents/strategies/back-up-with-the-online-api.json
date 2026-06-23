@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:sqlite:back-up-with-the-online-api",
+  "type": "strategy",
+  "title": "Back up with the online backup API",
+  "description": "Copy a live database with the backup API or VACUUM INTO, never a plain file copy, to avoid a corrupt snapshot.",
+  "body": "Use when backing up a database that is being written. Do not cp the .db file while connections are open, especially in WAL mode where committed data lives partly in the -wal file. Actions: use the SQLite online backup API (sqlite3_backup_*), the .backup command, or VACUUM INTO 'backup.db' to produce a transactionally consistent single-file copy; if you must copy files, ensure all connections are closed/checkpointed first and include the -wal/-shm files. Validation signals include running PRAGMA integrity_check on the backup and restoring it successfully. Risk boundary: a naive live file copy can yield a backup that is silently corrupt or missing recent commits — verify every backup with integrity_check.",
+  "domain": "sqlite",
+  "scope_hint": "code.database.sqlite:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.sqlite",
+  "pack_id": "code.database.sqlite"
+}

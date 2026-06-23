@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:vdb:benchmark-recall-against-ground-truth",
+  "type": "methodology",
+  "title": "Benchmark recall against brute-force ground truth",
+  "description": "Establish exact nearest neighbours on a sample, then measure how many the ANN index recovers at each setting.",
+  "body": "Use when validating that an ANN index returns good-enough results. Actions: take a representative sample of query vectors, compute exact top-k with brute-force search to form ground truth, run the ANN index at candidate parameters, and compute recall@k as the fraction of true neighbours recovered. Sweep ef_search or nprobe and plot recall against latency to find the knee. Verify the chosen setting meets the recall target on a held-out query set. Validation signals include a recall-versus-latency curve and the production setting landing on the target. Risk boundary: recall measured on training queries overstates real performance, so use held-out queries and re-benchmark after any embedding-model or data change.",
+  "domain": "vector_db",
+  "scope_hint": "code.database.vector:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.vector",
+  "pack_id": "code.database.vector"
+}

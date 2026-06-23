@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:dist:stale-read-from-undersized-quorum",
+  "type": "failure_dossier",
+  "description": "Read and write quorums chosen so R + W <= N let a read miss the most recent acknowledged write and return stale data as success.",
+  "body": "Failure mode: an operator lowers R or W for latency so read and write sets no longer intersect, and a read served entirely by replicas that missed the latest write returns an old value with a normal success status. Detection signals: a read immediately after an acknowledged write returns the prior value; read-your-writes tests fail intermittently; N, R, and W settings show R + W <= N. Do not weaken quorum sizes to chase latency without re-deriving the guarantee. Safer fallback: restore R + W > N (and W > N/2) for the affected keyspace, add a read-your-writes regression test, and document the latency-versus-consistency tradeoff before changing it again.",
+  "domain": "distributed",
+  "scope_hint": "code.distributed:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.distributed:human_authored",
+  "pack_id": "code.distributed"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:prompt:diagnose-an-injection-leak",
+  "type": "methodology",
+  "title": "Diagnose an injection or leak",
+  "description": "Trace a hijacked or leaking prompt back through assembly, scrubbing, and region separation to find where input escaped.",
+  "body": "Steps: 1. Reproduce with the offending input and capture the exact assembled prompt. 2. Check whether the input reached instruction position or carried PII/secrets into the payload. 3. If it reached instructions, inspect region separation and delimiter handling. 4. If it carried PII, inspect whether redaction ran before assembly. 5. Fix at the earliest failing stage and add a regression test for that payload. Rollback point: before changing the template structure. Validation: the previously hijacking or leaking input is neutralized and the regression test fails on the old code.",
+  "domain": "prompt_pipeline",
+  "scope_hint": "code.prompt-pipeline:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.prompt-pipeline",
+  "pack_id": "code.prompt-pipeline"
+}

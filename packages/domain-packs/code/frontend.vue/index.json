@@ -1,0 +1,856 @@
+[
+  {
+    "ref_id": "knowledge:frontend_vue:computed-is-for-derived-state",
+    "type": "knowledge",
+    "title": "Computed Is For Derived State",
+    "summary": "Computed values should derive from reactive sources and stay side-effect free.",
+    "domains": [
+      "frontend_vue",
+      "code",
+      "frontend",
+      "vue",
+      "nuxt",
+      "vite",
+      "pinia"
+    ],
+    "triggers": [
+      "computed",
+      "values",
+      "should",
+      "derive",
+      "from",
+      "reactive",
+      "sources",
+      "stay"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.vue"
+  },
+  {
+    "ref_id": "knowledge:frontend_vue:nuxt-client-only-boundary",
+    "type": "knowledge",
+    "title": "Nuxt Client Only Boundary",
+    "summary": "Browser-only APIs must be gated from server render in Nuxt and SSR Vue.",
+    "domains": [
+      "frontend_vue",
+      "code",
+      "frontend",
+      "vue",
+      "nuxt",
+      "vite",
+      "pinia"
+    ],
+    "triggers": [
+      "browser",
+      "only",
+      "apis",
+      "must",
+      "gated",
+      "from",
+      "server",
+      "render"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.vue"
+  },
+  {
+    "ref_id": "knowledge:frontend_vue:reactive-destructure-can-lose-tracking",
+    "type": "knowledge",
+    "title": "Reactive Destructure Can Lose Tracking",
+    "summary": "Naive destructuring of reactive props/objects can break dependency tracking unless using supported helpers/patterns.",
+    "domains": [
+      "frontend_vue",
+      "code",
+      "frontend",
+      "vue",
+      "nuxt",
+      "vite",
+      "pinia"
+    ],
+    "triggers": [
+      "naive",
+      "destructuring",
+      "reactive",
+      "props",
+      "objects",
+      "break",
+      "dependency",
+      "tracking"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.vue"
+  },
+  {
+    "ref_id": "knowledge:frontend_vue:refs-unwrapped-in-template",
+    "type": "knowledge",
+    "title": "Refs Unwrapped In Template",
+    "summary": "Vue templates automatically unwrap refs, while script code generally uses .value.",
+    "domains": [
+      "frontend_vue",
+      "code",
+      "frontend",
+      "vue",
+      "nuxt",
+      "vite",
+      "pinia"
+    ],
+    "triggers": [
+      "templates",
+      "automatically",
+      "unwrap",
+      "refs",
+      "while",
+      "script",
+      "code",
+      "generally"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.vue"
+  },
+  {
+    "ref_id": "knowledge:frontend_vue:v-for-key-preserves-identity",
+    "type": "knowledge",
+    "title": "V For Key Preserves Identity",
+    "summary": "Stable keys are required to preserve component and form identity across list updates.",
+    "domains": [
+      "frontend_vue",
+      "code",
+      "frontend",
+      "vue",
+      "nuxt",
+      "vite",
+      "pinia"
+    ],
+    "triggers": [
+      "stable",
+      "keys",
+      "required",
+      "preserve",
+      "component",
+      "form",
+      "identity",
+      "across"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.vue"
+  },
+  {
+    "ref_id": "knowledge:frontend_vue:v-model-is-prop-event-contract",
+    "type": "knowledge",
+    "title": "V Model Is Prop Event Contract",
+    "summary": "Vue v-model maps to props and update events, including named models and modifiers.",
+    "domains": [
+      "frontend_vue",
+      "code",
+      "frontend",
+      "vue",
+      "nuxt",
+      "vite",
+      "pinia"
+    ],
+    "triggers": [
+      "model",
+      "maps",
+      "props",
+      "update",
+      "events",
+      "including",
+      "named",
+      "models"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.vue"
+  },
+  {
+    "ref_id": "knowledge:frontend_vue:vite-env-client-prefix",
+    "type": "knowledge",
+    "title": "Vite Env Client Prefix",
+    "summary": "Only explicitly prefixed env variables are exposed to client code by Vite conventions.",
+    "domains": [
+      "frontend_vue",
+      "code",
+      "frontend",
+      "vue",
+      "nuxt",
+      "vite",
+      "pinia"
+    ],
+    "triggers": [
+      "only",
+      "explicitly",
+      "prefixed",
+      "variables",
+      "exposed",
+      "client",
+      "code",
+      "vite"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.vue"
+  },
+  {
+    "ref_id": "knowledge:frontend_vue:watch-requires-cleanup-for-async",
+    "type": "knowledge",
+    "title": "Watch Requires Cleanup For Async",
+    "summary": "Watchers that start async work need stale-result or cleanup handling.",
+    "domains": [
+      "frontend_vue",
+      "code",
+      "frontend",
+      "vue",
+      "nuxt",
+      "vite",
+      "pinia"
+    ],
+    "triggers": [
+      "watchers",
+      "that",
+      "start",
+      "async",
+      "work",
+      "need",
+      "stale",
+      "result"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.vue"
+  },
+  {
+    "ref_id": "methodology:frontend_vue:composition-api-diagnostic-flow",
+    "type": "methodology",
+    "title": "Composition Api Diagnostic Flow",
+    "summary": "Diagnose Vue reactivity issues by following ref/reactive/computed/watch/lifecycle ownership.",
+    "domains": [
+      "frontend_vue",
+      "code",
+      "frontend",
+      "vue",
+      "nuxt",
+      "vite",
+      "pinia"
+    ],
+    "triggers": [
+      "diagnose",
+      "reactivity",
+      "issues",
+      "following",
+      "reactive",
+      "computed",
+      "watch",
+      "lifecycle"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.vue"
+  },
+  {
+    "ref_id": "methodology:frontend_vue:nuxt-hydration-smoke",
+    "type": "methodology",
+    "title": "Nuxt Hydration Smoke",
+    "summary": "Check Nuxt SSR/client consistency after page, plugin, composable, or data-fetch changes.",
+    "domains": [
+      "frontend_vue",
+      "code",
+      "frontend",
+      "vue",
+      "nuxt",
+      "vite",
+      "pinia"
+    ],
+    "triggers": [
+      "check",
+      "nuxt",
+      "client",
+      "consistency",
+      "after",
+      "page",
+      "plugin",
+      "composable"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.vue"
+  },
+  {
+    "ref_id": "methodology:frontend_vue:pinia-store-change-loop",
+    "type": "methodology",
+    "title": "Pinia Store Change Loop",
+    "summary": "Validate store edits through action, getter, component consumer, and persistence/SSR boundaries.",
+    "domains": [
+      "frontend_vue",
+      "code",
+      "frontend",
+      "vue",
+      "nuxt",
+      "vite",
+      "pinia"
+    ],
+    "triggers": [
+      "validate",
+      "store",
+      "edits",
+      "through",
+      "action",
+      "getter",
+      "component",
+      "consumer"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.vue"
+  },
+  {
+    "ref_id": "methodology:frontend_vue:router-flow-smoke",
+    "type": "methodology",
+    "title": "Router Flow Smoke",
+    "summary": "Validate route-driven Vue behavior with params, query, guards, and browser history.",
+    "domains": [
+      "frontend_vue",
+      "code",
+      "frontend",
+      "vue",
+      "nuxt",
+      "vite",
+      "pinia"
+    ],
+    "triggers": [
+      "validate",
+      "route",
+      "driven",
+      "behavior",
+      "with",
+      "params",
+      "query",
+      "guards"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.vue"
+  },
+  {
+    "ref_id": "methodology:frontend_vue:vue-sfc-change-loop",
+    "type": "methodology",
+    "title": "Vue Sfc Change Loop",
+    "summary": "Validate a .vue change through SFC compile, focused tests, and browser interaction.",
+    "domains": [
+      "frontend_vue",
+      "code",
+      "frontend",
+      "vue",
+      "nuxt",
+      "vite",
+      "pinia"
+    ],
+    "triggers": [
+      "validate",
+      "change",
+      "through",
+      "compile",
+      "focused",
+      "tests",
+      "browser",
+      "interaction"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.vue"
+  },
+  {
+    "ref_id": "skill:frontend_vue:nuxt-ssr-hydration-check",
+    "type": "skill",
+    "title": "Nuxt Ssr Hydration Check",
+    "summary": "Verify full reload SSR hydration after Nuxt page/plugin/composable changes.",
+    "domains": [
+      "frontend_vue",
+      "code",
+      "frontend",
+      "vue",
+      "nuxt",
+      "vite",
+      "pinia"
+    ],
+    "triggers": [
+      "verify",
+      "full",
+      "reload",
+      "hydration",
+      "after",
+      "nuxt",
+      "page",
+      "plugin"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.vue"
+  },
+  {
+    "ref_id": "skill:frontend_vue:pinia-store-test-skill",
+    "type": "skill",
+    "title": "Pinia Store Test Skill",
+    "summary": "Run focused store and component-consumer tests around Pinia state/action changes.",
+    "domains": [
+      "frontend_vue",
+      "code",
+      "frontend",
+      "vue",
+      "nuxt",
+      "vite",
+      "pinia"
+    ],
+    "triggers": [
+      "focused",
+      "store",
+      "component",
+      "consumer",
+      "tests",
+      "around",
+      "pinia",
+      "state"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.vue"
+  },
+  {
+    "ref_id": "skill:frontend_vue:vue-component-browser-smoke",
+    "type": "skill",
+    "title": "Vue Component Browser Smoke",
+    "summary": "Run or drive a browser smoke for changed Vue component states and console errors.",
+    "domains": [
+      "frontend_vue",
+      "code",
+      "frontend",
+      "vue",
+      "nuxt",
+      "vite",
+      "pinia"
+    ],
+    "triggers": [
+      "drive",
+      "browser",
+      "smoke",
+      "changed",
+      "component",
+      "states",
+      "console",
+      "errors"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.vue"
+  },
+  {
+    "ref_id": "skill:frontend_vue:vue-router-flow-check",
+    "type": "skill",
+    "title": "Vue Router Flow Check",
+    "summary": "Validate navigation, params, query, guards, and browser history for changed route behavior.",
+    "domains": [
+      "frontend_vue",
+      "code",
+      "frontend",
+      "vue",
+      "nuxt",
+      "vite",
+      "pinia"
+    ],
+    "triggers": [
+      "validate",
+      "navigation",
+      "params",
+      "query",
+      "guards",
+      "browser",
+      "history",
+      "changed"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.vue"
+  },
+  {
+    "ref_id": "strategy:ui_frontend_vue:browser-visual-state-matrix",
+    "type": "strategy",
+    "title": "Browser Visual State Matrix",
+    "summary": "Exercise visible Vue states across data loading, empty, error, interactive, route, and responsive cases.",
+    "domains": [
+      "frontend_vue",
+      "code",
+      "frontend",
+      "vue",
+      "nuxt",
+      "vite",
+      "pinia"
+    ],
+    "triggers": [
+      "exercise",
+      "visible",
+      "states",
+      "across",
+      "data",
+      "loading",
+      "empty",
+      "error"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.vue"
+  },
+  {
+    "ref_id": "strategy:ui_frontend_vue:composition-contract-first",
+    "type": "strategy",
+    "title": "Composition Contract First",
+    "summary": "Design Composition API state, computed values, effects, and exposed events before editing templates.",
+    "domains": [
+      "frontend_vue",
+      "code",
+      "frontend",
+      "vue",
+      "nuxt",
+      "vite",
+      "pinia"
+    ],
+    "triggers": [
+      "design",
+      "composition",
+      "state",
+      "computed",
+      "values",
+      "effects",
+      "exposed",
+      "events"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.vue"
+  },
+  {
+    "ref_id": "strategy:ui_frontend_vue:nuxt-ssr-hydration-stability",
+    "type": "strategy",
+    "title": "Nuxt Ssr Hydration Stability",
+    "summary": "Ensure SSR output and first client render use the same data and browser-only APIs are gated.",
+    "domains": [
+      "frontend_vue",
+      "code",
+      "frontend",
+      "vue",
+      "nuxt",
+      "vite",
+      "pinia"
+    ],
+    "triggers": [
+      "ensure",
+      "output",
+      "first",
+      "client",
+      "render",
+      "same",
+      "data",
+      "browser"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.vue"
+  },
+  {
+    "ref_id": "strategy:ui_frontend_vue:pinia-action-state-shape",
+    "type": "strategy",
+    "title": "Pinia Action State Shape",
+    "summary": "Treat Pinia store actions, getters, and state shape as shared component contracts.",
+    "domains": [
+      "frontend_vue",
+      "code",
+      "frontend",
+      "vue",
+      "nuxt",
+      "vite",
+      "pinia"
+    ],
+    "triggers": [
+      "treat",
+      "pinia",
+      "store",
+      "actions",
+      "getters",
+      "state",
+      "shape",
+      "shared"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.vue"
+  },
+  {
+    "ref_id": "strategy:ui_frontend_vue:reactivity-owner-boundary",
+    "type": "strategy",
+    "title": "Reactivity Owner Boundary",
+    "summary": "Keep mutable reactive ownership clear between props, local state, Pinia, and route/query state.",
+    "domains": [
+      "frontend_vue",
+      "code",
+      "frontend",
+      "vue",
+      "nuxt",
+      "vite",
+      "pinia"
+    ],
+    "triggers": [
+      "keep",
+      "mutable",
+      "reactive",
+      "ownership",
+      "clear",
+      "between",
+      "props",
+      "local"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.vue"
+  },
+  {
+    "ref_id": "strategy:ui_frontend_vue:template-binding-trace",
+    "type": "strategy",
+    "title": "Template Binding Trace",
+    "summary": "Trace template bindings back to reactive sources and emitted events.",
+    "domains": [
+      "frontend_vue",
+      "code",
+      "frontend",
+      "vue",
+      "nuxt",
+      "vite",
+      "pinia"
+    ],
+    "triggers": [
+      "trace",
+      "template",
+      "bindings",
+      "back",
+      "reactive",
+      "sources",
+      "emitted",
+      "events"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.vue"
+  },
+  {
+    "ref_id": "strategy:ui_frontend_vue:vite-vue-build-boundary",
+    "type": "strategy",
+    "title": "Vite Vue Build Boundary",
+    "summary": "Validate SFC, plugin, alias, and env changes through Vite dev/build behavior.",
+    "domains": [
+      "frontend_vue",
+      "code",
+      "frontend",
+      "vue",
+      "nuxt",
+      "vite",
+      "pinia"
+    ],
+    "triggers": [
+      "validate",
+      "plugin",
+      "alias",
+      "changes",
+      "through",
+      "vite",
+      "build",
+      "behavior"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.vue"
+  },
+  {
+    "ref_id": "strategy:ui_frontend_vue:vue-router-navigation-contract",
+    "type": "strategy",
+    "title": "Vue Router Navigation Contract",
+    "summary": "Preserve route params, query, guards, and async navigation behavior as public UI contracts.",
+    "domains": [
+      "frontend_vue",
+      "code",
+      "frontend",
+      "vue",
+      "nuxt",
+      "vite",
+      "pinia"
+    ],
+    "triggers": [
+      "preserve",
+      "route",
+      "params",
+      "query",
+      "guards",
+      "async",
+      "navigation",
+      "behavior"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.vue"
+  }
+]

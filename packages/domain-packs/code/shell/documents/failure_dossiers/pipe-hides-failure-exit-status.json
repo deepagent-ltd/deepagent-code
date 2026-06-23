@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:shell:pipe-hides-failure-exit-status",
+  "type": "failure_dossier",
+  "description": "Relying on the exit status of a pipeline, which by default reflects only the last command and masks an upstream failure.",
+  "body": "Failure mode: in `producer | consumer`, the pipeline status is the consumer's, so if producer fails (e.g. curl errors but jq still exits 0) the script proceeds as if it succeeded. Detection signals: a failed download/command is treated as success; empty or partial data flows downstream; `set -e` does not stop the script. Do not assume a pipeline fails when an upstream stage does. Safer fallback: enable `set -o pipefail` (bash) so the pipeline returns the first non-zero status, check ${PIPESTATUS[@]} for per-stage status, or split the stages, then verify by forcing the producer to fail.",
+  "domain": "shell",
+  "scope_hint": "code.shell:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.shell:human_authored",
+  "pack_id": "code.shell"
+}

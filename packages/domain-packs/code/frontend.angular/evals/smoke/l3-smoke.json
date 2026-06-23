@@ -1,0 +1,74 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "code.frontend.angular",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "angular",
+      "rxjs",
+      "frontend"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [
+      "typescript"
+    ],
+    "frameworks": [
+      "angular",
+      "rxjs"
+    ],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "L3 smoke for code.frontend.angular: dependency injection providers, rxjs observable composition, change detection OnPush and signals, reactive forms, and standalone components"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "plain prose note with no repository or domain signal"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "retrieval_query": "angular rxjs observable subscription unsubscribe change detection onpush signal dependency injection provider reactive forms standalone component async pipe",
+  "expected_pack_id": "code.frontend.angular",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "code.frontend.angular L3 validation smoke",
+    "signals": [
+      "component test via TestBed asserts the template after an input change",
+      "every long-lived subscription is torn down via async pipe, takeUntilDestroyed, or unsubscribe",
+      "OnPush component re-renders only on input/observable change in a test",
+      "reactive form validation state matches the control's value in a test"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "code.frontend.angular diagnosis smoke",
+    "signals": [
+      "subscription created in ngOnInit never unsubscribed",
+      "nested subscribe instead of a flattening operator causing lost cancellation",
+      "OnPush component not updating because state was mutated not replaced",
+      "service provided in multiple places creating unexpected multiple instances",
+      "change detection thrashing because work runs inside Zone on every event"
+    ]
+  },
+  "source_refs": [
+    "source:angular-docs:paraphrased",
+    "source:rxjs-docs:paraphrased"
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:finance:balance-overwritten-without-trail",
+  "type": "failure_dossier",
+  "description": "Correcting a balance by writing a new value in place, destroying the history needed to audit or reverse the change.",
+  "body": "Failure mode: a balance is fixed by UPDATE-ing the balance column to a new number rather than posting a compensating entry, so there is no record of what changed, why, or by whom, and the change cannot be audited or cleanly reversed. Detection signals: balance columns mutated directly; no ledger entry explaining a balance change; reconciliation cannot trace a delta. Do not edit balances in place. Safer fallback: post an immutable adjusting/reversal entry with actor and reason and derive the balance from entries. Risk boundary: advisory only; any direct balance mutation must be denied and escalated to a human with an audit trail, never performed silently.",
+  "domain": "finance",
+  "scope_hint": "business.finance:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:business.finance:human_authored",
+  "pack_id": "business.finance"
+}

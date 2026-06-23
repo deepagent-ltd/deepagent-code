@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:ng:unsubscribed-long-lived-stream",
+  "type": "failure_dossier",
+  "description": "A subscription to a never-completing observable is created and never torn down, leaking across navigations.",
+  "body": "Failure mode: ngOnInit subscribes to a router, store, or websocket stream that never completes and there is no ngOnDestroy teardown, so each time the component mounts another live subscription accumulates and old ones keep firing. Detection signals: a side effect runs more times than mounted components; memory grows as the user navigates; a bare .subscribe() has no async pipe, takeUntilDestroyed, or destroy Subject. Do not leave a long-lived subscribe untorn-down. Safer fallback: bind the stream with the async pipe so Angular manages teardown, or add takeUntilDestroyed()/a destroy Subject completed in ngOnDestroy, and test that emissions stop after destroy.",
+  "domain": "angular",
+  "scope_hint": "code.frontend.angular:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.frontend.angular:human_authored",
+  "pack_id": "code.frontend.angular"
+}

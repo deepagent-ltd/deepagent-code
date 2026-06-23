@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:supply_chain:detect-typosquat-on-add",
+  "type": "methodology",
+  "title": "Screen a new dependency for typosquatting",
+  "description": "Before adding a package, check its name, age, popularity, and maintainer against the intended well-known package to catch lookalike or hijacked names.",
+  "body": "Steps: 1. Confirm the exact intended package name and its canonical source/repo. 2. Compare the candidate name for character swaps, added words, hyphen/scope differences, and homoglyphs against the real package. 3. Check the registry metadata: download counts, publish age, maintainer, and linked repository. 4. Verify the repo URL resolves to the legitimate project, not a fork created recently. 5. Record the verification before adding. Rollback point: before the package enters the lockfile. Validation: the package's name, maintainer, and repo match the intended well-known project and its popularity/age are consistent. Risk boundary: a low-download, newly-published lookalike of a popular package is a typosquat signal; deny the add and escalate rather than installing to 'see if it works'.",
+  "domain": "security",
+  "scope_hint": "risk.supply-chain:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.supply-chain",
+  "pack_id": "risk.supply-chain"
+}

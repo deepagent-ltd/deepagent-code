@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure_dossier:vdb:stale-vectors-after-model-upgrade",
+  "type": "failure_dossier",
+  "description": "Re-embedding only new data after a model change leaves one index holding incompatible vectors.",
+  "body": "Failure mode: the embedding model is upgraded but only new documents are re-embedded, so the index mixes vectors from two models whose spaces are not comparable, and distances between old and new vectors are meaningless. Detection signals: relevance drops for queries spanning old and new content, neighbours cluster by ingestion date rather than meaning, and the index holds vectors tagged with two model versions. Do not partially re-embed in place. Safer fallback: re-embed the entire corpus with the new model into a parallel index, validate relevance against the old index, and cut over atomically with the old index retained until the switch is confirmed.",
+  "domain": "vector_db",
+  "scope_hint": "code.database.vector:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.vector:human_authored",
+  "pack_id": "code.database.vector"
+}

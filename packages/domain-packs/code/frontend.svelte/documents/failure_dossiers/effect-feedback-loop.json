@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:svelte:effect-feedback-loop",
+  "type": "failure_dossier",
+  "description": "A $effect reads state and writes back into its own dependency, creating an unbounded update loop.",
+  "body": "Failure mode: a $effect is used to compute a value by reading some state and assigning to other state that the same effect depends on, so each run schedules another, looping until the browser stalls. Detection signals: the effect re-runs continuously; CPU spikes and the tab freezes; a value oscillates; the effect both reads and writes overlapping state. Do not use $effect to derive values from other state. Safer fallback: declare the computed value with $derived so it recomputes lazily and cannot self-trigger, and reserve $effect for genuine side effects that do not feed their own dependencies.",
+  "domain": "svelte",
+  "scope_hint": "code.frontend.svelte:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.frontend.svelte:human_authored",
+  "pack_id": "code.frontend.svelte"
+}

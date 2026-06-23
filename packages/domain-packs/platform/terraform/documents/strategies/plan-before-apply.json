@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:tf:plan-before-apply",
+  "type": "strategy",
+  "title": "Always review a saved plan before applying",
+  "description": "Generate an explicit plan file, read it for destroys and replacements, and apply only that artifact rather than re-planning at apply time.",
+  "body": "Use when making any change to managed infrastructure. Do not run a bare terraform apply that auto-approves, and do not assume the diff at apply matches the diff you reviewed. Actions: run terraform plan -out=plan.tfbin, inspect the summary for create/update/destroy/replace counts, scrutinize every '-/+' replacement and every destroy, then apply the saved file so what you reviewed is exactly what executes. Validation signals include a plan with zero unexpected destroys and an apply that matches the saved plan. Risk boundary: any plan showing resource destruction or replacement of stateful infrastructure must be escalated for human approval before apply.",
+  "domain": "terraform",
+  "scope_hint": "platform.terraform:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.terraform",
+  "pack_id": "platform.terraform"
+}

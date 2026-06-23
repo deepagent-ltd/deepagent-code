@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:kernel:driver-model-and-lifetime",
+  "type": "knowledge",
+  "title": "Driver model, probing, and object lifetime",
+  "description": "Drivers bind to devices via probe/remove and manage object lifetime with reference counts; a use-after-free from a stale reference is a classic exploit.",
+  "body": "Use when reasoning about driver and kernel-object lifecycle. Devices are bound at probe and torn down at remove/hot-unplug, and shared objects are kept alive by reference counts (get/put); a path that uses an object after its last put, or that races remove against an in-flight operation, causes a use-after-free. Do not assume a device or buffer stays valid for the duration of an async operation. Actions: take a reference for the lifetime of each use, drop it exactly once, and synchronize teardown against in-flight work. Validation signals include KASAN-clean concurrent probe/remove stress. Risk boundary: use-after-free in the kernel is directly exploitable; treat refcount/teardown races as security-blocking.",
+  "domain": "kernel",
+  "scope_hint": "code.os-kernel:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.os-kernel",
+  "pack_id": "code.os-kernel"
+}

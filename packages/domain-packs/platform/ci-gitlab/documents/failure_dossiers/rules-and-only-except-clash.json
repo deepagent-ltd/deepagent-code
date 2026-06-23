@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:glci:rules-and-only-except-clash",
+  "type": "failure_dossier",
+  "description": "A job mixes rules with only/except or relies on an implicit default, so it silently never runs or runs everywhere.",
+  "body": "Failure mode: a job declares both rules and only/except (mutually exclusive) or rules with no matching clause and no default, so GitLab either rejects the config or, more confusingly, the job is silently dropped from the pipeline or created on an unintended source. Detection signals: a job present in config but absent from the pipeline; CI lint errors about combined keywords; a deploy job appearing on the wrong ref. Do not mix rules with only/except. Safer fallback: use rules alone with explicit if/changes/when clauses, preview with CI lint and the pipeline editor, and confirm the job appears only in the intended pipeline sources.",
+  "domain": "ci_gitlab",
+  "scope_hint": "platform.ci-gitlab:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.ci-gitlab:human_authored",
+  "pack_id": "platform.ci-gitlab"
+}

@@ -1,0 +1,71 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "code.mobile.ios",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "ios",
+      "swiftui",
+      "uikit",
+      "xcode"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "L3 smoke for code.mobile.ios: SwiftUI and UIKit view lifecycle, @State data flow, ARC retain cycles, provisioning and signing, background modes, and App Store privacy with main-thread UI updates"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "implement a gRPC service in Go running on a Linux server"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "retrieval_query": "ios swiftui uikit view lifecycle state arc retain cycle provisioning signing background mode app store privacy main thread combine",
+  "expected_pack_id": "code.mobile.ios",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "code.mobile.ios L3 validation smoke",
+    "signals": [
+      "all UI updates dispatched on the main thread (no main-thread checker warnings)",
+      "no retain cycles (Instruments shows no leaked view controllers/objects)",
+      "SwiftUI view re-renders from a single source of truth",
+      "app archives and signs with a valid provisioning profile",
+      "privacy usage strings present for every sensitive API used"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "code.mobile.ios diagnosis smoke",
+    "signals": [
+      "UI updated from a background thread (purple main-thread warning)",
+      "retain cycle between a closure and self leaking a view controller",
+      "SwiftUI state mutated without @State/@Published so the view never updates",
+      "missing or wrong provisioning profile blocking install",
+      "accessing a sensitive API with no Info.plist usage string, crashing on launch"
+    ]
+  },
+  "source_refs": [
+    "source:apple-swiftui-data-flow:paraphrased",
+    "source:apple-app-distribution-guide:paraphrased"
+  ]
+}

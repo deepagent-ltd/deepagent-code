@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:cass:plan-multi-datacenter-replication",
+  "type": "methodology",
+  "title": "Plan multi-datacenter replication",
+  "description": "Use NetworkTopologyStrategy with per-DC replication and LOCAL_QUORUM to keep reads local and survive a DC outage.",
+  "body": "Use when deploying across regions for locality or disaster recovery. Actions: set NetworkTopologyStrategy with an explicit replication factor per datacenter, use LOCAL_QUORUM for reads and writes so operations complete within the local DC without cross-region latency, and configure clients with a DC-aware load-balancing policy. Verify a read-after-write within one DC and a failover to another DC. Validation signals include LOCAL_QUORUM operations staying within the local datacenter latency and the cluster surviving the loss of one DC. Risk boundary: using QUORUM (global) instead of LOCAL_QUORUM forces cross-DC round trips and ties availability to remote regions, so confirm the CL is LOCAL_QUORUM before claiming DC independence.",
+  "domain": "cassandra",
+  "scope_hint": "code.database.cassandra:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.cassandra",
+  "pack_id": "code.database.cassandra"
+}

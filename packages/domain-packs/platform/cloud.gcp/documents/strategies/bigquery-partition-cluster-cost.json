@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:gcp:bigquery-partition-cluster-cost",
+  "type": "strategy",
+  "title": "Partition and cluster BigQuery tables to bound scanned bytes",
+  "description": "Partition on a date/ingestion column and cluster on high-selectivity filters so queries prune data, then guard with maximum-bytes-billed.",
+  "body": "Use when a BigQuery table is large or queries are slow/expensive. Do not query unpartitioned tables with SELECT * or rely on LIMIT to reduce cost (LIMIT does not reduce bytes scanned). Actions: partition by ingestion time or a date column, cluster on the columns most used in WHERE/JOIN, always filter on the partition key, select only needed columns, and set maximum_bytes_billed as a guardrail. Validate with a --dry_run to see bytes that would be processed. Validation signals include the dry-run bytes-scanned dropping after partition pruning and queries completing within slot budget. Risk boundary: a query without a partition filter on a huge table is a cost risk and should be flagged.",
+  "domain": "gcp",
+  "scope_hint": "platform.cloud.gcp:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.cloud.gcp",
+  "pack_id": "platform.cloud.gcp"
+}

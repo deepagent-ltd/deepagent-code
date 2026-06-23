@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:comp:recover-from-parse-errors",
+  "type": "strategy",
+  "title": "Recover from parse errors gracefully",
+  "description": "Make the parser resynchronize after an error so it reports multiple useful diagnostics instead of one cascade of noise.",
+  "body": "Use when building or improving a parser's error handling. Do not abort on the first syntax error, and do not emit a flood of bogus follow-on errors after the real one. Actions: implement panic-mode or phrase-level recovery (skip to a synchronizing token like ; or }), insert/delete a token where it clearly fixes the parse, and suppress cascaded errors caused by an already-reported failure. Validation signals include a test suite of malformed programs each yielding one accurate diagnostic and continued parsing. Risk boundary: poor recovery either hides real errors or buries them in noise, frustrating users; verify recovery on a corpus of broken programs rather than tuning it on one input.",
+  "domain": "compiler",
+  "scope_hint": "code.compiler:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.compiler",
+  "pack_id": "code.compiler"
+}

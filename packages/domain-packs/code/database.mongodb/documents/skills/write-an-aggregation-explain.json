@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:mongo:write-an-aggregation-explain",
+  "type": "skill",
+  "title": "Profile an aggregation with explain",
+  "description": "Run an aggregation in explain mode to see which stages used indexes and where the pipeline blocks or spills.",
+  "body": "Use when an aggregation pipeline is slow and you need stage-level insight. Actions: call db.collection.aggregate(pipeline, { explain: true }) or append .explain(\"executionStats\"), read each stage to see which used an index (the leading $match/$sort) and which are blocking ($group, $sort without an index), and look for usedDisk true signalling a spill. Reorder stages or add an index and re-profile. Verify the leading stage reports an IXSCAN and the spill flag clears. Validation signals include executionTimeMillis dropping and no stage reporting a disk spill. Risk boundary: setting allowDiskUse to mask a spill hides a memory problem, so prefer filtering earlier before enabling disk use.",
+  "domain": "mongodb",
+  "scope_hint": "code.database.mongodb:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.mongodb",
+  "pack_id": "code.database.mongodb"
+}

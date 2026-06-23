@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:rag:why-rag-over-finetuning",
+  "type": "knowledge",
+  "title": "When RAG beats fine-tuning",
+  "description": "RAG injects fresh, citable knowledge at query time; fine-tuning bakes patterns into weights but cannot cite or update cheaply.",
+  "body": "Use when deciding how to give a model domain knowledge. RAG retrieves passages at query time so knowledge stays current, is attributable via citations, and updates by changing the corpus; fine-tuning adjusts weights to learn style or format but cannot cite sources, is costly to update, and risks memorizing stale facts. Do not fine-tune to add factual knowledge that changes, and avoid expecting RAG to teach a new output format. Actions: use RAG for changing, citable facts and fine-tuning for stable behavior/format. Validation signals include a test that updated corpus content changes the answer without retraining. Risk boundary: relying on baked-in weights for facts that change produces confident stale answers; prefer retrieval with citations.",
+  "domain": "rag",
+  "scope_hint": "code.rag:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.rag",
+  "pack_id": "code.rag"
+}

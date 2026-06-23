@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:privacy:data-inventory-first",
+  "type": "strategy",
+  "title": "Data inventory first",
+  "description": "Identify personal-data fields, sources, stores, processors, logs, exports, and deletion paths before editing privacy-sensitive behavior.",
+  "body": "Use when a change touches user profiles, accounts, health, payment, analytics, support tooling, telemetry, uploads, identifiers, or data retention. Do not use to declare legal compliance or choose lawful basis; that needs accountable human authority. Actions: map collection point, purpose, storage, derived copies, log sinks, external sharing, and deletion/export paths before proposing code. Validation signals include a reviewed data-flow map, changed tests for affected stores, and no untracked sink remaining. Risk boundary: unknown personal-data flow, new sharing destination, or regulated data class requires a human gate.",
+  "domain": "privacy",
+  "scope_hint": "risk.privacy:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.privacy",
+  "pack_id": "risk.privacy"
+}

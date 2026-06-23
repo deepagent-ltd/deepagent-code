@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:hdl:stay-in-synthesizable-subset",
+  "type": "strategy",
+  "title": "Stay in the synthesizable subset",
+  "description": "Keep RTL within constructs the synthesis tool maps to hardware; confine delays, initial blocks, and dynamic types to testbenches only.",
+  "body": "Use when writing design (not testbench) code. Do not use #delays, initial blocks, real/dynamic types, or unbounded loops in synthesizable RTL — they simulate but do not synthesize, causing sim/synth divergence. Actions: keep design code to always_ff/always_comb, fixed-width types, and bounded constructs; isolate all non-synthesizable code in the testbench. Validation signals include a synthesis run with no 'ignored construct' warnings and gate-level sim matching RTL. Risk boundary: code that simulates correctly but is silently ignored at synthesis ships broken hardware; escalate any synth warning about dropped logic.",
+  "domain": "hdl",
+  "scope_hint": "hardware.hdl:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.hdl",
+  "pack_id": "hardware.hdl"
+}

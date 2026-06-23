@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:k8s:overbroad-clusterrole-wildcards",
+  "type": "failure_dossier",
+  "description": "A workload is bound to a ClusterRole with wildcard verbs/resources or cluster-admin, granting far more than it needs.",
+  "body": "Failure mode: a ServiceAccount is bound to cluster-admin or a ClusterRole using verbs:['*'] and resources:['*'], so a compromised pod can read all secrets, modify any object, or escalate across namespaces. Detection signals: kubectl auth can-i --list shows broad or wildcard access; bindings reference cluster-admin; the SA token can list secrets cluster-wide. Do not use wildcards or cluster-admin to make a workload function. Safer fallback: replace with a namespaced Role enumerating exact apiGroups/resources/verbs, bind the dedicated SA, and verify can-i returns 'no' for everything outside the workload's needs.",
+  "domain": "kubernetes",
+  "scope_hint": "platform.kubernetes:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.kubernetes:human_authored",
+  "pack_id": "platform.kubernetes"
+}

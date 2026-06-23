@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:security:negative-tests-cover-bypass-not-just-errors",
+  "type": "knowledge",
+  "title": "Negative tests cover bypass paths",
+  "description": "A useful security negative test proves a bypass is denied, not merely that malformed input returns any error.",
+  "body": "Use when authoring tests for security fixes. Do not count tests that only assert parser exceptions when the real risk is unauthorized access or disclosure. Actions: model the attacker goal, attempt the forbidden action, assert denial and absence of sensitive output, and include one allowed control path. Validation signals include denied status, response shape, and no sensitive side effect. Risk boundary: if the forbidden action cannot be tested safely, escalate with a manual validation plan. Use when Security Risk Controls work touches trust boundaries, authorization decisions, dangerous sinks, secrets, and dependency execution. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: use the fact to constrain the change and test plan; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include negative security tests, server-side checks, sink payload tests, and secret scans. Risk boundary: escalate or stop when the task involves client-only controls, injection, credential leakage, permissive fallback, and unsafe dependency changes, missing owner evidence, or live external state.",
+  "domain": "security",
+  "scope_hint": "risk.security:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.security",
+  "pack_id": "risk.security"
+}

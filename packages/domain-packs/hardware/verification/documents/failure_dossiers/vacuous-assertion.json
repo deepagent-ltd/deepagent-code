@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure_dossier:hwverif:vacuous-assertion",
+  "type": "failure_dossier",
+  "description": "An assertion gives false confidence because it passed vacuously, its precondition never occurring during simulation.",
+  "body": "Failure mode: a concurrent assertion's antecedent is never satisfied by the stimulus, so the assertion reports passing without ever evaluating its real check. Detection signals: an assertion that never fails across all tests, zero coverage on its precondition, and the rule it guards still violated in hardware. Do not count a vacuously passing assertion as evidence. Safer fallback: add coverage on the antecedent, drive stimulus that triggers the precondition, and inject a fault to confirm the assertion can actually fire.",
+  "domain": "hw_verification",
+  "scope_hint": "hardware.verification:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.verification:human_authored",
+  "pack_id": "hardware.verification"
+}

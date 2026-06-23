@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure_dossier:sim:wrong-order-convergence",
+  "type": "failure_dossier",
+  "description": "A solver's error fails to shrink at its theoretical rate because a discretization bug lowered its effective order.",
+  "body": "Failure mode: a coding mistake in the stencil or stage weights drops the method's effective order, so refining the step reduces error more slowly than theory predicts. Detection signals: a convergence study fitting an order below the method's design, error that barely improves when the step halves, and disagreement with analytical cases at fine steps. Do not chase accuracy by brute-force refinement while the order is wrong. Safer fallback: re-derive the scheme's coefficients, fix the stencil or stage weights, and re-run the convergence study to confirm the expected order.",
+  "domain": "simulation",
+  "scope_hint": "code.simulation:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.simulation:human_authored",
+  "pack_id": "code.simulation"
+}

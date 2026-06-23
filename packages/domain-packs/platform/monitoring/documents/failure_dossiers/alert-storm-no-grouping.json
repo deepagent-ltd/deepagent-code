@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:mon:alert-storm-no-grouping",
+  "type": "failure_dossier",
+  "description": "One incident triggers dozens of separate pages because alerts lack grouping and inhibition.",
+  "body": "Failure mode: a single underlying incident fires many correlated alerts with no grouping or inhibition, burying the on-call in pages and obscuring the root cause. Detection signals: dozens of pages within seconds for one outage; duplicate alerts for the same incident; on-call dismissing pages without reading them. Do not send every alert ungrouped. Safer fallback: group alerts by shared labels, add inhibition so the top-level failure suppresses dependents, and demote non-actionable alerts off the paging path.",
+  "domain": "monitoring",
+  "scope_hint": "platform.monitoring:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.monitoring:human_authored",
+  "pack_id": "platform.monitoring"
+}

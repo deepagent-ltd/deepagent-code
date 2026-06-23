@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:pg:run-an-online-schema-change",
+  "type": "methodology",
+  "title": "Run an online schema change",
+  "description": "Apply DDL to a live table in small, weakly-locking steps with CONCURRENTLY and NOT VALID/VALIDATE.",
+  "body": "Steps: 1. Classify the change by lock and rewrite cost. 2. For indexes use CREATE/DROP INDEX CONCURRENTLY outside a transaction. 3. For constraints add them NOT VALID first (fast, weak lock), then VALIDATE CONSTRAINT separately (no exclusive lock). 4. For new columns prefer nullable or constant-default forms that avoid a rewrite. 5. Set lock_timeout and statement_timeout so a blocked step fails fast. Rollback point: each step is independently reversible; clean up any INVALID index. Validation: writes continue throughout, no step holds ACCESS EXCLUSIVE long, and constraints end up valid.",
+  "domain": "postgres",
+  "scope_hint": "code.database.postgres:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.postgres",
+  "pack_id": "code.database.postgres"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:ansible:guard-raw-commands",
+  "type": "strategy",
+  "title": "Guard raw commands for idempotency",
+  "description": "When a module does not exist, bound shell/command tasks with creates, changed_when, and failed_when.",
+  "body": "Use when no native module covers an operation and you must run a raw command. Do not leave a command task unguarded — it executes on every run and always reports changed, masking real drift. Actions: add creates/removes so it skips when the target already exists, set changed_when to reflect actual change from the command output, and set failed_when to define real failure. Validation signals include the task skipping on a converged host and reporting changed only when it acted. Risk boundary: an unguarded destructive command re-runs on every play — confirm idempotency before targeting shared or production hosts.",
+  "domain": "ansible",
+  "scope_hint": "platform.ansible:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.ansible",
+  "pack_id": "platform.ansible"
+}

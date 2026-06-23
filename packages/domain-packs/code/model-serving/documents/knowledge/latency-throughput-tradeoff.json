@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:serving:latency-throughput-tradeoff",
+  "type": "knowledge",
+  "title": "The latency/throughput tradeoff in batching",
+  "description": "Larger batches raise throughput and GPU efficiency but add queue wait; the optimum is the largest batch whose tail stays under the SLO.",
+  "body": "Use when reasoning about serving performance. Accelerators process a batch nearly as fast as a single request, so larger batches multiply throughput and utilization — but requests wait to fill the batch, raising latency, especially the tail. There is no free lunch: every throughput gain from bigger batches costs queueing latency. Do not maximize one in isolation. Actions: choose the batch/wait that meets p99 at target QPS. Validation signals include a utilization-vs-p99 curve showing the knee. Risk boundary: pushing batch size for throughput without watching the tail silently breaks the latency SLO.",
+  "domain": "model_serving",
+  "scope_hint": "code.model-serving:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.model-serving",
+  "pack_id": "code.model-serving"
+}

@@ -1,0 +1,484 @@
+[
+  {
+    "ref_id": "strategy:sys:durable-write-temp-fsync-rename",
+    "type": "strategy",
+    "title": "Make file writes durable with temp-fsync-rename",
+    "summary": "Write to a temp file, fsync it, atomically rename over the target, then fsync the directory so a crash cannot leave torn data.",
+    "domains": [
+      "systems",
+      "os",
+      "filesystem",
+      "process",
+      "resource_limits"
+    ],
+    "triggers": [
+      "durable",
+      "fsync",
+      "rename",
+      "atomic",
+      "temp",
+      "crash"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.systems"
+  },
+  {
+    "ref_id": "strategy:sys:own-every-resource-with-cleanup",
+    "type": "strategy",
+    "title": "Give every OS resource a deterministic release path",
+    "summary": "Pair each fd, lock, mapping, and child with a guaranteed close on every exit path, including errors and signals.",
+    "domains": [
+      "systems",
+      "os",
+      "filesystem",
+      "process",
+      "resource_limits"
+    ],
+    "triggers": [
+      "resource",
+      "cleanup",
+      "close",
+      "fd",
+      "defer",
+      "raii"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.systems"
+  },
+  {
+    "ref_id": "strategy:sys:check-syscalls-and-handle-errno",
+    "type": "strategy",
+    "title": "Check every syscall return and handle errno",
+    "summary": "Treat each syscall as fallible: inspect the return, branch on errno, and retry EINTR and short writes correctly.",
+    "domains": [
+      "systems",
+      "os",
+      "filesystem",
+      "process",
+      "resource_limits"
+    ],
+    "triggers": [
+      "syscall",
+      "errno",
+      "eintr",
+      "return",
+      "short-write",
+      "check"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.systems"
+  },
+  {
+    "ref_id": "strategy:sys:keep-signal-handlers-async-safe",
+    "type": "strategy",
+    "title": "Keep signal handlers async-signal-safe and minimal",
+    "summary": "Do only async-signal-safe work in a handler; set a flag or write to a self-pipe and handle the real work in the main loop.",
+    "domains": [
+      "systems",
+      "os",
+      "filesystem",
+      "process",
+      "resource_limits"
+    ],
+    "triggers": [
+      "signal",
+      "handler",
+      "async-signal-safe",
+      "self-pipe",
+      "sigterm",
+      "flag"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.systems"
+  },
+  {
+    "ref_id": "strategy:sys:bound-memory-against-oom",
+    "type": "strategy",
+    "title": "Bound memory growth to avoid the OOM killer",
+    "summary": "Cap buffers and in-flight work and stream large inputs so the process cannot grow until the kernel kills it.",
+    "domains": [
+      "systems",
+      "os",
+      "filesystem",
+      "process",
+      "resource_limits"
+    ],
+    "triggers": [
+      "memory",
+      "oom",
+      "bound",
+      "stream",
+      "buffer",
+      "rss"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.systems"
+  },
+  {
+    "ref_id": "strategy:sys:size-and-respect-resource-limits",
+    "type": "strategy",
+    "title": "Size and respect file-descriptor and resource limits",
+    "summary": "Set RLIMIT/ulimit for peak fd and memory use and design so the process degrades rather than hitting a hard limit.",
+    "domains": [
+      "systems",
+      "os",
+      "filesystem",
+      "process",
+      "resource_limits"
+    ],
+    "triggers": [
+      "ulimit",
+      "rlimit",
+      "limits",
+      "fd",
+      "nofile",
+      "peak"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.systems"
+  },
+  {
+    "ref_id": "methodology:sys:diagnose-a-file-descriptor-leak",
+    "type": "methodology",
+    "title": "Diagnose a file-descriptor or handle leak",
+    "summary": "Track fd counts over time, list open fds, and bisect the code path that opens without closing.",
+    "domains": [
+      "systems",
+      "os",
+      "filesystem",
+      "process",
+      "resource_limits"
+    ],
+    "triggers": [
+      "fd",
+      "leak",
+      "lsof",
+      "handle",
+      "emfile",
+      "diagnose"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.systems"
+  },
+  {
+    "ref_id": "methodology:sys:verify-crash-consistency",
+    "type": "methodology",
+    "title": "Verify crash consistency of a write path",
+    "summary": "Inject crashes between write, fsync, and rename and assert the file is always either old-complete or new-complete.",
+    "domains": [
+      "systems",
+      "os",
+      "filesystem",
+      "process",
+      "resource_limits"
+    ],
+    "triggers": [
+      "crash",
+      "consistency",
+      "fsync",
+      "rename",
+      "durability",
+      "verify"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.systems"
+  },
+  {
+    "ref_id": "methodology:sys:debug-a-signal-or-shutdown-bug",
+    "type": "methodology",
+    "title": "Debug a signal handling or shutdown bug",
+    "summary": "Trace which signals are delivered, what the handler does, and where unsafe work or lost signals cause the failure.",
+    "domains": [
+      "systems",
+      "os",
+      "filesystem",
+      "process",
+      "resource_limits"
+    ],
+    "triggers": [
+      "signal",
+      "shutdown",
+      "sigterm",
+      "sigchld",
+      "handler",
+      "debug"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.systems"
+  },
+  {
+    "ref_id": "methodology:sys:investigate-an-oom-kill",
+    "type": "methodology",
+    "title": "Investigate an OOM kill",
+    "summary": "Correlate the kernel OOM log, RSS growth, and allocation paths to find the unbounded consumer.",
+    "domains": [
+      "systems",
+      "os",
+      "filesystem",
+      "process",
+      "resource_limits"
+    ],
+    "triggers": [
+      "oom",
+      "kill",
+      "rss",
+      "memory",
+      "dmesg",
+      "investigate"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.systems"
+  },
+  {
+    "ref_id": "knowledge:sys:page-cache-fsync-and-durability",
+    "type": "knowledge",
+    "title": "Page cache, fsync, and durability ordering",
+    "summary": "write() only updates the page cache; data is durable only after fsync, and a rename's durability needs the directory fsynced too.",
+    "domains": [
+      "systems",
+      "os",
+      "filesystem",
+      "process",
+      "resource_limits"
+    ],
+    "triggers": [
+      "page cache",
+      "fsync",
+      "durability",
+      "write",
+      "rename",
+      "directory"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.systems"
+  },
+  {
+    "ref_id": "knowledge:sys:process-fork-exec-and-zombies",
+    "type": "knowledge",
+    "title": "Fork, exec, and zombie reaping",
+    "summary": "fork duplicates the process and exec replaces its image; a child that exits stays a zombie until the parent waits for it.",
+    "domains": [
+      "systems",
+      "os",
+      "filesystem",
+      "process",
+      "resource_limits"
+    ],
+    "triggers": [
+      "fork",
+      "exec",
+      "zombie",
+      "waitpid",
+      "child",
+      "reap"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.systems"
+  },
+  {
+    "ref_id": "knowledge:sys:file-descriptors-and-limits",
+    "type": "knowledge",
+    "title": "File descriptors, the open file table, and limits",
+    "summary": "An fd indexes a per-process table pointing to shared open-file descriptions; the soft RLIMIT_NOFILE caps how many a process can hold.",
+    "domains": [
+      "systems",
+      "os",
+      "filesystem",
+      "process",
+      "resource_limits"
+    ],
+    "triggers": [
+      "file descriptor",
+      "rlimit",
+      "nofile",
+      "open file table",
+      "dup",
+      "limit"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.systems"
+  },
+  {
+    "ref_id": "knowledge:sys:virtual-memory-mmap-and-oom",
+    "type": "knowledge",
+    "title": "Virtual memory, mmap, overcommit, and the OOM killer",
+    "summary": "Allocations reserve virtual address space populated lazily by page faults; under overcommit the OOM killer reclaims by terminating a process.",
+    "domains": [
+      "systems",
+      "os",
+      "filesystem",
+      "process",
+      "resource_limits"
+    ],
+    "triggers": [
+      "virtual memory",
+      "mmap",
+      "overcommit",
+      "oom",
+      "page fault",
+      "rss"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.systems"
+  },
+  {
+    "ref_id": "skill:sys:read-code-for-resource-and-durability-gaps",
+    "type": "skill",
+    "title": "Read code for resource and durability gaps",
+    "summary": "Inspect systems code and report unclosed resources, missing fsync, unchecked syscalls, and unsafe signal handlers.",
+    "domains": [
+      "systems",
+      "os",
+      "filesystem",
+      "process",
+      "resource_limits"
+    ],
+    "triggers": [
+      "read",
+      "review",
+      "resource",
+      "durability",
+      "inspect",
+      "gaps"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.systems"
+  },
+  {
+    "ref_id": "skill:sys:run-leak-and-crash-tests",
+    "type": "skill",
+    "title": "Run leak and crash-consistency tests",
+    "summary": "Exercise the path under repetition and injected crashes to confirm resources stay bounded and writes stay consistent.",
+    "domains": [
+      "systems",
+      "os",
+      "filesystem",
+      "process",
+      "resource_limits"
+    ],
+    "triggers": [
+      "leak",
+      "crash",
+      "test",
+      "fd",
+      "fsync",
+      "verify"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.systems"
+  }
+]

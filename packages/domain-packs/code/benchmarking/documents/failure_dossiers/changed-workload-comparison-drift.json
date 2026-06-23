@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:benchmarking:changed-workload-comparison-drift",
+  "type": "failure_dossier",
+  "description": "Comparing baseline and candidate under different inputs, data sizes, or environments, so the delta reflects the setup, not the code.",
+  "body": "Failure mode: the candidate is benchmarked with a different dataset, input distribution, machine, or runtime flag than the baseline, so the measured difference is attributable to the changed conditions rather than the code change. Detection signals: input size or environment differs between runs; results not reproducible on a matched setup; no recorded environment manifest. Do not compare across mismatched workloads or hosts. Safer fallback: fix the identical workload and pinned environment for both, run them back-to-back on the same host, and record the environment with each result before attributing any delta.",
+  "domain": "code",
+  "scope_hint": "code.benchmarking:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.benchmarking:human_authored",
+  "pack_id": "code.benchmarking"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:edge:origin-shield-and-coalescing",
+  "type": "knowledge",
+  "title": "Origin shield and request coalescing",
+  "description": "A shield tier and request coalescing collapse many concurrent edge misses into a single origin fetch per key.",
+  "body": "Use when protecting the origin from miss storms. Without shielding, every PoP independently fetches a missing object, multiplying origin load on cold start or purge; an origin shield designates a mid-tier that fetches once for many PoPs, and request coalescing merges concurrent misses for the same key into one upstream request. Do not rely on edge TTL alone for origin protection. Actions: enable tiered caching/shield and verify coalescing. Validation signals include flat origin request rate during purge. Risk boundary: a hot-key purge without shielding can stampede the origin.",
+  "domain": "cdn",
+  "scope_hint": "platform.cdn-edge:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.cdn-edge",
+  "pack_id": "platform.cdn-edge"
+}

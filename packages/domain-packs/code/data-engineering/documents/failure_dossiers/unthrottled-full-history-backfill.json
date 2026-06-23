@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:dataeng:unthrottled-full-history-backfill",
+  "type": "failure_dossier",
+  "description": "Backfilling all history at once without throttling or idempotency, overwhelming the warehouse or overwriting partial data.",
+  "body": "Failure mode: a backfill reprocesses the entire history in one unbounded job, starving the live pipeline and warehouse, and if the transform is not idempotent it overwrites partitions with partial results. Detection signals: live pipelines miss SLAs during the backfill; warehouse slots/queues saturate; partitions end up with fewer rows than the forward run. Do not run a full-history backfill unthrottled. Safer fallback: verify idempotency, backfill one partition and compare to a forward run, then batch with throttling while the forward pipeline keeps running.",
+  "domain": "data_engineering",
+  "scope_hint": "code.data-engineering:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.data-engineering:human_authored",
+  "pack_id": "code.data-engineering"
+}

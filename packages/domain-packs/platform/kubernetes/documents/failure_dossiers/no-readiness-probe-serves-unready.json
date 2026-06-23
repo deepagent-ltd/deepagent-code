@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:k8s:no-readiness-probe-serves-unready",
+  "type": "failure_dossier",
+  "description": "A Service routes traffic to pods that have not finished starting because no readiness probe gates the endpoint.",
+  "body": "Failure mode: a Deployment has no readiness probe (or one that returns ready immediately), so the Service adds pods to endpoints before they can serve, causing connection resets and 5xx during every rollout and scale-up. Detection signals: error spikes coincide with rollouts; new pods receive traffic before warmup; endpoints include pods whose app port is not yet listening. Do not use liveness alone or assume a started container is ready. Safer fallback: add a readiness probe that flips ready only when the app can serve, verify endpoints exclude unready pods, and confirm rollout error rate stays flat.",
+  "domain": "kubernetes",
+  "scope_hint": "platform.kubernetes:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.kubernetes:human_authored",
+  "pack_id": "platform.kubernetes"
+}

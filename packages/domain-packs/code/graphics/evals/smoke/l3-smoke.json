@@ -1,0 +1,71 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "code.graphics",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "graphics",
+      "rendering",
+      "shader",
+      "gpu_graphics"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "L3 smoke for code.graphics: GLSL vertex and fragment shaders, the rasterization pipeline, model-view-projection transforms, texture sampling and framebuffers, Vulkan render passes and frame timing"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "optimize a CPU JSON parser hot loop and add a microbenchmark"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "retrieval_query": "rendering pipeline rasterization vertex shader fragment shader glsl hlsl wgsl model view projection matrix texture sampler framebuffer render target depth blend opengl vulkan webgpu frame timing",
+  "expected_pack_id": "code.graphics",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "code.graphics L3 validation smoke",
+    "signals": [
+      "shader compiles clean under the validation/SPIR-V layer",
+      "rendered output matches a reference image within tolerance",
+      "GPU validation layer (Vulkan/WebGPU) reports no errors",
+      "depth/blend state produces correct occlusion and transparency",
+      "frame time stays within the target budget on the GPU timeline"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "code.graphics diagnosis smoke",
+    "signals": [
+      "geometry transformed in the wrong coordinate space (object vs world vs clip)",
+      "reading an attachment while still writing it without a barrier (resource hazard)",
+      "non-power-of-two or mismatched texture format causing sampling artifacts",
+      "alpha blending order producing wrong transparency",
+      "validation layer error ignored because the image still looks plausible"
+    ]
+  },
+  "source_refs": [
+    "source:realtime-rendering-pipeline:paraphrased",
+    "source:vulkan-synchronization-practice:paraphrased"
+  ]
+}

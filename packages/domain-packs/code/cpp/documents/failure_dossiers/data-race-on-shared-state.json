@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:cpp:data-race-on-shared-state",
+  "type": "failure_dossier",
+  "description": "Accessing shared mutable state from multiple threads without synchronization, producing a data race and undefined behavior.",
+  "body": "Failure mode: two threads read/write the same non-atomic variable or container without a mutex or atomic, so the program has a data race; results are nondeterministic and the optimizer may assume no race. Detection signals: ThreadSanitizer reports a data race with both stacks; values are occasionally wrong under load; bugs vanish under a debugger (timing). Do not share mutable state across threads unprotected. Safer fallback: guard the state with std::mutex/scoped_lock or use std::atomic for simple counters, prefer message passing where possible, and confirm a clean `-fsanitize=thread` run under load.",
+  "domain": "cpp",
+  "scope_hint": "code.cpp:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.cpp:human_authored",
+  "pack_id": "code.cpp"
+}

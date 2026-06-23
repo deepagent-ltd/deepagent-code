@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:search:recall-precision-and-knobs",
+  "type": "knowledge",
+  "title": "Recall, precision, and the knobs that move them",
+  "description": "Recall is the fraction of relevant docs found; precision is the fraction of returned docs that are relevant; operators, fuzziness, and stemming trade between them.",
+  "body": "Use when results are too sparse or too noisy. Recall measures coverage of relevant documents; precision measures cleanliness of the result list, and they usually trade off. Loose OR matching, high fuzziness, aggressive synonyms, and stemming raise recall but lower precision; strict AND, phrase matching, and minimum_should_match raise precision but can drop relevant hits. Do not treat 'more results' as 'better search'. Actions: set knobs to the query type's needs and measure both metrics. Validation signals include precision@k and recall reported together. Risk boundary: maximizing recall alone buries good results in noise; maximizing precision alone hides relevant ones.",
+  "domain": "search",
+  "scope_hint": "code.search:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.search",
+  "pack_id": "code.search"
+}

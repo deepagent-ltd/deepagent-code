@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:security:authz-matrix-test",
+  "type": "methodology",
+  "title": "Authorization matrix test",
+  "description": "Build a role, owner, tenant, and state matrix before declaring access-control behavior correct.",
+  "body": "Use when modifying object-level permissions, admin flows, tenant isolation, feature flags, or data visibility. Do not use for pure authentication flows that never access protected objects. Steps: list principals, resource ownership, tenant boundaries, resource states, and expected allow or deny result; implement focused tests for the highest-risk denies plus one allowed path; verify response bodies and logs do not leak hidden data. Validation signals include matrix coverage and explicit denied assertions. Risk boundary: ambiguous policy cells require human product/security input before code changes.",
+  "domain": "authz",
+  "scope_hint": "risk.security:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.security",
+  "pack_id": "risk.security"
+}

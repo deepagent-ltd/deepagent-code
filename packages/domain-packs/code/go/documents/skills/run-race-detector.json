@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:go:run-race-detector",
+  "type": "skill",
+  "title": "Run the race detector and report data races",
+  "description": "Execute the test suite under -race and report each detected data race with the conflicting goroutine stacks.",
+  "body": "Use when validating concurrent code or diagnosing intermittent failures. Actions: run `go test -race ./...` (and, for a binary, build with -race for a load test), parse the 'WARNING: DATA RACE' blocks, and report each with the read/write locations and the two goroutine stacks involved. Do not declare concurrent code correct from a green non-race run, since races are timing-dependent. This skill exposes capability only and must not run production binaries without runtime permission. Validation signals include zero DATA RACE warnings across repeated runs and a previously-flaky test stabilizing after the fix. Risk boundary: the race detector finds only races that actually occurred in the run, so absence is not proof; recommend stress (-count, -race under load) and escalate unfixable shared-state designs toward channels or sync primitives.",
+  "domain": "go",
+  "scope_hint": "code.go:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.go",
+  "pack_id": "code.go"
+}

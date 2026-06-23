@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:php:integrate-a-laravel-feature",
+  "type": "methodology",
+  "title": "Integrate a feature behind Laravel/Symfony seams",
+  "description": "Add a feature using container bindings, migrations, and events so it stays testable and framework-idiomatic.",
+  "body": "Steps: 1. Model the data with a migration and (Eloquent/Doctrine) entity, keeping schema changes versioned. 2. Put business logic in a service class bound in the container (a service provider in Laravel, services.yaml in Symfony). 3. Wire HTTP through a thin controller that resolves the service via injection. 4. Emit domain events for cross-cutting effects rather than inlining them. 5. Add feature and unit tests using the framework test case. Rollback point: the migration's down() and the unbound service, before exposing the route. Validation: a feature test drives the route end to end and a unit test swaps the bound service via the container.",
+  "domain": "php",
+  "scope_hint": "code.php:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.php",
+  "pack_id": "code.php"
+}

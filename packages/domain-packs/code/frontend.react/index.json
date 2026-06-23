@@ -1,0 +1,473 @@
+[
+  {
+    "ref_id": "knowledge:frontend_react:cleanup-before-next-effect",
+    "type": "knowledge",
+    "title": "Cleanup Before Next Effect",
+    "summary": "React effect cleanup runs before the next effect for the same component and on unmount.",
+    "domains": [
+      "react",
+      "frontend",
+      "typescript"
+    ],
+    "triggers": [
+      "react",
+      "effect",
+      "cleanup",
+      "runs",
+      "before",
+      "next",
+      "same"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.react"
+  },
+  {
+    "ref_id": "knowledge:frontend_react:controlled-uncontrolled",
+    "type": "knowledge",
+    "title": "Controlled Uncontrolled",
+    "summary": "Switching input controlledness can cause warnings and state bugs.",
+    "domains": [
+      "react",
+      "frontend",
+      "typescript"
+    ],
+    "triggers": [
+      "switching",
+      "input",
+      "controlledness",
+      "cause",
+      "warnings",
+      "state",
+      "bugs",
+      "form"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.react"
+  },
+  {
+    "ref_id": "knowledge:frontend_react:keys-preserve-identity",
+    "type": "knowledge",
+    "title": "Keys Preserve Identity",
+    "summary": "React keys control identity during list reconciliation.",
+    "domains": [
+      "react",
+      "frontend",
+      "typescript"
+    ],
+    "triggers": [
+      "react",
+      "keys",
+      "control",
+      "identity",
+      "during",
+      "list",
+      "reconciliation",
+      "unstable"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.react"
+  },
+  {
+    "ref_id": "methodology:frontend_react:component-state-matrix",
+    "type": "methodology",
+    "title": "Component State Matrix",
+    "summary": "Validate component states: loading, empty, populated, error, disabled, and pending.",
+    "domains": [
+      "react",
+      "frontend",
+      "typescript"
+    ],
+    "triggers": [
+      "validate",
+      "component",
+      "states",
+      "loading",
+      "empty",
+      "populated",
+      "error",
+      "disabled"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.react"
+  },
+  {
+    "ref_id": "methodology:frontend_react:hook-dependency-review",
+    "type": "methodology",
+    "title": "Hook Dependency Review",
+    "summary": "Review dependencies, cleanup, and stale closures for hook changes.",
+    "domains": [
+      "react",
+      "frontend",
+      "typescript"
+    ],
+    "triggers": [
+      "review",
+      "dependencies",
+      "cleanup",
+      "stale",
+      "closures",
+      "hook",
+      "changes",
+      "steps"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.react"
+  },
+  {
+    "ref_id": "methodology:frontend_react:react-change-smoke",
+    "type": "methodology",
+    "title": "React Change Smoke",
+    "summary": "Run typecheck/tests, render affected component, inspect console, and interact with changed states.",
+    "domains": [
+      "react",
+      "frontend",
+      "typescript"
+    ],
+    "triggers": [
+      "typecheck",
+      "tests",
+      "render",
+      "affected",
+      "component",
+      "inspect",
+      "console",
+      "interact"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.react"
+  },
+  {
+    "ref_id": "skill:frontend_react:react-component-smoke",
+    "type": "skill",
+    "title": "React Component Smoke",
+    "summary": "Run a focused React component or route smoke with console and state checks.",
+    "domains": [
+      "react",
+      "frontend",
+      "typescript"
+    ],
+    "triggers": [
+      "focused",
+      "react",
+      "component",
+      "route",
+      "smoke",
+      "with",
+      "console",
+      "state"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.react"
+  },
+  {
+    "ref_id": "strategy:frontend_react:component-contract",
+    "type": "strategy",
+    "title": "Component Contract",
+    "summary": "React components should expose clear props, events, state ownership, and loading/error states.",
+    "domains": [
+      "react",
+      "frontend",
+      "typescript"
+    ],
+    "triggers": [
+      "react",
+      "components",
+      "should",
+      "expose",
+      "clear",
+      "props",
+      "events",
+      "state"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.react"
+  },
+  {
+    "ref_id": "strategy:frontend_react:effect-cleanup",
+    "type": "strategy",
+    "title": "Effect Cleanup",
+    "summary": "Effects that subscribe, schedule, or fetch need cleanup and stale-state protection.",
+    "domains": [
+      "react",
+      "frontend",
+      "typescript"
+    ],
+    "triggers": [
+      "effects",
+      "that",
+      "subscribe",
+      "schedule",
+      "fetch",
+      "need",
+      "cleanup",
+      "stale"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.react"
+  },
+  {
+    "ref_id": "strategy:frontend_react:hydration-stability",
+    "type": "strategy",
+    "title": "Hydration Stability",
+    "summary": "SSR or persisted markup must match initial client render.",
+    "domains": [
+      "react",
+      "frontend",
+      "typescript"
+    ],
+    "triggers": [
+      "persisted",
+      "markup",
+      "must",
+      "match",
+      "initial",
+      "client",
+      "render",
+      "avoid"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.react"
+  },
+  {
+    "ref_id": "strategy:frontend_react:state-location",
+    "type": "strategy",
+    "title": "State Location",
+    "summary": "Place state at the smallest owner that needs to coordinate it.",
+    "domains": [
+      "react",
+      "frontend",
+      "typescript"
+    ],
+    "triggers": [
+      "place",
+      "state",
+      "smallest",
+      "owner",
+      "that",
+      "needs",
+      "coordinate",
+      "over"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.react"
+  },
+  {
+    "ref_id": "strategy:frontend_react:memoize-with-intent",
+    "type": "strategy",
+    "title": "Memoize only proven hot paths",
+    "summary": "Apply useMemo/useCallback/React.memo to fix a measured render cost or a referential-identity break, not as a blanket default.",
+    "domains": [
+      "react",
+      "frontend",
+      "typescript"
+    ],
+    "triggers": [
+      "usememo",
+      "usecallback",
+      "react.memo",
+      "memoization",
+      "referential",
+      "rerender"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.react"
+  },
+  {
+    "ref_id": "strategy:frontend_react:stable-context-value",
+    "type": "strategy",
+    "title": "Keep context values referentially stable",
+    "summary": "Provide a memoized context value and split contexts by update frequency so unrelated consumers do not rerender on every provider render.",
+    "domains": [
+      "react",
+      "frontend",
+      "typescript"
+    ],
+    "triggers": [
+      "context",
+      "provider",
+      "rerender",
+      "usecontext",
+      "stable",
+      "split"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.react"
+  },
+  {
+    "ref_id": "methodology:frontend_react:suspense-boundary-review",
+    "type": "methodology",
+    "title": "Review Suspense and error boundary placement",
+    "summary": "Verify async UI is wrapped by a Suspense fallback and an error boundary at the right granularity so failures and loading stay localized.",
+    "domains": [
+      "react",
+      "frontend",
+      "typescript"
+    ],
+    "triggers": [
+      "suspense",
+      "error boundary",
+      "fallback",
+      "lazy",
+      "async",
+      "boundary"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.react"
+  },
+  {
+    "ref_id": "knowledge:frontend_react:rsc-vs-client-component",
+    "type": "knowledge",
+    "title": "Server vs client components differ in capabilities",
+    "summary": "React Server Components run only on the server with no hooks/state/effects, while client components ship JS and own interactivity; the boundary controls bundle and hydration.",
+    "domains": [
+      "react",
+      "frontend",
+      "typescript"
+    ],
+    "triggers": [
+      "rsc",
+      "server component",
+      "client component",
+      "use client",
+      "hydration",
+      "bundle"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.react"
+  },
+  {
+    "ref_id": "skill:frontend_react:profile-react-renders",
+    "type": "skill",
+    "title": "Profile React render and commit behavior",
+    "summary": "Record a React Profiler session for a changed interaction and report which components rerendered, how often, and why.",
+    "domains": [
+      "react",
+      "frontend",
+      "typescript"
+    ],
+    "triggers": [
+      "profiler",
+      "render",
+      "commit",
+      "rerender",
+      "flamegraph",
+      "why-did-you-render"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.react"
+  }
+]

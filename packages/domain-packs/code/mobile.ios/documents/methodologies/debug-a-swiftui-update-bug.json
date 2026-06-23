@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:ios:debug-a-swiftui-update-bug",
+  "type": "methodology",
+  "title": "Debug a SwiftUI view that won't update",
+  "description": "Trace why a SwiftUI view ignores a change by checking the state ownership and observation wrappers.",
+  "body": "Steps: 1. Identify the data the view should react to and where it lives. 2. Check the wrapper: is value state @State, is a model @StateObject/@ObservedObject, are its mutable fields @Published? 3. Confirm the mutated property is actually the observed source, not a copy or a plain stored property. 4. Verify bindings (@Binding) propagate writes back to the owner. 5. Check the view isn't capturing a stale value or recreating its @StateObject. Rollback point: before restructuring ownership (can change identity/lifecycle). Validation: mutating the source re-renders the view automatically; if the UI updates only after a manual nudge, the state is not properly observed — fix the source of truth, not the symptom.",
+  "domain": "ios",
+  "scope_hint": "code.mobile.ios:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.mobile.ios",
+  "pack_id": "code.mobile.ios"
+}

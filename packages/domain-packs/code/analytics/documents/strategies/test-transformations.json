@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:analytics:test-transformations",
+  "type": "strategy",
+  "title": "Test transformations like production code",
+  "description": "Attach data tests to models so uniqueness, referential integrity, and freshness assumptions fail loudly before consumers see bad data.",
+  "body": "Use when a model's output feeds dashboards or downstream models. Do not ship transformations untested on the assumption that upstream data is clean — a broken join silently fans out wrong numbers everywhere. Actions: add tests for primary-key uniqueness and not-null, referential integrity to parent keys, accepted values, and source freshness; run them in CI and on each build. Validation signals include a CI run executing model tests and a failing test blocking a build on seeded bad data. Risk boundary: untested transformations propagate errors warehouse-wide; if a model lacks key and relationship tests, treat it as unsafe to publish and add them before exposing it.",
+  "domain": "analytics",
+  "scope_hint": "code.analytics:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.analytics",
+  "pack_id": "code.analytics"
+}

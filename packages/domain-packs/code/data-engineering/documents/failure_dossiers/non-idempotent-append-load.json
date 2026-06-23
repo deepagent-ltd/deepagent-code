@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:dataeng:non-idempotent-append-load",
+  "type": "failure_dossier",
+  "description": "Loading with blind append/insert so a retried or re-run task double-inserts rows and corrupts aggregates.",
+  "body": "Failure mode: a load task appends rows without partition scoping or upsert, so when the orchestrator retries after a partial failure the same rows are written twice and every downstream sum/count is inflated. Detection signals: distinct-key count is less than total count; aggregates jump after a retry; the load uses INSERT with no replace/merge. Do not append into a target that can be retried. Safer fallback: scope the write to a partition and replace-by-partition or upsert on a key, then verify a double-run yields identical counts.",
+  "domain": "data_engineering",
+  "scope_hint": "code.data-engineering:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.data-engineering:human_authored",
+  "pack_id": "code.data-engineering"
+}

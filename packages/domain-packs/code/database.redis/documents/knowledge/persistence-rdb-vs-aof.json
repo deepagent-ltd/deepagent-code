@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:redis:persistence-rdb-vs-aof",
+  "type": "knowledge",
+  "title": "Persistence: RDB vs AOF tradeoffs",
+  "description": "RDB snapshots are compact with a larger loss window; AOF logs writes for durability at higher cost.",
+  "body": "Use when deciding how durable Redis must be. RDB writes a periodic binary snapshot — small files, fast restore, but a crash loses every write since the last snapshot (often minutes). AOF appends each write command and replays it on restart; with appendfsync everysec the loss window is about a second, with always it is near zero but slower, and the file is larger and replays slower on boot (mitigated by AOF rewrite). Do not assume Redis is durable by default — a pure-cache config may have no persistence. Actions: enable AOF (often alongside RDB) when Redis holds data you cannot lose. Validation signals include a kill-restart test reloading the dataset within the chosen window. Risk boundary: RDB-only when Redis is a system of record risks minutes of silent data loss on crash.",
+  "domain": "redis",
+  "scope_hint": "code.database.redis:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.redis",
+  "pack_id": "code.database.redis"
+}

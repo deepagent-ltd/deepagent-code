@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:agent:no-progress-spin",
+  "type": "failure_dossier",
+  "description": "The agent repeats the same failing action every step, making no state change, until the step cap or budget is exhausted.",
+  "body": "Failure mode: a tool keeps returning the same error and the agent keeps re-issuing the identical call, so it burns its entire step budget without progress. Detection signals: no signature comparison across steps; identical action/result repeated; the loop only stops at the step cap; a repeating-error scenario has no test. Do not assume the step cap alone protects against stalls. Safer fallback: track a signature of each step's action and result, detect repetition across a window, and halt or change strategy on no progress, with a test that a repeated error breaks the loop early.",
+  "domain": "agent",
+  "scope_hint": "code.agent:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.agent:human_authored",
+  "pack_id": "code.agent"
+}

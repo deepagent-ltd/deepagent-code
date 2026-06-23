@@ -1,0 +1,47 @@
+{
+  "schema_version": "domain_pack.v1",
+  "id": "code.compiler",
+  "name": "Compiler and Language Implementation",
+  "version": "1.0.0",
+  "scope": "system",
+  "risk": "medium",
+  "domains": [
+    "compiler",
+    "parser",
+    "ir",
+    "codegen",
+    "optimization"
+  ],
+  "provides": [
+    "knowledge",
+    "strategy",
+    "methodology",
+    "skill",
+    "diagnosis",
+    "validation"
+  ],
+  "depends_on": [
+    "code.core",
+    "code.testing"
+  ],
+  "conflicts_with": [],
+  "knowledge_store": "document_store",
+  "allowed_tools": [
+    "read",
+    "shell:test"
+  ],
+  "denied_tools": [
+    "shell:deploy-production"
+  ],
+  "data_policy": {
+    "sensitivity": [
+      "source_code"
+    ],
+    "default_admission": "summary_only",
+    "secret_policy": "deny"
+  },
+  "detector": {
+    "inline": "profile.code_domains.some(d=>['compiler','parser','ir','codegen','optimization'].includes(d)) || profile.repo_signals.some(s=>/(lexer|parser|abstract syntax tree|\\bast\\b|intermediate representation|\\bir\\b|code generation|compiler pass|type checker|llvm)/i.test(s)) ? 0.9 : 0",
+    "threshold": 0.5
+  }
+}

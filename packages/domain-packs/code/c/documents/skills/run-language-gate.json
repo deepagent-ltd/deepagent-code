@@ -1,0 +1,11 @@
+{
+  "ref_id": "skill:c:run-language-gate",
+  "type": "skill",
+  "description": "In C, run the package-local validation gate (make / Makefile targets (and the exact CC, CFLAGS, and -I/-L flags)) and summarize the diagnostics.",
+  "body": "In C, this capability runs the owning package's gate and reports the outcome so the next action is obvious. Use when you need an authoritative pass/fail for a C package before or after a change. Do not run a root or generic command that bypasses the package's real config, and avoid reporting success without the exit code. Actions: take the package path, run cc -Wall -Wextra -Werror with the same standard (-std=c11) the build uses then clang-tidy, cppcheck, and -fanalyzer warnings and the unit binary plus valgrind on the changed translation unit, and record the command, exit code, the first compiler error with file:line and the caret-marked token, and the recommended next step. Validation signals include the captured command log, the exit code, and the first diagnostics with file and line. Risk boundary: surface, do not auto-fix; escalate when the gate requires network access, credentials, or a toolchain change.",
+  "domain": "c",
+  "scope_hint": "code.c:skills",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.c:skill_survey",
+  "pack_id": "code.c"
+}

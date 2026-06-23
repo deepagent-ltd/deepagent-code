@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:glci:control-jobs-with-rules",
+  "type": "strategy",
+  "title": "Control job creation with rules, not only/except",
+  "description": "Express when a job runs using rules with explicit if/changes/when, and avoid mixing the legacy only/except syntax.",
+  "body": "Use when deciding when a job should be added to a pipeline. Do not mix rules with only/except in the same job (they are mutually exclusive and the combination is rejected or behaves surprisingly) and do not rely on implicit defaults that silently drop a job. Actions: define rules with explicit if conditions (branch, tag, MR, pipeline source), use changes for path-based triggering, and set when: never branches deliberately. Validation signals include the job appearing only in the intended pipeline contexts and a dry view of the pipeline matching expectation. Risk boundary: a rule that runs a deploy job on an unintended ref is a production-reach change; review the conditions before merge.",
+  "domain": "ci_gitlab",
+  "scope_hint": "platform.ci-gitlab:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.ci-gitlab",
+  "pack_id": "platform.ci-gitlab"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:chain:evm-gas-and-execution",
+  "type": "knowledge",
+  "title": "The EVM gas and execution model",
+  "description": "Every opcode costs gas the caller prepays; running out reverts all state changes, and storage writes are by far the most expensive operations.",
+  "body": "Use when reasoning about cost and failure of contract calls. The EVM charges gas per opcode, the sender sets a gas limit and price, and if execution exhausts gas it reverts all state changes (but still consumes the gas); storage writes (SSTORE) cost orders of magnitude more than memory or arithmetic. A transaction is atomic: it fully succeeds or fully reverts. Do not assume unlimited computation or that a partial execution persists. Actions: minimize storage writes, estimate worst-case gas, and keep work under the block gas limit. Validation signals include a gas report and a worst-case-size test fitting the limit. Risk boundary: an operation whose gas grows with attacker-controlled input can become permanently uncallable; treat gas growth as a correctness concern, not just cost.",
+  "domain": "blockchain",
+  "scope_hint": "code.blockchain:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.blockchain",
+  "pack_id": "code.blockchain"
+}

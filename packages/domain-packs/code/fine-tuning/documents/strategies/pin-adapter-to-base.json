@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:finetune:pin-adapter-to-base",
+  "type": "strategy",
+  "title": "Pin every adapter to its exact base and tokenizer",
+  "description": "Record the base model version and tokenizer an adapter was trained on so it is only ever loaded or merged onto a compatible base.",
+  "body": "Use when distributing or merging LoRA/PEFT adapters. Do not load an adapter onto a different base revision or tokenizer than it was trained against — weights misalign and quality silently drops. Actions: record the base model id/revision and tokenizer hash in the adapter metadata, validate compatibility before load or merge, and verify outputs match the training-time reference. Validation signals include adapter metadata resolving to the exact base and a parity check against a reference prompt set. Risk boundary: a mismatched merge corrupts the model invisibly; if the base or tokenizer cannot be confirmed, deny the merge and escalate.",
+  "domain": "fine_tuning",
+  "scope_hint": "code.fine-tuning:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.fine-tuning",
+  "pack_id": "code.fine-tuning"
+}

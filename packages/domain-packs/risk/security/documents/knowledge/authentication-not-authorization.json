@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:security:authentication-not-authorization",
+  "type": "knowledge",
+  "title": "Authentication is not authorization",
+  "description": "Knowing who a caller is does not prove what object, action, tenant, or state they may access.",
+  "body": "Use when code checks login state, token validity, session presence, or user ID but then reads or writes protected resources. Do not use to design the full permission taxonomy. Actions: look for a separate policy decision tied to action and resource; require owner, role, tenant, and state checks where relevant. Validation signals include tests where authenticated users are denied outside their scope. Risk boundary: replacing authorization with authentication is a blocking issue for protected resources.",
+  "domain": "authz",
+  "scope_hint": "risk.security:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.security",
+  "pack_id": "risk.security"
+}

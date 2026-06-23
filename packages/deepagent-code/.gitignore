@@ -1,0 +1,13 @@
+research
+dist
+dist-*
+gen
+app.log
+script/build-*.ts
+temporary-*.md
+.artifacts
+
+# DeepAgent task-run scratch output (CUDA/GEMM benchmarks, stray probe files) must not be committed
+*.cu
+/git
+/config.json

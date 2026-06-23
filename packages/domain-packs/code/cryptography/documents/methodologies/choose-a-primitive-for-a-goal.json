@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:crypto:choose-a-primitive-for-a-goal",
+  "type": "methodology",
+  "title": "Map a security goal to the right primitive",
+  "description": "Translate a requirement (confidentiality, integrity, authenticity, password storage) into a specific named construction before writing code.",
+  "body": "Steps: 1. State the exact goal: secrecy, tamper-detection, sender authenticity, password storage, or key agreement. 2. Map it to a named construction: AEAD for secrecy+integrity, HMAC for integrity of known-key data, Ed25519/ECDSA for authenticity, Argon2 for passwords, X25519/ECDH for agreement. 3. Pick the vetted library implementation and current parameters. 4. Bind context with associated data or info labels. 5. Write tests for both the success and the tamper/wrong-key path. Rollback point: before swapping a primitive in a released format. Validation: the construction is named and standard, parameters match current guidance, and tamper tests fail closed; choosing a primitive by familiarity rather than by goal is how misuse starts.",
+  "domain": "cryptography",
+  "scope_hint": "code.cryptography:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.cryptography",
+  "pack_id": "code.cryptography"
+}

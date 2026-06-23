@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:crypto:derive-keys-with-a-kdf",
+  "type": "strategy",
+  "title": "Derive purpose-specific keys with a KDF",
+  "description": "Use HKDF or a context-bound KDF to expand or separate keys per purpose, rather than reusing one key everywhere or hashing it ad hoc.",
+  "body": "Use when one secret must produce multiple keys or a shared secret must become a symmetric key. Do not reuse the same key for encryption and MAC and signing, and avoid deriving keys with a bare hash and no context label. Actions: run HKDF (extract-then-expand) with a salt and a distinct info/context string per key purpose so derived keys are cryptographically separated; never truncate a key below its required length. Validation signals include distinct keys per purpose in tests and reproducible derivation from the same inputs. Risk boundary: cross-purpose key reuse means a weakness in one use compromises others; treat shared keys across distinct purposes as a design defect and separate them.",
+  "domain": "cryptography",
+  "scope_hint": "code.cryptography:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.cryptography",
+  "pack_id": "code.cryptography"
+}

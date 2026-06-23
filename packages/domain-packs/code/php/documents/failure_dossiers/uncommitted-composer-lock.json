@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:php:uncommitted-composer-lock",
+  "type": "failure_dossier",
+  "description": "composer.lock is missing or gitignored, so each environment resolves a different dependency graph and prod runs untested versions.",
+  "body": "Failure mode: an application does not commit composer.lock (or deploy runs composer update), so CI, staging, and production each resolve constraints independently and run different transitive versions than were tested. Detection signals: composer.lock absent or in .gitignore for an app; deploy scripts call composer update; a bug reproduces only in one environment. Do not resolve versions at deploy time for an application. Safer fallback: commit composer.lock, run composer install (which honors the lock) everywhere, and reserve composer update for a reviewed, tested dependency bump. Libraries legitimately omit the lock; applications must not.",
+  "domain": "php",
+  "scope_hint": "code.php:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.php:human_authored",
+  "pack_id": "code.php"
+}

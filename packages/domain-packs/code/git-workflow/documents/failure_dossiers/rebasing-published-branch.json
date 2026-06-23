@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:git:rebasing-published-branch",
+  "type": "failure_dossier",
+  "description": "Rebasing a branch others have already pulled rewrites commit hashes, forcing every collaborator into painful re-syncing and duplicate commits.",
+  "body": "Failure mode: an interactive or onto rebase is run on a branch that teammates already based work on, so the original commits are replaced by new hashes and everyone's local branch diverges. Detection signals: collaborators see merge conflicts against commits they thought were identical; duplicated changes appear after they merge; git pull produces a tangled history. Do not rebase a branch once it is shared. Safer fallback: merge the base into the shared branch instead of rebasing, or if a rewrite is truly required, announce it and have everyone reset to the new tip deliberately.",
+  "domain": "git_workflow",
+  "scope_hint": "code.git-workflow:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.git-workflow:human_authored",
+  "pack_id": "code.git-workflow"
+}

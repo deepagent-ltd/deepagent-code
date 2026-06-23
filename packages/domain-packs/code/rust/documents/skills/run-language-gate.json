@@ -1,0 +1,11 @@
+{
+  "ref_id": "skill:rust:run-language-gate",
+  "type": "skill",
+  "description": "In Rust, run the package-local validation gate (cargo build (and cargo build --release) with the workspace's feature flags) and summarize the diagnostics.",
+  "body": "In Rust, this capability runs the owning package's gate and reports the outcome so the next action is obvious. Use when you need an authoritative pass/fail for a Rust package before or after a change. Do not run a root or generic command that bypasses the package's real config, and avoid reporting success without the exit code. Actions: take the package path, run cargo check, where the borrow checker and trait resolution must pass then cargo clippy -D warnings and rustc lint output and cargo test on the affected crate with the relevant features, and record the command, exit code, the first rustc error code (Exxxx) and the borrow/lifetime explanation, and the recommended next step. Validation signals include the captured command log, the exit code, and the first diagnostics with file and line. Risk boundary: surface, do not auto-fix; escalate when the gate requires network access, credentials, or a toolchain change.",
+  "domain": "rust",
+  "scope_hint": "code.rust:skills",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.rust:skill_survey",
+  "pack_id": "code.rust"
+}

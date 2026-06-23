@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:scala:for-comprehension-desugaring",
+  "type": "knowledge",
+  "title": "For-comprehensions desugar to map/flatMap",
+  "description": "A for-comprehension is sugar over flatMap/map/withFilter, so its behavior depends entirely on the monad it runs over.",
+  "body": "Use when reading or writing for-comprehensions over Option, Either, Future, IO, or collections. The compiler desugars for { a <- fa; b <- fb } yield expr into fa.flatMap(a => fb.map(b => expr)), with guards becoming withFilter, so the sequencing, short-circuiting, and error semantics come from the underlying type's flatMap. An Either/Option short-circuits on the first Left/None; a Future sequences (and, if values are pre-constructed, may run in parallel); a List produces a cartesian product. Do not assume a for-comprehension parallelizes or that effects start lazily unless the monad does so. Actions: pick the type whose flatMap gives the desired sequencing. Validation signals include a test asserting short-circuit/sequence behavior. Risk boundary: mixing monads in one for-comprehension fails to compile, and constructing Futures before the for runs them eagerly in parallel unintentionally.",
+  "domain": "scala",
+  "scope_hint": "code.scala:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.scala",
+  "pack_id": "code.scala"
+}

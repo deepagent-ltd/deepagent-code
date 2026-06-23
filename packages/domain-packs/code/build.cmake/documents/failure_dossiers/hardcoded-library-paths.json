@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:cmake:hardcoded-library-paths",
+  "type": "failure_dossier",
+  "description": "Hardcoding absolute library and include paths instead of using imported targets makes the build non-portable and fragile across machines.",
+  "body": "Failure mode: a CMakeLists references a dependency by absolute path to its .so and headers rather than through find_package's imported target. Detection signals: the build fails on another machine or OS; updating the dependency requires editing paths; cross-compiling picks the host library. Do not hardcode paths discovered on one machine. Safer fallback: locate the dependency with find_package and link its exported imported target so includes and transitive deps come from the package's INTERFACE properties.",
+  "domain": "cmake",
+  "scope_hint": "code.build.cmake:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.build.cmake:human_authored",
+  "pack_id": "code.build.cmake"
+}

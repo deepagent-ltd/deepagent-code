@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:rlang:pipe-readable-dplyr",
+  "type": "strategy",
+  "title": "Compose dplyr pipelines for readable transforms",
+  "description": "Chain verbs with the pipe so each step is a named, inspectable transformation of the data.",
+  "body": "Use when reshaping or summarizing a data frame through several steps. Do not nest functions inside out or reassign an intermediate variable at every step — both obscure the data's flow. Actions: chain filter, mutate, group_by, and summarise with the pipe, keeping one verb per line, and inspect the intermediate after each new step while building. Validation signals include intermediate row counts and column types matching expectations at each stage. Risk boundary: group_by left applied downstream silently changes later verb semantics — ungroup once the grouped operation is done.",
+  "domain": "r_lang",
+  "scope_hint": "code.r:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.r",
+  "pack_id": "code.r"
+}

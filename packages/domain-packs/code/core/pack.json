@@ -1,0 +1,17 @@
+{
+  "schema_version": "domain_pack.v1",
+  "id": "code.core",
+  "name": "Code Core",
+  "version": "1.0.0",
+  "scope": "system",
+  "risk": "low",
+  "domains": ["code"],
+  "provides": ["knowledge", "strategy", "methodology", "skill"],
+  "depends_on": [],
+  "conflicts_with": [],
+  "knowledge_store": "document_store",
+  "detector": {
+    "inline": "profile.code_domains.length > 0 ? 0.9 : 0",
+    "threshold": 0.5
+  }
+}

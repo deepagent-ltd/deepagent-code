@@ -1,0 +1,11 @@
+{
+  "ref_id": "strategy:python:package-local-command",
+  "type": "strategy",
+  "description": "In Python, use the package-local commands (the package's editable install (pip install -e / uv sync) inside its venv) rather than a root or generic command.",
+  "body": "In Python, the real contract lives in the owning package's config; a root or generic command can use the wrong the interpreter version, the active venv, and the dependency resolver or skip checks. Use when building, testing, or analyzing a specific Python package, especially in a monorepo. Do not assume a top-level command covers the package, and avoid running a generic command that ignores its config. Actions: find the package's own targets, run the package's editable install (pip install -e / uv sync) inside its venv and pytest on the changed package inside the project venv scoped to it, and compare results against the package's configured gate. Validation signals include the package-scoped command log, its exit code, and a mypy/pyright type checks, ruff/flake8 lint, and DeprecationWarnings pass using the package config. Risk boundary: escalate if no package-local command exists or if it depends on environment you cannot safely provision.",
+  "domain": "python",
+  "scope_hint": "code.python:strategies",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.python:skill_survey",
+  "pack_id": "code.python"
+}

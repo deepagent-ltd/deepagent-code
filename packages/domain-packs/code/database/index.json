@@ -1,0 +1,870 @@
+[
+  {
+    "ref_id": "knowledge:database:backfills-must-be-restartable",
+    "type": "knowledge",
+    "title": "Backfills Must Be Restartable",
+    "summary": "Data backfills should be bounded, idempotent, and restartable after partial failure.",
+    "domains": [
+      "sql",
+      "database",
+      "migration",
+      "transaction"
+    ],
+    "triggers": [
+      "data",
+      "backfills",
+      "should",
+      "bounded",
+      "idempotent",
+      "restartable",
+      "after",
+      "partial"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database"
+  },
+  {
+    "ref_id": "knowledge:database:ddl-may-lock-or-rewrite",
+    "type": "knowledge",
+    "title": "Ddl May Lock Or Rewrite",
+    "summary": "DDL statements may lock, rewrite, or validate large tables even when the SQL text is short.",
+    "domains": [
+      "sql",
+      "database",
+      "migration",
+      "transaction"
+    ],
+    "triggers": [
+      "statements",
+      "lock",
+      "rewrite",
+      "validate",
+      "large",
+      "tables",
+      "even",
+      "when"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database"
+  },
+  {
+    "ref_id": "knowledge:database:explain-needs-representative-parameters",
+    "type": "knowledge",
+    "title": "Explain Needs Representative Parameters",
+    "summary": "EXPLAIN evidence is only useful when parameters and data distribution resemble the real query workload.",
+    "domains": [
+      "sql",
+      "database",
+      "migration",
+      "transaction"
+    ],
+    "triggers": [
+      "explain",
+      "evidence",
+      "only",
+      "useful",
+      "when",
+      "parameters",
+      "data",
+      "distribution"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database"
+  },
+  {
+    "ref_id": "knowledge:database:foreign-key-actions-are-delete-contracts",
+    "type": "knowledge",
+    "title": "Foreign Key Actions Are Delete Contracts",
+    "summary": "Foreign key cascade, restrict, and set-null actions define deletion and update behavior across tables.",
+    "domains": [
+      "sql",
+      "database",
+      "migration",
+      "transaction"
+    ],
+    "triggers": [
+      "foreign",
+      "cascade",
+      "restrict",
+      "null",
+      "actions",
+      "define",
+      "deletion",
+      "update"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database"
+  },
+  {
+    "ref_id": "knowledge:database:foreign-key-integrity",
+    "type": "knowledge",
+    "title": "Foreign Key Integrity",
+    "summary": "Foreign keys protect relationships across all writers.",
+    "domains": [
+      "sql",
+      "database",
+      "migration",
+      "transaction"
+    ],
+    "triggers": [
+      "foreign",
+      "keys",
+      "protect",
+      "relationships",
+      "across",
+      "writers",
+      "application",
+      "only"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database"
+  },
+  {
+    "ref_id": "knowledge:database:indexes-cost-writes",
+    "type": "knowledge",
+    "title": "Indexes Cost Writes",
+    "summary": "Indexes improve reads at the cost of write and storage overhead.",
+    "domains": [
+      "sql",
+      "database",
+      "migration",
+      "transaction"
+    ],
+    "triggers": [
+      "indexes",
+      "improve",
+      "reads",
+      "cost",
+      "write",
+      "storage",
+      "overhead",
+      "every"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database"
+  },
+  {
+    "ref_id": "knowledge:database:isolation-level-matters",
+    "type": "knowledge",
+    "title": "Isolation Level Matters",
+    "summary": "Transaction isolation affects visibility and race behavior.",
+    "domains": [
+      "sql",
+      "database",
+      "migration",
+      "transaction"
+    ],
+    "triggers": [
+      "transaction",
+      "isolation",
+      "affects",
+      "visibility",
+      "race",
+      "behavior",
+      "read",
+      "committed"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database"
+  },
+  {
+    "ref_id": "knowledge:database:nullability-contract",
+    "type": "knowledge",
+    "title": "Nullability Contract",
+    "summary": "Column nullability is a data and application contract.",
+    "domains": [
+      "sql",
+      "database",
+      "migration",
+      "transaction"
+    ],
+    "triggers": [
+      "column",
+      "nullability",
+      "data",
+      "application",
+      "contract",
+      "changing",
+      "affects"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database"
+  },
+  {
+    "ref_id": "knowledge:database:transactions-need-error-path-tests",
+    "type": "knowledge",
+    "title": "Transactions Need Error Path Tests",
+    "summary": "Transaction correctness is proven on failure paths, not only on successful commits.",
+    "domains": [
+      "sql",
+      "database",
+      "migration",
+      "transaction"
+    ],
+    "triggers": [
+      "transaction",
+      "correctness",
+      "proven",
+      "failure",
+      "paths",
+      "only",
+      "successful",
+      "commits"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database"
+  },
+  {
+    "ref_id": "knowledge:database:unique-constraints-are-concurrency-controls",
+    "type": "knowledge",
+    "title": "Unique Constraints Are Concurrency Controls",
+    "summary": "Unique constraints protect invariants under concurrent writers better than application-only checks.",
+    "domains": [
+      "sql",
+      "database",
+      "migration",
+      "transaction"
+    ],
+    "triggers": [
+      "unique",
+      "constraints",
+      "protect",
+      "invariants",
+      "under",
+      "concurrent",
+      "writers",
+      "better"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database"
+  },
+  {
+    "ref_id": "methodology:database:constraint-rollout",
+    "type": "methodology",
+    "title": "Constraint Rollout",
+    "summary": "Validate existing data before adding stricter constraints.",
+    "domains": [
+      "sql",
+      "database",
+      "migration",
+      "transaction"
+    ],
+    "triggers": [
+      "validate",
+      "existing",
+      "data",
+      "before",
+      "adding",
+      "stricter",
+      "constraints",
+      "steps"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database"
+  },
+  {
+    "ref_id": "methodology:database:lock-and-deadlock-reproduction",
+    "type": "methodology",
+    "title": "Lock And Deadlock Reproduction",
+    "summary": "Reproduce lock waits or deadlocks with controlled concurrent transactions before changing query or transaction order.",
+    "domains": [
+      "sql",
+      "database",
+      "migration",
+      "transaction"
+    ],
+    "triggers": [
+      "reproduce",
+      "lock",
+      "waits",
+      "deadlocks",
+      "with",
+      "controlled",
+      "concurrent",
+      "transactions"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database"
+  },
+  {
+    "ref_id": "methodology:database:migration-dry-run-and-rollback",
+    "type": "methodology",
+    "title": "Migration Dry Run And Rollback",
+    "summary": "Dry-run migrations against disposable data, verify invariants, and prove rollback or roll-forward handling.",
+    "domains": [
+      "sql",
+      "database",
+      "migration",
+      "transaction"
+    ],
+    "triggers": [
+      "migrations",
+      "against",
+      "disposable",
+      "data",
+      "verify",
+      "invariants",
+      "prove",
+      "rollback"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database"
+  },
+  {
+    "ref_id": "methodology:database:query-plan-review",
+    "type": "methodology",
+    "title": "Query Plan Review",
+    "summary": "Compare query plan and cardinality before and after performance changes.",
+    "domains": [
+      "sql",
+      "database",
+      "migration",
+      "transaction"
+    ],
+    "triggers": [
+      "compare",
+      "query",
+      "plan",
+      "cardinality",
+      "before",
+      "after",
+      "performance",
+      "changes"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database"
+  },
+  {
+    "ref_id": "methodology:database:safe-migration-sequence",
+    "type": "methodology",
+    "title": "Safe Migration Sequence",
+    "summary": "Plan additive schema, compatible code, backfill, switch, and cleanup.",
+    "domains": [
+      "sql",
+      "database",
+      "migration",
+      "transaction"
+    ],
+    "triggers": [
+      "plan",
+      "additive",
+      "schema",
+      "compatible",
+      "code",
+      "backfill",
+      "switch",
+      "cleanup"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database"
+  },
+  {
+    "ref_id": "methodology:database:transaction-failure-test",
+    "type": "methodology",
+    "title": "Transaction Failure Test",
+    "summary": "Test partial failure to prove rollback behavior.",
+    "domains": [
+      "sql",
+      "database",
+      "migration",
+      "transaction"
+    ],
+    "triggers": [
+      "test",
+      "partial",
+      "failure",
+      "prove",
+      "rollback",
+      "behavior",
+      "steps",
+      "force"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database"
+  },
+  {
+    "ref_id": "skill:database:constraint-integrity-audit",
+    "type": "skill",
+    "title": "Constraint Integrity Audit",
+    "summary": "Audit proposed constraints against existing data, application error mapping, and migration rollout sequence.",
+    "domains": [
+      "sql",
+      "database",
+      "migration",
+      "transaction"
+    ],
+    "triggers": [
+      "audit",
+      "proposed",
+      "constraints",
+      "against",
+      "existing",
+      "data",
+      "application",
+      "error"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database"
+  },
+  {
+    "ref_id": "skill:database:explain-plan-comparison",
+    "type": "skill",
+    "title": "Explain Plan Comparison",
+    "summary": "Compare before/after query plans using representative predicates and report index or scan risk.",
+    "domains": [
+      "sql",
+      "database",
+      "migration",
+      "transaction"
+    ],
+    "triggers": [
+      "compare",
+      "before",
+      "after",
+      "query",
+      "plans",
+      "using",
+      "representative",
+      "predicates"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database"
+  },
+  {
+    "ref_id": "skill:database:migration-dry-run-review",
+    "type": "skill",
+    "title": "Migration Dry Run Review",
+    "summary": "Run or inspect a database migration on disposable data and report schema, data, lock, and rollback evidence.",
+    "domains": [
+      "sql",
+      "database",
+      "migration",
+      "transaction"
+    ],
+    "triggers": [
+      "inspect",
+      "database",
+      "migration",
+      "disposable",
+      "data",
+      "report",
+      "schema"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database"
+  },
+  {
+    "ref_id": "skill:database:transaction-rollback-probe",
+    "type": "skill",
+    "title": "Transaction Rollback Probe",
+    "summary": "Inject or simulate failure in a multi-write path and verify all database changes roll back correctly.",
+    "domains": [
+      "sql",
+      "database",
+      "migration",
+      "transaction"
+    ],
+    "triggers": [
+      "inject",
+      "simulate",
+      "failure",
+      "multi",
+      "write",
+      "path",
+      "verify",
+      "database"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database"
+  },
+  {
+    "ref_id": "strategy:database:constraint-owned-invariant",
+    "type": "strategy",
+    "title": "Constraint Owned Invariant",
+    "summary": "Use database constraints for invariants all writers must obey.",
+    "domains": [
+      "sql",
+      "database",
+      "migration",
+      "transaction"
+    ],
+    "triggers": [
+      "database",
+      "constraints",
+      "invariants",
+      "writers",
+      "must",
+      "obey",
+      "unique",
+      "foreign"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database"
+  },
+  {
+    "ref_id": "strategy:database:data-backfill-batches",
+    "type": "strategy",
+    "title": "Data Backfill Batches",
+    "summary": "Backfill large data sets in bounded, restartable batches.",
+    "domains": [
+      "sql",
+      "database",
+      "migration",
+      "transaction"
+    ],
+    "triggers": [
+      "backfill",
+      "large",
+      "data",
+      "sets",
+      "bounded",
+      "restartable",
+      "batches"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database"
+  },
+  {
+    "ref_id": "strategy:database:expand-contract",
+    "type": "strategy",
+    "title": "Expand Contract",
+    "summary": "Use staged expand/backfill/contract for risky schema changes.",
+    "domains": [
+      "sql",
+      "database",
+      "migration",
+      "transaction"
+    ],
+    "triggers": [
+      "staged",
+      "expand",
+      "backfill",
+      "contract",
+      "risky",
+      "schema",
+      "changes",
+      "compatible"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database"
+  },
+  {
+    "ref_id": "strategy:database:index-query-shape",
+    "type": "strategy",
+    "title": "Index Query Shape",
+    "summary": "Design indexes for actual filters, joins, sort, and cardinality.",
+    "domains": [
+      "sql",
+      "database",
+      "migration",
+      "transaction"
+    ],
+    "triggers": [
+      "design",
+      "indexes",
+      "actual",
+      "filters",
+      "joins",
+      "sort",
+      "cardinality",
+      "indexing"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database"
+  },
+  {
+    "ref_id": "strategy:database:lock-budget-awareness",
+    "type": "strategy",
+    "title": "Lock Budget Awareness",
+    "summary": "Treat lock duration and lock scope as design constraints for migrations and queries.",
+    "domains": [
+      "sql",
+      "database",
+      "migration",
+      "transaction"
+    ],
+    "triggers": [
+      "treat",
+      "lock",
+      "duration",
+      "scope",
+      "design",
+      "constraints",
+      "migrations"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database"
+  },
+  {
+    "ref_id": "strategy:database:migration-reversibility-first",
+    "type": "strategy",
+    "title": "Migration Reversibility First",
+    "summary": "Design schema and data migrations with explicit rollback or roll-forward recovery before applying destructive steps.",
+    "domains": [
+      "sql",
+      "database",
+      "migration",
+      "transaction"
+    ],
+    "triggers": [
+      "design",
+      "schema",
+      "data",
+      "migrations",
+      "with",
+      "explicit",
+      "rollback",
+      "roll"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database"
+  },
+  {
+    "ref_id": "strategy:database:plan-before-index",
+    "type": "strategy",
+    "title": "Plan Before Index",
+    "summary": "Require query-plan evidence before adding, removing, or reshaping indexes.",
+    "domains": [
+      "sql",
+      "database",
+      "migration",
+      "transaction"
+    ],
+    "triggers": [
+      "require",
+      "query",
+      "plan",
+      "evidence",
+      "before",
+      "adding",
+      "removing",
+      "reshaping"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database"
+  },
+  {
+    "ref_id": "strategy:database:transaction-boundary",
+    "type": "strategy",
+    "title": "Transaction Boundary",
+    "summary": "Keep atomic operations inside explicit transaction boundaries.",
+    "domains": [
+      "sql",
+      "database",
+      "migration",
+      "transaction"
+    ],
+    "triggers": [
+      "keep",
+      "atomic",
+      "operations",
+      "inside",
+      "explicit",
+      "transaction",
+      "boundaries",
+      "dependent"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database"
+  }
+]

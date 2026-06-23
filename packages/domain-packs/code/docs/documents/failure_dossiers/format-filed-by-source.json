@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:docs:format-filed-by-source",
+  "type": "failure_dossier",
+  "description": "Filing docs by input format instead of subject makes them hard to find.",
+  "body": "File docs by primary subject or reader task.\n\nDerived from local skill survey outputs under /Users/xiuranli/code/agent/skill, especially reviewed canonical rules, coverage reports, and trusted local skill notes. Paraphrased into domain-pack seed form.\n\nDiagnostic use only: keep this out of index.json and use it only as a blocked/do-not-use signal.",
+  "domain": "docs",
+  "scope_hint": "code.docs:failure_dossiers",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.docs:skill_survey",
+  "pack_id": "code.docs"
+}

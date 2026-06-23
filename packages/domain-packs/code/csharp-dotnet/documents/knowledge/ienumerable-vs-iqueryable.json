@@ -1,0 +1,11 @@
+{
+  "ref_id": "knowledge:csharp_dotnet:ienumerable-vs-iqueryable",
+  "type": "knowledge",
+  "description": "IEnumerable executes in memory; IQueryable may translate expression trees to a remote provider.",
+  "body": "Use when changing LINQ queries. Do not add local methods into provider queries without verifying translation. Keep provider-side filters before materialization. Verify provider tests or query logs. Risk boundary: client-side evaluation and performance regressions. Use when C# / .NET Engineering work touches repository conventions, toolchain files, changed symbols, validation commands, and runtime output. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: use the fact to constrain the change and test plan; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include package-local checks, focused tests, build output, smoke runs, and command logs. Risk boundary: escalate or stop when the task involves broad rewrites, generated-file drift, stale assumptions, and unvalidated behavior changes, missing owner evidence, or live external state.",
+  "domain": "csharp_dotnet",
+  "scope_hint": "code.csharp-dotnet:knowledges",
+  "evidence_strength": "strong",
+  "provenance_tag": "code.csharp-dotnet:seed:dotnet_cli_csharp_docs:paraphrased",
+  "pack_id": "code.csharp-dotnet"
+}

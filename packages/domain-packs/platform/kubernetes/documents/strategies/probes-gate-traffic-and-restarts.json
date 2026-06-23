@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:k8s:probes-gate-traffic-and-restarts",
+  "type": "strategy",
+  "title": "Use readiness, liveness, and startup probes for distinct jobs",
+  "description": "Readiness gates traffic, liveness restarts a hung container, startup protects slow boots; never reuse one endpoint for all three blindly.",
+  "body": "Use when a pod serves traffic or has a non-trivial boot. Do not point liveness at a deep dependency check (a slow database makes liveness kill healthy pods in a restart storm), and do not omit readiness on a service that takes time to warm. Actions: set readiness to a lightweight self-check that flips false when the pod cannot serve; set liveness to detect only a wedged process; add startupProbe with a generous failureThreshold for slow boots. Validation signals include new pods receiving traffic only after readiness passes and no restart loops from liveness during dependency blips. Risk boundary: removing readiness from a live service is a traffic-correctness change needing review.",
+  "domain": "kubernetes",
+  "scope_hint": "platform.kubernetes:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.kubernetes",
+  "pack_id": "platform.kubernetes"
+}

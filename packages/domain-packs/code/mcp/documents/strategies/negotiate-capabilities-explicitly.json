@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:mcp:negotiate-capabilities-explicitly",
+  "type": "strategy",
+  "title": "Negotiate capabilities before invoking server features",
+  "description": "Advertise and check the capabilities each side declared during initialization, and degrade gracefully instead of calling features the peer never offered.",
+  "body": "Use when a host connects to an MCP server or a server exposes optional features (tools, resources, prompts, sampling). Do not assume a peer supports a method because your version does, and avoid calling resource or prompt endpoints a server never advertised. Actions: complete the initialize handshake, read the declared capabilities object, and gate each call on the corresponding advertised capability; record which features were negotiated. Validation signals include an initialize exchange in the trace showing matching capabilities and a graceful 'method not supported' path test. Risk boundary: if a required capability is absent, surface a clear unsupported-feature error rather than crashing or silently no-oping, and escalate version mismatches.",
+  "domain": "code",
+  "scope_hint": "code.mcp:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.mcp",
+  "pack_id": "code.mcp"
+}

@@ -1,0 +1,46 @@
+{
+  "schema_version": "domain_pack.v1",
+  "id": "hardware.fpga-toolflow",
+  "name": "FPGA Toolflow & Timing Closure",
+  "version": "1.0.0",
+  "scope": "system",
+  "risk": "medium",
+  "domains": [
+    "fpga_toolflow",
+    "synthesis",
+    "place_route",
+    "timing_constraint",
+    "bitstream"
+  ],
+  "provides": [
+    "knowledge",
+    "strategy",
+    "methodology",
+    "skill",
+    "diagnosis",
+    "validation"
+  ],
+  "depends_on": [
+    "hardware.hdl"
+  ],
+  "conflicts_with": [],
+  "knowledge_store": "document_store",
+  "allowed_tools": [
+    "read",
+    "shell:test"
+  ],
+  "denied_tools": [
+    "shell:deploy-production"
+  ],
+  "data_policy": {
+    "sensitivity": [
+      "source_code"
+    ],
+    "default_admission": "summary_only",
+    "secret_policy": "deny"
+  },
+  "detector": {
+    "inline": "profile.code_domains.some(d=>['fpga_toolflow','synthesis','place_route','timing_constraint','bitstream'].includes(d)) || profile.repo_signals.some(s=>/\\b(vivado|quartus|synplify|xdc|sdc constraint|place and route|static timing analysis|\\bsta\\b|multicycle path|false path|bitstream)\\b/i.test(s)) ? 0.9 : 0",
+    "threshold": 0.5
+  }
+}

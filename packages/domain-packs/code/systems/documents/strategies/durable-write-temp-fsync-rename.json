@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:sys:durable-write-temp-fsync-rename",
+  "type": "strategy",
+  "title": "Make file writes durable with temp-fsync-rename",
+  "description": "Write to a temp file, fsync it, atomically rename over the target, then fsync the directory so a crash cannot leave torn data.",
+  "body": "Use when a file must survive a crash or power loss intact (config, database, state file). Do not write in place or assume write() reached disk, because data sits in the page cache and a crash mid-write leaves a truncated or torn file. Actions: write the full contents to a temp file in the same directory, fsync the temp file, rename it over the target (atomic within a filesystem), then fsync the containing directory so the rename itself is durable. Validation signals include a crash-consistency test (kill between steps) always leaving either the old or the complete new file, never a partial one. Risk boundary: dropping the fsync or the directory fsync on a durability-critical path is a data-loss risk requiring a crash test before acceptance.",
+  "domain": "systems",
+  "scope_hint": "code.systems:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.systems",
+  "pack_id": "code.systems"
+}

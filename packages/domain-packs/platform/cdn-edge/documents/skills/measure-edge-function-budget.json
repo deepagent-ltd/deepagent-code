@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:edge:measure-edge-function-budget",
+  "type": "skill",
+  "title": "Measure edge function runtime budget",
+  "description": "Report an edge function's CPU-ms, memory, and bundle size against the platform's limits before deploy.",
+  "body": "Use when validating an edge function is deployable. Actions: run the platform's local/preview tooling to capture CPU-ms, memory, and bundle size, and compare each against the documented cap; report headroom and any limit breach. Do not deploy a function whose budget is unknown. This skill exposes capability only and must not deploy to edge without runtime permission. Validation signals include all metrics under the platform cap with headroom. Risk boundary: a function near or over the CPU/memory limit will be killed globally under load — flag it for escalation rather than shipping.",
+  "domain": "cdn",
+  "scope_hint": "platform.cdn-edge:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.cdn-edge",
+  "pack_id": "platform.cdn-edge"
+}

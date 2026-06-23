@@ -1,0 +1,473 @@
+[
+  {
+    "ref_id": "knowledge:cloud:cloud-errors-often-policy",
+    "type": "knowledge",
+    "title": "Cloud Errors Often Policy",
+    "summary": "Many cloud failures are policy, quota, or identity issues rather than source bugs.",
+    "domains": [
+      "cloud",
+      "platform",
+      "environment"
+    ],
+    "triggers": [
+      "many",
+      "cloud",
+      "failures",
+      "policy",
+      "quota",
+      "identity",
+      "issues",
+      "rather"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.cloud"
+  },
+  {
+    "ref_id": "knowledge:cloud:cloud-logs-sensitive",
+    "type": "knowledge",
+    "title": "Cloud Logs Sensitive",
+    "summary": "Cloud logs can include request and identity data.",
+    "domains": [
+      "cloud",
+      "platform",
+      "environment"
+    ],
+    "triggers": [
+      "cloud",
+      "logs",
+      "include",
+      "request",
+      "identity",
+      "data",
+      "apply",
+      "privacy"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.cloud"
+  },
+  {
+    "ref_id": "knowledge:cloud:resource-names-are-contract",
+    "type": "knowledge",
+    "title": "Resource Names Are Contract",
+    "summary": "Cloud resource names can be referenced by scripts, DNS, IAM, and dashboards.",
+    "domains": [
+      "cloud",
+      "platform",
+      "environment"
+    ],
+    "triggers": [
+      "cloud",
+      "resource",
+      "names",
+      "referenced",
+      "scripts",
+      "dashboards",
+      "renaming",
+      "resources"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.cloud"
+  },
+  {
+    "ref_id": "methodology:cloud:cloud-failure-triage",
+    "type": "methodology",
+    "title": "Cloud Failure Triage",
+    "summary": "Classify cloud failure as auth, quota, network, service, config, or app.",
+    "domains": [
+      "cloud",
+      "platform",
+      "environment"
+    ],
+    "triggers": [
+      "classify",
+      "cloud",
+      "failure",
+      "auth",
+      "quota",
+      "network",
+      "service",
+      "config"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.cloud"
+  },
+  {
+    "ref_id": "methodology:cloud:cloud-preflight",
+    "type": "methodology",
+    "title": "Cloud Preflight",
+    "summary": "Check subscription/project, region, quota, identity, network, and secrets before deployment.",
+    "domains": [
+      "cloud",
+      "platform",
+      "environment"
+    ],
+    "triggers": [
+      "check",
+      "subscription",
+      "project",
+      "region",
+      "quota",
+      "identity",
+      "network",
+      "secrets"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.cloud"
+  },
+  {
+    "ref_id": "methodology:cloud:iac-review",
+    "type": "methodology",
+    "title": "Iac Review",
+    "summary": "Review Terraform/Bicep/CloudFormation diffs for IAM, network, secrets, cost, and destructive changes.",
+    "domains": [
+      "cloud",
+      "platform",
+      "environment"
+    ],
+    "triggers": [
+      "review",
+      "terraform",
+      "bicep",
+      "cloudformation",
+      "diffs",
+      "network",
+      "secrets",
+      "cost"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.cloud"
+  },
+  {
+    "ref_id": "skill:cloud:cloud-preflight-report",
+    "type": "skill",
+    "title": "Cloud Preflight Report",
+    "summary": "Produce a preflight report for cloud deployment readiness.",
+    "domains": [
+      "cloud",
+      "platform",
+      "environment"
+    ],
+    "triggers": [
+      "produce",
+      "preflight",
+      "report",
+      "cloud",
+      "deployment",
+      "readiness",
+      "inputs",
+      "config"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.cloud"
+  },
+  {
+    "ref_id": "strategy:cloud:cost-and-quota-awareness",
+    "type": "strategy",
+    "title": "Cost And Quota Awareness",
+    "summary": "Cloud changes need quota and cost awareness.",
+    "domains": [
+      "cloud",
+      "platform",
+      "environment"
+    ],
+    "triggers": [
+      "cloud",
+      "changes",
+      "need",
+      "quota",
+      "cost",
+      "awareness",
+      "autoscaling",
+      "logs"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.cloud"
+  },
+  {
+    "ref_id": "strategy:cloud:diagnostic-query-record",
+    "type": "strategy",
+    "title": "Diagnostic Query Record",
+    "summary": "Record cloud diagnostic queries and time windows as evidence.",
+    "domains": [
+      "cloud",
+      "platform",
+      "environment"
+    ],
+    "triggers": [
+      "record",
+      "cloud",
+      "diagnostic",
+      "queries",
+      "time",
+      "windows",
+      "evidence"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.cloud"
+  },
+  {
+    "ref_id": "strategy:cloud:iam-least-privilege",
+    "type": "strategy",
+    "title": "Iam Least Privilege",
+    "summary": "Cloud identities should receive only needed actions and scopes.",
+    "domains": [
+      "cloud",
+      "platform",
+      "environment"
+    ],
+    "triggers": [
+      "cloud",
+      "identities",
+      "should",
+      "receive",
+      "only",
+      "needed",
+      "actions",
+      "scopes"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.cloud"
+  },
+  {
+    "ref_id": "strategy:cloud:preflight-before-deploy",
+    "type": "strategy",
+    "title": "Preflight Before Deploy",
+    "summary": "Validate region, quotas, identities, and dependencies before deployment.",
+    "domains": [
+      "cloud",
+      "platform",
+      "environment"
+    ],
+    "triggers": [
+      "validate",
+      "region",
+      "quotas",
+      "identities",
+      "dependencies",
+      "before",
+      "deployment",
+      "cloud"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.cloud"
+  },
+  {
+    "ref_id": "strategy:cloud:design-for-region-az-failover",
+    "type": "strategy",
+    "title": "Design for region and availability-zone failover",
+    "summary": "Spread stateful and stateful-dependent resources across AZs (and regions where required) so a single zone or region loss degrades rather than downs the service.",
+    "domains": [
+      "platform",
+      "cloud",
+      "environment"
+    ],
+    "triggers": [
+      "availability zone",
+      "region failover",
+      "multi-az",
+      "high availability",
+      "disaster recovery",
+      "redundancy"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.cloud"
+  },
+  {
+    "ref_id": "strategy:cloud:use-secrets-manager-not-config",
+    "type": "strategy",
+    "title": "Source secrets from a managed secrets store at runtime",
+    "summary": "Fetch credentials from a secrets manager with rotation and access control instead of baking them into config files, images, or environment defaults.",
+    "domains": [
+      "platform",
+      "cloud",
+      "environment"
+    ],
+    "triggers": [
+      "secrets manager",
+      "credentials",
+      "rotation",
+      "kms",
+      "vault",
+      "runtime secret"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.cloud"
+  },
+  {
+    "ref_id": "methodology:cloud:plan-for-service-quotas",
+    "type": "methodology",
+    "title": "Plan capacity against managed-service quotas and limits",
+    "summary": "Map a workload's projected load to each managed service's account quotas and rate limits before launch so throttling and hard caps surface in planning, not in production.",
+    "domains": [
+      "platform",
+      "cloud",
+      "environment"
+    ],
+    "triggers": [
+      "service quota",
+      "rate limit",
+      "throttling",
+      "capacity planning",
+      "limit increase",
+      "scaling"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.cloud"
+  },
+  {
+    "ref_id": "knowledge:cloud:quotas-are-account-scoped-and-throttle",
+    "type": "knowledge",
+    "title": "Quotas are account-scoped and enforced by throttling",
+    "summary": "Cloud limits apply per account/region and are enforced as rate limiting or hard caps, so one noisy workload can throttle unrelated ones sharing the account.",
+    "domains": [
+      "platform",
+      "cloud",
+      "environment"
+    ],
+    "triggers": [
+      "quota",
+      "account scope",
+      "throttle",
+      "noisy neighbor",
+      "shared limit",
+      "429"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.cloud"
+  },
+  {
+    "ref_id": "skill:cloud:audit-iam-policy-scope",
+    "type": "skill",
+    "title": "Audit an IAM policy for over-broad scope",
+    "summary": "Inspect an IAM policy or role for wildcard actions, wildcard resources, and unused permissions, reporting each over-grant against least privilege.",
+    "domains": [
+      "platform",
+      "cloud",
+      "environment"
+    ],
+    "triggers": [
+      "iam audit",
+      "policy",
+      "wildcard",
+      "least privilege",
+      "permissions",
+      "role"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.cloud"
+  }
+]

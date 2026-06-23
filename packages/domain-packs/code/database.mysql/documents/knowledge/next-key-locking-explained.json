@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:mysql:next-key-locking-explained",
+  "type": "knowledge",
+  "title": "How InnoDB next-key locking works",
+  "description": "Next-key locks combine a record lock with a gap lock to stop phantom rows under REPEATABLE READ.",
+  "body": "Reference for understanding why ranged writes block inserts. A next-key lock is the union of a lock on an index record and a gap lock on the gap before it, which is how InnoDB blocks phantoms at REPEATABLE READ without full serialisation. Use when reasoning about why an insert into an apparently unrelated key value is blocked. Do not assume locking is row-only; the gap component means an INSERT whose key falls inside a locked range waits even though no existing row conflicts. Validation signals include INNODB_LOCKS showing a lock of mode X with a gap flag on the relevant index. Risk boundary: tightening or relaxing this behaviour means changing isolation level, which is a correctness decision, not a tuning knob.",
+  "domain": "mysql",
+  "scope_hint": "code.database.mysql:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.mysql",
+  "pack_id": "code.database.mysql"
+}

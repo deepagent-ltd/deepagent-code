@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:aws:s3-bucket-policy-encryption",
+  "type": "strategy",
+  "title": "Lock S3 with Block Public Access, bucket policy, and default encryption",
+  "description": "Keep account and bucket-level Block Public Access on, deny non-TLS and unencrypted PutObject in the bucket policy, and set SSE-KMS default encryption.",
+  "body": "Use when creating an S3 bucket or reviewing object exposure. Do not disable Block Public Access to share data and avoid bucket policies with Principal:* unless serving genuinely public static content. Actions: keep BlockPublicAcls/IgnorePublicAcls/BlockPublicPolicy/RestrictPublicBuckets all true, add a bucket policy that denies aws:SecureTransport false and denies PutObject without s3:x-amz-server-side-encryption, set default SSE-KMS with a scoped key, and confirm with s3api get-bucket-policy-status. Validation signals include get-bucket-policy-status IsPublic false, get-bucket-encryption returning the KMS rule, and a denied plaintext-HTTP GET. Risk boundary: any change that makes a bucket or object public is human-gated and must be logged.",
+  "domain": "aws",
+  "scope_hint": "platform.cloud.aws:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.cloud.aws",
+  "pack_id": "platform.cloud.aws"
+}

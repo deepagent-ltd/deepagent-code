@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:bazel:investigate-rebuild-scope",
+  "type": "skill",
+  "title": "Investigate why a change rebuilds so much",
+  "description": "Use bazel query and the execution log to find the dependency edge that makes a small edit trigger a large rebuild.",
+  "body": "Use when a localized change causes an unexpectedly large rebuild. Do not accept the cost without tracing it. Actions: identify the changed target; run bazel query rdeps to list reverse dependents; use somepath to find the edge linking them; inspect the execution log to confirm which actions re-ran. Validation signals include locating the over-broad dependency and a smaller rebuild after splitting it. Risk boundary: refactoring the graph can break distant consumers, so confirm reverse dependents with rdeps before changing edges.",
+  "domain": "bazel",
+  "scope_hint": "code.build.bazel:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.build.bazel",
+  "pack_id": "code.build.bazel"
+}

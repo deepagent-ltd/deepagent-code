@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:ecom:trace-order-transitions",
+  "type": "skill",
+  "title": "Trace order state transitions",
+  "description": "Replay an order's recorded transitions to find illegal jumps or a stuck state.",
+  "body": "Use when an order is in an unexpected or stuck state. Actions: read the order's transition history, replay it against the allowed state graph, and report any illegal edge or a state that stalled past its threshold (for example paid but never fulfilled). Do not force a status change without first tracing how the order reached its current state. This skill is read-only and must not mutate order state without permission. Validation signals include a transition timeline with the offending or stalled step identified. Risk boundary: a money-affecting recovery (refund, re-charge) must defer to business.finance under a human gate.",
+  "domain": "ecommerce",
+  "scope_hint": "business.ecommerce:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:business.ecommerce",
+  "pack_id": "business.ecommerce"
+}

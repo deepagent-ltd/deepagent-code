@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:electron:design-the-ipc-surface",
+  "type": "methodology",
+  "title": "Design the IPC surface",
+  "description": "Define a minimal, typed set of IPC channels and a preload bridge before wiring features, instead of ad-hoc channels.",
+  "body": "Steps: 1. List the privileged operations the renderer genuinely needs from main (file save, settings, OS dialogs). 2. Define one IPC channel per operation with a typed request/response contract. 3. In preload, expose a named function per operation via contextBridge that invokes its fixed channel. 4. In main, register one validating handler per channel. 5. Keep the renderer free of any raw ipcRenderer/require access. Rollback point: before exposing a new capability (each one widens the attack surface). Validation: the renderer can perform exactly the intended operations and nothing more, and every channel has a validating handler; a generic pass-through 'invoke(channel,args)' bridge fails this design.",
+  "domain": "electron",
+  "scope_hint": "code.desktop.electron:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.desktop.electron",
+  "pack_id": "code.desktop.electron"
+}

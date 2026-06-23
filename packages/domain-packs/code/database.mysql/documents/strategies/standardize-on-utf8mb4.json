@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:mysql:standardize-on-utf8mb4",
+  "type": "strategy",
+  "title": "Standardize on utf8mb4 for every text column",
+  "description": "The legacy utf8 alias stores only three bytes and silently truncates four-byte characters such as emoji.",
+  "body": "Use when defining text columns or auditing a schema that predates MySQL 8. Do not use the historical `utf8` charset (an alias for utf8mb3); it cannot store four-byte code points, so emoji and many CJK extensions are truncated or rejected. Actions: set CHARACTER SET utf8mb4 and collation utf8mb4_0900_ai_ci (or utf8mb4_unicode_ci on MariaDB) at column, table, and connection level, and verify with SHOW CREATE TABLE plus a round-trip insert of a four-byte sample. Validation signals include the sample emoji surviving a write-then-read and SHOW VARIABLES confirming character_set_client. Risk boundary: converting a large column to utf8mb4 can exceed index key-length limits (767 vs 3072 bytes), so check index prefixes before altering.",
+  "domain": "mysql",
+  "scope_hint": "code.database.mysql:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.mysql",
+  "pack_id": "code.database.mysql"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:k8s:rollback-to-known-revision",
+  "type": "strategy",
+  "title": "Keep rollbacks fast and revision-pinned",
+  "description": "Preserve revisionHistoryLimit and use kubectl rollout undo / helm rollback to a known-good revision instead of hand-editing live objects.",
+  "body": "Use when a rollout regresses (crashloop, error spike, failed probes) and you must restore service. Do not hand-patch the live Deployment to 'fix forward' under pressure or delete the ReplicaSet history. Actions: identify the last healthy revision with kubectl rollout history; run kubectl rollout undo --to-revision or helm rollback <release> <revision>; verify the restored pods pass probes. Validation signals include rollout status returning to available on the prior revision and the regression signal clearing. Risk boundary: production rollback is a change-controlled action; record the revision and reason and escalate if state (PVCs, migrations) cannot be reverted with the rollout.",
+  "domain": "kubernetes",
+  "scope_hint": "platform.kubernetes:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.kubernetes",
+  "pack_id": "platform.kubernetes"
+}

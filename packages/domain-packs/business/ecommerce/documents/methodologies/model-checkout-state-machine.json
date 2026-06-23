@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:ecom:model-checkout-state-machine",
+  "type": "methodology",
+  "title": "Model the checkout state machine",
+  "description": "Enumerate cart and checkout states and the guarded transitions before writing handler code.",
+  "body": "Steps: 1. List every cart/checkout state from empty through cart, reserved, paying, paid, and failed. 2. Define which transitions are legal and what triggers each. 3. Identify the side effects (reserve stock, charge, release) bound to each transition. 4. Add guards so illegal jumps are rejected. 5. Persist the current state and reconstruct it on resume. Rollback point: keep the prior state until the transition's side effects confirm. Validation: a replay of events lands the order in the same state with consistent stock and payment.",
+  "domain": "ecommerce",
+  "scope_hint": "business.ecommerce:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:business.ecommerce",
+  "pack_id": "business.ecommerce"
+}

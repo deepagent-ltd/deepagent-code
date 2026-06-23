@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:php:laravel-vs-symfony-conventions",
+  "type": "knowledge",
+  "title": "Laravel vs Symfony conventions",
+  "description": "Laravel favors convention, facades, and Eloquent active-record; Symfony favors explicit configuration, services, and Doctrine data-mapper.",
+  "body": "Use when working across or choosing between the two frameworks. Laravel optimizes for convention over configuration: facades give static-looking access to container services, Eloquent is an active-record ORM where models carry persistence, and artisan scaffolds code. Symfony favors explicit wiring: services are configured and autowired via the container, Doctrine is a data-mapper ORM separating entities from repositories, and the console mirrors artisan. Do not carry active-record assumptions into Doctrine (entities are plain objects persisted by an EntityManager) or treat a facade as a real static method. Actions: follow each framework's seam for DI, ORM, and CLI. Validation signals include a test resolving services through the framework's container. Risk boundary: mixing the paradigms (persistence logic in Doctrine entities, manual instantiation of Laravel services) yields untestable, non-idiomatic code.",
+  "domain": "php",
+  "scope_hint": "code.php:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.php",
+  "pack_id": "code.php"
+}

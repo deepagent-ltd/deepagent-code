@@ -1,0 +1,156 @@
+---
+title: دعم ACP
+description: استخدم DeepAgent Code في أي محرر متوافق مع ACP.
+---
+
+يدعم DeepAgent Code بروتوكول [Agent Client Protocol](https://agentclientprotocol.com) أو (ACP)، مما يتيح لك استخدامه مباشرة في المحررات وبيئات التطوير المتكاملة (IDEs) المتوافقة.
+
+:::tip
+للاطلاع على قائمة بالمحررات والأدوات التي تدعم ACP، راجع [ACP progress report](https://zed.dev/blog/acp-progress-report#available-now).
+:::
+
+ACP بروتوكول مفتوح يوحّد آلية التواصل بين محررات الشيفرة ووكلاء البرمجة بالذكاء الاصطناعي.
+
+---
+
+## الإعداد
+
+لاستخدام DeepAgent Code عبر ACP، اضبط محررك ليشغّل الأمر `deepagent-code acp`.
+
+يشغّل هذا الأمر DeepAgent Code كعملية فرعية متوافقة مع ACP تتواصل مع محررك عبر JSON-RPC باستخدام stdio.
+
+فيما يلي أمثلة لمحررات شائعة تدعم ACP.
+
+---
+
+### Zed
+
+أضف إلى إعدادات [Zed](https://zed.dev) (`~/.config/zed/settings.json`):
+
+```json title="~/.config/zed/settings.json"
+{
+  "agent_servers": {
+    "DeepAgent Code": {
+      "command": "deepagent-code",
+      "args": ["acp"]
+    }
+  }
+}
+```
+
+لفتحه، استخدم الإجراء `agent: new thread` في **Command Palette**.
+
+يمكنك أيضا ربط اختصار لوحة مفاتيح عبر تعديل `keymap.json`:
+
+```json title="keymap.json"
+[
+  {
+    "bindings": {
+      "cmd-alt-o": [
+        "agent::NewExternalAgentThread",
+        {
+          "agent": {
+            "custom": {
+              "name": "DeepAgent Code",
+              "command": {
+                "command": "deepagent-code",
+                "args": ["acp"]
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+]
+```
+
+---
+
+### JetBrains IDEs
+
+أضف إلى ملف acp.json الخاص بـ [JetBrains IDE](https://www.jetbrains.com/) وفقا لـ [documentation](https://www.jetbrains.com/help/ai-assistant/acp.html):
+
+```json title="acp.json"
+{
+  "agent_servers": {
+    "DeepAgent Code": {
+      "command": "/absolute/path/bin/deepagent-code",
+      "args": ["acp"]
+    }
+  }
+}
+```
+
+لفتحه، اختر الوكيل الجديد 'DeepAgent Code' من محدد الوكلاء في AI Chat.
+
+---
+
+### Avante.nvim
+
+أضف إلى إعدادات [Avante.nvim](https://github.com/yetone/avante.nvim):
+
+```lua
+{
+  acp_providers = {
+    ["deepagent-code"] = {
+      command = "deepagent-code",
+      args = { "acp" }
+    }
+  }
+}
+```
+
+إذا احتجت إلى تمرير متغيرات البيئة:
+
+```lua {6-8}
+{
+  acp_providers = {
+    ["deepagent-code"] = {
+      command = "deepagent-code",
+      args = { "acp" },
+      env = {
+        DEEPAGENT_CODE_API_KEY = os.getenv("DEEPAGENT_CODE_API_KEY")
+      }
+    }
+  }
+}
+```
+
+---
+
+### CodeCompanion.nvim
+
+لاستخدام DeepAgent Code كوكيل ACP في [CodeCompanion.nvim](https://github.com/olimorris/codecompanion.nvim)، أضف التالي إلى إعدادات Neovim:
+
+```lua
+require("codecompanion").setup({
+  interactions = {
+    chat = {
+      adapter = {
+        name = "deepagent-code",
+        model = "claude-sonnet-4",
+      },
+    },
+  },
+})
+```
+
+يضبط هذا الإعداد CodeCompanion لاستخدام DeepAgent Code كوكيل ACP للدردشة.
+
+إذا احتجت إلى تمرير متغيرات البيئة (مثل `DEEPAGENT_CODE_API_KEY`)، فارجع إلى [Configuring Adapters: Environment Variables](https://codecompanion.olimorris.dev/getting-started#setting-an-api-key) ضمن توثيق CodeCompanion.nvim للاطلاع على التفاصيل كاملة.
+
+## الدعم
+
+يعمل DeepAgent Code عبر ACP بالطريقة نفسها التي يعمل بها في terminal. جميع الميزات مدعومة:
+
+:::note
+بعض أوامر الشرطة المائلة المضمنة مثل `/undo` و`/redo` غير مدعومة حاليا.
+:::
+
+- الأدوات المضمنة (عمليات الملفات، أوامر terminal، إلخ.)
+- الأدوات المخصصة وأوامر الشرطة المائلة
+- خوادم MCP المضبوطة في إعدادات DeepAgent Code
+- قواعد خاصة بالمشروع من `AGENTS.md`
+- المنسقات (formatters) والمدققات (linters) المخصصة
+- نظام الوكلاء والأذونات

@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure_dossier:hwprot:can-bit-timing-busoff",
+  "type": "failure_dossier",
+  "description": "A CAN node repeatedly errors and eventually goes bus-off because its bit timing or sample point disagrees with the rest of the bus.",
+  "body": "Failure mode: one node's bit-timing segments place its sample point differently from peers, so it misreads bits near edges and floods the bus with error frames until the controller disables itself. Detection signals: a rising transmit-error counter, error frames clustered around bit boundaries, and a node entering bus-off after a burst. Do not keep retransmitting while the error counter climbs. Safer fallback: recompute the bit-timing segments for the shared bitrate, align the sample point across all nodes, and reset the controller out of bus-off.",
+  "domain": "hw_protocols",
+  "scope_hint": "hardware.protocols:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.protocols:human_authored",
+  "pack_id": "hardware.protocols"
+}

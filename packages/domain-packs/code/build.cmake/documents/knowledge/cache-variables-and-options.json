@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:cmake:cache-variables-and-options",
+  "type": "knowledge",
+  "title": "Cache variables and the option command",
+  "description": "Cache variables persist across configures and are set with -D or option(), while normal variables live only for the current configure run.",
+  "body": "Use when deciding how a build setting should be exposed and remembered. Do not use a normal set() for something users must override from the command line. Cache variables are stored in CMakeCache.txt and survive reconfigure, settable via -D or the option() command for booleans; normal variables reset each run. Inspect cached values with cmake -LAH. Validation signals include a user toggling a feature with -DOPTION=ON and the choice persisting. Risk boundary: a stale cached value can override intent silently, so document options and clear the cache when fundamentals change.",
+  "domain": "cmake",
+  "scope_hint": "code.build.cmake:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.build.cmake",
+  "pack_id": "code.build.cmake"
+}

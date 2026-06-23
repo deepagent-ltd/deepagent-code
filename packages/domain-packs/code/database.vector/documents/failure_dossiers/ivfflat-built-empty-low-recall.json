@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure_dossier:vdb:ivfflat-built-empty-low-recall",
+  "type": "failure_dossier",
+  "description": "An IVFFlat index built before data load has untrained lists and collapses recall.",
+  "body": "Failure mode: an IVFFlat index created on an empty or tiny table seeds its lists from almost no data, so after bulk loading the clusters are unbalanced and many queries miss their true neighbours. Detection signals: recall@k is poor right after a bulk load, list occupancy is highly skewed, and the problem disappears when the index is rebuilt on the full data. Do not build IVFFlat before loading the bulk of the data. Safer fallback: load data first, build IVFFlat with a list count near the square root of the row count, and re-create the index after any large data change while validating recall against ground truth.",
+  "domain": "vector_db",
+  "scope_hint": "code.database.vector:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.vector:human_authored",
+  "pack_id": "code.database.vector"
+}

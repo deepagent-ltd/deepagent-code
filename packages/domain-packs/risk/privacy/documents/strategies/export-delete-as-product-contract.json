@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:privacy:export-delete-as-product-contract",
+  "type": "strategy",
+  "title": "Treat export and delete as product contracts",
+  "description": "Data export and deletion behavior must include primary, derived, cached, indexed, and external-copy boundaries.",
+  "body": "Use when changing schemas, storage, search indexes, analytics, backups, support tools, or user account lifecycle. Do not promise deletion of systems outside project control without evidence. Actions: update export/delete paths alongside storage changes, include derived records and indexes, and note external processor gaps. Validation signals include export fixtures, deletion propagation tests, and no orphaned personal records in derived stores. Risk boundary: inability to honor export/delete obligations must be escalated. Use when Privacy Risk Controls work touches personal-data classes, sinks, retention, consent, logs, prompts, and exports. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: choose the smallest direction that preserves the domain contract; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include data inventory, redaction tests, retention checks, export/delete tests, and approval evidence. Risk boundary: escalate or stop when the task involves PII disclosure, consent bypass, retention drift, and unapproved processor expansion, missing owner evidence, or live external state.",
+  "domain": "privacy",
+  "scope_hint": "risk.privacy:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.privacy",
+  "pack_id": "risk.privacy"
+}

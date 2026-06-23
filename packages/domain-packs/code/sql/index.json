@@ -1,0 +1,460 @@
+[
+  {
+    "ref_id": "knowledge:sql:generated-code-drift",
+    "type": "knowledge",
+    "title": "Generated Code Drift",
+    "summary": "In SQL, never hand-edit ORM-generated DDL and migration files emitted by the schema tool; change the source and rerun the generator.",
+    "domains": [
+      "sql",
+      "database"
+    ],
+    "triggers": [
+      "generated",
+      "code",
+      "must",
+      "tied",
+      "regeneration",
+      "commands",
+      "hand",
+      "edit"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.sql"
+  },
+  {
+    "ref_id": "knowledge:sql:query-plan-matters",
+    "type": "knowledge",
+    "title": "Query Plan Matters",
+    "summary": "SQL correctness and performance depend on schema, data distribution, and plan.",
+    "domains": [
+      "sql",
+      "database"
+    ],
+    "triggers": [
+      "correctness",
+      "performance",
+      "depend",
+      "schema",
+      "data",
+      "distribution",
+      "plan",
+      "validate"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.sql"
+  },
+  {
+    "ref_id": "knowledge:sql:runtime-errors-differ",
+    "type": "knowledge",
+    "title": "Runtime Errors Differ",
+    "summary": "In SQL, a clean build does not prevent three-valued NULL logic, silent JOIN fan-out, and implicit type coercion surprises.",
+    "domains": [
+      "sql",
+      "database"
+    ],
+    "triggers": [
+      "compile",
+      "success",
+      "does",
+      "guarantee",
+      "runtime",
+      "behavior",
+      "representative",
+      "tests"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.sql"
+  },
+  {
+    "ref_id": "knowledge:sql:toolchain-is-contract",
+    "type": "knowledge",
+    "title": "Toolchain Is Contract",
+    "summary": "In SQL, the database engine and version, and its SQL dialect are part of the contract and changing them changes behavior.",
+    "domains": [
+      "sql",
+      "database"
+    ],
+    "triggers": [
+      "compiler",
+      "formatter",
+      "package",
+      "manager",
+      "test",
+      "runner",
+      "part",
+      "language"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.sql"
+  },
+  {
+    "ref_id": "methodology:sql:dependency-update-check",
+    "type": "methodology",
+    "title": "Dependency Update Check",
+    "summary": "In SQL, when object dependencies (views, foreign keys, triggers) and migration ordering change, verify the lockfile, generated artifacts, and a runtime smoke.",
+    "domains": [
+      "sql",
+      "database"
+    ],
+    "triggers": [
+      "when",
+      "dependencies",
+      "change",
+      "inspect",
+      "lockfile",
+      "generated",
+      "artifacts",
+      "runtime"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.sql"
+  },
+  {
+    "ref_id": "methodology:sql:interop-boundary-check",
+    "type": "methodology",
+    "title": "Interop Boundary Check",
+    "summary": "In SQL, validate the parameterized inputs, transaction isolation levels, and NULL handling at JOINs where external data crosses in.",
+    "domains": [
+      "sql",
+      "database"
+    ],
+    "triggers": [
+      "validate",
+      "module",
+      "shell",
+      "serialization",
+      "boundaries",
+      "steps",
+      "identify",
+      "boundary"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.sql"
+  },
+  {
+    "ref_id": "methodology:sql:language-gate-loop",
+    "type": "methodology",
+    "title": "Language Gate Loop",
+    "summary": "In SQL, run the package-local gate, fix the first owned diagnostic, rerun, then broaden.",
+    "domains": [
+      "sql",
+      "database"
+    ],
+    "triggers": [
+      "package",
+      "local",
+      "gate",
+      "first",
+      "owned",
+      "diagnostic",
+      "rerun",
+      "then"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.sql"
+  },
+  {
+    "ref_id": "skill:sql:run-language-gate",
+    "type": "skill",
+    "title": "Run Language Gate",
+    "summary": "In SQL, run the package-local validation gate (the migration applied against a scratch database (the same engine/version as prod)) and summarize the diagnostics.",
+    "domains": [
+      "sql",
+      "database"
+    ],
+    "triggers": [
+      "package",
+      "local",
+      "language",
+      "validation",
+      "gate",
+      "summarize",
+      "diagnostics",
+      "inputs"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.sql"
+  },
+  {
+    "ref_id": "strategy:sql:boundary-validation",
+    "type": "strategy",
+    "title": "Boundary Validation",
+    "summary": "In SQL, validate external input at the parameterized inputs, transaction isolation levels, and NULL handling at JOINs before internal use.",
+    "domains": [
+      "sql",
+      "database"
+    ],
+    "triggers": [
+      "validate",
+      "external",
+      "input",
+      "language",
+      "runtime",
+      "boundaries",
+      "parsing",
+      "serialization"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.sql"
+  },
+  {
+    "ref_id": "strategy:sql:diagnostic-first",
+    "type": "strategy",
+    "title": "Diagnostic First",
+    "summary": "In SQL, read the engine's error code and the offending clause it points to before making speculative edits.",
+    "domains": [
+      "sql",
+      "database"
+    ],
+    "triggers": [
+      "compiler",
+      "runtime",
+      "diagnostics",
+      "before",
+      "speculative",
+      "edits",
+      "read",
+      "first"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.sql"
+  },
+  {
+    "ref_id": "strategy:sql:idiom-preserving-change",
+    "type": "strategy",
+    "title": "Idiom Preserving Change",
+    "summary": "In SQL, prefer established idioms (set-based operations, explicit JOIN types, and dialect-specific functions) over generic rewrites.",
+    "domains": [
+      "sql",
+      "database"
+    ],
+    "triggers": [
+      "prefer",
+      "local",
+      "idioms",
+      "standard",
+      "tooling",
+      "over",
+      "generic",
+      "rewrites"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.sql"
+  },
+  {
+    "ref_id": "strategy:sql:package-local-command",
+    "type": "strategy",
+    "title": "Package Local Command",
+    "summary": "In SQL, use the package-local commands (the migration applied against a scratch database (the same engine/version as prod)) rather than a root or generic command.",
+    "domains": [
+      "sql",
+      "database"
+    ],
+    "triggers": [
+      "package",
+      "local",
+      "build",
+      "test",
+      "typecheck",
+      "commands",
+      "this",
+      "language"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.sql"
+  },
+  {
+    "ref_id": "strategy:sql:use-window-functions-over-self-joins",
+    "type": "strategy",
+    "title": "Use window functions instead of self-joins for ranking and running totals",
+    "summary": "Compute rankings, running totals, and per-group comparisons with OVER(PARTITION BY ... ORDER BY ...) rather than correlated subqueries or self-joins.",
+    "domains": [
+      "sql",
+      "database"
+    ],
+    "triggers": [
+      "window function",
+      "over",
+      "partition by",
+      "row_number",
+      "running total",
+      "rank"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.sql"
+  },
+  {
+    "ref_id": "strategy:sql:idempotent-upsert-pattern",
+    "type": "strategy",
+    "title": "Make writes idempotent with the dialect's upsert",
+    "summary": "Use INSERT ... ON CONFLICT / MERGE with a unique constraint so retries and concurrent inserts converge instead of duplicating or racing.",
+    "domains": [
+      "sql",
+      "database"
+    ],
+    "triggers": [
+      "upsert",
+      "on conflict",
+      "merge",
+      "insert",
+      "unique constraint",
+      "idempotent"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.sql"
+  },
+  {
+    "ref_id": "methodology:sql:read-the-query-plan",
+    "type": "methodology",
+    "title": "Diagnose a slow query by reading its execution plan",
+    "summary": "Capture EXPLAIN ANALYZE, find the dominant operator and the estimate-vs-actual row gap, and target the real bottleneck before changing SQL.",
+    "domains": [
+      "sql",
+      "database"
+    ],
+    "triggers": [
+      "explain",
+      "explain analyze",
+      "query plan",
+      "seq scan",
+      "estimate",
+      "index"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.sql"
+  },
+  {
+    "ref_id": "skill:sql:capture-and-summarize-explain",
+    "type": "skill",
+    "title": "Capture EXPLAIN output and summarize the bottleneck",
+    "summary": "Run EXPLAIN/EXPLAIN ANALYZE on a target query and report the costliest node, row mis-estimates, and index usage.",
+    "domains": [
+      "sql",
+      "database"
+    ],
+    "triggers": [
+      "explain",
+      "analyze",
+      "plan",
+      "cost",
+      "rows",
+      "buffers"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.sql"
+  }
+]

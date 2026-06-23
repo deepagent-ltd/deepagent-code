@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:conc:prefer-message-passing-over-shared-memory",
+  "type": "strategy",
+  "title": "Prefer message passing to shared mutable memory",
+  "description": "Move state into a single owning task that receives messages, so concurrency reduces to a serialized mailbox.",
+  "body": "Use when shared-memory locking is becoming a tangle of locks and invariants. Do not share a struct across tasks with fine-grained locks when a single owner could serialize access. Actions: give the state to one task, have other tasks send requests over a channel/queue, and let the owner process them one at a time; return results via reply channels. Validation signals include no lock around the state, a race detector clean run, and ordering guarantees coming from the single consumer. Risk boundary: unbounded queues can hide backpressure and exhaust memory; bound the channel and decide a drop/block policy, escalating if the policy changes semantics.",
+  "domain": "concurrency",
+  "scope_hint": "code.concurrency:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.concurrency",
+  "pack_id": "code.concurrency"
+}

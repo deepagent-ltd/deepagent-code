@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:svc:audit-job-for-retry-safety",
+  "type": "skill",
+  "title": "Audit a background job for retry safety",
+  "description": "Read a job/consumer and report whether redelivery is safe, retries back off, and failures are dead-lettered.",
+  "body": "Use when asked whether a worker is reliable. Actions: inspect the handler to verify it is idempotent on the message/job id; verify ack happens only after the effect commits; check that retries use capped backoff with jitter and that a max-attempt path routes to a DLQ; verify concurrency is bounded. Do not assume the broker dedups for you. Report and record the exact handler location and classify gaps as non-idempotent, ack-before-commit, no-backoff, or no-DLQ. This skill is read-only and must not run against production queues. Validation signals include a confirmed redelivery-single-effect path. Risk boundary: a non-idempotent retried side effect on a sensitive path is a blocking finding to escalate.",
+  "domain": "backend_service",
+  "scope_hint": "code.backend.service:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.service",
+  "pack_id": "code.backend.service"
+}

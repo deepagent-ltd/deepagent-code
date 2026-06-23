@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:apidesign:design-pagination-contract",
+  "type": "strategy",
+  "title": "Design an explicit pagination contract",
+  "description": "Define how clients page through collections from the start, choosing cursor or offset semantics and a stable response envelope.",
+  "body": "Use when an endpoint returns a collection that can grow. Do not return an unbounded list with no paging contract. Actions: choose cursor-based paging for large or changing data and offset only for small stable sets; define the page size, the cursor or page parameters, and where the next link lives; keep ordering stable. Validation signals include a client iterating all pages without missing or duplicating items as data changes. Risk boundary: an unbounded list endpoint becomes a performance and reliability hazard at scale, so commit to a paging contract before launch.",
+  "domain": "api_design",
+  "scope_hint": "code.api-design:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.api-design",
+  "pack_id": "code.api-design"
+}

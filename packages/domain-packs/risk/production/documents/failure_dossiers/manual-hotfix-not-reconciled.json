@@ -1,0 +1,12 @@
+{
+  "ref_id": "failure_dossier:production:manual-hotfix-not-reconciled",
+  "type": "failure_dossier",
+  "title": "Manual hotfix not reconciled",
+  "description": "A one-off production edit fixes symptoms but is not captured in source, runbook, or rollback plan.",
+  "body": "Failure mode: console edits, database tweaks, config changes, or scripts create drift that future deployments may overwrite or amplify. Detection signals include manual command suggestions, no code diff, no audit trail, and no follow-up issue. Remediation is document exact action, reconcile into source-controlled config, and plan validation. Human approval is required for any manual live change. Use when a proposed approach skips repository conventions, toolchain files, changed symbols, validation commands, and runtime output or claims success without domain evidence. Do not use this dossier as a positive implementation strategy; it is a do-not-use signal. Actions: block the shortcut, name the missing evidence, and switch to a safer methodology or ask for human approval. Validation signals include absence or contradiction in package-local checks, focused tests, build output, smoke runs, and command logs. Risk boundary: treat repeated recurrence as a blocker when it can cause broad rewrites, generated-file drift, stale assumptions, and unvalidated behavior changes.",
+  "domain": "production",
+  "scope_hint": "risk.production:failure_dossiers",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:risk.production",
+  "pack_id": "risk.production"
+}

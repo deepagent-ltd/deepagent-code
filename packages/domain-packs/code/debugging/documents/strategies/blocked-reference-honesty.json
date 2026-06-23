@@ -1,0 +1,11 @@
+{
+  "ref_id": "strategy:debugging:blocked-reference-honesty",
+  "type": "strategy",
+  "description": "When diagnosis cannot proceed, name the missing evidence, blocked reference, and next unblock action.",
+  "body": "Apply when a suspected root cause depends on unavailable logs, missing credentials, external services, production-only state, absent repro steps, or erased artifacts. The action is to stop claiming certainty and record the blocked reference: which evidence is missing, why it matters, and what would unblock the diagnosis. Do not convert a blocker into a speculative fix or a broad rewrite. Verification signals include a clear artifact name, command failure, permission denial, unavailable trace ID, or explicit non-reproducible condition. Risk boundary: user-facing reports should separate confirmed facts, hypotheses, and blocked refs so follow-up work can continue safely. Use when Code Debugging work touches reproduction steps, stack traces, logs, state transitions, and controlled hypotheses. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: choose the smallest direction that preserves the domain contract; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include minimal repro, before/after trace, regression test, and command output. Risk boundary: escalate or stop when the task involves blind retries, wrapper fixes, broad rewrites, and unproven root cause, missing owner evidence, or live external state.",
+  "domain": "debugging",
+  "scope_hint": "code.debugging:strategies",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.debugging:human_authored",
+  "pack_id": "code.debugging"
+}

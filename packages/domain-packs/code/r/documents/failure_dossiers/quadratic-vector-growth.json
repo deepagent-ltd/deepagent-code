@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:rlang:quadratic-vector-growth",
+  "type": "failure_dossier",
+  "description": "Growing a vector with c() or append inside a loop copies the whole structure each step, turning work quadratic.",
+  "body": "Failure mode: a loop accumulates results by reassigning x <- c(x, new) each iteration, copying the entire vector every step so runtime grows quadratically with n. Detection signals: runtime that explodes as input size grows; high memory churn; a loop that is fine on small data but hangs on large. Do not grow vectors incrementally in a loop. Safer fallback: preallocate the result to its final length and assign by index, or vectorize the computation entirely.",
+  "domain": "r_lang",
+  "scope_hint": "code.r:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.r:human_authored",
+  "pack_id": "code.r"
+}

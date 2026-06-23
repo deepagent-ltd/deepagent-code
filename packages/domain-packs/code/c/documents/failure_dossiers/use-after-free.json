@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:c:use-after-free",
+  "type": "failure_dossier",
+  "description": "Dereferencing or freeing a pointer after the memory it points to has already been freed.",
+  "body": "Failure mode: code keeps using a pointer after free() (or frees it twice), reading or writing reclaimed memory that may have been reallocated, causing corruption or crashes that depend on allocator state. Detection signals: ASan reports heap-use-after-free with the alloc/free stacks; intermittent crashes far from the free; Valgrind 'Invalid read/write'. Do not retain a pointer past the free that owns it. Safer fallback: set the pointer to NULL immediately after free, establish single clear ownership, and re-run under ASan/Valgrind to confirm the use-after-free is gone.",
+  "domain": "c",
+  "scope_hint": "code.c:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.c:human_authored",
+  "pack_id": "code.c"
+}

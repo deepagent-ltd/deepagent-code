@@ -1,0 +1,70 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "code.build.bazel",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "bazel",
+      "build_graph",
+      "hermetic_build",
+      "remote_cache"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "L3 smoke for code.build.bazel: BUILD files and Starlark, hermetic builds, deps and visibility, remote cache and execution, bazel query, bzlmod"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "style a responsive navbar with CSS"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "retrieval_query": "bazel BUILD starlark hermetic remote cache deps visibility bazel query bzlmod incremental action graph",
+  "expected_pack_id": "code.build.bazel",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "code.build.bazel L3 validation smoke",
+    "signals": [
+      "a second build with no source changes is fully served from cache with no actions executed",
+      "bazel query confirms the actual dependency edges match the intended graph",
+      "the same target built on two machines produces byte-identical outputs",
+      "a remote-cache hit rate stays high across clean checkouts because actions are hermetic"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "code.build.bazel diagnosis smoke",
+    "signals": [
+      "a build passes locally but fails remotely because it relied on an undeclared system tool",
+      "an output changes between builds despite identical inputs, indicating non-determinism",
+      "a target depends on another it must not reach, revealed by a visibility violation",
+      "the cache never hits because an action embeds an absolute path or timestamp",
+      "a tiny source edit rebuilds far more than expected due to an over-broad dependency"
+    ]
+  },
+  "source_refs": [
+    "bazel-docs:build-ref-and-starlark-rules",
+    "bazel-docs:remote-caching-and-hermeticity"
+  ]
+}

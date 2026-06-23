@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:hwprot:usb-descriptor-validation",
+  "type": "methodology",
+  "title": "Validate USB descriptors against the spec",
+  "description": "Check device, configuration, interface, and endpoint descriptors for consistent lengths and totals before enumeration testing.",
+  "body": "Use when authoring or auditing USB device firmware. Do not rely on a single host accepting the device, since hosts vary in strictness. Actions: parse each descriptor, verify length fields and the configuration total length, and confirm endpoint addresses and packet sizes are consistent. Validation signals include a descriptor set that passes a compliance tool and enumeration succeeding across multiple host stacks. Risk boundary: an inconsistent total length can crash a strict host driver, so deny release until a compliance check passes.",
+  "domain": "hw_protocols",
+  "scope_hint": "hardware.protocols:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.protocols",
+  "pack_id": "hardware.protocols"
+}

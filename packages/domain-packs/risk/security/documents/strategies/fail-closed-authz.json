@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:security:fail-closed-authz",
+  "type": "strategy",
+  "title": "Fail closed authorization",
+  "description": "Authorization decisions should deny when identity, ownership, tenant, scope, or policy evidence is missing.",
+  "body": "Use when changing route guards, object access, feature entitlements, admin checks, service-to-service permissions, or multi-tenant data reads. Do not use to invent a business permission model; defer to the project policy when explicit rules exist. Actions: make the allow path explicit, keep missing context as deny, and add tests for unauthenticated, wrong-role, wrong-owner, and wrong-tenant cases. Validation signals include negative security tests, rejected requests with stable error shape, and no sensitive object in the response or log. Risk boundary: any fallback from deny to allow, break-glass bypass, or policy exception needs human approval and an audit trail.",
+  "domain": "authz",
+  "scope_hint": "risk.security:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.security",
+  "pack_id": "risk.security"
+}

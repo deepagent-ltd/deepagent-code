@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:fpgatf:audit-constraint-coverage",
+  "type": "methodology",
+  "title": "Audit constraint coverage before sign-off",
+  "description": "Confirm every clock, I/O, and exception is intentional and complete using the tool's coverage reports.",
+  "body": "Use when finalizing constraints ahead of a release build. Do not trust a passing STA alone, since a missing constraint can make timing look met while a path goes untimed. Actions: run the constraint coverage report, verify every clock and I/O is constrained, and review each exception for justification. Validation signals include a coverage report with no unconstrained objects and every exception traced to a documented reason. Risk boundary: an untimed path that passes by omission fails in the field, so deny sign-off until coverage is complete.",
+  "domain": "fpga_toolflow",
+  "scope_hint": "hardware.fpga-toolflow:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.fpga-toolflow",
+  "pack_id": "hardware.fpga-toolflow"
+}

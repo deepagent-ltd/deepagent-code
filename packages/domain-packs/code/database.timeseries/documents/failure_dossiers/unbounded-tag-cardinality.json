@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:tsdb:unbounded-tag-cardinality",
+  "type": "failure_dossier",
+  "description": "Putting a high-cardinality identifier in a tag/label, exploding series count and exhausting memory.",
+  "body": "Failure mode: an identifier (user id, request id, full URL) is used as a tag/label, so every unique value creates a new series and the index grows until the instance OOMs or slows for everyone. Detection signals: series cardinality climbing without bound; memory pressure; a tag whose distinct-value count tracks traffic. Do not store identifiers in tags. Safer fallback: move the identifier to a field, enumerate allowed tag values, and re-measure cardinality.",
+  "domain": "timeseries_db",
+  "scope_hint": "code.database.timeseries:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.timeseries:human_authored",
+  "pack_id": "code.database.timeseries"
+}

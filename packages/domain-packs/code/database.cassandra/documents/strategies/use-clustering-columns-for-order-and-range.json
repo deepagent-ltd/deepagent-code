@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:cass:use-clustering-columns-for-order-and-range",
+  "type": "strategy",
+  "title": "Use clustering columns for on-disk order and range scans",
+  "description": "Define clustering columns to control row order within a partition and to serve efficient range slices.",
+  "body": "Use when rows within a partition must be ordered or range-queried (time series, feeds). Do not sort or filter clustering data in the application after fetching the whole partition; let the engine do it. Actions: declare clustering columns in the intended sort order with a CLUSTERING ORDER BY clause, query with the partition key plus a range on the leading clustering column, and keep the partition bounded so the slice stays cheap. Verify the query is a single-partition range read. Validation signals include the read seeking one partition and returning rows already ordered without an in-memory sort. Risk boundary: a range query without the partition key degenerates into a cluster scan needing ALLOW FILTERING, so always pin the partition key first.",
+  "domain": "cassandra",
+  "scope_hint": "code.database.cassandra:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.cassandra",
+  "pack_id": "code.database.cassandra"
+}

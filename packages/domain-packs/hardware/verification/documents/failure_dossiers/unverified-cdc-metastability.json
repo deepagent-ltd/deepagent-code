@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure_dossier:hwverif:unverified-cdc-metastability",
+  "type": "failure_dossier",
+  "description": "A design fails intermittently in the field because a clock-domain crossing passed functional simulation but was never CDC-verified.",
+  "body": "Failure mode: nominal functional simulation never exposes metastability, so an unsynchronized crossing looks correct in the testbench while it occasionally fails on real silicon. Detection signals: passing simulation alongside intermittent hardware glitches, a structural CDC report flagging the crossing, and failures sensitive to temperature and voltage. Do not rely on functional simulation alone to clear clock-domain crossings. Safer fallback: run structural CDC analysis, add a proper synchronizer to the crossing, and inject metastability in simulation to confirm robustness.",
+  "domain": "hw_verification",
+  "scope_hint": "hardware.verification:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.verification:human_authored",
+  "pack_id": "hardware.verification"
+}

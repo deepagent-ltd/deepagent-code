@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:cass:manage-tombstones-with-the-right-compaction",
+  "type": "strategy",
+  "title": "Manage tombstones with the right compaction strategy",
+  "description": "Match compaction strategy to the workload and avoid delete-heavy patterns that accumulate tombstones.",
+  "body": "Use when a table sees deletes, TTLs, or frequent overwrites. Do not model a queue or a frequently-deleted dataset on a single partition with the default compaction; deletes become tombstones that linger until gc_grace_seconds passes and compaction runs, and reads must scan them. Actions: choose TimeWindowCompactionStrategy for time-series with TTL so whole SSTables expire together, avoid queue-like delete patterns, and monitor tombstones-per-read in tracing. Verify reads scan few tombstones. Validation signals include tracing showing a low tombstone scan count and TTL'd SSTables dropping whole. Risk boundary: a partition that crosses the tombstone failure threshold makes reads fail outright, so redesign delete-heavy access patterns rather than raising the threshold.",
+  "domain": "cassandra",
+  "scope_hint": "code.database.cassandra:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.cassandra",
+  "pack_id": "code.database.cassandra"
+}

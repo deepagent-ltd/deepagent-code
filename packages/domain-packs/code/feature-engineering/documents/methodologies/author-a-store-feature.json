@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:feat:author-a-store-feature",
+  "type": "methodology",
+  "title": "Author a feature for the offline/online store",
+  "description": "The end-to-end path from raw source to a materialized, point-in-time-correct, dual-served feature.",
+  "body": "Use when adding a new feature that training and serving will both consume. Do not ship a feature that only materializes offline — serving will lack it or compute it differently. Actions: declare the entity and source, write the single transform, configure offline materialization and online sync, then replay an entity through both and diff. Validation signals include matching offline/online values for a replayed key and a point-in-time backfill that respects label timing. Risk boundary: a partially materialized feature causes serving-time nulls or skew; if online sync lags, escalate before the feature gates a production model.",
+  "domain": "feature_engineering",
+  "scope_hint": "code.feature-engineering:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.feature-engineering",
+  "pack_id": "code.feature-engineering"
+}

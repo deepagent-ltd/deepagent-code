@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:svc:make-retryable-operations-idempotent",
+  "type": "strategy",
+  "title": "Make retryable operations idempotent",
+  "description": "Any operation a caller or queue may retry must produce the same end state whether run once or many times.",
+  "body": "Use when adding any write, charge, email, or external call that a client retry, queue redelivery, or timeout could repeat. Do not assume the network delivers a result exactly once. Actions: derive a stable idempotency key (client-supplied or natural business key), record it before the side effect, and short-circuit on replay returning the stored result. Validation signals include a test that replays the same key and asserts a single effect plus identical response. Risk boundary: a side effect with no idempotency boundary on a money/notification path is a blocking finding requiring a human gate.",
+  "domain": "backend_service",
+  "scope_hint": "code.backend.service:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.service",
+  "pack_id": "code.backend.service"
+}

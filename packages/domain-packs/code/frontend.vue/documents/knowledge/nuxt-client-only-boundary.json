@@ -1,0 +1,11 @@
+{
+  "ref_id": "knowledge:frontend_vue:nuxt-client-only-boundary",
+  "type": "knowledge",
+  "description": "Browser-only APIs must be gated from server render in Nuxt and SSR Vue.",
+  "body": "Use when code reads DOM, storage, media, or location. Do not execute browser-only code during setup that also runs on server. Gate through client lifecycle or client-only components/plugins. Verify full page reload. Risk boundary: secrets and user-specific data in SSR output. Use when Vue Frontend Engineering work touches visible UI behavior, browser console output, DOM state, assets, viewport behavior, and interaction evidence. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: use the fact to constrain the change and test plan; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include browser smoke, component tests, viewport screenshots, console/network checks, and accessibility assertions. Risk boundary: escalate or stop when the task involves visual regressions, inaccessible interaction, hydration mismatch, and browser-only failures, missing owner evidence, or live external state.",
+  "domain": "frontend_vue",
+  "scope_hint": "code.frontend.vue:knowledges",
+  "evidence_strength": "strong",
+  "provenance_tag": "code.frontend.vue:seed:vue_nuxt_pinia_vite_docs:paraphrased",
+  "pack_id": "code.frontend.vue"
+}

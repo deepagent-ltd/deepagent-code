@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:cass:no-secondary-index-substitute-for-key-design",
+  "type": "knowledge",
+  "title": "Secondary indexes do not replace partition key design",
+  "description": "Native secondary indexes scan all nodes and scale poorly, so they are not a substitute for modelling the right table.",
+  "body": "Reference for index expectations. A Cassandra secondary index is local to each node, so a query using it must contact every node in the datacenter (a scatter-gather), which does not scale like a relational secondary index. Use when tempted to add an index to support a new query. Do not rely on a secondary index for a high-cardinality or hot-path predicate; it works only for low-cardinality fields within an already-narrowed partition. Validation signals include tracing showing the index query fanning out to all nodes. Risk boundary: a secondary index on a high-cardinality column is a known anti-pattern that degrades the cluster, so prefer a denormalized lookup table or a materialized view and review any new index.",
+  "domain": "cassandra",
+  "scope_hint": "code.database.cassandra:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.cassandra",
+  "pack_id": "code.database.cassandra"
+}

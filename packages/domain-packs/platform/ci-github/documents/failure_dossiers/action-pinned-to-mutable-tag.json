@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:ghci:action-pinned-to-mutable-tag",
+  "type": "failure_dossier",
+  "description": "A third-party action is referenced by a floating tag or branch, so its code can be swapped after review.",
+  "body": "Failure mode: a workflow pins uses: some/action@v3 (or @main), so the maintainer or an attacker who compromises the tag can repoint it to malicious code that runs with the workflow's token and secrets, after your review passed. Detection signals: external uses: ending in a tag, branch, or short SHA rather than a 40-hex commit SHA; no version-comment audit trail; no Dependabot for actions. Do not trust mutable refs for actions with write or secret access. Safer fallback: pin to the full commit SHA with the version in a comment, enable Dependabot to propose reviewed SHA bumps, and verify every external action ends in a 40-hex SHA.",
+  "domain": "ci_github",
+  "scope_hint": "platform.ci-github:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.ci-github:human_authored",
+  "pack_id": "platform.ci-github"
+}

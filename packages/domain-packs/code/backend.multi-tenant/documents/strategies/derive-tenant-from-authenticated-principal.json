@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:mt:derive-tenant-from-authenticated-principal",
+  "type": "strategy",
+  "title": "Derive tenant context from the authenticated principal",
+  "description": "Resolve the active tenant from the verified session or token, never from a client-supplied id, header, or body field.",
+  "body": "Use when establishing which tenant a request acts on. Do not read the tenant from a request parameter a client can set. Actions: extract the tenant claim from the authenticated token or session; reject requests whose claimed tenant does not match the principal; thread that trusted tenant context through the request. Validation signals include a forged tenant id in the body being ignored in favor of the authenticated tenant. Risk boundary: trusting client-supplied tenant identity lets a caller impersonate another tenant, so always bind tenant context to the principal and escalate any code that reads it from input.",
+  "domain": "multi_tenant",
+  "scope_hint": "code.backend.multi-tenant:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.multi-tenant",
+  "pack_id": "code.backend.multi-tenant"
+}

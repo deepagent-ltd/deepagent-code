@@ -1,0 +1,71 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "code.backend.auth",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "backend_auth",
+      "authz",
+      "permissions"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [
+      "security"
+    ],
+    "repo_signals": [
+      "L3 smoke for code.backend.auth: authorization checks, RBAC permission matrix, session and JWT token validation, OAuth callback, and tenant scoping"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "plain prose note with no repository or domain signal"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "retrieval_query": "backend authorization authentication RBAC permission matrix session token JWT validation negative permission test deny by default",
+  "expected_pack_id": "code.backend.auth",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "code.backend.auth L3 validation smoke",
+    "signals": [
+      "negative authorization tests per role",
+      "permission matrix coverage",
+      "session/token expiry and revocation tests",
+      "tenant isolation query tests"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "code.backend.auth diagnosis smoke",
+    "signals": [
+      "client-side-only authorization",
+      "missing server-side permission check",
+      "broken object-level access (IDOR)",
+      "over-broad token scope",
+      "session not invalidated on logout"
+    ]
+  },
+  "source_refs": [
+    "source:owasp-asvs:paraphrased",
+    "source:oauth2-rfc6749:paraphrased"
+  ]
+}

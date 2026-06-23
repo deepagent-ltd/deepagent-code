@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:tf:import-before-recreate",
+  "type": "strategy",
+  "title": "Import existing resources instead of recreating",
+  "description": "Bring already-existing infrastructure under management with import/import blocks rather than letting Terraform create a duplicate.",
+  "body": "Use when Terraform must manage infrastructure that already exists (brownfield adoption). Do not apply config that would create a second copy of a resource that already exists, and do not delete the original to 'start clean'. Actions: write the matching resource block, use an import block or terraform import to bind the real resource id into state, then plan and confirm it reports no changes (or only intended ones). Validation signals include a post-import plan with zero creates for the imported resource. Risk boundary: an import bound to the wrong resource id can cause Terraform to later modify or destroy unrelated infrastructure; verify the id maps to exactly the intended resource.",
+  "domain": "terraform",
+  "scope_hint": "platform.terraform:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.terraform",
+  "pack_id": "platform.terraform"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:helm:release-storage-revisions",
+  "type": "knowledge",
+  "title": "How Helm stores releases and tracks revisions",
+  "description": "Covers release state stored as Secrets/ConfigMaps in the namespace, revision history, and the deployed/superseded/failed/pending status model.",
+  "body": "Use when reasoning about Helm state and rollbacks. Do not assume Helm tracks state in the cluster's live objects. Actions: know each release revision is stored as a Secret (default driver) in the release namespace, helm history reads those to show revisions and statuses (deployed, superseded, failed, pending-upgrade), and rollback creates a new revision reapplying an old manifest. Inspect with helm history and kubectl get secret -l owner=helm. Validation signals include the revision count matching history and a rollback adding a new deployed revision. Risk boundary: deleting release secrets corrupts history and is destructive.",
+  "domain": "helm",
+  "scope_hint": "platform.helm:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.helm",
+  "pack_id": "platform.helm"
+}

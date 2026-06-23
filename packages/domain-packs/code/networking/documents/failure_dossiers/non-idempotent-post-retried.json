@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:net:non-idempotent-post-retried",
+  "type": "failure_dossier",
+  "description": "A timed-out POST is retried without an idempotency key, duplicating a create or charge that the first attempt already applied.",
+  "body": "Failure mode: the client retries a non-idempotent POST after a timeout, but the first attempt actually reached the server and applied the effect before the response was lost, so the retry creates a second record or charges twice. Detection signals: duplicate resources/charges correlated with timeouts; the bug appears only under network flakiness; retry logic that does not distinguish idempotent methods. Do not retry mutations without a dedup mechanism. Safer fallback: attach a client-generated idempotency key the server deduplicates, or use an idempotent method/conditional update, and verify with a test that a retried mutation applies exactly once.",
+  "domain": "networking",
+  "scope_hint": "code.networking:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.networking:human_authored",
+  "pack_id": "code.networking"
+}

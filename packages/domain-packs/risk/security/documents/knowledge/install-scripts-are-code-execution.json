@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:security:install-scripts-are-code-execution",
+  "type": "knowledge",
+  "title": "Install scripts are code execution",
+  "description": "Package install hooks, build scripts, binary downloads, and generated code can execute before application tests begin.",
+  "body": "Use when dependency changes add scripts, native builds, postinstall hooks, or remote downloads. Do not duplicate license review or ecosystem-specific package guidance. Actions: inspect scripts, pin source, avoid running unreviewed installers with secrets in environment, and prefer lockfile integrity. Validation signals include package manager output and lockfile evidence. Risk boundary: unreviewed install-time execution in CI or production build requires human review. Use when Security Risk Controls work touches trust boundaries, authorization decisions, dangerous sinks, secrets, and dependency execution. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: use the fact to constrain the change and test plan; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include negative security tests, server-side checks, sink payload tests, and secret scans. Risk boundary: escalate or stop when the task involves client-only controls, injection, credential leakage, permissive fallback, and unsafe dependency changes, missing owner evidence, or live external state.",
+  "domain": "supply_chain",
+  "scope_hint": "risk.security:knowledge",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:risk.security",
+  "pack_id": "risk.security"
+}

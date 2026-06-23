@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:mongo:configure-a-resilient-replica-set",
+  "type": "methodology",
+  "title": "Configure a resilient replica set",
+  "description": "Use an odd number of voting members across failure domains so elections reach a clean majority.",
+  "body": "Use when standing up or reviewing a replica set for high availability. Actions: deploy an odd number of voting members (three or five) spread across separate availability zones, add an arbiter only when an even count is otherwise unavoidable, set priorities so a preferred primary leads, and test a failover with rs.stepDown(). Verify the set re-elects a primary within the election timeout and writes resume. Validation signals include a new primary elected after stepDown and majority writes continuing without data loss. Risk boundary: placing a majority of voters in one zone means a zone outage halts writes, so confirm voter placement spans failure domains before declaring the set highly available.",
+  "domain": "mongodb",
+  "scope_hint": "code.database.mongodb:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.mongodb",
+  "pack_id": "code.database.mongodb"
+}

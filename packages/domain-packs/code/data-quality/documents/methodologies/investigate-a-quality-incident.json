@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:dq:investigate-a-quality-incident",
+  "type": "methodology",
+  "title": "Investigate a data quality incident",
+  "description": "Trace a quality alert from symptom to root cause across the lineage, then fix the source rather than patching the symptom.",
+  "body": "Steps: 1. Pin the symptom: which check failed, which column/partition, and when it started. 2. Walk lineage upstream to find the first table where the anomaly appears. 3. Correlate the start time with deploys, schema changes, or source incidents. 4. Distinguish a true data change from a pipeline bug (counts, joins, units). 5. Fix at the source and backfill affected partitions. Rollback point: re-run affected partitions from landed data after the fix. Validation: the failing check passes after the source fix and downstream tables reconcile; patching the symptom table without finding the source guarantees recurrence.",
+  "domain": "data_quality",
+  "scope_hint": "code.data-quality:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.data-quality",
+  "pack_id": "code.data-quality"
+}

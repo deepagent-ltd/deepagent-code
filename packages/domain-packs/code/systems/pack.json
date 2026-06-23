@@ -1,0 +1,47 @@
+{
+  "schema_version": "domain_pack.v1",
+  "id": "code.systems",
+  "name": "Systems Programming: OS, Filesystem & Processes",
+  "version": "1.0.0",
+  "scope": "system",
+  "risk": "medium",
+  "domains": [
+    "systems",
+    "os",
+    "filesystem",
+    "process",
+    "resource_limits"
+  ],
+  "provides": [
+    "knowledge",
+    "strategy",
+    "methodology",
+    "skill",
+    "diagnosis",
+    "validation"
+  ],
+  "depends_on": [
+    "code.debugging",
+    "code.performance"
+  ],
+  "conflicts_with": [],
+  "knowledge_store": "document_store",
+  "allowed_tools": [
+    "read",
+    "shell:test"
+  ],
+  "denied_tools": [
+    "shell:deploy-production"
+  ],
+  "data_policy": {
+    "sensitivity": [
+      "source_code"
+    ],
+    "default_admission": "summary_only",
+    "secret_policy": "deny"
+  },
+  "detector": {
+    "inline": "profile.code_domains.some(d=>['systems','os','filesystem','process','resource_limits'].includes(d)) || profile.repo_signals.some(s=>/\\b(filesystem|fsync|atomic rename|file descriptor|ulimit|signal handler|syscall|oom|mmap|process fork)\\b/i.test(s)) ? 0.9 : 0",
+    "threshold": 0.5
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:crypto:why-not-roll-your-own",
+  "type": "knowledge",
+  "title": "Why you must not roll your own crypto",
+  "description": "Security depends on resistance to adaptive attackers, not on whether your test vectors decrypt; novel schemes fail in ways unit tests cannot reveal.",
+  "body": "Use when tempted to design a cipher, MAC, or protocol. A scheme can correctly round-trip your own test data yet leak under chosen-ciphertext, timing, or padding-oracle attacks that ordinary tests never exercise; security comes from years of public cryptanalysis of standard constructions, not from secrecy or local correctness. Do not invent algorithms or 'improve' a standard by tweaking it. Actions: compose vetted library primitives via their named high-level APIs and keep parameters current. Validation signals include using only standard named constructions and passing tamper/wrong-key tests. Risk boundary: a custom or modified construction is unreviewable and likely broken; treat homemade crypto on real data as a critical defect requiring replacement with a standard primitive.",
+  "domain": "cryptography",
+  "scope_hint": "code.cryptography:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.cryptography",
+  "pack_id": "code.cryptography"
+}

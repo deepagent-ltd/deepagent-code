@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:git:squash-and-fixup-semantics",
+  "type": "knowledge",
+  "title": "Squash and fixup commit semantics",
+  "description": "Squash combines commits and lets you edit the joined message, while fixup folds a commit into the previous one and discards its message automatically.",
+  "body": "Use when collapsing review-iteration commits during an interactive rebase. Do not lose meaningful messages by using fixup when the wording matters. Squash merges a commit into its predecessor and opens an editor to combine messages; fixup does the same but silently drops the squashed commit's message, ideal for amend-style follow-ups created with commit --fixup. Inspect the rebase todo list to choose per commit. Validation signals include a final history whose messages describe the change accurately. Risk boundary: fixup permanently drops text, so review the resulting messages before force-pushing.",
+  "domain": "git_workflow",
+  "scope_hint": "code.git-workflow:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.git-workflow",
+  "pack_id": "code.git-workflow"
+}

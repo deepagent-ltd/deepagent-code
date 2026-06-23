@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:llm:review-model-call-safety",
+  "type": "skill",
+  "title": "Review a model call for safety",
+  "description": "Read a model-calling path and report whether output is verified, calls are bounded, tool arguments are validated, and the injection boundary holds.",
+  "body": "Use when asked whether an LLM integration is safe to ship. Actions: inspect the call site for an explicit timeout, bounded retries, and a cost ceiling; verify structured output is schema-checked and tool arguments validated before execution; trace whether untrusted content is isolated from system instructions; run or trace a request to confirm a verification step sits between output and any irreversible action. Do not treat a passing happy-path test as evidence of safety. Report and record the exact file/line of each gap, classifying it as missing-verification, unbounded-call, unvalidated-tool, or open-injection. This skill is read-only and must not change call configuration without runtime permission. Validation signals include a confirmed timeout abort and a rejected malformed payload. Risk boundary: an unbounded or unverified path to a side effect is a blocking finding.",
+  "domain": "llm_app",
+  "scope_hint": "code.llm-app:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.llm-app",
+  "pack_id": "code.llm-app"
+}

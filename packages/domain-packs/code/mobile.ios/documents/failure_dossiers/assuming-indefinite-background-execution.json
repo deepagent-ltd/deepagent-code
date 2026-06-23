@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:ios:assuming-indefinite-background-execution",
+  "type": "failure_dossier",
+  "description": "Relying on the app continuing to run in the background, so the system suspends or terminates it and in-flight work is lost.",
+  "body": "Failure mode: the app starts long-running work (upload, processing) expecting to keep executing after the user backgrounds it, but iOS suspends the process and may terminate it, dropping the work with no callback. Detection signals: uploads/tasks that fail to complete when the user leaves the app; work that only finishes if the app stays foregrounded; lost progress after the system reclaims the app. Do not assume indefinite background execution. Safer fallback: use the appropriate background API (BGTaskScheduler, begin/endBackgroundTask, or a specific background mode), persist progress so it can resume, and handle suspension and relaunch explicitly.",
+  "domain": "ios",
+  "scope_hint": "code.mobile.ios:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.mobile.ios:human_authored",
+  "pack_id": "code.mobile.ios"
+}

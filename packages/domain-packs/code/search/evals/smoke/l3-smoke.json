@@ -1,0 +1,70 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "code.search",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "search",
+      "elasticsearch",
+      "ranking"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "L3 smoke for code.search: Elasticsearch inverted index and mappings, custom analyzer and tokenization, BM25 relevance ranking, query DSL with bool clauses, recall vs precision tuning, and faceted aggregations"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "implement a payment webhook handler with signature verification"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "retrieval_query": "elasticsearch opensearch inverted index bm25 relevance ranking analyzer tokenization full text search query dsl faceting recall precision mapping reindex",
+  "expected_pack_id": "code.search",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "code.search L3 validation smoke",
+    "signals": [
+      "query analyzer matches the index analyzer for the field",
+      "relevance measured against judged queries (nDCG/precision@k)",
+      "mapping changes accompanied by a reindex plan",
+      "facet counts reconcile with filtered result totals",
+      "recall and precision both reported, not just one"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "code.search diagnosis smoke",
+    "signals": [
+      "exact-looking query returns no hits due to analyzer mismatch",
+      "relevance tuned by eyeballing one query",
+      "a field typed as text when it should be keyword (or vice versa)",
+      "mapping changed in place with no reindex",
+      "high recall but low precision swamping users with noise"
+    ]
+  },
+  "source_refs": [
+    "source:lucene-inverted-index-practice:paraphrased",
+    "source:bm25-relevance-tuning:paraphrased"
+  ]
+}

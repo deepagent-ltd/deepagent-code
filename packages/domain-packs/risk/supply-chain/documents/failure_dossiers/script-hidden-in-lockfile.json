@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:supply_chain:script-hidden-in-lockfile",
+  "type": "failure_dossier",
+  "description": "Transitive package scripts can execute during install.",
+  "body": "Inspect package lifecycle hooks.\n\nDerived from local skill survey outputs under /Users/xiuranli/code/agent/skill, especially reviewed canonical rules, coverage reports, and trusted local skill notes. Paraphrased into domain-pack seed form.\n\nDiagnostic use only: keep this out of index.json and use it only as a blocked/do-not-use signal.",
+  "domain": "supply_chain",
+  "scope_hint": "risk.supply-chain:failure_dossiers",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:risk.supply-chain:skill_survey",
+  "pack_id": "risk.supply-chain"
+}

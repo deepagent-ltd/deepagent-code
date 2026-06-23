@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:ruby:audit-gem-and-lock-health",
+  "type": "skill",
+  "title": "Audit gem and lock health",
+  "description": "Read the Gemfile and Gemfile.lock and report uncommitted locks, loose constraints, and risky monkey-patch gems.",
+  "body": "Use when asked whether a Ruby project's dependencies are sound. Actions: read the Gemfile and Gemfile.lock, confirm the lock is committed for an application, inspect constraints for overly loose ranges or conflicts, and note gems known to monkey-patch core classes on load. Do not assume the lock matches the Gemfile without checking bundle. Report and record each uncommitted lock, risky constraint, and global-patching gem with its location. This skill is read-only and must not run bundle update without runtime permission. Validation signals include confirming bundle install reproduces gems from the lock with no drift. Risk boundary: flag a missing committed lock as a reproducibility defect and a core-patching gem as a behavior-change risk to review.",
+  "domain": "ruby",
+  "scope_hint": "code.ruby:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.ruby",
+  "pack_id": "code.ruby"
+}

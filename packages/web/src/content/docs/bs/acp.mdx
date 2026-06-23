@@ -1,0 +1,156 @@
+---
+title: ACP podrška
+description: Koristite DeepAgent Code u bilo kojem uređivaču kompatibilnom sa ACP.
+---
+
+DeepAgent Code podržava [Agent Client Protocol](https://agentclientprotocol.com) (ACP), što vam omogućava da ga koristite direktno u kompatibilnim uređivačima i IDE-ovima.
+
+:::tip
+Za listu uređivača i alata koji podržavaju ACP, pogledajte [ACP izvještaj o napretku](https://zed.dev/blog/acp-progress-report#available-now).
+:::
+
+ACP je otvoreni protokol koji standardizira komunikaciju između uređivača koda i AI coding agenata.
+
+---
+
+## Konfiguracija
+
+Da biste koristili DeepAgent Code putem ACP-a, konfigurirajte svoj uređivač da pokrene naredbu `deepagent-code acp`.
+
+Naredba pokreće DeepAgent Code kao ACP-kompatibilan podproces koji komunicira sa vašim uređivačem preko JSON-RPC-a kroz stdio.
+
+Ispod su primjeri za popularne uređivače koji podržavaju ACP.
+
+---
+
+### Zed
+
+Dodajte u svoju [Zed](https://zed.dev) konfiguraciju (`~/.config/zed/settings.json`):
+
+```json title="~/.config/zed/settings.json"
+{
+  "agent_servers": {
+    "DeepAgent Code": {
+      "command": "deepagent-code",
+      "args": ["acp"]
+    }
+  }
+}
+```
+
+Da biste ga otvorili, koristite akciju `agent: new thread` u **Command Palette**.
+
+Također možete vezati prečicu na tastaturi uređivanjem vašeg `keymap.json`:
+
+```json title="keymap.json"
+[
+  {
+    "bindings": {
+      "cmd-alt-o": [
+        "agent::NewExternalAgentThread",
+        {
+          "agent": {
+            "custom": {
+              "name": "DeepAgent Code",
+              "command": {
+                "command": "deepagent-code",
+                "args": ["acp"]
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+]
+```
+
+---
+
+### JetBrains IDE-ovi
+
+Dodajte u svoj [JetBrains IDE](https://www.jetbrains.com/) `acp.json` prema [dokumentaciji](https://www.jetbrains.com/help/ai-assistant/acp.html):
+
+```json title="acp.json"
+{
+  "agent_servers": {
+    "DeepAgent Code": {
+      "command": "/absolute/path/bin/deepagent-code",
+      "args": ["acp"]
+    }
+  }
+}
+```
+
+Da biste ga otvorili, koristite novog "DeepAgent Code" agenta u AI Chat agent selektoru.
+
+---
+
+### Avante.nvim
+
+Dodajte u svoju [Avante.nvim](https://github.com/yetone/avante.nvim) konfiguraciju:
+
+```lua
+{
+  acp_providers = {
+    ["deepagent-code"] = {
+      command = "deepagent-code",
+      args = { "acp" }
+    }
+  }
+}
+```
+
+Ako trebate proslijediti varijable okruženja:
+
+```lua {6-8}
+{
+  acp_providers = {
+    ["deepagent-code"] = {
+      command = "deepagent-code",
+      args = { "acp" },
+      env = {
+        DEEPAGENT_CODE_API_KEY = os.getenv("DEEPAGENT_CODE_API_KEY")
+      }
+    }
+  }
+}
+```
+
+---
+
+### CodeCompanion.nvim
+
+Da koristite DeepAgent Code kao ACP agenta u [CodeCompanion.nvim](https://github.com/olimorris/codecompanion.nvim), dodajte sljedeće u svoju Neovim konfiguraciju:
+
+```lua
+require("codecompanion").setup({
+  interactions = {
+    chat = {
+      adapter = {
+        name = "deepagent-code",
+        model = "claude-sonnet-4",
+      },
+    },
+  },
+})
+```
+
+Ova konfiguracija postavlja CodeCompanion da koristi DeepAgent Code kao ACP chat agenta.
+
+Ako trebate proslijediti varijable okruženja (kao što je `DEEPAGENT_CODE_API_KEY`), pogledajte [Configuring Adapters: Environment Variables](https://codecompanion.olimorris.dev/getting-started#setting-an-api-key) u dokumentaciji CodeCompanion.nvim.
+
+## Podržane funkcije
+
+DeepAgent Code radi isto kroz ACP kao i u terminalu. Podržane su sve funkcije:
+
+:::note
+Neke ugrađene komande kao što su `/undo` i `/redo` trenutno nisu podržane.
+:::
+
+- Ugrađeni alati (operacije sa datotekama, naredbe terminala, itd.)
+- Prilagođeni alati i slash komande
+- MCP serveri konfigurisani u vašoj DeepAgent Code konfiguraciji
+- Pravila specifična za projekat `AGENTS.md`
+- Prilagođeni formateri i linteri
+- Agenti i sistem dozvola

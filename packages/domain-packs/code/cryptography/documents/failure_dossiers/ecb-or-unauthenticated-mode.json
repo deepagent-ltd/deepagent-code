@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:crypto:ecb-or-unauthenticated-mode",
+  "type": "failure_dossier",
+  "description": "Encrypting with ECB or raw CBC/CTR without authentication, leaving ciphertext malleable and patterns visible.",
+  "body": "Failure mode: data is encrypted with ECB (identical plaintext blocks produce identical ciphertext, leaking structure) or with CBC/CTR and no MAC, so an attacker can tamper with ciphertext undetected and mount padding-oracle or bit-flipping attacks. Detection signals: visible patterns in encrypted images/data; cipher mode is ECB or a bare CBC/CTR with no tag verification; decryption never checks integrity. Do not use unauthenticated encryption on attacker-reachable data. Safer fallback: switch to an AEAD construction (AES-GCM or ChaCha20-Poly1305), bind context via associated data, verify the tag before using plaintext, and add a test that a flipped byte fails verification.",
+  "domain": "cryptography",
+  "scope_hint": "code.cryptography:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.cryptography:human_authored",
+  "pack_id": "code.cryptography"
+}

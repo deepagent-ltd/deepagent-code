@@ -1,0 +1,11 @@
+{
+  "ref_id": "knowledge:testing:validation-claim-is-not-runner-truth",
+  "type": "knowledge",
+  "description": "A model validation claim has lower authority than command output, exit code, and runner metadata.",
+  "body": "Use when summarizing validation evidence for deterministic tasks or final-answer readiness. Do not use a model sentence such as 'tests pass' as the source of truth when command output is absent, stale, or contradictory. Actions: inspect the runner artifact, compare command and cwd to the task boundary, record whether the result is pass, fail, timeout, skipped, or unverified, and preserve the exact evidence reference. Validation signals include structured validation result, terminal exit code, test totals, compiler diagnostics, and runner timestamp. Risk boundary: a passing focused test does not prove broad correctness; a missing validation result must remain unverified instead of being converted into success.",
+  "domain": "testing",
+  "scope_hint": "code.testing:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.testing:docs38",
+  "pack_id": "code.testing"
+}

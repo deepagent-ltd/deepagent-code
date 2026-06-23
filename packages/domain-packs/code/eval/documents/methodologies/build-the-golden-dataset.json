@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:eval:build-the-golden-dataset",
+  "type": "methodology",
+  "title": "Build the golden dataset",
+  "description": "Assemble a representative, leak-free, segmented dataset with trusted reference answers and freeze it under version control.",
+  "body": "Steps: 1. Define the task and the segments that matter (easy, hard, adversarial, edge). 2. Collect inputs disjoint from training/prompt material and check for cross-boundary duplicates. 3. Establish trusted reference answers or labels with a review process. 4. Segment and version the set, then freeze it. 5. Record the dataset version for every future score. Rollback point: before relabeling or adding cases. Validation: a leakage check passes and per-segment counts cover the failure cases, not just the happy path.",
+  "domain": "eval",
+  "scope_hint": "code.eval:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.eval",
+  "pack_id": "code.eval"
+}

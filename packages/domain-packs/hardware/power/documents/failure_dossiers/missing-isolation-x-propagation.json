@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure_dossier:hwpwr:missing-isolation-x-propagation",
+  "type": "failure_dossier",
+  "description": "Unknown values propagate into live logic because a powered-down domain's outputs were not isolated.",
+  "body": "Failure mode: a domain is gated off but its outputs feed the always-on side without isolation cells, so floating values drive the live logic. Detection signals: X propagation appearing in power-aware simulation when the domain powers down, glitches on the always-on side during the gated window, and a missing isolation strategy in the power-intent file. Do not power-gate while outputs reach live logic unisolated. Safer fallback: insert isolation cells to clamp the outputs to a safe value during power-down and re-run power-aware simulation.",
+  "domain": "power_design",
+  "scope_hint": "hardware.power:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.power:human_authored",
+  "pack_id": "hardware.power"
+}

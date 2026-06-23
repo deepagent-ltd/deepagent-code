@@ -1,0 +1,11 @@
+{
+  "ref_id": "strategy:frontend_react:component-contract",
+  "type": "strategy",
+  "description": "React components should expose clear props, events, state ownership, and loading/error states.",
+  "body": "Treat a component as a boundary: props are inputs, rendered UI/events are outputs, and effects are side effects that need cleanup. Use when React component behavior work touches component ownership, hook dependencies, render paths, hydration output, router state, and browser smoke evidence. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: choose the smallest direction that preserves the domain contract; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include component tests, React Testing Library assertions, Playwright smoke, console logs, hydration warnings, and viewport checks. Risk boundary: escalate or stop when the task involves state identity leaks, stale closures, inaccessible controls, hydration mismatch, and user-visible regressions, missing owner evidence, or live external state.",
+  "domain": "react",
+  "scope_hint": "code.frontend.react:strategy",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.frontend.react:skill_survey",
+  "pack_id": "code.frontend.react"
+}

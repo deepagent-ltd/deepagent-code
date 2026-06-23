@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:auth:jwt-accepts-alg-none-or-unverified",
+  "type": "failure_dossier",
+  "description": "Token consumer trusts claims without verifying the signature, or accepts alg:none / confused algorithms.",
+  "body": "Failure mode: the service decodes a JWT and reads role/scope without verifying the signature, or accepts a token whose header says alg:none, or verifies an asymmetric token using the public key as an HMAC secret. Detection signals: decode without verify; alg taken from the token header; no iss/aud check. Do not trust any claim before signature verification. Safer fallback: pin the expected algorithm, verify with the correct key, check iss/aud/exp, and add tests for tampered-signature, alg:none, and wrong-issuer rejection.",
+  "domain": "backend_auth",
+  "scope_hint": "code.backend.auth:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.auth:human_authored",
+  "pack_id": "code.backend.auth"
+}

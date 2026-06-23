@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:php:enable-strict-types-at-boundaries",
+  "type": "strategy",
+  "title": "Enable strict_types where contracts matter",
+  "description": "Declare strict_types and type hints so PHP rejects silent scalar coercion at call boundaries.",
+  "body": "Use when a function's correctness depends on argument types (ids, money, flags). Do not rely on PHP's default coercive mode that turns '5' into 5 or true into 1 silently. Actions: add declare(strict_types=1) at the top of files you author (it governs calls made from that file), add scalar and return type hints, and use union/nullable types to express intent. Validation signals include a PHPUnit test asserting a TypeError is thrown when a wrong-typed argument is passed under strict mode. Risk boundary: silent coercion hides bugs that surface as wrong data far from the cause; never disable strict mode to make a wrong-typed call compile.",
+  "domain": "php",
+  "scope_hint": "code.php:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.php",
+  "pack_id": "code.php"
+}

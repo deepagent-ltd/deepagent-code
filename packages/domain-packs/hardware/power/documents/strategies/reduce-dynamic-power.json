@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:hwpwr:reduce-dynamic-power",
+  "type": "strategy",
+  "title": "Reduce dynamic power at the activity source",
+  "description": "Cut switching activity through gating, operand isolation, and avoiding needless toggling on wide buses.",
+  "body": "Use when dynamic power dominates the budget on an active design. Do not chase only clock frequency, since switching activity and capacitance also drive dynamic power. Actions: profile switching activity, apply operand isolation to datapaths that compute unused results, and gate clocks on idle banks. Validation signals include a lower activity factor in power analysis and reduced dynamic power without functional change. Risk boundary: an aggressive activity reduction can break timing or function, so escalate to verification when gating logic grows complex.",
+  "domain": "power_design",
+  "scope_hint": "hardware.power:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.power",
+  "pack_id": "hardware.power"
+}

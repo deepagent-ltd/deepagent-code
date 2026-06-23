@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:helm:atomic-upgrade-rollback",
+  "type": "strategy",
+  "title": "Run upgrades atomically and keep rollback fast",
+  "description": "Use helm upgrade --atomic --timeout so a failed release auto-rolls back, and rely on helm history plus rollback to a known revision instead of editing live objects.",
+  "body": "Use when releasing a chart change or recovering from a bad upgrade. Do not hand-patch live objects to fix forward, and do not run upgrades without a timeout. Actions: run helm upgrade --atomic --timeout so failure triggers automatic rollback, inspect helm history for the revision list, and use helm rollback <release> <revision> to restore a known-good state; verify pods pass readiness after. Validation signals include helm history showing a clean deployed revision, --atomic reverting a failed release, and the workload healthy post-rollback. Risk boundary: production upgrade or rollback is change-controlled; record the revision and reason, and escalate if state (PVCs, migrations) can't revert with the release.",
+  "domain": "helm",
+  "scope_hint": "platform.helm:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.helm",
+  "pack_id": "platform.helm"
+}

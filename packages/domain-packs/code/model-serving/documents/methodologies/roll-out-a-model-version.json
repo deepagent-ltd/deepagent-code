@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:serving:roll-out-a-model-version",
+  "type": "methodology",
+  "title": "Roll out a new model version safely",
+  "description": "Promote a model through health check, shadow/canary, and gradual ramp with metrics and an instant rollback.",
+  "body": "Steps: 1. Load the new version alongside the current one. 2. Health-check it and optionally shadow live traffic to compare outputs/latency without affecting users. 3. Canary a small traffic share and watch quality, latency, and error metrics. 4. Ramp gradually if metrics hold. 5. On any regression, route all traffic back to the previous version instantly. Rollback point: the previous version stays loaded throughout the ramp. Validation: canary metrics stay within bounds at each step and rollback is verified; an in-place swap with no canary turns a model regression into a full outage.",
+  "domain": "model_serving",
+  "scope_hint": "code.model-serving:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.model-serving",
+  "pack_id": "code.model-serving"
+}

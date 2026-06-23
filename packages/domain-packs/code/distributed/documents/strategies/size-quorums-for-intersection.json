@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:dist:size-quorums-for-intersection",
+  "type": "strategy",
+  "title": "Size quorums so reads and writes intersect",
+  "description": "Pick read and write quorums whose sizes guarantee overlap (R + W > N) so every read sees the latest acknowledged write.",
+  "body": "Use when designing a quorum-replicated store or tuning Dynamo-style consistency knobs. Do not set R + W <= N when you need read-your-writes, and avoid even-sized voting sets that admit tie partitions. Actions: choose N, then require R + W > N and W > N/2 so write sets intersect each other and every read intersects the last write; record the chosen values and the consistency they buy. Validation signals include a proof that any read quorum shares at least one node with any write quorum, and a test that a read after an acked write never returns a stale value. Risk boundary: under-sized quorums return stale data that looks like a healthy success; require explicit sign-off before weakening R or W in production.",
+  "domain": "distributed",
+  "scope_hint": "code.distributed:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.distributed",
+  "pack_id": "code.distributed"
+}

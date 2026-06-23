@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:sql:n-plus-one-query",
+  "type": "failure_dossier",
+  "description": "Issuing one query per row of a result set (often via an ORM lazy load) instead of a single set-based join or batch.",
+  "body": "Failure mode: code fetches a list then loops issuing a query per element (the N+1 pattern), so 1 + N round trips hammer the database and latency scales with row count. Detection signals: query logs show the same parameterized statement repeated N times; latency grows linearly with result size; an ORM emits SELECTs inside a loop. Do not lazy-load per row in a loop. Safer fallback: replace with a single JOIN or a WHERE id IN (...) batch, use the ORM's eager-load/join-fetch, and verify the query log shows a constant small number of statements regardless of N.",
+  "domain": "sql",
+  "scope_hint": "code.sql:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.sql:human_authored",
+  "pack_id": "code.sql"
+}

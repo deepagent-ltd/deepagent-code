@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:cache:cache-as-source-of-truth",
+  "type": "failure_dossier",
+  "description": "Code treats the cache as authoritative so an eviction or restart silently loses data or returns nothing.",
+  "body": "Failure mode: code treats the cache as authoritative and writes only there (or reads with no origin fallback), so an eviction or restart silently loses data or returns empty. Detection signals: data disappears after a cache flush or restart; missing-key reads return empty instead of loading from the store. Do not store the only copy of state in a cache. Safer fallback: keep the datastore authoritative, treat a cache miss as a normal load-from-origin path, and never persist unique state solely in the cache.",
+  "domain": "caching",
+  "scope_hint": "code.caching:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.caching:human_authored",
+  "pack_id": "code.caching"
+}

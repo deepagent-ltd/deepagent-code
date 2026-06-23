@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:cli:design-for-composability",
+  "type": "strategy",
+  "title": "Design for composability in pipelines",
+  "description": "Read from stdin when no file is given, emit line- or machine-parseable output, and avoid surprises so the tool plays well in pipes.",
+  "body": "Use when a CLI could be one stage of a pipeline. Do not require interactive input for batch use, force a proprietary output format with no machine-readable option, or buffer the entire stream when streaming would do. Actions: default to reading stdin when no input file is named, support line-oriented or --json output for downstream parsing, stream rather than load-all where possible, and keep output stable across runs. Validation signals include the tool working as a filter in `a | tool | b` and a downstream parser consuming its output. Risk boundary: unstable or human-only output breaks every script depending on it; provide a machine-readable mode and keep its format stable across versions.",
+  "domain": "cli",
+  "scope_hint": "code.cli:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.cli",
+  "pack_id": "code.cli"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:fpgatf:manage-incremental-compile",
+  "type": "strategy",
+  "title": "Use incremental compile to preserve closure",
+  "description": "Lock down timing-closed regions and recompile only changed logic to keep results stable across iterations.",
+  "body": "Use when iterating on a large design that has already met timing in parts. Do not recompile the whole design from scratch on every small change, since that wastes runtime and can perturb closed timing. Actions: mark closed partitions for reuse, recompile only the changed region, and verify the preserved partitions keep their timing. Validation signals include reused partitions reporting unchanged slack and a shorter compile time than a full rebuild. Risk boundary: stale reused logic can mask a real change, so escalate to a full rebuild when partition boundaries shift.",
+  "domain": "fpga_toolflow",
+  "scope_hint": "hardware.fpga-toolflow:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.fpga-toolflow",
+  "pack_id": "hardware.fpga-toolflow"
+}

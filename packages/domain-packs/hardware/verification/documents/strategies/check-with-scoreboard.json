@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:hwverif:check-with-scoreboard",
+  "type": "strategy",
+  "title": "Check outputs with a self-checking scoreboard",
+  "description": "Compare every observed output against a reference-model expectation so failures are caught automatically.",
+  "body": "Use when verifying any design where outputs must match a known-correct model. Do not eyeball waveforms for correctness, since that misses subtle and intermittent errors. Actions: build a reference model that predicts outputs, route observed transactions into the scoreboard, and verify every output is compared. Validation signals include the scoreboard checking all transactions and flagging any mismatch with the expected value. Risk boundary: an output that bypasses the scoreboard is unverified, so treat any unchecked output path as a verification gap.",
+  "domain": "hw_verification",
+  "scope_hint": "hardware.verification:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.verification",
+  "pack_id": "hardware.verification"
+}

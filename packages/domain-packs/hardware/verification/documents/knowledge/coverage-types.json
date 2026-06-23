@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:hwverif:coverage-types",
+  "type": "knowledge",
+  "title": "Code coverage versus functional coverage",
+  "description": "Code coverage measures which RTL lines and branches ran, while functional coverage measures which intended behaviors occurred.",
+  "body": "Use when deciding what coverage evidence proves. Do not treat high code coverage as functional completeness, since exercising a line does not prove its feature was meaningfully tested. Actions: collect both code and functional coverage, compare gaps, and direct stimulus to the functionally unhit behaviors. Validation signals include functional coverage closing on spec features and code coverage explaining any dead or unreachable logic. Risk boundary: relying on code coverage alone hides untested behavior, so flag a closure claim that lacks functional coverage evidence.",
+  "domain": "hw_verification",
+  "scope_hint": "hardware.verification:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.verification",
+  "pack_id": "hardware.verification"
+}

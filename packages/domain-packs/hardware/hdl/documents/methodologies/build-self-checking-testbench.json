@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:hdl:build-self-checking-testbench",
+  "type": "methodology",
+  "title": "Build a self-checking testbench",
+  "description": "Drive the DUT and automatically compare outputs against a reference model with a scoreboard, rather than inspecting waveforms by hand.",
+  "body": "Steps: 1. Instantiate the DUT and generate clock + reset. 2. Implement a golden/reference model of expected behavior. 3. Drive directed edge cases plus randomized/constrained-random stimulus. 4. Compare DUT output to the model every cycle via a scoreboard or assertions; fail loudly on mismatch. 5. Add functional coverage to know what was exercised. Rollback point: before changing the DUT interface. Validation: the scoreboard must report zero mismatches and coverage goals must be met; a waveform 'looks right' is not a pass.",
+  "domain": "hdl",
+  "scope_hint": "hardware.hdl:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.hdl",
+  "pack_id": "hardware.hdl"
+}

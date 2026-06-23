@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:embed:memory-mapped-io-semantics",
+  "type": "knowledge",
+  "title": "Memory-mapped I/O semantics",
+  "description": "Peripheral registers are not normal memory: reads/writes have side effects, ordering matters, and the compiler must not cache or reorder them.",
+  "body": "Use when accessing hardware registers. Unlike RAM, reading a register can clear a flag and writing can trigger an action; the compiler may otherwise cache, drop, or reorder these accesses. Do not access registers through non-volatile pointers or assume read-modify-write on a register with write-1-to-clear bits behaves like RAM. Actions: use volatile (or device-memory) access, respect required ordering with barriers where the bus allows reordering, and follow the datasheet's read/write semantics per field. Validation signals include logic-analyzer confirmation that the expected bus transactions occurred. Risk boundary: a missing volatile or wrong RMW on a status register causes flags to be missed or cleared spuriously — a field-only intermittent bug; verify access semantics against the datasheet.",
+  "domain": "embedded",
+  "scope_hint": "code.embedded:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.embedded",
+  "pack_id": "code.embedded"
+}

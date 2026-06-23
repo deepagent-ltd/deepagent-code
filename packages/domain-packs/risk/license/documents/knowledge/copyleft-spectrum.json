@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:lic:copyleft-spectrum",
+  "type": "knowledge",
+  "title": "The copyleft spectrum and its triggers",
+  "description": "Permissive, weak-copyleft, and strong/network-copyleft licenses impose escalating reciprocity triggered by different actions.",
+  "body": "Use when reasoning about what a license forces you to publish. Permissive licenses (MIT, BSD, Apache-2.0) require only preserving notices. Weak/file-level copyleft (LGPL, MPL-2.0, EPL) requires sharing changes to the licensed files but lets you keep your own files closed, and LGPL further constrains static vs dynamic linking. Strong copyleft (GPL) extends to the whole linked work conveyed as a binary; AGPL extends the trigger to network interaction, so a hosted service counts as distribution. Do not assume 'open source' means obligation-free. Actions: identify the class and the triggering action (conveying a binary, modifying files, serving over a network). Validation signals include classifying each dependency and confirming no network-copyleft component sits in an unmodified-source-undisclosed SaaS path. Risk boundary: AGPL in a hosted backend obligates source disclosure and must reach a human.",
+  "domain": "license",
+  "scope_hint": "risk.license:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.license",
+  "pack_id": "risk.license"
+}

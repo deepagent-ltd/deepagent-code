@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:cass:avoid-lwt-on-hot-paths",
+  "type": "strategy",
+  "title": "Avoid lightweight transactions on hot paths",
+  "description": "LWT compare-and-set runs a Paxos round per operation, so reserve it for rare contention rather than routine writes.",
+  "body": "Use when tempted to use IF NOT EXISTS or IF conditions for correctness. Do not sprinkle lightweight transactions across a high-throughput write path; each LWT runs a multi-round Paxos consensus across replicas, which is far slower than a normal write and serializes on the partition. Actions: restrict LWT to genuinely rare conflict resolution (claiming a unique username), model away the need with idempotent writes and natural keys where possible, and measure the LWT rate. Verify throughput holds under load. Validation signals include LWT operations confined to a small fraction of writes and Paxos contention staying low in metrics. Risk boundary: heavy LWT contention on one partition collapses throughput and can cause timeouts, so escalate any design that needs frequent compare-and-set on a hot key.",
+  "domain": "cassandra",
+  "scope_hint": "code.database.cassandra:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.cassandra",
+  "pack_id": "code.database.cassandra"
+}

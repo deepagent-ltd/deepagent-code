@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:rust:uphold-unsafe-invariants",
+  "type": "strategy",
+  "title": "Confine and document every unsafe invariant",
+  "description": "Wrap unsafe in a minimal safe abstraction, document the invariants each unsafe block relies on, and prove them locally.",
+  "body": "Use when FFI, raw pointers, or manual memory force unsafe code. Do not scatter unsafe across the codebase or expose a safe-looking API that can trigger UB with valid inputs. Actions: keep unsafe blocks as small as possible, add a `// SAFETY:` comment stating the precondition each one upholds (alignment, non-null, no aliasing, valid lifetime), encapsulate behind a checked safe wrapper, and run the test suite under Miri (`cargo +nightly miri test`). Validation signals include Miri reporting no undefined behavior and a fuzz/property test exercising the boundary. Risk boundary: UB is silent and can corrupt unrelated memory; if an invariant cannot be locally guaranteed, deny the unsafe shortcut and use a safe abstraction even at a cost.",
+  "domain": "rust",
+  "scope_hint": "code.rust:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.rust",
+  "pack_id": "code.rust"
+}

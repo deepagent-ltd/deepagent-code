@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:comp:unsound-type-rule",
+  "type": "failure_dossier",
+  "description": "A type rule that accepts an ill-typed program, breaking soundness so 'well-typed' programs can still go wrong at runtime.",
+  "body": "Failure mode: a type rule is relaxed (an unchecked coercion, a too-permissive subtyping or variance rule) to let some convenient program compile, but it now accepts a class of ill-typed programs; the language's safety guarantee is void and runtime errors the type system promised to prevent reappear. Detection signals: a known-unsafe program type-checks; soundness test cases that should be rejected are accepted; runtime crashes in code the type checker passed. Do not weaken a rule to admit a specific program. Safer fallback: restore the rule to its sound specification, verify progress/preservation for the construct, and add the unsafe program to the must-reject test suite.",
+  "domain": "compiler",
+  "scope_hint": "code.compiler:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.compiler:human_authored",
+  "pack_id": "code.compiler"
+}

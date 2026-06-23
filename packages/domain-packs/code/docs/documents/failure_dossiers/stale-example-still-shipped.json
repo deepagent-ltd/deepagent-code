@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:docs:stale-example-still-shipped",
+  "type": "failure_dossier",
+  "description": "Publishing a code example that no longer matches the current API, so readers copy a snippet that fails or misbehaves.",
+  "body": "Failure mode: a doc example references an old signature, flag, or import that the code has since changed, but nothing executes the snippet so the rot goes unnoticed until a reader hits the error. Detection signals: the example fails when run; signatures in prose differ from source; no CI step exercises the snippet. Do not ship examples that nothing verifies. Safer fallback: extract examples into CI-run sources, fix them to match current code, and mark any genuinely non-runnable snippet as illustrative so readers do not expect it to work verbatim.",
+  "domain": "code",
+  "scope_hint": "code.docs:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.docs:human_authored",
+  "pack_id": "code.docs"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:frontend_accessibility:inspect-accessibility-tree",
+  "type": "skill",
+  "title": "Inspect the accessibility tree for changed UI",
+  "description": "Read the browser accessibility tree for a changed component and report each node's computed name, role, and state.",
+  "body": "Use when verifying that markup exposes correct semantics. Actions: open the browser DevTools accessibility pane (or run an axe scan), select the changed controls, and report each node's computed accessible name, role, and state plus any violations with selectors. Do not assume semantics from the JSX; confirm what the browser actually computed. This skill exposes capability only and must not drive a browser without runtime permission. Validation signals include an accessibility-tree snapshot and a zero-violation scan for the changed surface. Risk boundary: if the tree cannot be inspected, report semantics as unverified rather than asserting the control is accessible.",
+  "domain": "frontend",
+  "scope_hint": "code.frontend.accessibility:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.frontend.accessibility",
+  "pack_id": "code.frontend.accessibility"
+}

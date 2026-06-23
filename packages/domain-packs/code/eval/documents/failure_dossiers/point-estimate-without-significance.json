@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:eval:point-estimate-without-significance",
+  "type": "failure_dossier",
+  "description": "A single-run score difference is declared a win without variance or a significance test, so noise is mistaken for improvement.",
+  "body": "Failure mode: two versions are compared on one run each, the candidate scores slightly higher, and it ships as better, but the gap is within the run-to-run variance from sampling and data order. Detection signals: no confidence interval; single seed; no significance test; differences smaller than typical run variance treated as real. Do not declare a win from a point estimate. Safer fallback: run multiple seeds or bootstrap the dataset, report a confidence interval, apply a significance test sized to the data, and refuse to call a within-noise difference an improvement.",
+  "domain": "eval",
+  "scope_hint": "code.eval:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.eval:human_authored",
+  "pack_id": "code.eval"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:serving:load-test-and-report-tail",
+  "type": "skill",
+  "title": "Load-test serving and report tail latency",
+  "description": "Drive a serving endpoint at realistic concurrency and report p50/p95/p99, throughput, and GPU utilization against the SLO.",
+  "body": "Use when validating serving performance. Actions: detect the endpoint and a load tool, ramp concurrency to target QPS, and report p50/p95/p99 latency, sustained throughput, and accelerator utilization with the batching config used. Compare p99 to the SLO and note where the tail breaks. Do not report a single-request or mean-only benchmark. This skill exposes capability only and must not load-test production without runtime permission. Validation signals include a latency histogram under realistic load. Risk boundary: if only mean latency is available, report the result as incomplete rather than SLO-passing.",
+  "domain": "model_serving",
+  "scope_hint": "code.model-serving:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.model-serving",
+  "pack_id": "code.model-serving"
+}

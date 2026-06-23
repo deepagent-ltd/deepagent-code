@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:embed:diagnose-a-watchdog-reset",
+  "type": "methodology",
+  "title": "Diagnose a watchdog reset or hang",
+  "description": "Find why the device resets or hangs by capturing the reset cause and tracing the path that starved the watchdog kick.",
+  "body": "Steps: 1. Read the reset-cause register on boot to confirm it was the watchdog, not a brownout or fault. 2. Capture the program counter / a breadcrumb log at the last kick point. 3. Trace what blocked the kick path: an ISR storm, a deadlock, a blocking call, or an infinite loop. 4. Fix the root cause — never just widen the watchdog period or disable it. 5. Re-run and confirm the watchdog no longer fires under the failing scenario. Rollback point: before any timing or priority change. Validation: reset-cause shows no watchdog resets across a soak test and the recovery path was exercised; disabling or lengthening the watchdog to stop resets hides a real hang and removes the safety net.",
+  "domain": "embedded",
+  "scope_hint": "code.embedded:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.embedded",
+  "pack_id": "code.embedded"
+}

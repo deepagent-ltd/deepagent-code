@@ -1,0 +1,47 @@
+{
+  "schema_version": "domain_pack.v1",
+  "id": "code.blockchain",
+  "name": "Blockchain & Smart Contracts (Solidity/EVM)",
+  "version": "1.0.0",
+  "scope": "system",
+  "risk": "high",
+  "domains": [
+    "blockchain",
+    "smart_contract",
+    "solidity",
+    "web3"
+  ],
+  "provides": [
+    "knowledge",
+    "strategy",
+    "methodology",
+    "skill",
+    "diagnosis",
+    "validation"
+  ],
+  "depends_on": [
+    "code.cryptography",
+    "risk.security",
+    "code.testing"
+  ],
+  "conflicts_with": [],
+  "knowledge_store": "document_store",
+  "allowed_tools": [
+    "read",
+    "shell:test"
+  ],
+  "denied_tools": [
+    "shell:deploy-production"
+  ],
+  "data_policy": {
+    "sensitivity": [
+      "source_code"
+    ],
+    "default_admission": "summary_only",
+    "secret_policy": "deny"
+  },
+  "detector": {
+    "inline": "profile.code_domains.some(d=>['blockchain','smart_contract','solidity','web3'].includes(d)) || profile.repo_signals.some(s=>/\\b(blockchain|smart contract|solidity|evm|gas limit|reentrancy|web3|on.?chain|erc-?20|ethereum)\\b/i.test(s)) ? 0.9 : 0",
+    "threshold": 0.5
+  }
+}

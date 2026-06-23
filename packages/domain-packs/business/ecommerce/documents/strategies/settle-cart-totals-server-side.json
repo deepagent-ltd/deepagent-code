@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:ecom:settle-cart-totals-server-side",
+  "type": "strategy",
+  "title": "Compute cart totals server-side",
+  "description": "Recompute price, tax, and discounts on the server at checkout, never trusting client-sent totals.",
+  "body": "Use when finalizing what a customer will be charged. Do not trust a total, unit price, or discount sent from the client — it can be tampered with to underpay. Actions: recompute every line price, applicable discount, and tax on the server from authoritative catalog and promotion data at checkout, and compare against the displayed total before charging. Validation signals include the server-computed total matching the catalog and rejecting a mismatched client total. Risk boundary: a pricing discrepancy at charge time is a financial and trust issue — surface it and defer the charge to business.finance rather than silently adjusting.",
+  "domain": "ecommerce",
+  "scope_hint": "business.ecommerce:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:business.ecommerce",
+  "pack_id": "business.ecommerce"
+}

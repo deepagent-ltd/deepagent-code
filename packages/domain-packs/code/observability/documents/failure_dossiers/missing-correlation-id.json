@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:observability:missing-correlation-id",
+  "type": "failure_dossier",
+  "description": "Telemetry emitted without a shared trace/request id, making it impossible to pivot from a metric anomaly to the explaining logs and trace.",
+  "body": "Failure mode: logs, metrics, and traces are emitted independently with no common correlation id, so during an incident a metric spike cannot be tied to specific traces or log lines and root cause takes far longer. Detection signals: logs lack a trace/request id; traces and logs cannot be joined; investigators grep by timestamp guesswork. Do not emit telemetry without a propagated correlation id. Safer fallback: generate and propagate a request/trace id through all signals, include it in structured logs and span attributes, and verify a metric anomaly can be pivoted to its trace and logs.",
+  "domain": "code",
+  "scope_hint": "code.observability:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.observability:human_authored",
+  "pack_id": "code.observability"
+}

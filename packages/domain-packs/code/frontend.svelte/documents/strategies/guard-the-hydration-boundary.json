@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:svelte:guard-the-hydration-boundary",
+  "type": "strategy",
+  "title": "Guard the hydration boundary",
+  "description": "Server-rendered markup must match the first client render, so non-deterministic or browser-only output must wait.",
+  "body": "Use when output depends on the current time, random values, or browser state and the route is server-rendered. Do not render values during SSR that the client will compute differently on hydration. Actions: render a stable placeholder on the server and fill browser-derived values in onMount, or use the browser guard from $app/environment to branch; keep the initial client render identical to the server HTML. Validation signals include no hydration-mismatch warning in the console and identical server and first-client markup. Risk boundary: a mismatch silently discards server markup and re-renders, hurting performance and sometimes flashing wrong content.",
+  "domain": "svelte",
+  "scope_hint": "code.frontend.svelte:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.frontend.svelte",
+  "pack_id": "code.frontend.svelte"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:mongo:read-preference-and-staleness",
+  "type": "knowledge",
+  "title": "Read preference trades freshness for scale",
+  "description": "Reading from secondaries spreads load but can return stale data because replication is asynchronous.",
+  "body": "Reference for choosing where reads run. Read preference secondary or secondaryPreferred routes reads to replicas to offload the primary, but replication lag means those replicas can serve data older than the latest write. Use when scaling read-heavy traffic. Do not route read-your-own-write or strongly-consistent reads to a secondary; a just-written document may not have replicated yet. Validation signals include a lag-tolerance test confirming acceptable staleness and serverStatus showing bounded replication lag. Risk boundary: mixing secondary reads with logic that assumes immediate consistency causes intermittent missing-data bugs, so pin consistency-sensitive reads to the primary or use readConcern majority.",
+  "domain": "mongodb",
+  "scope_hint": "code.database.mongodb:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.mongodb",
+  "pack_id": "code.database.mongodb"
+}

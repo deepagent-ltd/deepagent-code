@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:kernel:virtual-memory-and-paging",
+  "type": "knowledge",
+  "title": "Virtual memory and paging",
+  "description": "Page tables translate virtual to physical addresses with per-page protections; the TLB caches translations, so mapping changes need flushes to stay coherent.",
+  "body": "Use when working with memory mappings, mmap, or page faults. The MMU walks page tables to translate addresses and enforce per-page read/write/execute and user/kernel permissions; the TLB caches these, so changing a mapping without flushing leaves stale translations that read/write the wrong physical page. A page fault is the hook for demand paging and copy-on-write. Do not assume a contiguous virtual range is contiguous physically, or that a mapping change is instantly visible. Actions: flush the TLB after mapping changes and set least-privilege protections. Validation signals include correct fault handling and no stale-mapping corruption under stress. Risk boundary: a missing TLB flush corrupts data invisibly; verify mapping changes under concurrent load.",
+  "domain": "kernel",
+  "scope_hint": "code.os-kernel:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.os-kernel",
+  "pack_id": "code.os-kernel"
+}

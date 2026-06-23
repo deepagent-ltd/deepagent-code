@@ -1,0 +1,43 @@
+{
+  "schema_version": "domain_pack.v1",
+  "id": "code.performance",
+  "name": "Code Performance",
+  "version": "1.0.0",
+  "scope": "system",
+  "risk": "medium",
+  "domains": [
+    "code",
+    "performance"
+  ],
+  "provides": [
+    "knowledge",
+    "strategy",
+    "methodology",
+    "skill",
+    "diagnosis",
+    "validation"
+  ],
+  "depends_on": [
+    "code.testing"
+  ],
+  "conflicts_with": [],
+  "knowledge_store": "document_store",
+  "allowed_tools": [
+    "read",
+    "shell:test"
+  ],
+  "denied_tools": [
+    "shell:deploy-production"
+  ],
+  "data_policy": {
+    "sensitivity": [
+      "source_code"
+    ],
+    "default_admission": "summary_only",
+    "secret_policy": "deny"
+  },
+  "detector": {
+    "inline": "profile.task_kind === 'optimize' || profile.code_domains.includes('performance') || profile.repo_signals.some(s=>/\\b(latency|throughput|allocation|profiler|profiling|hot path|perf regression|benchmark baseline|p99|tail latency)\\b/i.test(s)) ? 0.88 : 0",
+    "threshold": 0.5
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:auth:scope-queries-by-tenant",
+  "type": "strategy",
+  "title": "Scope every query by tenant",
+  "description": "In multi-tenant systems, every data access is scoped by tenant at the query layer, not filtered after fetch.",
+  "body": "Use when the system serves multiple tenants/orgs and you touch any data-access path. Do not fetch broadly and filter in application code. Actions: ensure the tenant id from the principal is part of the WHERE/filter at the query layer; verify joins cannot leak cross-tenant rows. Validation signals include a test that a principal from tenant A cannot read or mutate tenant B rows via any endpoint. Risk boundary: a missing tenant scope is a data-isolation breach; escalate and add the scoped query plus a negative test.",
+  "domain": "backend_auth",
+  "scope_hint": "code.backend.auth:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.auth",
+  "pack_id": "code.backend.auth"
+}

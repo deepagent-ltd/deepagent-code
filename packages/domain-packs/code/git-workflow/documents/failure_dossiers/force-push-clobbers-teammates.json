@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:git:force-push-clobbers-teammates",
+  "type": "failure_dossier",
+  "description": "A plain force-push to a shared branch overwrites commits a teammate pushed in the meantime, deleting their work from the remote.",
+  "body": "Failure mode: a rebase or amend is followed by git push --force, which replaces the remote tip with the local one and discards any commits pushed by others since the last fetch. Detection signals: a teammate reports their commit vanished; git reflog on the remote or CI shows a tip that no longer contains known commits; the push reported no rejection despite the remote having advanced. Do not use plain --force on any shared branch. Safer fallback: fetch first and push with --force-with-lease so the push aborts when the remote moved, and coordinate any intentional rewrite with the team.",
+  "domain": "git_workflow",
+  "scope_hint": "code.git-workflow:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.git-workflow:human_authored",
+  "pack_id": "code.git-workflow"
+}

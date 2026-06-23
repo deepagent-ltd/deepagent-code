@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:ecom:double-charge-on-retry",
+  "type": "failure_dossier",
+  "description": "A payment retried after an ambiguous timeout charges the customer twice because no idempotency key dedupes it.",
+  "body": "Failure mode: a payment request times out ambiguously and is retried (by client, proxy, or user double-click) with no idempotency key, so the processor charges the customer twice and creates duplicate orders. Detection signals: duplicate charges minutes apart; two orders with identical contents; chargeback or refund requests for the same purchase. Do not retry a charge without an idempotency key. Safer fallback: generate and persist an idempotency key per attempt, dedupe on it, and defer the charge itself to business.finance under a human gate.",
+  "domain": "ecommerce",
+  "scope_hint": "business.ecommerce:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:business.ecommerce:human_authored",
+  "pack_id": "business.ecommerce"
+}

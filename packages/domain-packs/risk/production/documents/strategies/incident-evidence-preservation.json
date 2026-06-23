@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:production:incident-evidence-preservation",
+  "type": "strategy",
+  "title": "Preserve incident evidence",
+  "description": "During production incidents or regressions, preserve logs, metrics, timelines, commands, and decisions before cleanup or broad changes.",
+  "body": "Use when a task references outage, alert, customer impact, rollback, hotfix, or incident review. Do not access production systems or sensitive logs without authorization. Actions: record timeline, observed symptoms, affected versions, mitigation decisions, validation evidence, and unknowns. Validation signals include consistent metric/log references and a clear residual-risk note. Risk boundary: deleting evidence, rotating logs, or suppressing alerts during incident handling requires human approval. Use when Production Change Risk Controls work touches repository conventions, toolchain files, changed symbols, validation commands, and runtime output. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: choose the smallest direction that preserves the domain contract; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include package-local checks, focused tests, build output, smoke runs, and command logs. Risk boundary: escalate or stop when the task involves broad rewrites, generated-file drift, stale assumptions, and unvalidated behavior changes, missing owner evidence, or live external state.",
+  "domain": "incident",
+  "scope_hint": "risk.production:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.production",
+  "pack_id": "risk.production"
+}

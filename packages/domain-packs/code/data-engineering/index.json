@@ -1,0 +1,468 @@
+[
+  {
+    "ref_id": "strategy:dataeng:make-pipelines-idempotent",
+    "type": "strategy",
+    "title": "Make every pipeline run idempotent",
+    "summary": "Design writes so rerunning a task for a given partition produces the same result, never duplicates, regardless of how many times it runs.",
+    "domains": [
+      "data_engineering",
+      "etl",
+      "pipeline",
+      "warehouse"
+    ],
+    "triggers": [
+      "idempotent",
+      "rerun",
+      "retry",
+      "duplicate",
+      "partition",
+      "upsert"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.data-engineering"
+  },
+  {
+    "ref_id": "strategy:dataeng:partition-by-time-or-key",
+    "type": "strategy",
+    "title": "Partition data so work is bounded and replayable",
+    "summary": "Partition tables by an ingestion or event date (or a stable key) so each run touches one slice and backfills target single partitions.",
+    "domains": [
+      "data_engineering",
+      "etl",
+      "pipeline",
+      "warehouse"
+    ],
+    "triggers": [
+      "partition",
+      "date",
+      "backfill",
+      "scan",
+      "slice",
+      "pruning"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.data-engineering"
+  },
+  {
+    "ref_id": "strategy:dataeng:evolve-schema-additively",
+    "type": "strategy",
+    "title": "Evolve schemas additively and versioned",
+    "summary": "Add nullable columns and new fields rather than renaming or retyping, so existing consumers keep working through the change.",
+    "domains": [
+      "data_engineering",
+      "etl",
+      "pipeline",
+      "warehouse"
+    ],
+    "triggers": [
+      "schema evolution",
+      "migration",
+      "column",
+      "backward compatible",
+      "nullable",
+      "contract"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.data-engineering"
+  },
+  {
+    "ref_id": "strategy:dataeng:fail-loud-never-drop-rows",
+    "type": "strategy",
+    "title": "Fail loudly rather than drop data",
+    "summary": "Route unparseable or rejected records to a dead-letter path and surface counts, instead of silently filtering them out.",
+    "domains": [
+      "data_engineering",
+      "etl",
+      "pipeline",
+      "warehouse"
+    ],
+    "triggers": [
+      "dead letter",
+      "drop",
+      "reject",
+      "error",
+      "filter",
+      "quarantine"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.data-engineering"
+  },
+  {
+    "ref_id": "strategy:dataeng:choose-batch-vs-stream",
+    "type": "strategy",
+    "title": "Choose batch or streaming by latency need",
+    "summary": "Default to batch for its simplicity and reprocessability; adopt streaming only when end-to-end latency truly requires it.",
+    "domains": [
+      "data_engineering",
+      "etl",
+      "pipeline",
+      "warehouse"
+    ],
+    "triggers": [
+      "batch",
+      "streaming",
+      "kafka",
+      "latency",
+      "micro-batch",
+      "tradeoff"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.data-engineering"
+  },
+  {
+    "ref_id": "strategy:dataeng:make-orchestration-observable",
+    "type": "strategy",
+    "title": "Make orchestration dependencies and SLAs explicit",
+    "summary": "Model task dependencies as a DAG with declared SLAs and alerting so a late or failed upstream is visible, not silently stale.",
+    "domains": [
+      "data_engineering",
+      "etl",
+      "pipeline",
+      "warehouse"
+    ],
+    "triggers": [
+      "orchestration",
+      "airflow",
+      "dagster",
+      "dag",
+      "sla",
+      "dependency"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.data-engineering"
+  },
+  {
+    "ref_id": "methodology:dataeng:design-an-etl-pipeline",
+    "type": "methodology",
+    "title": "Design an ETL/ELT pipeline end to end",
+    "summary": "Lay out extract, load, transform, and validate stages with idempotent partitioned writes and a clear failure-recovery path.",
+    "domains": [
+      "data_engineering",
+      "etl",
+      "pipeline",
+      "warehouse"
+    ],
+    "triggers": [
+      "etl",
+      "elt",
+      "extract",
+      "transform",
+      "load",
+      "design"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.data-engineering"
+  },
+  {
+    "ref_id": "methodology:dataeng:run-a-safe-backfill",
+    "type": "methodology",
+    "title": "Run a safe backfill",
+    "summary": "Reprocess historical partitions in bounded, idempotent batches with verification, without disrupting the live forward pipeline.",
+    "domains": [
+      "data_engineering",
+      "etl",
+      "pipeline",
+      "warehouse"
+    ],
+    "triggers": [
+      "backfill",
+      "reprocess",
+      "historical",
+      "partition",
+      "throttle",
+      "verify"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.data-engineering"
+  },
+  {
+    "ref_id": "methodology:dataeng:debug-duplicated-rows",
+    "type": "methodology",
+    "title": "Debug duplicated rows in a target",
+    "summary": "Trace duplicates to a non-idempotent write, an at-least-once delivery, or a join fan-out, then fix the root cause.",
+    "domains": [
+      "data_engineering",
+      "etl",
+      "pipeline",
+      "warehouse"
+    ],
+    "triggers": [
+      "duplicates",
+      "double count",
+      "idempotent",
+      "at least once",
+      "join",
+      "dedup"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.data-engineering"
+  },
+  {
+    "ref_id": "methodology:dataeng:add-data-lineage",
+    "type": "methodology",
+    "title": "Establish data lineage",
+    "summary": "Map every target column back to its sources and transforms so impact analysis and debugging do not require reading all the code.",
+    "domains": [
+      "data_engineering",
+      "etl",
+      "pipeline",
+      "warehouse"
+    ],
+    "triggers": [
+      "lineage",
+      "provenance",
+      "impact analysis",
+      "dependency",
+      "column",
+      "trace"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.data-engineering"
+  },
+  {
+    "ref_id": "knowledge:dataeng:delivery-semantics",
+    "type": "knowledge",
+    "title": "At-least-once, at-most-once, exactly-once",
+    "summary": "Most systems deliver at-least-once, so consumers must be idempotent; true exactly-once requires transactional sinks or dedup keys.",
+    "domains": [
+      "data_engineering",
+      "etl",
+      "pipeline",
+      "warehouse"
+    ],
+    "triggers": [
+      "delivery",
+      "exactly once",
+      "at least once",
+      "idempotent",
+      "dedup",
+      "semantics"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.data-engineering"
+  },
+  {
+    "ref_id": "knowledge:dataeng:batch-vs-streaming-tradeoffs",
+    "type": "knowledge",
+    "title": "Batch vs streaming tradeoffs",
+    "summary": "Batch is simple, cheap, and trivially replayable; streaming gives low latency at the cost of stateful operators, watermarks, and harder backfills.",
+    "domains": [
+      "data_engineering",
+      "etl",
+      "pipeline",
+      "warehouse"
+    ],
+    "triggers": [
+      "batch",
+      "streaming",
+      "watermark",
+      "state",
+      "latency",
+      "reprocess"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.data-engineering"
+  },
+  {
+    "ref_id": "knowledge:dataeng:warehouse-vs-lake-modeling",
+    "type": "knowledge",
+    "title": "Warehouse modeling and partitioning",
+    "summary": "Columnar warehouses reward partitioning and clustering for pruning; modeling (staging, dimensions, facts) trades storage for query simplicity.",
+    "domains": [
+      "data_engineering",
+      "etl",
+      "pipeline",
+      "warehouse"
+    ],
+    "triggers": [
+      "warehouse",
+      "columnar",
+      "partition",
+      "clustering",
+      "dimensional",
+      "modeling"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.data-engineering"
+  },
+  {
+    "ref_id": "knowledge:dataeng:incremental-vs-full-load",
+    "type": "knowledge",
+    "title": "Incremental loads and watermarks",
+    "summary": "Incremental loads move only new/changed rows via a watermark or CDC; full reloads are simple but do not scale and risk overwriting good data.",
+    "domains": [
+      "data_engineering",
+      "etl",
+      "pipeline",
+      "warehouse"
+    ],
+    "triggers": [
+      "incremental",
+      "watermark",
+      "cdc",
+      "full load",
+      "high watermark",
+      "delta"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.data-engineering"
+  },
+  {
+    "ref_id": "skill:dataeng:run-pipeline-and-reconcile",
+    "type": "skill",
+    "title": "Run a pipeline task and reconcile counts",
+    "summary": "Execute a pipeline task (or its tests) and report row counts, reconciliation against source, and idempotency of a rerun.",
+    "domains": [
+      "data_engineering",
+      "etl",
+      "pipeline",
+      "warehouse"
+    ],
+    "triggers": [
+      "run",
+      "pipeline",
+      "reconcile",
+      "counts",
+      "idempotent",
+      "test"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.data-engineering"
+  },
+  {
+    "ref_id": "skill:dataeng:inspect-schema-and-lineage",
+    "type": "skill",
+    "title": "Inspect schema changes and lineage impact",
+    "summary": "Analyze a proposed schema change and the lineage graph and report which downstream consumers break and whether the change is additive.",
+    "domains": [
+      "data_engineering",
+      "etl",
+      "pipeline",
+      "warehouse"
+    ],
+    "triggers": [
+      "schema",
+      "lineage",
+      "impact",
+      "consumer",
+      "breaking",
+      "report"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.data-engineering"
+  }
+]

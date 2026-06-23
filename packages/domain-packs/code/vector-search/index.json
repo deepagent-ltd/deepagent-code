@@ -1,0 +1,452 @@
+[
+  {
+    "ref_id": "strategy:vsearch:match-query-and-index-embedder",
+    "type": "strategy",
+    "title": "Embed queries with the exact index model",
+    "summary": "Use the identical embedding model and version for queries that built the index, since mismatched encoders place vectors in incomparable spaces.",
+    "domains": [
+      "vector_search",
+      "embedding",
+      "ann",
+      "hybrid_search",
+      "vector_db"
+    ],
+    "triggers": [
+      "embedding model",
+      "vector search",
+      "consistency",
+      "versioning"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.vector-search"
+  },
+  {
+    "ref_id": "strategy:vsearch:tune-ann-against-recall",
+    "type": "strategy",
+    "title": "Tune ANN parameters against a recall target",
+    "summary": "Set HNSW or IVF build and search parameters from a measured recall-vs-latency curve, not from library defaults.",
+    "domains": [
+      "vector_search",
+      "embedding",
+      "ann",
+      "hybrid_search",
+      "vector_db"
+    ],
+    "triggers": [
+      "hnsw",
+      "ivf",
+      "ann index",
+      "recall"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.vector-search"
+  },
+  {
+    "ref_id": "strategy:vsearch:hybrid-fuse-lexical-and-vector",
+    "type": "strategy",
+    "title": "Fuse lexical and vector retrieval",
+    "summary": "Combine BM25 and dense retrieval so exact-term matches and semantic matches both surface, improving recall over either alone.",
+    "domains": [
+      "vector_search",
+      "embedding",
+      "ann",
+      "hybrid_search",
+      "vector_db"
+    ],
+    "triggers": [
+      "hybrid search",
+      "bm25",
+      "dense retrieval",
+      "fusion"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.vector-search"
+  },
+  {
+    "ref_id": "strategy:vsearch:rerank-the-shortlist",
+    "type": "strategy",
+    "title": "Re-rank a retrieved shortlist precisely",
+    "summary": "Retrieve a wider candidate set with cheap ANN, then re-rank the top candidates with a cross-encoder for precision.",
+    "domains": [
+      "vector_search",
+      "embedding",
+      "ann",
+      "hybrid_search",
+      "vector_db"
+    ],
+    "triggers": [
+      "re-rank",
+      "cross-encoder",
+      "precision",
+      "shortlist"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.vector-search"
+  },
+  {
+    "ref_id": "strategy:vsearch:chunk-for-retrieval",
+    "type": "strategy",
+    "title": "Choose chunking to match retrieval granularity",
+    "summary": "Size and overlap chunks so each embedded unit is self-contained enough to match queries without diluting the vector.",
+    "domains": [
+      "vector_search",
+      "embedding",
+      "ann",
+      "hybrid_search",
+      "vector_db"
+    ],
+    "triggers": [
+      "chunking",
+      "embedding",
+      "retrieval",
+      "granularity"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.vector-search"
+  },
+  {
+    "ref_id": "strategy:vsearch:pick-distance-to-embedder",
+    "type": "strategy",
+    "title": "Match the distance metric to the embedder",
+    "summary": "Use the similarity metric the embedding model was trained for (cosine, dot, or L2) and normalize vectors consistently.",
+    "domains": [
+      "vector_search",
+      "embedding",
+      "ann",
+      "hybrid_search",
+      "vector_db"
+    ],
+    "triggers": [
+      "distance metric",
+      "cosine",
+      "embedding",
+      "normalization"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.vector-search"
+  },
+  {
+    "ref_id": "methodology:vsearch:build-retrieval-eval",
+    "type": "methodology",
+    "title": "Build a labeled retrieval evaluation set",
+    "summary": "Assemble queries with judged relevant documents so recall and precision can gate every index or model change.",
+    "domains": [
+      "vector_search",
+      "embedding",
+      "ann",
+      "hybrid_search",
+      "vector_db"
+    ],
+    "triggers": [
+      "recall",
+      "precision",
+      "evaluate",
+      "benchmark"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.vector-search"
+  },
+  {
+    "ref_id": "methodology:vsearch:select-vector-db",
+    "type": "methodology",
+    "title": "Select a vector database for the workload",
+    "summary": "Choose among pgvector, Qdrant, and Milvus based on scale, filtering needs, and operational fit.",
+    "domains": [
+      "vector_search",
+      "embedding",
+      "ann",
+      "hybrid_search",
+      "vector_db"
+    ],
+    "triggers": [
+      "vector db",
+      "pgvector",
+      "qdrant",
+      "milvus"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.vector-search"
+  },
+  {
+    "ref_id": "methodology:vsearch:diagnose-low-recall",
+    "type": "methodology",
+    "title": "Diagnose a low-recall retrieval pipeline",
+    "summary": "A systematic pass isolating whether low recall comes from embedding mismatch, index tuning, or chunking.",
+    "domains": [
+      "vector_search",
+      "embedding",
+      "ann",
+      "hybrid_search",
+      "vector_db"
+    ],
+    "triggers": [
+      "recall",
+      "ann index",
+      "embedding model",
+      "diagnosis"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.vector-search"
+  },
+  {
+    "ref_id": "methodology:vsearch:reindex-on-model-change",
+    "type": "methodology",
+    "title": "Reindex safely when the embedder changes",
+    "summary": "Re-embed the whole corpus and validate recall before cutting queries over to a new embedding model.",
+    "domains": [
+      "vector_search",
+      "embedding",
+      "ann",
+      "hybrid_search",
+      "vector_db"
+    ],
+    "triggers": [
+      "embedding model",
+      "reindex",
+      "versioning",
+      "migration"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.vector-search"
+  },
+  {
+    "ref_id": "knowledge:vsearch:ann-algorithms",
+    "type": "knowledge",
+    "title": "ANN algorithms: HNSW, IVF, and PQ",
+    "summary": "How graph-based HNSW, inverted-file IVF, and product quantization trade recall, memory, and build cost.",
+    "domains": [
+      "vector_search",
+      "embedding",
+      "ann",
+      "hybrid_search",
+      "vector_db"
+    ],
+    "triggers": [
+      "hnsw",
+      "ivf",
+      "pq",
+      "ann index"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.vector-search"
+  },
+  {
+    "ref_id": "knowledge:vsearch:dense-sparse-late-interaction",
+    "type": "knowledge",
+    "title": "Dense, sparse, and late-interaction embeddings",
+    "summary": "How single-vector dense, learned-sparse, and multi-vector late-interaction representations differ in recall behavior.",
+    "domains": [
+      "vector_search",
+      "embedding",
+      "ann",
+      "hybrid_search",
+      "vector_db"
+    ],
+    "triggers": [
+      "dense retrieval",
+      "sparse retrieval",
+      "embedding",
+      "late interaction"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.vector-search"
+  },
+  {
+    "ref_id": "knowledge:vsearch:recall-precision-tradeoff",
+    "type": "knowledge",
+    "title": "Recall and precision in retrieval",
+    "summary": "What recall@k and precision@k measure and why first-stage retrieval optimizes recall while re-ranking optimizes precision.",
+    "domains": [
+      "vector_search",
+      "embedding",
+      "ann",
+      "hybrid_search",
+      "vector_db"
+    ],
+    "triggers": [
+      "recall",
+      "precision",
+      "evaluate",
+      "re-rank"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.vector-search"
+  },
+  {
+    "ref_id": "knowledge:vsearch:hybrid-fusion-methods",
+    "type": "knowledge",
+    "title": "Fusion methods for hybrid search",
+    "summary": "How reciprocal rank fusion and weighted score combination merge lexical and vector result lists.",
+    "domains": [
+      "vector_search",
+      "embedding",
+      "ann",
+      "hybrid_search",
+      "vector_db"
+    ],
+    "triggers": [
+      "hybrid search",
+      "fusion",
+      "bm25",
+      "reciprocal rank fusion"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.vector-search"
+  },
+  {
+    "ref_id": "skill:vsearch:run-recall-benchmark",
+    "type": "skill",
+    "title": "Run a recall/precision benchmark on an index",
+    "summary": "Steps to score an index against a labeled query set and compare ANN recall to exact-search ground truth.",
+    "domains": [
+      "vector_search",
+      "embedding",
+      "ann",
+      "hybrid_search",
+      "vector_db"
+    ],
+    "triggers": [
+      "recall",
+      "precision",
+      "benchmark",
+      "ann index"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.vector-search"
+  },
+  {
+    "ref_id": "skill:vsearch:wire-hybrid-retriever",
+    "type": "skill",
+    "title": "Wire a hybrid lexical+vector retriever",
+    "summary": "Steps to run BM25 and vector retrieval in parallel and fuse them with tuned reciprocal rank fusion.",
+    "domains": [
+      "vector_search",
+      "embedding",
+      "ann",
+      "hybrid_search",
+      "vector_db"
+    ],
+    "triggers": [
+      "hybrid search",
+      "bm25",
+      "fusion",
+      "dense retrieval"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.vector-search"
+  }
+]

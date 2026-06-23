@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:comp:keep-type-system-sound",
+  "type": "strategy",
+  "title": "Keep the type system sound",
+  "description": "Ensure type rules reject every ill-typed program (no false accepts) so well-typed programs cannot go wrong at runtime in the ways the type system promises.",
+  "body": "Use when implementing or changing type-checking rules. Do not relax a rule to make a specific program compile if it lets a class of unsafe programs through, and do not conflate convenience coercions with soundness. Actions: derive each rule from the type system's specification, prove progress/preservation hold for new constructs, and test with both well-typed programs (must accept) and ill-typed ones (must reject). Validation signals include a test suite where every ill-typed sample is rejected with a clear error and no well-typed sample is wrongly rejected. Risk boundary: an unsound rule that accepts an ill-typed program breaks the language's safety guarantee for everyone; treat soundness holes as blocking and escalate before weakening a rule.",
+  "domain": "compiler",
+  "scope_hint": "code.compiler:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.compiler",
+  "pack_id": "code.compiler"
+}

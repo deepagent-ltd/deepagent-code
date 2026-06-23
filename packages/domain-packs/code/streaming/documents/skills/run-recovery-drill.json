@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:stream:run-recovery-drill",
+  "type": "skill",
+  "title": "Run a checkpoint recovery drill",
+  "description": "Steps to force a failure, recover from a checkpoint, and reconcile output for loss and duplication.",
+  "body": "Use when validating that a stateful job recovers cleanly. Do not assume checkpointing works because it is enabled — only a drill proves it. Actions: feed a counted dataset, kill a task mid-stream to trigger checkpoint recovery, let the job resume, and reconcile the sink against the input for both missing and duplicated records. Validation signals include a recovered output count exactly matching input and a sink log showing replays were deduplicated or transactionally committed. Risk boundary: undetected duplication on recovery corrupts downstream aggregates; if the drill reveals loss or duplicates, treat the job as not production-ready and escalate to fix the sink or state handling.",
+  "domain": "streaming",
+  "scope_hint": "code.streaming:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.streaming",
+  "pack_id": "code.streaming"
+}

@@ -1,0 +1,11 @@
+{
+  "ref_id": "knowledge:swift:generated-code-drift",
+  "type": "knowledge",
+  "description": "In Swift, never hand-edit Swift Package plugin output and generated bindings (e.g. from .proto); change the source and rerun the generator.",
+  "body": "In Swift, Swift Package plugin output and generated bindings (e.g. from .proto) are derived artifacts: editing them directly drifts from the generator and is overwritten on the next run. Use when a diff touches generated files, codegen inputs, or the the Swift toolchain version, the SDK/platform, and the build configuration that produces them. Do not use this to justify patching generated output by hand or skipping regeneration. Actions: locate the generator and its inputs, edit the source, rerun the generation step, then run swift build (or the Xcode scheme) for the right platform and configuration so the regenerated output is what ships. Validation signals include a clean regeneration diff, a passing swift test (XCTest/swift-testing) on the affected target, and no manual edits left in the generated tree. Risk boundary: escalate before regenerating if the generator is pinned, vendored, or owned by another team, and roll back if regeneration changes unrelated files.",
+  "domain": "swift",
+  "scope_hint": "code.swift:knowledge",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.swift:skill_survey",
+  "pack_id": "code.swift"
+}

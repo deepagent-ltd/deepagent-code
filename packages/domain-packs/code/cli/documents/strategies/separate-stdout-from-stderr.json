@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:cli:separate-stdout-from-stderr",
+  "type": "strategy",
+  "title": "Send data to stdout, diagnostics to stderr",
+  "description": "Write only the program's actual output to stdout and all logs, progress, and errors to stderr so piping stays clean.",
+  "body": "Use when a CLI produces output a script might consume. Do not print progress bars, warnings, or errors to stdout, and do not interleave logs with data. Actions: route the result payload (the thing a pipe should receive) to stdout, and send everything else (status, warnings, errors, prompts) to stderr; verify with `tool > out.txt` that out.txt holds only data. Validation signals include redirecting stdout to a file and finding no diagnostic noise, and a downstream pipe parsing cleanly. Risk boundary: leaking diagnostics into stdout silently corrupts the input of the next command in a pipeline — treat it as a correctness bug, not cosmetics.",
+  "domain": "cli",
+  "scope_hint": "code.cli:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.cli",
+  "pack_id": "code.cli"
+}

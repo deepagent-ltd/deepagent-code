@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:privacy:aggregation-can-still-identify",
+  "type": "knowledge",
+  "title": "Aggregation can still identify small groups",
+  "description": "Aggregated statistics can identify people when groups are small, unique, or combined with other attributes.",
+  "body": "Use when adding dashboards, analytics exports, cohorts, or telemetry summaries. Do not require formal statistical disclosure control for every internal metric. Actions: check group size, linkability, rare combinations, and whether raw data can be reconstructed. Validation signals include thresholds, bucketing, or suppressed small cohorts. Risk boundary: sensitive attributes in small cohorts require human privacy review. Use when Privacy Risk Controls work touches personal-data classes, sinks, retention, consent, logs, prompts, and exports. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: use the fact to constrain the change and test plan; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include data inventory, redaction tests, retention checks, export/delete tests, and approval evidence. Risk boundary: escalate or stop when the task involves PII disclosure, consent bypass, retention drift, and unapproved processor expansion, missing owner evidence, or live external state.",
+  "domain": "privacy",
+  "scope_hint": "risk.privacy:knowledge",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:risk.privacy",
+  "pack_id": "risk.privacy"
+}

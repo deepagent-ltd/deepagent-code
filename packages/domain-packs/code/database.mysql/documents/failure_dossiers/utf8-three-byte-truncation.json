@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure_dossier:mysql:utf8-three-byte-truncation",
+  "type": "failure_dossier",
+  "description": "Choosing the utf8 charset alias silently drops four-byte characters on insert.",
+  "body": "Failure mode: a column declared CHARACTER SET utf8 (the utf8mb3 alias) truncates or rejects four-byte code points, so emoji and rare CJK characters are lost on write. Detection signals: round-tripped emoji come back as a replacement character or the insert raises Incorrect string value, and SHOW CREATE TABLE reports utf8 not utf8mb4. Do not use utf8 for any user-facing text column. Safer fallback: define columns as utf8mb4 with a utf8mb4 collation, set the connection charset to match, and re-import affected rows from a clean source after the conversion.",
+  "domain": "mysql",
+  "scope_hint": "code.database.mysql:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.mysql:human_authored",
+  "pack_id": "code.database.mysql"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:frontend_accessibility:label-every-form-control",
+  "type": "strategy",
+  "title": "Give every form control a programmatic label",
+  "description": "Associate each input with a real label element or aria-labelledby so the control's purpose is announced, never relying on placeholder text alone.",
+  "body": "Use when building or changing any form field, checkbox, radio, or select. Do not use placeholder text as the only label; it disappears on input and many screen readers skip it. Actions: connect a visible <label for=id> or wrap the control, add aria-describedby for hints and error text, and verify the accessible name in the accessibility tree. Validation signals include an axe/screen-reader check showing every control has a non-empty name and errors are announced. Risk boundary: an unlabeled control blocks task completion for assistive-tech users; treat a missing programmatic label as a blocking defect, not cosmetic.",
+  "domain": "frontend",
+  "scope_hint": "code.frontend.accessibility:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.frontend.accessibility",
+  "pack_id": "code.frontend.accessibility"
+}

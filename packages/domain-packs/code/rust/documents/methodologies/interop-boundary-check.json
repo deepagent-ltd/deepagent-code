@@ -1,0 +1,11 @@
+{
+  "ref_id": "methodology:rust:interop-boundary-check",
+  "type": "methodology",
+  "description": "In Rust, validate the serde deserialization, FFI across extern \"C\", and From/TryFrom conversions where external data crosses in.",
+  "body": "In Rust, defects cluster at serde deserialization, FFI across extern \"C\", and From/TryFrom conversions, where assumptions about types, ownership, or encoding stop holding. Use when a change crosses the pub API, trait bounds, lifetimes, and Send/Sync auto-traits or consumes data from outside the program. Do not assume the other side honors your contract, and avoid trusting input without checking it. Actions: identify the boundary, test both valid and malformed input, verify the error path, and record the assumptions you are relying on. Validation signals include tests for the failure path, a trace of rejected input, and a documented contract at the pub API, trait bounds, lifetimes, and Send/Sync auto-traits. Risk boundary: escalate when the boundary handles untrusted input, crosses a trust/security line, or feeds a system you cannot roll back.",
+  "domain": "rust",
+  "scope_hint": "code.rust:methodologies",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.rust:skill_survey",
+  "pack_id": "code.rust"
+}

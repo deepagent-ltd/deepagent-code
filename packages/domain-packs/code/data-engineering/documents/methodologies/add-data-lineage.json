@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:dataeng:add-data-lineage",
+  "type": "methodology",
+  "title": "Establish data lineage",
+  "description": "Map every target column back to its sources and transforms so impact analysis and debugging do not require reading all the code.",
+  "body": "Steps: 1. Inventory targets and the queries/jobs that produce them. 2. Capture column-level dependencies — which source columns and transforms feed each target column. 3. Record lineage in the orchestrator/catalog or generate it from query parsing. 4. Use it to answer 'what breaks if this source changes' before making the change. 5. Keep lineage updated as part of the pipeline definition. Rollback point: not applicable — lineage is metadata. Validation: every target column resolves to a source and an impact query returns affected downstreams; stale or missing lineage turns a small source change into an unbounded outage.",
+  "domain": "data_engineering",
+  "scope_hint": "code.data-engineering:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.data-engineering",
+  "pack_id": "code.data-engineering"
+}

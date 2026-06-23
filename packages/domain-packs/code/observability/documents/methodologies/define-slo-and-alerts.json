@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:observability:define-slo-and-alerts",
+  "type": "methodology",
+  "title": "Define an SLO and derive actionable alerts",
+  "description": "Set a measurable service objective, compute an error budget, and create alerts that fire on budget burn rather than on every blip.",
+  "body": "Steps: 1. Pick a user-centric SLI (e.g. fraction of requests under 300ms, success rate). 2. Set the SLO target and the resulting error budget over a window. 3. Define multi-window burn-rate alerts so fast burns page and slow burns ticket. 4. Make each alert link to a runbook and an owner. 5. Review against real traffic to tune thresholds. Rollback point: before paging policy changes. Validation: alerts fire on a simulated burn and stay quiet on normal noise; every alert maps to an action and owner. Risk boundary: an alert with no runbook or no owner is noise that erodes on-call trust — do not ship it; escalate alert fatigue rather than adding more pages.",
+  "domain": "code",
+  "scope_hint": "code.observability:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.observability",
+  "pack_id": "code.observability"
+}

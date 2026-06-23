@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:debugging:timeout-as-root-cause",
+  "type": "failure_dossier",
+  "description": "Increasing a timeout treats a symptom as the cause when ordering, waiting, or resource leaks are unproven.",
+  "body": "Failure mode: a timeout is observed and the fix only increases delay or retry count without proving why work did not complete. This can hide deadlocks, leaked handles, missing awaits, slow external calls, or incorrect readiness signals. Diagnostic signal: no timeline, no resource evidence, and no before/after proof beyond the command taking longer. Do not use timeout changes as a root-cause fix unless measurements show the previous bound was invalid by contract. Recovery is to collect timing evidence, identify the first delayed or missing event, and lock the original timeout failure with a regression signal. Use when a proposed approach skips reproduction steps, stack traces, logs, state transitions, and controlled hypotheses or claims success without domain evidence. Do not use this dossier as a positive implementation strategy; it is a do-not-use signal. Actions: block the shortcut, name the missing evidence, and switch to a safer methodology or ask for human approval. Validation signals include absence or contradiction in minimal repro, before/after trace, regression test, and command output. Risk boundary: treat repeated recurrence as a blocker when it can cause blind retries, wrapper fixes, broad rewrites, and unproven root cause.",
+  "domain": "debugging",
+  "scope_hint": "code.debugging:failure_dossiers",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.debugging:human_authored",
+  "pack_id": "code.debugging"
+}

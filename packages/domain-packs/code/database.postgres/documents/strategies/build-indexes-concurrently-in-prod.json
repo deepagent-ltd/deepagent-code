@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:pg:build-indexes-concurrently-in-prod",
+  "type": "strategy",
+  "title": "Build indexes CONCURRENTLY in production",
+  "description": "On a populated, live table, create and drop indexes with CONCURRENTLY so writers are not blocked.",
+  "body": "Use when adding or removing an index on a table that takes live traffic. Do not run a plain CREATE INDEX on a large hot table; it takes a SHARE lock that blocks writes for the whole build. Actions: use CREATE INDEX CONCURRENTLY (and DROP INDEX CONCURRENTLY), run it outside a transaction block, and check for and clean up an INVALID index if the build fails partway. Validation signals include writes continuing during the build and pg_index showing indisvalid true afterward. Risk boundary: a non-concurrent index build on a production hot table is an availability incident; if it must run plain, schedule a maintenance window and get a human gate.",
+  "domain": "postgres",
+  "scope_hint": "code.database.postgres:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.postgres",
+  "pack_id": "code.database.postgres"
+}

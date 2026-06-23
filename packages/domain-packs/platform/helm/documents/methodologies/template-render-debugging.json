@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:helm:template-render-debugging",
+  "type": "methodology",
+  "title": "Debug a chart by rendering and isolating the template",
+  "description": "Use helm template --debug and --show-only to see the exact rendered YAML and pinpoint a nil value or indentation bug before installing.",
+  "body": "Use when an install fails or a manifest renders wrong. Do not install repeatedly against the cluster to debug. Actions: run helm template --debug to render locally with stack traces, use --show-only templates/<file>.yaml to isolate one manifest, pass the failing -f values to reproduce, and look for nil pointer (missing key) or indentation (missing nindent/toYaml) issues. Validation signals include the render succeeding locally with the expected YAML and the previously failing key now populated. Risk boundary: none for local render; applying to production still requires the normal upgrade gate.",
+  "domain": "helm",
+  "scope_hint": "platform.helm:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.helm",
+  "pack_id": "platform.helm"
+}

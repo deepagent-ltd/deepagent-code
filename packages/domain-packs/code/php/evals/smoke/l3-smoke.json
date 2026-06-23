@@ -1,0 +1,74 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "code.php",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "php",
+      "composer",
+      "laravel"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [
+      "php"
+    ],
+    "frameworks": [
+      "laravel",
+      "symfony"
+    ],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "L3 smoke for code.php: composer psr-4 autoload, phpunit tests, laravel and symfony conventions, declare strict_types, and exception handling"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "plain prose note with no repository or domain signal"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "retrieval_query": "php composer psr-4 autoload composer.lock phpunit laravel symfony artisan eloquent strict_types exception namespace dependency injection",
+  "expected_pack_id": "code.php",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "code.php L3 validation smoke",
+    "signals": [
+      "composer install reproduces vendor/ from composer.lock with no drift",
+      "phpunit suite is green and a new class is autoloaded without a manual require",
+      "declare(strict_types=1) is set in files whose contracts depend on it",
+      "framework boundary code has a test exercising the documented seam (service container, event)"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "code.php diagnosis smoke",
+    "signals": [
+      "class loaded with require/include instead of PSR-4 autoload",
+      "composer.lock not committed so environments resolve different versions",
+      "type coercion bug from missing strict_types",
+      "Eloquent N+1 query from unbatched lazy relations",
+      "exception swallowed by an empty catch or the @ error-suppression operator"
+    ]
+  },
+  "source_refs": [
+    "source:php-the-right-way:paraphrased",
+    "source:psr-standards:paraphrased"
+  ]
+}

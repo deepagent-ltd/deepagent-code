@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:serving:oversized-batch-window-tail",
+  "type": "failure_dossier",
+  "description": "Setting a long queue-wait/batch window that maximizes throughput but pushes p99 latency past the SLO.",
+  "body": "Failure mode: the batch timeout is tuned for maximum throughput, so requests wait a long time to fill batches and tail latency balloons even though average latency and throughput look great. Detection signals: p99/p99.9 far exceeds the SLO while mean latency is fine; latency improves immediately when the queue wait is lowered; benchmarks only reported the mean. Do not tune batching on throughput alone. Safer fallback: measure p99 under load, cap the queue wait, and choose the largest batch that keeps the tail under the SLO.",
+  "domain": "model_serving",
+  "scope_hint": "code.model-serving:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.model-serving:human_authored",
+  "pack_id": "code.model-serving"
+}

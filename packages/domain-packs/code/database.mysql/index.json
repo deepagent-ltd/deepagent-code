@@ -1,0 +1,427 @@
+[
+  {
+    "ref_id": "strategy:mysql:design-around-the-clustered-primary-key",
+    "type": "strategy",
+    "title": "Design tables around the clustered primary key",
+    "summary": "Pick a small, monotonic primary key because InnoDB physically orders every row and every secondary index by it.",
+    "domains": [
+      "mysql",
+      "innodb",
+      "mariadb"
+    ],
+    "triggers": [
+      "primary key choice",
+      "clustered index",
+      "uuid key",
+      "secondary index bloat"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.mysql"
+  },
+  {
+    "ref_id": "strategy:mysql:keep-transactions-short-to-shrink-gap-locks",
+    "type": "strategy",
+    "title": "Keep transactions short to shrink gap-lock contention",
+    "summary": "Under REPEATABLE READ InnoDB takes next-key locks on ranges, so long transactions block neighbouring inserts.",
+    "domains": [
+      "mysql",
+      "innodb",
+      "mariadb"
+    ],
+    "triggers": [
+      "gap lock",
+      "next-key lock",
+      "deadlock",
+      "lock wait timeout",
+      "repeatable read"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.mysql"
+  },
+  {
+    "ref_id": "strategy:mysql:standardize-on-utf8mb4",
+    "type": "strategy",
+    "title": "Standardize on utf8mb4 for every text column",
+    "summary": "The legacy utf8 alias stores only three bytes and silently truncates four-byte characters such as emoji.",
+    "domains": [
+      "mysql",
+      "innodb",
+      "mariadb"
+    ],
+    "triggers": [
+      "utf8mb4",
+      "charset",
+      "collation",
+      "emoji truncation",
+      "character set"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.mysql"
+  },
+  {
+    "ref_id": "strategy:mysql:run-online-ddl-with-algorithm-inplace",
+    "type": "strategy",
+    "title": "Run schema changes with ALGORITHM=INPLACE online DDL",
+    "summary": "Many InnoDB ALTERs can run without a full table copy and without blocking writes when the right algorithm is chosen.",
+    "domains": [
+      "mysql",
+      "innodb",
+      "mariadb"
+    ],
+    "triggers": [
+      "online ddl",
+      "alter table",
+      "algorithm inplace",
+      "instant add column",
+      "gh-ost"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.mysql"
+  },
+  {
+    "ref_id": "strategy:mysql:do-not-rely-on-the-query-cache",
+    "type": "strategy",
+    "title": "Do not architect around the removed query cache",
+    "summary": "MySQL 8 deleted the query cache entirely, so designs that lean on it must move caching to the application layer.",
+    "domains": [
+      "mysql",
+      "innodb",
+      "mariadb"
+    ],
+    "triggers": [
+      "query cache",
+      "query_cache_size",
+      "mysql 8 upgrade",
+      "result caching"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.mysql"
+  },
+  {
+    "ref_id": "strategy:mysql:choose-binlog-format-for-replication-safety",
+    "type": "strategy",
+    "title": "Choose the binlog format for replication safety",
+    "summary": "ROW-based binary logging replicates exact changes and avoids the nondeterminism that breaks STATEMENT replication.",
+    "domains": [
+      "mysql",
+      "innodb",
+      "mariadb"
+    ],
+    "triggers": [
+      "binlog",
+      "replication",
+      "row format",
+      "statement replication",
+      "data drift",
+      "cdc"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.mysql"
+  },
+  {
+    "ref_id": "methodology:mysql:diagnose-a-deadlock-from-innodb-status",
+    "type": "methodology",
+    "title": "Diagnose a deadlock from INNODB STATUS",
+    "summary": "A repeatable procedure that reads the LATEST DETECTED DEADLOCK block to find the lock-order conflict and fix it.",
+    "domains": [
+      "mysql",
+      "innodb",
+      "mariadb"
+    ],
+    "triggers": [
+      "deadlock diagnosis",
+      "innodb status",
+      "lock order",
+      "retry transaction"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.mysql"
+  },
+  {
+    "ref_id": "methodology:mysql:plan-a-zero-downtime-schema-migration",
+    "type": "methodology",
+    "title": "Plan a zero-downtime schema migration",
+    "summary": "Sequence an expand-migrate-contract rollout so reads and writes never see a missing or half-populated column.",
+    "domains": [
+      "mysql",
+      "innodb",
+      "mariadb"
+    ],
+    "triggers": [
+      "zero downtime migration",
+      "expand contract",
+      "backfill",
+      "dual write"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.mysql"
+  },
+  {
+    "ref_id": "methodology:mysql:tune-innodb-buffer-pool-sizing",
+    "type": "methodology",
+    "title": "Tune InnoDB buffer pool sizing",
+    "summary": "Size innodb_buffer_pool_size against the hot working set and confirm the hit ratio rather than guessing a fraction of RAM.",
+    "domains": [
+      "mysql",
+      "innodb",
+      "mariadb"
+    ],
+    "triggers": [
+      "buffer pool",
+      "innodb_buffer_pool_size",
+      "hit ratio",
+      "memory tuning"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.mysql"
+  },
+  {
+    "ref_id": "methodology:mysql:validate-a-replica-is-consistent",
+    "type": "methodology",
+    "title": "Validate a replica is consistent with its primary",
+    "summary": "Use checksum tooling to prove a replica matches the primary instead of trusting that replication merely runs.",
+    "domains": [
+      "mysql",
+      "innodb",
+      "mariadb"
+    ],
+    "triggers": [
+      "replica consistency",
+      "pt-table-checksum",
+      "drift detection",
+      "promote replica"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.mysql"
+  },
+  {
+    "ref_id": "knowledge:mysql:next-key-locking-explained",
+    "type": "knowledge",
+    "title": "How InnoDB next-key locking works",
+    "summary": "Next-key locks combine a record lock with a gap lock to stop phantom rows under REPEATABLE READ.",
+    "domains": [
+      "mysql",
+      "innodb",
+      "mariadb"
+    ],
+    "triggers": [
+      "next-key lock",
+      "gap lock",
+      "phantom read",
+      "repeatable read locking"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.mysql"
+  },
+  {
+    "ref_id": "knowledge:mysql:auto-increment-gaps-are-expected",
+    "type": "knowledge",
+    "title": "Auto-increment gaps are normal, not corruption",
+    "summary": "InnoDB does not recycle auto-increment values from rolled-back or failed inserts, so id sequences have holes.",
+    "domains": [
+      "mysql",
+      "innodb",
+      "mariadb"
+    ],
+    "triggers": [
+      "auto increment gap",
+      "id holes",
+      "sequence gap",
+      "rollback id"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.mysql"
+  },
+  {
+    "ref_id": "knowledge:mysql:isolation-default-is-repeatable-read",
+    "type": "knowledge",
+    "title": "MySQL defaults to REPEATABLE READ, unlike most engines",
+    "summary": "InnoDB's default isolation is REPEATABLE READ with consistent snapshots, which differs from PostgreSQL's READ COMMITTED default.",
+    "domains": [
+      "mysql",
+      "innodb",
+      "mariadb"
+    ],
+    "triggers": [
+      "isolation level",
+      "repeatable read default",
+      "snapshot",
+      "porting"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.mysql"
+  },
+  {
+    "ref_id": "knowledge:mysql:covering-index-avoids-clustered-lookup",
+    "type": "knowledge",
+    "title": "Covering indexes avoid the clustered-index lookup",
+    "summary": "When a secondary index contains every column a query needs, InnoDB serves it without a second read of the clustered index.",
+    "domains": [
+      "mysql",
+      "innodb",
+      "mariadb"
+    ],
+    "triggers": [
+      "covering index",
+      "using index",
+      "secondary index",
+      "index only scan"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.mysql"
+  },
+  {
+    "ref_id": "skill:mysql:read-an-explain-plan",
+    "type": "skill",
+    "title": "Read a MySQL EXPLAIN plan",
+    "summary": "Interpret the access type, key, rows, and Extra columns of EXPLAIN to judge whether a query uses indexes well.",
+    "domains": [
+      "mysql",
+      "innodb",
+      "mariadb"
+    ],
+    "triggers": [
+      "explain plan",
+      "explain analyze",
+      "access type",
+      "filesort",
+      "query optimizer"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.mysql"
+  },
+  {
+    "ref_id": "skill:mysql:capture-a-consistent-logical-backup",
+    "type": "skill",
+    "title": "Capture a consistent logical backup",
+    "summary": "Use a single-transaction mysqldump or mydumper so an InnoDB dump is point-in-time consistent without locking writes.",
+    "domains": [
+      "mysql",
+      "innodb",
+      "mariadb"
+    ],
+    "triggers": [
+      "mysqldump",
+      "logical backup",
+      "single transaction",
+      "mydumper",
+      "point in time"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.mysql"
+  }
+]

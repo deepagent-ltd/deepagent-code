@@ -1,0 +1,55 @@
+{
+  "schema_version": "domain_pack.v1",
+  "id": "risk.security",
+  "name": "Security Risk Controls",
+  "version": "1.1.0",
+  "scope": "system",
+  "risk": "high",
+  "domains": [
+    "security",
+    "authz",
+    "injection",
+    "secrets",
+    "supply_chain"
+  ],
+  "provides": [
+    "knowledge",
+    "strategy",
+    "methodology",
+    "skill",
+    "diagnosis",
+    "validation"
+  ],
+  "depends_on": [
+    "code.core",
+    "code.testing",
+    "code.review"
+  ],
+  "conflicts_with": [],
+  "knowledge_store": "document_store",
+  "allowed_tools": [
+    "read",
+    "shell:test"
+  ],
+  "denied_tools": [
+    "shell:deploy-production",
+    "shell:exfiltrate",
+    "shell:credential-dump",
+    "shell:disable-security-control"
+  ],
+  "data_policy": {
+    "sensitivity": [
+      "source_code",
+      "user_data",
+      "pii",
+      "secret_adjacent",
+      "secret"
+    ],
+    "default_admission": "summary_only",
+    "secret_policy": "deny"
+  },
+  "detector": {
+    "inline": "profile.risk_markers.some(r => ['security','auth','authz','secret','vulnerability','injection','supply_chain'].includes(r)) || profile.repo_signals.some(s => /\\b(authz|authorization|access control|csrf|xss|sql injection|ssrf|deserialization|hardcoded secret|leaked credential|privilege escalation)\\b/i.test(s)) ? 0.82 : 0",
+    "threshold": 0.5
+  }
+}

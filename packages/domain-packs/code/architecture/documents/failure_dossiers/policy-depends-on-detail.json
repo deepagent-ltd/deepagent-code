@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:architecture:policy-depends-on-detail",
+  "type": "failure_dossier",
+  "description": "Core business logic imports a concrete vendor or I/O client directly, so every infrastructure change ripples into the policy layer.",
+  "body": "Failure mode: high-level policy code directly imports a specific database driver, HTTP client, or vendor SDK, so swapping or upgrading the detail forces edits to core logic and makes the policy untestable without that system. Detection signals: business modules importing concrete clients; tests requiring real infrastructure; churn in core logic driven by infra changes. Do not let stable policy depend on volatile detail. Safer fallback: define an interface owned by the policy layer, have the concrete adapter implement it, inject it, and verify the dependency now points from detail to policy.",
+  "domain": "code",
+  "scope_hint": "code.architecture:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.architecture:human_authored",
+  "pack_id": "code.architecture"
+}

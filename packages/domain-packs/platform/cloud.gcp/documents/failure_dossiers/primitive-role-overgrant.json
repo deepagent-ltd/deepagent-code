@@ -1,0 +1,11 @@
+{
+  "ref_id": "fail:gcp:primitive-role-overgrant",
+  "type": "failure_dossier",
+  "description": "Granting roles/editor or roles/owner at the project to fix a permission error.",
+  "body": "Failure mode: facing PERMISSION_DENIED, an engineer binds the primitive roles/editor (or owner) at project scope, handing the principal sweeping access. Detection signals: Policy Analyzer shows the principal with editor/owner, IAM Recommender flags excess permissions, and the grant is far broader than the failing call. Do not use primitive roles as a quick fix. Safer fallback: run Policy Troubleshooter to find the exact missing permission, bind the matching predefined role at the lowest resource node, and escalate if only a broad role appears to work.",
+  "domain": "gcp",
+  "scope_hint": "platform.cloud.gcp:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.cloud.gcp:human_authored",
+  "pack_id": "platform.cloud.gcp"
+}

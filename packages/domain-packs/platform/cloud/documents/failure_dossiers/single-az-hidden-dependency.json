@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:cloud:single-az-hidden-dependency",
+  "type": "failure_dossier",
+  "description": "A service believed to be highly available actually depends on a resource pinned to one availability zone, so a single zone outage takes it down.",
+  "body": "Failure mode: compute is spread across AZs but a database, NAT gateway, or cache sits in one AZ, so when that zone fails the whole service fails despite the redundant front end. Detection signals: an architecture review finds a single-AZ resource in the critical path; a zone-failure game day causes a full outage; placement shows one AZ for a key dependency. Do not assume multi-AZ front end implies multi-AZ everywhere. Safer fallback: identify every resource in the request path, make stateful dependencies multi-AZ with tested failover, and rehearse a zone loss. Risk boundary: escalate an untested cross-AZ/region failover rather than claiming HA.",
+  "domain": "platform",
+  "scope_hint": "platform.cloud:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.cloud:human_authored",
+  "pack_id": "platform.cloud"
+}

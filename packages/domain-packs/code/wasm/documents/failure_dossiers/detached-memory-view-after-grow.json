@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:wasm:detached-memory-view-after-grow",
+  "type": "failure_dossier",
+  "description": "A cached JS TypedArray view of WASM memory is used after memory.grow detaches the old buffer, reading stale data or throwing.",
+  "body": "Failure mode: JS creates a Uint8Array over memory.buffer and caches it, then a WASM call invokes memory.grow, which replaces the backing ArrayBuffer and detaches the old one, so the cached view reads stale bytes or throws on a detached buffer. Detection signals: intermittent wrong reads or 'detached ArrayBuffer' exceptions after operations that allocate; bugs that appear only once input is large enough to trigger growth. Do not cache a memory view across a call that can grow the heap. Safer fallback: re-create the view from memory.buffer after any call that may grow, or copy data out immediately, keep views short-lived, and verify with a test that grows memory between obtaining and using a view.",
+  "domain": "wasm",
+  "scope_hint": "code.wasm:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.wasm:human_authored",
+  "pack_id": "code.wasm"
+}

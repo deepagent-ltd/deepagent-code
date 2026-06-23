@@ -1,0 +1,474 @@
+[
+  {
+    "ref_id": "knowledge:release:changelog-user-impact",
+    "type": "knowledge",
+    "title": "Changelog User Impact",
+    "summary": "Changelog entries should state user-visible impact and action.",
+    "domains": [
+      "release",
+      "code",
+      "delivery"
+    ],
+    "triggers": [
+      "changelog",
+      "entries",
+      "should",
+      "state",
+      "user",
+      "visible",
+      "impact",
+      "action"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.release"
+  },
+  {
+    "ref_id": "knowledge:release:green-tests-not-release",
+    "type": "knowledge",
+    "title": "Green Tests Not Release",
+    "summary": "Passing tests are necessary but not sufficient for release readiness.",
+    "domains": [
+      "release",
+      "code",
+      "delivery"
+    ],
+    "triggers": [
+      "passing",
+      "tests",
+      "necessary",
+      "sufficient",
+      "release",
+      "readiness",
+      "artifacts",
+      "metadata"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.release"
+  },
+  {
+    "ref_id": "knowledge:release:published-artifacts-persist",
+    "type": "knowledge",
+    "title": "Published Artifacts Persist",
+    "summary": "Published packages may be hard or impossible to fully retract.",
+    "domains": [
+      "release",
+      "code",
+      "delivery"
+    ],
+    "triggers": [
+      "published",
+      "packages",
+      "hard",
+      "impossible",
+      "fully",
+      "retract",
+      "validate",
+      "before"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.release"
+  },
+  {
+    "ref_id": "methodology:release:artifact-validation",
+    "type": "methodology",
+    "title": "Artifact Validation",
+    "summary": "Validate generated package or binary contents before publishing.",
+    "domains": [
+      "release",
+      "code",
+      "delivery"
+    ],
+    "triggers": [
+      "validate",
+      "generated",
+      "package",
+      "binary",
+      "contents",
+      "before",
+      "publishing",
+      "steps"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.release"
+  },
+  {
+    "ref_id": "methodology:release:post-release-monitor",
+    "type": "methodology",
+    "title": "Post Release Monitor",
+    "summary": "After release, monitor errors, adoption, and rollback signals.",
+    "domains": [
+      "release",
+      "code",
+      "delivery"
+    ],
+    "triggers": [
+      "after",
+      "release",
+      "monitor",
+      "errors",
+      "adoption",
+      "rollback",
+      "signals",
+      "steps"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.release"
+  },
+  {
+    "ref_id": "methodology:release:pre-release-gate",
+    "type": "methodology",
+    "title": "Pre Release Gate",
+    "summary": "Check tests, build, artifacts, changelog, version, and rollback.",
+    "domains": [
+      "release",
+      "code",
+      "delivery"
+    ],
+    "triggers": [
+      "check",
+      "tests",
+      "build",
+      "artifacts",
+      "changelog",
+      "version",
+      "rollback",
+      "steps"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.release"
+  },
+  {
+    "ref_id": "skill:release:build-release-evidence",
+    "type": "skill",
+    "title": "Build Release Evidence",
+    "summary": "Create a release evidence summary from tests, artifacts, version, and rollback inputs.",
+    "domains": [
+      "release",
+      "code",
+      "delivery"
+    ],
+    "triggers": [
+      "create",
+      "release",
+      "evidence",
+      "summary",
+      "from",
+      "tests",
+      "artifacts",
+      "version"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.release"
+  },
+  {
+    "ref_id": "strategy:release:release-evidence-bundle",
+    "type": "strategy",
+    "title": "Release Evidence Bundle",
+    "summary": "A release should carry tests, artifact, changelog, and rollback evidence.",
+    "domains": [
+      "release",
+      "code",
+      "delivery"
+    ],
+    "triggers": [
+      "release",
+      "should",
+      "carry",
+      "tests",
+      "artifact",
+      "changelog",
+      "rollback",
+      "evidence"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.release"
+  },
+  {
+    "ref_id": "strategy:release:rollback-before-publish",
+    "type": "strategy",
+    "title": "Rollback Before Publish",
+    "summary": "Define rollback or mitigation before publishing risky changes.",
+    "domains": [
+      "release",
+      "code",
+      "delivery"
+    ],
+    "triggers": [
+      "define",
+      "rollback",
+      "mitigation",
+      "before",
+      "publishing",
+      "risky",
+      "changes",
+      "release"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.release"
+  },
+  {
+    "ref_id": "strategy:release:supply-chain-release-gate",
+    "type": "strategy",
+    "title": "Supply Chain Release Gate",
+    "summary": "Dependency, script, and package metadata changes need rereview before release.",
+    "domains": [
+      "release",
+      "code",
+      "delivery"
+    ],
+    "triggers": [
+      "dependency",
+      "script",
+      "package",
+      "metadata",
+      "changes",
+      "need",
+      "rereview",
+      "before"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.release"
+  },
+  {
+    "ref_id": "strategy:release:version-contract",
+    "type": "strategy",
+    "title": "Version Contract",
+    "summary": "Version changes should match compatibility impact.",
+    "domains": [
+      "release",
+      "code",
+      "delivery"
+    ],
+    "triggers": [
+      "version",
+      "changes",
+      "should",
+      "match",
+      "compatibility",
+      "impact",
+      "semver",
+      "project"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.release"
+  },
+  {
+    "ref_id": "strategy:release:semver-decision-by-contract",
+    "type": "strategy",
+    "title": "Pick the semver bump from the observed contract change",
+    "summary": "Derive major/minor/patch from whether the public surface broke, grew, or only got fixed, not from gut feel or release cadence.",
+    "domains": [
+      "code",
+      "release",
+      "delivery"
+    ],
+    "triggers": [
+      "semver",
+      "version bump",
+      "breaking change",
+      "major",
+      "minor",
+      "patch"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.release"
+  },
+  {
+    "ref_id": "strategy:release:correlate-tag-to-build",
+    "type": "strategy",
+    "title": "Bind every release artifact to its exact source tag",
+    "summary": "Make each published build traceable to one immutable commit and tag so any shipped binary can be rebuilt and audited from source.",
+    "domains": [
+      "code",
+      "release",
+      "delivery"
+    ],
+    "triggers": [
+      "tag",
+      "build provenance",
+      "commit",
+      "traceability",
+      "reproducible",
+      "artifact"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.release"
+  },
+  {
+    "ref_id": "methodology:release:plan-canary-rollout",
+    "type": "methodology",
+    "title": "Stage a canary rollout with explicit promotion gates",
+    "summary": "Release to a small slice first, watch defined health signals, and promote or halt on objective thresholds rather than time alone.",
+    "domains": [
+      "code",
+      "release",
+      "delivery"
+    ],
+    "triggers": [
+      "canary",
+      "staged rollout",
+      "progressive delivery",
+      "promotion",
+      "blast radius",
+      "rollout"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.release"
+  },
+  {
+    "ref_id": "knowledge:release:rollout-is-not-instant",
+    "type": "knowledge",
+    "title": "A deploy is a propagating process, not an instant switch",
+    "summary": "New versions reach instances, caches, and clients over time, so old and new code run concurrently and must stay mutually compatible during the window.",
+    "domains": [
+      "code",
+      "release",
+      "delivery"
+    ],
+    "triggers": [
+      "rollout window",
+      "mixed versions",
+      "backward compatible",
+      "propagation",
+      "concurrent versions",
+      "deploy"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.release"
+  },
+  {
+    "ref_id": "skill:release:generate-changelog-from-history",
+    "type": "skill",
+    "title": "Generate a changelog from commit and PR history",
+    "summary": "Assemble a user-facing changelog by grouping merged changes since the last tag into added/changed/fixed/breaking sections with provenance.",
+    "domains": [
+      "code",
+      "release",
+      "delivery"
+    ],
+    "triggers": [
+      "changelog",
+      "release notes",
+      "commit history",
+      "conventional commits",
+      "generate",
+      "since tag"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.release"
+  }
+]

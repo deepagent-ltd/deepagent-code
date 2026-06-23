@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:comp:action-without-audit-record",
+  "type": "failure_dossier",
+  "description": "A controlled action commits successfully while emitting no audit record, leaving the change invisible to any review.",
+  "body": "Failure mode: a path that modifies a regulated resource writes the business change but skips the audit record (logging is best-effort, outside the transaction, or omitted), so the action leaves no attributable trace. Detection signals: performing the action produces a data change with no matching audit row; audit writes are fire-and-forget and can fail silently; the audit sink lacks records for known actions. Do not treat application logs or async best-effort logging as the audit trail. Safer fallback: write the audit record in the same transaction as the change with actor, time, action, and before/after state, and add a test asserting exactly one immutable record per controlled action.",
+  "domain": "compliance",
+  "scope_hint": "risk.compliance:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.compliance:human_authored",
+  "pack_id": "risk.compliance"
+}

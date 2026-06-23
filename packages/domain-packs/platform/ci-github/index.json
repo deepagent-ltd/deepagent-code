@@ -1,0 +1,468 @@
+[
+  {
+    "ref_id": "strategy:ghci:scope-github-token-permissions",
+    "type": "strategy",
+    "title": "Scope GITHUB_TOKEN to least privilege",
+    "summary": "Declare an explicit permissions block defaulting to read and grant write only on the specific jobs that need it.",
+    "domains": [
+      "ci_github",
+      "github_actions",
+      "workflow",
+      "ci"
+    ],
+    "triggers": [
+      "github_token",
+      "permissions",
+      "least-privilege",
+      "contents",
+      "packages",
+      "write"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.ci-github"
+  },
+  {
+    "ref_id": "strategy:ghci:pin-actions-to-sha",
+    "type": "strategy",
+    "title": "Pin third-party actions to a full commit SHA",
+    "summary": "Reference external actions by 40-char commit SHA, not a mutable tag or branch, to stop silent supply-chain swaps.",
+    "domains": [
+      "ci_github",
+      "github_actions",
+      "workflow",
+      "ci"
+    ],
+    "triggers": [
+      "pin",
+      "sha",
+      "action",
+      "version",
+      "tag",
+      "supply-chain"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.ci-github"
+  },
+  {
+    "ref_id": "strategy:ghci:isolate-untrusted-pr-triggers",
+    "type": "strategy",
+    "title": "Isolate untrusted PR code from secrets",
+    "summary": "Keep secret-bearing logic out of pull_request_target jobs that build fork code; split trusted and untrusted phases.",
+    "domains": [
+      "ci_github",
+      "github_actions",
+      "workflow",
+      "ci"
+    ],
+    "triggers": [
+      "pull_request_target",
+      "fork",
+      "secret",
+      "untrusted",
+      "trigger",
+      "isolate"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.ci-github"
+  },
+  {
+    "ref_id": "strategy:ghci:use-oidc-not-stored-cloud-keys",
+    "type": "strategy",
+    "title": "Authenticate to cloud via OIDC, not stored keys",
+    "summary": "Exchange the workflow's OIDC token for short-lived cloud credentials instead of storing long-lived access keys as secrets.",
+    "domains": [
+      "ci_github",
+      "github_actions",
+      "workflow",
+      "ci"
+    ],
+    "triggers": [
+      "oidc",
+      "cloud",
+      "credentials",
+      "id-token",
+      "federation",
+      "keys"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.ci-github"
+  },
+  {
+    "ref_id": "strategy:ghci:key-caches-deterministically",
+    "type": "strategy",
+    "title": "Key caches on lockfile hash with safe fallback",
+    "summary": "Build cache keys from a hash of the lockfile so they bust on dependency change, and use restore-keys for partial hits.",
+    "domains": [
+      "ci_github",
+      "github_actions",
+      "workflow",
+      "ci"
+    ],
+    "triggers": [
+      "cache",
+      "key",
+      "lockfile",
+      "hashfiles",
+      "restore-keys",
+      "dependencies"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.ci-github"
+  },
+  {
+    "ref_id": "strategy:ghci:design-matrix-without-secret-fanout",
+    "type": "strategy",
+    "title": "Design matrix builds without multiplying risk",
+    "summary": "Use strategy.matrix to fan out across versions/OS while keeping secret use and deploy steps on a single trusted leg.",
+    "domains": [
+      "ci_github",
+      "github_actions",
+      "workflow",
+      "ci"
+    ],
+    "triggers": [
+      "matrix",
+      "strategy",
+      "fanout",
+      "fail-fast",
+      "include",
+      "exclude"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.ci-github"
+  },
+  {
+    "ref_id": "methodology:ghci:audit-workflow-permissions-and-triggers",
+    "type": "methodology",
+    "title": "Audit a workflow's triggers and token reach",
+    "summary": "Map every trigger to the token scope and secrets it exposes, then narrow anything broader than the job needs.",
+    "domains": [
+      "ci_github",
+      "github_actions",
+      "workflow",
+      "ci"
+    ],
+    "triggers": [
+      "audit",
+      "permissions",
+      "triggers",
+      "token",
+      "secrets",
+      "review"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.ci-github"
+  },
+  {
+    "ref_id": "methodology:ghci:debug-failing-or-flaky-job",
+    "type": "methodology",
+    "title": "Debug a failing or flaky CI job",
+    "summary": "Reproduce locally, isolate the failing step, and separate code failures from runner/cache/env nondeterminism.",
+    "domains": [
+      "ci_github",
+      "github_actions",
+      "workflow",
+      "ci"
+    ],
+    "triggers": [
+      "debug",
+      "failing",
+      "flaky",
+      "logs",
+      "reproduce",
+      "step"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.ci-github"
+  },
+  {
+    "ref_id": "methodology:ghci:review-reusable-workflow-change",
+    "type": "methodology",
+    "title": "Review a reusable or composite workflow change",
+    "summary": "Trace inputs, secrets, and permissions across the caller/callee boundary before changing a shared workflow.",
+    "domains": [
+      "ci_github",
+      "github_actions",
+      "workflow",
+      "ci"
+    ],
+    "triggers": [
+      "reusable",
+      "composite",
+      "workflow_call",
+      "inputs",
+      "secrets",
+      "caller"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.ci-github"
+  },
+  {
+    "ref_id": "methodology:ghci:harden-release-publish-pipeline",
+    "type": "methodology",
+    "title": "Harden a release/publish pipeline",
+    "summary": "Add environment protection, provenance, and least-privilege publish so a tag push cannot silently ship malware.",
+    "domains": [
+      "ci_github",
+      "github_actions",
+      "workflow",
+      "ci"
+    ],
+    "triggers": [
+      "release",
+      "publish",
+      "environment",
+      "provenance",
+      "attestation",
+      "registry"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.ci-github"
+  },
+  {
+    "ref_id": "knowledge:ghci:workflow-job-step-model",
+    "type": "knowledge",
+    "title": "Workflow, job, and step execution model",
+    "summary": "Jobs run on separate runners in parallel by default; steps share a runner and filesystem; needs creates ordering and artifact handoff.",
+    "domains": [
+      "ci_github",
+      "github_actions",
+      "workflow",
+      "ci"
+    ],
+    "triggers": [
+      "workflow",
+      "job",
+      "step",
+      "runner",
+      "needs",
+      "parallel"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.ci-github"
+  },
+  {
+    "ref_id": "knowledge:ghci:pull-request-vs-target-context",
+    "type": "knowledge",
+    "title": "pull_request vs pull_request_target context",
+    "summary": "pull_request runs fork code with no secrets and a read token; pull_request_target runs in the base repo context with secrets and write token.",
+    "domains": [
+      "ci_github",
+      "github_actions",
+      "workflow",
+      "ci"
+    ],
+    "triggers": [
+      "pull_request",
+      "pull_request_target",
+      "context",
+      "fork",
+      "secrets",
+      "token"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.ci-github"
+  },
+  {
+    "ref_id": "knowledge:ghci:caching-semantics-and-poisoning",
+    "type": "knowledge",
+    "title": "Cache semantics and cache poisoning",
+    "summary": "Caches are immutable per key, scoped by branch with fallback to default branch, and writable from PR builds, enabling poisoning.",
+    "domains": [
+      "ci_github",
+      "github_actions",
+      "workflow",
+      "ci"
+    ],
+    "triggers": [
+      "cache",
+      "poisoning",
+      "key",
+      "scope",
+      "branch",
+      "immutable"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.ci-github"
+  },
+  {
+    "ref_id": "knowledge:ghci:secret-handling-and-masking",
+    "type": "knowledge",
+    "title": "Secret handling, masking, and leakage paths",
+    "summary": "Secrets are masked in logs but leak via echo to files, env dumps, error output of forked code, and being absent from fork PRs.",
+    "domains": [
+      "ci_github",
+      "github_actions",
+      "workflow",
+      "ci"
+    ],
+    "triggers": [
+      "secret",
+      "masking",
+      "leak",
+      "env",
+      "log",
+      "fork"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.ci-github"
+  },
+  {
+    "ref_id": "skill:ghci:read-workflow-for-supply-chain-gaps",
+    "type": "skill",
+    "title": "Read a workflow for supply-chain and token gaps",
+    "summary": "Inspect a workflow YAML and report unpinned actions, broad token scope, risky triggers, and secret exposure.",
+    "domains": [
+      "ci_github",
+      "github_actions",
+      "workflow",
+      "ci"
+    ],
+    "triggers": [
+      "read",
+      "workflow",
+      "review",
+      "inspect",
+      "audit",
+      "gaps"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.ci-github"
+  },
+  {
+    "ref_id": "skill:ghci:run-workflow-lint-and-permission-check",
+    "type": "skill",
+    "title": "Lint and dry-check a workflow change",
+    "summary": "Run a workflow linter and a static permission/trigger check to preview problems before pushing.",
+    "domains": [
+      "ci_github",
+      "github_actions",
+      "workflow",
+      "ci"
+    ],
+    "triggers": [
+      "lint",
+      "actionlint",
+      "check",
+      "dry-run",
+      "permissions",
+      "preview"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.ci-github"
+  }
+]

@@ -1,0 +1,11 @@
+{
+  "ref_id": "strategy:lang_kotlin:coroutine-structured-concurrency",
+  "type": "strategy",
+  "description": "Keep coroutine lifetime tied to an explicit scope and cancellation boundary.",
+  "body": "Use when code changes suspend functions, launch/async usage, Flow collection, or background work. Do not create GlobalScope or detached jobs for convenience. Identify owning lifecycle scope, propagate cancellation, and choose async only when the result is awaited. Verify with coroutine tests or task output that cancellation/error paths behave. Risk boundary is leaked work in servers, Android lifecycles, or tests. Use when Kotlin Engineering work touches repository conventions, toolchain files, changed symbols, validation commands, and runtime output. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: choose the smallest direction that preserves the domain contract; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include package-local checks, focused tests, build output, smoke runs, and command logs. Risk boundary: escalate or stop when the task involves broad rewrites, generated-file drift, stale assumptions, and unvalidated behavior changes, missing owner evidence, or live external state.",
+  "domain": "kotlin",
+  "scope_hint": "code.kotlin:strategys",
+  "evidence_strength": "medium",
+  "provenance_tag": "code.kotlin:seed:kotlin_gradle_coroutines_docs:paraphrased",
+  "pack_id": "code.kotlin"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:local_dev:pin-toolchain-versions",
+  "type": "strategy",
+  "title": "Pin language and tool versions for the project",
+  "description": "Declare exact runtime and tooling versions in a version file so every developer and CI uses the same toolchain rather than whatever is on PATH.",
+  "body": "Use when a project depends on a specific language runtime or build tool. Do not rely on each developer's globally-installed version, and avoid 'works on my machine' drift from mismatched runtimes. Actions: add a version file (.nvmrc/.tool-versions/engines field or equivalent), document the version manager, and have bootstrap verify the active version matches; record the required versions. Validation signals include a version check in bootstrap/CI that fails on mismatch and reproducible installs across machines. Risk boundary: a version skew between local and CI can mask bugs until deploy; flag and align the toolchain rather than ignoring a mismatch warning.",
+  "domain": "platform",
+  "scope_hint": "platform.local-dev:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.local-dev",
+  "pack_id": "platform.local-dev"
+}

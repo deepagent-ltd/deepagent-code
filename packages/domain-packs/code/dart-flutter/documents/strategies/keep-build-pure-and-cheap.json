@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:flutter:keep-build-pure-and-cheap",
+  "type": "strategy",
+  "title": "Keep the build method pure and cheap",
+  "description": "build() can run many times per second, so it must only describe UI from current state and do no side effects or heavy work.",
+  "body": "Use when writing or editing a widget's build method. Do not start network calls, mutate state, create controllers, or run expensive computation inside build, which the framework may call on every frame. Actions: treat build as a pure function from state to widgets, move side effects to lifecycle methods (initState/didChangeDependencies) or event handlers, precompute heavy values, and mark unchanging subtrees const so they are not rebuilt. Validation signals include a widget test confirming the UI reflects state and a frame timing check showing build stays within budget. Risk boundary: side effects in build fire repeatedly and unpredictably (duplicate requests, leaked controllers), and heavy work there drops frames; a build that is not idempotent is a defect.",
+  "domain": "dart",
+  "scope_hint": "code.dart-flutter:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.dart-flutter",
+  "pack_id": "code.dart-flutter"
+}

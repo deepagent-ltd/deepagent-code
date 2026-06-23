@@ -1,0 +1,47 @@
+{
+  "schema_version": "domain_pack.v1",
+  "id": "code.assembly",
+  "name": "Assembly Language and Low-Level ABI",
+  "version": "1.0.0",
+  "scope": "system",
+  "risk": "medium",
+  "domains": [
+    "assembly",
+    "asm",
+    "x86",
+    "arm",
+    "calling_convention"
+  ],
+  "provides": [
+    "knowledge",
+    "strategy",
+    "methodology",
+    "skill",
+    "diagnosis",
+    "validation"
+  ],
+  "depends_on": [
+    "code.systems",
+    "code.cpp"
+  ],
+  "conflicts_with": [],
+  "knowledge_store": "document_store",
+  "allowed_tools": [
+    "read",
+    "shell:test"
+  ],
+  "denied_tools": [
+    "shell:deploy-production"
+  ],
+  "data_policy": {
+    "sensitivity": [
+      "source_code"
+    ],
+    "default_admission": "summary_only",
+    "secret_policy": "deny"
+  },
+  "detector": {
+    "inline": "profile.code_domains.some(d=>['assembly','asm','x86','arm','calling_convention'].includes(d)) || profile.repo_signals.some(s=>/(assembly|x86-64|arm64|aarch64|calling convention|stack frame|register allocation|inline asm|disassembl|\\.s file|godbolt)/i.test(s)) ? 0.9 : 0",
+    "threshold": 0.5
+  }
+}

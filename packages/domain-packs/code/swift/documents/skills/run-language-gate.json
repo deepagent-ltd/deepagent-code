@@ -1,0 +1,11 @@
+{
+  "ref_id": "skill:swift:run-language-gate",
+  "type": "skill",
+  "description": "In Swift, run the package-local validation gate (swift build (or the Xcode scheme) for the right platform and configuration) and summarize the diagnostics.",
+  "body": "In Swift, this capability runs the owning package's gate and reports the outcome so the next action is obvious. Use when you need an authoritative pass/fail for a Swift package before or after a change. Do not run a root or generic command that bypasses the package's real config, and avoid reporting success without the exit code. Actions: take the package path, run the type checker, where optionals and protocol conformances must resolve then swift build -warnings-as-errors and the Xcode static analyzer and swift test (XCTest/swift-testing) on the affected target, and record the command, exit code, the first type-checker diagnostic and its fix-it suggestion, and the recommended next step. Validation signals include the captured command log, the exit code, and the first diagnostics with file and line. Risk boundary: surface, do not auto-fix; escalate when the gate requires network access, credentials, or a toolchain change.",
+  "domain": "swift",
+  "scope_hint": "code.swift:skills",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.swift:skill_survey",
+  "pack_id": "code.swift"
+}

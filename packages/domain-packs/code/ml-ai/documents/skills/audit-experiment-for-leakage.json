@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:mlai:audit-experiment-for-leakage",
+  "type": "skill",
+  "title": "Audit an experiment for leakage and seeding",
+  "description": "Inspect the data split, preprocessing order, and seed setup and report leakage risks and reproducibility gaps with file locations.",
+  "body": "Use when reviewing an ML experiment before trusting its numbers. Actions: trace where the split happens relative to preprocessing, check that transforms are fit on train only, confirm seeds are set for all RNGs, and verify the test set is read once; report each finding with file/line. Compare offline metric to expected production behavior. Do not treat a clean run as a clean experiment. This skill exposes capability only and does not modify training code without permission. Validation signals include a documented split-then-fit order and seeded RNGs. Risk boundary: fit-before-split, future-derived features, and untouched-test violations are blocking; recommend re-running rather than publishing.",
+  "domain": "ml",
+  "scope_hint": "code.ml-ai:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.ml-ai",
+  "pack_id": "code.ml-ai"
+}

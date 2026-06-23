@@ -1,0 +1,71 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "code.eval",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "eval",
+      "evaluation",
+      "golden_data",
+      "regression",
+      "judge"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "L3 smoke for code.eval: evaluation suite, golden dataset, llm-as-judge scoring, benchmark regression, ablation, metric selection, holdout leakage prevention"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "plain prose note with no repository or domain signal"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "retrieval_query": "evaluation suite golden dataset llm as judge metric selection regression benchmark ablation holdout leakage statistical significance variance eval harness",
+  "expected_pack_id": "code.eval",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "code.eval L3 validation smoke",
+    "signals": [
+      "golden set held out and leak-free from training/prompt",
+      "metric correlates with the real quality goal",
+      "score differences pass a significance check",
+      "judge agreement with human labels measured before trust"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "code.eval diagnosis smoke",
+    "signals": [
+      "test data leaked into prompt or training",
+      "metric games the goal rather than measuring it",
+      "score difference reported without significance",
+      "llm judge trusted without human calibration",
+      "ablation changes multiple variables at once"
+    ]
+  },
+  "source_refs": [
+    "source:ml-eval-best-practices:paraphrased",
+    "source:statistical-significance-guide:paraphrased"
+  ]
+}

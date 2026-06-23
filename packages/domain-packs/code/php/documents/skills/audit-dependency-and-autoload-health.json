@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:php:audit-dependency-and-autoload-health",
+  "type": "skill",
+  "title": "Audit dependency and autoload health",
+  "description": "Read composer.json/lock and report missing locks, loose constraints, and classes loaded outside PSR-4.",
+  "body": "Use when asked whether a PHP project's dependencies are sound. Actions: read composer.json and composer.lock, confirm the lock is committed for an application, inspect version constraints for overly loose or conflicting ranges, and grep for require/include of class files that should be PSR-4 autoloaded. Do not assume the lock matches the manifest without checking. Report and record each uncommitted lock, risky constraint, and manual require with its location. This skill is read-only and must not run composer update without runtime permission. Validation signals include confirming composer install reproduces vendor/ from the lock. Risk boundary: flag a missing committed lock as a reproducibility defect and manual class requires as PSR-4 violations to convert.",
+  "domain": "php",
+  "scope_hint": "code.php:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.php",
+  "pack_id": "code.php"
+}

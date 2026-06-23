@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:android:keep-main-thread-free",
+  "type": "strategy",
+  "title": "Keep the main thread free to avoid ANRs",
+  "description": "Run all I/O, database, and heavy computation off the main thread with coroutines/dispatchers so the UI never blocks.",
+  "body": "Use when doing network, disk, database, or heavy work. Do not perform blocking calls on the main thread, and do not assume a quick call stays quick under load. Actions: launch work in a coroutine on Dispatchers.IO/Default (e.g. via viewModelScope), suspend rather than block, and update state on the main dispatcher; never run Room/network synchronously on the UI thread. Validation signals include no ANR reports and StrictMode showing no main-thread disk/network. Risk boundary: blocking the main thread for ~5 seconds triggers an Application Not Responding dialog and a kill; a main-thread I/O call is a reliability defect even when it usually returns fast, because it will stall under poor conditions.",
+  "domain": "android",
+  "scope_hint": "code.mobile.android:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.mobile.android",
+  "pack_id": "code.mobile.android"
+}

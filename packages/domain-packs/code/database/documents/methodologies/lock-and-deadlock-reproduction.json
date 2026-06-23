@@ -1,0 +1,11 @@
+{
+  "ref_id": "methodology:database:lock-and-deadlock-reproduction",
+  "type": "methodology",
+  "description": "Reproduce lock waits or deadlocks with controlled concurrent transactions before changing query or transaction order.",
+  "body": "Steps: identify the code paths and SQL statements that can touch the same rows or indexes; write a local two-session or concurrent-test reproduction with deterministic ordering; hold the first transaction at the suspected lock point; run the second operation and observe lock wait, timeout, or deadlock behavior; inspect transaction isolation, statement order, selected indexes, and retry handling; patch the smallest boundary such as lock order, predicate shape, transaction scope, or retry policy; rerun the reproduction plus rollback tests. Do not use this as permission to experiment on production traffic. Validation signals include a reproducible pre-fix wait or deadlock, post-fix completion without partial writes, bounded retry behavior, and preserved constraints. Rollback point: if the reproduction cannot be made deterministic, report limited confidence before rewriting large transaction flows. Use when Database Engineering work touches schema deltas, query shape, transaction ownership, constraints, locks, and data volume. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: follow the ordered review, edit, and validation sequence; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include migration dry-runs, rollback checks, EXPLAIN output, constraint tests, and fixture data comparisons. Risk boundary: escalate or stop when the task involves data loss, long locks, non-rollbackable writes, silent query-plan regressions, and unsafe backfills, missing owner evidence, or live external state.",
+  "domain": "sql",
+  "scope_hint": "code.database:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database:lock_deadlock_method",
+  "pack_id": "code.database"
+}

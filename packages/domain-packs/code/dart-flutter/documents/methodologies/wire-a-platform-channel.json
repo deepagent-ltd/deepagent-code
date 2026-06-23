@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:flutter:wire-a-platform-channel",
+  "type": "methodology",
+  "title": "Wire a platform channel to native code",
+  "description": "Define a MethodChannel contract, implement both native sides, and handle errors and missing platforms.",
+  "body": "Steps: 1. Define a channel name and the method/argument contract shared by Dart and native. 2. On the Dart side, invoke methodChannel.invokeMethod with typed arguments and await the result. 3. Implement the handler on each native side (Kotlin/Java for Android, Swift/ObjC for iOS), returning results or errors via the result callback. 4. On Dart, catch PlatformException and MissingPluginException and branch per platform. 5. Test with a mock method-call handler. Rollback point: before shipping the native handler, since a Dart call to an unimplemented channel crashes. Validation: a mocked-channel test confirms success, native-error, and missing-plugin paths are all handled.",
+  "domain": "dart",
+  "scope_hint": "code.dart-flutter:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.dart-flutter",
+  "pack_id": "code.dart-flutter"
+}

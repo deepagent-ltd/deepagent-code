@@ -1,0 +1,69 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "code.backend.event-driven",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "event_driven",
+      "messaging",
+      "outbox"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "L3 smoke for code.backend.event-driven: transactional outbox publishing to a Kafka event bus, idempotent consumer, dead-letter queue, ordering by partition key, and event replay"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "plain prose note with no repository or domain signal"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "retrieval_query": "event driven messaging transactional outbox idempotent consumer kafka partition ordering dead letter event sourcing replay schema evolution at-least-once",
+  "expected_pack_id": "code.backend.event-driven",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "code.backend.event-driven L3 validation smoke",
+    "signals": [
+      "outbox: event published only after source write commits test",
+      "idempotent consumer dedups redelivered event test",
+      "ordering preserved within a partition key test",
+      "dead-letter and replay of a failed event test"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "code.backend.event-driven diagnosis smoke",
+    "signals": [
+      "dual write to DB and broker without outbox",
+      "consumer assumes exactly-once / not idempotent",
+      "ordering assumed across partitions",
+      "no dead-letter for poison events",
+      "breaking event schema change without versioning"
+    ]
+  },
+  "source_refs": [
+    "source:enterprise-integration-patterns:paraphrased",
+    "source:kafka-docs-delivery-semantics:paraphrased"
+  ]
+}

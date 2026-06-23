@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:analytics:scd-types",
+  "type": "knowledge",
+  "title": "Slowly changing dimension types",
+  "description": "How SCD type 1 (overwrite), type 2 (versioned rows), and type 3 (prior-value column) preserve different amounts of history.",
+  "body": "Use when a dimension attribute changes over time. Type 1 overwrites the value, keeping no history; type 2 adds a new row per change with effective dates and a current flag, preserving full history; type 3 stores a single previous value in an extra column. Do not use type 1 when past facts must reflect the value current at their event time — it rewrites trends. Actions: pick type 2 for full history, type 1 for corrections, type 3 for a single prior comparison. Validation signals include type-2 rows with non-overlapping validity ranges and facts joined to the time-valid version. Risk boundary: choosing type 1 where history matters silently corrupts analysis; if historical accuracy is required, escalate to type 2 before loading.",
+  "domain": "analytics",
+  "scope_hint": "code.analytics:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.analytics",
+  "pack_id": "code.analytics"
+}

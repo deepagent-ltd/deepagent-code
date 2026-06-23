@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:edge:stale-content-after-deploy",
+  "type": "failure_dossier",
+  "description": "Assuming content is globally fresh immediately after deploy/purge, while edge PoPs still serve the old version.",
+  "body": "Failure mode: a release assumes the change is live everywhere the instant it deploys, but edge caches propagate over time, so some users keep getting stale assets — sometimes mixed old/new causing breakage. Detection signals: inconsistent behavior across regions after deploy; old asset hashes still served; support reports of stale UI. Do not treat edge propagation as instant. Safer fallback: version/fingerprint asset URLs so new content has new keys, measure purge propagation, and gate releases that require atomic switchover behind versioned paths.",
+  "domain": "cdn",
+  "scope_hint": "platform.cdn-edge:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.cdn-edge:human_authored",
+  "pack_id": "platform.cdn-edge"
+}

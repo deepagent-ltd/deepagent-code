@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:dq:check-freshness-explicitly",
+  "type": "strategy",
+  "title": "Check freshness against an explicit SLA",
+  "description": "Assert that the newest data is within an agreed recency window, because a pipeline can succeed while serving stale data.",
+  "body": "Use when downstream decisions depend on recent data. Do not equate a green pipeline run with fresh data — a job can complete having processed nothing new, or an upstream can stall while the loader reports success. Actions: assert max(event/ingest timestamp) or latest-partition age is within the SLA, and alert when it is exceeded. Validation signals include a freshness check confirming the latest partition is within window and an alert firing when data goes stale. Risk boundary: stale data presented as current drives wrong decisions silently; treat freshness as a first-class check, separate from job success.",
+  "domain": "data_quality",
+  "scope_hint": "code.data-quality:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.data-quality",
+  "pack_id": "code.data-quality"
+}

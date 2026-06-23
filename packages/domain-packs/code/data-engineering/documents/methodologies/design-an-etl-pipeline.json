@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:dataeng:design-an-etl-pipeline",
+  "type": "methodology",
+  "title": "Design an ETL/ELT pipeline end to end",
+  "description": "Lay out extract, load, transform, and validate stages with idempotent partitioned writes and a clear failure-recovery path.",
+  "body": "Steps: 1. Define the source extraction (incremental by watermark/CDC where possible, full only if small). 2. Land raw data immutably in a staging/landing zone partitioned by ingestion date. 3. Transform into modeled tables idempotently, replacing by partition. 4. Reconcile row counts source-to-target and run quality checks. 5. Publish and record lineage. Rollback point: re-run a partition from immutable landing data. Validation: a rerun reproduces the partition exactly and counts reconcile; a transform that reads mutable source instead of landed data cannot be safely replayed.",
+  "domain": "data_engineering",
+  "scope_hint": "code.data-engineering:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.data-engineering",
+  "pack_id": "code.data-engineering"
+}

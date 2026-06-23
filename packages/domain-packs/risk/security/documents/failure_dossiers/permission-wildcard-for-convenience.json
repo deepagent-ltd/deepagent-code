@@ -1,0 +1,12 @@
+{
+  "ref_id": "failure_dossier:security:permission-wildcard-for-convenience",
+  "type": "failure_dossier",
+  "title": "Permission wildcard for convenience",
+  "description": "A narrow permission problem is solved by adding wildcard access or broad admin scope.",
+  "body": "Failure mode: failing tests or integration errors are resolved by granting all resources, all actions, all tenants, or long-lived broad credentials. It may unblock the task but weakens blast-radius controls. Detection signals include wildcard policies, broad OAuth scopes, shared production tokens, and missing denied tests outside intended scope. Remediation is least-privilege diff review and explicit approval for any expansion. Human gate is mandatory for persistent or production-facing privilege increases. Use when a proposed approach skips trust boundaries, authorization decisions, dangerous sinks, secrets, and dependency execution or claims success without domain evidence. Do not use this dossier as a positive implementation strategy; it is a do-not-use signal. Actions: block the shortcut, name the missing evidence, and switch to a safer methodology or ask for human approval. Validation signals include absence or contradiction in negative security tests, server-side checks, sink payload tests, and secret scans. Risk boundary: treat repeated recurrence as a blocker when it can cause client-only controls, injection, credential leakage, permissive fallback, and unsafe dependency changes.",
+  "domain": "security",
+  "scope_hint": "risk.security:failure_dossiers",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.security",
+  "pack_id": "risk.security"
+}

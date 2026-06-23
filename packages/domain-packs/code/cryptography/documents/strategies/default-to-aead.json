@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:crypto:default-to-aead",
+  "type": "strategy",
+  "title": "Default to authenticated encryption (AEAD)",
+  "description": "Encrypt with an AEAD construction so confidentiality and integrity come together, instead of composing a cipher and a MAC by hand.",
+  "body": "Use whenever you encrypt data that an attacker could tamper with, which is essentially always. Do not use a bare cipher mode (ECB/CBC/CTR) without authentication, and avoid hand-composing encrypt-then-MAC unless a reviewed standard requires it. Actions: choose a library AEAD (AES-GCM or ChaCha20-Poly1305), pass associated data for context binding, and reject any message whose tag fails verification before using the plaintext. Validation signals include a test that a flipped ciphertext byte causes a verification failure, not silent garbage. Risk boundary: unauthenticated encryption lets attackers tamper undetected (padding-oracle, bit-flipping); treat any non-AEAD encryption on attacker-reachable data as a high-severity defect and escalate.",
+  "domain": "cryptography",
+  "scope_hint": "code.cryptography:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.cryptography",
+  "pack_id": "code.cryptography"
+}

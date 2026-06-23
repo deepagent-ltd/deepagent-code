@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:cpuarch:vectorize-hot-loops",
+  "type": "strategy",
+  "title": "Vectorize hot loops with SIMD",
+  "description": "Express data-parallel inner loops so the compiler auto-vectorizes, or use intrinsics (SSE/AVX/NEON) when it cannot, after confirming the loop is compute-bound.",
+  "body": "Use when a loop is compute-bound, data-parallel, and already cache-friendly. Do not vectorize a memory-bound loop (you will saturate bandwidth, not gain) and do not assume the compiler vectorized it. Actions: remove loop-carried dependencies and aliasing (restrict), align data, enable the target ISA, then inspect the emitted assembly for packed instructions; fall back to intrinsics only where auto-vectorization fails. Validation signals include vectorized opcodes in the disassembly and measured speedup matching the lane width on representative input. Risk boundary: ISA-specific intrinsics break portability and need runtime feature detection; escalate before shipping AVX-512 paths without a scalar fallback.",
+  "domain": "cpu_arch",
+  "scope_hint": "hardware.cpu-arch:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.cpu-arch",
+  "pack_id": "hardware.cpu-arch"
+}

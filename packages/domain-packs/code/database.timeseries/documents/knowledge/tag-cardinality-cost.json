@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:tsdb:tag-cardinality-cost",
+  "type": "knowledge",
+  "title": "Why tag cardinality dominates cost",
+  "description": "Each unique tag-value combination is a separate series with its own index entry and memory; cardinality grows multiplicatively across tags.",
+  "body": "Use when designing the schema or diagnosing memory pressure. Series count = product of distinct values across all tags; adding a high-cardinality tag (user id) multiplies total series and the in-memory index. Do not place identifiers or unbounded strings in tags/labels — keep them in fields, which are not indexed per-value. Actions: enumerate tag value ranges and estimate the product before deploying. Validation signals include series cardinality within the engine's tested limit. Risk boundary: cardinality blowup degrades the entire instance, not a single query.",
+  "domain": "timeseries_db",
+  "scope_hint": "code.database.timeseries:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.timeseries",
+  "pack_id": "code.database.timeseries"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:cli:check-tty-and-signal-handling",
+  "type": "skill",
+  "title": "Check TTY adaptation and signal handling",
+  "description": "Verify a CLI suppresses color/prompts when piped and that interrupting it leaves no partial output or orphaned children.",
+  "body": "Use when validating a CLI's robustness. Actions: pipe the tool's output to confirm no ANSI codes appear and that it does not block on a prompt when stdin is non-interactive; then send SIGINT mid-run and inspect for half-written files and orphaned child processes. Report missing TTY checks, blocking prompts, or unclean interruption. Do not alter the program. This skill exposes capability only and must not run commands with side effects on real data without runtime permission. Validation signals include plain piped output, no hang, and clean interrupt behavior. Risk boundary: a prompt that hangs automation and an interrupt that corrupts output are blocking; recommend TTY detection and atomic-write plus signal handlers.",
+  "domain": "cli",
+  "scope_hint": "code.cli:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.cli",
+  "pack_id": "code.cli"
+}

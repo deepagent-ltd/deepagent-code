@@ -1,0 +1,73 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "code.cpp",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "cpp",
+      "code"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [
+      "cpp"
+    ],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "L3 smoke for code.cpp: language semantics, compiler or interpreter diagnostics, package manager files, generated artifacts, tests, and runtime smoke"
+    ],
+    "round_signals": [
+      "l3_validation_smoke"
+    ],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "round_signals": [],
+    "user_overrides": [],
+    "repo_signals": [
+      "write a SQL migration adding a unique constraint"
+    ]
+  },
+  "retrieval_query": "C++ move semantics smart pointer RAII CMake target ASan gdb template error",
+  "expected_pack_id": "code.cpp",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "C++ language/toolchain behavior L3 validation smoke",
+    "signals": [
+      "package-local build/type/lint/test commands",
+      "minimal runtime smoke",
+      "generated artifact checks",
+      "and compiler diagnostics"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "C++ language/toolchain behavior diagnosis smoke",
+    "signals": [
+      "separate syntax/type errors",
+      "dependency resolution",
+      "build config",
+      "runtime mismatch",
+      "generated code",
+      "and platform-specific failures"
+    ]
+  },
+  "source_refs": [
+    "source:official-tooling-docs:paraphrased",
+    "source:engineering-practice:paraphrased"
+  ]
+}

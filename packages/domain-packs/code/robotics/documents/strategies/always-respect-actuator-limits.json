@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:robot:always-respect-actuator-limits",
+  "type": "strategy",
+  "title": "Clamp every command to actuator limits",
+  "description": "Enforce position, velocity, and torque limits at the lowest command layer so no upstream bug can drive hardware past its safe envelope.",
+  "body": "Use on every path that emits an actuator command. Do not assume upstream planners or controllers already respect limits, and avoid sending raw commands without a final clamp. Actions: define position, velocity, acceleration, and torque/current limits for each actuator, clamp commands to them at the last stage before the hardware interface, and detect sustained saturation as a fault. Validation signals include a test injecting an out-of-range command and confirming it is clamped and flagged, plus telemetry showing commands stay within the envelope. Risk boundary: an unclamped command can break the mechanism or injure a person; treat a missing final-stage limit check on an actuator path as a high-severity safety defect requiring review.",
+  "domain": "robotics",
+  "scope_hint": "code.robotics:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.robotics",
+  "pack_id": "code.robotics"
+}

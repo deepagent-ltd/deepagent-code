@@ -1,0 +1,12 @@
+{
+  "ref_id": "failure_dossier:privacy:nested-redaction-gap",
+  "type": "failure_dossier",
+  "title": "Nested redaction gap",
+  "description": "Redaction masks top-level fields but leaks nested identifiers, headers, query strings, arrays, or serialized objects.",
+  "body": "Failure mode: tests cover a flat payload while production objects contain nested profiles, authorization headers, payment metadata, or serialized JSON strings. Detection signals include recursive serializers, request capture middleware, and snapshots that omit nested examples. Remediation is semantic recursive redaction and negative sink tests. Human gate is required if nested raw sensitive data already reached persistent logs. Use when a proposed approach skips personal-data classes, sinks, retention, consent, logs, prompts, and exports or claims success without domain evidence. Do not use this dossier as a positive implementation strategy; it is a do-not-use signal. Actions: block the shortcut, name the missing evidence, and switch to a safer methodology or ask for human approval. Validation signals include absence or contradiction in data inventory, redaction tests, retention checks, export/delete tests, and approval evidence. Risk boundary: treat repeated recurrence as a blocker when it can cause PII disclosure, consent bypass, retention drift, and unapproved processor expansion.",
+  "domain": "privacy",
+  "scope_hint": "risk.privacy:failure_dossiers",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.privacy",
+  "pack_id": "risk.privacy"
+}

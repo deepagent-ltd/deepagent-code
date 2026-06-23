@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure_dossier:stream:unbounded-state-growth",
+  "type": "failure_dossier",
+  "description": "Keyed operator state grows without bound until the job runs out of memory or disk.",
+  "body": "Failure mode: a stateful operator such as a join or dedup keeps state per key with no TTL, so as the key space grows the state backend exhausts memory or disk and the job stalls or crashes. Detection signals: a steadily climbing state-size metric with no plateau, and checkpoint durations growing until they time out. Do not just add more memory to delay the crash. Safer fallback: set a state TTL or explicit cleanup for inactive keys, redesign the keying if the key space is genuinely unbounded, and verify the state-size metric flattens under sustained load before returning to production.",
+  "domain": "streaming",
+  "scope_hint": "code.streaming:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.streaming:human_authored",
+  "pack_id": "code.streaming"
+}

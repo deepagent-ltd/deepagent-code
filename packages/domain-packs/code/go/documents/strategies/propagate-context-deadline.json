@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:go:propagate-context-deadline",
+  "type": "strategy",
+  "title": "Propagate context for cancellation and deadlines",
+  "description": "Thread a context.Context as the first parameter through call chains so cancellation, deadlines, and request scope flow to every blocking operation.",
+  "body": "Use when writing functions that do IO, spawn goroutines, or call other services. Do not store a context in a struct field, pass context.Background() deep in a request path, or ignore ctx.Done(). Actions: accept ctx context.Context as the first arg, pass it to every downstream call (db.QueryContext, http.NewRequestWithContext), select on ctx.Done() in loops, and always call the cancel func from context.WithTimeout via defer. Validation signals include a test that cancels the parent context and asserts the goroutine returns and a -race run that is clean. Risk boundary: a leaked goroutine that never observes cancellation accumulates under load; escalate if a blocking call has no context-aware variant rather than busy-polling.",
+  "domain": "go",
+  "scope_hint": "code.go:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.go",
+  "pack_id": "code.go"
+}

@@ -1,0 +1,70 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "code.mobile.android",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "android",
+      "jetpack_compose",
+      "kotlin_android"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "L3 smoke for code.mobile.android: Activity/Fragment lifecycle, Jetpack Compose recomposition, ViewModel state survival across configuration changes, Gradle build, runtime permissions, and WorkManager background work without ANRs"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "configure a Postgres replication topology for a data warehouse"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "retrieval_query": "android jetpack compose activity fragment lifecycle viewmodel state configuration change gradle permission workmanager anr main thread recomposition",
+  "expected_pack_id": "code.mobile.android",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "code.mobile.android L3 validation smoke",
+    "signals": [
+      "UI state survives a configuration change (rotation) via ViewModel/rememberSaveable",
+      "no ANR: main thread free of blocking I/O under monitoring",
+      "Compose recomposes from observable state (no manual view mutation)",
+      "runtime permission requested in context and denial handled",
+      "deferred work runs reliably via WorkManager with constraints"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "code.mobile.android diagnosis smoke",
+    "signals": [
+      "UI state lost on rotation because it lived in the Activity",
+      "blocking network/disk call on the main thread triggering an ANR",
+      "Compose state held in a plain var so recomposition never happens",
+      "feature crashes because a runtime permission was never requested",
+      "background work started with a raw thread that dies when the process is killed"
+    ]
+  },
+  "source_refs": [
+    "source:android-app-architecture-guide:paraphrased",
+    "source:jetpack-compose-state-docs:paraphrased"
+  ]
+}

@@ -1,0 +1,75 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "code.backend.api",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "backend",
+      "api",
+      "rest",
+      "graphql"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "L3 smoke for code.backend.api: REST, GraphQL, RPC, routes, request validation, response schema, errors, idempotency, and OpenAPI"
+    ],
+    "round_signals": [
+      "l3_validation_smoke"
+    ],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "round_signals": [],
+    "user_overrides": [],
+    "repo_signals": [
+      "fix CSS responsive text overlap and a browser console warning in the marketing page"
+    ]
+  },
+  "retrieval_query": "REST route contract OpenAPI schema compatibility request validation idempotency error shape",
+  "expected_pack_id": "code.backend.api",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "API boundary behavior L3 validation smoke",
+    "signals": [
+      "route smoke",
+      "schema diff",
+      "contract tests",
+      "invalid-input tests",
+      "idempotency replay",
+      "and client-impact checks"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "API boundary behavior diagnosis smoke",
+    "signals": [
+      "separate transport",
+      "validation",
+      "handler",
+      "middleware",
+      "serialization",
+      "and client-compatibility causes"
+    ]
+  },
+  "source_refs": [
+    "source:official-tooling-docs:paraphrased",
+    "source:engineering-practice:paraphrased"
+  ]
+}

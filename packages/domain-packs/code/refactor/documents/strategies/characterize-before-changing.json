@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:refactor:characterize-before-changing",
+  "type": "strategy",
+  "title": "Pin behavior with characterization tests first",
+  "description": "Capture current observable behavior in tests before refactoring legacy code that lacks coverage, so regressions surface immediately.",
+  "body": "Use when refactoring code that has little or no existing test coverage. Do not restructure untested legacy code on the assumption you understand it. Actions: write characterization tests that record the code's actual current outputs (including quirks) for representative inputs, run them green against the unchanged code, then refactor and re-run to confirm identical outputs. Validation signals include the characterization suite passing both before and after with no output diff. Risk boundary: refactoring without a behavior net risks silent regressions in edge cases; if behavior cannot be pinned, narrow the change or escalate rather than refactoring blind.",
+  "domain": "code",
+  "scope_hint": "code.refactor:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.refactor",
+  "pack_id": "code.refactor"
+}

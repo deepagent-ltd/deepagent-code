@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:frontend_accessibility:placeholder-as-label",
+  "type": "failure_dossier",
+  "description": "Using placeholder text as the only label for a form control, leaving it with no accessible name once the user types.",
+  "body": "Failure mode: a field relies on placeholder text instead of a real label, so the accessible name is empty (or vanishes on input) and screen-reader users cannot tell what the field is for. Detection signals: axe reports a control with no accessible name; the placeholder disappears when typing; no <label> or aria-label in the markup. Do not treat placeholder as a substitute for a label. Safer fallback: add a programmatic label via <label for> or aria-labelledby, keep the placeholder only as a hint, and verify a non-empty name in the accessibility tree.",
+  "domain": "frontend",
+  "scope_hint": "code.frontend.accessibility:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.frontend.accessibility:human_authored",
+  "pack_id": "code.frontend.accessibility"
+}

@@ -1,0 +1,497 @@
+[
+  {
+    "ref_id": "strategy:comp:audit-every-controlled-action",
+    "type": "strategy",
+    "title": "Emit an audit record for every controlled action",
+    "summary": "Each action on a regulated resource writes an append-only record of who, what, when, and the before/after state.",
+    "domains": [
+      "compliance",
+      "audit",
+      "regulated",
+      "approval"
+    ],
+    "triggers": [
+      "audit",
+      "record",
+      "controlled",
+      "actor",
+      "trail",
+      "log"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "regulated",
+    "sensitivity": "audit_evidence",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.compliance"
+  },
+  {
+    "ref_id": "strategy:comp:enforce-change-approval-gate",
+    "type": "strategy",
+    "title": "Gate every change behind an independent approval",
+    "summary": "No change reaches a regulated system without a recorded approval by a principal who is not the author.",
+    "domains": [
+      "compliance",
+      "audit",
+      "regulated",
+      "approval"
+    ],
+    "triggers": [
+      "approval",
+      "gate",
+      "change",
+      "merge",
+      "review",
+      "independent"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "regulated",
+    "sensitivity": "audit_evidence",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.compliance"
+  },
+  {
+    "ref_id": "strategy:comp:preserve-segregation-of-duties",
+    "type": "strategy",
+    "title": "Preserve segregation of duties",
+    "summary": "Split the steps of a sensitive operation so no single principal can both initiate and authorize it.",
+    "domains": [
+      "compliance",
+      "audit",
+      "regulated",
+      "approval"
+    ],
+    "triggers": [
+      "segregation",
+      "duties",
+      "sod",
+      "separation",
+      "initiate",
+      "authorize"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "regulated",
+    "sensitivity": "audit_evidence",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.compliance"
+  },
+  {
+    "ref_id": "strategy:comp:make-the-trail-tamper-evident",
+    "type": "strategy",
+    "title": "Make the audit trail tamper-evident",
+    "summary": "Protect audit records so that deletion or modification is detectable, not merely discouraged.",
+    "domains": [
+      "compliance",
+      "audit",
+      "regulated",
+      "approval"
+    ],
+    "triggers": [
+      "tamper",
+      "evident",
+      "immutable",
+      "integrity",
+      "hash",
+      "append-only"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "regulated",
+    "sensitivity": "audit_evidence",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.compliance"
+  },
+  {
+    "ref_id": "strategy:comp:retain-evidence-for-the-required-period",
+    "type": "strategy",
+    "title": "Retain evidence for the framework's required period",
+    "summary": "Keep each control's evidence for its mandated retention window and prevent both early purge and indefinite hoarding.",
+    "domains": [
+      "compliance",
+      "audit",
+      "regulated",
+      "approval"
+    ],
+    "triggers": [
+      "retention",
+      "evidence",
+      "period",
+      "purge",
+      "lifecycle",
+      "archive"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "regulated",
+    "sensitivity": "audit_evidence",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.compliance"
+  },
+  {
+    "ref_id": "strategy:comp:bind-changes-to-tickets",
+    "type": "strategy",
+    "title": "Bind every controlled change to an authorized request",
+    "summary": "Require each change to reference an approved change request so the trail links why, who, and what.",
+    "domains": [
+      "compliance",
+      "audit",
+      "regulated",
+      "approval"
+    ],
+    "triggers": [
+      "ticket",
+      "change-request",
+      "traceability",
+      "link",
+      "authorization",
+      "reference"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "regulated",
+    "sensitivity": "audit_evidence",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.compliance"
+  },
+  {
+    "ref_id": "methodology:comp:assemble-an-evidence-package",
+    "type": "methodology",
+    "title": "Assemble an audit evidence package",
+    "summary": "Collect the artifacts a control requires into a coherent, reviewable package keyed to the control.",
+    "domains": [
+      "compliance",
+      "audit",
+      "regulated",
+      "approval"
+    ],
+    "triggers": [
+      "evidence",
+      "package",
+      "control",
+      "assemble",
+      "audit",
+      "collect"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "regulated",
+    "sensitivity": "audit_evidence",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.compliance"
+  },
+  {
+    "ref_id": "methodology:comp:map-a-control-to-code",
+    "type": "methodology",
+    "title": "Map a framework control to its code enforcement",
+    "summary": "Trace each abstract control requirement to the concrete code or config that enforces it and the test that proves it.",
+    "domains": [
+      "compliance",
+      "audit",
+      "regulated",
+      "approval"
+    ],
+    "triggers": [
+      "control",
+      "map",
+      "enforce",
+      "trace",
+      "requirement",
+      "coverage"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "regulated",
+    "sensitivity": "audit_evidence",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.compliance"
+  },
+  {
+    "ref_id": "methodology:comp:run-a-change-approval-review",
+    "type": "methodology",
+    "title": "Run a change-approval review for a deploy",
+    "summary": "Verify a pending deploy carries valid, independent, change-bound approval before it proceeds.",
+    "domains": [
+      "compliance",
+      "audit",
+      "regulated",
+      "approval"
+    ],
+    "triggers": [
+      "approval",
+      "review",
+      "deploy",
+      "verify",
+      "gate",
+      "change"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "regulated",
+    "sensitivity": "audit_evidence",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.compliance"
+  },
+  {
+    "ref_id": "methodology:comp:verify-audit-trail-integrity",
+    "type": "methodology",
+    "title": "Verify audit-trail integrity",
+    "summary": "Confirm the audit store is append-only and that its records cannot be silently altered or dropped.",
+    "domains": [
+      "compliance",
+      "audit",
+      "regulated",
+      "approval"
+    ],
+    "triggers": [
+      "integrity",
+      "verify",
+      "tamper",
+      "chain",
+      "append-only",
+      "audit"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "regulated",
+    "sensitivity": "audit_evidence",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.compliance"
+  },
+  {
+    "ref_id": "methodology:comp:scope-a-sod-matrix",
+    "type": "methodology",
+    "title": "Scope a segregation-of-duties matrix",
+    "summary": "Enumerate conflicting capability pairs and detect any principal holding both halves.",
+    "domains": [
+      "compliance",
+      "audit",
+      "regulated",
+      "approval"
+    ],
+    "triggers": [
+      "sod",
+      "matrix",
+      "conflict",
+      "roles",
+      "toxic",
+      "scope"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "regulated",
+    "sensitivity": "audit_evidence",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.compliance"
+  },
+  {
+    "ref_id": "knowledge:comp:audit-trail-properties",
+    "type": "knowledge",
+    "title": "What makes an audit trail trustworthy",
+    "summary": "A compliance-grade trail is complete, attributable, time-ordered, and tamper-evident, which ordinary application logs are not.",
+    "domains": [
+      "compliance",
+      "audit",
+      "regulated",
+      "approval"
+    ],
+    "triggers": [
+      "audit",
+      "trail",
+      "attributable",
+      "tamper",
+      "complete",
+      "properties"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "regulated",
+    "sensitivity": "audit_evidence",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.compliance"
+  },
+  {
+    "ref_id": "knowledge:comp:segregation-of-duties",
+    "type": "knowledge",
+    "title": "Segregation of duties and toxic combinations",
+    "summary": "SoD splits initiate, authorize, and execute across principals so no one can both commit and conceal a sensitive action.",
+    "domains": [
+      "compliance",
+      "audit",
+      "regulated",
+      "approval"
+    ],
+    "triggers": [
+      "segregation",
+      "duties",
+      "sod",
+      "toxic",
+      "combination",
+      "fraud"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "regulated",
+    "sensitivity": "audit_evidence",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.compliance"
+  },
+  {
+    "ref_id": "knowledge:comp:control-frameworks-overlap",
+    "type": "knowledge",
+    "title": "How SOC 2, GDPR, and HIPAA-style controls overlap",
+    "summary": "Different frameworks demand overlapping evidence (access, change, audit, retention) so one well-designed control often satisfies several.",
+    "domains": [
+      "compliance",
+      "audit",
+      "regulated",
+      "approval"
+    ],
+    "triggers": [
+      "soc2",
+      "gdpr",
+      "hipaa",
+      "framework",
+      "overlap",
+      "control"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "regulated",
+    "sensitivity": "audit_evidence",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.compliance"
+  },
+  {
+    "ref_id": "knowledge:comp:attestation-vs-assertion",
+    "type": "knowledge",
+    "title": "Attestation vs assertion of a control",
+    "summary": "Claiming a control exists is an assertion; proving it actually ran on real transactions for the period is attestation.",
+    "domains": [
+      "compliance",
+      "audit",
+      "regulated",
+      "approval"
+    ],
+    "triggers": [
+      "attestation",
+      "assertion",
+      "evidence",
+      "operating",
+      "effectiveness",
+      "design"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "regulated",
+    "sensitivity": "audit_evidence",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.compliance"
+  },
+  {
+    "ref_id": "skill:comp:assess-control-coverage",
+    "type": "skill",
+    "title": "Assess control coverage for a change",
+    "summary": "Read the change and report which in-scope controls apply, whether each is enforced, and whether evidence exists.",
+    "domains": [
+      "compliance",
+      "audit",
+      "regulated",
+      "approval"
+    ],
+    "triggers": [
+      "coverage",
+      "assess",
+      "control",
+      "review",
+      "gap",
+      "report"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "regulated",
+    "sensitivity": "audit_evidence",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.compliance"
+  },
+  {
+    "ref_id": "skill:comp:verify-approval-evidence",
+    "type": "skill",
+    "title": "Verify approval evidence for a deploy",
+    "summary": "Confirm a pending change carries independent, change-bound approval and a linked authorized request.",
+    "domains": [
+      "compliance",
+      "audit",
+      "regulated",
+      "approval"
+    ],
+    "triggers": [
+      "approval",
+      "evidence",
+      "verify",
+      "deploy",
+      "independent",
+      "request"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "regulated",
+    "sensitivity": "audit_evidence",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.compliance"
+  }
+]

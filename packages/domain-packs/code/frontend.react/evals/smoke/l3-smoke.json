@@ -1,0 +1,74 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "code.frontend.react",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "react",
+      "frontend",
+      "typescript"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [
+      "react"
+    ],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "L3 smoke for code.frontend.react: components, hooks, effects, state ownership, hydration, routing, and JSX/TSX rendering"
+    ],
+    "round_signals": [
+      "l3_validation_smoke"
+    ],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "round_signals": [],
+    "user_overrides": [],
+    "repo_signals": [
+      "add a database migration with a unique constraint and rollback"
+    ]
+  },
+  "retrieval_query": "React useEffect cleanup dependency memoization context Suspense error boundary hydration key",
+  "expected_pack_id": "code.frontend.react",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "React UI behavior L3 validation smoke",
+    "signals": [
+      "component tests",
+      "React Testing Library assertions",
+      "Playwright smoke",
+      "hydration warning checks",
+      "and console review"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "React UI behavior diagnosis smoke",
+    "signals": [
+      "separate stale closures",
+      "dependency arrays",
+      "identity/key issues",
+      "hydration mismatch",
+      "and browser rendering failures"
+    ]
+  },
+  "source_refs": [
+    "source:mdn-web-docs:paraphrased",
+    "source:web.dev:paraphrased"
+  ]
+}

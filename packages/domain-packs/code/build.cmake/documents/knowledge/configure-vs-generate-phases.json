@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:cmake:configure-vs-generate-phases",
+  "type": "knowledge",
+  "title": "Configure phase versus generate phase",
+  "description": "CMake first runs the configure step that executes CMakeLists logic, then a generate step that emits build files where generator expressions are resolved.",
+  "body": "Use when reasoning about when a value is known. Do not expect generator expressions to have a value during configure. The configure phase runs commands, sets variables, and populates the cache; the generate phase writes the native build system and evaluates genex against the concrete configuration. Inspect configure-time values with message and generate-time values with file(GENERATE). Validation signals include configure-time logic computing inputs and genex selecting per-config outputs correctly. Risk boundary: mixing the two phases produces flags applied to the wrong configuration, so keep per-config decisions in genex.",
+  "domain": "cmake",
+  "scope_hint": "code.build.cmake:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.build.cmake",
+  "pack_id": "code.build.cmake"
+}

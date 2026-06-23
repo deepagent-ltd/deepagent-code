@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:shell:generic-root-command",
+  "type": "failure_dossier",
+  "description": "Running a global build/test command for shell instead of the target shell with shellcheck misses the project-local config and reports misleading results.",
+  "body": "Failure mode: a generic root-level command is run for shell work instead of the target shell with shellcheck, so project-local configuration, lockfiles, and scripts are ignored and the output does not reflect the real build. Detection signals: the command ignores the project manifest; results differ from CI; tooling versions or flags do not match the repo. Do not run a global or default command when the project declares its own shell toolchain. Safer fallback: detect and run the target shell with shellcheck from the project root, verify the version matches the repo, and record the exact command and exit code.",
+  "domain": "shell",
+  "scope_hint": "code.shell:failure_dossiers",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.shell:skill_survey",
+  "pack_id": "code.shell"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:dist:implement-raft-leader-election",
+  "type": "methodology",
+  "title": "Implement and test Raft leader election",
+  "description": "Bring up Raft terms, election timeouts, and vote rules so the cluster elects exactly one leader per term and recovers after partitions.",
+  "body": "Steps: 1. Give each node a current term, randomized election timeout, and persistent voted-for record. 2. On timeout, increment term, become candidate, and request votes carrying last-log index/term. 3. Grant a vote only once per term and only if the candidate's log is at least as up-to-date. 4. Require a majority to win; step down on seeing a higher term. 5. Have the leader send periodic heartbeats to suppress new elections. Rollback point: before changing the term-persistence format. Validation: a partition test elects exactly one leader per term and converges to a single leader after heal; a split vote retries without two leaders. Inspect logs for any term with two leaders, which is a safety violation.",
+  "domain": "distributed",
+  "scope_hint": "code.distributed:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.distributed",
+  "pack_id": "code.distributed"
+}

@@ -1,0 +1,640 @@
+[
+  {
+    "ref_id": "knowledge:debugging:logs-are-observations",
+    "type": "knowledge",
+    "title": "Logs Are Observations",
+    "summary": "Logs describe observations, not necessarily causality.",
+    "domains": [
+      "debugging",
+      "code"
+    ],
+    "triggers": [
+      "logs",
+      "describe",
+      "observations",
+      "necessarily",
+      "causality",
+      "line",
+      "proves",
+      "that"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.debugging"
+  },
+  {
+    "ref_id": "knowledge:debugging:minimal-repro-is-filter",
+    "type": "knowledge",
+    "title": "Minimal Repro Is Filter",
+    "summary": "A minimal reproduction filters incidental context from cause.",
+    "domains": [
+      "debugging",
+      "code"
+    ],
+    "triggers": [
+      "minimal",
+      "reproduction",
+      "filters",
+      "incidental",
+      "context",
+      "from",
+      "cause",
+      "removing"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.debugging"
+  },
+  {
+    "ref_id": "knowledge:debugging:race-bugs-need-ordering",
+    "type": "knowledge",
+    "title": "Race Bugs Need Ordering",
+    "summary": "Race and async bugs require event ordering evidence.",
+    "domains": [
+      "debugging",
+      "code"
+    ],
+    "triggers": [
+      "race",
+      "async",
+      "bugs",
+      "require",
+      "event",
+      "ordering",
+      "evidence",
+      "concurrency"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.debugging"
+  },
+  {
+    "ref_id": "knowledge:debugging:regression-lock-proves-fix",
+    "type": "knowledge",
+    "title": "Regression Lock Proves Fix",
+    "summary": "A fix is not proven until the original failure mode is locked by a regression signal.",
+    "domains": [
+      "debugging",
+      "code"
+    ],
+    "triggers": [
+      "proven",
+      "until",
+      "original",
+      "failure",
+      "mode",
+      "locked",
+      "regression",
+      "signal"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.debugging"
+  },
+  {
+    "ref_id": "knowledge:debugging:reproduction-defines-scope",
+    "type": "knowledge",
+    "title": "Reproduction Defines Scope",
+    "summary": "A reliable reproduction defines the debugging scope and prevents unrelated rewrites.",
+    "domains": [
+      "debugging",
+      "code"
+    ],
+    "triggers": [
+      "reliable",
+      "reproduction",
+      "defines",
+      "debugging",
+      "scope",
+      "prevents",
+      "unrelated",
+      "rewrites"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.debugging"
+  },
+  {
+    "ref_id": "methodology:debugging:diagnosis-result-normalization",
+    "type": "methodology",
+    "title": "Diagnosis Result Normalization",
+    "summary": "Diagnosis Result Normalization",
+    "domains": [
+      "debugging",
+      "code"
+    ],
+    "triggers": [
+      "diagnosis",
+      "result",
+      "normalization",
+      "normalize",
+      "symptoms",
+      "evidence",
+      "refs",
+      "suspected"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.debugging"
+  },
+  {
+    "ref_id": "methodology:debugging:evidence-first-diagnosis",
+    "type": "methodology",
+    "title": "Evidence First Diagnosis",
+    "summary": "Evidence First Diagnosis",
+    "domains": [
+      "debugging",
+      "code"
+    ],
+    "triggers": [
+      "evidence",
+      "first",
+      "diagnosis",
+      "collect",
+      "artifact",
+      "refs",
+      "before"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.debugging"
+  },
+  {
+    "ref_id": "methodology:debugging:log-timeline-rebuild",
+    "type": "methodology",
+    "title": "Log Timeline Rebuild",
+    "summary": "Rebuild event order from timestamps, request IDs, and state transitions.",
+    "domains": [
+      "debugging",
+      "code"
+    ],
+    "triggers": [
+      "rebuild",
+      "event",
+      "order",
+      "from",
+      "timestamps",
+      "request",
+      "state",
+      "transitions"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.debugging"
+  },
+  {
+    "ref_id": "methodology:debugging:regression-lock",
+    "type": "methodology",
+    "title": "Regression Lock",
+    "summary": "After the fix, lock the reproduced failure with a stable check.",
+    "domains": [
+      "debugging",
+      "code"
+    ],
+    "triggers": [
+      "after",
+      "lock",
+      "reproduced",
+      "failure",
+      "with",
+      "stable",
+      "check",
+      "steps"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.debugging"
+  },
+  {
+    "ref_id": "methodology:debugging:repro-trace-patch-regress",
+    "type": "methodology",
+    "title": "Repro Trace Patch Regress",
+    "summary": "Reproduce, trace to first bad state, patch owner, then add regression evidence.",
+    "domains": [
+      "debugging",
+      "code"
+    ],
+    "triggers": [
+      "reproduce",
+      "trace",
+      "first",
+      "state",
+      "patch",
+      "owner",
+      "then",
+      "regression"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.debugging"
+  },
+  {
+    "ref_id": "methodology:debugging:stack-trace-reading",
+    "type": "methodology",
+    "title": "Stack Trace Reading",
+    "summary": "Read stack traces from cause chain to application ownership.",
+    "domains": [
+      "debugging",
+      "code"
+    ],
+    "triggers": [
+      "read",
+      "stack",
+      "traces",
+      "from",
+      "cause",
+      "chain",
+      "application",
+      "ownership"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.debugging"
+  },
+  {
+    "ref_id": "skill:debugging:build-minimal-repro",
+    "type": "skill",
+    "title": "Build Minimal Repro",
+    "summary": "Turn a failure report into the smallest runnable reproduction or explicitly record why reproduction is blocked.",
+    "domains": [
+      "debugging",
+      "code"
+    ],
+    "triggers": [
+      "turn",
+      "failure",
+      "report",
+      "into",
+      "smallest",
+      "runnable",
+      "reproduction",
+      "explicitly"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.debugging"
+  },
+  {
+    "ref_id": "skill:debugging:skill",
+    "type": "skill",
+    "title": "Skill",
+    "summary": "Collect Diagnostic Evidence",
+    "domains": [
+      "debugging",
+      "code"
+    ],
+    "triggers": [
+      "collect",
+      "diagnostic",
+      "evidence",
+      "structured",
+      "failing",
+      "path"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.debugging"
+  },
+  {
+    "ref_id": "skill:debugging:trace-log-timeline",
+    "type": "skill",
+    "title": "Trace Log Timeline",
+    "summary": "Reconstruct a failure timeline from logs, traces, stack frames, request IDs, and state transitions.",
+    "domains": [
+      "debugging",
+      "code"
+    ],
+    "triggers": [
+      "reconstruct",
+      "failure",
+      "timeline",
+      "from",
+      "logs",
+      "traces",
+      "stack",
+      "frames"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.debugging"
+  },
+  {
+    "ref_id": "strategy:debugging:blocked-reference-honesty",
+    "type": "strategy",
+    "title": "Blocked Reference Honesty",
+    "summary": "When diagnosis cannot proceed, name the missing evidence, blocked reference, and next unblock action.",
+    "domains": [
+      "debugging",
+      "code"
+    ],
+    "triggers": [
+      "when",
+      "diagnosis",
+      "cannot",
+      "proceed",
+      "name",
+      "missing",
+      "evidence",
+      "blocked"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.debugging"
+  },
+  {
+    "ref_id": "strategy:debugging:first-cause-not-wrapper",
+    "type": "strategy",
+    "title": "First Cause Not Wrapper",
+    "summary": "Trace to the original failure instead of the final wrapper error.",
+    "domains": [
+      "debugging",
+      "code"
+    ],
+    "triggers": [
+      "trace",
+      "original",
+      "failure",
+      "instead",
+      "final",
+      "wrapper",
+      "error",
+      "generic"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.debugging"
+  },
+  {
+    "ref_id": "strategy:debugging:hypothesis-before-patch",
+    "type": "strategy",
+    "title": "Hypothesis Before Patch",
+    "summary": "Write the current failure hypothesis and expected observation before changing implementation code.",
+    "domains": [
+      "debugging",
+      "code"
+    ],
+    "triggers": [
+      "write",
+      "current",
+      "failure",
+      "hypothesis",
+      "expected",
+      "observation",
+      "before",
+      "changing"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.debugging"
+  },
+  {
+    "ref_id": "strategy:debugging:instrument-boundaries-only",
+    "type": "strategy",
+    "title": "Instrument Boundaries Only",
+    "summary": "Add temporary diagnostics at ownership boundaries, not everywhere.",
+    "domains": [
+      "debugging",
+      "code"
+    ],
+    "triggers": [
+      "temporary",
+      "diagnostics",
+      "ownership",
+      "boundaries",
+      "everywhere",
+      "useful",
+      "debug",
+      "logs"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.debugging"
+  },
+  {
+    "ref_id": "strategy:debugging:minimize-input-surface",
+    "type": "strategy",
+    "title": "Minimize Input Surface",
+    "summary": "Shrink the failing input, state, or scenario until the smallest cause-bearing reproduction remains.",
+    "domains": [
+      "debugging",
+      "code"
+    ],
+    "triggers": [
+      "shrink",
+      "failing",
+      "input",
+      "state",
+      "scenario",
+      "until",
+      "smallest",
+      "cause"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.debugging"
+  },
+  {
+    "ref_id": "strategy:debugging:repro-or-evidence",
+    "type": "strategy",
+    "title": "Repro Or Evidence",
+    "summary": "Establish direct reproduction or preserve the strongest available evidence.",
+    "domains": [
+      "debugging",
+      "code"
+    ],
+    "triggers": [
+      "establish",
+      "direct",
+      "reproduction",
+      "preserve",
+      "strongest",
+      "available",
+      "evidence",
+      "before"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.debugging"
+  },
+  {
+    "ref_id": "strategy:debugging:root-cause-over-symptom",
+    "type": "strategy",
+    "title": "Root Cause Over Symptom",
+    "summary": "Prefer fixing the state, contract, or ordering error that creates the symptom over masking the symptom itself.",
+    "domains": [
+      "debugging",
+      "code"
+    ],
+    "triggers": [
+      "prefer",
+      "fixing",
+      "state",
+      "contract",
+      "ordering",
+      "error",
+      "that",
+      "creates"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.debugging"
+  },
+  {
+    "ref_id": "strategy:debugging:single-variable-change",
+    "type": "strategy",
+    "title": "Single Variable Change",
+    "summary": "Change one hypothesis variable per debug iteration.",
+    "domains": [
+      "debugging",
+      "code"
+    ],
+    "triggers": [
+      "change",
+      "hypothesis",
+      "variable",
+      "debug",
+      "iteration",
+      "mixing",
+      "config",
+      "dependency"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.debugging"
+  }
+]

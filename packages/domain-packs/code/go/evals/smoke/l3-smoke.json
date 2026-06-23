@@ -1,0 +1,73 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "code.go",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "go",
+      "code"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [
+      "go"
+    ],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "L3 smoke for code.go: language semantics, compiler or interpreter diagnostics, package manager files, generated artifacts, tests, and runtime smoke"
+    ],
+    "round_signals": [
+      "l3_validation_smoke"
+    ],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "round_signals": [],
+    "user_overrides": [],
+    "repo_signals": [
+      "style a responsive navbar with CSS flexbox"
+    ]
+  },
+  "retrieval_query": "Go generics context propagation error wrapping pprof race detector build constraint goroutine",
+  "expected_pack_id": "code.go",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "Go language/toolchain behavior L3 validation smoke",
+    "signals": [
+      "package-local build/type/lint/test commands",
+      "minimal runtime smoke",
+      "generated artifact checks",
+      "and compiler diagnostics"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "Go language/toolchain behavior diagnosis smoke",
+    "signals": [
+      "separate syntax/type errors",
+      "dependency resolution",
+      "build config",
+      "runtime mismatch",
+      "generated code",
+      "and platform-specific failures"
+    ]
+  },
+  "source_refs": [
+    "source:official-tooling-docs:paraphrased",
+    "source:engineering-practice:paraphrased"
+  ]
+}

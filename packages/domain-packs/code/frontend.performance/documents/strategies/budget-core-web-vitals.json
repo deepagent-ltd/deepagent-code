@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:frontend_performance:budget-core-web-vitals",
+  "type": "strategy",
+  "title": "Set and defend Core Web Vitals budgets",
+  "description": "Hold LCP, CLS, and INP to explicit field-aligned thresholds and treat a regression past budget as a release blocker.",
+  "body": "Use when changing rendering, layout, or interaction-heavy code on a user-facing route. Do not optimize a vital in isolation while regressing another, and do not judge by lab numbers alone. Actions: set targets (LCP <=2.5s, CLS <=0.1, INP <=200ms), measure before and after on a representative viewport and throttled network, and attribute any regression to the change. Validation signals include a Lighthouse/field comparison showing each vital within budget and a trace explaining any movement. Risk boundary: shipping a vitals regression degrades real-user experience and ranking; escalate to roll back if a budget is breached without justification.",
+  "domain": "frontend",
+  "scope_hint": "code.frontend.performance:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.frontend.performance",
+  "pack_id": "code.frontend.performance"
+}

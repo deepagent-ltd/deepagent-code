@@ -1,0 +1,461 @@
+[
+  {
+    "ref_id": "knowledge:python:generated-code-drift",
+    "type": "knowledge",
+    "title": "Generated Code Drift",
+    "summary": "In Python, never hand-edit outputs from protoc, pydantic codegen, or setuptools entry-point generation; change the source and rerun the generator.",
+    "domains": [
+      "python",
+      "code"
+    ],
+    "triggers": [
+      "generated",
+      "code",
+      "must",
+      "tied",
+      "regeneration",
+      "commands",
+      "hand",
+      "edit"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.python"
+  },
+  {
+    "ref_id": "knowledge:python:runtime-errors-differ",
+    "type": "knowledge",
+    "title": "Runtime Errors Differ",
+    "summary": "In Python, a clean build does not prevent AttributeError, ImportError, and TypeError that only surface at runtime since hints are not enforced.",
+    "domains": [
+      "python",
+      "code"
+    ],
+    "triggers": [
+      "compile",
+      "success",
+      "does",
+      "guarantee",
+      "runtime",
+      "behavior",
+      "representative",
+      "tests"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.python"
+  },
+  {
+    "ref_id": "knowledge:python:toolchain-is-contract",
+    "type": "knowledge",
+    "title": "Toolchain Is Contract",
+    "summary": "In Python, the interpreter version, the active venv, and the dependency resolver are part of the contract and changing them changes behavior.",
+    "domains": [
+      "python",
+      "code"
+    ],
+    "triggers": [
+      "compiler",
+      "formatter",
+      "package",
+      "manager",
+      "test",
+      "runner",
+      "part",
+      "language"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.python"
+  },
+  {
+    "ref_id": "knowledge:python:venv-is-boundary",
+    "type": "knowledge",
+    "title": "Venv Is Boundary",
+    "summary": "Python environment and dependency resolver are part of reproducibility.",
+    "domains": [
+      "python",
+      "code"
+    ],
+    "triggers": [
+      "python",
+      "environment",
+      "dependency",
+      "resolver",
+      "part",
+      "reproducibility",
+      "record",
+      "interpreter"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.python"
+  },
+  {
+    "ref_id": "methodology:python:dependency-update-check",
+    "type": "methodology",
+    "title": "Dependency Update Check",
+    "summary": "In Python, when the resolved lockfile (poetry.lock / uv.lock / requirements.txt) and extras change, verify the lockfile, generated artifacts, and a runtime smoke.",
+    "domains": [
+      "python",
+      "code"
+    ],
+    "triggers": [
+      "when",
+      "dependencies",
+      "change",
+      "inspect",
+      "lockfile",
+      "generated",
+      "artifacts",
+      "runtime"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.python"
+  },
+  {
+    "ref_id": "methodology:python:interop-boundary-check",
+    "type": "methodology",
+    "title": "Interop Boundary Check",
+    "summary": "In Python, validate the argparse parsing, json/pickle decoding, and encoding on file/network IO where external data crosses in.",
+    "domains": [
+      "python",
+      "code"
+    ],
+    "triggers": [
+      "validate",
+      "module",
+      "shell",
+      "serialization",
+      "boundaries",
+      "steps",
+      "identify",
+      "boundary"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.python"
+  },
+  {
+    "ref_id": "methodology:python:language-gate-loop",
+    "type": "methodology",
+    "title": "Language Gate Loop",
+    "summary": "In Python, run the package-local gate, fix the first owned diagnostic, rerun, then broaden.",
+    "domains": [
+      "python",
+      "code"
+    ],
+    "triggers": [
+      "package",
+      "local",
+      "gate",
+      "first",
+      "owned",
+      "diagnostic",
+      "rerun",
+      "then"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.python"
+  },
+  {
+    "ref_id": "skill:python:run-language-gate",
+    "type": "skill",
+    "title": "Run Language Gate",
+    "summary": "In Python, run the package-local validation gate (the package's editable install (pip install -e / uv sync) inside its venv) and summarize the diagnostics.",
+    "domains": [
+      "python",
+      "code"
+    ],
+    "triggers": [
+      "package",
+      "local",
+      "language",
+      "validation",
+      "gate",
+      "summarize",
+      "diagnostics",
+      "inputs"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.python"
+  },
+  {
+    "ref_id": "strategy:python:boundary-validation",
+    "type": "strategy",
+    "title": "Boundary Validation",
+    "summary": "In Python, validate external input at the argparse parsing, json/pickle decoding, and encoding on file/network IO before internal use.",
+    "domains": [
+      "python",
+      "code"
+    ],
+    "triggers": [
+      "validate",
+      "external",
+      "input",
+      "language",
+      "runtime",
+      "boundaries",
+      "parsing",
+      "serialization"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.python"
+  },
+  {
+    "ref_id": "strategy:python:diagnostic-first",
+    "type": "strategy",
+    "title": "Diagnostic First",
+    "summary": "In Python, read the last frame of the traceback owned by your code before making speculative edits.",
+    "domains": [
+      "python",
+      "code"
+    ],
+    "triggers": [
+      "compiler",
+      "runtime",
+      "diagnostics",
+      "before",
+      "speculative",
+      "edits",
+      "read",
+      "first"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.python"
+  },
+  {
+    "ref_id": "strategy:python:idiom-preserving-change",
+    "type": "strategy",
+    "title": "Idiom Preserving Change",
+    "summary": "In Python, prefer established idioms (context managers, generators, the import system, and type hints checked statically) over generic rewrites.",
+    "domains": [
+      "python",
+      "code"
+    ],
+    "triggers": [
+      "prefer",
+      "local",
+      "idioms",
+      "standard",
+      "tooling",
+      "over",
+      "generic",
+      "rewrites"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.python"
+  },
+  {
+    "ref_id": "strategy:python:package-local-command",
+    "type": "strategy",
+    "title": "Package Local Command",
+    "summary": "In Python, use the package-local commands (the package's editable install (pip install -e / uv sync) inside its venv) rather than a root or generic command.",
+    "domains": [
+      "python",
+      "code"
+    ],
+    "triggers": [
+      "package",
+      "local",
+      "build",
+      "test",
+      "typecheck",
+      "commands",
+      "this",
+      "language"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.python"
+  },
+  {
+    "ref_id": "strategy:python:no-blocking-in-event-loop",
+    "type": "strategy",
+    "title": "Keep blocking work out of the asyncio event loop",
+    "summary": "Offload synchronous file, network, or CPU work to executors so a single coroutine cannot stall every other task on the loop.",
+    "domains": [
+      "python",
+      "code"
+    ],
+    "triggers": [
+      "asyncio",
+      "event loop",
+      "coroutine",
+      "await",
+      "run_in_executor",
+      "blocking"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.python"
+  },
+  {
+    "ref_id": "strategy:python:pin-with-lockfile",
+    "type": "strategy",
+    "title": "Pin runtime dependencies with a lockfile, keep pyproject ranges loose",
+    "summary": "Declare compatible version ranges in pyproject.toml but resolve and commit an exact lockfile so builds are reproducible across machines.",
+    "domains": [
+      "python",
+      "code"
+    ],
+    "triggers": [
+      "pyproject",
+      "lockfile",
+      "pip",
+      "poetry",
+      "uv",
+      "wheel",
+      "reproducible"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.python"
+  },
+  {
+    "ref_id": "methodology:python:pytest-fixtures-and-parametrize",
+    "type": "methodology",
+    "title": "Structure tests with fixtures and parametrize",
+    "summary": "Replace per-test setup duplication and copy-pasted assertions with scoped fixtures and parametrized cases that report each input separately.",
+    "domains": [
+      "python",
+      "code"
+    ],
+    "triggers": [
+      "pytest",
+      "fixture",
+      "parametrize",
+      "conftest",
+      "scope",
+      "test"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.python"
+  },
+  {
+    "ref_id": "skill:python:profile-with-cprofile",
+    "type": "skill",
+    "title": "Profile a hot path with cProfile and pstats",
+    "summary": "Run cProfile on a representative workload, sort by cumulative time, and report the top callers instead of guessing at the bottleneck.",
+    "domains": [
+      "python",
+      "code"
+    ],
+    "triggers": [
+      "cprofile",
+      "pstats",
+      "profile",
+      "performance",
+      "hotspot",
+      "snakeviz"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.python"
+  }
+]

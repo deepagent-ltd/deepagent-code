@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:mysql:auto-increment-gaps-are-expected",
+  "type": "knowledge",
+  "title": "Auto-increment gaps are normal, not corruption",
+  "description": "InnoDB does not recycle auto-increment values from rolled-back or failed inserts, so id sequences have holes.",
+  "body": "Reference for explaining why an id column skips values. InnoDB allocates auto-increment values before a statement commits and does not return them on rollback, deadlock, or duplicate-key failure, so gaps are inherent and expected. Use when someone reports missing ids and suspects data loss. Do not build business logic that assumes contiguous ids or counts rows by MAX(id); both break the first time a transaction rolls back. Validation signals include the row count being correct while ids are non-contiguous, and the binlog showing the rolled-back statement. Risk boundary: never treat id gaps as evidence of deletion or corruption without checking the binlog, and never reuse a gap by manually inserting an id.",
+  "domain": "mysql",
+  "scope_hint": "code.database.mysql:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.mysql",
+  "pack_id": "code.database.mysql"
+}

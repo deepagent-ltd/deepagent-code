@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:wasm:match-build-target-to-runtime",
+  "type": "strategy",
+  "title": "Match the build target to the runtime",
+  "description": "Pick the compilation target (browser unknown vs WASI vs emscripten) for where the module runs so its imports are satisfiable.",
+  "body": "Use when setting up or fixing a WASM build. Do not build for one runtime and load in another, because a wasm32-wasi module expects WASI syscall imports a browser cannot provide, while a wasm32-unknown-unknown module built for the web expects JS glue. Actions: choose wasm32-unknown-unknown with wasm-bindgen/wasm-pack for browsers, wasm32-wasi for server/WASI hosts, and emscripten when you need its POSIX/JS emulation; confirm the toolchain emits the bindings the loader expects. Validation signals include the module instantiating without missing-import errors and its imports matching what the host supplies. Risk boundary: shipping a WASI-targeted module to the browser (or vice versa) is a build-config defect; verify against the actual runtime before release.",
+  "domain": "wasm",
+  "scope_hint": "code.wasm:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.wasm",
+  "pack_id": "code.wasm"
+}

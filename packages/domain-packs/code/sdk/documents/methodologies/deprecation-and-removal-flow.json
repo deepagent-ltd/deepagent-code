@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:sdk:deprecation-and-removal-flow",
+  "type": "methodology",
+  "title": "Run a staged deprecation and removal flow",
+  "description": "Move a public SDK API through documented deprecation, runtime warnings, and a removal window before deleting it in a major release.",
+  "body": "Steps: 1. Mark the API deprecated in code and docs with the replacement and a sunset version. 2. Emit a runtime/compile-time deprecation warning that points to the migration path. 3. Ship the replacement and keep the old API working through at least one minor cycle. 4. Remove only in a major version, with a migration note in the changelog. 5. Verify downstream samples compile against the replacement. Rollback point: before deleting the symbol. Validation: the deprecation warning fires, the replacement covers the old use cases, and removal lands only at a major bump documented in the changelog; deleting a public symbol in a minor is a contract break.",
+  "domain": "sdk",
+  "scope_hint": "code.sdk:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.sdk",
+  "pack_id": "code.sdk"
+}

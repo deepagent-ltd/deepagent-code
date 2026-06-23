@@ -1,0 +1,113 @@
+---
+title: Windows (WSL)
+description: Pokrenite DeepAgent Code na Windowsu preko WSL-a.
+---
+
+import { Steps } from "@astrojs/starlight/components"
+
+Iako DeepAgent Code moze raditi direktno na Windowsu, preporucujemo [Windows Subsystem for Linux (WSL)](https://learn.microsoft.com/en-us/windows/wsl/install) za najbolje iskustvo. WSL daje Linux okruzenje koje glatko radi sa DeepAgent Code funkcijama.
+
+:::tip[Zašto WSL?]
+WSL nudi bolje performanse fajl sistema, punu terminalsku podrsku i kompatibilnost s razvojnim alatima na koje se DeepAgent Code oslanja.
+:::
+
+---
+
+## Postavljanje
+
+<Steps>
+
+1. **Instalirajte WSL**
+
+   Ako vec niste, [instalirajte WSL](https://learn.microsoft.com/en-us/windows/wsl/install) prema zvanicnom Microsoft vodicu.
+
+2. **Instalirajte DeepAgent Code u WSL-u**
+
+   Kad je WSL spreman, otvorite WSL terminal i instalirajte DeepAgent Code jednom od [metoda instalacije](/docs/).
+
+   ```bash
+   curl -fsSL https://deepagent-code.ai/install | bash
+   ```
+
+3. **Koristite DeepAgent Code iz WSL-a**
+
+   Idite u direktorij projekta (Windows fajlovima pristupate preko `/mnt/c/`, `/mnt/d/` itd.) i pokrenite DeepAgent Code.
+
+   ```bash
+   cd /mnt/c/Users/YourName/project
+   deepagent-code
+   ```
+
+</Steps>
+
+---
+
+## Desktop aplikacija + WSL Server
+
+Ako preferirate DeepAgent Code Desktop aplikaciju, ali zelite da server radi u WSL-u:
+
+1. **Pokrenite server u WSL-u** sa `--hostname 0.0.0.0` da dozvolite vanjske konekcije:
+
+   ```bash
+   deepagent-code serve --hostname 0.0.0.0 --port 4096
+   ```
+
+2. **Povezite Desktop aplikaciju** na `http://localhost:4096`
+
+:::note
+Ako `localhost` ne radi u vasem setupu, povezte se preko WSL IP adrese (u WSL-u: `hostname -I`) i koristite `http://<wsl-ip>:4096`.
+:::
+
+:::caution
+Kada koristite `--hostname 0.0.0.0`, postavite `DEEPAGENT_CODE_SERVER_PASSWORD` da zastitite server.
+
+```bash
+DEEPAGENT_CODE_SERVER_PASSWORD=your-password deepagent-code serve --hostname 0.0.0.0
+```
+
+:::
+
+---
+
+## Web klijent + WSL
+
+Za najbolje web iskustvo na Windowsu:
+
+1. **Pokrenite `deepagent-code web` u WSL terminalu** umjesto u PowerShell-u:
+
+   ```bash
+   deepagent-code web --hostname 0.0.0.0
+   ```
+
+2. **Otvorite iz Windows browsera** na `http://localhost:<port>` (DeepAgent Code ispisuje URL)
+
+Pokretanje `deepagent-code web` iz WSL-a osigurava ispravan pristup fajl sistemu i terminalsku integraciju, a i dalje je dostupno iz Windows browsera.
+
+---
+
+## Pristup Windows fajlovima
+
+WSL moze pristupiti svim Windows fajlovima kroz `/mnt/` direktorij:
+
+- Disk `C:` → `/mnt/c/`
+- Disk `D:` → `/mnt/d/`
+- I tako dalje...
+
+Primjer:
+
+```bash
+cd /mnt/c/Users/YourName/Documents/project
+deepagent-code
+```
+
+:::tip
+Za najgladje iskustvo, razmislite da klonirate/kopirate repo u WSL fajl sistem (npr. pod `~/code/`) i tu pokrenete DeepAgent Code.
+:::
+
+---
+
+## Savjeti
+
+- Drzite DeepAgent Code u WSL-u za projekte na Windows diskovima - pristup fajlovima je jednostavan
+- Koristite VS Code [WSL ekstenziju](https://code.visualstudio.com/docs/remote/wsl) uz DeepAgent Code za integrisan tok rada
+- Vase DeepAgent Code konfiguracije i sesije cuvaju se u WSL okruzenju na `~/.deepagent/code/`

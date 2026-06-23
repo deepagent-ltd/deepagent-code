@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:security:tokens-are-bearer-capabilities",
+  "type": "knowledge",
+  "title": "Tokens are bearer capabilities",
+  "description": "Many tokens grant access to whoever holds them; masking display is not enough if storage, transport, or logs leak the raw value.",
+  "body": "Use when changing token generation, persistence, transport, display, or revocation. Do not use to choose cryptographic primitives without a specialist review. Actions: narrow scope, avoid storing raw values when possible, redact every display path, and verify revocation or expiry behavior. Validation signals include no raw token in logs and tests for expired or revoked tokens. Risk boundary: broader token scope or longer lifetime requires human approval.",
+  "domain": "secrets",
+  "scope_hint": "risk.security:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.security",
+  "pack_id": "risk.security"
+}

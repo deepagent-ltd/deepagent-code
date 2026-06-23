@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:gcp:scope-bigquery-query-cost",
+  "type": "skill",
+  "title": "Bound a BigQuery query's cost before running it",
+  "description": "Apply maximum_bytes_billed, partition filters, and a dry-run so an expensive query cannot silently scan terabytes.",
+  "body": "Use when you are about to run or schedule a BigQuery query against a large table. Do not run an unbounded query against production data. Actions: run with --dry_run first to see bytes that would be billed, add a filter on the partition column, select only needed columns, and set maximum_bytes_billed so the job fails fast instead of scanning everything. Validation signals include the dry-run reporting bytes within budget and the job aborting if it would exceed the cap. Risk boundary: a query that the dry-run shows scanning beyond the agreed budget should be flagged to a human before running against production.",
+  "domain": "gcp",
+  "scope_hint": "platform.cloud.gcp:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.cloud.gcp",
+  "pack_id": "platform.cloud.gcp"
+}

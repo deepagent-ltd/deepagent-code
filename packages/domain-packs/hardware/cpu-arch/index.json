@@ -1,0 +1,484 @@
+[
+  {
+    "ref_id": "strategy:cpuarch:design-for-cache-locality",
+    "type": "strategy",
+    "title": "Design data layout for cache locality",
+    "summary": "Lay out hot data so accesses are sequential and dense, maximizing cache-line and prefetcher utilization before touching SIMD or threads.",
+    "domains": [
+      "cpu_arch",
+      "microarchitecture",
+      "cache",
+      "simd",
+      "memory_model"
+    ],
+    "triggers": [
+      "cache line",
+      "locality",
+      "struct of arrays",
+      "prefetch",
+      "stride",
+      "layout"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.cpu-arch"
+  },
+  {
+    "ref_id": "strategy:cpuarch:eliminate-false-sharing",
+    "type": "strategy",
+    "title": "Eliminate false sharing between cores",
+    "summary": "Keep independently-written variables on separate cache lines so cores do not invalidate each other's lines on every write.",
+    "domains": [
+      "cpu_arch",
+      "microarchitecture",
+      "cache",
+      "simd",
+      "memory_model"
+    ],
+    "triggers": [
+      "false sharing",
+      "cache line",
+      "alignment",
+      "per-core",
+      "padding",
+      "contention"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.cpu-arch"
+  },
+  {
+    "ref_id": "strategy:cpuarch:reduce-branch-mispredictions",
+    "type": "strategy",
+    "title": "Reduce costly branch mispredictions",
+    "summary": "Turn unpredictable data-dependent branches in hot loops into branchless or well-predicted forms when the mispredict penalty dominates.",
+    "domains": [
+      "cpu_arch",
+      "microarchitecture",
+      "cache",
+      "simd",
+      "memory_model"
+    ],
+    "triggers": [
+      "branch predict",
+      "misprediction",
+      "branchless",
+      "cmov",
+      "data-dependent",
+      "hot loop"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.cpu-arch"
+  },
+  {
+    "ref_id": "strategy:cpuarch:vectorize-hot-loops",
+    "type": "strategy",
+    "title": "Vectorize hot loops with SIMD",
+    "summary": "Express data-parallel inner loops so the compiler auto-vectorizes, or use intrinsics (SSE/AVX/NEON) when it cannot, after confirming the loop is compute-bound.",
+    "domains": [
+      "cpu_arch",
+      "microarchitecture",
+      "cache",
+      "simd",
+      "memory_model"
+    ],
+    "triggers": [
+      "simd",
+      "avx",
+      "sse",
+      "neon",
+      "vectorize",
+      "intrinsics"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.cpu-arch"
+  },
+  {
+    "ref_id": "strategy:cpuarch:place-memory-numa-aware",
+    "type": "strategy",
+    "title": "Place memory NUMA-aware",
+    "summary": "Allocate and touch memory on the node where the thread that uses it runs, so hot data avoids slow cross-socket access.",
+    "domains": [
+      "cpu_arch",
+      "microarchitecture",
+      "cache",
+      "simd",
+      "memory_model"
+    ],
+    "triggers": [
+      "numa",
+      "node",
+      "first-touch",
+      "affinity",
+      "cross-socket",
+      "bandwidth"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.cpu-arch"
+  },
+  {
+    "ref_id": "strategy:cpuarch:order-with-correct-barriers",
+    "type": "strategy",
+    "title": "Order shared memory with the correct barrier",
+    "summary": "Use the minimal correct memory fence / atomic ordering for cross-thread visibility instead of relying on volatile or accidental ordering.",
+    "domains": [
+      "cpu_arch",
+      "microarchitecture",
+      "cache",
+      "simd",
+      "memory_model"
+    ],
+    "triggers": [
+      "memory barrier",
+      "fence",
+      "acquire",
+      "release",
+      "atomic",
+      "ordering"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.cpu-arch"
+  },
+  {
+    "ref_id": "methodology:cpuarch:profile-with-hardware-counters",
+    "type": "methodology",
+    "title": "Profile with hardware performance counters",
+    "summary": "Find the real bottleneck class (front-end, back-end, memory, branch) using PMU counters before changing any code.",
+    "domains": [
+      "cpu_arch",
+      "microarchitecture",
+      "cache",
+      "simd",
+      "memory_model"
+    ],
+    "triggers": [
+      "perf",
+      "pmu",
+      "counters",
+      "top-down",
+      "ipc",
+      "bottleneck"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.cpu-arch"
+  },
+  {
+    "ref_id": "methodology:cpuarch:verify-compiler-vectorization",
+    "type": "methodology",
+    "title": "Verify the compiler actually vectorized",
+    "summary": "Confirm a loop emitted packed SIMD instructions instead of trusting compiler flags or vectorization remarks alone.",
+    "domains": [
+      "cpu_arch",
+      "microarchitecture",
+      "cache",
+      "simd",
+      "memory_model"
+    ],
+    "triggers": [
+      "vectorization",
+      "assembly",
+      "disassembly",
+      "remarks",
+      "packed",
+      "godbolt"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.cpu-arch"
+  },
+  {
+    "ref_id": "methodology:cpuarch:diagnose-poor-multicore-scaling",
+    "type": "methodology",
+    "title": "Diagnose poor multicore scaling",
+    "summary": "When adding threads barely helps, isolate the cause among false sharing, lock contention, memory bandwidth, and NUMA.",
+    "domains": [
+      "cpu_arch",
+      "microarchitecture",
+      "cache",
+      "simd",
+      "memory_model"
+    ],
+    "triggers": [
+      "scaling",
+      "contention",
+      "false sharing",
+      "bandwidth",
+      "numa",
+      "lock"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.cpu-arch"
+  },
+  {
+    "ref_id": "methodology:cpuarch:apply-cache-blocking",
+    "type": "methodology",
+    "title": "Apply cache blocking to a memory-bound loop",
+    "summary": "Restructure a nested loop into tiles sized to a cache level so reused data stays resident, cutting memory traffic.",
+    "domains": [
+      "cpu_arch",
+      "microarchitecture",
+      "cache",
+      "simd",
+      "memory_model"
+    ],
+    "triggers": [
+      "blocking",
+      "tiling",
+      "cache",
+      "reuse",
+      "working set",
+      "loop nest"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.cpu-arch"
+  },
+  {
+    "ref_id": "knowledge:cpuarch:cache-hierarchy-and-locality",
+    "type": "knowledge",
+    "title": "Cache hierarchy and the cost of a miss",
+    "summary": "L1/L2/L3 and DRAM differ in latency by orders of magnitude, so data layout and reuse, not op count, usually decide hot-path speed.",
+    "domains": [
+      "cpu_arch",
+      "microarchitecture",
+      "cache",
+      "simd",
+      "memory_model"
+    ],
+    "triggers": [
+      "cache hierarchy",
+      "latency",
+      "l1",
+      "l2",
+      "llc",
+      "dram"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.cpu-arch"
+  },
+  {
+    "ref_id": "knowledge:cpuarch:pipeline-hazards-and-ilp",
+    "type": "knowledge",
+    "title": "Pipelines, hazards, and instruction-level parallelism",
+    "summary": "Modern cores are deep and superscalar; data dependencies, mispredicted branches, and long-latency ops stall the pipeline and limit IPC.",
+    "domains": [
+      "cpu_arch",
+      "microarchitecture",
+      "cache",
+      "simd",
+      "memory_model"
+    ],
+    "triggers": [
+      "pipeline",
+      "hazard",
+      "ilp",
+      "superscalar",
+      "dependency",
+      "stall"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.cpu-arch"
+  },
+  {
+    "ref_id": "knowledge:cpuarch:hardware-memory-model",
+    "type": "knowledge",
+    "title": "The hardware memory model and ordering",
+    "summary": "x86 is strongly ordered (TSO) while ARM/POWER are weakly ordered, so code that 'works' on x86 can break on ARM without explicit fences.",
+    "domains": [
+      "cpu_arch",
+      "microarchitecture",
+      "cache",
+      "simd",
+      "memory_model"
+    ],
+    "triggers": [
+      "memory model",
+      "tso",
+      "weak ordering",
+      "reordering",
+      "fence",
+      "arm"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.cpu-arch"
+  },
+  {
+    "ref_id": "knowledge:cpuarch:simd-models-and-portability",
+    "type": "knowledge",
+    "title": "SIMD instruction sets and portability",
+    "summary": "SSE/AVX/AVX-512 (x86) and NEON/SVE (ARM) differ in width and availability, so SIMD code needs feature detection and a scalar fallback.",
+    "domains": [
+      "cpu_arch",
+      "microarchitecture",
+      "cache",
+      "simd",
+      "memory_model"
+    ],
+    "triggers": [
+      "simd",
+      "avx",
+      "avx-512",
+      "neon",
+      "sve",
+      "feature detection"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.cpu-arch"
+  },
+  {
+    "ref_id": "skill:cpuarch:run-perf-counter-profile",
+    "type": "skill",
+    "title": "Run a hardware-counter profile",
+    "summary": "Collect PMU counters (cache misses, branch mispredicts, IPC, stalls) for a workload and report the dominant bottleneck class.",
+    "domains": [
+      "cpu_arch",
+      "microarchitecture",
+      "cache",
+      "simd",
+      "memory_model"
+    ],
+    "triggers": [
+      "perf",
+      "profile",
+      "counters",
+      "vtune",
+      "stat",
+      "run"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.cpu-arch"
+  },
+  {
+    "ref_id": "skill:cpuarch:inspect-emitted-assembly",
+    "type": "skill",
+    "title": "Inspect the emitted assembly for a hot function",
+    "summary": "Disassemble a hot function and report whether it vectorized, the instruction mix, and obvious stalls or scalar fallbacks.",
+    "domains": [
+      "cpu_arch",
+      "microarchitecture",
+      "cache",
+      "simd",
+      "memory_model"
+    ],
+    "triggers": [
+      "assembly",
+      "disassembly",
+      "objdump",
+      "godbolt",
+      "vectorized",
+      "inspect"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.cpu-arch"
+  }
+]

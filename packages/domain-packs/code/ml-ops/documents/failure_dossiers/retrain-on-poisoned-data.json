@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure_dossier:mlops:retrain-on-poisoned-data",
+  "type": "failure_dossier",
+  "description": "A scheduled retrain ingests corrupted upstream data and ships a degraded model automatically.",
+  "body": "Failure mode: an automated retrain trigger fires on drift, but the drift was caused by an upstream pipeline bug, so the new model trains on poisoned data and is promoted before anyone notices. Detection signals: drift alerts coinciding with data-quality failures, and a freshly promoted model whose eval metrics on a clean holdout drop sharply. Do not let the trigger proceed just because the drift threshold was crossed. Safer fallback: gate retraining behind a passing data-quality contract, hold the candidate in staging until a clean-holdout eval clears, and require human review when drift and a quality alert co-occur.",
+  "domain": "mlops",
+  "scope_hint": "code.mlops:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.mlops:human_authored",
+  "pack_id": "code.mlops"
+}

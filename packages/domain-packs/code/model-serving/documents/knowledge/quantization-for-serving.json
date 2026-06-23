@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:serving:quantization-for-serving",
+  "type": "knowledge",
+  "title": "Quantization tradeoffs for serving",
+  "description": "Lower-precision weights/activations (int8, fp8) cut memory and raise throughput, but can shift accuracy, so serving quality must be re-validated.",
+  "body": "Use when memory or throughput is the serving bottleneck. Quantizing to int8/fp8 shrinks the model and KV cache and speeds compute on supporting hardware, raising the batch you can fit — but it can degrade accuracy, sometimes only on certain inputs. Do not assume quantization is lossless. Actions: quantize, then re-run the evaluation set and compare quality to the full-precision baseline before serving. Validation signals include memory/throughput gains with quality within an accepted tolerance. Risk boundary: serving a quantized model without re-validating quality can ship a silent accuracy regression; treat quantization as a model change requiring evaluation.",
+  "domain": "model_serving",
+  "scope_hint": "code.model-serving:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.model-serving",
+  "pack_id": "code.model-serving"
+}

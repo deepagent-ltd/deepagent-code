@@ -1,0 +1,11 @@
+{
+  "ref_id": "methodology:benchmarking:bench-harness-validation",
+  "type": "methodology",
+  "description": "Validate benchmark harness before trusting numbers.",
+  "body": "Steps: confirm workload exercises target path; prevent dead-code elimination; verify result correctness; check timers and units.\n\nDerived from local skill survey outputs under /Users/xiuranli/code/agent/skill, especially reviewed canonical rules, coverage reports, and trusted local skill notes. Paraphrased into domain-pack seed form.\n\nSource rule: this is a generalized, paraphrased seed from local skill survey material; apply only with current repository evidence and more specific pack precedence. Use when Benchmarking work touches baseline metrics, profiler output, workload shape, resource budgets, and variance. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: follow the ordered review, edit, and validation sequence; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include repeatable benchmarks, profiler traces, threshold comparisons, and correctness checks before speed claims. Risk boundary: escalate or stop when the task involves benchmark noise, optimizing the wrong workload, correctness loss, and resource regressions, missing owner evidence, or live external state.",
+  "domain": "benchmarking",
+  "scope_hint": "code.benchmarking:methodologies",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.benchmarking:skill_survey",
+  "pack_id": "code.benchmarking"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:rlang:vectorize-over-loops",
+  "type": "strategy",
+  "title": "Vectorize instead of looping row by row",
+  "description": "Express element-wise work as whole-vector operations rather than explicit for loops over rows.",
+  "body": "Use when transforming columns or computing element-wise results in R. Do not write a for loop that indexes one element at a time when a vectorized operation exists — R's interpreter overhead per iteration makes that far slower and harder to read. Actions: replace the loop with whole-vector arithmetic, ifelse, or a dplyr mutate; reserve loops for genuinely sequential state. Validation signals include a benchmark showing the vectorized form faster and producing identical output. Risk boundary: vectorizing changes evaluation order, so verify results match the loop before discarding it, especially around NA.",
+  "domain": "r_lang",
+  "scope_hint": "code.r:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.r",
+  "pack_id": "code.r"
+}

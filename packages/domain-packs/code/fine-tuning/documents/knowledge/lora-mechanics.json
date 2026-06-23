@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:finetune:lora-mechanics",
+  "type": "knowledge",
+  "title": "How LoRA adapters work",
+  "description": "Why low-rank update matrices on frozen weights make adaptation cheap and composable.",
+  "body": "Use when reasoning about why LoRA is cheap and reversible. LoRA freezes the pretrained weights and learns a low-rank product (A·B) added to chosen projection matrices, so only a small fraction of parameters train and the base is untouched. Do not assume rank is free — too low underfits the task, too high erodes the efficiency and forgetting benefits. Actions: choose target modules and rank, train only the adapters, and load or merge them at serving. Validation signals include a parameter count far below the base and a task metric tracking the rank sweep. Risk boundary: adapters are tied to a base; if the base revision is unknown, escalate before loading because misaligned ranks corrupt outputs.",
+  "domain": "fine_tuning",
+  "scope_hint": "code.fine-tuning:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.fine-tuning",
+  "pack_id": "code.fine-tuning"
+}

@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:rlang:unpinned-package-drift",
+  "type": "failure_dossier",
+  "description": "An analysis runs against globally installed packages, so a CRAN update silently changes results between runs.",
+  "body": "Failure mode: code depends on whatever package versions are installed globally rather than a pinned project library, so a CRAN update changes a default or algorithm and results differ between runs or machines. Detection signals: a result that changes after a package upgrade; a collaborator getting different output; no renv.lock in the project. Do not ship an analysis without pinned dependencies. Safer fallback: initialize renv, snapshot to renv.lock, and restore from the lockfile elsewhere.",
+  "domain": "r_lang",
+  "scope_hint": "code.r:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.r:human_authored",
+  "pack_id": "code.r"
+}

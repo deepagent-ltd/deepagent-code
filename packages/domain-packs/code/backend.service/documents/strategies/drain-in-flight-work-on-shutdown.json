@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:svc:drain-in-flight-work-on-shutdown",
+  "type": "strategy",
+  "title": "Drain in-flight work on shutdown",
+  "description": "On SIGTERM the service stops accepting new work, finishes or re-queues in-flight items, then exits within the grace period.",
+  "body": "Use when a worker or server can be redeployed, scaled down, or evicted. Do not exit immediately on SIGTERM while jobs are mid-flight or rely on the orchestrator's kill. Actions: trap SIGTERM, stop accepting new work, wait for in-flight handlers up to a deadline shorter than the orchestrator grace, then nack/re-queue anything unfinished. Validation signals include a test that sends SIGTERM under load and asserts no job is lost and acks happen only after completion. Risk boundary: dropping in-flight work on deploy silently loses user actions and is a reliability defect.",
+  "domain": "backend_service",
+  "scope_hint": "code.backend.service:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.service",
+  "pack_id": "code.backend.service"
+}

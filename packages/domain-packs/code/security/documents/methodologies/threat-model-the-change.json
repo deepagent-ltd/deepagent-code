@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:security:threat-model-the-change",
+  "type": "methodology",
+  "title": "Threat-model the change before implementing",
+  "description": "Walk the data and trust flow of a change to enumerate who can reach the new surface, what they could abuse, and which controls block it.",
+  "body": "Steps: 1. Sketch the data flow for the change: entry points, trust boundaries crossed, and the sinks/resources touched. 2. Enumerate threats per boundary (spoofing, tampering, info disclosure, elevation) and who can reach them. 3. For each threat list the existing or needed control (authn, authz, validation, rate limit, encryption). 4. Note residual risk and abuse cases that tests must cover. 5. Record the model alongside the change. Rollback point: before merging a surface with an unmitigated high threat. Validation: each enumerated threat maps to a control plus a negative test; an unmodeled new external entry point is not ready. Risk boundary: escalate any threat whose only mitigation is 'trust the client'.",
+  "domain": "security",
+  "scope_hint": "code.security:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.security",
+  "pack_id": "code.security"
+}

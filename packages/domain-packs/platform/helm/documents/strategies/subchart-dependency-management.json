@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:helm:subchart-dependency-management",
+  "type": "strategy",
+  "title": "Manage subchart dependencies and value scoping",
+  "description": "Declare dependencies in Chart.yaml, lock with helm dependency build, and pass values under the subchart alias with global for shared config.",
+  "body": "Use when a chart depends on other charts or you must override a subchart's values. Do not vendor subcharts by hand or set subchart values at the parent's top level (they won't apply). Actions: declare dependencies (name, version, repository, optional alias, condition) in Chart.yaml, run helm dependency update/build to populate charts/ and Chart.lock, override a subchart by nesting values under its name/alias, and use the global block for values shared across subcharts. Validation signals include helm dependency list resolving versions, Chart.lock pinned, and helm template showing the subchart picking up nested overrides. Risk boundary: bumping a subchart major version on a production release is human-gated.",
+  "domain": "helm",
+  "scope_hint": "platform.helm:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.helm",
+  "pack_id": "platform.helm"
+}

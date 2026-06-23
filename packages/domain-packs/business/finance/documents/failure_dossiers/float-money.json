@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:finance:float-money",
+  "type": "failure_dossier",
+  "description": "Binary floating point for money can cause rounding defects.",
+  "body": "Use decimal or integer minor units. Use when a proposed approach skips money movement, ledger entries, reconciliation output, idempotency keys, audit trails, and approval records or claims success without domain evidence. Do not use this dossier as a positive implementation strategy; it is a do-not-use signal. Actions: block the shortcut, name the missing evidence, and switch to a safer methodology or ask for human approval. Validation signals include absence or contradiction in decimal precision tests, duplicate-submit tests, reconciliation reports, immutable audit evidence, and human approval notes. Risk boundary: treat repeated recurrence as a blocker when it can cause silent balance changes, floating-point money, missing audit trails, regulatory ambiguity, and irreversible financial state.",
+  "domain": "finance",
+  "scope_hint": "business.finance:failure",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:business.finance:skill_survey",
+  "pack_id": "business.finance"
+}

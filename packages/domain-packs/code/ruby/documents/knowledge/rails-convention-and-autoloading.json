@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:ruby:rails-convention-and-autoloading",
+  "type": "knowledge",
+  "title": "Rails conventions and Zeitwerk autoloading",
+  "description": "Rails maps class names to file paths via Zeitwerk and infers tables, routes, and associations from naming conventions.",
+  "body": "Use when adding code or debugging a load error. Rails uses Zeitwerk to autoload constants by mapping a CamelCase class to a snake_case file at the expected path, so Users::Profile must live in app/models/users/profile.rb. Conventions also infer the table name (pluralized), foreign keys, and RESTful routes from names. A mismatch (wrong file path, unexpected acronym inflection) yields a NameError or 'expected file to define constant' at boot. Do not work around autoload errors with manual require. Actions: align file path, class name, and inflections; register custom acronyms. Validation signals include the constant autoloading and the route resolving in a spec. Risk boundary: fighting convention with manual requires creates load-order fragility that breaks on Rails upgrades; rename to fit convention instead.",
+  "domain": "ruby",
+  "scope_hint": "code.ruby:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.ruby",
+  "pack_id": "code.ruby"
+}

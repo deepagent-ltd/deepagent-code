@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure_dossier:mysql:copy-algorithm-alter-locks-table",
+  "type": "failure_dossier",
+  "description": "An ALTER that falls back to ALGORITHM=COPY locks the table and stalls all writes for the rebuild.",
+  "body": "Failure mode: an ALTER TABLE that cannot run inplace silently uses ALGORITHM=COPY, building a shadow table under a metadata lock so every write queues behind it for the full copy duration. Detection signals: the processlist fills with Waiting for table metadata lock, application write latency spikes, and SHOW PROCESSLIST shows the ALTER copying to tmp table. Do not run an unguarded ALTER on a large hot table during peak traffic. Safer fallback: declare ALGORITHM=INPLACE, LOCK=NONE so the statement fails fast if it cannot run online, and use gh-ost or pt-online-schema-change in a scheduled window for true copy operations.",
+  "domain": "mysql",
+  "scope_hint": "code.database.mysql:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.mysql:human_authored",
+  "pack_id": "code.database.mysql"
+}

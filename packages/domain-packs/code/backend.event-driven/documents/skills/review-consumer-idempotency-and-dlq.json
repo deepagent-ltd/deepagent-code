@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:evt:review-consumer-idempotency-and-dlq",
+  "type": "skill",
+  "title": "Review consumer idempotency and dead-lettering",
+  "description": "Read a consumer and report whether redelivery is safe, offsets commit after effects, and poison events are dead-lettered.",
+  "body": "Use when validating an event consumer. Actions: inspect the handler for dedup on the event id committed atomically with the effect; verify the offset/ack is committed only after the effect is durable; check that retries are bounded and a dead-letter topic exists; confirm ordering assumptions match the partition key. Do not assume the broker dedups. Report the consumer location and classify gaps as non-idempotent, commit-before-effect, no-DLT, or wrong-ordering-assumption. This skill is read-only against non-production. Validation signals include a redelivery-single-effect path and a DLT path. Risk boundary: a non-idempotent consumer on a sensitive event is a blocking finding to escalate.",
+  "domain": "event_driven",
+  "scope_hint": "code.backend.event-driven:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.event-driven",
+  "pack_id": "code.backend.event-driven"
+}

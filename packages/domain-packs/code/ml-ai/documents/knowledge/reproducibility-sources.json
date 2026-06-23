@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:mlai:reproducibility-sources",
+  "type": "knowledge",
+  "title": "Sources of non-determinism in training",
+  "description": "Results vary across runs from RNG seeds, data shuffling, non-deterministic GPU kernels, and library/hardware versions.",
+  "body": "Use when two runs of the same code give different metrics. Non-determinism comes from unseeded RNGs (init, dropout, shuffling), parallel reductions and atomics in GPU kernels, varying library/driver versions, and hardware differences. Do not expect bit-identical results across machines even with seeds. Actions: seed all RNGs, enable deterministic kernels (accepting a speed cost), pin library versions, and record the environment with each run. Validation signals include a reproduced metric under fixed seed and pinned versions. Risk boundary: claiming an improvement without controlling these sources can report noise as signal; require reproduction before trusting a result.",
+  "domain": "ml",
+  "scope_hint": "code.ml-ai:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.ml-ai",
+  "pack_id": "code.ml-ai"
+}

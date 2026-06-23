@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:tf:recover-corrupted-or-locked-state",
+  "type": "methodology",
+  "title": "Recover from corrupted or stuck state",
+  "description": "Diagnose a locked or corrupted state safely by backing up, confirming no live run, then surgically repairing.",
+  "body": "Steps: 1. Pull and back up the current state (terraform state pull > backup.tfstate) before touching anything. 2. Determine whether a lock is held by an active run or an abandoned one. 3. If truly abandoned, force-unlock with the reported lock id, never blindly. 4. For corruption, repair via terraform state rm/mv/import against the backup, not hand-editing JSON. 5. Plan to confirm state matches reality. Rollback point: the backup taken in step 1. Validation: plan shows the intended state with no spurious destroys; if you cannot prove no live run holds the lock, escalate rather than force-unlock.",
+  "domain": "terraform",
+  "scope_hint": "platform.terraform:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.terraform",
+  "pack_id": "platform.terraform"
+}

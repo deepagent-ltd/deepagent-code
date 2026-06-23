@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:ruby:use-metaprogramming-sparingly",
+  "type": "strategy",
+  "title": "Use metaprogramming sparingly and test it",
+  "description": "Reserve method_missing/define_method for real need and pin the dynamic behavior with tests since tools cannot see it.",
+  "body": "Use when tempted to generate methods dynamically. Do not reach for method_missing when an explicit method or a simple loop of define_method would do, and never add method_missing without a matching respond_to_missing?. Actions: prefer explicit methods; if dynamic, implement both method_missing and respond_to_missing? so introspection and duck typing work, and cover each generated method with a test. Validation signals include specs that call the dynamically defined methods and assert respond_to? returns true. Risk boundary: undocumented metaprogramming defeats grep, static analysis, and IDE navigation, hiding behavior from reviewers; an unbounded method_missing that silently absorbs unknown calls masks typos as silent no-ops.",
+  "domain": "ruby",
+  "scope_hint": "code.ruby:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.ruby",
+  "pack_id": "code.ruby"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:gcp:iam-binding-resource-hierarchy",
+  "type": "strategy",
+  "title": "Grant IAM at the lowest node in the resource hierarchy",
+  "description": "Bind predefined roles to a principal at the project/dataset/bucket level rather than the organization, respecting policy inheritance.",
+  "body": "Use when granting GCP access or reviewing an allow policy. Do not bind roles at the organization or folder when a single project or resource suffices, and avoid primitive roles (owner/editor/viewer). Actions: pick a predefined role that matches the need, bind it at the lowest resource node (bucket, dataset, project) since IAM inherits downward, use conditions for time/resource constraints, and review effective access with the policy analyzer. Validation signals include the analyzer showing the principal's roles only at the intended scope and a denied attempt on a sibling resource. Risk boundary: any binding at org/folder scope or any primitive role grant is human-gated.",
+  "domain": "gcp",
+  "scope_hint": "platform.cloud.gcp:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.cloud.gcp",
+  "pack_id": "platform.cloud.gcp"
+}

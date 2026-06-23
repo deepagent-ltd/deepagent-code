@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:lic:declared-metadata-contradicts-license-file",
+  "type": "failure_dossier",
+  "description": "A package's metadata declares one license while its bundled LICENSE file is another, and the inventory trusts the metadata.",
+  "body": "Failure mode: the inventory records the license from package metadata (package.json / setup.py classifier), but the component's actual bundled LICENSE text is different or dual-licensed, so the recorded obligation is wrong. Detection signals: the metadata license and the LICENSE-file SPDX identifier disagree; a component listed as MIT contains GPL text or vice versa; the inventory never reconciled metadata against bundled text. Do not trust declared metadata as the authoritative license. Safer fallback: reconcile every component's declared license against the SPDX identifier inferred from its bundled LICENSE file and treat any mismatch as a finding to resolve before release.",
+  "domain": "license",
+  "scope_hint": "risk.license:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.license:human_authored",
+  "pack_id": "risk.license"
+}

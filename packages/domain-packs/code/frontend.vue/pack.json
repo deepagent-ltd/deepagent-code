@@ -1,0 +1,53 @@
+{
+  "schema_version": "domain_pack.v1",
+  "id": "code.frontend.vue",
+  "name": "Vue Frontend Engineering",
+  "version": "1.0.0",
+  "scope": "system",
+  "risk": "medium",
+  "domains": [
+    "code",
+    "frontend",
+    "vue",
+    "nuxt",
+    "vite",
+    "pinia"
+  ],
+  "provides": [
+    "knowledge",
+    "strategy",
+    "methodology",
+    "skill",
+    "validation",
+    "diagnosis"
+  ],
+  "depends_on": [
+    "code.core",
+    "code.javascript",
+    "code.frontend.web"
+  ],
+  "conflicts_with": [],
+  "knowledge_store": "document_store",
+  "allowed_tools": [
+    "read",
+    "edit",
+    "shell:test",
+    "shell:build",
+    "browser"
+  ],
+  "denied_tools": [
+    "shell:deploy-production"
+  ],
+  "data_policy": {
+    "sensitivity": [
+      "source_code",
+      "user_data"
+    ],
+    "default_admission": "summary_only",
+    "secret_policy": "deny"
+  },
+  "detector": {
+    "inline": "profile.frameworks.some((f) => ['vue','nuxt','pinia'].includes(f)) || profile.repo_signals.some((s) => ['vue.config.js','nuxt.config.ts','nuxt.config.js','vite.config.ts','vite.config.js'].includes(s) || s.endsWith('.vue')) ? 0.88 : 0",
+    "threshold": 0.5
+  }
+}

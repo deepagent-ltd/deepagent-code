@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:apidesign:hateoas-and-discoverability",
+  "type": "knowledge",
+  "title": "Hypermedia links and discoverability",
+  "description": "HATEOAS embeds links to related resources and available actions in responses so clients navigate by following links rather than hardcoding URLs.",
+  "body": "Use when weighing how tightly clients should couple to URL structure. Do not require clients to construct every URL from string templates. Hypermedia responses include links for related resources and next actions, letting the server evolve URLs without breaking clients that follow links; the trade-off is added response complexity. Inspect whether clients can be made link-following. Validation signals include a client navigating relationships via embedded links rather than constructed paths. Risk boundary: hardcoded URL construction couples clients to layout, so consider hypermedia where URL stability is costly to guarantee.",
+  "domain": "api_design",
+  "scope_hint": "code.api-design:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.api-design",
+  "pack_id": "code.api-design"
+}

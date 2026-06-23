@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:sls:audit-function-iam-and-limits",
+  "type": "skill",
+  "title": "Audit function IAM and execution limits",
+  "description": "Review a function's execution role for least privilege and its memory/timeout/concurrency config against its workload.",
+  "body": "Use when checking a function's configuration. Actions: read the execution role for wildcard actions or resources and unused permissions, and check memory/timeout/reserved-concurrency against what the handler actually does and calls. Report wildcards, missing reserved concurrency on downstream-heavy functions, and timeout/downstream mismatches with severity. Do not change live config. This skill exposes capability only and must not modify production configuration without runtime permission. Validation signals include a role with no wildcards and limits sized to the workload. Risk boundary: wildcard IAM and unbounded concurrency on database-touching functions are blocking; recommend tightening and escalation.",
+  "domain": "serverless",
+  "scope_hint": "code.backend.serverless:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.serverless",
+  "pack_id": "code.backend.serverless"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:conc:enforce-a-global-lock-order",
+  "type": "strategy",
+  "title": "Enforce a single global lock acquisition order",
+  "description": "Define a total order over locks and always acquire them in that order to make classic deadlock impossible.",
+  "body": "Use when any code path holds more than one lock at once. Do not let two paths acquire locks A,B and B,A respectively, because concurrent execution can wedge each waiting on the other. Actions: assign every lock a rank, document the order, and verify each multi-lock path acquires strictly in increasing rank; where ordering is impossible, use try-lock with backoff or restructure to hold one lock at a time. Validation signals include a stress test that exercises the contended paths without hanging and a lock-order check passing. Risk boundary: introducing a second lock into a path without placing it in the global order is a deadlock risk requiring review against all other multi-lock paths.",
+  "domain": "concurrency",
+  "scope_hint": "code.concurrency:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.concurrency",
+  "pack_id": "code.concurrency"
+}

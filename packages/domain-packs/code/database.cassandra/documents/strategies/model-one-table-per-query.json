@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:cass:model-one-table-per-query",
+  "type": "strategy",
+  "title": "Model one table per query pattern",
+  "description": "Design tables from the read queries you must serve, denormalizing data into each table rather than normalizing.",
+  "body": "Use when designing a Cassandra schema for a new feature. Do not normalize into shared tables and plan to join at read time; Cassandra has no joins and reads that are not seeks by partition key are unscalable. Actions: enumerate the exact read queries first, then create one table per query whose partition key matches the query's equality filter and whose clustering columns match its ordering, duplicating data across tables as needed. Validation signals include every production read being a single-partition seek and no query needing ALLOW FILTERING. Risk boundary: denormalization means the application owns keeping the copies consistent, so document which writes must fan out to which tables and gate any change that adds a new read pattern.",
+  "domain": "cassandra",
+  "scope_hint": "code.database.cassandra:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.cassandra",
+  "pack_id": "code.database.cassandra"
+}

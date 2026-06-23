@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:healthcare:re-identification-risk-is-cumulative",
+  "type": "knowledge",
+  "title": "Re-identification risk is cumulative across quasi-identifiers",
+  "description": "Removing direct identifiers is not enough; combinations of quasi-identifiers like ZIP, birth date, and gender can re-identify individuals in 'anonymous' data.",
+  "body": "Use when judging whether a dataset is safe to share. Stripping names and IDs leaves quasi-identifiers (dates, ZIP, demographics, rare diagnoses) that, combined or linked to external data, can single out a person, so 'de-identified' is a property of the whole field set, not just the obvious identifiers. Do not assume removing names makes data anonymous. Actions: assess quasi-identifier combinations, generalize/suppress to reduce uniqueness, and check re-identification risk before release. Validation signals include a re-identification risk assessment and a uniqueness/k-anonymity check on the output. Risk boundary: advisory only; whether residual risk is acceptable is a human privacy decision, so escalate borderline datasets rather than releasing them, and never loosen de-identification to retain analytic value.",
+  "domain": "healthcare",
+  "scope_hint": "business.healthcare:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:business.healthcare",
+  "pack_id": "business.healthcare"
+}

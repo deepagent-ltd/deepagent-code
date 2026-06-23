@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:privacy:retention-needs-trigger-and-owner",
+  "type": "knowledge",
+  "title": "Retention needs trigger and owner",
+  "description": "A retention rule is actionable only when it has a start point, expiry trigger, owner, cleanup mechanism, and evidence path.",
+  "body": "Use when storing personal data in durable stores, logs, archives, queues, or caches. Do not choose retention periods without responsible owner input. Actions: locate or add cleanup triggers, avoid indefinite defaults, and document ownership. Validation signals include scheduled cleanup tests, TTL configs, or retention metadata. Risk boundary: indefinite sensitive-data storage requires human approval. Use when Privacy Risk Controls work touches personal-data classes, sinks, retention, consent, logs, prompts, and exports. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: use the fact to constrain the change and test plan; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include data inventory, redaction tests, retention checks, export/delete tests, and approval evidence. Risk boundary: escalate or stop when the task involves PII disclosure, consent bypass, retention drift, and unapproved processor expansion, missing owner evidence, or live external state.",
+  "domain": "privacy",
+  "scope_hint": "risk.privacy:knowledge",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:risk.privacy",
+  "pack_id": "risk.privacy"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:mcp:design-tool-shutdown-lifecycle",
+  "type": "methodology",
+  "title": "Design the server lifecycle and clean shutdown",
+  "description": "Define how an MCP server starts, signals readiness, drains in-flight calls, and releases resources so the host never leaks processes or hangs on exit.",
+  "body": "Steps: 1. Define startup: initialize handshake, declare capabilities, signal ready before accepting calls. 2. Track in-flight tool calls so shutdown can drain rather than abort them. 3. Handle the host's close/SIGTERM by refusing new calls, finishing or cancelling in-flight work with a deadline, and releasing handles (files, sockets, child processes). 4. Exit with a clear status and flush logs. 5. Verify no orphaned child processes or open ports remain. Rollback point: before changing the transport or process model. Validation: a shutdown test shows in-flight calls drained or cancelled cleanly and no leaked processes/ports in the trace. Risk boundary: a server that ignores shutdown signals and leaks processes must be flagged; escalate rather than relying on the host to force-kill.",
+  "domain": "code",
+  "scope_hint": "code.mcp:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.mcp",
+  "pack_id": "code.mcp"
+}

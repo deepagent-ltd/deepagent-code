@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:vsearch:tune-ann-against-recall",
+  "type": "strategy",
+  "title": "Tune ANN parameters against a recall target",
+  "description": "Set HNSW or IVF build and search parameters from a measured recall-vs-latency curve, not from library defaults.",
+  "body": "Use when building or tuning an approximate index. Do not accept default M, ef, or nprobe — defaults optimize for a generic case and may miss true neighbors on your data. Actions: build a labeled query set with ground-truth neighbors, sweep ef_search/nprobe (and build-time M/ef_construction), and plot recall against latency to pick a point that meets the recall floor. Validation signals include a recall-vs-latency benchmark and a chosen setting hitting the recall target inside the latency budget. Risk boundary: an under-tuned index silently drops relevant results; if recall cannot reach the floor within budget, escalate before serving rather than quietly accepting low recall.",
+  "domain": "vector_search",
+  "scope_hint": "code.vector-search:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.vector-search",
+  "pack_id": "code.vector-search"
+}

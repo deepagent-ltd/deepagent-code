@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:ansible:inspect-idempotency",
+  "type": "skill",
+  "title": "Inspect playbook idempotency",
+  "description": "Report which tasks report changed on a second run to locate non-idempotent steps.",
+  "body": "Use when verifying a playbook converges. Actions: run the play twice in a safe environment and report the per-task changed status on the second run, naming any task that is still changed and whether it uses a raw command. Do not declare a playbook idempotent from a single run. This skill is read-only with respect to your code and exposes capability only; it must not run against production inventory without runtime permission. Validation signals include a second-run summary with zero changed, or a named list of offenders. Risk boundary: running even a check against prod hosts requires a human gate.",
+  "domain": "ansible",
+  "scope_hint": "platform.ansible:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.ansible",
+  "pack_id": "platform.ansible"
+}

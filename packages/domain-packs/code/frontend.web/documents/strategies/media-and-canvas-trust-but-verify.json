@@ -1,0 +1,11 @@
+{
+  "ref_id": "strategy:frontend_web:media-and-canvas-trust-but-verify",
+  "type": "strategy",
+  "description": "Images, video, SVG, and canvas must be verified as rendered pixels, not only referenced assets.",
+  "body": "Use this when the change touches image paths, CSS backgrounds, canvas/WebGL drawing, video posters, generated assets, icon packs, or lazy-loaded media. Source imports and successful builds are insufficient because wrong base paths, CORS, sizing, DPR, or draw-loop errors can still produce blank or cropped output. This does not replace performance image optimization; it verifies visible correctness. Execution actions include loading the route, waiting for media decode or canvas paint, checking natural dimensions or canvas pixels when possible, and testing at least one mobile and one desktop viewport. Validation signals include nonzero rendered dimensions, no broken image icons, no blank canvas, expected aspect ratio, and no console errors from media decode or WebGL context failure. Risk boundary: if media comes from remote third parties, avoid embedding secret URLs or production-only tokens in test artifacts. Use when Frontend Web work touches visible UI behavior, browser console output, DOM state, assets, viewport behavior, and interaction evidence. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: choose the smallest direction that preserves the domain contract; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include browser smoke, component tests, viewport screenshots, console/network checks, and accessibility assertions. Risk boundary: escalate or stop when the task involves visual regressions, inaccessible interaction, hydration mismatch, and browser-only failures, missing owner evidence, or live external state.",
+  "domain": "web",
+  "scope_hint": "code.frontend.web:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.frontend.web:visual_asset_verification",
+  "pack_id": "code.frontend.web"
+}

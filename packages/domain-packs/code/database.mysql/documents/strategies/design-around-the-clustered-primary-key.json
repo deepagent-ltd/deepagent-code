@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:mysql:design-around-the-clustered-primary-key",
+  "type": "strategy",
+  "title": "Design tables around the clustered primary key",
+  "description": "Pick a small, monotonic primary key because InnoDB physically orders every row and every secondary index by it.",
+  "body": "Use when choosing a primary key for a new InnoDB table or reviewing one with a wide or random key. Do not use a random UUIDv4 or a wide composite as the clustered key on a write-heavy table; every secondary index stores the full PK, so a fat key bloats all of them and random inserts fragment the B-tree. Actions: prefer a BIGINT auto-increment or a time-ordered UUIDv7, verify with SHOW TABLE STATUS that index size is proportional to rows, and run a bulk-insert benchmark comparing page splits. Validation signals include a flat insert-latency curve and secondary indexes staying compact. Risk boundary: changing the PK of a populated table rewrites the whole clustered index, so escalate it to a windowed migration.",
+  "domain": "mysql",
+  "scope_hint": "code.database.mysql:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.mysql",
+  "pack_id": "code.database.mysql"
+}

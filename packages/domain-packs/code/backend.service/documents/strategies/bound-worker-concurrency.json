@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:svc:bound-worker-concurrency",
+  "type": "strategy",
+  "title": "Bound worker concurrency and queue depth",
+  "description": "Workers process with an explicit concurrency limit and bounded queue so load sheds rather than exhausting resources.",
+  "body": "Use when building a consumer or a fan-out that pulls work as fast as it arrives. Do not spawn an unbounded goroutine/promise per message or hold an unbounded in-memory buffer. Actions: set an explicit max concurrency tied to the downstream pool (DB connections, API rate limit); apply backpressure by pausing fetch when in-flight reaches the limit; reject or shed when the bound is exceeded. Validation signals include a load test showing in-flight work plateaus at the limit and memory stays flat. Risk boundary: unbounded concurrency that exhausts a shared connection pool degrades unrelated services and warrants escalation.",
+  "domain": "backend_service",
+  "scope_hint": "code.backend.service:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.service",
+  "pack_id": "code.backend.service"
+}

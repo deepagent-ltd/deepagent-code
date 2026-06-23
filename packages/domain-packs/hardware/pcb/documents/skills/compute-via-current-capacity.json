@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:pcb:compute-via-current-capacity",
+  "type": "skill",
+  "title": "Estimate via current-carrying capacity",
+  "description": "Derive how many parallel vias a power connection needs from the via barrel size and the expected current.",
+  "body": "Use when connecting a power net through vias between planes. Do not route high current through a single small via, since it can overheat and fail. Actions: estimate a single via's current capacity from its barrel diameter and plating, divide the total current by that figure, and verify the via count against a temperature-rise limit. Validation signals include a via count that keeps the temperature rise within the limit and a thermal scan showing no hot via. Risk boundary: an undersized via array overheats under load, so escalate to more vias or a wider barrel when the current margin is thin.",
+  "domain": "pcb",
+  "scope_hint": "hardware.pcb:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.pcb",
+  "pack_id": "hardware.pcb"
+}

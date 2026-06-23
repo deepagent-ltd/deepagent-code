@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:rlang:handle-na-explicitly",
+  "type": "strategy",
+  "title": "Handle NA explicitly at every aggregate",
+  "description": "Decide and state how missing values are treated rather than relying on silent defaults.",
+  "body": "Use when summarizing, joining, or filtering data that may contain NA. Do not call mean or sum without deciding na.rm — a single NA makes the whole aggregate NA, often unnoticed. Actions: inspect NA counts per column first, choose to drop, impute, or propagate per column with intent, and set na.rm or filter explicitly. Validation signals include NA counts logged before and after and aggregates that are not unexpectedly NA. Risk boundary: silently dropping NA rows can bias a result — record how many rows were removed and why.",
+  "domain": "r_lang",
+  "scope_hint": "code.r:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.r",
+  "pack_id": "code.r"
+}

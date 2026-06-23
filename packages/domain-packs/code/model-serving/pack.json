@@ -1,0 +1,47 @@
+{
+  "schema_version": "domain_pack.v1",
+  "id": "code.model-serving",
+  "name": "Model Serving (inference serving, batching, latency)",
+  "version": "1.0.0",
+  "scope": "system",
+  "risk": "medium",
+  "domains": [
+    "model_serving",
+    "inference_serving",
+    "batching",
+    "latency"
+  ],
+  "provides": [
+    "knowledge",
+    "strategy",
+    "methodology",
+    "skill",
+    "diagnosis",
+    "validation"
+  ],
+  "depends_on": [
+    "code.backend.service",
+    "code.performance",
+    "code.observability"
+  ],
+  "conflicts_with": [],
+  "knowledge_store": "document_store",
+  "allowed_tools": [
+    "read",
+    "shell:test"
+  ],
+  "denied_tools": [
+    "shell:deploy-production"
+  ],
+  "data_policy": {
+    "sensitivity": [
+      "source_code"
+    ],
+    "default_admission": "summary_only",
+    "secret_policy": "deny"
+  },
+  "detector": {
+    "inline": "profile.code_domains.some(d=>['model_serving','inference_serving','batching','latency'].includes(d)) || profile.repo_signals.some(s=>/\\b(model serving|inference server|dynamic batching|triton|vllm|model versioning|inference latency|gpu utilization|autoscal|tensorrt)\\b/i.test(s)) ? 0.9 : 0",
+    "threshold": 0.5
+  }
+}

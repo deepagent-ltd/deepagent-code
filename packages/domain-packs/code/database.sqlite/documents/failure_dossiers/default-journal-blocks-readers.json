@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:sqlite:default-journal-blocks-readers",
+  "type": "failure_dossier",
+  "description": "Staying on the rollback journal makes a writer block all readers, serializing an otherwise read-heavy workload.",
+  "body": "Failure mode: the database uses the default rollback journal, so while a write transaction is open all readers are blocked and a reader blocks the writer, collapsing throughput for a concurrent read-heavy app. Detection signals: readers stall whenever a write is in progress; throughput far below expectation under mixed load; journal_mode never set to WAL. Do not raise timeouts to mask the serialization. Safer fallback: enable PRAGMA journal_mode=WAL so readers and the single writer proceed concurrently, keeping the -wal/-shm files alongside the database.",
+  "domain": "sqlite",
+  "scope_hint": "code.database.sqlite:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.sqlite:human_authored",
+  "pack_id": "code.database.sqlite"
+}

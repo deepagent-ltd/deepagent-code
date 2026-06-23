@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:cache:inspect-hit-rate",
+  "type": "skill",
+  "title": "Inspect cache hit rate",
+  "description": "Report hits, misses, evictions, memory, and key count to ground tuning in measured state.",
+  "body": "Use when assessing whether a cache is earning its place. Actions: query the cache's stats (hits, misses, evictions, memory, key count), compute the hit rate plus the dominant miss cause, and report numbers rather than impressions. Do not recommend TTL or capacity changes without these figures. This skill is read-only and exposes capability only; it must not flush or resize the cache without runtime permission. Validation signals include a concrete hit-rate and eviction-rate breakdown. Risk boundary: if evictions are high while memory is capped, report it as a capacity risk before adding more keys.",
+  "domain": "caching",
+  "scope_hint": "code.caching:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.caching",
+  "pack_id": "code.caching"
+}

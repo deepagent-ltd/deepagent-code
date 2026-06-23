@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:k8s:rollout-strategies-tradeoffs",
+  "type": "knowledge",
+  "title": "RollingUpdate vs Recreate vs blue-green/canary",
+  "description": "RollingUpdate keeps availability with version overlap; Recreate avoids overlap but has downtime; canary/blue-green trade infra for safety.",
+  "body": "Use when choosing how to ship a new version. RollingUpdate gradually replaces pods so old and new versions run simultaneously (the app must tolerate mixed versions and shared schema). Recreate kills all old pods first (no version overlap, but incurs downtime) and suits singletons or backward-incompatible changes. Canary and blue-green run a separate track for safer cutover at the cost of extra capacity and routing. Do not use RollingUpdate when old and new cannot coexist against the same database schema. Actions: pick by compatibility and downtime tolerance; gate schema-incompatible changes behind expand/contract migrations. Validation signals include no errors from version skew during overlap. Risk boundary: shipping an incompatible change as a rolling update can corrupt data; escalate to a migration plan.",
+  "domain": "kubernetes",
+  "scope_hint": "platform.kubernetes:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.kubernetes",
+  "pack_id": "platform.kubernetes"
+}

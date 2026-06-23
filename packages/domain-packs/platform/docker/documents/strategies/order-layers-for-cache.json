@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:docker:order-layers-for-cache",
+  "type": "strategy",
+  "title": "Order Dockerfile layers from least to most volatile",
+  "description": "Place dependency-install steps before copying application source so a code change does not bust the dependency cache layer on every build.",
+  "body": "Use when writing or optimizing a Dockerfile's build steps. Do not COPY the whole source tree before installing dependencies, and avoid putting frequently-changing files high in the layer stack. Actions: copy only the manifest/lockfile first, run the dependency install as its own layer, then copy the rest of the source; inspect the build to confirm the install layer is reused on a code-only change. Validation signals include a rebuild after a source edit showing the dependency layer 'CACHED' and a measurably shorter build time. Risk boundary: if a build reinstalls all dependencies on every code change, the layer order is wrong; fix ordering rather than disabling the cache, and avoid cache tricks that mask a stale lockfile.",
+  "domain": "platform",
+  "scope_hint": "platform.docker:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.docker",
+  "pack_id": "platform.docker"
+}

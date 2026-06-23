@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:helm:values-schema-validation",
+  "type": "strategy",
+  "title": "Guard chart inputs with values.schema.json",
+  "description": "Define a JSON Schema for values so bad or missing inputs fail at install time with a clear error instead of rendering broken manifests.",
+  "body": "Use when a chart has required or constrained values that operators must supply. Do not rely on templates failing cryptically on a missing key. Actions: add a values.schema.json declaring required properties, types, enums, and ranges; Helm validates supplied values against it on install/upgrade/lint/template; combine with required in templates for values that must be set. Validation signals include helm lint/template rejecting an invalid value set with a precise schema error and accepting a valid one. Risk boundary: loosening schema constraints that protect production-critical inputs (replica counts, resource limits) should be reviewed.",
+  "domain": "helm",
+  "scope_hint": "platform.helm:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.helm",
+  "pack_id": "platform.helm"
+}

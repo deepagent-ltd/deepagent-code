@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:aws:iam-policy-evaluation-logic",
+  "type": "knowledge",
+  "title": "How IAM evaluates a request: deny, boundary, allow",
+  "description": "Explains the order of explicit deny, SCPs, permission boundaries, session policies, and identity vs resource policies, and why an Allow can still be denied.",
+  "body": "Use when reasoning about why an IAM request is allowed or denied. Do not assume an identity policy Allow is sufficient. Actions: apply the evaluation order — an explicit Deny anywhere wins; the request must be allowed within the SCP, the permission boundary, the session policy (if assumed role), and the identity policy; for cross-account or S3/KMS the resource policy must also allow. Verify with simulate-principal-policy. Validation signals include the simulator's matched statements explaining each Allow/Deny and CloudTrail's errorCode matching the predicted gate. Risk boundary: widening any boundary or SCP to pass a check is a privilege change requiring human review.",
+  "domain": "aws",
+  "scope_hint": "platform.cloud.aws:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.cloud.aws",
+  "pack_id": "platform.cloud.aws"
+}

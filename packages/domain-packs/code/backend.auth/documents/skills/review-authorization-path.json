@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:auth:review-authorization-path",
+  "type": "skill",
+  "title": "Review the authorization path",
+  "description": "Read the request path and report where (and whether) a server-side, object-level access decision is made.",
+  "body": "Use when asked whether an endpoint is properly protected. Actions: inspect the route and its principal source; read middleware and handler to verify the access decision; run or trace a request to determine if the decision is server-side, uses the authenticated principal (not request input), and checks object ownership/tenant scope. Do not treat UI gating or a request-body role as a real check. Report and record the exact file/line of the check or its absence, classifying gaps as function-level-only, missing, or client-trusting. This skill is read-only and must not modify policy without runtime permission. Validation signals include a confirmed negative-principal denial. Risk boundary: if no server-side object-level check exists, report it as a blocking finding and recommend escalation.",
+  "domain": "backend_auth",
+  "scope_hint": "code.backend.auth:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.auth",
+  "pack_id": "code.backend.auth"
+}

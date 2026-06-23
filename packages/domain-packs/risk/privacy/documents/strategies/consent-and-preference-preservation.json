@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:privacy:consent-and-preference-preservation",
+  "type": "strategy",
+  "title": "Preserve consent and preferences",
+  "description": "Privacy-sensitive processing must respect existing consent, opt-out, regional, and account preferences instead of bypassing them for convenience.",
+  "body": "Use when changing notifications, analytics, tracking, personalization, cookies, marketing exports, or data sharing. Do not decide legal sufficiency of consent language. Actions: locate preference source of truth, keep deny or opt-out states as dominant, and add tests for disabled or withdrawn preferences. Validation signals include opt-out users excluded from the new path and audit logs showing preference checks. Risk boundary: missing preference model or ambiguous consent meaning requires human review. Use when Privacy Risk Controls work touches personal-data classes, sinks, retention, consent, logs, prompts, and exports. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: choose the smallest direction that preserves the domain contract; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include data inventory, redaction tests, retention checks, export/delete tests, and approval evidence. Risk boundary: escalate or stop when the task involves PII disclosure, consent bypass, retention drift, and unapproved processor expansion, missing owner evidence, or live external state.",
+  "domain": "privacy",
+  "scope_hint": "risk.privacy:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.privacy",
+  "pack_id": "risk.privacy"
+}

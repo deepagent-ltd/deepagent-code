@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:robot:run-control-and-fusion-tests",
+  "type": "skill",
+  "title": "Run control and fusion tests in simulation",
+  "description": "Execute the simulation/test suite for timing, transforms, fusion, and the safety stop, and report deadline and fault results.",
+  "body": "Use when validating a robotics change before hardware. Actions: detect the toolchain (ROS2 launch/test, Gazebo), run the simulation and test suite covering control-loop timing/jitter, tf transform correctness, sensor-fusion behavior under dropped measurements, and emergency-stop response under injected faults; report jitter histograms, fault outcomes, and any deadline miss. Do not declare hardware-readiness from a single nominal sim run. This skill exposes capability only and must not actuate real hardware without runtime permission. Validation signals include bounded jitter, correct transforms, graceful fusion degradation, and a working stop under faults. Risk boundary: if the stop or fault handling is untested, report the change as not hardware-ready and recommend simulation fault coverage first.",
+  "domain": "robotics",
+  "scope_hint": "code.robotics:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.robotics",
+  "pack_id": "code.robotics"
+}

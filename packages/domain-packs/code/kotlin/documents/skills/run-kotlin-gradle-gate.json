@@ -1,0 +1,11 @@
+{
+  "ref_id": "skill:kotlin:run-kotlin-gradle-gate",
+  "type": "skill",
+  "description": "Map Kotlin changes to Gradle module tasks and run compile/test gates.",
+  "body": "Inputs: changed Kotlin/build files and repository root. Actions: inspect settings.gradle.kts, module path, Gradle wrapper, Kotlin/Android plugins, and scripts; run the narrow compileKotlin or Android compile task, then the narrow test task. Do not run from a different Gradle version if wrapper exists. Verification is exact task output and exit code. Risk boundary: Android instrumented tests may require external device/emulator and should be reported separately. Use when Kotlin Engineering work touches repository conventions, toolchain files, changed symbols, validation commands, and runtime output. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: run the documented inspection and validation workflow; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include package-local checks, focused tests, build output, smoke runs, and command logs. Risk boundary: escalate or stop when the task involves broad rewrites, generated-file drift, stale assumptions, and unvalidated behavior changes, missing owner evidence, or live external state.",
+  "domain": "kotlin",
+  "scope_hint": "code.kotlin:skills",
+  "evidence_strength": "medium",
+  "provenance_tag": "code.kotlin:seed:kotlin_gradle_coroutines_docs:paraphrased",
+  "pack_id": "code.kotlin"
+}

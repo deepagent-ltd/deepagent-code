@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:net:run-fault-injection-against-client",
+  "type": "skill",
+  "title": "Run fault injection against a client in tests",
+  "description": "Exercise the client against slow, failing, and resetting test servers to verify timeouts, retries, and backpressure hold.",
+  "body": "Use when validating a client's resilience. Procedure: point the client at a controllable test server (or mock) that can delay responses, return 503/Retry-After, reset connections, and black-hole requests; assert the client times out by its deadline, retries the right number of times with growing jittered delays, does not retry non-idempotent calls without a key, and keeps memory/sockets bounded under a slow server. Report which fault cases behaved correctly and which leaked or hung. This skill runs against test servers only and must not inject faults into production traffic. Validation signals include bounded latency, correct retry counts, and stable resource use under each fault. Risk boundary: if a fault causes a hang, unbounded growth, or duplicate effect, treat it as a blocking defect rather than loosening the assertion.",
+  "domain": "networking",
+  "scope_hint": "code.networking:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.networking",
+  "pack_id": "code.networking"
+}

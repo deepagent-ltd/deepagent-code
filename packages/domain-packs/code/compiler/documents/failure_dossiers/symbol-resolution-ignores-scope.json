@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:comp:symbol-resolution-ignores-scope",
+  "type": "failure_dossier",
+  "description": "Name resolution that ignores scoping or shadowing rules, binding an identifier to the wrong declaration.",
+  "body": "Failure mode: the symbol table lookup does not honor lexical scope or shadowing — it uses a flat namespace, resolves to an outer binding when an inner one shadows it, or leaks names across scopes — so an identifier binds to the wrong declaration and the program means something other than written. Detection signals: a variable resolves to an outer/global of the same name despite a local declaration; shadowing tests fail; semantics differ from the language spec on nested scopes. Do not resolve names without modeling scope. Safer fallback: implement a scoped symbol table (a stack of scopes or proper environment) honoring shadowing and visibility, resolve from innermost outward, and test with nested-scope and shadowing programs against expected bindings.",
+  "domain": "compiler",
+  "scope_hint": "code.compiler:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.compiler:human_authored",
+  "pack_id": "code.compiler"
+}

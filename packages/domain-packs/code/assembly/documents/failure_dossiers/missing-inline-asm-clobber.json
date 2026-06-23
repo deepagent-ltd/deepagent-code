@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:asm:missing-inline-asm-clobber",
+  "type": "failure_dossier",
+  "description": "Omitting a clobbered register, flags, or memory from an inline-asm clobber list, so the optimizer reuses trashed state and miscompiles.",
+  "body": "Failure mode: an inline-asm block trashes a register (or the flags, or memory) that is not listed in its clobbers, so at -O2/-O3 the compiler keeps a live value in that register across the asm and reads back garbage, or reorders/drops a side-effecting block; at -O0 it happens to work. Detection signals: correct at -O0 but wrong at -O2/-O3; the bug changes with surrounding code; the result depends on which register the compiler chose. Do not understate an asm block's effects. Safer fallback: list every clobbered register plus 'cc' and 'memory' as needed, mark the block volatile if it has side effects, and confirm identical results across optimization levels against a C reference.",
+  "domain": "assembly",
+  "scope_hint": "code.assembly:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.assembly:human_authored",
+  "pack_id": "code.assembly"
+}

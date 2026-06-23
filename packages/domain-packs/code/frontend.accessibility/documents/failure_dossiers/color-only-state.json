@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:frontend_accessibility:color-only-state",
+  "type": "failure_dossier",
+  "description": "Signaling state such as errors or required fields using color alone, invisible to color-blind and low-vision users.",
+  "body": "Failure mode: validity, selection, or required status is conveyed only by a color change (e.g. a red border) with no text, icon, or shape cue, so users who cannot distinguish the color get no signal. Detection signals: error state has no message or icon; a color-blindness simulator hides the cue; contrast of the colored cue is below threshold. Do not encode meaning in color alone. Safer fallback: pair every color cue with text or an icon, ensure the cue meets contrast thresholds, and confirm the meaning survives a grayscale or color-blind simulation.",
+  "domain": "frontend",
+  "scope_hint": "code.frontend.accessibility:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.frontend.accessibility:human_authored",
+  "pack_id": "code.frontend.accessibility"
+}

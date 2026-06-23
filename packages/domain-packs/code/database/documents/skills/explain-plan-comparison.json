@@ -1,0 +1,11 @@
+{
+  "ref_id": "skill:database:explain-plan-comparison",
+  "type": "skill",
+  "description": "Compare before/after query plans using representative predicates and report index or scan risk.",
+  "body": "Inputs: query or ORM call, representative parameters, schema/index state, and database command for plan inspection. Procedure: capture the current plan; identify scan type, join order, sort, rows estimated or actual, and index usage; apply the proposed query or index change in a disposable environment; capture the new plan and compare read cost, write overhead, and sibling-query impact. This skill does not replace production observability or benchmark packs. Outputs: before/after plan summary, changed indexes, risk to writes or storage, and whether evidence supports the change. Failure handling: if only tiny fixtures exist, mark plan confidence limited and recommend representative data before merging performance-sensitive changes. Use when Database Engineering work touches schema deltas, query shape, transaction ownership, constraints, locks, and data volume. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: run the documented inspection and validation workflow; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include migration dry-runs, rollback checks, EXPLAIN output, constraint tests, and fixture data comparisons. Risk boundary: escalate or stop when the task involves data loss, long locks, non-rollbackable writes, silent query-plan regressions, and unsafe backfills, missing owner evidence, or live external state.",
+  "domain": "sql",
+  "scope_hint": "code.database:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database:explain_plan_skill",
+  "pack_id": "code.database"
+}

@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:apidesign:breaking-change-within-version",
+  "type": "failure_dossier",
+  "description": "Changing a field's type or removing it inside a published version silently breaks clients that depend on the old shape.",
+  "body": "Failure mode: a field is renamed, removed, or retyped within an existing API version to clean things up, and deployed clients break. Detection signals: clients error on deserialization after a deploy; generated client code no longer compiles against the contract; support reports a sudden surge of failures. Do not make non-additive changes inside a live version. Safer fallback: make the change additive with a new optional field, or introduce a new major version with a deprecation timeline, keeping the old shape until clients migrate.",
+  "domain": "api_design",
+  "scope_hint": "code.api-design:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.api-design:human_authored",
+  "pack_id": "code.api-design"
+}

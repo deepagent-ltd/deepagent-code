@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:mt:scope-every-query-by-tenant",
+  "type": "strategy",
+  "title": "Carry the tenant id on every data access",
+  "description": "Include the authenticated tenant in the filter of every query, read and write, so no operation can ever touch another tenant's rows.",
+  "body": "Use when writing or reviewing any data-access code in a pooled multi-tenant system. Do not fetch by id alone and trust that the id belongs to the caller's tenant. Actions: derive the tenant from the authenticated principal, never request input; add the tenant predicate to every read and write at the query layer; centralize it so it cannot be forgotten. Validation signals include a negative test where tenant A cannot reach tenant B's row by id. Risk boundary: a query missing the tenant predicate is a cross-tenant leak and a high-severity defect, so treat any such gap as blocking and escalate.",
+  "domain": "multi_tenant",
+  "scope_hint": "code.backend.multi-tenant:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.multi-tenant",
+  "pack_id": "code.backend.multi-tenant"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:ng:set-up-testbed-and-marble-tests",
+  "type": "methodology",
+  "title": "Set up TestBed and marble tests",
+  "description": "Use Angular TestBed for components/DI and RxJS TestScheduler marbles for stream logic.",
+  "body": "Steps: 1. Configure TestBed with the component/standalone imports and provider overrides (mock services via useValue/useClass). 2. For component behavior, create the fixture, set inputs, call detectChanges, and assert the rendered DOM. 3. For complex stream logic, use TestScheduler marble diagrams to assert emission timing and cancellation. 4. Mock HTTP via HttpTestingController. 5. Wire the suite into the build's test step (Karma/Jest/Vitest as configured). Rollback point: before changing the test runner config. Validation: a TestBed test asserts the template after an input change and a marble test proves switchMap cancels a stale inner request.",
+  "domain": "angular",
+  "scope_hint": "code.frontend.angular:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.frontend.angular",
+  "pack_id": "code.frontend.angular"
+}

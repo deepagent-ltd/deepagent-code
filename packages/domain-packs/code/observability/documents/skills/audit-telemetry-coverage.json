@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:observability:audit-telemetry-coverage",
+  "type": "skill",
+  "title": "Audit a service's telemetry coverage",
+  "description": "Inspect a service for RED/USE metrics, structured logs with correlation ids, and trace propagation, reporting gaps with locations.",
+  "body": "Use when checking whether a service is observable before relying on it in production. Actions: scan the code for request rate/error/duration metrics, resource utilization/saturation signals, structured log calls carrying a correlation id, and trace span creation/propagation; report each missing signal with file/line and the blind spot it creates. Do not declare a service observable from the presence of a logging import alone. This skill exposes capability only and must not enable telemetry exporters without runtime permission. Validation signals include a coverage report listing present vs missing RED/USE signals and confirmed correlation-id propagation. Risk boundary: report a service with no error/latency signal or no correlation id as an operational blind spot for human review rather than passing it.",
+  "domain": "code",
+  "scope_hint": "code.observability:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.observability",
+  "pack_id": "code.observability"
+}

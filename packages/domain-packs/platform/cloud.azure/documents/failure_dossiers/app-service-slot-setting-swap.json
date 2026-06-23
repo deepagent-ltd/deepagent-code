@@ -1,0 +1,11 @@
+{
+  "ref_id": "fail:azure:app-service-slot-setting-swap",
+  "type": "failure_dossier",
+  "description": "A slot swap carries the wrong connection string into production because settings were not marked slot-sticky.",
+  "body": "Failure mode: deployment slots are used but the staging connection string or environment flag is not marked as a slot setting, so on swap the staging value follows into production. Detection signals: production points at a staging database or feature flag after a swap, config diff shows the setting moved, and the swap completed without warm-up. Do not assume all settings stay with their slot. Safer fallback: mark environment-specific settings as slot settings (deployment slot setting), warm up the staging slot before swapping, verify health post-swap, and keep swap-back ready as rollback.",
+  "domain": "azure",
+  "scope_hint": "platform.cloud.azure:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.cloud.azure:human_authored",
+  "pack_id": "platform.cloud.azure"
+}

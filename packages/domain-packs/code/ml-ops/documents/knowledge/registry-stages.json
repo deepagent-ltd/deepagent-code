@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:mlops:registry-stages",
+  "type": "knowledge",
+  "title": "Model registry stages and their meaning",
+  "description": "How None/Staging/Production/Archived stages and version aliases structure controlled model rollout.",
+  "body": "Use when reasoning about how a registry controls which model serves. Registries model a version's lifecycle as stages — none, staging, production, archived — plus aliases that point named slots at versions. Do not point a serving alias straight at a freshly logged version; route it through staging first. Actions: register a version, transition it to staging for gating, then move the production alias on a passing gate, and archive superseded versions. Validation signals include an alias whose target resolves to a gated version and an audit log of stage transitions. Risk boundary: a serving alias jumping to an ungated version skips all guardrails; require a recorded gate pass before the production transition or escalate.",
+  "domain": "mlops",
+  "scope_hint": "code.mlops:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.mlops",
+  "pack_id": "code.mlops"
+}

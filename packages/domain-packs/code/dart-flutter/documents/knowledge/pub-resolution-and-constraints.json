@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:flutter:pub-resolution-and-constraints",
+  "type": "knowledge",
+  "title": "Pub dependency resolution and constraints",
+  "description": "Pub resolves version constraints into pubspec.lock; apps commit the lock while packages do not, and SDK constraints gate compatibility.",
+  "body": "Use when managing Flutter/Dart dependencies. pubspec.yaml declares dependencies with version constraints (caret ^ allows compatible updates) plus a Dart/Flutter SDK constraint; flutter pub get resolves them into pubspec.lock, which records exact versions. An application commits pubspec.lock so every build uses identical versions, while a reusable package omits it so consumers resolve fresh. dev_dependencies are excluded from the published package, and dependency_overrides force a version (use sparingly). Do not run an app build that re-resolves to untested versions or ignore SDK-constraint conflicts. Actions: commit the lock for apps, set realistic SDK constraints. Validation signals include a clean flutter pub get reproducing the lock. Risk boundary: an uncommitted lock for an app means production builds may pull different package versions than were tested.",
+  "domain": "dart",
+  "scope_hint": "code.dart-flutter:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.dart-flutter",
+  "pack_id": "code.dart-flutter"
+}

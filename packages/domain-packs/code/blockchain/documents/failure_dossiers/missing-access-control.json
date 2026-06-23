@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:chain:missing-access-control",
+  "type": "failure_dossier",
+  "description": "A privileged or initialization function left without an access-control check, letting anyone seize control or change state.",
+  "body": "Failure mode: an admin function (mint, withdraw, setOwner, upgrade) or an initializer lacks a modifier checking msg.sender, so any address can call it to take ownership, mint tokens, or drain the contract. Detection signals: a state-changing/admin function has no onlyOwner/role check; an initializer can be called more than once; an adversarial test from a non-owner account succeeds. Do not leave privileged functions unguarded. Safer fallback: apply a vetted access-control modifier (Ownable/AccessControl) to every privileged function, make initializers one-time, and add tests asserting non-owner calls and re-initialization both revert.",
+  "domain": "blockchain",
+  "scope_hint": "code.blockchain:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.blockchain:human_authored",
+  "pack_id": "code.blockchain"
+}

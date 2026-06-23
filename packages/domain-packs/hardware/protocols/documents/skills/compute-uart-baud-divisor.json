@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:hwprot:compute-uart-baud-divisor",
+  "type": "skill",
+  "title": "Compute a UART baud-rate divisor",
+  "description": "Derive the integer divisor from the peripheral clock and target baud, then check the resulting error percentage.",
+  "body": "Use when configuring a UART whose register takes a clock divisor rather than a baud value. Do not round the divisor without checking the resulting baud error, since large error breaks framing at long frames. Actions: divide the peripheral clock by the target baud and any oversampling factor, round to the nearest integer, and compute the actual baud error. Validation signals include a baud error below the tolerance for the frame length and a clean test-string receive. Risk boundary: a divisor error above a couple percent corrupts long frames, so escalate to a different clock source when the error exceeds tolerance.",
+  "domain": "hw_protocols",
+  "scope_hint": "hardware.protocols:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.protocols",
+  "pack_id": "hardware.protocols"
+}

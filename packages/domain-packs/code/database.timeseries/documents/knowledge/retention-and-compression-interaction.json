@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:tsdb:retention-and-compression-interaction",
+  "type": "knowledge",
+  "title": "Retention and compression interaction",
+  "description": "Retention drops whole cold chunks while compression makes cold chunks columnar and largely immutable; ordering matters.",
+  "body": "Use when configuring data lifecycle. Retention policies drop entire chunks older than a threshold; compression converts cold chunks to a columnar form that is cheap to scan but expensive to modify. Do not write or backfill into compressed/retained windows — writes may fail or force decompression. Actions: order policies so compression precedes retention age and both sit beyond the active write/lateness window. Validation signals include stable storage and successful cold-range queries. Risk boundary: misordered policies cause either data loss or failed late writes — verify the age thresholds against the lateness bound.",
+  "domain": "timeseries_db",
+  "scope_hint": "code.database.timeseries:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.timeseries",
+  "pack_id": "code.database.timeseries"
+}

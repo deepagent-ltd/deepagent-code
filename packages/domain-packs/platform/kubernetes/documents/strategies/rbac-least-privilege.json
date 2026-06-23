@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:k8s:rbac-least-privilege",
+  "type": "strategy",
+  "title": "Scope RBAC to least privilege per ServiceAccount",
+  "description": "Grant Roles namespace-scoped with explicit verbs and resources; reserve ClusterRoles and wildcards for genuine cluster-wide need.",
+  "body": "Use when a workload or user needs API access, or when reviewing a RoleBinding. Do not grant ClusterRole cluster-admin, wildcard verbs (verbs: ['*']), or wildcard resources to make something work. Actions: create a dedicated ServiceAccount; bind a namespaced Role listing exact apiGroups/resources/verbs; prefer Role over ClusterRole; audit existing bindings with kubectl auth can-i --list. Validation signals include kubectl auth can-i returning 'no' for actions the workload should not perform and the RoleBinding subject being the dedicated SA. Risk boundary: any widening of a Role/ClusterRole or new cluster-scoped grant is a privilege change requiring human review.",
+  "domain": "kubernetes",
+  "scope_hint": "platform.kubernetes:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.kubernetes",
+  "pack_id": "platform.kubernetes"
+}

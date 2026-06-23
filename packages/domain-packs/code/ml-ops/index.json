@@ -1,0 +1,452 @@
+[
+  {
+    "ref_id": "strategy:mlops:pin-model-lineage",
+    "type": "strategy",
+    "title": "Pin full lineage on every registered model",
+    "summary": "Record the training run, dataset snapshot hash, code commit, and hyperparameters with each model version so any served prediction is reproducible.",
+    "domains": [
+      "mlops",
+      "ml_pipeline",
+      "model_registry",
+      "experiment_tracking",
+      "ml_ci_cd"
+    ],
+    "triggers": [
+      "model registry",
+      "lineage",
+      "model versioning",
+      "reproducibility"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.mlops"
+  },
+  {
+    "ref_id": "strategy:mlops:gate-promotion-on-eval",
+    "type": "strategy",
+    "title": "Gate promotion on a frozen evaluation set",
+    "summary": "Block any candidate model from advancing to production unless it clears a frozen offline eval and shadow-traffic check against the incumbent.",
+    "domains": [
+      "mlops",
+      "ml_pipeline",
+      "model_registry",
+      "experiment_tracking",
+      "ml_ci_cd"
+    ],
+    "triggers": [
+      "deployment gate",
+      "model promotion",
+      "regression",
+      "ci/cd for ml"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.mlops"
+  },
+  {
+    "ref_id": "strategy:mlops:trigger-retrain-on-drift",
+    "type": "strategy",
+    "title": "Trigger retraining from drift, not the calendar",
+    "summary": "Drive retraining from measured input and label drift signals rather than a fixed schedule, so refresh tracks real distribution change.",
+    "domains": [
+      "mlops",
+      "ml_pipeline",
+      "model_registry",
+      "experiment_tracking",
+      "ml_ci_cd"
+    ],
+    "triggers": [
+      "data drift",
+      "retraining pipeline",
+      "retrain trigger",
+      "monitoring"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.mlops"
+  },
+  {
+    "ref_id": "strategy:mlops:rollback-on-regression",
+    "type": "strategy",
+    "title": "Keep a one-command rollback to the last good model",
+    "summary": "Maintain the previously serving model version warm and a single switch to restore it when live metrics regress after a rollout.",
+    "domains": [
+      "mlops",
+      "ml_pipeline",
+      "model_registry",
+      "experiment_tracking",
+      "ml_ci_cd"
+    ],
+    "triggers": [
+      "rollback",
+      "regression",
+      "serving",
+      "incident"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.mlops"
+  },
+  {
+    "ref_id": "strategy:mlops:ab-serve-with-guardrails",
+    "type": "strategy",
+    "title": "A/B serve models behind metric guardrails",
+    "summary": "Split traffic between model variants with predefined guardrail metrics and an automatic stop so a losing variant is bounded.",
+    "domains": [
+      "mlops",
+      "ml_pipeline",
+      "model_registry",
+      "experiment_tracking",
+      "ml_ci_cd"
+    ],
+    "triggers": [
+      "a/b serving",
+      "canary",
+      "model comparison",
+      "traffic split"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.mlops"
+  },
+  {
+    "ref_id": "strategy:mlops:reproducible-pipeline-artifacts",
+    "type": "strategy",
+    "title": "Make the ML pipeline produce immutable artifacts",
+    "summary": "Have each pipeline stage emit content-addressed, versioned artifacts so a run is replayable and a model's provenance is traceable end to end.",
+    "domains": [
+      "mlops",
+      "ml_pipeline",
+      "model_registry",
+      "experiment_tracking",
+      "ml_ci_cd"
+    ],
+    "triggers": [
+      "ml pipeline",
+      "artifact",
+      "reproducibility",
+      "lineage"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.mlops"
+  },
+  {
+    "ref_id": "methodology:mlops:promotion-workflow",
+    "type": "methodology",
+    "title": "Run the candidate-to-production promotion workflow",
+    "summary": "A staged path from logged experiment to gated production rollout with checks at each transition.",
+    "domains": [
+      "mlops",
+      "ml_pipeline",
+      "model_registry",
+      "experiment_tracking",
+      "ml_ci_cd"
+    ],
+    "triggers": [
+      "promotion",
+      "workflow",
+      "model registry",
+      "deployment"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.mlops"
+  },
+  {
+    "ref_id": "methodology:mlops:drift-monitoring-loop",
+    "type": "methodology",
+    "title": "Operate the drift monitoring and response loop",
+    "summary": "Continuously measure input, prediction, and outcome drift, then route breaches to retrain or investigate.",
+    "domains": [
+      "mlops",
+      "ml_pipeline",
+      "model_registry",
+      "experiment_tracking",
+      "ml_ci_cd"
+    ],
+    "triggers": [
+      "data drift",
+      "monitoring",
+      "retraining pipeline",
+      "alerting"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.mlops"
+  },
+  {
+    "ref_id": "methodology:mlops:experiment-tracking-discipline",
+    "type": "methodology",
+    "title": "Enforce experiment-tracking discipline",
+    "summary": "Log every training run with params, metrics, artifacts, and environment so experiments are comparable and the best run is recoverable.",
+    "domains": [
+      "mlops",
+      "ml_pipeline",
+      "model_registry",
+      "experiment_tracking",
+      "ml_ci_cd"
+    ],
+    "triggers": [
+      "experiment tracking",
+      "mlflow",
+      "wandb",
+      "reproducibility"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.mlops"
+  },
+  {
+    "ref_id": "methodology:mlops:ci-cd-for-models",
+    "type": "methodology",
+    "title": "Wire CI/CD that tests data, code, and the model",
+    "summary": "Extend CI/CD to validate data schemas and model behavior, not just unit tests, before a pipeline change ships.",
+    "domains": [
+      "mlops",
+      "ml_pipeline",
+      "model_registry",
+      "experiment_tracking",
+      "ml_ci_cd"
+    ],
+    "triggers": [
+      "ml ci/cd",
+      "pipeline",
+      "testing",
+      "deployment gate"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.mlops"
+  },
+  {
+    "ref_id": "knowledge:mlops:registry-stages",
+    "type": "knowledge",
+    "title": "Model registry stages and their meaning",
+    "summary": "How None/Staging/Production/Archived stages and version aliases structure controlled model rollout.",
+    "domains": [
+      "mlops",
+      "ml_pipeline",
+      "model_registry",
+      "experiment_tracking",
+      "ml_ci_cd"
+    ],
+    "triggers": [
+      "model registry",
+      "model versioning",
+      "staging",
+      "production"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.mlops"
+  },
+  {
+    "ref_id": "knowledge:mlops:drift-metrics",
+    "type": "knowledge",
+    "title": "Drift metrics: PSI, KS, and outcome drift",
+    "summary": "What population stability index, the KS statistic, and delayed-label outcome drift each measure and when each applies.",
+    "domains": [
+      "mlops",
+      "ml_pipeline",
+      "model_registry",
+      "experiment_tracking",
+      "ml_ci_cd"
+    ],
+    "triggers": [
+      "data drift",
+      "psi",
+      "ks test",
+      "monitoring"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.mlops"
+  },
+  {
+    "ref_id": "knowledge:mlops:lineage-graph",
+    "type": "knowledge",
+    "title": "Data and model lineage as a graph",
+    "summary": "How dataset versions, code commits, runs, and model versions form a lineage DAG that makes incidents explainable.",
+    "domains": [
+      "mlops",
+      "ml_pipeline",
+      "model_registry",
+      "experiment_tracking",
+      "ml_ci_cd"
+    ],
+    "triggers": [
+      "lineage",
+      "provenance",
+      "model versioning",
+      "audit"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.mlops"
+  },
+  {
+    "ref_id": "knowledge:mlops:shadow-vs-canary",
+    "type": "knowledge",
+    "title": "Shadow deployment versus canary rollout",
+    "summary": "How shadow serving (mirror, discard) and canary (small live share) differ in risk and what each validates.",
+    "domains": [
+      "mlops",
+      "ml_pipeline",
+      "model_registry",
+      "experiment_tracking",
+      "ml_ci_cd"
+    ],
+    "triggers": [
+      "shadow",
+      "canary",
+      "a/b serving",
+      "rollout"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.mlops"
+  },
+  {
+    "ref_id": "skill:mlops:register-and-gate",
+    "type": "skill",
+    "title": "Register a model and attach a promotion gate",
+    "summary": "Concrete steps to log a run, register the artifact with lineage, and bind a gate that blocks regression.",
+    "domains": [
+      "mlops",
+      "ml_pipeline",
+      "model_registry",
+      "experiment_tracking",
+      "ml_ci_cd"
+    ],
+    "triggers": [
+      "model registry",
+      "promotion",
+      "deployment gate",
+      "mlflow"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.mlops"
+  },
+  {
+    "ref_id": "skill:mlops:wire-drift-alert",
+    "type": "skill",
+    "title": "Wire a drift alert to a retrain trigger",
+    "summary": "Steps to compute drift on a schedule, threshold it, and fire a guarded retrain or investigation.",
+    "domains": [
+      "mlops",
+      "ml_pipeline",
+      "model_registry",
+      "experiment_tracking",
+      "ml_ci_cd"
+    ],
+    "triggers": [
+      "data drift",
+      "retrain trigger",
+      "alerting",
+      "monitoring"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.mlops"
+  }
+]

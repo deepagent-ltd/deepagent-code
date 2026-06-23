@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:gfx:debug-a-black-or-wrong-frame",
+  "type": "methodology",
+  "title": "Debug a black or visibly-wrong frame",
+  "description": "Isolate where the pipeline breaks by checking, in order, geometry submission, transforms, shaders, and output state.",
+  "body": "Steps: 1. Confirm draws are submitted and not culled (check viewport, scissor, primitive count). 2. Verify transforms: render with an identity/known matrix to see if geometry appears. 3. Output a debug color from the fragment shader to confirm the shader runs and is bound. 4. Check depth/blend and that the render target is cleared and presented. 5. Capture a frame in a GPU debugger (RenderDoc/PIX) and inspect inputs at the failing stage. Rollback point: before changing pipeline state objects. Validation: a known-good debug shader and identity transform produce visible geometry, and the captured frame shows correct inputs at each stage; do not guess-and-tweak shader math without first localizing the failing stage.",
+  "domain": "graphics",
+  "scope_hint": "code.graphics:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.graphics",
+  "pack_id": "code.graphics"
+}

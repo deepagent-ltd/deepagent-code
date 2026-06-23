@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:eval:data-leakage-forms",
+  "type": "knowledge",
+  "title": "Forms of evaluation data leakage",
+  "description": "Leakage enters through training contamination, few-shot overlap, prompt inclusion, and editing the golden set to match outputs.",
+  "body": "Use when auditing whether a score is trustworthy. Leakage takes several forms: eval cases present in training/fine-tuning data; eval inputs reused as few-shot examples; the eval input or answer included in the prompt or system context; and curating or editing the golden set to match what the system produced. Any of these inflates scores so they no longer measure generalization. Do not draw eval and prompt data from the same pool, and avoid editing references after seeing outputs. Actions: keep the golden set disjoint and frozen and run a cross-boundary duplicate check. Validation signals include a leakage scan finding no overlap. Risk boundary: a leaked score is not evidence of quality; treat detected leakage as invalidating and re-evaluate clean.",
+  "domain": "eval",
+  "scope_hint": "code.eval:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.eval",
+  "pack_id": "code.eval"
+}

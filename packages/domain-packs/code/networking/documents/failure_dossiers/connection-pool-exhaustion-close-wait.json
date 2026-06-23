@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:net:connection-pool-exhaustion-close-wait",
+  "type": "failure_dossier",
+  "description": "Connections are never closed, accumulating in CLOSE_WAIT until the pool and file descriptors are exhausted.",
+  "body": "Failure mode: response bodies/connections are not fully read and closed, so connections sit in CLOSE_WAIT and are never returned to the pool; over time the pool is exhausted, new calls block, and the process hits its file-descriptor limit. Detection signals: rising CLOSE_WAIT socket count; pool acquisition blocking; 'too many open files' errors; latency growing as connections leak. Do not raise the FD limit to mask the leak. Safer fallback: close/return every connection and response body in finally/defer, size the pool with idle timeout and max lifetime, and verify socket counts stay flat under sustained load.",
+  "domain": "networking",
+  "scope_hint": "code.networking:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.networking:human_authored",
+  "pack_id": "code.networking"
+}

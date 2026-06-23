@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure_dossier:cass:lwt-contention-throughput-collapse",
+  "type": "failure_dossier",
+  "description": "Frequent lightweight transactions on a hot partition serialize through Paxos and collapse throughput.",
+  "body": "Failure mode: routine writes use IF conditions or IF NOT EXISTS on a hot key, so each runs a multi-round Paxos consensus and contends with the others on the same partition, causing latency to spike and writes to time out under load. Detection signals: CAS/Paxos contention metrics climb, LWT operations dominate the write mix, and timeouts cluster on one partition. Do not use LWT for high-throughput writes. Safer fallback: model the operation as an idempotent write with a natural key so no compare-and-set is needed, reserve LWT for genuinely rare uniqueness conflicts, and measure that the LWT rate stays a small fraction of writes.",
+  "domain": "cassandra",
+  "scope_hint": "code.database.cassandra:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.cassandra:human_authored",
+  "pack_id": "code.database.cassandra"
+}

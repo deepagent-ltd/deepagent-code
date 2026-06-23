@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:cache:assign-roles-per-layer",
+  "type": "strategy",
+  "title": "Assign a distinct role per cache layer",
+  "description": "Give browser, CDN, application, and DB-buffer tiers separate responsibilities and freshness budgets.",
+  "body": "Use when one cache tier cannot satisfy both latency and freshness. Do not replicate identical TTLs across browser, CDN, and application tiers — uncoordinated layers compound staleness and make invalidation ambiguous. Actions: assign each layer a role (browser for per-user, CDN for shared edge content, app/Redis for computed values, DB buffer for rows) and set the shortest freshness closest to the source of truth. Validation signals include a documented end-to-end worst-case staleness equal to the sum of un-purgeable layer TTLs. Risk boundary: invalidating only one layer leaves the others stale — escalate if a layer cannot be purged on demand.",
+  "domain": "caching",
+  "scope_hint": "code.caching:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.caching",
+  "pack_id": "code.caching"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:mongo:size-the-working-set-against-ram",
+  "type": "methodology",
+  "title": "Size the working set against RAM",
+  "description": "Keep the frequently-touched indexes and documents inside the WiredTiger cache so reads stay in memory.",
+  "body": "Use when read latency rises and disk I/O climbs on a busy collection. Actions: estimate the working set (hot indexes plus hot documents) from db.stats() and serverStatus, compare it to the WiredTiger cache size (default about half of RAM minus 1GB), and either grow RAM, narrow indexes, or shard to fit the hot set in cache. Verify with the cache eviction and bytes-read-into-cache metrics in serverStatus. Validation signals include the cache hit ratio staying high and eviction pressure dropping after the change. Risk boundary: when the working set cannot fit even after tuning, sharding is the structural fix, so escalate a capacity plan rather than repeatedly bumping cache.",
+  "domain": "mongodb",
+  "scope_hint": "code.database.mongodb:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.mongodb",
+  "pack_id": "code.database.mongodb"
+}

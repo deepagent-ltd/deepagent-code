@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:feat:detect-feature-drift",
+  "type": "methodology",
+  "title": "Monitor each feature for drift over time",
+  "description": "Compare live feature distributions to the training reference and route material drift to investigation or retraining.",
+  "body": "Use when features feed a long-lived production model whose inputs can shift. Do not assume features are stationary — upstream changes silently shift distributions and degrade accuracy. Actions: store the training reference distribution per feature, compute drift (PSI/KS) on live values on a schedule, and alert when a feature crosses its threshold; reconcile with upstream change logs. Validation signals include per-feature drift scores against the training reference and an alert that fired on a seeded shift. Risk boundary: an undetected drifting feature poisons predictions; if drift co-occurs with an upstream schema change, escalate to confirm the feature is still valid.",
+  "domain": "feature_engineering",
+  "scope_hint": "code.feature-engineering:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.feature-engineering",
+  "pack_id": "code.feature-engineering"
+}

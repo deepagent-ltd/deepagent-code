@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:embed:inspect-linker-map-and-stack",
+  "type": "skill",
+  "title": "Inspect the linker map and stack usage",
+  "description": "Parse the build's memory map and stack high-water marks and report flash/RAM headroom and any task near its stack guard.",
+  "body": "Use when checking that firmware fits and is safe against overflow. Actions: read the linker map for flash/RAM section sizes against the device limits, check each RTOS task's stack high-water mark, and report remaining headroom and any task approaching its guard. Do not declare a build safe without checking stack margin. This skill exposes capability only and must not modify the linker script or flash the device without runtime permission. Validation signals include section sizes within device limits with margin and stack marks well below the guard. Risk boundary: a stack within a few bytes of its guard is a latent overflow that corrupts memory silently; flag it as blocking rather than passing the build.",
+  "domain": "embedded",
+  "scope_hint": "code.embedded:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.embedded",
+  "pack_id": "code.embedded"
+}

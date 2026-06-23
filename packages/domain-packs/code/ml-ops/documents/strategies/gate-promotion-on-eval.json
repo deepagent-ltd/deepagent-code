@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:mlops:gate-promotion-on-eval",
+  "type": "strategy",
+  "title": "Gate promotion on a frozen evaluation set",
+  "description": "Block any candidate model from advancing to production unless it clears a frozen offline eval and shadow-traffic check against the incumbent.",
+  "body": "Use when a retrained candidate is competing to replace the incumbent serving model. Do not promote on training metrics alone — they say nothing about regression on held-out slices or live traffic. Actions: run the candidate against a frozen eval set and key segments, compare to the incumbent, then shadow live requests before cutover. Validation signals include a benchmark report showing no slice regresses past the threshold and shadow predictions tracking the incumbent within tolerance. Risk boundary: promoting a regressing model degrades every downstream decision; if any guarded slice drops, deny the gate and require human sign-off.",
+  "domain": "mlops",
+  "scope_hint": "code.mlops:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.mlops",
+  "pack_id": "code.mlops"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:evt:ordering-and-partitioning",
+  "type": "knowledge",
+  "title": "Ordering and partitioning",
+  "description": "Order is preserved per partition; the partition key determines which events stay ordered relative to each other.",
+  "body": "Use when balancing ordering against parallelism. A topic is split into partitions consumed in parallel; order holds only within a partition, chosen by the partition key. Using the aggregate id as the key keeps one entity's events ordered while still scaling across entities. Do not key everything onto one partition (no parallelism) or assume cross-partition order. Actions: pick the key by the smallest unit that needs ordering; for late or reordered cross-key events, carry a version/sequence and make handlers tolerant. Validation signals include a test that same-key events apply in order under concurrent consumption. Risk boundary: an overly broad ordering assumption corrupts derived state.",
+  "domain": "event_driven",
+  "scope_hint": "code.backend.event-driven:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.event-driven",
+  "pack_id": "code.backend.event-driven"
+}

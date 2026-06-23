@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:dq:retraining-on-a-pipeline-bug",
+  "type": "failure_dossier",
+  "description": "Interpreting a pipeline-induced distribution shift as genuine drift and retraining, baking the bug into the model.",
+  "body": "Failure mode: a join change, unit error, or partial load shifts a feature distribution, drift monitoring flags it, and the team retrains on the corrupted data, encoding the bug into the new model and masking the real defect. Detection signals: a sharp distribution cliff coinciding with a deploy; row counts or null rates also moved; the shift reverses when the suspected bug is fixed. Do not retrain before ruling out a data defect. Safer fallback: run a pipeline-integrity check (counts, joins, units) against a baseline first, fix the source and backfill, then reassess whether real drift remains.",
+  "domain": "data_quality",
+  "scope_hint": "code.data-quality:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.data-quality:human_authored",
+  "pack_id": "code.data-quality"
+}

@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:scala:blocking-on-compute-pool",
+  "type": "failure_dossier",
+  "description": "A blocking call runs on the global/compute ExecutionContext, starving the pool and stalling unrelated async work.",
+  "body": "Failure mode: a synchronous JDBC query, Await, or Thread.sleep executes on the global compute ExecutionContext (sized to CPU cores), so blocked threads occupy the pool and other Futures/IO tasks cannot make progress, collapsing throughput under load. Detection signals: latency spikes and throughput drops under concurrency; thread dumps show compute threads parked in blocking calls; blocking IO scheduled on the global EC. Do not run blocking work on the compute pool. Safer fallback: move blocking calls to a dedicated bounded blocking ExecutionContext, wrap them in blocking { } (Future) or IO.blocking (Cats-Effect), and load-test to confirm the compute pool stays responsive.",
+  "domain": "scala",
+  "scope_hint": "code.scala:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.scala:human_authored",
+  "pack_id": "code.scala"
+}

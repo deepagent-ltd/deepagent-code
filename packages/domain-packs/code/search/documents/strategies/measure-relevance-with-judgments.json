@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:search:measure-relevance-with-judgments",
+  "type": "strategy",
+  "title": "Measure relevance against judged queries",
+  "description": "Tune ranking using a labeled set of queries with graded relevance and a metric like nDCG, not by inspecting one query's results.",
+  "body": "Use when changing ranking, boosts, or analyzers. Do not tune by eyeballing a favorite query — a boost that fixes it usually regresses others you didn't check. Actions: build a judgment set (queries with graded-relevant docs), compute nDCG/precision@k/recall before and after each change, and only keep changes that improve the aggregate. Validation signals include an offline relevance metric that improves across the judgment set, not a single anecdote. Risk boundary: relevance changes tuned on one query routinely regress the broad query distribution; require a judgment-set evaluation before shipping a ranking change.",
+  "domain": "search",
+  "scope_hint": "code.search:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.search",
+  "pack_id": "code.search"
+}

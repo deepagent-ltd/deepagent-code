@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:comp:bind-changes-to-tickets",
+  "type": "strategy",
+  "title": "Bind every controlled change to an authorized request",
+  "description": "Require each change to reference an approved change request so the trail links why, who, and what.",
+  "body": "Use when a change to a regulated system is proposed. Do not allow an unlinked change that has no recorded business or operational justification. Actions: require the commit/deploy to reference an approved change-request id, verify the request was authorized before the change, and store the linkage as evidence connecting request, approval, change, and deploy. Validation signals include a gate that rejects a deploy with no linked authorized request and a traceability report joining request to artifact. Risk boundary: an emergency/break-glass change still must create a retroactive request and reach a human reviewer; an unlinked change to a controlled system is blocking.",
+  "domain": "compliance",
+  "scope_hint": "risk.compliance:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.compliance",
+  "pack_id": "risk.compliance"
+}
