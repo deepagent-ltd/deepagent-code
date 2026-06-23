@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:finetune:run-lora-sweep",
+  "type": "skill",
+  "title": "Run a LoRA hyperparameter sweep",
+  "description": "Steps to sweep rank, target modules, and learning rate against a frozen eval to find a deployable adapter.",
+  "body": "Use when tuning LoRA settings for a task. Do not pick rank and learning rate by intuition — the optimum varies by task and base. Actions: fix the eval, sweep rank, target modules, and learning rate over a small grid, score each adapter against the base on task and capability holdouts, and select the best inside the capability constraint. Validation signals include a sweep table ranking configs and a chosen adapter beating the base without a capability regression. Risk boundary: a config that wins on task but drops capability is not deployable; if every config regresses the holdout, escalate to revisit the data or method rather than ship.",
+  "domain": "fine_tuning",
+  "scope_hint": "code.fine-tuning:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.fine-tuning",
+  "pack_id": "code.fine-tuning"
+}

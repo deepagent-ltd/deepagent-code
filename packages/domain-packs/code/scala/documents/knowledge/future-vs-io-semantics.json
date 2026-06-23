@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:scala:future-vs-io-semantics",
+  "type": "knowledge",
+  "title": "Future vs IO semantics",
+  "description": "scala.concurrent.Future is eager and memoized; Cats-Effect IO is a lazy, referentially transparent description run on demand.",
+  "body": "Use when choosing or reasoning about an async type. A Future begins executing the moment it is created and caches its single result, so it is not referentially transparent (val f = Future(sideEffect) already ran) and cannot be re-run or easily cancelled. An IO/Task is a lazy value describing an effect: building it does nothing, it can be composed, retried, and cancelled, and runs only when interpreted at the edge. Do not treat a Future as a re-runnable recipe or assume IO has executed just because it was constructed. Actions: pick IO for principled effect control, Future for interop with libraries that demand it, wrapping construction to delay it. Validation signals include a test distinguishing construction from execution. Risk boundary: eager Future side effects fire before composition, causing duplicate or out-of-order effects.",
+  "domain": "scala",
+  "scope_hint": "code.scala:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.scala",
+  "pack_id": "code.scala"
+}

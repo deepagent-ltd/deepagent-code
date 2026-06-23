@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:electron:unvalidated-ipc-handler",
+  "type": "failure_dossier",
+  "description": "A main-process IPC handler that performs file, shell, or network operations on renderer-supplied data without validation, enabling path traversal or injection.",
+  "body": "Failure mode: an ipcMain handler takes a file path or command argument from the renderer and acts on it directly, so a malicious or compromised renderer can read/write arbitrary paths or inject arguments via the privileged main process. Detection signals: a handler concatenates renderer input into a path or command; no type/shape/path validation; tests can escape the intended directory. Do not trust IPC input. Safer fallback: validate payload types and shapes, constrain file paths to an allow-listed directory, verify the sender where relevant, and reject anything unexpected before performing the privileged operation.",
+  "domain": "electron",
+  "scope_hint": "code.desktop.electron:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.desktop.electron:human_authored",
+  "pack_id": "code.desktop.electron"
+}

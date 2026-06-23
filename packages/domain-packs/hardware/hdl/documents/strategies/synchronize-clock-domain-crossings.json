@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:hdl:synchronize-clock-domain-crossings",
+  "type": "strategy",
+  "title": "Synchronize every clock-domain crossing",
+  "description": "Treat any signal crossing clock domains as a metastability hazard needing a synchronizer or FIFO plus timing constraints, never a bare wire.",
+  "body": "Use when a signal generated in one clock crosses into another. Do not connect cross-domain signals directly, and do not synchronize a multi-bit bus with parallel 2-flop synchronizers (bits resolve at different times). Actions: use a 2+ flop synchronizer for single-bit control, a gray-coded pointer or async FIFO for buses, and add false-path/max-delay constraints. Validation signals include a CDC report with every crossing covered and MTBF analysis. Risk boundary: metastability failures are probabilistic and field-only; a removed CDC warning is not a fix unless a real synchronizer was added.",
+  "domain": "hdl",
+  "scope_hint": "hardware.hdl:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.hdl",
+  "pack_id": "hardware.hdl"
+}

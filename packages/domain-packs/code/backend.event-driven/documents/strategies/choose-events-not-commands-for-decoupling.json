@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:evt:choose-events-not-commands-for-decoupling",
+  "type": "strategy",
+  "title": "Publish events, not commands, for decoupling",
+  "description": "Producers emit facts about what happened; consumers decide reactions, so producers stay unaware of subscribers.",
+  "body": "Use when designing what to put on the bus. Do not encode a specific consumer's action (SendWelcomeEmail) as the message, which recouples the producer to that consumer. Actions: publish a domain fact (UserRegistered) carrying the data consumers need; let each consumer own its reaction and subscription; keep the event named in past tense and free of consumer intent. Validation signals include adding a new consumer without touching the producer and a test that the producer emits the same fact regardless of subscribers. Risk boundary: command-shaped events leak orchestration into producers and erode the decoupling the bus exists to provide.",
+  "domain": "event_driven",
+  "scope_hint": "code.backend.event-driven:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.event-driven",
+  "pack_id": "code.backend.event-driven"
+}

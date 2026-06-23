@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:shell:trace-with-set-x-and-bash-debug",
+  "type": "skill",
+  "title": "Trace a misbehaving script with set -x and debug tools",
+  "description": "Turn on execution tracing with rich PS4, narrow it to the suspect region, and report the exact command and variable values at the failure.",
+  "body": "Use when a script produces wrong output or fails opaquely. Actions: set a descriptive PS4 (PS4='+${BASH_SOURCE}:${LINENO}:${FUNCNAME[0]}: ') and enable `set -x` around the suspect block (set +x to stop), or run `bash -x script.sh`; redirect trace to a file with BASH_XTRACEFD to keep stdout clean. Report the last command before failure, the expanded variables, and the exit status ($?). Do not debug by sprinkling echo when xtrace shows expansions precisely. This skill exposes capability only and must not run with secrets in the environment under trace without runtime permission (tracing prints values). Validation signals include the trace showing the divergent expansion and a clean rerun after the fix. Risk boundary: xtrace can leak secrets into logs; scope it tightly and redact, escalating rather than tracing a block that handles credentials.",
+  "domain": "shell",
+  "scope_hint": "code.shell:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.shell",
+  "pack_id": "code.shell"
+}

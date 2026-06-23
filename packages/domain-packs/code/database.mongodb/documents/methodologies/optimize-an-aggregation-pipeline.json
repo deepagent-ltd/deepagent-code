@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:mongo:optimize-an-aggregation-pipeline",
+  "type": "methodology",
+  "title": "Optimize an aggregation pipeline",
+  "description": "Reorder stages so $match and $project run before $group and $sort, letting indexes do the early filtering.",
+  "body": "Use when an aggregation is slow or spills to disk. Actions: put $match as early as possible so an index filters before any reshaping, follow with $project to drop unneeded fields and shrink the documents flowing downstream, place a $sort that can use an index before $group, and check explain to confirm the pipeline used an index for the leading stages. Verify by comparing executionStats before and after the reorder. Validation signals include the first stage reporting an IXSCAN and the pipeline no longer reporting usedDisk true. Risk boundary: a $group or blocking $sort over a large unfiltered set exceeds the 100MB per-stage memory limit, so filter first or set allowDiskUse deliberately rather than by default.",
+  "domain": "mongodb",
+  "scope_hint": "code.database.mongodb:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.mongodb",
+  "pack_id": "code.database.mongodb"
+}

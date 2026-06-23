@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:apidesign:inconsistent-error-shapes",
+  "type": "failure_dossier",
+  "description": "Returning errors in varied shapes across endpoints forces clients into brittle parsing and can leak internal details.",
+  "body": "Failure mode: different endpoints return errors as plain strings, varied JSON shapes, or raw stack traces because no envelope was defined. Detection signals: clients special-case error parsing per endpoint; some errors expose internal messages or stack frames; there is no stable error code to branch on. Do not let each endpoint invent its own error format. Safer fallback: adopt one error envelope with a stable machine-readable code, message, and details across the surface, map status codes consistently, and keep messages free of sensitive internals.",
+  "domain": "api_design",
+  "scope_hint": "code.api-design:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.api-design:human_authored",
+  "pack_id": "code.api-design"
+}

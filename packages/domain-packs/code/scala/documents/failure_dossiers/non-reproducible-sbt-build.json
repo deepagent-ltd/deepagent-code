@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:scala:non-reproducible-sbt-build",
+  "type": "failure_dossier",
+  "description": "The build uses dynamic version ranges or a floating sbt/Scala version, so it resolves differently across machines and over time.",
+  "body": "Failure mode: build.sbt declares a dependency as latest.release or with a + range, or the sbt/Scala version floats, so coursier resolves different versions on different days or machines and a breaking release slips into CI or production unnoticed. Detection signals: latest.release/+ in libraryDependencies; no pinned version in project/build.properties; a build that worked yesterday fails today with no source change. Do not use dynamic version ranges in a build meant to be reproducible. Safer fallback: pin every dependency, plugin, sbt, and Scala version, verify a fresh checkout resolves an identical dependencyTree, and bump versions only through reviewed changes.",
+  "domain": "scala",
+  "scope_hint": "code.scala:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.scala:human_authored",
+  "pack_id": "code.scala"
+}

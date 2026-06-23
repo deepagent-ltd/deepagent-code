@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:scala:variance-and-type-classes",
+  "type": "knowledge",
+  "title": "Variance and type classes",
+  "description": "Declaration-site variance (+A/-A) governs subtyping of generic types, and type classes add ad-hoc polymorphism via implicits.",
+  "body": "Use when designing generic APIs or instances. Scala uses declaration-site variance: +A makes a type covariant (a List[Dog] is a List[Animal]), -A contravariant (a Function consuming Animal can take a Dog's place), and invariant by default for mutable containers. Type classes provide ad-hoc polymorphism: a trait like Ordering[A] with instances supplied implicitly lets you add behavior to types you do not own without inheritance. Do not annotate a mutable container covariantly (it breaks soundness) or add a type-class instance in a scope that conflicts with the canonical one. Actions: choose variance by whether the parameter is produced or consumed, place instances canonically. Validation signals include the compiler accepting intended subtyping and rejecting unsound uses. Risk boundary: wrong variance either over-restricts the API or, if forced, opens a soundness hole.",
+  "domain": "scala",
+  "scope_hint": "code.scala:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.scala",
+  "pack_id": "code.scala"
+}

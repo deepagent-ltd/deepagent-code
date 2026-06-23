@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:llm:token-limits-and-context-window",
+  "type": "knowledge",
+  "title": "Token limits and the context window",
+  "description": "Input plus requested output must fit the model's context window, and the output is separately capped by max-tokens.",
+  "body": "Use when prompts grow large or outputs get cut off. The context window bounds input tokens plus generated tokens together; max-tokens caps only the output. Exceeding the window errors or silently drops content, and an output longer than max-tokens is truncated with a length finish-reason. Do not assume a fixed character budget (tokens are not characters), and avoid ignoring the finish-reason. Actions: estimate token counts, reserve headroom for output, and check the finish-reason on every response. Validation signals include a test that an over-window request is caught before sending and that a length-truncated response is flagged. Risk boundary: a truncated structured response acted on as complete corrupts state; treat truncation as failure.",
+  "domain": "llm_app",
+  "scope_hint": "code.llm-app:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.llm-app",
+  "pack_id": "code.llm-app"
+}

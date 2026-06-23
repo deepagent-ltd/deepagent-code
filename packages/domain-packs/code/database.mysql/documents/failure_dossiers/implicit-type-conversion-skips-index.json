@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure_dossier:mysql:implicit-type-conversion-skips-index",
+  "type": "failure_dossier",
+  "description": "Comparing an indexed string column to a numeric literal forces a full scan via implicit conversion.",
+  "body": "Failure mode: a WHERE clause comparing a VARCHAR column to an integer literal (or mismatched collations across a join) triggers implicit type conversion, which prevents the index from being used and falls back to a full clustered scan. Detection signals: EXPLAIN shows type ALL and no key on a column that is indexed, and the slow query log captures the statement. Do not use loose, mismatched-type comparisons in hot predicates. Safer fallback: quote the literal to match the column type, align collations across joined columns, and confirm EXPLAIN reports a ref access using the intended index.",
+  "domain": "mysql",
+  "scope_hint": "code.database.mysql:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.mysql:human_authored",
+  "pack_id": "code.database.mysql"
+}

@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:ci_triage:blanket-retry-hides-real-failure",
+  "type": "failure_dossier",
+  "description": "Configuring automatic retries on all jobs, which converts real intermittent defects into rare green runs and hides regressions.",
+  "body": "Failure mode: a blanket retry policy is applied so any failing job is rerun until it passes, masking genuine flaky-but-real bugs and nondeterministic defects behind an eventually-green result. Detection signals: jobs that pass only on the 2nd/3rd attempt; retry counts climbing over time; intermittent production bugs that CI 'never catches'. Do not retry indiscriminately to get green. Safer fallback: retry only when evidence points to infrastructure/nondeterminism, quarantine and track confirmed flakes with a tracking issue, and investigate the underlying cause instead of masking it.",
+  "domain": "code",
+  "scope_hint": "code.ci-triage:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.ci-triage:human_authored",
+  "pack_id": "code.ci-triage"
+}

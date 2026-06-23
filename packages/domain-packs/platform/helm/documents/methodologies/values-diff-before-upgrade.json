@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:helm:values-diff-before-upgrade",
+  "type": "methodology",
+  "title": "Diff rendered manifests before a Helm upgrade",
+  "description": "Render the new and current revisions and compare so the upgrade's real Kubernetes-object delta is reviewed, not just the values change.",
+  "body": "Use before upgrading a release with new values or chart version. Do not upgrade based only on the values change. Actions: render the proposed manifests (helm template or the diff plugin) and compare against the live release's manifests, focusing on changes to immutable fields (selectors, volume claims), replica counts, and resource limits. Validation signals include the diff showing only intended object changes and no edits to immutable selector fields. Risk boundary: a diff that mutates an immutable field forces a resource recreate; for production that is human-gated.",
+  "domain": "helm",
+  "scope_hint": "platform.helm:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.helm",
+  "pack_id": "platform.helm"
+}

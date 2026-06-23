@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:wasm:linear-memory-double-free-or-leak",
+  "type": "failure_dossier",
+  "description": "A buffer in linear memory is freed on both sides or never freed, corrupting memory or growing it without bound.",
+  "body": "Failure mode: ownership of a linear-memory buffer crossing the boundary is unclear, so both JS and WASM free it (double-free, corrupting the allocator) or neither frees it (leak), since WASM linear memory is manually managed and JS GC will not reclaim it. Detection signals: allocator corruption or traps after repeated calls; linear-memory size climbing across round-trips; use-after-free reading stale bytes. Do not assume the other side or the GC frees the buffer. Safer fallback: define a single ownership contract (one side allocates and frees, freed exactly once), prefer the binding layer's managed wrappers, and verify with a repeated round-trip leak test that memory stays bounded.",
+  "domain": "wasm",
+  "scope_hint": "code.wasm:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.wasm:human_authored",
+  "pack_id": "code.wasm"
+}

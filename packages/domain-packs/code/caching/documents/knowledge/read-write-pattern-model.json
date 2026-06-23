@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:cache:read-write-pattern-model",
+  "type": "knowledge",
+  "title": "Read/write pattern model",
+  "description": "Cache-aside, read/write-through, and write-behind differ in who owns loads, writes, and durability.",
+  "body": "Use when reasoning about who owns reads and writes between cache and store. Cache-aside: the app reads cache, loads from store on miss and populates, and invalidates the key on write. Read-through/write-through: the cache library loads and persists synchronously on the app's behalf. Write-behind: writes hit the cache and flush to the store asynchronously. Do not conflate them — each carries a different failure and consistency profile. Actions: pick by durability and latency needs. Validation signals include a documented staleness and durability bound. Risk boundary: write-behind can lose unflushed writes on a crash.",
+  "domain": "caching",
+  "scope_hint": "code.caching:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.caching",
+  "pack_id": "code.caching"
+}

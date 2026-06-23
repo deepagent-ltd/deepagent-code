@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:wasm:build-target-runtime-mismatch",
+  "type": "failure_dossier",
+  "description": "A module built for one runtime is loaded in another, so it declares imports the host cannot supply and fails to instantiate.",
+  "body": "Failure mode: a module compiled for wasm32-wasi (expecting WASI syscall imports) is loaded in a browser, or a browser-targeted module is run in a bare WASI host, so instantiation throws because the import object cannot satisfy the module's declared imports. Detection signals: instantiation fails with a missing-import or unknown-import error; the toolchain target does not match where the module runs; WASI imports requested in a browser. Do not assume a module is portable across runtimes. Safer fallback: pick the target for the actual runtime (wasm32-unknown-unknown + wasm-bindgen for browsers, wasm32-wasi for WASI hosts), provide or shim the needed imports, and verify the module instantiates with every import satisfied.",
+  "domain": "wasm",
+  "scope_hint": "code.wasm:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.wasm:human_authored",
+  "pack_id": "code.wasm"
+}

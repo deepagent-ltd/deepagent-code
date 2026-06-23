@@ -1,0 +1,420 @@
+[
+  {
+    "ref_id": "strategy:azure:rbac-scope-built-in-roles",
+    "type": "strategy",
+    "title": "Assign Azure RBAC at the narrowest scope with built-in roles",
+    "summary": "Bind a specific built-in role at the resource or resource-group scope rather than Owner/Contributor at subscription, respecting downward inheritance.",
+    "domains": [
+      "azure",
+      "aks",
+      "azure_functions",
+      "azure_ad"
+    ],
+    "triggers": [
+      "rbac",
+      "role assignment",
+      "scope"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.cloud.azure"
+  },
+  {
+    "ref_id": "strategy:azure:managed-identity-no-secrets",
+    "type": "strategy",
+    "title": "Use managed identity instead of connection strings and secrets",
+    "summary": "Enable a system- or user-assigned managed identity so Azure resources authenticate without storing client secrets, keys, or connection strings.",
+    "domains": [
+      "azure",
+      "aks",
+      "azure_functions",
+      "azure_ad"
+    ],
+    "triggers": [
+      "managed identity",
+      "no secrets",
+      "passwordless"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.cloud.azure"
+  },
+  {
+    "ref_id": "strategy:azure:functions-plan-selection",
+    "type": "strategy",
+    "title": "Pick the Azure Functions hosting plan for the latency and scale profile",
+    "summary": "Choose Consumption for bursty cheap workloads, Premium for no-cold-start and VNet, and Dedicated when co-locating with an App Service plan.",
+    "domains": [
+      "azure",
+      "aks",
+      "azure_functions",
+      "azure_ad"
+    ],
+    "triggers": [
+      "azure functions",
+      "premium plan",
+      "consumption"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.cloud.azure"
+  },
+  {
+    "ref_id": "strategy:azure:blob-access-private-firewall",
+    "type": "strategy",
+    "title": "Keep Blob storage private with RBAC, firewall, and SAS limits",
+    "summary": "Set container access to Private, restrict with the storage firewall and private endpoints, and prefer user-delegation SAS over account keys.",
+    "domains": [
+      "azure",
+      "aks",
+      "azure_functions",
+      "azure_ad"
+    ],
+    "triggers": [
+      "azure blob",
+      "storage firewall",
+      "sas token"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.cloud.azure"
+  },
+  {
+    "ref_id": "strategy:azure:bicep-whatif-deployment",
+    "type": "strategy",
+    "title": "Preview Bicep/ARM changes with what-if before deploying",
+    "summary": "Author idempotent Bicep modules and run az deployment what-if so the exact resource delta is reviewed before any apply.",
+    "domains": [
+      "azure",
+      "aks",
+      "azure_functions",
+      "azure_ad"
+    ],
+    "triggers": [
+      "bicep",
+      "arm template",
+      "what-if"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.cloud.azure"
+  },
+  {
+    "ref_id": "strategy:azure:app-service-slot-swap",
+    "type": "strategy",
+    "title": "Deploy App Service with deployment slots and warm-up",
+    "summary": "Stage to a non-production slot, warm it, then swap so traffic shifts to an already-initialized instance with the right slot settings.",
+    "domains": [
+      "azure",
+      "aks",
+      "azure_functions",
+      "azure_ad"
+    ],
+    "triggers": [
+      "app service",
+      "deployment slot",
+      "slot swap"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.cloud.azure"
+  },
+  {
+    "ref_id": "methodology:azure:authorization-failed-triage",
+    "type": "methodology",
+    "title": "Triage an Azure AuthorizationFailed to the exact scope and role",
+    "summary": "Walk the scope hierarchy and use Check Access / activity log to find the missing role assignment before granting anything broad.",
+    "domains": [
+      "azure",
+      "aks",
+      "azure_functions",
+      "azure_ad"
+    ],
+    "triggers": [
+      "authorization failed",
+      "rbac triage",
+      "check access"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.cloud.azure"
+  },
+  {
+    "ref_id": "methodology:azure:functions-cold-start-triage",
+    "type": "methodology",
+    "title": "Diagnose Azure Functions cold starts and scaling stalls",
+    "summary": "Separate plan scale-from-zero, dependency init, and the scale controller's decisions using Application Insights before changing plans.",
+    "domains": [
+      "azure",
+      "aks",
+      "azure_functions",
+      "azure_ad"
+    ],
+    "triggers": [
+      "functions cold start",
+      "scale controller",
+      "app insights"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.cloud.azure"
+  },
+  {
+    "ref_id": "methodology:azure:aks-identity-acr-debug",
+    "type": "methodology",
+    "title": "Debug AKS workload identity and ACR pull failures",
+    "summary": "Trace ImagePullBackOff and API auth errors to the kubelet identity's AcrPull role or the workload identity federation, not the pod spec alone.",
+    "domains": [
+      "azure",
+      "aks",
+      "azure_functions",
+      "azure_ad"
+    ],
+    "triggers": [
+      "aks imagepullbackoff",
+      "acrpull",
+      "workload identity"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.cloud.azure"
+  },
+  {
+    "ref_id": "knowledge:azure:rbac-scope-hierarchy",
+    "type": "knowledge",
+    "title": "Azure RBAC scopes, inheritance, and role definitions",
+    "summary": "Explains the management-group->subscription->resource-group->resource scope chain, downward inheritance, and Actions vs DataActions in role definitions.",
+    "domains": [
+      "azure",
+      "aks",
+      "azure_functions",
+      "azure_ad"
+    ],
+    "triggers": [
+      "rbac scope",
+      "role definition",
+      "dataactions"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.cloud.azure"
+  },
+  {
+    "ref_id": "knowledge:azure:entra-id-tokens-app-roles",
+    "type": "knowledge",
+    "title": "Entra ID app registrations, scopes, and app roles",
+    "summary": "Covers OAuth scopes vs app roles, delegated vs application permissions, and why a valid token can still be denied without the right role/scope claim.",
+    "domains": [
+      "azure",
+      "aks",
+      "azure_functions",
+      "azure_ad"
+    ],
+    "triggers": [
+      "entra id",
+      "app role",
+      "oauth scope"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.cloud.azure"
+  },
+  {
+    "ref_id": "knowledge:azure:functions-hosting-scaling",
+    "type": "knowledge",
+    "title": "Azure Functions hosting plans and scaling mechanics",
+    "summary": "Explains Consumption scale-from-zero, Premium pre-warmed elastic instances, the scale controller, and per-plan VNet and timeout limits.",
+    "domains": [
+      "azure",
+      "aks",
+      "azure_functions",
+      "azure_ad"
+    ],
+    "triggers": [
+      "functions hosting",
+      "elastic premium",
+      "scale from zero"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.cloud.azure"
+  },
+  {
+    "ref_id": "methodology:azure:resource-group-blast-radius",
+    "type": "methodology",
+    "title": "Bound blast radius with resource-group and lock design",
+    "summary": "Organize resources into lifecycle-aligned resource groups and apply CanNotDelete locks so a deletion or RBAC change cannot cascade.",
+    "domains": [
+      "azure",
+      "aks",
+      "azure_functions",
+      "azure_ad"
+    ],
+    "triggers": [
+      "resource group",
+      "management lock",
+      "blast radius"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.cloud.azure"
+  },
+  {
+    "ref_id": "knowledge:azure:resource-manager-deployment-model",
+    "type": "knowledge",
+    "title": "Azure Resource Manager deployment modes and idempotency",
+    "summary": "Explains incremental vs complete deployment modes, ARM's declarative idempotency, and how resource providers and dependsOn ordering work.",
+    "domains": [
+      "azure",
+      "aks",
+      "azure_functions",
+      "azure_ad"
+    ],
+    "triggers": [
+      "resource manager",
+      "deployment mode",
+      "incremental complete"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.cloud.azure"
+  },
+  {
+    "ref_id": "skill:azure:assign-scoped-rbac-role",
+    "type": "skill",
+    "title": "Assign a least-privilege Azure RBAC role to an identity",
+    "summary": "Create a role assignment binding a built-in role to a managed identity at the narrowest scope, then verify with Check Access.",
+    "domains": [
+      "azure",
+      "aks",
+      "azure_functions",
+      "azure_ad"
+    ],
+    "triggers": [
+      "create role assignment",
+      "scoped rbac",
+      "managed identity grant"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.cloud.azure"
+  },
+  {
+    "ref_id": "skill:azure:run-bicep-whatif",
+    "type": "skill",
+    "title": "Run a Bicep what-if and read the resource delta",
+    "summary": "Execute az deployment what-if and interpret Create/Modify/Delete/NoChange so risky changes surface before an apply.",
+    "domains": [
+      "azure",
+      "aks",
+      "azure_functions",
+      "azure_ad"
+    ],
+    "triggers": [
+      "bicep what-if",
+      "deployment preview",
+      "resource delta"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.cloud.azure"
+  }
+]

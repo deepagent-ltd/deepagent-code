@@ -1,0 +1,452 @@
+[
+  {
+    "ref_id": "strategy:electron:enforce-context-isolation",
+    "type": "strategy",
+    "title": "Enforce context isolation on every renderer",
+    "summary": "Keep contextIsolation enabled and nodeIntegration disabled so page scripts cannot reach Node or Electron internals directly.",
+    "domains": [
+      "electron",
+      "desktop",
+      "ipc"
+    ],
+    "triggers": [
+      "contextisolation",
+      "nodeintegration",
+      "renderer",
+      "sandbox",
+      "security",
+      "webpreferences"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.desktop.electron"
+  },
+  {
+    "ref_id": "strategy:electron:minimal-preload-bridge",
+    "type": "strategy",
+    "title": "Expose a minimal API through preload",
+    "summary": "Use contextBridge in a preload script to expose only specific, named functions to the renderer, never the raw ipcRenderer or Node modules.",
+    "domains": [
+      "electron",
+      "desktop",
+      "ipc"
+    ],
+    "triggers": [
+      "preload",
+      "contextbridge",
+      "api",
+      "exposeinmainworld",
+      "ipcrenderer",
+      "surface"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.desktop.electron"
+  },
+  {
+    "ref_id": "strategy:electron:validate-ipc-in-main",
+    "type": "strategy",
+    "title": "Validate every IPC message in the main process",
+    "summary": "Treat all IPC payloads from renderers as untrusted input; validate sender, channel, and arguments before acting.",
+    "domains": [
+      "electron",
+      "desktop",
+      "ipc"
+    ],
+    "triggers": [
+      "ipc",
+      "ipcmain",
+      "validate",
+      "untrusted",
+      "sender",
+      "payload"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.desktop.electron"
+  },
+  {
+    "ref_id": "strategy:electron:keep-main-process-responsive",
+    "type": "strategy",
+    "title": "Keep the main process responsive",
+    "summary": "Never run heavy or blocking work on the main process, since it owns every window and the app's event loop.",
+    "domains": [
+      "electron",
+      "desktop",
+      "ipc"
+    ],
+    "triggers": [
+      "main process",
+      "blocking",
+      "responsive",
+      "worker",
+      "freeze",
+      "event loop"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.desktop.electron"
+  },
+  {
+    "ref_id": "strategy:electron:control-remote-content-and-navigation",
+    "type": "strategy",
+    "title": "Control remote content and navigation",
+    "summary": "Restrict which URLs renderers may load, block unexpected navigation and new windows, and never grant Node to remote pages.",
+    "domains": [
+      "electron",
+      "desktop",
+      "ipc"
+    ],
+    "triggers": [
+      "remote content",
+      "navigation",
+      "will-navigate",
+      "window.open",
+      "csp",
+      "loadurl"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.desktop.electron"
+  },
+  {
+    "ref_id": "strategy:electron:sign-and-secure-auto-update",
+    "type": "strategy",
+    "title": "Code-sign and secure auto-update",
+    "summary": "Distribute signed builds and serve updates over HTTPS with signature verification so the update channel cannot be hijacked.",
+    "domains": [
+      "electron",
+      "desktop",
+      "ipc"
+    ],
+    "triggers": [
+      "auto-update",
+      "code-sign",
+      "https",
+      "notarize",
+      "release",
+      "integrity"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.desktop.electron"
+  },
+  {
+    "ref_id": "methodology:electron:design-the-ipc-surface",
+    "type": "methodology",
+    "title": "Design the IPC surface",
+    "summary": "Define a minimal, typed set of IPC channels and a preload bridge before wiring features, instead of ad-hoc channels.",
+    "domains": [
+      "electron",
+      "desktop",
+      "ipc"
+    ],
+    "triggers": [
+      "ipc",
+      "design",
+      "channel",
+      "preload",
+      "typed",
+      "surface"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.desktop.electron"
+  },
+  {
+    "ref_id": "methodology:electron:integrate-a-native-module",
+    "type": "methodology",
+    "title": "Integrate a native module safely",
+    "summary": "Add a native addon by matching it to Electron's ABI, rebuilding for the target, and isolating its failure modes.",
+    "domains": [
+      "electron",
+      "desktop",
+      "ipc"
+    ],
+    "triggers": [
+      "native module",
+      "abi",
+      "rebuild",
+      "node-gyp",
+      "n-api",
+      "electron-rebuild"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.desktop.electron"
+  },
+  {
+    "ref_id": "methodology:electron:harden-renderer-security",
+    "type": "methodology",
+    "title": "Harden renderer security",
+    "summary": "Run an Electron app through the security checklist: isolation, preload surface, IPC validation, navigation, and CSP.",
+    "domains": [
+      "electron",
+      "desktop",
+      "ipc"
+    ],
+    "triggers": [
+      "security",
+      "harden",
+      "checklist",
+      "audit",
+      "csp",
+      "isolation"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.desktop.electron"
+  },
+  {
+    "ref_id": "methodology:electron:package-for-distribution",
+    "type": "methodology",
+    "title": "Package and sign for distribution",
+    "summary": "Produce signed, platform-correct installers with electron-builder and validate auto-update before release.",
+    "domains": [
+      "electron",
+      "desktop",
+      "ipc"
+    ],
+    "triggers": [
+      "packaging",
+      "electron-builder",
+      "installer",
+      "sign",
+      "notarize",
+      "release"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.desktop.electron"
+  },
+  {
+    "ref_id": "knowledge:electron:the-process-model",
+    "type": "knowledge",
+    "title": "Electron's main/renderer process model",
+    "summary": "One privileged main process manages app lifecycle and windows; each window runs a separate sandboxed Chromium renderer process.",
+    "domains": [
+      "electron",
+      "desktop",
+      "ipc"
+    ],
+    "triggers": [
+      "process model",
+      "main",
+      "renderer",
+      "chromium",
+      "lifecycle",
+      "window"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.desktop.electron"
+  },
+  {
+    "ref_id": "knowledge:electron:why-context-isolation-matters",
+    "type": "knowledge",
+    "title": "Why context isolation matters",
+    "summary": "Context isolation runs preload and page scripts in separate JS contexts so a compromised page cannot tamper with privileged objects.",
+    "domains": [
+      "electron",
+      "desktop",
+      "ipc"
+    ],
+    "triggers": [
+      "context isolation",
+      "security",
+      "prototype",
+      "preload",
+      "world",
+      "xss"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.desktop.electron"
+  },
+  {
+    "ref_id": "knowledge:electron:native-module-abi",
+    "type": "knowledge",
+    "title": "Native modules and the Electron ABI",
+    "summary": "Native addons are compiled against a specific Node/V8 ABI; Electron ships its own, so modules built for system Node may fail to load.",
+    "domains": [
+      "electron",
+      "desktop",
+      "ipc"
+    ],
+    "triggers": [
+      "native module",
+      "abi",
+      "v8",
+      "node",
+      "rebuild",
+      "n-api"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.desktop.electron"
+  },
+  {
+    "ref_id": "knowledge:electron:bundle-size-and-resource-cost",
+    "type": "knowledge",
+    "title": "Electron's resource and size cost",
+    "summary": "Each app bundles a full Chromium and Node runtime, so binaries are large and every window carries a renderer process's memory overhead.",
+    "domains": [
+      "electron",
+      "desktop",
+      "ipc"
+    ],
+    "triggers": [
+      "bundle size",
+      "memory",
+      "chromium",
+      "resources",
+      "footprint",
+      "process"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.desktop.electron"
+  },
+  {
+    "ref_id": "skill:electron:audit-renderer-security-config",
+    "type": "skill",
+    "title": "Audit renderer security configuration",
+    "summary": "Inspect BrowserWindow/webview webPreferences and the preload bridge for isolation, nodeIntegration, and over-broad exposure.",
+    "domains": [
+      "electron",
+      "desktop",
+      "ipc"
+    ],
+    "triggers": [
+      "audit",
+      "security",
+      "webpreferences",
+      "preload",
+      "isolation",
+      "inspect"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.desktop.electron"
+  },
+  {
+    "ref_id": "skill:electron:inspect-ipc-handlers",
+    "type": "skill",
+    "title": "Inspect IPC handlers for input validation",
+    "summary": "Review ipcMain handlers for unvalidated payloads, path traversal, and privileged actions taken on renderer-supplied data.",
+    "domains": [
+      "electron",
+      "desktop",
+      "ipc"
+    ],
+    "triggers": [
+      "ipc",
+      "ipcmain",
+      "inspect",
+      "validation",
+      "path traversal",
+      "handler"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.desktop.electron"
+  }
+]

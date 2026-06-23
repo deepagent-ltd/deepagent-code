@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:embed:real-time-determinism",
+  "type": "knowledge",
+  "title": "Real-time means deterministic, not fast",
+  "description": "A hard real-time system must meet the worst-case deadline every time; average speed and throughput are irrelevant if the tail violates the budget.",
+  "body": "Use when reasoning about timing requirements. Hard real-time correctness is about the worst case: a path that is fast on average but occasionally blocks (GC-like pause, heap call, lock wait, cache effect) misses its deadline and fails. Do not optimize average throughput at the expense of worst-case bound, and do not introduce unbounded operations on a deadline path. Actions: bound every real-time operation, eliminate sources of jitter, and validate against the maximum, not the mean. Validation signals include measured worst-case timing within budget under stress and bounded jitter. Risk boundary: a single missed hard deadline can cause physical harm; treat any unbounded operation on a hard real-time path as a defect and escalate for analysis.",
+  "domain": "embedded",
+  "scope_hint": "code.embedded:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.embedded",
+  "pack_id": "code.embedded"
+}

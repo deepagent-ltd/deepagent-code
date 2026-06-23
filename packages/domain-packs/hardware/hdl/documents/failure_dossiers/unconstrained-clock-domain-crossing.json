@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:hdl:unconstrained-clock-domain-crossing",
+  "type": "failure_dossier",
+  "description": "A signal crossing clock domains without a synchronizer or timing constraint, risking intermittent metastability failures.",
+  "body": "Failure mode: a signal generated in one clock feeds logic in another with no synchronizer and no false-path/max-delay constraint, so metastability causes rare, non-reproducible field failures. Detection signals: CDC tool flags an unconstrained crossing; intermittent hardware glitches not seen in sim; a multi-bit bus synchronized bit-by-bit. Do not connect cross-domain signals directly or rely on a single synchronizer for buses. Safer fallback: add a 2+ flop synchronizer for control or an async FIFO/gray code for buses, add timing constraints, and confirm via a CDC report.",
+  "domain": "hdl",
+  "scope_hint": "hardware.hdl:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.hdl:human_authored",
+  "pack_id": "hardware.hdl"
+}

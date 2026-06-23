@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:dist:run-partition-fault-injection",
+  "type": "methodology",
+  "title": "Run partition and fault-injection tests",
+  "description": "Use a fault injector to partition, delay, and crash nodes while a consistency checker validates the cluster's promised invariants.",
+  "body": "Steps: 1. Define the invariant under test (linearizability, no lost acked write, single leader). 2. Drive a concurrent client workload while recording a real-time history of operations. 3. Inject nemeses: network partitions, asymmetric drops, clock skew, and process crashes. 4. Heal faults and let the cluster recover. 5. Run a linearizability/consistency checker over the recorded history. Rollback point: before running against a shared/staging cluster. Validation: the checker reports no invariant violation across many randomized runs; a clean run on a healthy cluster without injected faults does not count as evidence. Escalate any acked-write loss immediately.",
+  "domain": "distributed",
+  "scope_hint": "code.distributed:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.distributed",
+  "pack_id": "code.distributed"
+}

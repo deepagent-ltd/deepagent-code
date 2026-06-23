@@ -1,0 +1,11 @@
+{
+  "ref_id": "strategy:c:package-local-command",
+  "type": "strategy",
+  "description": "In C, use the package-local commands (make / Makefile targets (and the exact CC, CFLAGS, and -I/-L flags)) rather than a root or generic command.",
+  "body": "In C, the real contract lives in the owning package's config; a root or generic command can use the wrong the toolchain triple, libc version, and compiler version or skip checks. Use when building, testing, or analyzing a specific C package, especially in a monorepo. Do not assume a top-level command covers the package, and avoid running a generic command that ignores its config. Actions: find the package's own targets, run make / Makefile targets (and the exact CC, CFLAGS, and -I/-L flags) and the unit binary plus valgrind on the changed translation unit scoped to it, and compare results against the package's configured gate. Validation signals include the package-scoped command log, its exit code, and a clang-tidy, cppcheck, and -fanalyzer warnings pass using the package config. Risk boundary: escalate if no package-local command exists or if it depends on environment you cannot safely provision.",
+  "domain": "c",
+  "scope_hint": "code.c:strategies",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.c:skill_survey",
+  "pack_id": "code.c"
+}

@@ -1,0 +1,71 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "platform.cloud.aws",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "aws",
+      "iam",
+      "lambda_aws",
+      "ecs",
+      "cloudwatch"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "L3 smoke for platform.cloud.aws: IAM least privilege, Lambda concurrency and cold start, ECS Fargate sizing, S3 bucket policy and encryption, CloudWatch alarms, cost guardrails"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "fix a React useEffect bug"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "retrieval_query": "aws iam least privilege lambda concurrency cold start ecs fargate s3 bucket policy cloudwatch alarm cost guardrail",
+  "expected_pack_id": "platform.cloud.aws",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "platform.cloud.aws L3 validation smoke",
+    "signals": [
+      "iam simulate-principal-policy returns Deny for actions outside the documented task scope",
+      "Lambda function reports zero throttles and steady p99 after provisioned concurrency is tuned",
+      "s3api get-bucket-policy-status shows IsPublic false and default encryption is enabled",
+      "CloudWatch alarm transitions OK->ALARM on an injected fault and back to OK after recovery"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "platform.cloud.aws diagnosis smoke",
+    "signals": [
+      "AccessDenied in CloudTrail traced to a missing condition key or wrong resource ARN rather than a broad grant",
+      "Lambda cold-start latency correlates with VPC ENI attach time or large deployment package",
+      "ECS task stuck in PENDING due to insufficient Fargate capacity, subnet IP exhaustion, or failed image pull",
+      "CloudWatch alarm in INSUFFICIENT_DATA from a renamed metric dimension or missing namespace",
+      "Unexpected bill spike isolated to NAT Gateway data processing or cross-AZ transfer in Cost Explorer"
+    ]
+  },
+  "source_refs": [
+    "aws-iam-user-guide:policy-evaluation-logic",
+    "aws-lambda-dg:execution-environment-and-concurrency"
+  ]
+}

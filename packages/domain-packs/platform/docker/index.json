@@ -1,0 +1,471 @@
+[
+  {
+    "ref_id": "knowledge:docker:dockerignore-security",
+    "type": "knowledge",
+    "title": "Dockerignore Security",
+    "summary": "A .dockerignore file is both performance and security control.",
+    "domains": [
+      "docker",
+      "platform",
+      "container"
+    ],
+    "triggers": [
+      "dockerignore",
+      "file",
+      "both",
+      "performance",
+      "security",
+      "control",
+      "prevents",
+      "unnecessary"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.docker"
+  },
+  {
+    "ref_id": "knowledge:docker:layers-retain-secrets",
+    "type": "knowledge",
+    "title": "Layers Retain Secrets",
+    "summary": "Secrets copied into image layers can remain after later deletion.",
+    "domains": [
+      "docker",
+      "platform",
+      "container"
+    ],
+    "triggers": [
+      "secrets",
+      "copied",
+      "into",
+      "image",
+      "layers",
+      "remain",
+      "after",
+      "later"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.docker"
+  },
+  {
+    "ref_id": "knowledge:docker:root-container-risk",
+    "type": "knowledge",
+    "title": "Root Container Risk",
+    "summary": "Running as root in containers increases blast radius.",
+    "domains": [
+      "docker",
+      "platform",
+      "container"
+    ],
+    "triggers": [
+      "running",
+      "root",
+      "containers",
+      "increases",
+      "blast",
+      "radius",
+      "runtime"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.docker"
+  },
+  {
+    "ref_id": "methodology:docker:compose-dev-check",
+    "type": "methodology",
+    "title": "Compose Dev Check",
+    "summary": "Validate compose services, volumes, env vars, health checks, and network names.",
+    "domains": [
+      "docker",
+      "platform",
+      "container"
+    ],
+    "triggers": [
+      "validate",
+      "compose",
+      "services",
+      "volumes",
+      "vars",
+      "health",
+      "checks",
+      "network"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.docker"
+  },
+  {
+    "ref_id": "methodology:docker:dockerfile-review",
+    "type": "methodology",
+    "title": "Dockerfile Review",
+    "summary": "Review base image, context, layers, users, ports, secrets, and runtime command.",
+    "domains": [
+      "docker",
+      "platform",
+      "container"
+    ],
+    "triggers": [
+      "review",
+      "base",
+      "image",
+      "context",
+      "layers",
+      "users",
+      "ports",
+      "secrets"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.docker"
+  },
+  {
+    "ref_id": "methodology:docker:image-smoke-test",
+    "type": "methodology",
+    "title": "Image Smoke Test",
+    "summary": "Build image, run container, and execute a minimal health path.",
+    "domains": [
+      "docker",
+      "platform",
+      "container"
+    ],
+    "triggers": [
+      "build",
+      "image",
+      "container",
+      "execute",
+      "minimal",
+      "health",
+      "path",
+      "steps"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.docker"
+  },
+  {
+    "ref_id": "skill:docker:validate-docker-build",
+    "type": "skill",
+    "title": "Validate Docker Build",
+    "summary": "Inspect and optionally build a Docker image with evidence output.",
+    "domains": [
+      "docker",
+      "platform",
+      "container"
+    ],
+    "triggers": [
+      "inspect",
+      "optionally",
+      "build",
+      "docker",
+      "image",
+      "with",
+      "evidence",
+      "output"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.docker"
+  },
+  {
+    "ref_id": "strategy:docker:healthcheck-meaningful",
+    "type": "strategy",
+    "title": "Healthcheck Meaningful",
+    "summary": "Container health checks should verify real readiness, not only process existence.",
+    "domains": [
+      "docker",
+      "platform",
+      "container"
+    ],
+    "triggers": [
+      "container",
+      "health",
+      "checks",
+      "should",
+      "verify",
+      "real",
+      "readiness",
+      "only"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.docker"
+  },
+  {
+    "ref_id": "strategy:docker:multi-stage-runtime",
+    "type": "strategy",
+    "title": "Multi Stage Runtime",
+    "summary": "Use build stages to keep runtime images small and free of build secrets.",
+    "domains": [
+      "docker",
+      "platform",
+      "container"
+    ],
+    "triggers": [
+      "build",
+      "stages",
+      "keep",
+      "runtime",
+      "images",
+      "small",
+      "free"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.docker"
+  },
+  {
+    "ref_id": "strategy:docker:no-secrets-in-image",
+    "type": "strategy",
+    "title": "No Secrets In Image",
+    "summary": "Do not bake secrets into image layers or compose files.",
+    "domains": [
+      "docker",
+      "platform",
+      "container"
+    ],
+    "triggers": [
+      "bake",
+      "secrets",
+      "into",
+      "image",
+      "layers",
+      "compose",
+      "files"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.docker"
+  },
+  {
+    "ref_id": "strategy:docker:small-build-context",
+    "type": "strategy",
+    "title": "Small Build Context",
+    "summary": "Keep Docker build context minimal and intentional.",
+    "domains": [
+      "docker",
+      "platform",
+      "container"
+    ],
+    "triggers": [
+      "keep",
+      "docker",
+      "build",
+      "context",
+      "minimal",
+      "intentional",
+      "large",
+      "contexts"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.docker"
+  },
+  {
+    "ref_id": "strategy:docker:order-layers-for-cache",
+    "type": "strategy",
+    "title": "Order Dockerfile layers from least to most volatile",
+    "summary": "Place dependency-install steps before copying application source so a code change does not bust the dependency cache layer on every build.",
+    "domains": [
+      "platform",
+      "docker",
+      "container"
+    ],
+    "triggers": [
+      "layer cache",
+      "build cache",
+      "layer ordering",
+      "dependency install",
+      "cache invalidation",
+      "dockerfile"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.docker"
+  },
+  {
+    "ref_id": "strategy:docker:declare-meaningful-healthcheck",
+    "type": "strategy",
+    "title": "Make HEALTHCHECK probe real readiness",
+    "summary": "Define a HEALTHCHECK (or orchestrator probe) that exercises the app's actual ability to serve, not just that the process is alive.",
+    "domains": [
+      "platform",
+      "docker",
+      "container"
+    ],
+    "triggers": [
+      "healthcheck",
+      "readiness",
+      "liveness",
+      "probe",
+      "container health",
+      "dependency check"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.docker"
+  },
+  {
+    "ref_id": "methodology:docker:shrink-image-size",
+    "type": "methodology",
+    "title": "Reduce final image size methodically",
+    "summary": "Drive image size down by switching to a slim base, using multi-stage builds, and pruning build-only artifacts rather than guessing.",
+    "domains": [
+      "platform",
+      "docker",
+      "container"
+    ],
+    "triggers": [
+      "image size",
+      "slim",
+      "multi-stage",
+      "prune",
+      "bloat",
+      "optimize"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.docker"
+  },
+  {
+    "ref_id": "knowledge:docker:multi-stage-separates-build-from-run",
+    "type": "knowledge",
+    "title": "Multi-stage builds separate build-time from runtime",
+    "summary": "A multi-stage Dockerfile compiles in a fat builder stage and copies only the produced artifacts into a lean runtime stage, so toolchains and secrets never reach the shipped image.",
+    "domains": [
+      "platform",
+      "docker",
+      "container"
+    ],
+    "triggers": [
+      "multi-stage",
+      "builder stage",
+      "runtime stage",
+      "copy --from",
+      "build artifact",
+      "distroless"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.docker"
+  },
+  {
+    "ref_id": "skill:docker:scan-image-for-secrets-and-bloat",
+    "type": "skill",
+    "title": "Scan an image's layers for secrets and bloat",
+    "summary": "Inspect built image layers for embedded credentials, leftover build tooling, and oversized layers, reporting each with the originating instruction.",
+    "domains": [
+      "platform",
+      "docker",
+      "container"
+    ],
+    "triggers": [
+      "image scan",
+      "layer inspect",
+      "secret leak",
+      "bloat",
+      "history",
+      "audit"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.docker"
+  }
+]

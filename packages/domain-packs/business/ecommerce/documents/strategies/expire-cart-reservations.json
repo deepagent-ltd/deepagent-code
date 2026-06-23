@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:ecom:expire-cart-reservations",
+  "type": "strategy",
+  "title": "Expire cart reservations on a timer",
+  "description": "Hold reserved stock only for a bounded window so abandoned carts release inventory back to the pool.",
+  "body": "Use when add-to-cart reserves stock before payment completes. Do not hold a reservation indefinitely — abandoned carts then pin inventory that no one will buy, starving real demand. Actions: attach a TTL to each reservation, release it back to available on expiry or explicit cart abandonment, and re-validate availability at the payment step. Validation signals include reserved stock returning to the available pool after the window and no orphaned holds. Risk boundary: a reservation that expires mid-checkout can oversell on the retry — re-reserve atomically at payment rather than trusting the earlier hold.",
+  "domain": "ecommerce",
+  "scope_hint": "business.ecommerce:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:business.ecommerce",
+  "pack_id": "business.ecommerce"
+}

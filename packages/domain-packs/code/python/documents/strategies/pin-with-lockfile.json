@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:python:pin-with-lockfile",
+  "type": "strategy",
+  "title": "Pin runtime dependencies with a lockfile, keep pyproject ranges loose",
+  "description": "Declare compatible version ranges in pyproject.toml but resolve and commit an exact lockfile so builds are reproducible across machines.",
+  "body": "Use when adding or upgrading a dependency in a packaged project. Do not pin exact == versions in pyproject [project.dependencies] (it blocks downstream resolution) and do not ship without a lock. Actions: declare ranges (e.g. \">=2,<3\") in pyproject, run the resolver (uv lock / poetry lock / pip-compile) to produce a fully pinned lock with hashes, install from the lock in CI (uv sync --frozen / pip install --require-hashes), and verify the wheel imports in a clean venv. Validation signals include a byte-stable lockfile across two machines and `pip check` reporting no broken requirements. Risk boundary: --require-hashes failures are supply-chain signals, not noise; deny the install and review the changed hash before overriding.",
+  "domain": "python",
+  "scope_hint": "code.python:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.python",
+  "pack_id": "code.python"
+}

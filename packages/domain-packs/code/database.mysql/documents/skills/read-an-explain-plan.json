@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:mysql:read-an-explain-plan",
+  "type": "skill",
+  "title": "Read a MySQL EXPLAIN plan",
+  "description": "Interpret the access type, key, rows, and Extra columns of EXPLAIN to judge whether a query uses indexes well.",
+  "body": "Use when a query is slow and you need to know how the optimizer executes it. Actions: run EXPLAIN (or EXPLAIN ANALYZE on MySQL 8 for real timings) and read the type column (const/eq_ref/ref are good, ALL is a full scan), the key column for which index was chosen, rows for the estimated examined count, and Extra for flags like Using filesort, Using temporary, or Using index. Compare the estimate to the actual rows from EXPLAIN ANALYZE to spot bad statistics. Validation signals include type improving from ALL to ref after adding an index and rows examined dropping. Risk boundary: forcing an index with a hint masks a statistics problem, so prefer ANALYZE TABLE to refresh statistics before pinning a plan.",
+  "domain": "mysql",
+  "scope_hint": "code.database.mysql:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.mysql",
+  "pack_id": "code.database.mysql"
+}

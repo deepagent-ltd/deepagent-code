@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:refactor:extract-changes-evaluation-order",
+  "type": "failure_dossier",
+  "description": "An extraction that moves code into a helper but alters side-effect or evaluation order, silently changing behavior.",
+  "body": "Failure mode: pulling a block into a function reorders when side effects run or when arguments are evaluated (e.g. eager evaluation of a previously short-circuited expression), so observable behavior shifts despite a 'pure structural' intent. Detection signals: characterization tests diff after extraction; side effects fire in a different order; lazy/short-circuit behavior lost. Do not assume extraction is automatically behavior-preserving. Safer fallback: preserve evaluation and side-effect order when extracting, pass values rather than re-evaluating expressions, and confirm identical test output before and after.",
+  "domain": "code",
+  "scope_hint": "code.refactor:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.refactor:human_authored",
+  "pack_id": "code.refactor"
+}

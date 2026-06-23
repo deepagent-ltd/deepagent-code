@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:search:max-recall-noise",
+  "type": "failure_dossier",
+  "description": "Maximizing recall with loose OR matching and aggressive fuzziness, flooding users with irrelevant results.",
+  "body": "Failure mode: matching is set as loose as possible (OR operator, high fuzziness, broad synonyms) to 'never miss', so result lists fill with weakly-related documents and the relevant ones are buried, hurting the actual user experience. Detection signals: large result counts with relevant hits far down the list; precision@k is low while recall is high; users complain results are noisy. Do not equate maximum recall with better search. Safer fallback: tighten the operator/minimum_should_match/fuzziness to the query type, and tune against both precision@k and recall on a judgment set.",
+  "domain": "search",
+  "scope_hint": "code.search:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.search:human_authored",
+  "pack_id": "code.search"
+}

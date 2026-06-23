@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:shell:cleanup-with-trap",
+  "type": "strategy",
+  "title": "Guarantee cleanup with trap on EXIT",
+  "description": "Register a trap on EXIT (and signals) so temp files, locks, and background jobs are released even when the script errors or is interrupted.",
+  "body": "Use when a script creates temp files, mounts, locks, or background processes. Do not rm a temp dir only at the happy-path end, since an error or Ctrl-C skips it and leaks. Actions: create temp space with `tmp=$(mktemp -d)`, register `trap 'rm -rf \"$tmp\"' EXIT` immediately after, and trap INT/TERM if you need to kill children; keep the handler idempotent and quote the paths. Validation signals include the temp dir being gone after both a successful run and a forced failure/Ctrl-C, verified with ls. Risk boundary: an unquoted or empty variable in `rm -rf` can delete the wrong tree; verify the variable is set (rm -rf \"${tmp:?}\") and escalate before any recursive delete near an unset path.",
+  "domain": "shell",
+  "scope_hint": "code.shell:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.shell",
+  "pack_id": "code.shell"
+}

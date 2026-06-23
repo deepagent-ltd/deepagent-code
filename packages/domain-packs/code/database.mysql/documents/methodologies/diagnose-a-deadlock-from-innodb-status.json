@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:mysql:diagnose-a-deadlock-from-innodb-status",
+  "type": "methodology",
+  "title": "Diagnose a deadlock from INNODB STATUS",
+  "description": "A repeatable procedure that reads the LATEST DETECTED DEADLOCK block to find the lock-order conflict and fix it.",
+  "body": "Use when the application logs intermittent ER_LOCK_DEADLOCK errors. Actions, in order: run SHOW ENGINE INNODB STATUS and read the LATEST DETECTED DEADLOCK section; identify the two transactions, the rows and indexes each holds and waits on, and the acquisition order; then make all code paths lock rows in a single consistent order, or add an index so the predicate locks fewer rows. Verify by replaying the two concurrent paths in a test and confirming the deadlock no longer fires. Validation signals include the deadlock section staying stale across a load run and the error counter flatlining. Risk boundary: deadlocks are expected and the loser is rolled back, so the app must retry the victim transaction; escalate only if the retry storm itself becomes the bottleneck.",
+  "domain": "mysql",
+  "scope_hint": "code.database.mysql:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.mysql",
+  "pack_id": "code.database.mysql"
+}

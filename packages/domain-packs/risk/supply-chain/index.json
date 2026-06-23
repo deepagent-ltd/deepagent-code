@@ -1,0 +1,472 @@
+[
+  {
+    "ref_id": "knowledge:supply_chain:generated-low-provenance",
+    "type": "knowledge",
+    "title": "Generated Low Provenance",
+    "summary": "Generated or low-provenance catalogs need quarantine or manual review.",
+    "domains": [
+      "supply_chain",
+      "security",
+      "dependency"
+    ],
+    "triggers": [
+      "generated",
+      "provenance",
+      "catalogs",
+      "need",
+      "quarantine",
+      "manual",
+      "review",
+      "promote"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.supply-chain"
+  },
+  {
+    "ref_id": "knowledge:supply_chain:license-missing-is-risk",
+    "type": "knowledge",
+    "title": "License Missing Is Risk",
+    "summary": "Missing or restrictive license is a promotion blocker for reusable package content.",
+    "domains": [
+      "supply_chain",
+      "security",
+      "dependency"
+    ],
+    "triggers": [
+      "missing",
+      "restrictive",
+      "license",
+      "promotion",
+      "blocker",
+      "reusable",
+      "package",
+      "content"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.supply-chain"
+  },
+  {
+    "ref_id": "knowledge:supply_chain:scripts-are-execution",
+    "type": "knowledge",
+    "title": "Scripts Are Execution",
+    "summary": "Install and hook scripts are executable code, not metadata.",
+    "domains": [
+      "supply_chain",
+      "security",
+      "dependency"
+    ],
+    "triggers": [
+      "install",
+      "hook",
+      "scripts",
+      "executable",
+      "code",
+      "metadata",
+      "treat"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.supply-chain"
+  },
+  {
+    "ref_id": "methodology:supply_chain:dependency-incident-check",
+    "type": "methodology",
+    "title": "Dependency Incident Check",
+    "summary": "When a dependency appears risky, find exposure and mitigation path.",
+    "domains": [
+      "supply_chain",
+      "security",
+      "dependency"
+    ],
+    "triggers": [
+      "when",
+      "dependency",
+      "appears",
+      "risky",
+      "find",
+      "exposure",
+      "mitigation",
+      "path"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.supply-chain"
+  },
+  {
+    "ref_id": "methodology:supply_chain:external-skill-promotion",
+    "type": "methodology",
+    "title": "External Skill Promotion",
+    "summary": "Promote external skills only through reviewed candidate path.",
+    "domains": [
+      "supply_chain",
+      "security",
+      "dependency"
+    ],
+    "triggers": [
+      "promote",
+      "external",
+      "skills",
+      "only",
+      "through",
+      "reviewed",
+      "candidate",
+      "path"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.supply-chain"
+  },
+  {
+    "ref_id": "methodology:supply_chain:supply-chain-rereview-gate",
+    "type": "methodology",
+    "title": "Supply Chain Rereview Gate",
+    "summary": "Check license, dependency delta, scripts, permissions, provenance, and runtime behavior.",
+    "domains": [
+      "supply_chain",
+      "security",
+      "dependency"
+    ],
+    "triggers": [
+      "check",
+      "license",
+      "dependency",
+      "delta",
+      "scripts",
+      "permissions",
+      "provenance",
+      "runtime"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.supply-chain"
+  },
+  {
+    "ref_id": "skill:supply_chain:review-dependency-delta",
+    "type": "skill",
+    "title": "Review Dependency Delta",
+    "summary": "Inspect dependency and lockfile changes for supply-chain risk.",
+    "domains": [
+      "supply_chain",
+      "security",
+      "dependency"
+    ],
+    "triggers": [
+      "inspect",
+      "dependency",
+      "lockfile",
+      "changes",
+      "supply",
+      "chain",
+      "risk",
+      "inputs"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.supply-chain"
+  },
+  {
+    "ref_id": "strategy:supply_chain:lockfile-delta-review",
+    "type": "strategy",
+    "title": "Lockfile Delta Review",
+    "summary": "Review lockfile changes as executable supply-chain changes.",
+    "domains": [
+      "supply_chain",
+      "security",
+      "dependency"
+    ],
+    "triggers": [
+      "review",
+      "lockfile",
+      "changes",
+      "executable",
+      "supply",
+      "chain",
+      "transitive"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.supply-chain"
+  },
+  {
+    "ref_id": "strategy:supply_chain:rereview-external-change",
+    "type": "strategy",
+    "title": "Rereview External Change",
+    "summary": "External skill, plugin, or package changes trigger provenance and permission rereview.",
+    "domains": [
+      "supply_chain",
+      "security",
+      "dependency"
+    ],
+    "triggers": [
+      "external",
+      "skill",
+      "plugin",
+      "package",
+      "changes",
+      "trigger",
+      "provenance",
+      "permission"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.supply-chain"
+  },
+  {
+    "ref_id": "strategy:supply_chain:script-permission-gate",
+    "type": "strategy",
+    "title": "Script Permission Gate",
+    "summary": "Inspect install, postinstall, hook, and generated scripts before enabling.",
+    "domains": [
+      "supply_chain",
+      "security",
+      "dependency"
+    ],
+    "triggers": [
+      "inspect",
+      "install",
+      "postinstall",
+      "hook",
+      "generated",
+      "scripts",
+      "before",
+      "enabling"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.supply-chain"
+  },
+  {
+    "ref_id": "strategy:supply_chain:source-trust-tier",
+    "type": "strategy",
+    "title": "Source Trust Tier",
+    "summary": "Apply stricter gates to unknown, generated, or license-missing sources.",
+    "domains": [
+      "supply_chain",
+      "security",
+      "dependency"
+    ],
+    "triggers": [
+      "apply",
+      "stricter",
+      "gates",
+      "unknown",
+      "generated",
+      "license",
+      "missing",
+      "sources"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.supply-chain"
+  },
+  {
+    "ref_id": "strategy:supply_chain:verify-lockfile-integrity-hashes",
+    "type": "strategy",
+    "title": "Verify lockfile integrity hashes on install",
+    "summary": "Install from a committed lockfile with integrity hashes enforced so a tampered or substituted package fails the build instead of installing silently.",
+    "domains": [
+      "security",
+      "supply_chain",
+      "dependency"
+    ],
+    "triggers": [
+      "lockfile",
+      "integrity hash",
+      "frozen install",
+      "subresource integrity",
+      "checksum",
+      "ci install"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.supply-chain"
+  },
+  {
+    "ref_id": "strategy:supply_chain:require-sbom-for-provenance",
+    "type": "strategy",
+    "title": "Require an SBOM and provenance for shipped dependencies",
+    "summary": "Generate a software bill of materials and capture build provenance so every shipped component has a known source, version, and origin that can be audited.",
+    "domains": [
+      "security",
+      "supply_chain",
+      "dependency"
+    ],
+    "triggers": [
+      "sbom",
+      "provenance",
+      "bill of materials",
+      "attestation",
+      "component inventory",
+      "slsa"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.supply-chain"
+  },
+  {
+    "ref_id": "methodology:supply_chain:detect-typosquat-on-add",
+    "type": "methodology",
+    "title": "Screen a new dependency for typosquatting",
+    "summary": "Before adding a package, check its name, age, popularity, and maintainer against the intended well-known package to catch lookalike or hijacked names.",
+    "domains": [
+      "security",
+      "supply_chain",
+      "dependency"
+    ],
+    "triggers": [
+      "typosquatting",
+      "lookalike",
+      "package name",
+      "new dependency",
+      "maintainer",
+      "popularity"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.supply-chain"
+  },
+  {
+    "ref_id": "knowledge:supply_chain:pinning-vs-ranges-tradeoff",
+    "type": "knowledge",
+    "title": "Version ranges trade reproducibility for silent updates",
+    "summary": "Open version ranges let transitive dependencies change without a code change, so a pinned lockfile is what actually makes installs reproducible and reviewable.",
+    "domains": [
+      "security",
+      "supply_chain",
+      "dependency"
+    ],
+    "triggers": [
+      "version pinning",
+      "semver range",
+      "transitive",
+      "reproducible",
+      "floating version",
+      "lockfile"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.supply-chain"
+  },
+  {
+    "ref_id": "skill:supply_chain:flag-postinstall-scripts",
+    "type": "skill",
+    "title": "Flag dependency install/postinstall scripts",
+    "summary": "Inspect a dependency or lockfile delta for lifecycle install scripts that execute code at install time and report what each runs.",
+    "domains": [
+      "security",
+      "supply_chain",
+      "dependency"
+    ],
+    "triggers": [
+      "postinstall",
+      "lifecycle script",
+      "install script",
+      "preinstall",
+      "arbitrary code",
+      "audit"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.supply-chain"
+  }
+]

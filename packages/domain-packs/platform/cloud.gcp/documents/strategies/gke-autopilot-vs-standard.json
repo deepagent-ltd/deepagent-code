@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:gcp:gke-autopilot-vs-standard",
+  "type": "strategy",
+  "title": "Choose GKE Autopilot or Standard by operational ownership",
+  "description": "Pick Autopilot when you want Google to manage nodes and pay per-pod, Standard when you need node-level control, then set requests so scheduling works.",
+  "body": "Use when provisioning GKE or debugging scheduling. Do not run Standard with hand-managed node pools if you only need pods scheduled, and do not expect Autopilot to allow privileged daemonsets or arbitrary node tweaks. Actions: choose Autopilot for hands-off, per-pod-billed clusters and Standard when you need GPUs, specific machine types, or node customization; always set realistic resource requests since Autopilot bills and schedules on them; enable Workload Identity. Validation signals include pods scheduling without Insufficient cpu/memory events and Autopilot provisioning capacity automatically. Risk boundary: switching a production cluster's mode or node pool is human-gated.",
+  "domain": "gcp",
+  "scope_hint": "platform.cloud.gcp:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.cloud.gcp",
+  "pack_id": "platform.cloud.gcp"
+}

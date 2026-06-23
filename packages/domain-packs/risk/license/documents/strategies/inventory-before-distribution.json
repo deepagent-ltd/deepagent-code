@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:lic:inventory-before-distribution",
+  "type": "strategy",
+  "title": "Build the license inventory before distribution",
+  "description": "Resolve every shipped dependency to a concrete SPDX identifier before an artifact leaves the build, treating unknown as blocking.",
+  "body": "Use when producing any artifact that is published, shipped to a customer, or embedded in a binary (container image, npm tarball, jar, static link). Do not rely on the top-level package's declared license to cover transitive dependencies. Actions: walk the resolved lockfile, map each component to an SPDX identifier from its package metadata and its actual LICENSE file, and mark any that disagree or resolve to NOASSERTION. Validation signals include a generated inventory where every distributed component has a resolved identifier and the count matches the lockfile. Risk boundary: any component that stays 'unknown' after inspection is a blocking finding; escalate to a human rather than guessing the license.",
+  "domain": "license",
+  "scope_hint": "risk.license:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.license",
+  "pack_id": "risk.license"
+}

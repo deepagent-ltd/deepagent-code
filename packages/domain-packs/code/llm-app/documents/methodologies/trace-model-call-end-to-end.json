@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:llm:trace-model-call-end-to-end",
+  "type": "methodology",
+  "title": "Trace a model call end to end",
+  "description": "Follow a request from prompt assembly through the API to parsing and the action it drives, recording each transformation.",
+  "body": "Steps: 1. Capture the exact assembled prompt and parameters sent. 2. Record the raw response and finish reason. 3. Note where the response is parsed/validated and what it is checked against. 4. Identify the action the validated value drives and whether an independent check guards it. 5. Flag any step that trusts raw output or lacks a timeout. Rollback point: before changing prompt assembly or parsing. Validation: the trace shows a verification step between model output and any irreversible action.",
+  "domain": "llm_app",
+  "scope_hint": "code.llm-app:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.llm-app",
+  "pack_id": "code.llm-app"
+}

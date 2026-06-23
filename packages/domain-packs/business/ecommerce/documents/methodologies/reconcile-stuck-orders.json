@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:ecom:reconcile-stuck-orders",
+  "type": "methodology",
+  "title": "Reconcile stuck orders",
+  "description": "Find orders wedged between paid and fulfilled and drive them to a consistent state.",
+  "body": "Steps: 1. Query orders that have been paid but not fulfilled past a threshold. 2. For each, determine whether payment, reservation, and fulfilment agree. 3. Identify where a partial failure left the order between states. 4. Drive it forward (fulfil) or backward (refund and restock) per the state graph. 5. Make the recovery idempotent so re-running is safe. Rollback point: before any money-affecting recovery, gate on business.finance. Validation: no order remains between paid and fulfilled past the threshold and money matches stock.",
+  "domain": "ecommerce",
+  "scope_hint": "business.ecommerce:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:business.ecommerce",
+  "pack_id": "business.ecommerce"
+}

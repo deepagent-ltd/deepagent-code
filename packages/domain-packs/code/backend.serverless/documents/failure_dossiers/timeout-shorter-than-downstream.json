@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:sls:timeout-shorter-than-downstream",
+  "type": "failure_dossier",
+  "description": "Setting a function timeout shorter than its slowest downstream call, causing truncated work and retry storms.",
+  "body": "Failure mode: the function timeout is left at a low default while a downstream API/database call can take longer, so the function is killed mid-call; the event source then retries, repeating partial work. Detection signals: timeouts under load while downstreams are merely slow, not failing; retries amplifying load; partial writes. Do not set timeout below worst-case downstream latency. Safer fallback: measure the slowest downstream call under load, set timeout above it with margin (but bounded), make the handler idempotent so retries are safe, and add a DLQ for genuine failures.",
+  "domain": "serverless",
+  "scope_hint": "code.backend.serverless:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.serverless:human_authored",
+  "pack_id": "code.backend.serverless"
+}

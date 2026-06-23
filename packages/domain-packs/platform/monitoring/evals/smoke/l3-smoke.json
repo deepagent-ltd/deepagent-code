@@ -1,0 +1,71 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "platform.monitoring",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "monitoring",
+      "prometheus",
+      "grafana",
+      "alerting",
+      "sli_slo"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "L3 smoke for platform.monitoring: PromQL with rate increase and histogram_quantile, recording versus alerting rules, Alertmanager routing grouping and inhibition, SLI SLO and error budget, dashboard design, label cardinality control, scrape config, alert fatigue and actionability"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "fix a Vue reactivity bug in the form"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "retrieval_query": "prometheus promql rate increase histogram_quantile recording rule alerting rule alertmanager routing grouping inhibition slo sli error budget label cardinality scrape config grafana dashboard",
+  "expected_pack_id": "platform.monitoring",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "platform.monitoring L3 validation smoke",
+    "signals": [
+      "alert maps to a documented human action",
+      "rate() applied to a counter over an adequate window",
+      "recording rule precomputes the expensive query for dashboards",
+      "label cardinality stays within the TSDB budget"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "platform.monitoring diagnosis smoke",
+    "signals": [
+      "alert storm from no grouping or inhibition rules",
+      "rate() over a window shorter than the scrape interval returning gaps",
+      "histogram_quantile on non-cumulative buckets giving wrong percentiles",
+      "label cardinality explosion from a high-cardinality label",
+      "SLO burn-rate alert that never fires or always fires"
+    ]
+  },
+  "source_refs": [
+    "source:prometheus-querying-docs:paraphrased",
+    "source:google-sre-slo-alerting:paraphrased"
+  ]
+}

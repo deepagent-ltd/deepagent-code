@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:edge:cdn-is-eventually-consistent",
+  "type": "knowledge",
+  "title": "A CDN is an eventually-consistent cache",
+  "description": "Edge PoPs cache independently; a purge propagates over time, so global consistency after a change is not instant.",
+  "body": "Use when reasoning about staleness after a content change. Each edge location caches independently and a purge reaches PoPs over seconds, so different users may briefly see old and new content. Do not assume a change is globally live the instant you deploy or purge. Actions: design for brief inconsistency, use versioned URLs for must-be-fresh assets, and measure purge propagation. Validation signals include observed propagation time within tolerance. Risk boundary: content requiring strict consistency (legal, pricing) should be versioned or not edge-cached.",
+  "domain": "cdn",
+  "scope_hint": "platform.cdn-edge:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.cdn-edge",
+  "pack_id": "platform.cdn-edge"
+}

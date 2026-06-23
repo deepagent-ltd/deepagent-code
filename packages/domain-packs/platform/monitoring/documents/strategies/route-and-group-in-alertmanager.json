@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:mon:route-and-group-in-alertmanager",
+  "type": "strategy",
+  "title": "Route and group in Alertmanager",
+  "description": "Group related alerts, route by severity and team, and use inhibition to suppress downstream noise.",
+  "body": "Use when many alerts can fire together for one underlying incident. Do not send every alert as a separate page — an incident then becomes an unreadable storm. Actions: group alerts by a shared label set, route by severity and owning team, and add inhibition rules so a higher-level outage suppresses its dependent alerts. Validation signals include one incident producing a grouped notification and inhibited child alerts staying silent. Risk boundary: an over-broad inhibition or silence can hide an unrelated real alert — scope inhibition narrowly and treat blanket silences as needing review.",
+  "domain": "monitoring",
+  "scope_hint": "platform.monitoring:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.monitoring",
+  "pack_id": "platform.monitoring"
+}

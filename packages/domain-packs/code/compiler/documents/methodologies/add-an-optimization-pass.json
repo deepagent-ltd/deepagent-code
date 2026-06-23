@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:comp:add-an-optimization-pass",
+  "type": "methodology",
+  "title": "Add an optimization pass safely",
+  "description": "Introduce an IR optimization by proving its legality condition, gating it on that condition, and validating equivalence on a corpus.",
+  "body": "Steps: 1. State what the pass does and the precise precondition under which it preserves semantics. 2. Implement the required data-flow analysis to detect when the precondition holds. 3. Apply the rewrite only when legal and re-establish IR invariants. 4. Run the IR verifier and differential tests (optimized vs unoptimized) across a program corpus, including edge cases. 5. Add regression tests for any miscompile found. Rollback point: keep the pass behind a flag until it is proven. Validation: differential testing shows identical observable behavior with the pass on vs off, and the IR verifier passes after it; a pass that improves a benchmark but changes one program's output must be reverted.",
+  "domain": "compiler",
+  "scope_hint": "code.compiler:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.compiler",
+  "pack_id": "code.compiler"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:cpuarch:pipeline-hazards-and-ilp",
+  "type": "knowledge",
+  "title": "Pipelines, hazards, and instruction-level parallelism",
+  "description": "Modern cores are deep and superscalar; data dependencies, mispredicted branches, and long-latency ops stall the pipeline and limit IPC.",
+  "body": "Use when IPC is low even though the loop is small and cache-resident. Out-of-order superscalar cores execute many instructions per cycle, but a chain of dependent operations (a loop-carried reduction), a long-latency divide, or a mispredicted branch serializes execution and drops IPC. Do not assume fewer instructions means faster if they form a dependency chain. Actions: break dependency chains (multiple accumulators), hoist long-latency ops, and reduce unpredictable branches. Validation signals include higher IPC and fewer stall cycles in the top-down profile. Risk boundary: hand-scheduling can fight the out-of-order engine and the compiler; verify with counters and revert changes that do not raise IPC.",
+  "domain": "cpu_arch",
+  "scope_hint": "hardware.cpu-arch:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.cpu-arch",
+  "pack_id": "hardware.cpu-arch"
+}

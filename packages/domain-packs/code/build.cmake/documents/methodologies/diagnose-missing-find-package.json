@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:cmake:diagnose-missing-find-package",
+  "type": "methodology",
+  "title": "Diagnose a failing find_package",
+  "description": "A procedure to work out why find_package cannot locate a package and to point it at the right config or module.",
+  "body": "Use when find_package reports a package not found despite it being installed. Do not work around it by hardcoding paths. Steps: rerun configure with --debug-find or set CMAKE_FIND_DEBUG_MODE to see search paths; confirm whether the package ships a config file or needs a Find module; set CMAKE_PREFIX_PATH or the package's _DIR variable to the install location; reconfigure. Validation signals include the imported target becoming available and the consumer linking. Risk boundary: silencing the failure with manual paths hides version mismatches, so resolve the discovery itself.",
+  "domain": "cmake",
+  "scope_hint": "code.build.cmake:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.build.cmake",
+  "pack_id": "code.build.cmake"
+}

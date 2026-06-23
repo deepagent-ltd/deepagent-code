@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:sigproc:dft-bin-resolution",
+  "type": "knowledge",
+  "title": "DFT math and bin frequency resolution",
+  "description": "The DFT maps N time samples to N frequency bins spaced at sample_rate over N, fixing the achievable frequency resolution.",
+  "body": "Use when reasoning about which frequencies an FFT can distinguish. Do not expect finer resolution from zero-padding alone, because padding interpolates the spectrum without adding real information. Actions: compute bin spacing as sample rate divided by transform length, verify a tone lands near its expected bin, and record the interpolation versus true-resolution distinction. Validation signals include a synthetic tone appearing within one bin of its known frequency and resolution scaling inversely with block length. Risk boundary: conflating zero-pad interpolation with true resolution misleads measurement claims, so flag any resolution assertion that ignores the underlying record length.",
+  "domain": "signal_processing",
+  "scope_hint": "hardware.signal-processing:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.signal-processing",
+  "pack_id": "hardware.signal-processing"
+}

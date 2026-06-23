@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:scala:keep-effects-as-values",
+  "type": "strategy",
+  "title": "Keep effects as values, run them at the edge",
+  "description": "Describe side effects as IO/effect values and compose them, deferring execution to a single run at the program boundary.",
+  "body": "Use when writing side-effecting code with Cats-Effect/ZIO (or designing pure cores). Do not perform side effects inline in the middle of a computation or start work the moment you construct it. Actions: wrap effects in IO/Task so they are descriptions, compose them with map/flatMap/for, and run the resulting program once (unsafeRunSync / IOApp) at the outermost edge. Validation signals include a test that constructing the effect performs nothing until it is run, preserving referential transparency. Risk boundary: an eagerly executed effect breaks composition and makes retries/cancellation impossible; mixing eager side effects into a supposedly pure value is a defect that undermines the whole effect system.",
+  "domain": "scala",
+  "scope_hint": "code.scala:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.scala",
+  "pack_id": "code.scala"
+}

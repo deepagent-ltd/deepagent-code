@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:chain:everything-on-chain-is-public",
+  "type": "knowledge",
+  "title": "All on-chain state and code is public",
+  "description": "Anyone can read every storage slot and decompile bytecode, so 'private' Solidity visibility hides nothing from observers.",
+  "body": "Use when deciding what to store or how to handle secrets on-chain. Solidity's private/internal visibility only restricts contract-to-contract access; the actual storage and bytecode are fully readable by anyone running a node, and pending transactions are visible in the mempool before they confirm. Do not store secrets, keys, or sensitive data on-chain, and do not assume an unrevealed value (commit) is hidden once revealed in calldata. Actions: keep secrets off-chain, use commit-reveal with hashes for fairness, and assume the mempool is watched. Validation signals include a review confirming no sensitive data in storage or calldata. Risk boundary: treating on-chain storage as private leaks the data permanently; this is a critical and irreversible disclosure.",
+  "domain": "blockchain",
+  "scope_hint": "code.blockchain:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.blockchain",
+  "pack_id": "code.blockchain"
+}

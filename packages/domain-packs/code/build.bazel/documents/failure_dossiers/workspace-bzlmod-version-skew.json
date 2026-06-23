@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:bazel:workspace-bzlmod-version-skew",
+  "type": "failure_dossier",
+  "description": "Managing the same external dependency through both WORKSPACE and bzlmod causes conflicting versions and confusing resolution.",
+  "body": "Failure mode: a dependency is declared in legacy WORKSPACE while bzlmod also pulls it, so two versions enter the graph with unclear precedence. Detection signals: duplicate or conflicting versions of a library at link or runtime; resolution differs between machines; builds break after a partial migration. Do not split one dependency across both systems. Safer fallback: choose one source of truth, migrate the dependency fully to bzlmod with a pinned version in MODULE.bazel, and verify a clean checkout resolves a single consistent version.",
+  "domain": "bazel",
+  "scope_hint": "code.build.bazel:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.build.bazel:human_authored",
+  "pack_id": "code.build.bazel"
+}

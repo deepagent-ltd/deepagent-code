@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:aws:lambda-concurrency-coldstart",
+  "type": "strategy",
+  "title": "Tune Lambda concurrency and cold starts before scaling out",
+  "description": "Use reserved concurrency to cap blast radius and provisioned concurrency to kill cold starts; trim VPC ENI and package weight before raising limits.",
+  "body": "Use when a Lambda function throttles, has spiky p99 latency, or sits behind a VPC. Do not blindly raise the account concurrency limit to hide throttling, and avoid attaching a function to a VPC unless it truly needs private resources. Actions: set reserved concurrency to bound a noisy function, enable provisioned concurrency for latency-sensitive paths, shrink the deployment package and move heavy init outside the handler, and check whether Hyperplane ENI warm-up is the cold-start cost. Validation signals include zero Throttles in the metric, ConcurrentExecutions staying under the reserved cap, and Init Duration dropping after provisioned concurrency. Risk boundary: changing account-level concurrency or a production alias routing is human-gated.",
+  "domain": "aws",
+  "scope_hint": "platform.cloud.aws:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.cloud.aws",
+  "pack_id": "platform.cloud.aws"
+}

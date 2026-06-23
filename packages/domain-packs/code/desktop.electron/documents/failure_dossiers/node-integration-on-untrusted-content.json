@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:electron:node-integration-on-untrusted-content",
+  "type": "failure_dossier",
+  "description": "Enabling nodeIntegration (or disabling contextIsolation) on a renderer that loads remote or user-controlled content, exposing full RCE.",
+  "body": "Failure mode: a BrowserWindow is created with nodeIntegration:true or contextIsolation:false and then loads remote pages or content influenced by user input, so any XSS or malicious script can call Node and run arbitrary code on the user's machine. Detection signals: webPreferences shows nodeIntegration:true / contextIsolation:false; the renderer loads http(s) URLs or external content; a security audit flags the window. Do not give renderers Node access with untrusted content. Safer fallback: set contextIsolation:true, nodeIntegration:false, sandbox:true, expose only a minimal preload bridge, and load remote content (if at all) only in fully isolated renderers.",
+  "domain": "electron",
+  "scope_hint": "code.desktop.electron:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.desktop.electron:human_authored",
+  "pack_id": "code.desktop.electron"
+}

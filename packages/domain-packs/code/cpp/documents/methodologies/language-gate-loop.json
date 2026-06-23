@@ -1,0 +1,11 @@
+{
+  "ref_id": "methodology:cpp:language-gate-loop",
+  "type": "methodology",
+  "description": "In C++, run the package-local gate, fix the first owned diagnostic, rerun, then broaden.",
+  "body": "In C++, the fastest path through errors is to let the compiler at the project's -std (e.g. -std=c++20) with -Wall -Wextra and clang-tidy, include-what-you-use, and -Wpedantic diagnostics drive one fix at a time rather than guessing. Use when CMake targets (cmake --build) with the configured generator and CMAKE_BUILD_TYPE or the analyzers report multiple diagnostics. Do not batch speculative edits across files, and avoid suppressing diagnostics to move on. Actions: inspect the package, run the gate, fix only the first template/overload-resolution error and the instantiation backtrace, rerun the ctest suite plus a sanitized build of the touched target, then widen to CMake targets (cmake --build) with the configured generator and CMAKE_BUILD_TYPE for the whole package. Validation signals include a shrinking diagnostic count, a passing focused test, and a clean package-wide gate. Risk boundary: if a diagnostic implies a design or API change, stop and escalate instead of forcing the gate green.",
+  "domain": "cpp",
+  "scope_hint": "code.cpp:methodologies",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.cpp:skill_survey",
+  "pack_id": "code.cpp"
+}

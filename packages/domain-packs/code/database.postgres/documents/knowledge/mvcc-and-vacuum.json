@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:pg:mvcc-and-vacuum",
+  "type": "knowledge",
+  "title": "MVCC and why VACUUM exists",
+  "description": "Postgres keeps row versions for concurrency; updates and deletes leave dead tuples that VACUUM must reclaim.",
+  "body": "Use when reasoning about bloat, autovacuum, or 'why is my table huge'. Under MVCC every UPDATE writes a new row version and marks the old one dead rather than overwriting, so readers see a consistent snapshot without blocking writers. Dead tuples are reclaimed by VACUUM; if autovacuum can't keep up or a long transaction/replication slot pins the xmin horizon, dead tuples accumulate as bloat that slows scans and inflates indexes. Do not assume DELETE frees space immediately. Actions: monitor dead tuples, tune per-table autovacuum, and clear stuck long transactions. Validation signals include dead-tuple counts stabilizing after tuning. Risk boundary: transaction-id wraparound from never-vacuumed tables forces an emergency and must be escalated early.",
+  "domain": "postgres",
+  "scope_hint": "code.database.postgres:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.postgres",
+  "pack_id": "code.database.postgres"
+}

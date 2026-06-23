@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:finetune:select-adaptation-method",
+  "type": "methodology",
+  "title": "Select the right adaptation method for the goal",
+  "description": "A decision path from prompting through PEFT to full fine-tuning and RLHF based on data, budget, and capability needs.",
+  "body": "Use when deciding how to adapt a model to a need. Do not jump to full fine-tuning or RLHF first — cheaper interventions often suffice and forget less. Actions: try prompting/few-shot, then PEFT/LoRA for behavior or domain shifts, reserve full fine-tuning for large stable corpora, and use preference methods (RLHF/DPO) only when alignment to human preference is the actual goal. Validation signals include a recorded comparison showing the chosen method meets the target and a cheaper rejected alternative. Risk boundary: RLHF and full tuning carry the most cost and forgetting risk; if a lighter method meets the goal, escalate to the heavier one only with explicit justification.",
+  "domain": "fine_tuning",
+  "scope_hint": "code.fine-tuning:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.fine-tuning",
+  "pack_id": "code.fine-tuning"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:go:benchmark-with-testing-b",
+  "type": "methodology",
+  "title": "Measure performance with go test -bench and pprof",
+  "description": "Write a stable BenchmarkXxx, capture allocations and CPU profiles, and compare with benchstat before claiming a speedup.",
+  "body": "Steps: 1. Write func BenchmarkX(b *testing.B) that resets the timer after setup (b.ResetTimer) and loops b.N times over the real operation, calling b.ReportAllocs(). 2. Run `go test -bench=. -benchmem -count=10 -cpuprofile cpu.prof` on a quiet machine. 3. Inspect with `go tool pprof cpu.prof` (top, list) to find the hot function. 4. Apply one change, rerun, and compare old vs new with `benchstat old.txt new.txt`. 5. Keep only changes whose delta is significant (not within noise). Rollback point: before optimizing away allocations that change behavior. Validation: benchstat shows a statistically significant ns/op or B/op improvement and the -race suite still passes. Risk boundary: a single -count=1 run is noise, not evidence; record the benchstat output rather than a one-shot number.",
+  "domain": "go",
+  "scope_hint": "code.go:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.go",
+  "pack_id": "code.go"
+}

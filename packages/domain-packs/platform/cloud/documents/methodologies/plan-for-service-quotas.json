@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:cloud:plan-for-service-quotas",
+  "type": "methodology",
+  "title": "Plan capacity against managed-service quotas and limits",
+  "description": "Map a workload's projected load to each managed service's account quotas and rate limits before launch so throttling and hard caps surface in planning, not in production.",
+  "body": "Steps: 1. Enumerate the managed services in the path (compute, database connections, function concurrency, API rate limits, IP/ENI counts). 2. Look up the current account quota for each and the per-resource hard limits. 3. Project peak load and compare against quotas, noting which are soft (raisable) vs hard. 4. Request increases ahead of time for soft limits and redesign around hard limits. 5. Add throttling/backoff and monitor approach-to-limit. Rollback point: before launching a load that exceeds a confirmed quota. Validation: a load projection mapped to each quota with headroom, and an alarm on quota utilization. Risk boundary: launching into a hard limit causes an outage; escalate when projected load exceeds a non-raisable limit rather than hoping.",
+  "domain": "platform",
+  "scope_hint": "platform.cloud:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.cloud",
+  "pack_id": "platform.cloud"
+}

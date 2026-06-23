@@ -1,0 +1,452 @@
+[
+  {
+    "ref_id": "strategy:android:hoist-state-into-viewmodel",
+    "type": "strategy",
+    "title": "Hold UI state in a ViewModel",
+    "summary": "Keep UI state in a ViewModel scoped to outlive Activity/Fragment recreation, not in the lifecycle component itself.",
+    "domains": [
+      "android",
+      "jetpack_compose",
+      "kotlin_android"
+    ],
+    "triggers": [
+      "viewmodel",
+      "state",
+      "configuration change",
+      "lifecycle",
+      "survive",
+      "rotation"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.mobile.android"
+  },
+  {
+    "ref_id": "strategy:android:drive-compose-from-observable-state",
+    "type": "strategy",
+    "title": "Drive Compose from observable state",
+    "summary": "Back composables with State/StateFlow so changing the value triggers recomposition, rather than mutating views imperatively.",
+    "domains": [
+      "android",
+      "jetpack_compose",
+      "kotlin_android"
+    ],
+    "triggers": [
+      "compose",
+      "recomposition",
+      "state",
+      "mutablestateof",
+      "observable",
+      "remember"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.mobile.android"
+  },
+  {
+    "ref_id": "strategy:android:keep-main-thread-free",
+    "type": "strategy",
+    "title": "Keep the main thread free to avoid ANRs",
+    "summary": "Run all I/O, database, and heavy computation off the main thread with coroutines/dispatchers so the UI never blocks.",
+    "domains": [
+      "android",
+      "jetpack_compose",
+      "kotlin_android"
+    ],
+    "triggers": [
+      "anr",
+      "main thread",
+      "coroutine",
+      "dispatcher",
+      "blocking",
+      "io"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.mobile.android"
+  },
+  {
+    "ref_id": "strategy:android:request-runtime-permissions-in-context",
+    "type": "strategy",
+    "title": "Request runtime permissions in context",
+    "summary": "Declare permissions in the manifest and request dangerous ones at point of use, handling denial and don't-ask-again.",
+    "domains": [
+      "android",
+      "jetpack_compose",
+      "kotlin_android"
+    ],
+    "triggers": [
+      "permission",
+      "runtime",
+      "manifest",
+      "dangerous",
+      "request",
+      "rationale"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.mobile.android"
+  },
+  {
+    "ref_id": "strategy:android:defer-background-work-to-workmanager",
+    "type": "strategy",
+    "title": "Defer guaranteed work to WorkManager",
+    "summary": "Schedule deferrable, guaranteed background work through WorkManager with constraints, not raw threads that die with the process.",
+    "domains": [
+      "android",
+      "jetpack_compose",
+      "kotlin_android"
+    ],
+    "triggers": [
+      "workmanager",
+      "background",
+      "deferred",
+      "constraints",
+      "guaranteed",
+      "scheduler"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.mobile.android"
+  },
+  {
+    "ref_id": "strategy:android:manage-gradle-builds-deliberately",
+    "type": "strategy",
+    "title": "Manage Gradle builds deliberately",
+    "summary": "Pin SDK/dependency versions, use build variants for environments, and keep secrets out of the build instead of guessing config.",
+    "domains": [
+      "android",
+      "jetpack_compose",
+      "kotlin_android"
+    ],
+    "triggers": [
+      "gradle",
+      "build",
+      "dependency",
+      "variant",
+      "sdk",
+      "version"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.mobile.android"
+  },
+  {
+    "ref_id": "methodology:android:fix-state-loss-on-rotation",
+    "type": "methodology",
+    "title": "Fix UI state lost on rotation",
+    "summary": "Trace state that disappears on configuration change and relocate it into a ViewModel or saved state.",
+    "domains": [
+      "android",
+      "jetpack_compose",
+      "kotlin_android"
+    ],
+    "triggers": [
+      "rotation",
+      "configuration change",
+      "state loss",
+      "viewmodel",
+      "savedstate",
+      "recreate"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.mobile.android"
+  },
+  {
+    "ref_id": "methodology:android:diagnose-an-anr",
+    "type": "methodology",
+    "title": "Diagnose an ANR",
+    "summary": "Locate the main-thread block behind an Application Not Responding event and move the work off the UI thread.",
+    "domains": [
+      "android",
+      "jetpack_compose",
+      "kotlin_android"
+    ],
+    "triggers": [
+      "anr",
+      "main thread",
+      "block",
+      "trace",
+      "diagnose",
+      "strictmode"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.mobile.android"
+  },
+  {
+    "ref_id": "methodology:android:debug-missing-recomposition",
+    "type": "methodology",
+    "title": "Debug missing or excessive recomposition",
+    "summary": "Diagnose a Compose UI that won't update (or updates too much) by checking state observability and read scope.",
+    "domains": [
+      "android",
+      "jetpack_compose",
+      "kotlin_android"
+    ],
+    "triggers": [
+      "recomposition",
+      "compose",
+      "state",
+      "debug",
+      "remember",
+      "stability"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.mobile.android"
+  },
+  {
+    "ref_id": "methodology:android:add-a-runtime-permission-flow",
+    "type": "methodology",
+    "title": "Add a runtime permission flow",
+    "summary": "Wire a dangerous permission from manifest declaration through request, rationale, grant, and graceful denial.",
+    "domains": [
+      "android",
+      "jetpack_compose",
+      "kotlin_android"
+    ],
+    "triggers": [
+      "permission",
+      "runtime",
+      "flow",
+      "rationale",
+      "launcher",
+      "denial"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.mobile.android"
+  },
+  {
+    "ref_id": "knowledge:android:lifecycle-and-recreation",
+    "type": "knowledge",
+    "title": "The Android component lifecycle",
+    "summary": "Activities and Fragments are created, destroyed, and recreated on configuration changes and memory pressure, so their instances are short-lived.",
+    "domains": [
+      "android",
+      "jetpack_compose",
+      "kotlin_android"
+    ],
+    "triggers": [
+      "lifecycle",
+      "activity",
+      "fragment",
+      "recreate",
+      "configuration",
+      "destroy"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.mobile.android"
+  },
+  {
+    "ref_id": "knowledge:android:compose-recomposition-model",
+    "type": "knowledge",
+    "title": "Compose recomposition model",
+    "summary": "Composables are functions of state that the runtime re-invokes when the state they read changes; UI is described, not mutated.",
+    "domains": [
+      "android",
+      "jetpack_compose",
+      "kotlin_android"
+    ],
+    "triggers": [
+      "compose",
+      "recomposition",
+      "state",
+      "snapshot",
+      "declarative",
+      "read"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.mobile.android"
+  },
+  {
+    "ref_id": "knowledge:android:anr-and-the-main-thread",
+    "type": "knowledge",
+    "title": "ANRs and the main thread",
+    "summary": "Android shows an Application Not Responding dialog and may kill the app when the main thread is blocked too long, so UI-thread work must be trivial.",
+    "domains": [
+      "android",
+      "jetpack_compose",
+      "kotlin_android"
+    ],
+    "triggers": [
+      "anr",
+      "main thread",
+      "ui thread",
+      "block",
+      "responsiveness",
+      "watchdog"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.mobile.android"
+  },
+  {
+    "ref_id": "knowledge:android:permissions-and-privacy-model",
+    "type": "knowledge",
+    "title": "Android permissions and privacy model",
+    "summary": "Dangerous permissions are granted by the user at runtime and revocable, and Play enforces declared data use, so access is never guaranteed.",
+    "domains": [
+      "android",
+      "jetpack_compose",
+      "kotlin_android"
+    ],
+    "triggers": [
+      "permission",
+      "privacy",
+      "runtime",
+      "dangerous",
+      "revoke",
+      "play"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.mobile.android"
+  },
+  {
+    "ref_id": "skill:android:inspect-state-scoping-and-lifecycle",
+    "type": "skill",
+    "title": "Inspect state scoping and lifecycle handling",
+    "summary": "Review where UI state lives and whether it survives configuration changes and process death.",
+    "domains": [
+      "android",
+      "jetpack_compose",
+      "kotlin_android"
+    ],
+    "triggers": [
+      "state",
+      "viewmodel",
+      "lifecycle",
+      "inspect",
+      "rotation",
+      "savedstate"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.mobile.android"
+  },
+  {
+    "ref_id": "skill:android:audit-main-thread-and-permissions",
+    "type": "skill",
+    "title": "Audit main-thread work and permissions",
+    "summary": "Inspect for blocking calls on the UI thread and for dangerous-API use lacking a runtime permission request.",
+    "domains": [
+      "android",
+      "jetpack_compose",
+      "kotlin_android"
+    ],
+    "triggers": [
+      "main thread",
+      "anr",
+      "permission",
+      "audit",
+      "blocking",
+      "manifest"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.mobile.android"
+  }
+]

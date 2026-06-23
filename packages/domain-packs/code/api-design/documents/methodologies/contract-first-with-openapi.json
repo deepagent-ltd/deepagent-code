@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:apidesign:contract-first-with-openapi",
+  "type": "methodology",
+  "title": "Design contract-first with OpenAPI",
+  "description": "A procedure to specify the contract in OpenAPI before implementation so consumers, mocks, and stubs derive from one source.",
+  "body": "Use when starting a new API or a significant addition. Do not let the implementation become the de facto spec. Steps: model resources, methods, schemas, and errors in an OpenAPI document; review it with consumers; generate mocks and client or server stubs from it; keep the spec the source of truth. Validation signals include the document validating and round-tripping to generated stubs that match consumer expectations. Risk boundary: a spec that drifts from the implementation misleads clients, so generate or test the implementation against the contract.",
+  "domain": "api_design",
+  "scope_hint": "code.api-design:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.api-design",
+  "pack_id": "code.api-design"
+}

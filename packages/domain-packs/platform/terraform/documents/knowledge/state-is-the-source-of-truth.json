@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:tf:state-is-the-source-of-truth",
+  "type": "knowledge",
+  "title": "State maps config to real resources",
+  "description": "The state file binds HCL addresses to real resource ids and caches attributes; without it Terraform cannot know what it manages.",
+  "body": "Use when reasoning about imports, moves, or lost state. State records the mapping from each resource address to its real provider id plus a cached copy of attributes; plans diff desired config against this cache (refreshed against the API). Lose or corrupt state and Terraform either re-creates duplicates or orphans real resources. Do not hand-edit state JSON. Actions: manage state with import/mv/rm commands and keep an encrypted, locked, backed-up backend. Validation signals include a plan that matches reality after any state operation. Risk boundary: state contains plaintext resource attributes including secrets, so it is a sensitive artifact — leaking it is a security incident.",
+  "domain": "terraform",
+  "scope_hint": "platform.terraform:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.terraform",
+  "pack_id": "platform.terraform"
+}

@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:cloud:broad-iam-fix",
+  "type": "failure_dossier",
+  "description": "Granting broad IAM to clear an error creates security debt.",
+  "body": "Find minimum required permission.\n\nDerived from local skill survey outputs under /Users/xiuranli/code/agent/skill, especially reviewed canonical rules, coverage reports, and trusted local skill notes. Paraphrased into domain-pack seed form.\n\nDiagnostic use only: keep this out of index.json and use it only as a blocked/do-not-use signal.",
+  "domain": "cloud",
+  "scope_hint": "platform.cloud:failure_dossiers",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:platform.cloud:skill_survey",
+  "pack_id": "platform.cloud"
+}

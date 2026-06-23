@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:eval:hold-out-and-prevent-leakage",
+  "type": "strategy",
+  "title": "Hold out the golden set and prevent leakage",
+  "description": "Evaluation data is strictly separated from anything the system saw in training, prompts, or few-shot examples.",
+  "body": "Use when building or auditing an evaluation dataset. Do not draw eval cases from the same source as few-shot examples or fine-tuning data, and avoid letting eval inputs appear in the prompt or system context. Actions: partition data so the golden set is disjoint from training/prompt material, check for near-duplicates across the boundary, and freeze the set so it is not edited to match outputs. Validation signals include a leakage check that finds no eval case overlapping training or prompt content. Risk boundary: a leaked golden set produces inflated scores that look like quality; treat detected leakage as invalidating the result and escalate before trusting it.",
+  "domain": "eval",
+  "scope_hint": "code.eval:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.eval",
+  "pack_id": "code.eval"
+}

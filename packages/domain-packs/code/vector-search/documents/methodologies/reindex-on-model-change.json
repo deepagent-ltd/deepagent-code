@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:vsearch:reindex-on-model-change",
+  "type": "methodology",
+  "title": "Reindex safely when the embedder changes",
+  "description": "Re-embed the whole corpus and validate recall before cutting queries over to a new embedding model.",
+  "body": "Use when upgrading the embedding model behind a live index. Do not query a new-model index with old-model vectors mixed in — the space is inconsistent and recall collapses. Actions: build a fresh index by re-embedding the entire corpus with the new model, validate recall on the labeled set against the old index, then atomically switch queries to the new index and embedder together. Validation signals include a side-by-side recall comparison of old vs new index and an atomic cutover with no mixed-model vectors. Risk boundary: a partial re-embed leaves a corrupt mixed index; if reindexing cannot complete atomically, escalate to a blue/green swap rather than mutating in place.",
+  "domain": "vector_search",
+  "scope_hint": "code.vector-search:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.vector-search",
+  "pack_id": "code.vector-search"
+}

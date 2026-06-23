@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:hwprot:i2c-bus-scan-recovery",
+  "type": "methodology",
+  "title": "Scan an I2C bus and recover a stuck line",
+  "description": "Enumerate responding addresses and apply a clock-pulse recovery when a slave holds the data line low.",
+  "body": "Use when one or more I2C peripherals are missing or the bus appears hung. Do not power-cycle the whole board as a first resort when a single slave is stuck mid-transaction. Actions: scan every address for an ACK, identify which respond, and if SDA is stuck low, clock SCL until the slave releases it. Validation signals include an address scan matching the expected device map and SDA returning high after recovery pulses. Risk boundary: an unrecoverable stuck bus may indicate a hardware fault, so escalate to a physical inspection rather than looping recovery forever.",
+  "domain": "hw_protocols",
+  "scope_hint": "hardware.protocols:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.protocols",
+  "pack_id": "hardware.protocols"
+}

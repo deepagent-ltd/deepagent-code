@@ -1,0 +1,52 @@
+{
+  "schema_version": "domain_pack.v1",
+  "id": "code.query",
+  "name": "Deterministic Query Controls",
+  "version": "1.0.0",
+  "scope": "system",
+  "risk": "low",
+  "domains": [
+    "code",
+    "query",
+    "deterministic",
+    "read_only"
+  ],
+  "provides": [
+    "knowledge",
+    "strategy",
+    "methodology",
+    "skill",
+    "diagnosis",
+    "validation"
+  ],
+  "depends_on": [
+    "code.core"
+  ],
+  "conflicts_with": [],
+  "knowledge_store": "document_store",
+  "allowed_tools": [
+    "read",
+    "search",
+    "shell:read-only",
+    "git:status",
+    "git:diff"
+  ],
+  "denied_tools": [
+    "edit",
+    "shell:write",
+    "shell:deploy-production",
+    "shell:apply-migration",
+    "shell:delete-data"
+  ],
+  "data_policy": {
+    "sensitivity": [
+      "source_code"
+    ],
+    "default_admission": "summary_only",
+    "secret_policy": "deny"
+  },
+  "detector": {
+    "inline": "(profile.code_domains.includes('query') || profile.code_domains.includes('deterministic') || profile.repo_signals.some(s => /\\b(how many (rows|records|entries|files|items)|count (the )?(rows|records|entries|matching)|list (the )?(files|tables|columns|rows|records|entries)|select .* from|read-only query|inspect (the )?(state|config|schema|database)|show (the )?(schema|table|rows|status|diff|config value)|git (status|diff)|explain (analyze|the query|plan))\\b|查询|统计.*(条|行|个)|列出.*(文件|表|记录)|读取.*(配置|状态)|有多少(条|行|个)/i.test(s))) && !profile.repo_signals.some(s => /\\b(fix|implement|edit|modify|delete|deploy|migrate|migration|backfill|insert|update|alter|drop|setup|bootstrap)\\b|修复|实现|修改|删除|部署|迁移|写入/i.test(s)) ? 0.9 : 0",
+    "threshold": 0.5
+  }
+}

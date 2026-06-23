@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:svc:retry-with-capped-backoff-and-jitter",
+  "type": "strategy",
+  "title": "Retry with capped backoff and jitter",
+  "description": "Retries use exponential backoff with full jitter, a max attempt count, and only on retryable errors.",
+  "body": "Use when calling a dependency that can fail transiently (timeout, 503, connection reset). Do not retry non-idempotent operations or non-retryable errors (400/validation/auth). Actions: classify the error as retryable or terminal; apply exponential backoff with full jitter (sleep = random(0, min(cap, base*2^attempt))); cap attempts and total deadline. Validation signals include a test that retries stop after the cap and that backoff spreads in time rather than firing in lockstep. Risk boundary: retrying without a cap or jitter can amplify an outage into a self-inflicted thundering herd.",
+  "domain": "backend_service",
+  "scope_hint": "code.backend.service:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.service",
+  "pack_id": "code.backend.service"
+}

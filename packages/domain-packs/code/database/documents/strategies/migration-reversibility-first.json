@@ -1,0 +1,11 @@
+{
+  "ref_id": "strategy:database:migration-reversibility-first",
+  "type": "strategy",
+  "description": "Design schema and data migrations with explicit rollback or roll-forward recovery before applying destructive steps.",
+  "body": "Use this when changing table shape, column semantics, constraints, indexes, seed data, or data transformations. Prefer additive changes and reversible backfills before destructive cleanup; when rollback is impossible, define a roll-forward plan and human approval boundary. This does not authorize production operations or business data policy decisions. Execution actions include identifying irreversible statements, preserving old data until verification passes, storing transformation checkpoints, and separating deploy phases. Validation signals include a dry-run result, down migration or documented roll-forward path, row-count/hash checks, and tests proving old and new code can coexist during the compatibility window. Risk boundary: dropping columns, rewriting primary keys, truncating tables, or mass-updating rows requires explicit confirmation and backup evidence. Use when Database Engineering work touches schema deltas, query shape, transaction ownership, constraints, locks, and data volume. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: choose the smallest direction that preserves the domain contract; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include migration dry-runs, rollback checks, EXPLAIN output, constraint tests, and fixture data comparisons. Risk boundary: escalate or stop when the task involves data loss, long locks, non-rollbackable writes, silent query-plan regressions, and unsafe backfills, missing owner evidence, or live external state.",
+  "domain": "sql",
+  "scope_hint": "code.database:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database:migration_safety_practice",
+  "pack_id": "code.database"
+}

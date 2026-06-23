@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:review:style-as-severity",
+  "type": "failure_dossier",
+  "description": "Treating style preferences as high-severity findings dilutes real blockers.",
+  "body": "Formatting or naming concerns should not be ranked with correctness, security, data-loss, or compatibility defects unless they produce a concrete failure.\n\nUse only as a diagnostic do-not-use signal; do not expose this as positive strategy, methodology, or memory.",
+  "domain": "review",
+  "scope_hint": "code.review:failure_dossiers",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.review",
+  "pack_id": "code.review"
+}

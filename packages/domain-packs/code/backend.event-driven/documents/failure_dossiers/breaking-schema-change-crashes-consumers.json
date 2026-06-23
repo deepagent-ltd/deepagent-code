@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:evt:breaking-schema-change-crashes-consumers",
+  "type": "failure_dossier",
+  "description": "A field is renamed, removed, or retyped on a live event, crashing consumers and breaking replay of historical events.",
+  "body": "Failure mode: a producer ships an incompatible payload change; deserializers in lagging consumers and in any replay of older events throw, and a rolling deploy means old and new shapes coexist on the topic. Detection signals: consumer deserialization errors spike after a producer deploy; replay of historical events fails to parse; no schema-registry compatibility check. Do not change fields in place on a live topic. Safer fallback: add fields as optional with defaults, keep old fields until consumers migrate, version the event for breaking changes, and gate with a CI compatibility check.",
+  "domain": "event_driven",
+  "scope_hint": "code.backend.event-driven:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.event-driven:human_authored",
+  "pack_id": "code.backend.event-driven"
+}

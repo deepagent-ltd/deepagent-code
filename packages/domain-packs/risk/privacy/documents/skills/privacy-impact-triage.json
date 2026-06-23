@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:risk.privacy:privacy-impact-triage",
+  "type": "skill",
+  "title": "Privacy Impact Triage",
+  "description": "Classify data classes, sinks, purposes, retention, and human-gate requirements for a proposed change.",
+  "body": "Inputs: user request, changed files, schemas, logs, events, and external destinations. Use when deciding whether privacy constraints should block or reshape a task. Do not provide legal advice or certify compliance. Procedure: identify PII/PHI/PCI and indirect identifiers, list new or changed sinks, map purpose and retention, check export/delete impact, and decide whether human approval is required. Output: risk class, required engineering controls, validation plan, and residual risk. Validation signals include concrete field and sink evidence. Use when Privacy Risk Controls work touches personal-data classes, sinks, retention, consent, logs, prompts, and exports. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: run the documented inspection and validation workflow; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include data inventory, redaction tests, retention checks, export/delete tests, and approval evidence. Risk boundary: escalate or stop when the task involves PII disclosure, consent bypass, retention drift, and unapproved processor expansion, missing owner evidence, or live external state.",
+  "domain": "privacy",
+  "scope_hint": "risk.privacy:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.privacy",
+  "pack_id": "risk.privacy"
+}

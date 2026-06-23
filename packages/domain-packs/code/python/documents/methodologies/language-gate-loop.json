@@ -1,0 +1,11 @@
+{
+  "ref_id": "methodology:python:language-gate-loop",
+  "type": "methodology",
+  "description": "In Python, run the package-local gate, fix the first owned diagnostic, rerun, then broaden.",
+  "body": "In Python, the fastest path through errors is to let import-time evaluation plus python -m py_compile on changed modules and mypy/pyright type checks, ruff/flake8 lint, and DeprecationWarnings drive one fix at a time rather than guessing. Use when the package's editable install (pip install -e / uv sync) inside its venv or the analyzers report multiple diagnostics. Do not batch speculative edits across files, and avoid suppressing diagnostics to move on. Actions: inspect the package, run the gate, fix only the last frame of the traceback owned by your code, rerun pytest on the changed package inside the project venv, then widen to the package's editable install (pip install -e / uv sync) inside its venv for the whole package. Validation signals include a shrinking diagnostic count, a passing focused test, and a clean package-wide gate. Risk boundary: if a diagnostic implies a design or API change, stop and escalate instead of forcing the gate green.",
+  "domain": "python",
+  "scope_hint": "code.python:methodologies",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.python:skill_survey",
+  "pack_id": "code.python"
+}

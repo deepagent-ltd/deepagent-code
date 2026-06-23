@@ -1,0 +1,497 @@
+[
+  {
+    "ref_id": "strategy:lic:inventory-before-distribution",
+    "type": "strategy",
+    "title": "Build the license inventory before distribution",
+    "summary": "Resolve every shipped dependency to a concrete SPDX identifier before an artifact leaves the build, treating unknown as blocking.",
+    "domains": [
+      "license",
+      "oss_license",
+      "attribution",
+      "spdx"
+    ],
+    "triggers": [
+      "inventory",
+      "spdx",
+      "dependency",
+      "distribution",
+      "manifest",
+      "resolve"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.license"
+  },
+  {
+    "ref_id": "strategy:lic:classify-copyleft-vs-permissive",
+    "type": "strategy",
+    "title": "Classify each license as permissive, weak-copyleft, or strong-copyleft",
+    "summary": "Sort dependencies by the reciprocity strength of their license, because that class drives what you must publish back.",
+    "domains": [
+      "license",
+      "oss_license",
+      "attribution",
+      "spdx"
+    ],
+    "triggers": [
+      "copyleft",
+      "permissive",
+      "reciprocal",
+      "gpl",
+      "lgpl",
+      "classify"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.license"
+  },
+  {
+    "ref_id": "strategy:lic:detect-incompatible-combinations",
+    "type": "strategy",
+    "title": "Detect incompatible license combinations",
+    "summary": "Check pairwise compatibility of the combined license set, since some licenses cannot legally coexist in one distributed work.",
+    "domains": [
+      "license",
+      "oss_license",
+      "attribution",
+      "spdx"
+    ],
+    "triggers": [
+      "incompatible",
+      "combination",
+      "compatibility",
+      "conflict",
+      "gpl",
+      "apache"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.license"
+  },
+  {
+    "ref_id": "strategy:lic:generate-attribution-from-lockfile",
+    "type": "strategy",
+    "title": "Generate attribution from the lockfile, not by hand",
+    "summary": "Derive the NOTICE/THIRD-PARTY file mechanically from the resolved dependency set so it cannot drift from what actually ships.",
+    "domains": [
+      "license",
+      "oss_license",
+      "attribution",
+      "spdx"
+    ],
+    "triggers": [
+      "attribution",
+      "notice",
+      "third-party",
+      "lockfile",
+      "generate",
+      "credits"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.license"
+  },
+  {
+    "ref_id": "strategy:lic:track-redistribution-obligations",
+    "type": "strategy",
+    "title": "Track redistribution obligations per shipping channel",
+    "summary": "Map each obligation (source offer, notice, modification disclosure) to the specific way the artifact is delivered.",
+    "domains": [
+      "license",
+      "oss_license",
+      "attribution",
+      "spdx"
+    ],
+    "triggers": [
+      "redistribution",
+      "obligation",
+      "source",
+      "offer",
+      "channel",
+      "modification"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.license"
+  },
+  {
+    "ref_id": "strategy:lic:pin-license-at-version-resolution",
+    "type": "strategy",
+    "title": "Re-resolve licenses on every dependency bump",
+    "summary": "Treat a version change as a potential license change, because projects relicense between releases.",
+    "domains": [
+      "license",
+      "oss_license",
+      "attribution",
+      "spdx"
+    ],
+    "triggers": [
+      "version",
+      "bump",
+      "relicense",
+      "upgrade",
+      "pin",
+      "re-resolve"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.license"
+  },
+  {
+    "ref_id": "methodology:lic:run-a-license-scan",
+    "type": "methodology",
+    "title": "Run and reconcile a license scan",
+    "summary": "Produce an inventory with a scanner, then reconcile declared metadata against the actual LICENSE files.",
+    "domains": [
+      "license",
+      "oss_license",
+      "attribution",
+      "spdx"
+    ],
+    "triggers": [
+      "scan",
+      "reconcile",
+      "scancode",
+      "metadata",
+      "inventory",
+      "audit"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.license"
+  },
+  {
+    "ref_id": "methodology:lic:resolve-an-spdx-expression",
+    "type": "methodology",
+    "title": "Resolve and validate an SPDX expression",
+    "summary": "Parse compound SPDX expressions (AND/OR/WITH) and pick the operative license for the project's use.",
+    "domains": [
+      "license",
+      "oss_license",
+      "attribution",
+      "spdx"
+    ],
+    "triggers": [
+      "spdx",
+      "expression",
+      "dual",
+      "or",
+      "with",
+      "exception"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.license"
+  },
+  {
+    "ref_id": "methodology:lic:build-the-attribution-artifact",
+    "type": "methodology",
+    "title": "Build the attribution/NOTICE artifact",
+    "summary": "Assemble a complete THIRD-PARTY notice from collected copyright lines and license texts, then verify completeness.",
+    "domains": [
+      "license",
+      "oss_license",
+      "attribution",
+      "spdx"
+    ],
+    "triggers": [
+      "notice",
+      "attribution",
+      "third-party",
+      "copyright",
+      "build",
+      "artifact"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.license"
+  },
+  {
+    "ref_id": "methodology:lic:audit-a-compatibility-conflict",
+    "type": "methodology",
+    "title": "Audit a flagged compatibility conflict",
+    "summary": "Confirm whether a flagged incompatible pair is real by examining linkage and distribution, then route it.",
+    "domains": [
+      "license",
+      "oss_license",
+      "attribution",
+      "spdx"
+    ],
+    "triggers": [
+      "conflict",
+      "audit",
+      "linkage",
+      "static",
+      "dynamic",
+      "investigate"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.license"
+  },
+  {
+    "ref_id": "methodology:lic:bootstrap-policy-for-a-repo",
+    "type": "methodology",
+    "title": "Bootstrap a license policy for a repository",
+    "summary": "Define an allowlist/denylist of licenses and wire it into CI so new dependencies are gated.",
+    "domains": [
+      "license",
+      "oss_license",
+      "attribution",
+      "spdx"
+    ],
+    "triggers": [
+      "policy",
+      "allowlist",
+      "denylist",
+      "ci",
+      "gate",
+      "bootstrap"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.license"
+  },
+  {
+    "ref_id": "knowledge:lic:copyleft-spectrum",
+    "type": "knowledge",
+    "title": "The copyleft spectrum and its triggers",
+    "summary": "Permissive, weak-copyleft, and strong/network-copyleft licenses impose escalating reciprocity triggered by different actions.",
+    "domains": [
+      "license",
+      "oss_license",
+      "attribution",
+      "spdx"
+    ],
+    "triggers": [
+      "copyleft",
+      "reciprocal",
+      "agpl",
+      "lgpl",
+      "mpl",
+      "trigger"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.license"
+  },
+  {
+    "ref_id": "knowledge:lic:spdx-identifiers-and-expressions",
+    "type": "knowledge",
+    "title": "SPDX identifiers and license expressions",
+    "summary": "SPDX gives each license a stable identifier and a small grammar (AND/OR/WITH) for expressing combined and exception-bearing terms.",
+    "domains": [
+      "license",
+      "oss_license",
+      "attribution",
+      "spdx"
+    ],
+    "triggers": [
+      "spdx",
+      "identifier",
+      "expression",
+      "dual",
+      "exception",
+      "grammar"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.license"
+  },
+  {
+    "ref_id": "knowledge:lic:attribution-and-notice-duties",
+    "type": "knowledge",
+    "title": "Attribution and NOTICE duties",
+    "summary": "Even permissive licenses require carrying copyright and license text into distributions, and Apache-2.0 adds a NOTICE-propagation duty.",
+    "domains": [
+      "license",
+      "oss_license",
+      "attribution",
+      "spdx"
+    ],
+    "triggers": [
+      "attribution",
+      "notice",
+      "copyright",
+      "permissive",
+      "apache",
+      "preserve"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.license"
+  },
+  {
+    "ref_id": "knowledge:lic:source-available-vs-osi",
+    "type": "knowledge",
+    "title": "Source-available licenses are not open source",
+    "summary": "BSL, SSPL, and Elastic-style licenses ship source but restrict use, so they fail OSI criteria and break OSS assumptions.",
+    "domains": [
+      "license",
+      "oss_license",
+      "attribution",
+      "spdx"
+    ],
+    "triggers": [
+      "source-available",
+      "bsl",
+      "sspl",
+      "elastic",
+      "osi",
+      "non-free"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.license"
+  },
+  {
+    "ref_id": "skill:lic:produce-license-inventory",
+    "type": "skill",
+    "title": "Produce a license inventory report",
+    "summary": "Read the lockfile and emit a component-to-SPDX inventory, flagging unknowns and license deltas.",
+    "domains": [
+      "license",
+      "oss_license",
+      "attribution",
+      "spdx"
+    ],
+    "triggers": [
+      "inventory",
+      "report",
+      "scan",
+      "lockfile",
+      "produce",
+      "list"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.license"
+  },
+  {
+    "ref_id": "skill:lic:check-attribution-completeness",
+    "type": "skill",
+    "title": "Check attribution completeness",
+    "summary": "Verify the committed NOTICE/THIRD-PARTY file covers every attribution-requiring component in the current lockfile.",
+    "domains": [
+      "license",
+      "oss_license",
+      "attribution",
+      "spdx"
+    ],
+    "triggers": [
+      "attribution",
+      "notice",
+      "completeness",
+      "check",
+      "verify",
+      "diff"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.license"
+  }
+]

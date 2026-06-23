@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:eval:design-an-ablation-study",
+  "type": "methodology",
+  "title": "Design an ablation study",
+  "description": "Plan arms that each change one variable against a fixed baseline, with a stable dataset, metric, and judge.",
+  "body": "Steps: 1. Define the baseline configuration and the factors to test. 2. Create one arm per factor, changing only that factor. 3. Fix the dataset, metric, and judge across all arms. 4. Run each arm with multiple seeds for variance. 5. Compare each arm to the baseline with a significance check and record the config diff. Rollback point: before combining factors into one change. Validation: each arm's config diff shows a single changed variable and deltas come with confidence intervals.",
+  "domain": "eval",
+  "scope_hint": "code.eval:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.eval",
+  "pack_id": "code.eval"
+}

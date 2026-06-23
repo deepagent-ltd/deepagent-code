@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:rust:choose-static-vs-dynamic-dispatch",
+  "type": "strategy",
+  "title": "Choose generics vs trait objects deliberately",
+  "description": "Pick monomorphized generics for hot paths and boxed trait objects (dyn Trait) for heterogeneous collections or compile-time/size trade-offs.",
+  "body": "Use when designing an API that abstracts over behavior. Do not reach for Box<dyn Trait> by default in a tight loop (it adds a vtable indirection and prevents inlining) and do not over-genericize cold code (monomorphization bloats compile time and binary size). Actions: use generic <T: Trait> or impl Trait for performance-critical and inlinable paths, use Box<dyn Trait> / &dyn Trait when storing mixed types in one collection or to cut code bloat, and ensure the trait is object-safe before boxing. Validation signals include a criterion benchmark showing the dispatch cost is negligible (or not) and `cargo build --timings` for compile impact. Risk boundary: a dyn call in a per-element hot loop can dominate runtime; measure before committing and escalate if object-safety forces an awkward design.",
+  "domain": "rust",
+  "scope_hint": "code.rust:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.rust",
+  "pack_id": "code.rust"
+}

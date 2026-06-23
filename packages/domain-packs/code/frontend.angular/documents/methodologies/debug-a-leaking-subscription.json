@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:ng:debug-a-leaking-subscription",
+  "type": "methodology",
+  "title": "Debug a leaking or duplicate subscription",
+  "description": "Trace duplicated side effects or growing memory to a subscription that is never torn down.",
+  "body": "Steps: 1. Reproduce by navigating into and out of the component repeatedly and watch a side effect or memory grow. 2. Locate every .subscribe() in the component/service. 3. For each, check whether it is the async pipe (managed), takeUntilDestroyed/destroy-Subject (managed), or bare (leaking). 4. Convert bare long-lived subscribes to the async pipe or add takeUntilDestroyed. 5. Re-navigate and confirm emissions stop after destroy. Rollback point: before changing the subscription model. Validation: a test asserts no callback fires after ngOnDestroy and memory stabilizes across navigations.",
+  "domain": "angular",
+  "scope_hint": "code.frontend.angular:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.frontend.angular",
+  "pack_id": "code.frontend.angular"
+}

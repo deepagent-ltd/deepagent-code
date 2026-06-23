@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:vdb:write-a-pgvector-knn-query",
+  "type": "skill",
+  "title": "Write an indexed pgvector KNN query",
+  "description": "Use the matching distance operator and set the per-query search parameter so the ANN index is actually used.",
+  "body": "Use when querying a pgvector column for nearest neighbours. Actions: write the ORDER BY using the operator that matches the index's operator class (<=> for cosine, <-> for L2, <#> for inner product) with a LIMIT k, set the session parameter (hnsw.ef_search or ivfflat.probes) before the query, and run EXPLAIN to confirm an index scan rather than an exact sequential scan. Verify EXPLAIN shows the index and the result ordering matches the metric. Validation signals include EXPLAIN reporting an Index Scan using the vector index and recall meeting target at the chosen ef_search. Risk boundary: using a different operator than the index was built with forces a sequential scan over every row, so assert the operator and operator class agree before deploying the query.",
+  "domain": "vector_db",
+  "scope_hint": "code.database.vector:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.vector",
+  "pack_id": "code.database.vector"
+}

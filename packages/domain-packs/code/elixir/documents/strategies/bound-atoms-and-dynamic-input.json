@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:elixir:bound-atoms-and-dynamic-input",
+  "type": "strategy",
+  "title": "Never create atoms from unbounded input",
+  "description": "Atoms are never garbage-collected, so converting arbitrary external strings to atoms can exhaust the atom table and crash the VM.",
+  "body": "Use when converting external strings (params, JSON keys, headers) to atoms. Do not call String.to_atom/2 on user-controlled input. Actions: use String.to_existing_atom/1 when the set of valid atoms is known and pre-defined, keep dynamic data as strings or maps with string keys, and only intern atoms you control at compile time. Validation signals include a test that an unknown input raises (to_existing_atom) rather than minting a new atom, and a check that decoders do not auto-atomize keys. Risk boundary: unbounded atom creation slowly fills the fixed atom table and eventually crashes the entire BEAM node, an availability/DoS issue; treat any to_atom on request data as a blocking finding.",
+  "domain": "elixir",
+  "scope_hint": "code.elixir:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.elixir",
+  "pack_id": "code.elixir"
+}

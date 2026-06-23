@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure_dossier:vdb:post-filter-starves-results",
+  "type": "failure_dossier",
+  "description": "Applying a metadata filter after ANN search returns far fewer than k results.",
+  "body": "Failure mode: the query fetches the top-k vectors first and filters by metadata afterward, but the nearest vectors were filtered out, leaving only a handful of matches even though many qualifying vectors exist further out. Detection signals: filtered queries return fewer than the requested k results, result count varies wildly with the filter, and the engine logs show filtering applied to the result set rather than the candidate set. Do not post-filter ANN results in a hot path. Safer fallback: use the engine's index-aware pre-filtering (payload filters, boolean expressions, or a partial index) so the predicate constrains the searched candidates, and verify a full k results return.",
+  "domain": "vector_db",
+  "scope_hint": "code.database.vector:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.vector:human_authored",
+  "pack_id": "code.database.vector"
+}

@@ -1,0 +1,468 @@
+[
+  {
+    "ref_id": "strategy:pg:read-the-plan-before-tuning",
+    "type": "strategy",
+    "title": "Read the plan before tuning a query",
+    "summary": "Diagnose slow queries with EXPLAIN (ANALYZE, BUFFERS) on real data before adding indexes or rewriting SQL.",
+    "domains": [
+      "postgres",
+      "postgresql",
+      "database",
+      "sql"
+    ],
+    "triggers": [
+      "explain",
+      "analyze",
+      "plan",
+      "buffers",
+      "tuning",
+      "slow"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.postgres"
+  },
+  {
+    "ref_id": "strategy:pg:choose-the-right-index-type",
+    "type": "strategy",
+    "title": "Choose the index type that fits the predicate",
+    "summary": "Match btree, gin, gist, or brin to the query shape rather than defaulting every index to btree.",
+    "domains": [
+      "postgres",
+      "postgresql",
+      "database",
+      "sql"
+    ],
+    "triggers": [
+      "index",
+      "btree",
+      "gin",
+      "gist",
+      "brin",
+      "type"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.postgres"
+  },
+  {
+    "ref_id": "strategy:pg:build-indexes-concurrently-in-prod",
+    "type": "strategy",
+    "title": "Build indexes CONCURRENTLY in production",
+    "summary": "On a populated, live table, create and drop indexes with CONCURRENTLY so writers are not blocked.",
+    "domains": [
+      "postgres",
+      "postgresql",
+      "database",
+      "sql"
+    ],
+    "triggers": [
+      "concurrently",
+      "index",
+      "create",
+      "lock",
+      "production",
+      "online"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.postgres"
+  },
+  {
+    "ref_id": "strategy:pg:keep-migrations-short-locked",
+    "type": "strategy",
+    "title": "Keep migration locks short and weak",
+    "summary": "Schema changes avoid long-held ACCESS EXCLUSIVE locks by splitting steps and setting lock_timeout.",
+    "domains": [
+      "postgres",
+      "postgresql",
+      "database",
+      "sql"
+    ],
+    "triggers": [
+      "migration",
+      "lock",
+      "access",
+      "exclusive",
+      "alter",
+      "timeout"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.postgres"
+  },
+  {
+    "ref_id": "strategy:pg:match-isolation-to-consistency-need",
+    "type": "strategy",
+    "title": "Match isolation level to the consistency need",
+    "summary": "Pick read-committed, repeatable-read, or serializable deliberately and handle the failure modes each allows.",
+    "domains": [
+      "postgres",
+      "postgresql",
+      "database",
+      "sql"
+    ],
+    "triggers": [
+      "isolation",
+      "serializable",
+      "repeatable",
+      "read-committed",
+      "transaction",
+      "consistency"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.postgres"
+  },
+  {
+    "ref_id": "strategy:pg:model-jsonb-without-losing-the-relational-spine",
+    "type": "strategy",
+    "title": "Use JSONB without losing the relational spine",
+    "summary": "Keep queried, constrained, and joined fields as columns; reserve JSONB for genuinely variable or sparse data.",
+    "domains": [
+      "postgres",
+      "postgresql",
+      "database",
+      "sql"
+    ],
+    "triggers": [
+      "jsonb",
+      "schema",
+      "column",
+      "model",
+      "containment",
+      "index"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.postgres"
+  },
+  {
+    "ref_id": "methodology:pg:diagnose-a-slow-query",
+    "type": "methodology",
+    "title": "Diagnose a slow query",
+    "summary": "Use EXPLAIN ANALYZE, statistics, and pg_stat views to find and fix the actual bottleneck node.",
+    "domains": [
+      "postgres",
+      "postgresql",
+      "database",
+      "sql"
+    ],
+    "triggers": [
+      "diagnose",
+      "slow",
+      "explain",
+      "statistics",
+      "pg_stat",
+      "bottleneck"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.postgres"
+  },
+  {
+    "ref_id": "methodology:pg:run-an-online-schema-change",
+    "type": "methodology",
+    "title": "Run an online schema change",
+    "summary": "Apply DDL to a live table in small, weakly-locking steps with CONCURRENTLY and NOT VALID/VALIDATE.",
+    "domains": [
+      "postgres",
+      "postgresql",
+      "database",
+      "sql"
+    ],
+    "triggers": [
+      "schema",
+      "online",
+      "ddl",
+      "concurrently",
+      "validate",
+      "migration"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.postgres"
+  },
+  {
+    "ref_id": "methodology:pg:tune-autovacuum-for-a-hot-table",
+    "type": "methodology",
+    "title": "Tune autovacuum for a hot table",
+    "summary": "Adjust per-table autovacuum settings and monitor bloat so dead tuples are reclaimed before they hurt.",
+    "domains": [
+      "postgres",
+      "postgresql",
+      "database",
+      "sql"
+    ],
+    "triggers": [
+      "autovacuum",
+      "bloat",
+      "dead",
+      "tuples",
+      "vacuum",
+      "tune"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.postgres"
+  },
+  {
+    "ref_id": "methodology:pg:resolve-a-lock-contention-incident",
+    "type": "methodology",
+    "title": "Resolve a lock-contention incident",
+    "summary": "Identify blocking transactions via pg_locks and pg_stat_activity and unblock without data loss.",
+    "domains": [
+      "postgres",
+      "postgresql",
+      "database",
+      "sql"
+    ],
+    "triggers": [
+      "lock",
+      "contention",
+      "blocking",
+      "pg_locks",
+      "deadlock",
+      "incident"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.postgres"
+  },
+  {
+    "ref_id": "knowledge:pg:mvcc-and-vacuum",
+    "type": "knowledge",
+    "title": "MVCC and why VACUUM exists",
+    "summary": "Postgres keeps row versions for concurrency; updates and deletes leave dead tuples that VACUUM must reclaim.",
+    "domains": [
+      "postgres",
+      "postgresql",
+      "database",
+      "sql"
+    ],
+    "triggers": [
+      "mvcc",
+      "vacuum",
+      "dead",
+      "tuple",
+      "bloat",
+      "version"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.postgres"
+  },
+  {
+    "ref_id": "knowledge:pg:index-types-and-when-they-help",
+    "type": "knowledge",
+    "title": "Postgres index types and their use",
+    "summary": "btree, gin, gist, brin, and hash each fit different predicates, and an index only helps a sargable query.",
+    "domains": [
+      "postgres",
+      "postgresql",
+      "database",
+      "sql"
+    ],
+    "triggers": [
+      "index",
+      "btree",
+      "gin",
+      "gist",
+      "brin",
+      "sargable"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.postgres"
+  },
+  {
+    "ref_id": "knowledge:pg:isolation-levels-and-anomalies",
+    "type": "knowledge",
+    "title": "Isolation levels and the anomalies they allow",
+    "summary": "Read-committed allows non-repeatable reads and lost updates; serializable prevents anomalies but can abort.",
+    "domains": [
+      "postgres",
+      "postgresql",
+      "database",
+      "sql"
+    ],
+    "triggers": [
+      "isolation",
+      "anomaly",
+      "lost-update",
+      "serializable",
+      "phantom",
+      "snapshot"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.postgres"
+  },
+  {
+    "ref_id": "knowledge:pg:jsonb-storage-and-indexing",
+    "type": "knowledge",
+    "title": "JSONB storage, operators, and indexing",
+    "summary": "JSONB stores parsed binary, supports containment operators, and is indexed with gin or expression indexes.",
+    "domains": [
+      "postgres",
+      "postgresql",
+      "database",
+      "sql"
+    ],
+    "triggers": [
+      "jsonb",
+      "containment",
+      "gin",
+      "operator",
+      "path",
+      "expression"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.postgres"
+  },
+  {
+    "ref_id": "skill:pg:explain-a-query-and-report-plan",
+    "type": "skill",
+    "title": "EXPLAIN a query and report the plan",
+    "summary": "Run EXPLAIN (ANALYZE, BUFFERS) and report the dominant cost node, stats accuracy, and the indicated fix.",
+    "domains": [
+      "postgres",
+      "postgresql",
+      "database",
+      "sql"
+    ],
+    "triggers": [
+      "explain",
+      "analyze",
+      "plan",
+      "report",
+      "query",
+      "inspect"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.postgres"
+  },
+  {
+    "ref_id": "skill:pg:review-migration-for-lock-safety",
+    "type": "skill",
+    "title": "Review a migration for lock safety",
+    "summary": "Read a migration and report which locks it takes and whether it is safe to run on a live, populated table.",
+    "domains": [
+      "postgres",
+      "postgresql",
+      "database",
+      "sql"
+    ],
+    "triggers": [
+      "migration",
+      "lock",
+      "review",
+      "ddl",
+      "concurrently",
+      "safety"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.postgres"
+  }
+]

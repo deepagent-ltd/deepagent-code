@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:ios:respect-background-execution",
+  "type": "strategy",
+  "title": "Respect background execution limits",
+  "description": "Use the right background mode/API for the work and assume the system can suspend or terminate the app at any time.",
+  "body": "Use when work must continue after the user leaves the app (uploads, location, audio, refresh). Do not assume the app keeps running in the background, and do not declare background modes you do not genuinely use. Actions: pick the correct mechanism (BGTaskScheduler for refresh/processing, begin/endBackgroundTask for short finish-up work, the specific audio/location/VoIP modes), persist progress, and handle being suspended/killed and relaunched. Validation signals include background work completing or resuming correctly after suspension. Risk boundary: relying on indefinite background execution leads to dropped work when the system reclaims the app, and over-declaring background modes risks App Store rejection — match the API to the real need.",
+  "domain": "ios",
+  "scope_hint": "code.mobile.ios:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.mobile.ios",
+  "pack_id": "code.mobile.ios"
+}

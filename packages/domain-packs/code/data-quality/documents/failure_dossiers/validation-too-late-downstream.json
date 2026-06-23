@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:dq:validation-too-late-downstream",
+  "type": "failure_dossier",
+  "description": "Validating data only in downstream dashboards or models, so bad data corrupts many derived tables before detection.",
+  "body": "Failure mode: quality is checked far from ingestion, so by the time a dashboard looks wrong the bad data has already spread through staging, marts, and features, and tracing it back is expensive. Detection signals: anomalies first appear in a BI tool or model metric, not at the source; multiple derived tables are wrong simultaneously; root-cause hunts take days. Do not defer validation to the consumer end. Safer fallback: validate at the ingestion boundary, gate promotion on the suite, and quarantine bad records before they propagate.",
+  "domain": "data_quality",
+  "scope_hint": "code.data-quality:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.data-quality:human_authored",
+  "pack_id": "code.data-quality"
+}

@@ -1,0 +1,474 @@
+[
+  {
+    "ref_id": "knowledge:observability:high-cardinality-cost",
+    "type": "knowledge",
+    "title": "High Cardinality Cost",
+    "summary": "High-cardinality metric labels can overload observability systems.",
+    "domains": [
+      "observability",
+      "code",
+      "debugging"
+    ],
+    "triggers": [
+      "high",
+      "cardinality",
+      "metric",
+      "labels",
+      "overload",
+      "observability",
+      "systems",
+      "user"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.observability"
+  },
+  {
+    "ref_id": "knowledge:observability:logs-can-leak",
+    "type": "knowledge",
+    "title": "Logs Can Leak",
+    "summary": "Logs can leak secrets and personal data.",
+    "domains": [
+      "observability",
+      "code",
+      "debugging"
+    ],
+    "triggers": [
+      "logs",
+      "leak",
+      "secrets",
+      "personal",
+      "data",
+      "telemetry",
+      "sinks",
+      "often"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.observability"
+  },
+  {
+    "ref_id": "knowledge:observability:traces-show-path",
+    "type": "knowledge",
+    "title": "Traces Show Path",
+    "summary": "Distributed traces show path and timing, not automatically root cause.",
+    "domains": [
+      "observability",
+      "code",
+      "debugging"
+    ],
+    "triggers": [
+      "distributed",
+      "traces",
+      "show",
+      "path",
+      "timing",
+      "automatically",
+      "root",
+      "cause"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.observability"
+  },
+  {
+    "ref_id": "methodology:observability:incident-evidence-pack",
+    "type": "methodology",
+    "title": "Incident Evidence Pack",
+    "summary": "Collect logs, metrics, traces, commands, and timeline for failure diagnosis.",
+    "domains": [
+      "observability",
+      "code",
+      "debugging"
+    ],
+    "triggers": [
+      "collect",
+      "logs",
+      "metrics",
+      "traces",
+      "commands",
+      "timeline",
+      "failure",
+      "diagnosis"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.observability"
+  },
+  {
+    "ref_id": "methodology:observability:instrumentation-review",
+    "type": "methodology",
+    "title": "Instrumentation Review",
+    "summary": "Review new telemetry for cardinality, sensitivity, and usefulness.",
+    "domains": [
+      "observability",
+      "code",
+      "debugging"
+    ],
+    "triggers": [
+      "review",
+      "telemetry",
+      "cardinality",
+      "sensitivity",
+      "usefulness",
+      "steps",
+      "inspect",
+      "fields"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.observability"
+  },
+  {
+    "ref_id": "methodology:observability:trace-search-flow",
+    "type": "methodology",
+    "title": "Trace Search Flow",
+    "summary": "Search traces/logs by correlation, time window, and boundary events.",
+    "domains": [
+      "observability",
+      "code",
+      "debugging"
+    ],
+    "triggers": [
+      "search",
+      "traces",
+      "logs",
+      "correlation",
+      "time",
+      "window",
+      "boundary",
+      "events"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.observability"
+  },
+  {
+    "ref_id": "skill:observability:build-diagnostic-timeline",
+    "type": "skill",
+    "title": "Build Diagnostic Timeline",
+    "summary": "Build a failure timeline from logs, traces, metrics, and commands.",
+    "domains": [
+      "observability",
+      "code",
+      "debugging"
+    ],
+    "triggers": [
+      "build",
+      "failure",
+      "timeline",
+      "from",
+      "logs",
+      "traces",
+      "metrics",
+      "commands"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.observability"
+  },
+  {
+    "ref_id": "strategy:observability:correlation-first",
+    "type": "strategy",
+    "title": "Correlation First",
+    "summary": "Use request IDs, trace IDs, or run IDs to connect events.",
+    "domains": [
+      "observability",
+      "code",
+      "debugging"
+    ],
+    "triggers": [
+      "request",
+      "trace",
+      "connect",
+      "events",
+      "uncorrelated",
+      "logs",
+      "hard",
+      "debug"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.observability"
+  },
+  {
+    "ref_id": "strategy:observability:metric-with-owner",
+    "type": "strategy",
+    "title": "Metric With Owner",
+    "summary": "Metrics need owner, interpretation, and action threshold.",
+    "domains": [
+      "observability",
+      "code",
+      "debugging"
+    ],
+    "triggers": [
+      "metrics",
+      "need",
+      "owner",
+      "interpretation",
+      "action",
+      "threshold",
+      "metric",
+      "understands"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.observability"
+  },
+  {
+    "ref_id": "strategy:observability:safe-telemetry",
+    "type": "strategy",
+    "title": "Safe Telemetry",
+    "summary": "Telemetry must avoid secrets and personal data by default.",
+    "domains": [
+      "observability",
+      "code",
+      "debugging"
+    ],
+    "triggers": [
+      "telemetry",
+      "must",
+      "avoid",
+      "secrets",
+      "personal",
+      "data",
+      "default",
+      "observability"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.observability"
+  },
+  {
+    "ref_id": "strategy:observability:structured-logs",
+    "type": "strategy",
+    "title": "Structured Logs",
+    "summary": "Prefer structured events over free-form strings for diagnostic data.",
+    "domains": [
+      "observability",
+      "code",
+      "debugging"
+    ],
+    "triggers": [
+      "prefer",
+      "structured",
+      "events",
+      "over",
+      "free",
+      "form",
+      "strings",
+      "diagnostic"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.observability"
+  },
+  {
+    "ref_id": "strategy:observability:red-use-method-coverage",
+    "type": "strategy",
+    "title": "Instrument services with RED and resources with USE",
+    "summary": "Apply Rate/Errors/Duration to request-driven services and Utilization/Saturation/Errors to resources so every component has a small, actionable metric set.",
+    "domains": [
+      "code",
+      "observability",
+      "debugging"
+    ],
+    "triggers": [
+      "red method",
+      "use method",
+      "rate errors duration",
+      "saturation",
+      "metrics",
+      "coverage"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.observability"
+  },
+  {
+    "ref_id": "strategy:observability:bounded-cardinality-labels",
+    "type": "strategy",
+    "title": "Keep metric label cardinality bounded",
+    "summary": "Restrict metric labels to low-cardinality dimensions and push high-cardinality identifiers to logs or traces to avoid blowing up the metrics backend.",
+    "domains": [
+      "code",
+      "observability",
+      "debugging"
+    ],
+    "triggers": [
+      "cardinality",
+      "labels",
+      "dimensions",
+      "metrics cost",
+      "user id",
+      "explosion"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.observability"
+  },
+  {
+    "ref_id": "methodology:observability:define-slo-and-alerts",
+    "type": "methodology",
+    "title": "Define an SLO and derive actionable alerts",
+    "summary": "Set a measurable service objective, compute an error budget, and create alerts that fire on budget burn rather than on every blip.",
+    "domains": [
+      "code",
+      "observability",
+      "debugging"
+    ],
+    "triggers": [
+      "slo",
+      "sli",
+      "error budget",
+      "alerting",
+      "burn rate",
+      "objective"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.observability"
+  },
+  {
+    "ref_id": "knowledge:observability:three-pillars-roles",
+    "type": "knowledge",
+    "title": "Logs, metrics, and traces answer different questions",
+    "summary": "Metrics tell you something is wrong and how much, traces show where in the request path, and logs explain why — using one for another's job is costly or blind.",
+    "domains": [
+      "code",
+      "observability",
+      "debugging"
+    ],
+    "triggers": [
+      "three pillars",
+      "logs",
+      "metrics",
+      "traces",
+      "correlation",
+      "telemetry"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.observability"
+  },
+  {
+    "ref_id": "skill:observability:audit-telemetry-coverage",
+    "type": "skill",
+    "title": "Audit a service's telemetry coverage",
+    "summary": "Inspect a service for RED/USE metrics, structured logs with correlation ids, and trace propagation, reporting gaps with locations.",
+    "domains": [
+      "code",
+      "observability",
+      "debugging"
+    ],
+    "triggers": [
+      "audit",
+      "coverage",
+      "instrumentation",
+      "telemetry",
+      "gaps",
+      "inspect"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.observability"
+  }
+]

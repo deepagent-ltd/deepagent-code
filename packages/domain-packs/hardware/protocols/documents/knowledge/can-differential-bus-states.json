@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:hwprot:can-differential-bus-states",
+  "type": "knowledge",
+  "title": "CAN differential signaling and bus states",
+  "description": "CAN encodes dominant and recessive bits on a differential pair, and dominant bits win arbitration without data loss.",
+  "body": "Use when reasoning about CAN arbitration and error behavior. Do not treat CAN like a single-ended bus, because its dominant-recessive scheme is what enables lossless arbitration. Actions: inspect the differential voltage for dominant versus recessive states, verify termination resistors at both ends, and check the recessive idle level. Validation signals include correct differential levels on a scope and arbitration resolving to the lowest identifier without retransmission. Risk boundary: missing termination causes reflections and intermittent errors, so flag any bus lacking proper end termination.",
+  "domain": "hw_protocols",
+  "scope_hint": "hardware.protocols:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.protocols",
+  "pack_id": "hardware.protocols"
+}

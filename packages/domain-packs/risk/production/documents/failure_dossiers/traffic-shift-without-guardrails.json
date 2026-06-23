@@ -1,0 +1,12 @@
+{
+  "ref_id": "failure_dossier:production:traffic-shift-without-guardrails",
+  "type": "failure_dossier",
+  "title": "Traffic shift without guardrails",
+  "description": "Canary or rollout percentage increases without baseline, metrics, stop condition, or owner.",
+  "body": "Failure mode: deployment scripts or config shift live traffic because the new version appears to start successfully. Detection signals include percentage changes, routing weights, service mesh edits, or blue-green swaps with no metric checks. Remediation is define guardrails and rollback owner before shifting. Human gate is required for production traffic changes. Use when a proposed approach skips repository conventions, toolchain files, changed symbols, validation commands, and runtime output or claims success without domain evidence. Do not use this dossier as a positive implementation strategy; it is a do-not-use signal. Actions: block the shortcut, name the missing evidence, and switch to a safer methodology or ask for human approval. Validation signals include absence or contradiction in package-local checks, focused tests, build output, smoke runs, and command logs. Risk boundary: treat repeated recurrence as a blocker when it can cause broad rewrites, generated-file drift, stale assumptions, and unvalidated behavior changes.",
+  "domain": "deployment",
+  "scope_hint": "risk.production:failure_dossiers",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.production",
+  "pack_id": "risk.production"
+}

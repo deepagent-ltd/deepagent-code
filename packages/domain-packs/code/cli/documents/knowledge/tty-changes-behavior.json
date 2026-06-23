@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:cli:tty-changes-behavior",
+  "type": "knowledge",
+  "title": "A TTY changes correct behavior",
+  "description": "Whether a stream is a terminal determines whether color, prompts, and progress make sense; the same program should adapt to interactive vs piped use.",
+  "body": "Use when a CLI runs both for humans and in scripts. isatty(fd) reports whether a stream is a terminal; a human at a TTY benefits from color and prompts, but the same output piped to a file or another program must be plain and non-interactive. Do not assume one is always true. Actions: detect TTY per stream and switch formatting and prompting accordingly, honoring NO_COLOR and explicit flags. Validation signals include identical data but no escape codes when piped, and no hang when stdin is not a terminal. Risk boundary: prompting on a non-TTY stdin hangs automation indefinitely and emitting color into files corrupts downstream parsing — behavior must be conditioned on the TTY check.",
+  "domain": "cli",
+  "scope_hint": "code.cli:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.cli",
+  "pack_id": "code.cli"
+}

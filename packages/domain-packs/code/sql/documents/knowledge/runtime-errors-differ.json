@@ -1,0 +1,11 @@
+{
+  "ref_id": "knowledge:sql:runtime-errors-differ",
+  "type": "knowledge",
+  "description": "In SQL, a clean build does not prevent three-valued NULL logic, silent JOIN fan-out, and implicit type coercion surprises.",
+  "body": "In SQL, passing EXPLAIN on the statement to confirm it parses and the planner accepts it says nothing about runtime: three-valued NULL logic, silent JOIN fan-out, and implicit type coercion surprises surface only when the code actually runs. Use when a change touches control flow, IO, concurrency, or data shapes that the build cannot prove safe. Do not use a green compile as evidence that behavior is correct, and avoid shipping without exercising the path. Actions: run a transaction that runs the statement, asserts row counts, then rolls back, reproduce the runtime path, and where relevant run work_mem/sort spills and the plan's estimated vs actual rows to catch latent defects. Validation signals include the test/trace logs, a clean work_mem/sort spills and the plan's estimated vs actual rows run, and observed correct output on representative input. Risk boundary: escalate or hold the change when the failure mode is data loss or memory corruption you cannot reproduce locally.",
+  "domain": "sql",
+  "scope_hint": "code.sql:knowledge",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.sql:skill_survey",
+  "pack_id": "code.sql"
+}

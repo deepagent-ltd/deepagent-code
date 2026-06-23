@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:stream:checkpoint-vs-savepoint",
+  "type": "knowledge",
+  "title": "Checkpoints versus savepoints",
+  "description": "How automatic checkpoints enable failure recovery while manual savepoints enable planned upgrades and rescaling.",
+  "body": "Use when planning recovery and upgrades for a stateful job. Checkpoints are periodic, engine-managed snapshots used to recover automatically after a failure; savepoints are manually triggered, durable snapshots used to stop, upgrade code or rescale, and resume from a known state. Do not redeploy a stateful job without a savepoint — restarting from scratch loses accumulated state. Actions: rely on checkpoints for fault recovery and take a savepoint before any code or parallelism change. Validation signals include a restart resuming from a checkpoint and an upgrade resuming from a savepoint with intact state. Risk boundary: an incompatible state migration breaks resume; if state schema changed, escalate to a migration plan before restoring.",
+  "domain": "streaming",
+  "scope_hint": "code.streaming:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.streaming",
+  "pack_id": "code.streaming"
+}

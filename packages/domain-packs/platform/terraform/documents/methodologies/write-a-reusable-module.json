@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:tf:write-a-reusable-module",
+  "type": "methodology",
+  "title": "Extract a reusable, versioned module",
+  "description": "Turn a repeated resource pattern into a module with validated inputs, minimal outputs, and a pinned version.",
+  "body": "Steps: 1. Identify the resource block(s) duplicated across stacks/environments. 2. Move them into a module dir with variables.tf (typed, with validation blocks) and outputs.tf exposing only what callers need. 3. Replace duplicates with module calls, passing differences as inputs. 4. Pin the module source to a tag/version. 5. terraform validate and plan in each consumer to confirm no behavioral change. Rollback point: before deleting the inline blocks. Validation: each environment plans clean with only inputs differing; a module that leaks internal resource references back to callers has failed the contract test.",
+  "domain": "terraform",
+  "scope_hint": "platform.terraform:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.terraform",
+  "pack_id": "platform.terraform"
+}

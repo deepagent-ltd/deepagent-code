@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:vsearch:hybrid-fusion-methods",
+  "type": "knowledge",
+  "title": "Fusion methods for hybrid search",
+  "description": "How reciprocal rank fusion and weighted score combination merge lexical and vector result lists.",
+  "body": "Use when merging lexical and vector result sets. Reciprocal rank fusion combines rankings by summing 1/(k+rank), avoiding the need to calibrate incomparable score scales; weighted score fusion blends normalized scores but requires tuning the weight and normalization. Do not naively add raw BM25 and cosine scores — their scales differ and one dominates. Actions: prefer RRF for robustness or tune weighted fusion on a labeled set, and benchmark against each component. Validation signals include fused recall beating both single-mode baselines and a documented fusion configuration. Risk boundary: uncalibrated score fusion silently favors one retriever; if fusion underperforms a component, switch to RRF and re-evaluate before shipping.",
+  "domain": "vector_search",
+  "scope_hint": "code.vector-search:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.vector-search",
+  "pack_id": "code.vector-search"
+}

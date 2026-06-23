@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:git:bisect-to-locate-regression",
+  "type": "methodology",
+  "title": "Locate a regression with git bisect",
+  "description": "Use binary search over history with a reproducible test to pinpoint the exact commit that introduced a defect.",
+  "body": "Use when a bug appeared somewhere in a range of commits and manual inspection is too slow. Do not guess the culprit when a deterministic check exists. Steps: confirm a good and a bad commit; run git bisect start, mark them; at each step build and run the failing check, marking good or bad; record the commit bisect reports. Validation signals include bisect converging on one commit whose revert removes the symptom. Risk boundary: an unreliable test misleads bisect, so verify the check is deterministic before trusting the result.",
+  "domain": "git_workflow",
+  "scope_hint": "code.git-workflow:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.git-workflow",
+  "pack_id": "code.git-workflow"
+}

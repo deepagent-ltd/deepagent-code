@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:gfx:textures-samplers-and-filtering",
+  "type": "knowledge",
+  "title": "Textures, samplers, and filtering",
+  "description": "Texture sampling depends on format, wrap mode, and filtering (nearest/linear/mipmapped); mismatches cause aliasing, seams, or wrong colors.",
+  "body": "Use when sampling images or debugging texture artifacts. A sampler combines a texture's format and layout with a wrap mode (repeat/clamp), a min/mag filter (nearest/linear), and mip selection; minification without mipmaps aliases, and a wrong wrap mode produces edge seams or bleeding. sRGB vs linear format choice changes color math. Do not sample an sRGB texture as if it were linear in lighting math, and avoid linear filtering across format boundaries. Actions: choose format (sRGB for color, linear for data), generate mipmaps for minified textures, and pick wrap/filter per use. Validation signals include artifact-free output matching the reference. Risk boundary: an sRGB/linear mismatch silently shifts all colors; verify the color pipeline against a known reference.",
+  "domain": "graphics",
+  "scope_hint": "code.graphics:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.graphics",
+  "pack_id": "code.graphics"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:cpuarch:reduce-branch-mispredictions",
+  "type": "strategy",
+  "title": "Reduce costly branch mispredictions",
+  "description": "Turn unpredictable data-dependent branches in hot loops into branchless or well-predicted forms when the mispredict penalty dominates.",
+  "body": "Use when perf shows a high branch-mispredict rate in an inner loop with data-dependent control flow. Do not blindly remove branches that the predictor already handles well (loop counters, rarely-taken errors). Actions: measure the mispredict rate, then convert the offending branch to a branchless select / cmov / table lookup, or sort/partition data so the branch becomes predictable. Validation signals include a lower mispredict count under perf stat and improved cycles on representative data. Risk boundary: branchless code can be slower if the branch was predictable, and can hurt readability; require a counter-backed before/after, and revert if IPC does not improve.",
+  "domain": "cpu_arch",
+  "scope_hint": "hardware.cpu-arch:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.cpu-arch",
+  "pack_id": "hardware.cpu-arch"
+}

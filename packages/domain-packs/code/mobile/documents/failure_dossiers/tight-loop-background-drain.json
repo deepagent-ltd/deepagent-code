@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:mobile:tight-loop-background-drain",
+  "type": "failure_dossier",
+  "description": "A background timer or polling loop that wakes the device frequently, draining battery and getting the app OS-throttled.",
+  "body": "Failure mode: the app polls or holds a wake lock on a short interval in the background, preventing the device from sleeping and burning battery and data. Detection signals: energy profiler shows frequent wake-ups; users report battery drain; the OS throttles or kills the app under Doze/App Standby. Do not poll on a tight timer or hold wake locks for routine background work. Safer fallback: replace polling with OS-scheduled batched jobs or push-triggered sync, back off on metered networks, and confirm reduced wake-ups in an energy trace.",
+  "domain": "mobile",
+  "scope_hint": "code.mobile:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.mobile:human_authored",
+  "pack_id": "code.mobile"
+}

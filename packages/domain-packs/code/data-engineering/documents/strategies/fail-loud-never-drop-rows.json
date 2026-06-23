@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:dataeng:fail-loud-never-drop-rows",
+  "type": "strategy",
+  "title": "Fail loudly rather than drop data",
+  "description": "Route unparseable or rejected records to a dead-letter path and surface counts, instead of silently filtering them out.",
+  "body": "Use when handling malformed or unexpected records. Do not wrap parsing in a catch-all that discards bad rows — the pipeline then 'succeeds' while quietly losing data nobody notices for weeks. Actions: send rejected records to a dead-letter/quarantine table with the error and offset, emit reject counts as metrics, and alert when the rate exceeds a threshold. Validation signals include reconciled input vs output+rejected counts and a non-empty dead-letter trail for failures. Risk boundary: silent row loss is the hardest data bug to detect after the fact; treat any catch-and-drop in a load path as a defect needing a dead-letter route.",
+  "domain": "data_engineering",
+  "scope_hint": "code.data-engineering:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.data-engineering",
+  "pack_id": "code.data-engineering"
+}

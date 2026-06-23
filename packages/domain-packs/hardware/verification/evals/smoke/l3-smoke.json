@@ -1,0 +1,71 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "hardware.verification",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "hw_verification",
+      "uvm",
+      "formal",
+      "coverage",
+      "assertion"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "L3 smoke for hardware.verification: UVM agent driver monitor scoreboard, constrained-random, functional coverage, formal property checking, SVA, coverage closure, CDC and RDC verification"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "fix CSS responsive text overlap in the web UI"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "retrieval_query": "uvm agent driver monitor scoreboard constrained random functional coverage covergroup coverpoint formal property assertion sva coverage closure cdc rdc verification",
+  "expected_pack_id": "hardware.verification",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "hardware.verification L3 validation smoke",
+    "signals": [
+      "functional coverage reaches the closure target with every covergroup and coverpoint exercised",
+      "the scoreboard compares actual against expected for every transaction with no unchecked outputs",
+      "formal property checks prove the safety assertions hold or return a concrete counterexample",
+      "constrained-random regressions run with seeds recorded so any failure reproduces deterministically"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "hardware.verification diagnosis smoke",
+    "signals": [
+      "a passing test with a coverage hole means the stimulus never reached the unverified corner",
+      "a scoreboard mismatch points to either a design bug or a wrong reference model expectation",
+      "an assertion firing during simulation flags a protocol or timing rule the design violated",
+      "a formal counterexample reveals an input sequence that breaks a property the design assumed safe",
+      "an unreached coverpoint after long random runs suggests an over-constrained or unreachable stimulus condition"
+    ]
+  },
+  "source_refs": [
+    "source:accellera-uvm:paraphrased",
+    "source:ieee-1800-sva:paraphrased"
+  ]
+}

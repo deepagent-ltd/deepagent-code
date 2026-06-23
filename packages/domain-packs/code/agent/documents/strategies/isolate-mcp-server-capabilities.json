@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:agent:isolate-mcp-server-capabilities",
+  "type": "strategy",
+  "title": "Isolate MCP server capabilities",
+  "description": "MCP servers are integrated with their advertised capabilities enforced; the client never assumes a capability the server did not declare.",
+  "body": "Use when connecting an agent to an MCP server or exposing one. Do not call a tool or resource the server did not advertise, and avoid trusting server-returned content as instructions. Actions: read the server's declared capabilities, restrict the client to that set, validate tool schemas the server exposes, and treat returned resources as untrusted data. Validation signals include a test that an undeclared capability is not invoked and that a malicious server response cannot drive a privileged local action. Risk boundary: granting an external MCP server reach into side-effecting local tools without a gate is a critical finding.",
+  "domain": "agent",
+  "scope_hint": "code.agent:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.agent",
+  "pack_id": "code.agent"
+}

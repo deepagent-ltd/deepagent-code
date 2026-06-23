@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure_dossier:sim:explicit-solver-divergence",
+  "type": "failure_dossier",
+  "description": "An explicit solver blows up to infinity because the step size exceeded its stability region for a stiff system.",
+  "body": "Failure mode: an explicit method like forward Euler runs at a step larger than its stability limit on a stiff system, so per-step error amplifies until the solution diverges. Detection signals: values growing exponentially toward infinity or NaN, divergence that worsens with a larger step, and stability returning only at an impractically tiny step. Do not keep shrinking the step indefinitely for a genuinely stiff system. Safer fallback: switch to an implicit or adaptive solver whose stability region tolerates the stiffness, then confirm a bounded solution at a usable step.",
+  "domain": "simulation",
+  "scope_hint": "code.simulation:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.simulation:human_authored",
+  "pack_id": "code.simulation"
+}

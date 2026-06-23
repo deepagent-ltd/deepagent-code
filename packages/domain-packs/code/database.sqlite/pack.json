@@ -1,0 +1,47 @@
+{
+  "schema_version": "domain_pack.v1",
+  "id": "code.database.sqlite",
+  "name": "SQLite Engineering",
+  "version": "1.0.0",
+  "scope": "system",
+  "risk": "low",
+  "domains": [
+    "sqlite",
+    "database",
+    "sql",
+    "embedded"
+  ],
+  "provides": [
+    "knowledge",
+    "strategy",
+    "methodology",
+    "skill",
+    "diagnosis",
+    "validation"
+  ],
+  "depends_on": [
+    "code.database",
+    "code.sql"
+  ],
+  "conflicts_with": [],
+  "knowledge_store": "document_store",
+  "allowed_tools": [
+    "read",
+    "shell:test"
+  ],
+  "denied_tools": [
+    "shell:deploy-production"
+  ],
+  "data_policy": {
+    "sensitivity": [
+      "source_code",
+      "user_data"
+    ],
+    "default_admission": "summary_only",
+    "secret_policy": "deny"
+  },
+  "detector": {
+    "inline": "profile.code_domains.some(d=>['sqlite'].includes(d)) || profile.repo_signals.some(s=>/\\b(sqlite|wal mode|pragma|busy_timeout|fts5|type affinity|\\.db file|better-sqlite3)\\b/i.test(s)) ? 0.9 : 0",
+    "threshold": 0.5
+  }
+}

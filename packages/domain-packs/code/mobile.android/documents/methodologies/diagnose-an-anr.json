@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:android:diagnose-an-anr",
+  "type": "methodology",
+  "title": "Diagnose an ANR",
+  "description": "Locate the main-thread block behind an Application Not Responding event and move the work off the UI thread.",
+  "body": "Steps: 1. Collect the ANR trace (Play vitals / adb) and read the main thread's stack at the time of the block. 2. Identify the blocking call: synchronous network, disk/database, large bitmap decode, or a lock contended by the UI thread. 3. Enable StrictMode in debug to catch main-thread disk/network proactively. 4. Move the work into a coroutine on Dispatchers.IO/Default and post results back to the main dispatcher. 5. Re-test under slow-network/large-data conditions. Rollback point: before introducing concurrency around shared state (race risk). Validation: no ANR under stress and StrictMode shows a clean main thread; fixing the symptom by widening the ANR timeout instead of unblocking the thread leaves the freeze in place.",
+  "domain": "android",
+  "scope_hint": "code.mobile.android:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.mobile.android",
+  "pack_id": "code.mobile.android"
+}

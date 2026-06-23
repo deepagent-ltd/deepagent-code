@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:sql:deadlock-from-inconsistent-lock-order",
+  "type": "failure_dossier",
+  "description": "Two transactions acquiring the same rows/tables in opposite orders, producing a deadlock the engine resolves by aborting one.",
+  "body": "Failure mode: transaction A locks row 1 then row 2 while B locks row 2 then row 1, so each waits on the other and the database kills one with a deadlock error. Detection signals: 'deadlock detected' errors under concurrency; intermittent transaction aborts that vanish at low load; the DB's deadlock log shows a lock cycle. Do not let concurrent transactions acquire resources in arbitrary orders. Safer fallback: acquire locks in a consistent global order (e.g. ascending primary key), keep transactions short, add a retry-on-deadlock loop for the loser, and verify under concurrent load that retries succeed.",
+  "domain": "sql",
+  "scope_hint": "code.sql:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.sql:human_authored",
+  "pack_id": "code.sql"
+}

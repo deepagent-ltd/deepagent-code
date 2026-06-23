@@ -1,0 +1,69 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "code.database.redis",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "redis",
+      "cache",
+      "ttl"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "L3 smoke for code.database.redis: cache invalidation with TTL, eviction policy, atomic Lua scripting, redis streams vs pub/sub, distributed lock with redlock hazards, and RDB/AOF persistence"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "plain prose note with no repository or domain signal"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "retrieval_query": "redis cache invalidation ttl eviction policy lru atomic lua script distributed lock redlock redis stream pubsub consumer group rdb aof persistence stampede setex expire",
+  "expected_pack_id": "code.database.redis",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "code.database.redis L3 validation smoke",
+    "signals": [
+      "cache miss falls back to source and repopulates with TTL test",
+      "eviction policy bounds memory under maxmemory test",
+      "atomic read-modify-write via Lua/transaction test",
+      "stream consumer group acks and replays unacked test"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "code.database.redis diagnosis smoke",
+    "signals": [
+      "stale cache after a write (no invalidation)",
+      "cache stampede on a hot key expiry",
+      "unbounded keyspace with no TTL or eviction policy",
+      "distributed lock used as sole correctness guard",
+      "data loss from RDB-only persistence on crash"
+    ]
+  },
+  "source_refs": [
+    "source:redis-docs-eviction:paraphrased",
+    "source:redis-docs-distlock:paraphrased"
+  ]
+}

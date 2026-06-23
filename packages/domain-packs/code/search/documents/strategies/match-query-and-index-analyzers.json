@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:search:match-query-and-index-analyzers",
+  "type": "strategy",
+  "title": "Match the query analyzer to the index analyzer",
+  "description": "Ensure search-time analysis produces tokens compatible with how the field was analyzed at index time, or exact-looking queries return nothing.",
+  "body": "Use when a field is searched and seems to miss obvious matches. Do not apply a different analyzer (or none) at query time than was used at index time — tokens won't line up and a clearly-present term returns zero hits. Actions: confirm the field's index analyzer, set a compatible search_analyzer, and use the analyze API to compare the tokens each produces for the same input. Validation signals include the analyze API yielding matching tokens and the term now matching. Risk boundary: an analyzer mismatch silently breaks recall for whole classes of queries; treat unexpected zero-hit results as an analyzer check, not a data problem.",
+  "domain": "search",
+  "scope_hint": "code.search:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.search",
+  "pack_id": "code.search"
+}

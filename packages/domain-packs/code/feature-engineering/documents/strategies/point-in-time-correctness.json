@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:feat:point-in-time-correctness",
+  "type": "strategy",
+  "title": "Join features at the label's point in time",
+  "description": "Construct training rows with a point-in-time join so each feature reflects only data available before the label timestamp.",
+  "body": "Use when assembling a training set from time-varying features and labels. Do not join the latest feature value to a historical label — that injects future information and inflates offline metrics (temporal leakage). Actions: perform an as-of join keyed on entity and event time, taking the most recent feature value strictly before the label timestamp; verify no feature row postdates its label. Validation signals include a join audit showing every feature timestamp precedes its label and an offline metric that survives a temporal holdout. Risk boundary: temporal leakage is invisible until production underperforms; if a backfill cannot prove point-in-time correctness, escalate and rebuild the training set.",
+  "domain": "feature_engineering",
+  "scope_hint": "code.feature-engineering:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.feature-engineering",
+  "pack_id": "code.feature-engineering"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:hwverif:write-immediate-assertion",
+  "type": "skill",
+  "title": "Write an immediate assertion for a procedural check",
+  "description": "Place an immediate assertion in procedural code to check a condition at a specific simulation point.",
+  "body": "Use when a condition must hold at a precise point in procedural testbench code. Do not use a concurrent assertion for a one-shot procedural check, since the semantics and timing differ. Actions: place the immediate assertion where the condition must hold, attach a clear failure message, and verify it fires when the condition is deliberately broken. Validation signals include the assertion firing on an injected violation and a message that identifies the failing condition. Risk boundary: an immediate assertion in the wrong process can miss the event, so flag any placement where the checked value is not yet stable.",
+  "domain": "hw_verification",
+  "scope_hint": "hardware.verification:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.verification",
+  "pack_id": "hardware.verification"
+}

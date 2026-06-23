@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:privacy:hashing-is-not-anonymization",
+  "type": "knowledge",
+  "title": "Hashing is not anonymization",
+  "description": "Hashing identifiers can remain linkable or reversible by dictionary attack, especially for emails, phones, IDs, and small domains.",
+  "body": "Use when a proposal claims privacy safety because values are hashed, encoded, tokenized, or pseudonymized. Do not reject all pseudonymization; treat it as risk reduction, not removal. Actions: evaluate linkability, salt/key handling, join paths, and whether the raw value can be reconstructed or matched. Validation signals include no raw fallback path and limited joinability. Risk boundary: hashed personal data sent to new sinks still requires privacy review. Use when Privacy Risk Controls work touches personal-data classes, sinks, retention, consent, logs, prompts, and exports. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: use the fact to constrain the change and test plan; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include data inventory, redaction tests, retention checks, export/delete tests, and approval evidence. Risk boundary: escalate or stop when the task involves PII disclosure, consent bypass, retention drift, and unapproved processor expansion, missing owner evidence, or live external state.",
+  "domain": "privacy",
+  "scope_hint": "risk.privacy:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.privacy",
+  "pack_id": "risk.privacy"
+}

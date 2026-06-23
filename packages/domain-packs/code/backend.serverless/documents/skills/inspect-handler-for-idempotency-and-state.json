@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:sls:inspect-handler-for-idempotency-and-state",
+  "type": "skill",
+  "title": "Inspect a handler for state and idempotency risks",
+  "description": "Statically review a function for shared-state leakage, non-idempotent side effects, and timeout-vs-downstream mismatches.",
+  "body": "Use when reviewing a function before deploy. Actions: read the handler for module-scope mutable state that holds per-request data, for non-idempotent side effects (insert/charge/send) lacking a dedup key, and compare the configured timeout against the slowest downstream call. Report each risk with location and severity. Do not deploy. This skill exposes capability only and must not deploy or invoke against production without runtime permission. Validation signals include a handler with no per-request global state and idempotent side effects. Risk boundary: non-idempotent money/state handlers and cross-request shared state are blocking findings; recommend a fix rather than shipping.",
+  "domain": "serverless",
+  "scope_hint": "code.backend.serverless:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.serverless",
+  "pack_id": "code.backend.serverless"
+}

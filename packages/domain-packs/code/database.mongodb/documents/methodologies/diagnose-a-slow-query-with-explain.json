@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:mongo:diagnose-a-slow-query-with-explain",
+  "type": "methodology",
+  "title": "Diagnose a slow query with explain executionStats",
+  "description": "Read totalDocsExamined versus nReturned to tell whether a query is index-bound or scanning the collection.",
+  "body": "Use when a find or aggregation is unexpectedly slow. Actions: run the query with .explain(\"executionStats\"), read the winning plan's stage (IXSCAN good, COLLSCAN bad), and compare totalDocsExamined and totalKeysExamined to nReturned; a large ratio means the index is missing or unselective. Add or reorder a compound index to close the gap and re-run explain. Verify the examined-to-returned ratio falls toward one. Validation signals include the stage flipping from COLLSCAN to IXSCAN and totalDocsExamined approaching nReturned. Risk boundary: adding an index fixes reads but taxes writes and RAM, so confirm with $indexStats that existing indexes are used before piling on another.",
+  "domain": "mongodb",
+  "scope_hint": "code.database.mongodb:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.mongodb",
+  "pack_id": "code.database.mongodb"
+}

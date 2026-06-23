@@ -1,0 +1,46 @@
+{
+  "schema_version": "domain_pack.v1",
+  "id": "code.database.cassandra",
+  "name": "Cassandra / Wide-Column Engine",
+  "version": "1.0.0",
+  "scope": "system",
+  "risk": "medium",
+  "domains": [
+    "cassandra",
+    "wide_column",
+    "scylladb",
+    "cql"
+  ],
+  "provides": [
+    "knowledge",
+    "strategy",
+    "methodology",
+    "skill",
+    "diagnosis",
+    "validation"
+  ],
+  "depends_on": [
+    "code.database",
+    "code.distributed"
+  ],
+  "conflicts_with": [],
+  "knowledge_store": "document_store",
+  "allowed_tools": [
+    "read",
+    "shell:test"
+  ],
+  "denied_tools": [
+    "shell:deploy-production"
+  ],
+  "data_policy": {
+    "sensitivity": [
+      "source_code"
+    ],
+    "default_admission": "summary_only",
+    "secret_policy": "deny"
+  },
+  "detector": {
+    "inline": "profile.code_domains.some(d=>['cassandra','wide_column','scylladb','cql'].includes(d)) || profile.repo_signals.some(s=>/\\b(cassandra|scylladb|wide.?column|cql|partition key|clustering key|tombstone|consistency level|quorum read|denormaliz)\\b/i.test(s)) ? 0.9 : 0",
+    "threshold": 0.5
+  }
+}

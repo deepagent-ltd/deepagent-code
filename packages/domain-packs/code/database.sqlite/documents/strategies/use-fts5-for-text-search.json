@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:sqlite:use-fts5-for-text-search",
+  "type": "strategy",
+  "title": "Use FTS5 for full-text search",
+  "description": "Index searchable text in an FTS5 virtual table kept in sync with the base table rather than scanning with LIKE.",
+  "body": "Use when users search free text and LIKE '%term%' is too slow or unranked. Do not scan a large text column with leading-wildcard LIKE. Actions: create an FTS5 virtual table over the searchable columns, keep it in sync via triggers or the external-content/contentless option, and query with MATCH plus bm25() for ranking; pick a tokenizer (unicode61, porter, or trigram for substring). Validation signals include a search returning ranked results from the FTS index rather than a full scan, confirmed by query plan or timing. Risk boundary: an FTS table that drifts out of sync with the base table returns stale or missing results — verify the sync triggers cover insert, update, and delete.",
+  "domain": "sqlite",
+  "scope_hint": "code.database.sqlite:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.sqlite",
+  "pack_id": "code.database.sqlite"
+}

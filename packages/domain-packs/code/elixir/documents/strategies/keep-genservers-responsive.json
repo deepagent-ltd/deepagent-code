@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:elixir:keep-genservers-responsive",
+  "type": "strategy",
+  "title": "Keep GenServers responsive; never block the loop",
+  "description": "A GenServer processes one message at a time, so move slow or blocking work out of handle_call/handle_cast.",
+  "body": "Use when a GenServer does I/O, calls external services, or runs CPU-heavy work. Do not perform a slow synchronous operation inside handle_call, since the process handles messages serially and its mailbox backs up while callers time out. Actions: offload slow work to a Task (Task.async / Task.Supervisor) and reply later, use handle_continue for post-init work, or restructure so the GenServer only guards state. Validation signals include a test that concurrent callers are served promptly and the mailbox does not grow unbounded under load. Risk boundary: a blocking handle_call serializes the whole system behind one process, causing cascading timeouts; a single GenServer is a concurrency bottleneck if it owns hot-path work it does not need to.",
+  "domain": "elixir",
+  "scope_hint": "code.elixir:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.elixir",
+  "pack_id": "code.elixir"
+}

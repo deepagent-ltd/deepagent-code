@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:sys:virtual-memory-mmap-and-oom",
+  "type": "knowledge",
+  "title": "Virtual memory, mmap, overcommit, and the OOM killer",
+  "description": "Allocations reserve virtual address space populated lazily by page faults; under overcommit the OOM killer reclaims by terminating a process.",
+  "body": "Use when reasoning about memory footprint and OOM. Allocating or mmap'ing memory reserves virtual address space; physical pages (RSS) are only assigned when first touched, via page faults. Linux typically overcommits, so allocation can succeed even if the system cannot back it all; when physical memory and swap are exhausted, the kernel OOM-killer terminates a process chosen by a heuristic (often high-RSS), which may not be the one that caused the pressure. Do not assume a successful allocation means the memory is available. Actions: bound resident usage, stream large data, and watch RSS not just virtual size. Validation signals include flat RSS under load and no OOM events. Risk boundary: unbounded RSS growth risks killing this or a neighboring process; bound it and verify under sustained load.",
+  "domain": "systems",
+  "scope_hint": "code.systems:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.systems",
+  "pack_id": "code.systems"
+}

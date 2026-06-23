@@ -1,0 +1,460 @@
+[
+  {
+    "ref_id": "knowledge:rust:generated-code-drift",
+    "type": "knowledge",
+    "title": "Generated Code Drift",
+    "summary": "In Rust, never hand-edit build.rs output, bindgen bindings, and macro-expanded code (cargo expand); change the source and rerun the generator.",
+    "domains": [
+      "rust",
+      "code"
+    ],
+    "triggers": [
+      "generated",
+      "code",
+      "must",
+      "tied",
+      "regeneration",
+      "commands",
+      "hand",
+      "edit"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.rust"
+  },
+  {
+    "ref_id": "knowledge:rust:ownership-is-api",
+    "type": "knowledge",
+    "title": "Ownership Is Api",
+    "summary": "Rust ownership and lifetimes express API constraints.",
+    "domains": [
+      "rust",
+      "code"
+    ],
+    "triggers": [
+      "rust",
+      "ownership",
+      "lifetimes",
+      "express",
+      "constraints",
+      "avoid",
+      "cloning",
+      "unsafe"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.rust"
+  },
+  {
+    "ref_id": "knowledge:rust:runtime-errors-differ",
+    "type": "knowledge",
+    "title": "Runtime Errors Differ",
+    "summary": "In Rust, a clean build does not prevent undefined behavior inside unsafe blocks, plus panics from unwrap/index out of bounds.",
+    "domains": [
+      "rust",
+      "code"
+    ],
+    "triggers": [
+      "compile",
+      "success",
+      "does",
+      "guarantee",
+      "runtime",
+      "behavior",
+      "representative",
+      "tests"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.rust"
+  },
+  {
+    "ref_id": "knowledge:rust:toolchain-is-contract",
+    "type": "knowledge",
+    "title": "Toolchain Is Contract",
+    "summary": "In Rust, the toolchain channel (rust-toolchain.toml), edition, and enabled features are part of the contract and changing them changes behavior.",
+    "domains": [
+      "rust",
+      "code"
+    ],
+    "triggers": [
+      "compiler",
+      "formatter",
+      "package",
+      "manager",
+      "test",
+      "runner",
+      "part",
+      "language"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.rust"
+  },
+  {
+    "ref_id": "methodology:rust:dependency-update-check",
+    "type": "methodology",
+    "title": "Dependency Update Check",
+    "summary": "In Rust, when Cargo.toml / Cargo.lock, feature unification across the workspace, and crate versions change, verify the lockfile, generated artifacts, and a runtime smoke.",
+    "domains": [
+      "rust",
+      "code"
+    ],
+    "triggers": [
+      "when",
+      "dependencies",
+      "change",
+      "inspect",
+      "lockfile",
+      "generated",
+      "artifacts",
+      "runtime"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.rust"
+  },
+  {
+    "ref_id": "methodology:rust:interop-boundary-check",
+    "type": "methodology",
+    "title": "Interop Boundary Check",
+    "summary": "In Rust, validate the serde deserialization, FFI across extern \"C\", and From/TryFrom conversions where external data crosses in.",
+    "domains": [
+      "rust",
+      "code"
+    ],
+    "triggers": [
+      "validate",
+      "module",
+      "shell",
+      "serialization",
+      "boundaries",
+      "steps",
+      "identify",
+      "boundary"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.rust"
+  },
+  {
+    "ref_id": "methodology:rust:language-gate-loop",
+    "type": "methodology",
+    "title": "Language Gate Loop",
+    "summary": "In Rust, run the package-local gate, fix the first owned diagnostic, rerun, then broaden.",
+    "domains": [
+      "rust",
+      "code"
+    ],
+    "triggers": [
+      "package",
+      "local",
+      "gate",
+      "first",
+      "owned",
+      "diagnostic",
+      "rerun",
+      "then"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.rust"
+  },
+  {
+    "ref_id": "skill:rust:run-language-gate",
+    "type": "skill",
+    "title": "Run Language Gate",
+    "summary": "In Rust, run the package-local validation gate (cargo build (and cargo build --release) with the workspace's feature flags) and summarize the diagnostics.",
+    "domains": [
+      "rust",
+      "code"
+    ],
+    "triggers": [
+      "package",
+      "local",
+      "language",
+      "validation",
+      "gate",
+      "summarize",
+      "diagnostics",
+      "inputs"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.rust"
+  },
+  {
+    "ref_id": "strategy:rust:boundary-validation",
+    "type": "strategy",
+    "title": "Boundary Validation",
+    "summary": "In Rust, validate external input at the serde deserialization, FFI across extern \"C\", and From/TryFrom conversions before internal use.",
+    "domains": [
+      "rust",
+      "code"
+    ],
+    "triggers": [
+      "validate",
+      "external",
+      "input",
+      "language",
+      "runtime",
+      "boundaries",
+      "parsing",
+      "serialization"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.rust"
+  },
+  {
+    "ref_id": "strategy:rust:diagnostic-first",
+    "type": "strategy",
+    "title": "Diagnostic First",
+    "summary": "In Rust, read the first rustc error code (Exxxx) and the borrow/lifetime explanation before making speculative edits.",
+    "domains": [
+      "rust",
+      "code"
+    ],
+    "triggers": [
+      "compiler",
+      "runtime",
+      "diagnostics",
+      "before",
+      "speculative",
+      "edits",
+      "read",
+      "first"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.rust"
+  },
+  {
+    "ref_id": "strategy:rust:idiom-preserving-change",
+    "type": "strategy",
+    "title": "Idiom Preserving Change",
+    "summary": "In Rust, prefer established idioms (ownership and borrowing, Result/Option with ?, and RAII via Drop) over generic rewrites.",
+    "domains": [
+      "rust",
+      "code"
+    ],
+    "triggers": [
+      "prefer",
+      "local",
+      "idioms",
+      "standard",
+      "tooling",
+      "over",
+      "generic",
+      "rewrites"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.rust"
+  },
+  {
+    "ref_id": "strategy:rust:package-local-command",
+    "type": "strategy",
+    "title": "Package Local Command",
+    "summary": "In Rust, use the package-local commands (cargo build (and cargo build --release) with the workspace's feature flags) rather than a root or generic command.",
+    "domains": [
+      "rust",
+      "code"
+    ],
+    "triggers": [
+      "package",
+      "local",
+      "build",
+      "test",
+      "typecheck",
+      "commands",
+      "this",
+      "language"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.rust"
+  },
+  {
+    "ref_id": "strategy:rust:choose-static-vs-dynamic-dispatch",
+    "type": "strategy",
+    "title": "Choose generics vs trait objects deliberately",
+    "summary": "Pick monomorphized generics for hot paths and boxed trait objects (dyn Trait) for heterogeneous collections or compile-time/size trade-offs.",
+    "domains": [
+      "rust",
+      "code"
+    ],
+    "triggers": [
+      "generics",
+      "trait object",
+      "dyn",
+      "monomorphization",
+      "dispatch",
+      "impl Trait"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.rust"
+  },
+  {
+    "ref_id": "strategy:rust:uphold-unsafe-invariants",
+    "type": "strategy",
+    "title": "Confine and document every unsafe invariant",
+    "summary": "Wrap unsafe in a minimal safe abstraction, document the invariants each unsafe block relies on, and prove them locally.",
+    "domains": [
+      "rust",
+      "code"
+    ],
+    "triggers": [
+      "unsafe",
+      "invariant",
+      "safety",
+      "miri",
+      "ub",
+      "raw pointer"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.rust"
+  },
+  {
+    "ref_id": "methodology:rust:structure-cargo-workspace",
+    "type": "methodology",
+    "title": "Structure a multi-crate cargo workspace",
+    "summary": "Split a growing crate into a workspace with shared dependency versions and a clear dependency direction to cut compile times and coupling.",
+    "domains": [
+      "rust",
+      "code"
+    ],
+    "triggers": [
+      "workspace",
+      "cargo",
+      "crate",
+      "members",
+      "workspace.dependencies",
+      "feature"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.rust"
+  },
+  {
+    "ref_id": "skill:rust:benchmark-with-criterion",
+    "type": "skill",
+    "title": "Benchmark with criterion and detect regressions",
+    "summary": "Run criterion benchmarks with black_box, and report the statistical estimate and whether a change is a real regression or noise.",
+    "domains": [
+      "rust",
+      "code"
+    ],
+    "triggers": [
+      "criterion",
+      "benchmark",
+      "black_box",
+      "bench",
+      "regression",
+      "performance"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.rust"
+  }
+]

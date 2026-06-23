@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:frontend_accessibility:contrast-meets-threshold",
+  "type": "strategy",
+  "title": "Meet contrast thresholds for text and UI",
+  "description": "Ensure text and meaningful UI elements meet WCAG contrast ratios and do not convey information by color alone.",
+  "body": "Use when choosing or reviewing colors for text, icons, focus rings, and state indicators. Do not signal state (error, success, required) with color alone, and do not assume a brand palette passes. Actions: measure foreground/background contrast (target 4.5:1 for normal text, 3:1 for large text and UI components), add a non-color cue (icon, text, underline), and record measured ratios. Validation signals include a contrast tool report at the failing pairs and a check under a color-blindness simulator. Risk boundary: low contrast and color-only meaning exclude low-vision and color-blind users; full conformance still requires manual review beyond automated ratio checks.",
+  "domain": "frontend",
+  "scope_hint": "code.frontend.accessibility:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.frontend.accessibility",
+  "pack_id": "code.frontend.accessibility"
+}

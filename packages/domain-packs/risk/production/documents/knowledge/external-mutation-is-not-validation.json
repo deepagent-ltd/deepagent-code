@@ -1,0 +1,11 @@
+{
+  "ref_id": "knowledge:production:external-mutation-is-not-validation",
+  "type": "knowledge",
+  "description": "Running a deploy, migration, delete, or traffic shift is a production action, not a validation shortcut.",
+  "body": "Use when a validation plan includes commands that may mutate external or production state. Do not treat deploy, apply migration, delete, restart, rotate, or traffic-shift commands as ordinary tests. Actions: separate read-only verification from write actions, classify the command's target environment, record what would change, and require human approval before execution. Validation signals include dry-run output, staging-only proof, migration plan, rollback drill, and explicit operator approval. Risk boundary: if target environment is ambiguous, default to production-risk handling and stop before mutation; unverified safety should block execution but should not cause broad agent failure.",
+  "domain": "production",
+  "scope_hint": "risk.production:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.production:docs38",
+  "pack_id": "risk.production"
+}

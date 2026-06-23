@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:flutter:trace-a-state-not-updating",
+  "type": "methodology",
+  "title": "Trace a UI that will not update",
+  "description": "Follow a stale widget back to mutation outside the update path or state placed where it cannot trigger a rebuild.",
+  "body": "Steps: 1. Confirm the underlying state value actually changed. 2. Check how the change is applied: was it inside setState (or pushed through the state-management notifier), or mutated in place outside any update path. 3. Verify the widget reading the state is a descendant that actually rebuilds when that state changes (correct Provider/listener wiring). 4. Move the mutation into the framework's update path or fix the listener scope. 5. Re-test. Rollback point: before relocating state ownership. Validation: a widget test shows the UI updates after the state change, and the rebuild profiler confirms the right widget rebuilt.",
+  "domain": "dart",
+  "scope_hint": "code.dart-flutter:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.dart-flutter",
+  "pack_id": "code.dart-flutter"
+}

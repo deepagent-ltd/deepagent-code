@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:tf:remote-state-with-locking",
+  "type": "strategy",
+  "title": "Use remote state with locking",
+  "description": "Store state in a shared remote backend with state locking so concurrent runs cannot corrupt it, never local files on a team project.",
+  "body": "Use when more than one person or pipeline runs Terraform against the same resources. Do not keep state in a local file or commit tfstate to git, and do not disable locking to 'unstick' a run. Actions: configure a remote backend (S3+DynamoDB, GCS, Terraform Cloud) with locking enabled, verify the lock is acquired at plan/apply start, and release it cleanly on exit. Validation signals include a lock entry appearing during a run and clearing afterward, and no two runs proceeding at once. Risk boundary: a force-unlock can let two applies race and corrupt state; only force-unlock after confirming no other run holds it, and back up state first.",
+  "domain": "terraform",
+  "scope_hint": "platform.terraform:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.terraform",
+  "pack_id": "platform.terraform"
+}

@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure_dossier:cass:tombstone-overload-on-reads",
+  "type": "failure_dossier",
+  "description": "A delete-heavy or queue-like access pattern accumulates tombstones that make reads slow or fail.",
+  "body": "Failure mode: modelling a queue or a frequently-deleted dataset on one partition leaves thousands of tombstones that every read must scan, so latency climbs and eventually a read crosses the tombstone failure threshold and errors out. Detection signals: query tracing reports a high tombstones-scanned count, reads warn about tombstone thresholds in the log, and latency correlates with delete volume. Do not build queues or high-churn delete patterns on a single Cassandra partition. Safer fallback: redesign to append-only with TimeWindowCompactionStrategy and TTL so whole SSTables expire, or move the queue workload to a purpose-built system, and confirm tombstone scans drop.",
+  "domain": "cassandra",
+  "scope_hint": "code.database.cassandra:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.cassandra:human_authored",
+  "pack_id": "code.database.cassandra"
+}

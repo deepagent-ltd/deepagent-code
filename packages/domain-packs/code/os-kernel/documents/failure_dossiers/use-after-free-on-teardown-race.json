@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:kernel:use-after-free-on-teardown-race",
+  "type": "failure_dossier",
+  "description": "Using a device or object after it was freed during concurrent remove/unload, a classic exploitable use-after-free.",
+  "body": "Failure mode: an in-flight operation holds a raw pointer to a device/object while another path (hot-unplug, rmmod, last put) frees it; the operation then touches freed memory, corrupting the kernel and giving an exploit primitive. Detection signals: KASAN reports use-after-free with the free and use stacks; crashes only under concurrent open/close or probe/remove stress; refcount drops to zero while an operation is still running. Do not assume an object outlives an async operation. Safer fallback: take a reference for the full duration of each use and drop it exactly once, synchronize teardown against in-flight work, and verify with KASAN under concurrent probe/remove stress.",
+  "domain": "kernel",
+  "scope_hint": "code.os-kernel:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.os-kernel:human_authored",
+  "pack_id": "code.os-kernel"
+}

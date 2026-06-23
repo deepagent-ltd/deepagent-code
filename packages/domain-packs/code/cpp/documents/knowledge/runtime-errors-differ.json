@@ -1,0 +1,11 @@
+{
+  "ref_id": "knowledge:cpp:runtime-errors-differ",
+  "type": "knowledge",
+  "description": "In C++, a clean build does not prevent undefined behavior from dangling references, ODR violations, and unsequenced modifications.",
+  "body": "In C++, passing the compiler at the project's -std (e.g. -std=c++20) with -Wall -Wextra says nothing about runtime: undefined behavior from dangling references, ODR violations, and unsequenced modifications surface only when the code actually runs. Use when a change touches control flow, IO, concurrency, or data shapes that the build cannot prove safe. Do not use a green compile as evidence that behavior is correct, and avoid shipping without exercising the path. Actions: run the ctest suite plus a sanitized build of the touched target, reproduce the runtime path, and where relevant run AddressSanitizer/UBSan (-fsanitize=address,undefined) and valgrind to catch latent defects. Validation signals include the test/trace logs, a clean AddressSanitizer/UBSan (-fsanitize=address,undefined) and valgrind run, and observed correct output on representative input. Risk boundary: escalate or hold the change when the failure mode is data loss or memory corruption you cannot reproduce locally.",
+  "domain": "cpp",
+  "scope_hint": "code.cpp:knowledge",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.cpp:skill_survey",
+  "pack_id": "code.cpp"
+}

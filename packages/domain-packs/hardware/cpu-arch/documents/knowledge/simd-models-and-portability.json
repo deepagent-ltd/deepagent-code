@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:cpuarch:simd-models-and-portability",
+  "type": "knowledge",
+  "title": "SIMD instruction sets and portability",
+  "description": "SSE/AVX/AVX-512 (x86) and NEON/SVE (ARM) differ in width and availability, so SIMD code needs feature detection and a scalar fallback.",
+  "body": "Use when writing or porting vectorized code. SSE is 128-bit, AVX/AVX2 256-bit, AVX-512 512-bit (and may downclock), while ARM NEON is 128-bit and SVE is width-agnostic; not every CPU supports every set. Do not compile AVX-512 unconditionally or assume NEON on every ARM target. Actions: detect features at runtime (cpuid / hwcaps), dispatch to the best available kernel, and always keep a correct scalar fallback. Validation signals include the binary running correctly on a baseline CPU and the dispatcher selecting the right path. Risk boundary: an unguarded wide-vector instruction faults with SIGILL on older hardware; require runtime detection before shipping any ISA-extension path.",
+  "domain": "cpu_arch",
+  "scope_hint": "hardware.cpu-arch:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.cpu-arch",
+  "pack_id": "hardware.cpu-arch"
+}

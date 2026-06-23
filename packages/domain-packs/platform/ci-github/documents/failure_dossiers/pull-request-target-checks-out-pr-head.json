@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:ghci:pull-request-target-checks-out-pr-head",
+  "type": "failure_dossier",
+  "description": "A pull_request_target workflow checks out and runs the fork PR head with base-repo secrets and write token in scope.",
+  "body": "Failure mode: a workflow uses on: pull_request_target, then actions/checkout with ref: the PR head, and runs the PR's build scripts while the job holds the base repo's secrets and a write-capable GITHUB_TOKEN, letting attacker-controlled code read secrets and push to the repo. Detection signals: pull_request_target combined with checkout of github.event.pull_request.head, secrets referenced in that job, and the workflow accepting fork PRs. Do not execute PR-head code under pull_request_target with secrets present. Safer fallback: build/test untrusted code under pull_request (no secrets), gate any privileged follow-up behind workflow_run or a protected environment, and verify no secret is in scope where fork code runs.",
+  "domain": "ci_github",
+  "scope_hint": "platform.ci-github:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.ci-github:human_authored",
+  "pack_id": "platform.ci-github"
+}

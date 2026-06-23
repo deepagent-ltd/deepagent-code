@@ -1,0 +1,73 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "code.concurrency",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "concurrency",
+      "races",
+      "locks",
+      "async",
+      "deadlock"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [
+      "performance"
+    ],
+    "repo_signals": [
+      "L3 smoke for code.concurrency: data race on shared state, mutex lock ordering and deadlock, async cancellation, memory ordering with atomics, idempotency under concurrency, and reproducing flaky timing failures"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "plain prose note with no repository or domain signal"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "retrieval_query": "concurrency data race deadlock lock ordering mutex async cancellation memory ordering atomic idempotency flaky timing reproduce thread safety",
+  "expected_pack_id": "code.concurrency",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "code.concurrency L3 validation smoke",
+    "signals": [
+      "race detector (TSan/Go -race) runs clean on the changed paths",
+      "a stress test with many concurrent iterations passes repeatedly",
+      "lock acquisition order is documented and consistent across call sites",
+      "concurrent operations are idempotent or guarded so retries do not double-apply"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "code.concurrency diagnosis smoke",
+    "signals": [
+      "unsynchronized read/write of shared mutable state",
+      "inconsistent lock ordering across paths risking deadlock",
+      "async task continuing after its scope was cancelled",
+      "relaxed/atomic operation assumed to provide ordering it does not",
+      "test passes alone but fails under parallel load (timing-dependent flake)"
+    ]
+  },
+  "source_refs": [
+    "source:cpp-memory-model:paraphrased",
+    "source:go-memory-model:paraphrased"
+  ]
+}

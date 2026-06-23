@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:cass:last-write-wins-conflict-resolution",
+  "type": "knowledge",
+  "title": "Last-write-wins and clock skew",
+  "description": "Cassandra resolves conflicting writes by cell timestamp, so clock skew across clients can silently drop the newer write.",
+  "body": "Reference for concurrent-write semantics. Each cell carries a write timestamp, and when replicas disagree the highest timestamp wins; there is no merge, so a write with an earlier timestamp is discarded even if it arrived later in real time. Use when multiple clients update the same cell. Do not assume the last write you sent wins; if a client's clock is skewed ahead, its stale write can mask a fresher one. Validation signals include consistent timestamps via server-side timestamp generation and NTP keeping client clocks aligned. Risk boundary: relying on application clocks for ordering risks silent data loss under skew, so use coordinator-assigned timestamps and treat clock discipline as a correctness requirement.",
+  "domain": "cassandra",
+  "scope_hint": "code.database.cassandra:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.cassandra",
+  "pack_id": "code.database.cassandra"
+}

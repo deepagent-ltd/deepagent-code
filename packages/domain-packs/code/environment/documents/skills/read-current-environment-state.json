@@ -1,0 +1,11 @@
+{
+  "ref_id": "skill:environment:read-current-environment-state",
+  "type": "skill",
+  "description": "Read a current environment value through a bounded, read-only check and report evidence scope.",
+  "body": "Use when the task is a current-state query about env vars, config, model/provider, ports, tool versions, workspace path, or service status. Do not use for mutation, setup, dependency installation, restarts, or broad diagnosis unless the user asks for repair. Actions: choose one authoritative read-only source, execute or inspect it with a timeout where relevant, summarize the exact value, include source path or command, and mark unavailable values as unverified. Validation signals include current command output, config file content, run metadata, and matching cwd/workspace. Risk boundary: avoid dumping secrets or full env; redact sensitive values and report only the needed field.",
+  "domain": "environment",
+  "scope_hint": "code.environment:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.environment:docs38",
+  "pack_id": "code.environment"
+}

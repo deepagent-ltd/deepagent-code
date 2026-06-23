@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:cpuarch:hardware-memory-model",
+  "type": "knowledge",
+  "title": "The hardware memory model and ordering",
+  "description": "x86 is strongly ordered (TSO) while ARM/POWER are weakly ordered, so code that 'works' on x86 can break on ARM without explicit fences.",
+  "body": "Use when porting concurrent code across ISAs or debugging rare ordering bugs. x86-64 uses total-store-order: loads are not reordered with loads, so many missing-fence bugs stay hidden; ARM64 and POWER allow aggressive reordering, exposing those bugs as field failures. Do not treat 'passes on my x86 laptop' as proof of correctness for ARM targets. Actions: reason in terms of acquire/release semantics, add the minimal correct fence, and test on the weakest target under stress. Validation signals include a clean TSan run and a passing stress test on ARM. Risk boundary: ordering bugs are probabilistic and hardware-specific; never dismiss one as 'cannot reproduce' without testing the weakly-ordered target.",
+  "domain": "cpu_arch",
+  "scope_hint": "hardware.cpu-arch:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.cpu-arch",
+  "pack_id": "hardware.cpu-arch"
+}

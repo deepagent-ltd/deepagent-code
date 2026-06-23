@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:mesh:golden-signals-telemetry",
+  "type": "knowledge",
+  "title": "Golden-signal telemetry the mesh emits for free",
+  "description": "Explains the request-level metrics (latency, traffic, errors, saturation) the proxies emit and how to use them without app instrumentation.",
+  "body": "Use when you need service-level visibility from the mesh. Do not re-instrument the app for metrics the proxy already provides. Actions: know each sidecar emits standard request metrics (request count, duration histograms, response codes) labeled by source/destination workload and response flags, enabling RED/golden-signal dashboards and SLOs without code changes; use response flags to distinguish upstream failures from proxy-level rejections. Validation signals include per-route latency/error metrics appearing and response-flag labels explaining failures. Risk boundary: high-cardinality custom labels on mesh metrics can blow up storage and warrant care.",
+  "domain": "service_mesh",
+  "scope_hint": "platform.service-mesh:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.service-mesh",
+  "pack_id": "platform.service-mesh"
+}

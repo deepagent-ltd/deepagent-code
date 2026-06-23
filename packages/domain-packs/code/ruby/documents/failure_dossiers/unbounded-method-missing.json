@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:ruby:unbounded-method-missing",
+  "type": "failure_dossier",
+  "description": "A method_missing absorbs unknown calls without respond_to_missing?, so typos become silent no-ops and tools cannot see methods.",
+  "body": "Failure mode: a class defines method_missing to handle dynamic calls but omits respond_to_missing? and does not bound which names it accepts, so a misspelled method silently returns nil instead of raising NoMethodError and respond_to?/duck typing report the method as absent. Detection signals: method_missing with no respond_to_missing?; typos that fail silently; static tools and IDEs cannot find the methods. Do not let method_missing swallow arbitrary names. Safer fallback: prefer explicit methods or bounded define_method, always pair method_missing with respond_to_missing?, restrict the names handled and raise for the rest, and test the dynamic methods plus respond_to?.",
+  "domain": "ruby",
+  "scope_hint": "code.ruby:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.ruby:human_authored",
+  "pack_id": "code.ruby"
+}

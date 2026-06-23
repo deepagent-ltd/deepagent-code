@@ -1,0 +1,11 @@
+{
+  "ref_id": "knowledge:frontend_web:focus-visible-and-tab-order-are-behavior",
+  "type": "knowledge",
+  "description": "Focus visibility and tab order are observable behavior for keyboard and assistive users.",
+  "body": "Apply this when adding, hiding, reordering, disabling, or restyling interactive elements. Native controls usually provide focus behavior, activation keys, and disabled semantics; custom controls must reproduce them intentionally. This does not cover advanced ARIA authoring patterns owned by a dedicated accessibility pack. Execution impact: verify tab sequence follows visual/task order, focus remains visible against the background, Enter or Space activates controls as expected, and modals or popovers contain and restore focus. Validation signals include role/name availability, visible focus ring, no keyboard trap, and correct disabled or expanded state exposure. Risk boundary: removing outlines or using pointer-only handlers creates a functional regression even if mouse screenshots look correct. Use when Frontend Web work touches visible UI behavior, browser console output, DOM state, assets, viewport behavior, and interaction evidence. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: use the fact to constrain the change and test plan; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include browser smoke, component tests, viewport screenshots, console/network checks, and accessibility assertions. Risk boundary: escalate or stop when the task involves visual regressions, inaccessible interaction, hydration mismatch, and browser-only failures, missing owner evidence, or live external state.",
+  "domain": "web",
+  "scope_hint": "code.frontend.web:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.frontend.web:platform_accessibility_baseline",
+  "pack_id": "code.frontend.web"
+}

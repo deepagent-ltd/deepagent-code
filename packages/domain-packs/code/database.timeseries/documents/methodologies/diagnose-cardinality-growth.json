@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:tsdb:diagnose-cardinality-growth",
+  "type": "methodology",
+  "title": "Diagnose runaway cardinality",
+  "description": "Trace which tag/measurement drives series growth and bound it before the instance degrades.",
+  "body": "Steps: 1. Query series cardinality per measurement/tag (engine-specific cardinality estimators). 2. Identify the tag with unbounded value count. 3. Confirm it is an identifier wrongly placed in a tag. 4. Move it to a field and re-ingest or stop emitting it. 5. Re-measure cardinality and memory. Rollback point: before schema change to writers. Validation: cardinality flattens and memory stabilizes.",
+  "domain": "timeseries_db",
+  "scope_hint": "code.database.timeseries:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.timeseries",
+  "pack_id": "code.database.timeseries"
+}

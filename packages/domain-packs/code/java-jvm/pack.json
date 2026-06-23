@@ -1,0 +1,44 @@
+{
+  "schema_version": "domain_pack.v1",
+  "id": "code.java-jvm",
+  "name": "Java JVM",
+  "version": "1.0.0",
+  "scope": "system",
+  "risk": "low",
+  "domains": [
+    "java",
+    "jvm",
+    "code"
+  ],
+  "provides": [
+    "knowledge",
+    "strategy",
+    "methodology",
+    "skill",
+    "diagnosis",
+    "validation"
+  ],
+  "depends_on": [
+    "code.core"
+  ],
+  "conflicts_with": [],
+  "knowledge_store": "document_store",
+  "allowed_tools": [
+    "read",
+    "shell:test"
+  ],
+  "denied_tools": [
+    "shell:deploy-production"
+  ],
+  "data_policy": {
+    "sensitivity": [
+      "source_code"
+    ],
+    "default_admission": "summary_only",
+    "secret_policy": "deny"
+  },
+  "detector": {
+    "inline": "profile.languages.includes('java') || profile.repo_signals.some(s=>/\\b(pom.xml|gradle|maven|junit|.java)\\b/i.test(s)) ? 0.86 : 0",
+    "threshold": 0.5
+  }
+}

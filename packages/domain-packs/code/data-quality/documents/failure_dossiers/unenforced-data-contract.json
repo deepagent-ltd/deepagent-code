@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:dq:unenforced-data-contract",
+  "type": "failure_dossier",
+  "description": "Relying on an implicit, unenforced schema agreement so a producer's change silently breaks downstream consumers.",
+  "body": "Failure mode: consumers depend on a producer's current schema and semantics with no codified or enforced contract, so when the producer renames a column, changes units, or relaxes nullability, consumers break or silently misread. Detection signals: downstream failures or wrong values right after an unrelated producer deploy; no versioned contract exists; the producer was unaware of consumers. Do not treat the current shape as an implicit contract. Safer fallback: define and version a contract, validate producer output at publish, and require sign-off plus a migration for breaking changes.",
+  "domain": "data_quality",
+  "scope_hint": "code.data-quality:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.data-quality:human_authored",
+  "pack_id": "code.data-quality"
+}

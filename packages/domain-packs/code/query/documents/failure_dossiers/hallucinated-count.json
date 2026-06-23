@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:query:hallucinated-count",
+  "type": "failure_dossier",
+  "description": "The model answered a count or list from memory instead of a current tool result.",
+  "body": "Failure: a deterministic count, row total, file list, or matching item count was generated from model text or stale context. Impact: the answer may vary across model routes and cannot be reproduced. Do not use: do not present counts as verified without a command/query/source scope. Recovery: run a read-only query or mark the answer unverified.. Use when a query task is answered from memory, stale context, or an unbounded dump instead of source evidence. Do not use this dossier as a positive implementation strategy; it is a do-not-use signal. Actions: rerun the read-only query, cite the exact source, narrow the output, and verify the working tree stayed unchanged. Validation signals include command output, file references, count checks, and no edit/diff evidence. Risk boundary: block closure when the request was mutated into a write task or when sensitive data would be exposed.",
+  "domain": "query",
+  "scope_hint": "code.query:negative",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.query",
+  "pack_id": "code.query"
+}

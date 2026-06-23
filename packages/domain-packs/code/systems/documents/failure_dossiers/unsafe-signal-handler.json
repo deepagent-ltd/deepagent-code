@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:sys:unsafe-signal-handler",
+  "type": "failure_dossier",
+  "description": "A signal handler calls non-async-signal-safe functions or loses signals, deadlocking or skipping cleanup.",
+  "body": "Failure mode: a handler for SIGTERM/SIGCHLD calls malloc, printf, or takes a lock, which is unsafe because the handler interrupts arbitrary code and can re-enter a non-reentrant function and deadlock or corrupt state; or it assumes each signal queues, missing collapsed SIGCHLD and leaving zombies. Detection signals: the process hangs during shutdown or under signal load; defunct/zombie children accumulate; intermittent corruption tied to signal timing. Do not do real work inside a handler. Safer fallback: set a sig_atomic_t flag or write to a self-pipe and handle work in the main loop, reap children in a waitpid WNOHANG loop, and verify clean shutdown under repeated signals.",
+  "domain": "systems",
+  "scope_hint": "code.systems:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.systems:human_authored",
+  "pack_id": "code.systems"
+}
