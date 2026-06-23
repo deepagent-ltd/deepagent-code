@@ -1,0 +1,44 @@
+{
+  "schema_version": "domain_pack.v1",
+  "id": "code.game",
+  "name": "Game Engine & Real-Time Simulation",
+  "version": "1.0.0",
+  "scope": "system",
+  "risk": "medium",
+  "domains": [
+    "game",
+    "game_loop",
+    "physics",
+    "rendering_game"
+  ],
+  "provides": [
+    "knowledge",
+    "strategy",
+    "methodology",
+    "skill",
+    "diagnosis",
+    "validation"
+  ],
+  "depends_on": [
+    "code.performance",
+    "code.graphics"
+  ],
+  "conflicts_with": [],
+  "knowledge_store": "document_store",
+  "allowed_tools": [
+    "read",
+    "shell:test"
+  ],
+  "denied_tools": [],
+  "data_policy": {
+    "sensitivity": [
+      "source_code"
+    ],
+    "default_admission": "summary_only",
+    "secret_policy": "deny"
+  },
+  "detector": {
+    "inline": "profile.code_domains.some(d=>['game','game_loop','physics','rendering_game'].includes(d)) || profile.repo_signals.some(s=>/\\b(game loop|game engine|fixed timestep|entity component|collision detection|frame budget|sprite|game physics|unity|unreal|godot)\\b/i.test(s)) ? 0.9 : 0",
+    "threshold": 0.5
+  }
+}

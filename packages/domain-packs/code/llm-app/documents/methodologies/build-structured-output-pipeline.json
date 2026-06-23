@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:llm:build-structured-output-pipeline",
+  "type": "methodology",
+  "title": "Build a structured-output pipeline",
+  "description": "Construct the schema, parse, validate, and bounded-repair stages so a call reliably yields conforming structure or a typed failure.",
+  "body": "Steps: 1. Define the strict output schema (required fields, types, enums). 2. Request the structure (response_format / function schema where the provider supports it). 3. Parse and validate every response. 4. On failure, feed the validator error back for at most N repairs. 5. After the budget, return a typed error and do not act. Rollback point: before relaxing the schema to make parsing pass. Validation: a conformance run over sampled inputs reports the pass rate and malformed cases reach the typed fallback rather than downstream code.",
+  "domain": "llm_app",
+  "scope_hint": "code.llm-app:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.llm-app",
+  "pack_id": "code.llm-app"
+}

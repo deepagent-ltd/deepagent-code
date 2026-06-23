@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:orch:scope-backfills-carefully",
+  "type": "strategy",
+  "title": "Scope and rate-limit backfills",
+  "description": "Run backfills over explicit date ranges with bounded concurrency so they reproduce history without overwhelming shared resources.",
+  "body": "Use when reprocessing a historical date range after a fix or new model. Do not kick off an unbounded backfill across all dates at full parallelism — it can saturate the warehouse and starve live runs. Actions: confirm tasks are idempotent per date, bound backfill concurrency and pool slots, run an explicit date range, and reconcile a sample of backfilled output against expectations. Validation signals include backfilled partitions matching the original scheduled output and live runs unaffected by backfill load. Risk boundary: an uncontrolled backfill can exhaust shared capacity and double-write; if tasks are not idempotent or capacity is tight, deny the bulk backfill and escalate to stage it.",
+  "domain": "orchestration",
+  "scope_hint": "code.data-pipeline-orchestration:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.data-pipeline-orchestration",
+  "pack_id": "code.data-pipeline-orchestration"
+}

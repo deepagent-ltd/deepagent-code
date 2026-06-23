@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:docker:declare-meaningful-healthcheck",
+  "type": "strategy",
+  "title": "Make HEALTHCHECK probe real readiness",
+  "description": "Define a HEALTHCHECK (or orchestrator probe) that exercises the app's actual ability to serve, not just that the process is alive.",
+  "body": "Use when a container should report health to an orchestrator or compose. Do not use a healthcheck that only checks the process exists or always returns 200, and avoid probing a dependency in a way that cascades failures. Actions: implement a lightweight endpoint or command that confirms the app can serve a representative request (and, for readiness, that critical dependencies are reachable), set sensible interval/timeout/retries, and inspect that an injected fault flips the status to unhealthy. Validation signals include the container reporting unhealthy when the app is broken and healthy when serving, visible in the orchestrator status. Risk boundary: a healthcheck that never goes unhealthy hides outages; flag a probe that cannot detect a real failure rather than shipping false confidence.",
+  "domain": "platform",
+  "scope_hint": "platform.docker:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.docker",
+  "pack_id": "platform.docker"
+}

@@ -1,0 +1,460 @@
+[
+  {
+    "ref_id": "knowledge:c:generated-code-drift",
+    "type": "knowledge",
+    "title": "Generated Code Drift",
+    "summary": "In C, never hand-edit outputs from lex/yacc, autoconf (configure.ac), or codegen scripts that emit .c/.h; change the source and rerun the generator.",
+    "domains": [
+      "c",
+      "code"
+    ],
+    "triggers": [
+      "generated",
+      "code",
+      "must",
+      "tied",
+      "regeneration",
+      "commands",
+      "hand",
+      "edit"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.c"
+  },
+  {
+    "ref_id": "knowledge:c:manual-memory-contract",
+    "type": "knowledge",
+    "title": "Manual Memory Contract",
+    "summary": "C code needs explicit ownership, allocation, and error cleanup contracts.",
+    "domains": [
+      "c",
+      "code"
+    ],
+    "triggers": [
+      "code",
+      "needs",
+      "explicit",
+      "ownership",
+      "allocation",
+      "error",
+      "cleanup",
+      "contracts"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.c"
+  },
+  {
+    "ref_id": "knowledge:c:runtime-errors-differ",
+    "type": "knowledge",
+    "title": "Runtime Errors Differ",
+    "summary": "In C, a clean build does not prevent undefined behavior from signed overflow, out-of-bounds access, use-after-free, and strict-aliasing violations.",
+    "domains": [
+      "c",
+      "code"
+    ],
+    "triggers": [
+      "compile",
+      "success",
+      "does",
+      "guarantee",
+      "runtime",
+      "behavior",
+      "representative",
+      "tests"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.c"
+  },
+  {
+    "ref_id": "knowledge:c:toolchain-is-contract",
+    "type": "knowledge",
+    "title": "Toolchain Is Contract",
+    "summary": "In C, the toolchain triple, libc version, and compiler version are part of the contract and changing them changes behavior.",
+    "domains": [
+      "c",
+      "code"
+    ],
+    "triggers": [
+      "compiler",
+      "formatter",
+      "package",
+      "manager",
+      "test",
+      "runner",
+      "part",
+      "language"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.c"
+  },
+  {
+    "ref_id": "methodology:c:dependency-update-check",
+    "type": "methodology",
+    "title": "Dependency Update Check",
+    "summary": "In C, when pkg-config entries, vendored headers, and the libraries listed in LDLIBS change, verify the lockfile, generated artifacts, and a runtime smoke.",
+    "domains": [
+      "c",
+      "code"
+    ],
+    "triggers": [
+      "when",
+      "dependencies",
+      "change",
+      "inspect",
+      "lockfile",
+      "generated",
+      "artifacts",
+      "runtime"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.c"
+  },
+  {
+    "ref_id": "methodology:c:interop-boundary-check",
+    "type": "methodology",
+    "title": "Interop Boundary Check",
+    "summary": "In C, validate the argv parsing, fread/fgets bounds, and ntohl/htonl on wire data where external data crosses in.",
+    "domains": [
+      "c",
+      "code"
+    ],
+    "triggers": [
+      "validate",
+      "module",
+      "shell",
+      "serialization",
+      "boundaries",
+      "steps",
+      "identify",
+      "boundary"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.c"
+  },
+  {
+    "ref_id": "methodology:c:language-gate-loop",
+    "type": "methodology",
+    "title": "Language Gate Loop",
+    "summary": "In C, run the package-local gate, fix the first owned diagnostic, rerun, then broaden.",
+    "domains": [
+      "c",
+      "code"
+    ],
+    "triggers": [
+      "package",
+      "local",
+      "gate",
+      "first",
+      "owned",
+      "diagnostic",
+      "rerun",
+      "then"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.c"
+  },
+  {
+    "ref_id": "skill:c:run-language-gate",
+    "type": "skill",
+    "title": "Run Language Gate",
+    "summary": "In C, run the package-local validation gate (make / Makefile targets (and the exact CC, CFLAGS, and -I/-L flags)) and summarize the diagnostics.",
+    "domains": [
+      "c",
+      "code"
+    ],
+    "triggers": [
+      "package",
+      "local",
+      "language",
+      "validation",
+      "gate",
+      "summarize",
+      "diagnostics",
+      "inputs"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.c"
+  },
+  {
+    "ref_id": "strategy:c:boundary-validation",
+    "type": "strategy",
+    "title": "Boundary Validation",
+    "summary": "In C, validate external input at the argv parsing, fread/fgets bounds, and ntohl/htonl on wire data before internal use.",
+    "domains": [
+      "c",
+      "code"
+    ],
+    "triggers": [
+      "validate",
+      "external",
+      "input",
+      "language",
+      "runtime",
+      "boundaries",
+      "parsing",
+      "serialization"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.c"
+  },
+  {
+    "ref_id": "strategy:c:diagnostic-first",
+    "type": "strategy",
+    "title": "Diagnostic First",
+    "summary": "In C, read the first compiler error with file:line and the caret-marked token before making speculative edits.",
+    "domains": [
+      "c",
+      "code"
+    ],
+    "triggers": [
+      "compiler",
+      "runtime",
+      "diagnostics",
+      "before",
+      "speculative",
+      "edits",
+      "read",
+      "first"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.c"
+  },
+  {
+    "ref_id": "strategy:c:idiom-preserving-change",
+    "type": "strategy",
+    "title": "Idiom Preserving Change",
+    "summary": "In C, prefer established idioms (manual memory ownership conventions, errno checks, and goto-cleanup patterns) over generic rewrites.",
+    "domains": [
+      "c",
+      "code"
+    ],
+    "triggers": [
+      "prefer",
+      "local",
+      "idioms",
+      "standard",
+      "tooling",
+      "over",
+      "generic",
+      "rewrites"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.c"
+  },
+  {
+    "ref_id": "strategy:c:package-local-command",
+    "type": "strategy",
+    "title": "Package Local Command",
+    "summary": "In C, use the package-local commands (make / Makefile targets (and the exact CC, CFLAGS, and -I/-L flags)) rather than a root or generic command.",
+    "domains": [
+      "c",
+      "code"
+    ],
+    "triggers": [
+      "package",
+      "local",
+      "build",
+      "test",
+      "typecheck",
+      "commands",
+      "this",
+      "language"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.c"
+  },
+  {
+    "ref_id": "strategy:c:respect-pointer-aliasing-rules",
+    "type": "strategy",
+    "title": "Respect strict aliasing and pointer provenance",
+    "summary": "Avoid reinterpreting memory through incompatible pointer types; use memcpy or unions so the optimizer's aliasing assumptions stay valid.",
+    "domains": [
+      "c",
+      "code"
+    ],
+    "triggers": [
+      "aliasing",
+      "strict aliasing",
+      "type punning",
+      "restrict",
+      "memcpy",
+      "optimizer"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.c"
+  },
+  {
+    "ref_id": "strategy:c:control-struct-layout-and-packing",
+    "type": "strategy",
+    "title": "Control struct layout, alignment, and padding deliberately",
+    "summary": "Order members and choose packing explicitly so size, alignment, and any wire/ABI layout are intentional rather than compiler-dependent.",
+    "domains": [
+      "c",
+      "code"
+    ],
+    "triggers": [
+      "struct",
+      "packing",
+      "alignment",
+      "padding",
+      "offsetof",
+      "abi"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.c"
+  },
+  {
+    "ref_id": "methodology:c:harden-with-static-analysis-and-flags",
+    "type": "methodology",
+    "title": "Harden a C build with warnings, sanitizers, and static analysis",
+    "summary": "Layer strict warning flags, runtime sanitizers, and a static analyzer to catch memory and integer bugs the standard does not require diagnosing.",
+    "domains": [
+      "c",
+      "code"
+    ],
+    "triggers": [
+      "warnings",
+      "static analysis",
+      "clang-tidy",
+      "cppcheck",
+      "sanitizer",
+      "flags"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.c"
+  },
+  {
+    "ref_id": "skill:c:debug-with-gdb-and-core-dump",
+    "type": "skill",
+    "title": "Diagnose a C crash with gdb and a core dump",
+    "summary": "Load a core file or attach gdb to capture the faulting backtrace, inspect frames and memory, and identify the bad access.",
+    "domains": [
+      "c",
+      "code"
+    ],
+    "triggers": [
+      "gdb",
+      "core dump",
+      "backtrace",
+      "segfault",
+      "frame",
+      "watchpoint"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.c"
+  }
+]

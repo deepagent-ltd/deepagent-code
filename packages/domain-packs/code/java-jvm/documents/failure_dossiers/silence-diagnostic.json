@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:java_jvm:silence-diagnostic",
+  "type": "failure_dossier",
+  "description": "Suppressing a the JVM build compiler/linter diagnostic without fixing the underlying contract hides a real defect.",
+  "body": "Failure mode: a the JVM build diagnostic (compiler error, type/lint warning) is silenced with a suppression directive or cast instead of fixing the cause, so the underlying contract violation ships. Detection signals: new suppression annotations or ignore directives appear near the change; the warning count drops without a logic fix; the same class of error recurs. Do not suppress a the JVM build diagnostic to make the gate pass. Safer fallback: fix the contract the diagnostic points to, or, if suppression is genuinely correct, record why with evidence and keep it narrowly scoped.",
+  "domain": "java_jvm",
+  "scope_hint": "code.java-jvm:failure_dossiers",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.java-jvm:skill_survey",
+  "pack_id": "code.java-jvm"
+}

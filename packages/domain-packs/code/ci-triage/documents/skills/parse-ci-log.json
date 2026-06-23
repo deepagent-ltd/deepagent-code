@@ -1,0 +1,11 @@
+{
+  "ref_id": "skill:ci_triage:parse-ci-log",
+  "type": "skill",
+  "description": "Extract first failing command, job metadata, and artifact refs from CI output.",
+  "body": "Inputs: raw CI log or URL summary. Output: normalized evidence record with job, step, command, exit code, primary diagnostic, artifact refs, and suspected category.\n\nDerived from local skill survey outputs under /Users/xiuranli/code/agent/skill, especially reviewed canonical rules, coverage reports, and trusted local skill notes. Paraphrased into domain-pack seed form.\n\nSkill contract: expose this as an index-visible capability for high/max/ultra, but load body only when triggers and permissions match. Use when CI Triage work touches repository conventions, toolchain files, changed symbols, validation commands, and runtime output. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: run the documented inspection and validation workflow; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include package-local checks, focused tests, build output, smoke runs, and command logs. Risk boundary: escalate or stop when the task involves broad rewrites, generated-file drift, stale assumptions, and unvalidated behavior changes, missing owner evidence, or live external state.",
+  "domain": "ci_triage",
+  "scope_hint": "code.ci-triage:skills",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.ci-triage:skill_survey",
+  "pack_id": "code.ci-triage"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:prompt:design-the-assembly-pipeline",
+  "type": "methodology",
+  "title": "Design the assembly pipeline",
+  "description": "Define the ordered stages from raw inputs through scrub, redact, assemble, and snapshot so preparation is auditable.",
+  "body": "Steps: 1. Enumerate inputs and classify each as trusted instruction, untrusted data, or context parameter. 2. Define the ordered stages: normalize, scrub, redact PII, assemble from the versioned template, snapshot. 3. Keep instructions and data in separate regions. 4. Make every stage pure and deterministic. 5. Add a snapshot test of the assembled prompt for representative inputs. Rollback point: before changing stage order or the template. Validation: identical inputs yield a byte-identical prompt and untrusted data never lands in the instruction region.",
+  "domain": "prompt_pipeline",
+  "scope_hint": "code.prompt-pipeline:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.prompt-pipeline",
+  "pack_id": "code.prompt-pipeline"
+}

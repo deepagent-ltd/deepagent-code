@@ -1,0 +1,11 @@
+{
+  "ref_id": "skill:kotlin:triage-kotlin-nullability",
+  "type": "skill",
+  "description": "Find the nullable boundary owner and replace assertion fixes with contract-aware handling.",
+  "body": "Inputs: compiler diagnostic or runtime NPE. Actions: trace value origin, Java annotations/schema, smart-cast invalidation, and caller contract; patch producer, validation, or local narrowing; add negative-path test if possible. Avoid broad !! or elvis defaults without semantics. Verification is compile plus test or reproduction. Use when Kotlin Engineering work touches repository conventions, toolchain files, changed symbols, validation commands, and runtime output. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: run the documented inspection and validation workflow; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include package-local checks, focused tests, build output, smoke runs, and command logs. Risk boundary: escalate or stop when the task involves broad rewrites, generated-file drift, stale assumptions, and unvalidated behavior changes, missing owner evidence, or live external state.",
+  "domain": "kotlin",
+  "scope_hint": "code.kotlin:skills",
+  "evidence_strength": "medium",
+  "provenance_tag": "code.kotlin:seed:kotlin_gradle_coroutines_docs:paraphrased",
+  "pack_id": "code.kotlin"
+}

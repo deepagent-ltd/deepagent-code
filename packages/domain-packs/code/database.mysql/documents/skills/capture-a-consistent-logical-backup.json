@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:mysql:capture-a-consistent-logical-backup",
+  "type": "skill",
+  "title": "Capture a consistent logical backup",
+  "description": "Use a single-transaction mysqldump or mydumper so an InnoDB dump is point-in-time consistent without locking writes.",
+  "body": "Use when taking a logical backup of an InnoDB database that stays online. Actions: run mysqldump with --single-transaction --source-data=2 so the dump runs inside one consistent snapshot and records the binlog position, or use mydumper for parallel chunks on large datasets; never add --lock-all-tables on an InnoDB-only schema because it needlessly blocks writes. Verify the dump restores into a scratch instance and the recorded binlog coordinates let you replay forward. Validation signals include the dump header carrying a CHANGE MASTER position and a test restore completing without errors. Risk boundary: --single-transaction does not protect against concurrent DDL, so freeze schema changes during the dump and confirm no ALTER ran mid-backup.",
+  "domain": "mysql",
+  "scope_hint": "code.database.mysql:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.mysql",
+  "pack_id": "code.database.mysql"
+}

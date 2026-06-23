@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:prompt:keep-assembly-deterministic",
+  "type": "strategy",
+  "title": "Keep prompt assembly deterministic",
+  "description": "The same inputs always produce the same prompt; no clock, random ordering, or unstable iteration leaks into assembly.",
+  "body": "Use when building the code that constructs a prompt from parts. Do not interpolate timestamps, random ids, or map-iteration-order-dependent fields into the prompt, and avoid nondeterministic formatting. Actions: sort keys and lists deterministically, freeze the template, isolate any genuinely dynamic value behind an explicit parameter, and snapshot the assembled prompt for given inputs. Validation signals include a test that the same inputs yield a byte-identical prompt across runs. Risk boundary: nondeterministic assembly makes evaluation and debugging unreproducible and can hide regressions; treat it as a defect, not a stylistic choice.",
+  "domain": "prompt_pipeline",
+  "scope_hint": "code.prompt-pipeline:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.prompt-pipeline",
+  "pack_id": "code.prompt-pipeline"
+}

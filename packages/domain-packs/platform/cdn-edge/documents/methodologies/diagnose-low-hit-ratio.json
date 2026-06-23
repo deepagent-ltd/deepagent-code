@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:edge:diagnose-low-hit-ratio",
+  "type": "methodology",
+  "title": "Diagnose a low edge hit ratio",
+  "description": "Trace why responses miss: missing cache-control, key fragmentation, or uncacheable per-user content.",
+  "body": "Steps: 1. Pull the CDN's HIT/MISS and cache-status logs. 2. Check whether responses carry cacheable Cache-Control. 3. Inspect the cache key for fragmenting params/headers/cookies. 4. Identify content that is per-user and correctly uncacheable. 5. Fix headers or key normalization for the cacheable subset. Rollback point: before changing key/Vary live. Validation: hit ratio rises for the cacheable classes and no private content becomes shared.",
+  "domain": "cdn",
+  "scope_hint": "platform.cdn-edge:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.cdn-edge",
+  "pack_id": "platform.cdn-edge"
+}

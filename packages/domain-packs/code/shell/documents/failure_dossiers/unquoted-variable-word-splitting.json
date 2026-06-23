@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:shell:unquoted-variable-word-splitting",
+  "type": "failure_dossier",
+  "description": "Leaving a variable expansion unquoted, so values with spaces or globs undergo word-splitting and pathname expansion.",
+  "body": "Failure mode: `rm $file` or `for x in $list` without quotes splits on whitespace and expands globs, so a filename with a space becomes two arguments and a value containing * matches files. Detection signals: 'No such file or directory' on names with spaces; unexpected files affected; shellcheck SC2086 'Double quote to prevent globbing'. Do not leave expansions unquoted in command arguments or loops. Safer fallback: quote every expansion (\"$file\"), use arrays for lists (\"${arr[@]}\"), and iterate files with find -print0 | while IFS= read -r -d '' f; verify with a filename containing a space and an asterisk.",
+  "domain": "shell",
+  "scope_hint": "code.shell:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.shell:human_authored",
+  "pack_id": "code.shell"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:risk.security:dangerous-sink-review",
+  "type": "skill",
+  "title": "Dangerous Sink Review",
+  "description": "Trace untrusted input into interpreters, network, filesystem, renderers, and dynamic loading sinks.",
+  "body": "Inputs: data-flow path, sink API, and representative attacker-controlled values. Use when code constructs commands, queries, paths, redirects, templates, XML, JSON deserialization, or outbound requests. Do not approve regex-only sanitization across contexts. Procedure: classify the sink, identify safe structured APIs, add malicious input tests, and record why payload syntax is treated as data or rejected. Output: sink inventory, safe API recommendation, tests, and residual risk. Human gate: code execution, SSRF, or privileged filesystem exposure. Use when Security Risk Controls work touches trust boundaries, authorization decisions, dangerous sinks, secrets, and dependency execution. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: run the documented inspection and validation workflow; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include negative security tests, server-side checks, sink payload tests, and secret scans. Risk boundary: escalate or stop when the task involves client-only controls, injection, credential leakage, permissive fallback, and unsafe dependency changes, missing owner evidence, or live external state.",
+  "domain": "injection",
+  "scope_hint": "risk.security:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.security",
+  "pack_id": "risk.security"
+}

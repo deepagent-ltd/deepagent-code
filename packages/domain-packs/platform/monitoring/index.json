@@ -1,0 +1,468 @@
+[
+  {
+    "ref_id": "strategy:mon:make-every-alert-actionable",
+    "type": "strategy",
+    "title": "Make every alert actionable",
+    "summary": "Page only on symptoms a human must act on, and route everything else to dashboards or tickets.",
+    "domains": [
+      "monitoring",
+      "prometheus",
+      "grafana",
+      "alerting",
+      "sli_slo"
+    ],
+    "triggers": [
+      "alert",
+      "actionable",
+      "page",
+      "fatigue",
+      "symptom"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.monitoring"
+  },
+  {
+    "ref_id": "strategy:mon:rate-counters-over-adequate-windows",
+    "type": "strategy",
+    "title": "Rate counters over adequate windows",
+    "summary": "Apply rate()/increase() to counters across a window covering several scrape intervals.",
+    "domains": [
+      "monitoring",
+      "prometheus",
+      "grafana",
+      "alerting",
+      "sli_slo"
+    ],
+    "triggers": [
+      "rate",
+      "increase",
+      "counter",
+      "window",
+      "scrape"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.monitoring"
+  },
+  {
+    "ref_id": "strategy:mon:precompute-with-recording-rules",
+    "type": "strategy",
+    "title": "Precompute with recording rules",
+    "summary": "Materialize expensive or repeated PromQL into recording rules so dashboards and alerts read cheap series.",
+    "domains": [
+      "monitoring",
+      "prometheus",
+      "grafana",
+      "alerting",
+      "sli_slo"
+    ],
+    "triggers": [
+      "recording rule",
+      "precompute",
+      "dashboard",
+      "expensive",
+      "materialize"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.monitoring"
+  },
+  {
+    "ref_id": "strategy:mon:control-label-cardinality",
+    "type": "strategy",
+    "title": "Control label cardinality",
+    "summary": "Keep label value sets bounded; never label series with unbounded identifiers like user id or request id.",
+    "domains": [
+      "monitoring",
+      "prometheus",
+      "grafana",
+      "alerting",
+      "sli_slo"
+    ],
+    "triggers": [
+      "cardinality",
+      "label",
+      "series",
+      "unbounded",
+      "budget"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.monitoring"
+  },
+  {
+    "ref_id": "strategy:mon:alert-on-slo-burn-rate",
+    "type": "strategy",
+    "title": "Alert on SLO burn rate",
+    "summary": "Page on multi-window error-budget burn rate rather than a raw threshold so alerts track real risk.",
+    "domains": [
+      "monitoring",
+      "prometheus",
+      "grafana",
+      "alerting",
+      "sli_slo"
+    ],
+    "triggers": [
+      "slo",
+      "burn rate",
+      "error budget",
+      "sli",
+      "multi-window"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.monitoring"
+  },
+  {
+    "ref_id": "strategy:mon:route-and-group-in-alertmanager",
+    "type": "strategy",
+    "title": "Route and group in Alertmanager",
+    "summary": "Group related alerts, route by severity and team, and use inhibition to suppress downstream noise.",
+    "domains": [
+      "monitoring",
+      "prometheus",
+      "grafana",
+      "alerting",
+      "sli_slo"
+    ],
+    "triggers": [
+      "alertmanager",
+      "routing",
+      "grouping",
+      "inhibition",
+      "silence"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.monitoring"
+  },
+  {
+    "ref_id": "methodology:mon:define-sli-slo-and-budget",
+    "type": "methodology",
+    "title": "Define an SLI, SLO, and error budget",
+    "summary": "Pick a user-centric SLI, set an achievable SLO target, and derive the error budget and burn alerts.",
+    "domains": [
+      "monitoring",
+      "prometheus",
+      "grafana",
+      "alerting",
+      "sli_slo"
+    ],
+    "triggers": [
+      "sli",
+      "slo",
+      "error budget",
+      "burn rate",
+      "define"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.monitoring"
+  },
+  {
+    "ref_id": "methodology:mon:tame-alert-storms",
+    "type": "methodology",
+    "title": "Tame alert storms",
+    "summary": "Reduce a flood of pages through grouping, inhibition, and demoting non-actionable alerts.",
+    "domains": [
+      "monitoring",
+      "prometheus",
+      "grafana",
+      "alerting",
+      "sli_slo"
+    ],
+    "triggers": [
+      "alert storm",
+      "grouping",
+      "inhibition",
+      "fatigue",
+      "tame"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.monitoring"
+  },
+  {
+    "ref_id": "methodology:mon:diagnose-cardinality-blowup",
+    "type": "methodology",
+    "title": "Diagnose a cardinality blowup",
+    "summary": "Find the label driving series growth and bound it before the Prometheus server degrades.",
+    "domains": [
+      "monitoring",
+      "prometheus",
+      "grafana",
+      "alerting",
+      "sli_slo"
+    ],
+    "triggers": [
+      "cardinality",
+      "series",
+      "diagnose",
+      "label",
+      "memory"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.monitoring"
+  },
+  {
+    "ref_id": "methodology:mon:tune-scrape-config",
+    "type": "methodology",
+    "title": "Tune the scrape config",
+    "summary": "Align scrape interval, timeout, and relabeling with metric freshness and cardinality goals.",
+    "domains": [
+      "monitoring",
+      "prometheus",
+      "grafana",
+      "alerting",
+      "sli_slo"
+    ],
+    "triggers": [
+      "scrape",
+      "interval",
+      "relabel",
+      "timeout",
+      "tune"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.monitoring"
+  },
+  {
+    "ref_id": "knowledge:mon:promql-rate-and-counters",
+    "type": "knowledge",
+    "title": "PromQL rate and counters",
+    "summary": "rate() and increase() compute per-second and total change of counters, handling resets, over a window.",
+    "domains": [
+      "monitoring",
+      "prometheus",
+      "grafana",
+      "alerting",
+      "sli_slo"
+    ],
+    "triggers": [
+      "promql",
+      "rate",
+      "increase",
+      "counter",
+      "reset"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.monitoring"
+  },
+  {
+    "ref_id": "knowledge:mon:histogram-quantiles",
+    "type": "knowledge",
+    "title": "Histogram quantiles",
+    "summary": "histogram_quantile estimates percentiles from cumulative bucket counts, and bucket choice bounds accuracy.",
+    "domains": [
+      "monitoring",
+      "prometheus",
+      "grafana",
+      "alerting",
+      "sli_slo"
+    ],
+    "triggers": [
+      "histogram",
+      "quantile",
+      "percentile",
+      "bucket",
+      "latency"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.monitoring"
+  },
+  {
+    "ref_id": "knowledge:mon:recording-vs-alerting-rules",
+    "type": "knowledge",
+    "title": "Recording versus alerting rules",
+    "summary": "Recording rules precompute series on a schedule; alerting rules evaluate a condition and emit alerts.",
+    "domains": [
+      "monitoring",
+      "prometheus",
+      "grafana",
+      "alerting",
+      "sli_slo"
+    ],
+    "triggers": [
+      "recording rule",
+      "alerting rule",
+      "evaluate",
+      "precompute",
+      "for"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.monitoring"
+  },
+  {
+    "ref_id": "knowledge:mon:alertmanager-routing-model",
+    "type": "knowledge",
+    "title": "Alertmanager routing model",
+    "summary": "Alertmanager groups, routes, inhibits, and silences alerts via a routing tree keyed on labels.",
+    "domains": [
+      "monitoring",
+      "prometheus",
+      "grafana",
+      "alerting",
+      "sli_slo"
+    ],
+    "triggers": [
+      "alertmanager",
+      "routing",
+      "grouping",
+      "inhibition",
+      "silence"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.monitoring"
+  },
+  {
+    "ref_id": "skill:mon:inspect-active-series",
+    "type": "skill",
+    "title": "Inspect active series and cardinality",
+    "summary": "Report top series counts per metric and label to ground cardinality decisions in measured state.",
+    "domains": [
+      "monitoring",
+      "prometheus",
+      "grafana",
+      "alerting",
+      "sli_slo"
+    ],
+    "triggers": [
+      "series",
+      "cardinality",
+      "tsdb",
+      "inspect",
+      "report"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.monitoring"
+  },
+  {
+    "ref_id": "skill:mon:validate-alert-rules",
+    "type": "skill",
+    "title": "Validate alert rules",
+    "summary": "Check alert expressions, for-durations, and labels against test data to catch flapping or dead alerts.",
+    "domains": [
+      "monitoring",
+      "prometheus",
+      "grafana",
+      "alerting",
+      "sli_slo"
+    ],
+    "triggers": [
+      "alert",
+      "rule",
+      "validate",
+      "for",
+      "test"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.monitoring"
+  }
+]

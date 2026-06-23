@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:dist:trace-replication-flow",
+  "type": "skill",
+  "title": "Trace a write through the replication path",
+  "description": "Follow a single write from client to quorum ack to applied state across replicas and report where consistency is established or lost.",
+  "body": "Use when validating that a replicated write behaves as specified. Actions: instrument or read logs to follow one write's request id from the coordinator, through replica appends, to the quorum acknowledgement and the applied commit index on each node; compare the committed value across replicas. Report the request id, the quorum that acked, the commit index, and any replica that lagged or diverged. Do not infer correctness from the client's success response alone. This skill exposes capability only and must not mutate a live cluster without runtime permission. Validation signals include matching committed values at the same index on a majority of nodes. Risk boundary: if any replica shows a different committed value, report divergence as unverified-and-unsafe rather than passing.",
+  "domain": "distributed",
+  "scope_hint": "code.distributed:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.distributed",
+  "pack_id": "code.distributed"
+}

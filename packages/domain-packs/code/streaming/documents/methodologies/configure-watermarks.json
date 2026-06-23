@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:stream:configure-watermarks",
+  "type": "methodology",
+  "title": "Configure watermarks against real skew",
+  "description": "Measure out-of-order behavior per source and set watermark and lateness policy so windows fire correctly.",
+  "body": "Use when wiring event-time windows over real sources. Do not copy a watermark delay from an example — every source has its own skew and idle behavior. Actions: sample the arrival-vs-event-time gap, set the watermark to cover typical lateness, add allowed lateness and a side output for stragglers, and handle idle partitions so they do not stall the watermark. Validation signals include windows firing on watermark advance and a near-zero dropped-late metric under normal skew. Risk boundary: an idle partition can freeze the global watermark and stop all output; if windows stop firing, escalate to idle-source handling before assuming a data outage.",
+  "domain": "streaming",
+  "scope_hint": "code.streaming:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.streaming",
+  "pack_id": "code.streaming"
+}

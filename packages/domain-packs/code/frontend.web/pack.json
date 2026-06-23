@@ -1,0 +1,48 @@
+{
+  "schema_version": "domain_pack.v1",
+  "id": "code.frontend.web",
+  "name": "Frontend Web",
+  "version": "1.1.0",
+  "scope": "system",
+  "risk": "medium",
+  "domains": [
+    "frontend",
+    "web",
+    "browser",
+    "css",
+    "accessibility"
+  ],
+  "provides": [
+    "knowledge",
+    "strategy",
+    "methodology",
+    "skill",
+    "diagnosis"
+  ],
+  "depends_on": [
+    "code.core",
+    "code.testing"
+  ],
+  "conflicts_with": [],
+  "knowledge_store": "document_store",
+  "allowed_tools": [
+    "read",
+    "edit",
+    "shell:test",
+    "browser"
+  ],
+  "denied_tools": [
+    "shell:deploy-production"
+  ],
+  "data_policy": {
+    "sensitivity": [
+      "source_code"
+    ],
+    "default_admission": "summary_only",
+    "secret_policy": "deny"
+  },
+  "detector": {
+    "inline": "profile.code_domains.some(d => ['frontend','web','browser','css','accessibility'].includes(d)) || profile.platforms.includes('web') || profile.repo_signals.some(s => /\\b(dom|css|html|vite|playwright|browser|a11y)\\b/i.test(s)) ? 0.86 : 0",
+    "threshold": 0.5
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:chain:analyze-and-optimize-gas",
+  "type": "methodology",
+  "title": "Analyze and optimize gas usage",
+  "description": "Measure per-function gas, find storage-write hot spots, and reduce cost without breaking correctness or safety.",
+  "body": "Steps: 1. Generate a gas report per function from the test suite. 2. Identify hot spots: storage writes (SSTORE) dominate, then storage reads and external calls. 3. Apply safe reductions: pack storage variables into fewer slots, cache storage reads in memory, avoid redundant writes, and use events for data that does not need on-chain reads. 4. Re-run tests to confirm behavior is unchanged. 5. Re-measure against the target. Rollback point: before changing storage layout on a deployed-format contract. Validation: gas falls measurably and all correctness and adversarial tests still pass; never trade away a safety check (reentrancy guard, access control) to save gas.",
+  "domain": "blockchain",
+  "scope_hint": "code.blockchain:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.blockchain",
+  "pack_id": "code.blockchain"
+}

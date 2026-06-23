@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure_dossier:analytics:divergent-metric-definitions",
+  "type": "failure_dossier",
+  "description": "Two dashboards report different numbers for the same metric because each redefined the calculation.",
+  "body": "Failure mode: a metric like active users is implemented separately in each dashboard's SQL, and subtle differences in filters or grain make the dashboards disagree, eroding trust in the warehouse. Detection signals: stakeholders citing conflicting numbers for one metric, and a code search revealing multiple independent definitions of the same calculation. Do not reconcile by patching one dashboard to match another. Safer fallback: define the metric once in a governed metrics layer with explicit grain and filters, repoint every consumer to that definition, and verify the metric returns identical values across all consuming tools before closing the discrepancy.",
+  "domain": "analytics",
+  "scope_hint": "code.analytics:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.analytics:human_authored",
+  "pack_id": "code.analytics"
+}

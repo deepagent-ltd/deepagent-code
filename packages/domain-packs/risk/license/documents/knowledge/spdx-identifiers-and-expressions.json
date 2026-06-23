@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:lic:spdx-identifiers-and-expressions",
+  "type": "knowledge",
+  "title": "SPDX identifiers and license expressions",
+  "description": "SPDX gives each license a stable identifier and a small grammar (AND/OR/WITH) for expressing combined and exception-bearing terms.",
+  "body": "Use when recording or parsing the license of a component. An SPDX identifier (MIT, Apache-2.0, GPL-3.0-or-later) is a stable string from the SPDX License List. Expressions combine them: OR means the recipient may choose a disjunct (dual licensing), AND means all terms apply cumulatively, and WITH attaches an exception (GPL-2.0-with-classpath-exception relaxes linking). The '+' / '-or-later' suffix lets a later version of the license apply. Do not invent identifiers or treat 'GPL' as unambiguous about version. Actions: validate identifiers against the current list, record the chosen disjunct for OR, and treat deprecated identifiers (e.g. GPL-2.0 vs GPL-2.0-only) as fixups. Validation signals include every inventory identifier parsing against the current SPDX list. Risk boundary: an unparseable or deprecated identifier means the obligation is undetermined; escalate.",
+  "domain": "license",
+  "scope_hint": "risk.license:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.license",
+  "pack_id": "risk.license"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:cass:batch-writes-correctly",
+  "type": "skill",
+  "title": "Use BATCH only for single-partition atomicity",
+  "description": "Scope a CQL BATCH to one partition for atomicity; never use multi-partition batches as a performance shortcut.",
+  "body": "Use when several writes to the same partition must apply atomically. Actions: wrap writes that share one partition key in a logged BATCH so they commit together, and for unrelated partitions issue independent asynchronous writes instead. Do not use a multi-partition BATCH to group unrelated inserts; it forces the coordinator to fan out and log every mutation, hurting throughput and creating coordinator pressure. Verify the batch targets a single partition. Validation signals include batches confined to one partition and write latency staying flat under load. Risk boundary: a large multi-partition batch can overload the coordinator and time out, so reserve BATCH for single-partition atomicity and parallelise cross-partition writes from the client.",
+  "domain": "cassandra",
+  "scope_hint": "code.database.cassandra:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.cassandra",
+  "pack_id": "code.database.cassandra"
+}

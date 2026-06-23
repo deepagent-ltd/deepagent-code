@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:evt:migrate-event-schema",
+  "type": "methodology",
+  "title": "Migrate an event schema safely",
+  "description": "Roll out an event payload change behind compatibility checks so producers and consumers never break mid-deploy.",
+  "body": "Steps: 1. Classify the change as compatible (add optional field) or breaking (rename/remove/retype). 2. For compatible changes, deploy consumers tolerating both shapes first, then producers. 3. For breaking changes, introduce a new event version/topic, run both in parallel, migrate consumers, then retire the old. 4. Add a CI schema-registry compatibility check. 5. Verify replay of historical events still parses. Rollback point: keep the old field/version until all consumers confirm migration. Validation: compatibility tests pass for old-event/new-consumer and new-event/old-consumer, and replayed history parses.",
+  "domain": "event_driven",
+  "scope_hint": "code.backend.event-driven:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.event-driven",
+  "pack_id": "code.backend.event-driven"
+}

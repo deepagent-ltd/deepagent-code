@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:tsdb:always-filter-by-time",
+  "type": "strategy",
+  "title": "Always filter by a time predicate",
+  "description": "Every query carries a bounded time range so the planner prunes to relevant chunks instead of scanning all history.",
+  "body": "Use when writing or reviewing any time-series query. Do not issue aggregate queries without a time bound — the planner cannot prune chunks and scans the entire hypertable. Actions: add an explicit time range (or default window), verify the plan prunes to the expected chunks, and parameterize the range. Validation signals include EXPLAIN showing chunk exclusion and bounded scan rows. Risk boundary: an unbounded scan on a large hypertable can saturate I/O for all tenants — escalate before running ad-hoc full-history aggregates in production.",
+  "domain": "timeseries_db",
+  "scope_hint": "code.database.timeseries:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.timeseries",
+  "pack_id": "code.database.timeseries"
+}

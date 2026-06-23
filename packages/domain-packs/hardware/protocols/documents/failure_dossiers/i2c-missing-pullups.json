@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure_dossier:hwprot:i2c-missing-pullups",
+  "type": "failure_dossier",
+  "description": "An I2C bus works at low speed but fails intermittently at higher speed because the pull-up resistors are too weak for the bus capacitance.",
+  "body": "Failure mode: weak or absent external pull-ups leave the open-drain lines with slow rising edges that violate timing as the clock speeds up. Detection signals: rounded rising edges on a capture, errors that appear only at fast mode, and reliability that improves when the clock slows. Do not blame firmware for errors that track bus speed. Safer fallback: size the pull-ups for the bus capacitance and target rise time, verify edges on a scope, then retest at full speed.",
+  "domain": "hw_protocols",
+  "scope_hint": "hardware.protocols:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.protocols:human_authored",
+  "pack_id": "hardware.protocols"
+}

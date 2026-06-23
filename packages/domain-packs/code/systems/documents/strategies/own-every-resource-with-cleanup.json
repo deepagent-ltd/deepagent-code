@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:sys:own-every-resource-with-cleanup",
+  "type": "strategy",
+  "title": "Give every OS resource a deterministic release path",
+  "description": "Pair each fd, lock, mapping, and child with a guaranteed close on every exit path, including errors and signals.",
+  "body": "Use when acquiring any OS resource: file descriptors, locks, mmap regions, child processes, sockets. Do not close only on the happy path, because an early return or exception leaks the resource until the process exhausts its limit. Actions: use the language's deterministic cleanup (defer, finally, RAII, with/context manager) so release runs on every path; for children, always wait/reap to avoid zombies. Validation signals include a leak test that runs the path many times with fd/handle counts staying flat. Risk boundary: removing a cleanup so a resource leaks under load is an availability regression; require a leak test that holds steady before accepting.",
+  "domain": "systems",
+  "scope_hint": "code.systems:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.systems",
+  "pack_id": "code.systems"
+}

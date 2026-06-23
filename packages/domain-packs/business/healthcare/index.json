@@ -1,0 +1,468 @@
+[
+  {
+    "ref_id": "knowledge:healthcare:audit-and-consent",
+    "type": "knowledge",
+    "title": "Audit And Consent",
+    "summary": "Healthcare systems often require consent, purpose, and access audit evidence.",
+    "domains": [
+      "healthcare",
+      "business",
+      "privacy"
+    ],
+    "triggers": [
+      "healthcare",
+      "systems",
+      "often",
+      "require",
+      "consent",
+      "purpose",
+      "access",
+      "audit"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "regulated",
+    "sensitivity": "pii",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "business.healthcare"
+  },
+  {
+    "ref_id": "knowledge:healthcare:phi-is-high-sensitivity",
+    "type": "knowledge",
+    "title": "Phi Is High Sensitivity",
+    "summary": "Health information linked to a person requires strict privacy handling.",
+    "domains": [
+      "healthcare",
+      "business",
+      "privacy"
+    ],
+    "triggers": [
+      "health",
+      "information",
+      "linked",
+      "person",
+      "requires",
+      "strict",
+      "privacy",
+      "handling"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "regulated",
+    "sensitivity": "pii",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "business.healthcare"
+  },
+  {
+    "ref_id": "methodology:healthcare:clinical-safety-change-review",
+    "type": "methodology",
+    "title": "Clinical Safety Change Review",
+    "summary": "Escalate changes affecting clinical decisions, triage, dosage, or patient instructions.",
+    "domains": [
+      "healthcare",
+      "business",
+      "privacy"
+    ],
+    "triggers": [
+      "escalate",
+      "changes",
+      "affecting",
+      "clinical",
+      "decisions",
+      "triage",
+      "dosage",
+      "patient"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "regulated",
+    "sensitivity": "pii",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "business.healthcare"
+  },
+  {
+    "ref_id": "methodology:healthcare:healthcare-data-flow-review",
+    "type": "methodology",
+    "title": "Healthcare Data Flow Review",
+    "summary": "Trace PHI from collection to storage, access, logging, export, and deletion.",
+    "domains": [
+      "healthcare",
+      "business",
+      "privacy"
+    ],
+    "triggers": [
+      "trace",
+      "from",
+      "collection",
+      "storage",
+      "access",
+      "logging",
+      "export",
+      "deletion"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "regulated",
+    "sensitivity": "pii",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "business.healthcare"
+  },
+  {
+    "ref_id": "skill:healthcare:healthcare-privacy-review",
+    "type": "skill",
+    "title": "Healthcare Privacy Review",
+    "summary": "Review healthcare code changes for PHI flow, audit, access, and human gates.",
+    "domains": [
+      "healthcare",
+      "business",
+      "privacy"
+    ],
+    "triggers": [
+      "review",
+      "healthcare",
+      "code",
+      "changes",
+      "flow",
+      "audit",
+      "access",
+      "human"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "regulated",
+    "sensitivity": "pii",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "business.healthcare"
+  },
+  {
+    "ref_id": "strategy:healthcare:audit-access",
+    "type": "strategy",
+    "title": "Audit Access",
+    "summary": "Access to patient or clinical data should be auditable.",
+    "domains": [
+      "healthcare",
+      "business",
+      "privacy"
+    ],
+    "triggers": [
+      "access",
+      "patient",
+      "clinical",
+      "data",
+      "should",
+      "auditable",
+      "record",
+      "actor"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "regulated",
+    "sensitivity": "pii",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "business.healthcare"
+  },
+  {
+    "ref_id": "strategy:healthcare:clinical-human-gate",
+    "type": "strategy",
+    "title": "Clinical Human Gate",
+    "summary": "Clinical decision ambiguity requires qualified human review.",
+    "domains": [
+      "healthcare",
+      "business",
+      "privacy"
+    ],
+    "triggers": [
+      "clinical",
+      "decision",
+      "ambiguity",
+      "requires",
+      "qualified",
+      "human",
+      "review",
+      "automation"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "regulated",
+    "sensitivity": "pii",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "business.healthcare"
+  },
+  {
+    "ref_id": "strategy:healthcare:phi-minimization",
+    "type": "strategy",
+    "title": "Phi Minimization",
+    "summary": "Collect and expose only PHI needed for the workflow.",
+    "domains": [
+      "healthcare",
+      "business",
+      "privacy"
+    ],
+    "triggers": [
+      "collect",
+      "expose",
+      "only",
+      "needed",
+      "workflow",
+      "healthcare",
+      "data",
+      "high"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "regulated",
+    "sensitivity": "pii",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "business.healthcare"
+  },
+  {
+    "ref_id": "strategy:healthcare:minimize-phi-collection",
+    "type": "strategy",
+    "title": "Collect and retain the minimum PHI necessary",
+    "summary": "Gather only the protected health information a feature genuinely needs, for only as long as needed, rather than capturing whole records by default.",
+    "domains": [
+      "healthcare",
+      "business",
+      "privacy"
+    ],
+    "triggers": [
+      "phi minimization",
+      "data minimization",
+      "retention",
+      "necessary",
+      "scope",
+      "collection"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "regulated",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "business.healthcare"
+  },
+  {
+    "ref_id": "strategy:healthcare:de-identify-before-secondary-use",
+    "type": "strategy",
+    "title": "De-identify PHI before analytics or non-clinical use",
+    "summary": "Strip or transform identifiers before patient data flows into analytics, test, or model-training environments so secondary use does not expose individuals.",
+    "domains": [
+      "healthcare",
+      "business",
+      "privacy"
+    ],
+    "triggers": [
+      "de-identification",
+      "anonymization",
+      "safe harbor",
+      "analytics",
+      "test data",
+      "re-identification"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "regulated",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "business.healthcare"
+  },
+  {
+    "ref_id": "strategy:healthcare:gate-patient-impacting-logic",
+    "type": "strategy",
+    "title": "Gate patient-impacting logic behind clinical human review",
+    "summary": "Require qualified human sign-off for any code path whose output could influence diagnosis, treatment, dosing, or triage decisions.",
+    "domains": [
+      "healthcare",
+      "business",
+      "privacy"
+    ],
+    "triggers": [
+      "clinical safety",
+      "human gate",
+      "decision support",
+      "dosing",
+      "triage",
+      "sign-off"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "regulated",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "business.healthcare"
+  },
+  {
+    "ref_id": "methodology:healthcare:map-phi-data-flow",
+    "type": "methodology",
+    "title": "Map the end-to-end PHI data flow for a change",
+    "summary": "Trace where protected health information enters, is stored, transmitted, logged, and exits to confirm every hop is access-controlled, encrypted, and audited.",
+    "domains": [
+      "healthcare",
+      "business",
+      "privacy"
+    ],
+    "triggers": [
+      "data flow",
+      "phi mapping",
+      "encryption",
+      "access control",
+      "transmission",
+      "boundary"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "regulated",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "business.healthcare"
+  },
+  {
+    "ref_id": "methodology:healthcare:track-consent-and-authorization",
+    "type": "methodology",
+    "title": "Track consent and authorization for PHI use",
+    "summary": "Verify that each use or disclosure of patient data is covered by a recorded consent or lawful basis, and enforce that scope in code.",
+    "domains": [
+      "healthcare",
+      "business",
+      "privacy"
+    ],
+    "triggers": [
+      "consent",
+      "authorization",
+      "lawful basis",
+      "disclosure",
+      "purpose limitation",
+      "scope"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "regulated",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "business.healthcare"
+  },
+  {
+    "ref_id": "knowledge:healthcare:re-identification-risk-is-cumulative",
+    "type": "knowledge",
+    "title": "Re-identification risk is cumulative across quasi-identifiers",
+    "summary": "Removing direct identifiers is not enough; combinations of quasi-identifiers like ZIP, birth date, and gender can re-identify individuals in 'anonymous' data.",
+    "domains": [
+      "healthcare",
+      "business",
+      "privacy"
+    ],
+    "triggers": [
+      "re-identification",
+      "quasi-identifier",
+      "anonymization",
+      "linkage",
+      "k-anonymity",
+      "cumulative"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "regulated",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "business.healthcare"
+  },
+  {
+    "ref_id": "knowledge:healthcare:phi-leaks-through-incidental-channels",
+    "type": "knowledge",
+    "title": "PHI leaks through logs, URLs, and error messages",
+    "summary": "Patient data commonly escapes not through the database but through debug logs, URL query strings, stack traces, analytics, and third-party scripts.",
+    "domains": [
+      "healthcare",
+      "business",
+      "privacy"
+    ],
+    "triggers": [
+      "log leakage",
+      "url parameter",
+      "stack trace",
+      "analytics",
+      "incidental disclosure",
+      "telemetry"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "regulated",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "business.healthcare"
+  },
+  {
+    "ref_id": "skill:healthcare:scan-change-for-phi-exposure",
+    "type": "skill",
+    "title": "Scan a change for PHI exposure paths",
+    "summary": "Inspect a diff for PHI in logs, URLs, error output, unencrypted sinks, and unconsented uses, reporting each exposure with its channel.",
+    "domains": [
+      "healthcare",
+      "business",
+      "privacy"
+    ],
+    "triggers": [
+      "phi scan",
+      "exposure",
+      "log",
+      "url",
+      "encryption",
+      "audit"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "regulated",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "business.healthcare"
+  }
+]

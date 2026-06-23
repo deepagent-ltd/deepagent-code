@@ -1,0 +1,11 @@
+{
+  "ref_id": "strategy:python:idiom-preserving-change",
+  "type": "strategy",
+  "description": "In Python, prefer established idioms (context managers, generators, the import system, and type hints checked statically) over generic rewrites.",
+  "body": "In Python, the ecosystem has settled idioms — context managers, generators, the import system, and type hints checked statically — and changes that ignore them add risk and review friction. Use when adding or modifying Python code near existing patterns. Do not impose a foreign style or rewrite working code into a generic shape, and avoid abandoning nearby conventions. Actions: read the surrounding code, follow its context managers, generators, the import system, and type hints checked statically, keep the change minimal, then run mypy/pyright type checks, ruff/flake8 lint, and DeprecationWarnings and pytest on the changed package inside the project venv to confirm fit. Validation signals include a small diff consistent with neighbors, a clean lint pass, and passing tests. Risk boundary: a broad idiom migration is its own reviewed task; escalate rather than bundling it into an unrelated change.",
+  "domain": "python",
+  "scope_hint": "code.python:strategies",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.python:skill_survey",
+  "pack_id": "code.python"
+}

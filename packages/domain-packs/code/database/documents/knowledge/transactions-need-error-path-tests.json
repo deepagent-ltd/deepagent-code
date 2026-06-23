@@ -1,0 +1,11 @@
+{
+  "ref_id": "knowledge:database:transactions-need-error-path-tests",
+  "type": "knowledge",
+  "description": "Transaction correctness is proven on failure paths, not only on successful commits.",
+  "body": "Use this when code performs multiple writes, updates denormalized records, emits outbox rows, or changes transaction boundaries. A success-path test can miss partial writes, swallowed errors, nested transaction behavior, or commits before external side effects fail. This does not define distributed transaction architecture. Execution impact: inject or simulate an error after an early write, assert rollback of all atomic rows, verify external side effects are outside or coordinated with the transaction, and check that errors propagate predictably. Validation signals include unchanged row counts after failure, no orphan rows, no partially advanced state machine, and logs or errors that identify rollback. Risk boundary: do not broaden transaction scope around slow network calls without considering locks and timeouts. Use when Database Engineering work touches schema deltas, query shape, transaction ownership, constraints, locks, and data volume. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: use the fact to constrain the change and test plan; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include migration dry-runs, rollback checks, EXPLAIN output, constraint tests, and fixture data comparisons. Risk boundary: escalate or stop when the task involves data loss, long locks, non-rollbackable writes, silent query-plan regressions, and unsafe backfills, missing owner evidence, or live external state.",
+  "domain": "sql",
+  "scope_hint": "code.database:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database:transaction_testing_practice",
+  "pack_id": "code.database"
+}

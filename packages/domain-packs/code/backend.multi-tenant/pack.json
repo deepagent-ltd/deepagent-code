@@ -1,0 +1,51 @@
+{
+  "schema_version": "domain_pack.v1",
+  "id": "code.backend.multi-tenant",
+  "name": "Multi-Tenant Backend",
+  "version": "1.0.0",
+  "scope": "system",
+  "risk": "high",
+  "domains": [
+    "multi_tenant",
+    "tenant_isolation",
+    "scoped_query",
+    "tenant_routing"
+  ],
+  "provides": [
+    "knowledge",
+    "strategy",
+    "methodology",
+    "skill",
+    "diagnosis",
+    "validation"
+  ],
+  "depends_on": [
+    "code.backend.api",
+    "risk.privacy",
+    "risk.security",
+    "code.database"
+  ],
+  "conflicts_with": [],
+  "knowledge_store": "document_store",
+  "allowed_tools": [
+    "read",
+    "shell:test"
+  ],
+  "denied_tools": [
+    "shell:cross-tenant-access",
+    "shell:deploy-production"
+  ],
+  "data_policy": {
+    "sensitivity": [
+      "source_code",
+      "user_data",
+      "pii"
+    ],
+    "default_admission": "summary_only",
+    "secret_policy": "deny"
+  },
+  "detector": {
+    "inline": "profile.code_domains.some(d=>['multi_tenant','tenant_isolation','scoped_query','tenant_routing'].includes(d)) || profile.repo_signals.some(s=>/\\b(multi.?tenant|tenant isolation|tenant.?scoped|row.?level security|tenant id|noisy neighbor|tenant routing|per.?tenant)\\b/i.test(s)) ? 0.9 : 0",
+    "threshold": 0.5
+  }
+}

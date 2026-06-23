@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:net:backpressure-and-flow-control",
+  "type": "knowledge",
+  "title": "Backpressure and flow control",
+  "description": "When a consumer is slower than a producer, the system must slow the producer (backpressure) or it buffers without bound until it fails.",
+  "body": "Use when wiring producers to consumers across a network boundary. If a downstream consumer is slower than the producer, something must give: either the producer is slowed (blocking, bounded concurrency, TCP flow control), requests are queued in a bounded buffer, or excess is shed/dropped. With no backpressure the queue grows until memory or descriptors are exhausted and the whole system fails rather than degrading. Do not use unbounded queues as shock absorbers. Actions: bound concurrency and queues, choose a block/drop/shed policy deliberately, and let slowness propagate upstream. Validation signals include flat memory under a slow downstream and the producer rate adapting. Risk boundary: an unbounded buffer converts a transient slowdown into a hard crash and can lose data when it finally fails.",
+  "domain": "networking",
+  "scope_hint": "code.networking:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.networking",
+  "pack_id": "code.networking"
+}

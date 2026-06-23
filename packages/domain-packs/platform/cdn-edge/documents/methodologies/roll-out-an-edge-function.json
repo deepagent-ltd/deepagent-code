@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:edge:roll-out-an-edge-function",
+  "type": "methodology",
+  "title": "Roll out an edge function safely",
+  "description": "Measure runtime budget, test cold start, and stage the function to a fraction of traffic before global deploy.",
+  "body": "Steps: 1. Measure the function's CPU-ms, memory, and bundle size against platform limits. 2. Remove filesystem/stateful assumptions. 3. Test cold-start latency. 4. Deploy to a canary route or fraction of PoPs. 5. Watch error/kill rates, then expand. Rollback point: keep the previous version deployable for instant revert. Validation: error and CPU-limit-kill rates stay flat as traffic ramps. Note: edge deploys are global and fast to propagate — a bad function affects everyone, so canary first.",
+  "domain": "cdn",
+  "scope_hint": "platform.cdn-edge:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.cdn-edge",
+  "pack_id": "platform.cdn-edge"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:frontend_accessibility:semantic-html-carries-behavior",
+  "type": "knowledge",
+  "title": "Semantic HTML carries built-in behavior",
+  "description": "Native elements like button, a, and input bring keyboard handling, focusability, and roles that a div with ARIA must reimplement by hand.",
+  "body": "Use when deciding between a native element and a styled div/span. A native <button> is focusable, fires on Enter/Space, and exposes a button role for free; a <div role=button> reimplements none of that and needs tabindex, key handlers, and an explicit role. Do not rebuild native semantics on generic elements unless truly necessary. Actions: reach for the native element first and only add ARIA when no native element fits. Validation signals include keyboard operation working without custom handlers and a correct role in the accessibility tree. Risk boundary: a fake button missing keyboard support is unusable without a mouse; verify keyboard operability before shipping any custom control.",
+  "domain": "frontend",
+  "scope_hint": "code.frontend.accessibility:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.frontend.accessibility",
+  "pack_id": "code.frontend.accessibility"
+}

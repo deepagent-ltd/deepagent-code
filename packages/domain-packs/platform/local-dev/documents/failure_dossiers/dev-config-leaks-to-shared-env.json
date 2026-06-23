@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:local_dev:dev-config-leaks-to-shared-env",
+  "type": "failure_dossier",
+  "description": "Local development overrides or test data unintentionally written to a shared or production-like backend instead of a local sandbox.",
+  "body": "Failure mode: a dev run points at a shared database, queue, or service because the default config or an env var was not overridden locally, so local experiments mutate data other people or production depend on. Detection signals: local actions appear in shared dashboards; connection strings point at non-local hosts; test data shows up in a shared store. Do not run local dev against shared/production backends by default. Safer fallback: default local config to local services, require explicit opt-in to point at any shared environment, and verify the target host before write operations. Risk boundary: escalate and confirm with a human before any local run can write to a shared or production datastore.",
+  "domain": "platform",
+  "scope_hint": "platform.local-dev:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.local-dev:human_authored",
+  "pack_id": "platform.local-dev"
+}

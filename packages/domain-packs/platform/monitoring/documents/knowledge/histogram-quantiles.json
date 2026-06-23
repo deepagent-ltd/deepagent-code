@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:mon:histogram-quantiles",
+  "type": "knowledge",
+  "title": "Histogram quantiles",
+  "description": "histogram_quantile estimates percentiles from cumulative bucket counts, and bucket choice bounds accuracy.",
+  "body": "Use when computing latency percentiles from a Prometheus histogram. histogram_quantile interpolates a percentile from the cumulative _bucket counts (rated over a window); accuracy is limited by where the bucket boundaries fall around the percentile. Do not apply it to non-bucket series or expect precision between sparse buckets. Actions: rate the buckets first, choose boundaries near the SLO latency, and read the estimate as bounded by bucket width. Validation signals include the estimated percentile aligning with bucket granularity. Risk boundary: poorly placed buckets make a latency SLO unmeasurable, so align buckets to the target.",
+  "domain": "monitoring",
+  "scope_hint": "platform.monitoring:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.monitoring",
+  "pack_id": "platform.monitoring"
+}

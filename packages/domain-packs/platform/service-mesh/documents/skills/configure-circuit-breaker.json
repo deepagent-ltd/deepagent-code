@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:mesh:configure-circuit-breaker",
+  "type": "skill",
+  "title": "Configure a DestinationRule circuit breaker",
+  "description": "Set connectionPool limits and outlierDetection on a DestinationRule so unhealthy upstream hosts eject and concurrency is capped.",
+  "body": "Use when an upstream needs protection from overload or flaky instances. Do not leave the pool unbounded or eject the entire fleet. Actions: on the DestinationRule set connectionPool (max connections, http1MaxPendingRequests, maxRequestsPerConnection) to bound concurrency and outlierDetection (consecutive5xxErrors, interval, baseEjectionTime, maxEjectionPercent) to eject bad hosts while keeping a quorum. Test with an injected error stream. Validation signals include the bad host being ejected and the breaker tripping when the pool saturates. Risk boundary: tightening these on a live service can shed real traffic and is human-gated for production.",
+  "domain": "service_mesh",
+  "scope_hint": "platform.service-mesh:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.service-mesh",
+  "pack_id": "platform.service-mesh"
+}

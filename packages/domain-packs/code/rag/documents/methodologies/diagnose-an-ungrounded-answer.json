@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:rag:diagnose-an-ungrounded-answer",
+  "type": "methodology",
+  "title": "Diagnose an ungrounded answer",
+  "description": "Trace a wrong answer back through grounding, retrieval, and chunking to find where the supporting passage was lost.",
+  "body": "Steps: 1. Take the bad answer and check whether any retrieved passage supports the claim. 2. If a supporting passage was retrieved but ignored, the fault is generation/grounding. 3. If none was retrieved, check whether the reranker dropped it or first-stage retrieval missed it. 4. If retrieval missed it, check whether chunking split the answer or the embedding mismatched the query. 5. Fix at the lowest failing stage. Rollback point: before re-ingesting or re-embedding. Validation: the corrected stage retrieves and grounds the previously failing query.",
+  "domain": "rag",
+  "scope_hint": "code.rag:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.rag",
+  "pack_id": "code.rag"
+}

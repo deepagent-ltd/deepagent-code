@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:query:stale-context-answer",
+  "type": "failure_dossier",
+  "description": "The answer used old context or a previous run instead of current workspace, git, config, log, or database state.",
+  "body": "Failure: a current-state question was answered from stale context. Impact: the result may be plausible but wrong after file, branch, environment, data, or log changes. Do not use: do not treat prior chat or memory as current state. Recovery: refresh the relevant read-only source or state that the answer is unverified. This failure dossier is a negative signal only and must not be injected as a positive strategy.. Use when a query task is answered from memory, stale context, or an unbounded dump instead of source evidence. Do not use this dossier as a positive implementation strategy; it is a do-not-use signal. Actions: rerun the read-only query, cite the exact source, narrow the output, and verify the working tree stayed unchanged. Validation signals include command output, file references, count checks, and no edit/diff evidence. Risk boundary: block closure when the request was mutated into a write task or when sensitive data would be exposed.",
+  "domain": "query",
+  "scope_hint": "code.query:negative",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.query",
+  "pack_id": "code.query"
+}

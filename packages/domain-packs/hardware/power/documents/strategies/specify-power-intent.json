@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:hwpwr:specify-power-intent",
+  "type": "strategy",
+  "title": "Capture power intent in UPF or CPF",
+  "description": "Declare power domains, supply nets, isolation, level shifters, and retention in a power-intent file the tools enforce.",
+  "body": "Use when a design has more than one power state or voltage domain. Do not bury power intent in scattered RTL, since tools need a single declarative source to insert and check power structures. Actions: define the power domains and supply nets, declare isolation and retention strategies, and verify the tools insert matching cells. Validation signals include a power-intent file that the tools accept without errors and inserted cells matching the declared strategy. Risk boundary: a mismatch between intent and RTL silently breaks power management, so deny sign-off until the power-intent file checks clean.",
+  "domain": "power_design",
+  "scope_hint": "hardware.power:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.power",
+  "pack_id": "hardware.power"
+}

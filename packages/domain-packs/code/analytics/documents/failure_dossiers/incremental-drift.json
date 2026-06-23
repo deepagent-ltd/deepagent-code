@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure_dossier:analytics:incremental-drift",
+  "type": "failure_dossier",
+  "description": "An incremental model silently diverges from the truth because its late-arriving data window is too narrow.",
+  "body": "Failure mode: an incremental model filters on rows newer than the last run, so backdated or updated source records arriving after the window are never picked up and the table drifts below a full refresh. Detection signals: a reconciliation diff between the incremental table and a full refresh growing over time, and totals trailing a trusted source. Do not just rerun the incremental build, which repeats the same gap. Safer fallback: widen the incremental predicate to a lookback window covering observed late arrivals, switch to a merge keyed on a unique id so updates are captured, full-refresh once to reset, and schedule ongoing reconciliation.",
+  "domain": "analytics",
+  "scope_hint": "code.analytics:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.analytics:human_authored",
+  "pack_id": "code.analytics"
+}

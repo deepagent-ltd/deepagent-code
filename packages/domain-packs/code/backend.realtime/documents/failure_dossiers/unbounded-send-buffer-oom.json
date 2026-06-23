@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:rt:unbounded-send-buffer-oom",
+  "type": "failure_dossier",
+  "description": "A slow client's outbound messages queue without limit, exhausting server memory and taking down all connections.",
+  "body": "Failure mode: the server enqueues every message for a connection whose socket write is slow, so the per-connection buffer grows until the process runs out of memory and all clients drop. Detection signals: memory grows with the slowest client's lag; no high-water mark or drop policy on the send queue; OOM kills correlate with bursty broadcasts. Do not buffer outbound messages without bound. Safer fallback: bound the outbound queue, coalesce to latest-state or disconnect laggards with a resync contract, and load-test that memory stays flat under a slow consumer.",
+  "domain": "realtime",
+  "scope_hint": "code.backend.realtime:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.realtime:human_authored",
+  "pack_id": "code.backend.realtime"
+}

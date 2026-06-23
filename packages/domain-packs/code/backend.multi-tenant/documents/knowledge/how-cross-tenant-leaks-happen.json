@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:mt:how-cross-tenant-leaks-happen",
+  "type": "knowledge",
+  "title": "How cross-tenant leaks happen",
+  "description": "Leaks arise when a path fetches data without the tenant predicate, trusts a client-supplied tenant, or shares a cache key across tenants.",
+  "body": "Use when reasoning about where isolation breaks. Do not assume leaks only come from obvious endpoints. Common causes are queries that select by id alone, tenant context taken from forgeable request fields, background jobs that scan all rows, and cache keys missing the tenant; aggregate and reporting queries are frequent blind spots. Inspect every path, not just CRUD endpoints. Validation signals include negative tests covering jobs, exports, and caches in addition to endpoints. Risk boundary: a single missed path exposes another tenant's data, so treat completeness of scoping as the property to verify.",
+  "domain": "multi_tenant",
+  "scope_hint": "code.backend.multi-tenant:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.multi-tenant",
+  "pack_id": "code.backend.multi-tenant"
+}

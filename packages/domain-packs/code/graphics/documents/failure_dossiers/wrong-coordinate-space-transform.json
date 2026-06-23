@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:gfx:wrong-coordinate-space-transform",
+  "type": "failure_dossier",
+  "description": "Applying transforms in the wrong order or space so geometry, normals, or lighting are computed in mismatched coordinate systems.",
+  "body": "Failure mode: a position is multiplied by the projection before the view matrix, or normals are transformed by the model matrix instead of its inverse-transpose, so geometry is misplaced or lighting is wrong while the frame still looks superficially plausible. Detection signals: objects render at unexpected locations or scales; lighting shifts incorrectly as the model is non-uniformly scaled; a reference-image test fails though no error is logged. Do not eyeball a single frame as proof of correct transforms. Safer fallback: label each vector's space, apply model then view then projection in order, transform normals by the inverse-transpose of the model matrix, and verify against a known reference image.",
+  "domain": "graphics",
+  "scope_hint": "code.graphics:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.graphics:human_authored",
+  "pack_id": "code.graphics"
+}

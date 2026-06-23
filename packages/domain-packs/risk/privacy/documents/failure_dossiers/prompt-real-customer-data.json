@@ -1,0 +1,12 @@
+{
+  "ref_id": "failure_dossier:privacy:prompt-real-customer-data",
+  "type": "failure_dossier",
+  "title": "Real customer data in prompts",
+  "description": "A bug report, fixture, or AI prompt includes raw personal data from production or support records.",
+  "body": "Failure mode: real records are copied into model context, generated tests, screenshots, or issue descriptions. This creates new uncontrolled sinks and retention. Detection signals include names, emails, health/payment fields, screenshots, or raw payloads in prompts and artifacts. Remediation is redaction or synthetic reproduction. Human gate is required for any real regulated data already shared. Use when a proposed approach skips personal-data classes, sinks, retention, consent, logs, prompts, and exports or claims success without domain evidence. Do not use this dossier as a positive implementation strategy; it is a do-not-use signal. Actions: block the shortcut, name the missing evidence, and switch to a safer methodology or ask for human approval. Validation signals include absence or contradiction in data inventory, redaction tests, retention checks, export/delete tests, and approval evidence. Risk boundary: treat repeated recurrence as a blocker when it can cause PII disclosure, consent bypass, retention drift, and unapproved processor expansion.",
+  "domain": "privacy",
+  "scope_hint": "risk.privacy:failure_dossiers",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.privacy",
+  "pack_id": "risk.privacy"
+}

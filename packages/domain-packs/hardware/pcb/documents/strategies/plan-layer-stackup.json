@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:pcb:plan-layer-stackup",
+  "type": "strategy",
+  "title": "Plan the layer stackup before routing",
+  "description": "Define signal, plane, and power layers and their spacing up front so impedance and return paths are designed, not discovered.",
+  "body": "Use when starting a multilayer board with any high-speed or controlled-impedance nets. Do not route first and assign layers later, because the stackup determines achievable impedance and return-path continuity. Actions: choose the layer count, place reference planes adjacent to signal layers, and verify the dielectric heights support the target impedance. Validation signals include a fab-confirmed stackup whose impedance calculations match the target and every signal layer paired with an adjacent plane. Risk boundary: a stackup change after routing forces a re-spin, so escalate stackup decisions to review before committing layout.",
+  "domain": "pcb",
+  "scope_hint": "hardware.pcb:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.pcb",
+  "pack_id": "hardware.pcb"
+}

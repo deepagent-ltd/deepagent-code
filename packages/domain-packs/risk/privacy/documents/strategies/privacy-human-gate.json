@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:privacy:privacy-human-gate",
+  "type": "strategy",
+  "title": "Privacy human gate",
+  "description": "Escalate ambiguous data class, regulated data, secondary use, cross-border sharing, or user-rights behavior.",
+  "body": "Use when the agent cannot prove a privacy-sensitive change is conservative. Do not proceed by assuming legal basis, consent sufficiency, or acceptable retention. Actions: stop before broadening collection or sharing, summarize data classes and affected flows, state missing evidence, and request an accountable human decision. Validation signals include explicit approval, rejected change, or narrowed implementation that avoids the risky flow. Risk boundary: PHI, PCI, children data, government IDs, precise location, biometrics, and model training all require human review. Use when Privacy Risk Controls work touches personal-data classes, sinks, retention, consent, logs, prompts, and exports. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: choose the smallest direction that preserves the domain contract; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include data inventory, redaction tests, retention checks, export/delete tests, and approval evidence. Risk boundary: escalate or stop when the task involves PII disclosure, consent bypass, retention drift, and unapproved processor expansion, missing owner evidence, or live external state.",
+  "domain": "privacy",
+  "scope_hint": "risk.privacy:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.privacy",
+  "pack_id": "risk.privacy"
+}

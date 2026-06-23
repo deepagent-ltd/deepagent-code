@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:mon:slo-alert-misconfigured",
+  "type": "failure_dossier",
+  "description": "A burn-rate alert is set so it either never fires or fires constantly, making the SLO meaningless.",
+  "body": "Failure mode: an SLO burn-rate alert is misconfigured (wrong window, wrong threshold, or missing 'for'), so it either never fires while the budget silently exhausts or fires constantly and gets ignored. Detection signals: budget exhausted with no page; or a burn alert paging during normal operation; an alert with no 'for' duration flapping. Do not ship burn-rate alerts unvalidated. Safer fallback: derive the budget from the SLO, use multi-window fast and slow burn alerts, and validate them against historical data before paging on them.",
+  "domain": "monitoring",
+  "scope_hint": "platform.monitoring:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.monitoring:human_authored",
+  "pack_id": "platform.monitoring"
+}

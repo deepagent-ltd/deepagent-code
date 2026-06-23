@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure_dossier:mysql:long-transaction-blocks-purge",
+  "type": "failure_dossier",
+  "description": "A long-open read transaction prevents InnoDB purge and bloats the undo log and history list.",
+  "body": "Failure mode: a transaction left open for hours (often an idle session under REPEATABLE READ) pins an old read view, so InnoDB cannot purge old row versions and the history list length and undo tablespace grow without bound. Detection signals: SHOW ENGINE INNODB STATUS reports a large History list length, INNODB_TRX shows a very old trx_started, and disk usage on the undo tablespace climbs. Do not leave transactions open across user think-time or external calls. Safer fallback: set a short idle and execution timeout, commit or roll back promptly, and kill the offending transaction to let purge resume.",
+  "domain": "mysql",
+  "scope_hint": "code.database.mysql:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.mysql:human_authored",
+  "pack_id": "code.database.mysql"
+}

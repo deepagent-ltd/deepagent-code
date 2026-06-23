@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:orch:bounded-retries-with-alerts",
+  "type": "strategy",
+  "title": "Bound retries and alert on exhaustion",
+  "description": "Configure finite retries with backoff for transient faults and route final failures to a notification so they are not lost.",
+  "body": "Use when a task can fail from transient causes (network, rate limits). Do not retry infinitely or retry non-transient errors — infinite retries hide real breakage and waste resources. Actions: set a bounded retry count with exponential backoff for transient failures, fail fast on deterministic errors, and wire a notification on final failure with run and task context. Validation signals include a task that recovers within the retry budget on a transient fault and an alert delivered when retries are exhausted. Risk boundary: silent retry loops mask outages and delay response; if a task exhausts retries, treat it as a real incident, notify, and escalate rather than auto-resetting it.",
+  "domain": "orchestration",
+  "scope_hint": "code.data-pipeline-orchestration:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.data-pipeline-orchestration",
+  "pack_id": "code.data-pipeline-orchestration"
+}

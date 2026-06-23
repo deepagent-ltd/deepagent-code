@@ -1,0 +1,11 @@
+{
+  "ref_id": "knowledge:java_jvm:runtime-errors-differ",
+  "type": "knowledge",
+  "description": "In Java/JVM, a clean build does not prevent NullPointerException, ClassCastException, and ConcurrentModificationException at runtime.",
+  "body": "In Java/JVM, passing javac at the configured --release with -Xlint warnings says nothing about runtime: NullPointerException, ClassCastException, and ConcurrentModificationException at runtime surface only when the code actually runs. Use when a change touches control flow, IO, concurrency, or data shapes that the build cannot prove safe. Do not use a green compile as evidence that behavior is correct, and avoid shipping without exercising the path. Actions: run the module's JUnit suite on the affected classpath, reproduce the runtime path, and where relevant run heap dumps, JFR recordings, and GC logs to catch latent defects. Validation signals include the test/trace logs, a clean heap dumps, JFR recordings, and GC logs run, and observed correct output on representative input. Risk boundary: escalate or hold the change when the failure mode is data loss or memory corruption you cannot reproduce locally.",
+  "domain": "java_jvm",
+  "scope_hint": "code.java-jvm:knowledge",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.java-jvm:skill_survey",
+  "pack_id": "code.java-jvm"
+}

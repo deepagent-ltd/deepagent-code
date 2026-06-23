@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:scala:model-with-the-type-system",
+  "type": "strategy",
+  "title": "Make illegal states unrepresentable in types",
+  "description": "Use ADTs, opaque types, and refined types so invalid data cannot be constructed rather than validated late.",
+  "body": "Use when modeling a domain with constrained values or finite states. Do not represent a finite set of states as loose strings/ints or carry validity as a separate boolean. Actions: encode states as a sealed ADT/enum, wrap primitives in opaque types or value classes to prevent mixing (a UserId is not any String), and push validation to the constructor (smart constructor returning Either) so a value's existence proves its validity. Validation signals include a test that an invalid construction fails to compile or returns a Left, and that downstream code needs no re-validation. Risk boundary: stringly-typed domains let mismatched values flow through silently; a value class/opaque type that is unwrapped too early reintroduces the confusion it prevented.",
+  "domain": "scala",
+  "scope_hint": "code.scala:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.scala",
+  "pack_id": "code.scala"
+}

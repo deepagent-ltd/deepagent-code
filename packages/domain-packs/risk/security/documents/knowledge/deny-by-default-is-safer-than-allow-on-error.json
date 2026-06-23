@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:security:deny-by-default-is-safer-than-allow-on-error",
+  "type": "knowledge",
+  "title": "Deny by default is safer than allow on error",
+  "description": "Parsing, policy lookup, network, cache, or configuration errors should not grant access to protected operations.",
+  "body": "Use when an authorization path includes fallbacks, caches, feature flags, config fetches, or exception handling. Do not use to hide operational outages; denied results still need observability. Actions: keep failures as deny or fail-safe degraded mode, record diagnostic evidence, and avoid catch blocks that return allow. Validation signals include simulated policy errors producing deny. Risk boundary: allow-on-error in protected paths is a blocking security defect.",
+  "domain": "authz",
+  "scope_hint": "risk.security:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.security",
+  "pack_id": "risk.security"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:embed:bare-metal-vs-rtos-tradeoffs",
+  "type": "knowledge",
+  "title": "Bare-metal vs RTOS trade-offs",
+  "description": "A super-loop is simple and deterministic but scales poorly; an RTOS adds preemption and structure at the cost of footprint and concurrency hazards.",
+  "body": "Use when choosing the firmware architecture for a device. A bare-metal super-loop with interrupts is tiny and easy to reason about for a few tasks, but timing couples as it grows; an RTOS gives preemptive priorities and blocking primitives at the cost of RAM/flash and new hazards (priority inversion, stack-per-task, races). Do not add an RTOS reflexively when a state machine would do. Actions: match the model to the number of independent deadlines and concurrency needs, and size RAM for per-task stacks. Validation signals include meeting all deadlines with the chosen model under stress. Risk boundary: an RTOS misused (everything one priority, blocking in ISRs) is worse than a clean super-loop; if real-time guarantees are unclear, escalate for a timing review before committing the architecture.",
+  "domain": "embedded",
+  "scope_hint": "code.embedded:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.embedded",
+  "pack_id": "code.embedded"
+}

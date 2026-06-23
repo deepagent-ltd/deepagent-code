@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:llm:treat-output-as-claim",
+  "type": "strategy",
+  "title": "Treat model output as a claim, not a fact",
+  "description": "Every value a model returns is an unverified assertion that must be checked against ground truth or a schema before code acts on it.",
+  "body": "Use when wiring any model response into business logic, a database write, or a user-facing answer. Do not let a model's confident phrasing substitute for verification, and avoid treating extracted entities or computed numbers as correct just because they parsed. Actions: identify each model-derived value that drives a decision; verify it against a deterministic source (schema, lookup, recomputation) before use; record the raw response and the verified value separately. Validation signals include tests that feed plausible-but-wrong model output and assert the verification layer rejects it. Risk boundary: if a model value drives an irreversible action (payment, deletion, external send) with no independent check, escalate to a human gate.",
+  "domain": "llm_app",
+  "scope_hint": "code.llm-app:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.llm-app",
+  "pack_id": "code.llm-app"
+}

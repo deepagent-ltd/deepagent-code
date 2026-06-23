@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:hwverif:assertion-semantics",
+  "type": "knowledge",
+  "title": "Concurrent assertion semantics and vacuity",
+  "description": "Concurrent assertions evaluate over clocked sequences and can pass vacuously when their precondition never holds.",
+  "body": "Use when interpreting whether a passing assertion actually proved anything. Do not trust a never-failing assertion, since it may pass only because its antecedent was never triggered. Actions: check the assertion's enable condition, confirm the precondition occurs in stimulus, and inject a violation to prove it can fire. Validation signals include the assertion firing on injected faults and coverage confirming the precondition was reached. Risk boundary: a vacuously passing assertion gives false confidence, so flag any assertion whose precondition coverage is zero.",
+  "domain": "hw_verification",
+  "scope_hint": "hardware.verification:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.verification",
+  "pack_id": "hardware.verification"
+}

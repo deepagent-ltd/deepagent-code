@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:release:deploy-without-rollback-path",
+  "type": "failure_dossier",
+  "description": "Shipping a release with no tested way to revert, so a regression can only be fixed by a forward scramble under pressure.",
+  "body": "Failure mode: a release goes out with an irreversible migration or no retained previous artifact, so when a defect appears there is no fast path back and the team must hotfix forward live. Detection signals: no previous version retained or deployable; migrations drop columns/data with no down path; no documented or rehearsed revert. Do not deploy a change whose rollback was never tested. Safer fallback: keep the prior artifact deployable, use expand/contract migrations that preserve a revert window, rehearse the rollback, and gate the release on a working revert. Risk boundary: escalate any deploy that cannot be reverted within the agreed recovery objective.",
+  "domain": "code",
+  "scope_hint": "code.release:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.release:human_authored",
+  "pack_id": "code.release"
+}

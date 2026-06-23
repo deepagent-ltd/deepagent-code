@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:tsdb:check-query-chunk-pruning",
+  "type": "skill",
+  "title": "Check query chunk pruning",
+  "description": "Run EXPLAIN on a time-series query and report whether the planner prunes to the expected chunks.",
+  "body": "Use when a time-series query is slow. Actions: run the engine's EXPLAIN on the query, read which chunks are scanned vs excluded, and confirm a time predicate is driving exclusion. Report the scanned-chunk count and whether a missing time bound caused a full scan. Do not declare a query optimized from latency alone — confirm pruning in the plan. This skill exposes capability only and must not run heavy queries against production without permission. Validation signals include the plan showing chunk exclusion. Risk boundary: an unbounded full-history scan can saturate shared I/O — flag before running it live.",
+  "domain": "timeseries_db",
+  "scope_hint": "code.database.timeseries:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.timeseries",
+  "pack_id": "code.database.timeseries"
+}

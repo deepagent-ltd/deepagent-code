@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:mlai:preprocessing-fit-before-split",
+  "type": "failure_dossier",
+  "description": "Fitting a scaler, encoder, or imputer on the full dataset before splitting, leaking test statistics into training.",
+  "body": "Failure mode: normalization or encoding parameters are computed over all rows and then the data is split, so the model implicitly sees test-set statistics and the offline metric is optimistic. Detection signals: a scaler/encoder fit appears before the train_test_split call; validation looks great but production underperforms; metric drops sharply under a strict re-split. Do not fit any transform on data outside the training fold. Safer fallback: split first, fit transforms on train, persist and reuse them on validation/test inside a pipeline, then re-run the experiment.",
+  "domain": "ml",
+  "scope_hint": "code.ml-ai:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.ml-ai:human_authored",
+  "pack_id": "code.ml-ai"
+}

@@ -1,0 +1,45 @@
+{
+  "schema_version": "domain_pack.v1",
+  "id": "platform.helm",
+  "name": "Helm Charts",
+  "version": "1.0.0",
+  "scope": "system",
+  "risk": "medium",
+  "domains": [
+    "helm",
+    "helm_chart",
+    "chart_values",
+    "helm_release"
+  ],
+  "provides": [
+    "knowledge",
+    "strategy",
+    "methodology",
+    "skill",
+    "diagnosis",
+    "validation"
+  ],
+  "depends_on": [
+    "platform.kubernetes"
+  ],
+  "conflicts_with": [],
+  "knowledge_store": "document_store",
+  "allowed_tools": [
+    "read",
+    "shell:test"
+  ],
+  "denied_tools": [
+    "shell:deploy-production"
+  ],
+  "data_policy": {
+    "sensitivity": [
+      "source_code"
+    ],
+    "default_admission": "summary_only",
+    "secret_policy": "deny"
+  },
+  "detector": {
+    "inline": "profile.code_domains.some(d=>['helm','helm_chart','chart_values','helm_release'].includes(d)) || profile.repo_signals.some(s=>/\\b(helm chart|helm install|helm upgrade|values\\.yaml|chart\\.yaml|helm template|helm release|tiller|subchart|helm hook)\\b/i.test(s)) ? 0.9 : 0",
+    "threshold": 0.5
+  }
+}

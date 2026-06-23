@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:tsdb:query-without-time-bound",
+  "type": "failure_dossier",
+  "description": "Running an aggregate query with no time predicate, forcing a full-hypertable scan that saturates I/O.",
+  "body": "Failure mode: a query omits the time range, so the planner cannot exclude chunks and scans all history, starving other queries of I/O. Detection signals: EXPLAIN shows all chunks scanned; query latency scales with total data; I/O saturation during ad-hoc analysis. Do not run unbounded aggregates on large hypertables. Safer fallback: add an explicit time window, verify chunk pruning in the plan, and run heavy historical scans off-peak or on a replica.",
+  "domain": "timeseries_db",
+  "scope_hint": "code.database.timeseries:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.timeseries:human_authored",
+  "pack_id": "code.database.timeseries"
+}

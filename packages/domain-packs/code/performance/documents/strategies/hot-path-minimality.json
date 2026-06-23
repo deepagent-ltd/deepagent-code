@@ -1,0 +1,11 @@
+{
+  "ref_id": "strategy:performance:hot-path-minimality",
+  "type": "strategy",
+  "description": "Keep hot-path changes small and measurable.",
+  "body": "Large refactors can obscure whether latency improved or correctness regressed. Change one bottleneck at a time and preserve tests.\n\nDerived from local skill survey outputs under /Users/xiuranli/code/agent/skill, especially reviewed canonical rules, coverage reports, and trusted local skill notes. Paraphrased into domain-pack seed form.\n\nSource rule: this is a generalized, paraphrased seed from local skill survey material; apply only with current repository evidence and more specific pack precedence. Use when Code Performance work touches baseline metrics, profiler output, workload shape, resource budgets, and variance. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: choose the smallest direction that preserves the domain contract; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include repeatable benchmarks, profiler traces, threshold comparisons, and correctness checks before speed claims. Risk boundary: escalate or stop when the task involves benchmark noise, optimizing the wrong workload, correctness loss, and resource regressions, missing owner evidence, or live external state.",
+  "domain": "performance",
+  "scope_hint": "code.performance:strategies",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.performance:skill_survey",
+  "pack_id": "code.performance"
+}

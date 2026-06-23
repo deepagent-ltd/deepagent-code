@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:chain:reentrancy-state-after-call",
+  "type": "failure_dossier",
+  "description": "Updating balances or flags after an external call, letting a malicious callback re-enter and withdraw repeatedly.",
+  "body": "Failure mode: a withdrawal sends ETH or calls a token before decrementing the user's balance, so the recipient's fallback re-enters the function while the balance still reads its original value and drains funds across nested calls. Detection signals: a state write (balance decrement, flag set) appears after an external call; an adversarial reentrancy test succeeds in extracting more than deposited; no reentrancy guard. Do not perform external calls before finalizing state. Safer fallback: reorder to checks-effects-interactions so all state updates precede the external call, add a reentrancy guard for defense in depth, and verify with a malicious re-entering mock that the exploit now fails.",
+  "domain": "blockchain",
+  "scope_hint": "code.blockchain:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.blockchain:human_authored",
+  "pack_id": "code.blockchain"
+}

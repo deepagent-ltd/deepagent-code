@@ -1,0 +1,48 @@
+{
+  "schema_version": "domain_pack.v1",
+  "id": "code.database.vector",
+  "name": "Vector Database Engine",
+  "version": "1.0.0",
+  "scope": "system",
+  "risk": "medium",
+  "domains": [
+    "vector_db",
+    "pgvector_ext",
+    "milvus",
+    "qdrant",
+    "ann_index"
+  ],
+  "provides": [
+    "knowledge",
+    "strategy",
+    "methodology",
+    "skill",
+    "diagnosis",
+    "validation"
+  ],
+  "depends_on": [
+    "code.database",
+    "code.vector-search",
+    "code.ml-ai"
+  ],
+  "conflicts_with": [],
+  "knowledge_store": "document_store",
+  "allowed_tools": [
+    "read",
+    "shell:test"
+  ],
+  "denied_tools": [
+    "shell:deploy-production"
+  ],
+  "data_policy": {
+    "sensitivity": [
+      "source_code"
+    ],
+    "default_admission": "summary_only",
+    "secret_policy": "deny"
+  },
+  "detector": {
+    "inline": "profile.code_domains.some(d=>['vector_db','pgvector_ext','milvus','qdrant','ann_index'].includes(d)) || profile.repo_signals.some(s=>/\\b(vector database|pgvector|milvus|qdrant|weaviate|pinecone|ivfflat|hnsw index|vector column|cosine distance|approximate nearest)\\b/i.test(s)) ? 0.9 : 0",
+    "threshold": 0.5
+  }
+}

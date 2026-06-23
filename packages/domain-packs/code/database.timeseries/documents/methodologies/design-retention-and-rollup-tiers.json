@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:tsdb:design-retention-and-rollup-tiers",
+  "type": "methodology",
+  "title": "Design retention and rollup tiers",
+  "description": "Define a tiered lifecycle: raw → hourly → daily with matching retention so storage stays bounded and history survives.",
+  "body": "Steps: 1. List required granularities and how long each is needed. 2. Create continuous aggregates for each coarser tier. 3. Set retention on each tier (short for raw, long for daily). 4. Verify aggregates fully cover their window before raw retention fires. 5. Point dashboards at the coarsest tier that answers the query. Rollback point: before enabling raw retention. Validation: query each tier and confirm continuity across the raw→rollup boundary.",
+  "domain": "timeseries_db",
+  "scope_hint": "code.database.timeseries:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.timeseries",
+  "pack_id": "code.database.timeseries"
+}

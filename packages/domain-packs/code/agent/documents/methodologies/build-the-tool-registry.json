@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:agent:build-the-tool-registry",
+  "type": "methodology",
+  "title": "Build the tool registry",
+  "description": "Register tools with typed schemas, side-effect class, and required permission, then enforce the gate at dispatch.",
+  "body": "Steps: 1. List every tool the agent may call and classify each as read-only or side-effecting. 2. Register each with a typed argument schema and a required permission. 3. Implement dispatch that rejects unregistered names and checks permission. 4. Validate arguments against the schema before execution. 5. Add tests for unregistered name, missing permission, and malformed arguments. Rollback point: before granting a new side-effecting tool. Validation: an unregistered or unpermitted call is denied and malformed arguments are rejected.",
+  "domain": "agent",
+  "scope_hint": "code.agent:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.agent",
+  "pack_id": "code.agent"
+}

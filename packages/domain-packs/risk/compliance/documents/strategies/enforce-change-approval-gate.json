@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:comp:enforce-change-approval-gate",
+  "type": "strategy",
+  "title": "Gate every change behind an independent approval",
+  "description": "No change reaches a regulated system without a recorded approval by a principal who is not the author.",
+  "body": "Use when a change can affect a regulated system (deploy, schema migration, config change, access grant). Do not allow a self-approved or unreviewed change to merge or deploy. Actions: require the pipeline to verify an approval record exists, that the approver differs from the author, and that the approval references the exact change being deployed. Validation signals include a gate that blocks a change whose only approver is its author and a test proving the approval is bound to the specific commit/artifact. Risk boundary: deploying without a recorded independent approval is blocking, and production deploy is denied to the agent and routed to a human gate.",
+  "domain": "compliance",
+  "scope_hint": "risk.compliance:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.compliance",
+  "pack_id": "risk.compliance"
+}

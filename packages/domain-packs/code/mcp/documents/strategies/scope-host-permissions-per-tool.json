@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:mcp:scope-host-permissions-per-tool",
+  "type": "strategy",
+  "title": "Scope host-granted permissions to each tool's real need",
+  "description": "Grant each MCP tool only the filesystem, network, and command rights its declared function requires, gated by host consent, not a blanket allow.",
+  "body": "Use when a host decides what an MCP tool may touch. Do not grant a read-only lookup tool write or shell access, and avoid auto-approving a tool that requests broad filesystem or network scope. Actions: read the tool's declared schema and side effects, map them to the minimum rights, present the specific scope to the host/user for consent, and deny anything beyond it; record the granted scope per tool. Validation signals include a consent log per tool invocation and a test that an out-of-scope operation is rejected. Risk boundary: a tool requesting unrestricted shell or filesystem access is a privilege-escalation risk; deny by default and escalate to a human for explicit approval rather than widening scope automatically.",
+  "domain": "code",
+  "scope_hint": "code.mcp:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.mcp",
+  "pack_id": "code.mcp"
+}

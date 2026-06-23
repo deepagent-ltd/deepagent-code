@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:cmake:model-the-build-as-targets",
+  "type": "strategy",
+  "title": "Model the build as targets, not directories",
+  "description": "Express the build as libraries and executables with properties attached per target, instead of directory-scoped commands that leak settings everywhere.",
+  "body": "Use when authoring or modernizing a CMakeLists that still relies on include_directories or add_definitions at directory scope. Do not use global commands that apply flags to every target in a subtree. Actions: define each component with add_library or add_executable; attach includes, definitions, and options with the target_* commands; let consumers inherit requirements by linking. Validation signals include a consumer that compiles using only target_link_libraries, with no restated include paths. Risk boundary: directory-wide flags create hidden coupling that breaks when files move, so prefer per-target properties from the start.",
+  "domain": "cmake",
+  "scope_hint": "code.build.cmake:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.build.cmake",
+  "pack_id": "code.build.cmake"
+}

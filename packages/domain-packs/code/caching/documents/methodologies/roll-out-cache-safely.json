@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:cache:roll-out-cache-safely",
+  "type": "methodology",
+  "title": "Roll out a new cache safely",
+  "description": "Shadow-compare cached against origin values, ramp traffic, and keep a bypass switch.",
+  "body": "Steps: 1. Add the cache in read-through-but-verify mode, comparing cached and origin values on a sample. 2. Watch for mismatches that reveal a missing key input or stale invalidation. 3. Ramp the fraction of traffic served from cache gradually. 4. Confirm origin load drops while error rate stays flat. 5. Keep a kill switch that bypasses the cache instantly. Rollback point: flip the bypass switch to read directly from origin. Validation: sampled cached values match origin throughout the ramp.",
+  "domain": "caching",
+  "scope_hint": "code.caching:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.caching",
+  "pack_id": "code.caching"
+}

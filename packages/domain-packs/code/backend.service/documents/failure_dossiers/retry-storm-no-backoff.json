@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:svc:retry-storm-no-backoff",
+  "type": "failure_dossier",
+  "description": "Retries fire in tight loops or synchronized waves with no backoff, amplifying a transient failure into an outage.",
+  "body": "Failure mode: on dependency failure the code retries immediately or at a fixed interval across all clients, so a recovering service is re-overwhelmed and never stabilizes. Detection signals: retry loop with no sleep or fixed sleep; no jitter; no attempt cap; traffic spikes to a failing dependency. Do not retry without capped exponential backoff and full jitter. Safer fallback: add full jitter, cap attempts and total deadline, and add a circuit breaker that stops retrying under sustained failure.",
+  "domain": "backend_service",
+  "scope_hint": "code.backend.service:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.service:human_authored",
+  "pack_id": "code.backend.service"
+}

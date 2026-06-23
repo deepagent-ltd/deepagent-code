@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:redis:stale-cache-no-invalidation",
+  "type": "failure_dossier",
+  "description": "A write updates the source but not the cache, so reads serve stale data until the TTL eventually expires.",
+  "body": "Failure mode: data is cached on read but writes to the source do not delete the cached key, so every read returns the old value for the full TTL window. Detection signals: updates not visible until the cache entry expires; no DEL on the write path; bug severity scales with TTL length. Do not lengthen TTL or rely on it to self-heal. Safer fallback: on every source write, delete the precise derived cache keys (delete rather than update to avoid races), and choose key names so writes can compute which keys to invalidate.",
+  "domain": "redis",
+  "scope_hint": "code.database.redis:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.redis:human_authored",
+  "pack_id": "code.database.redis"
+}

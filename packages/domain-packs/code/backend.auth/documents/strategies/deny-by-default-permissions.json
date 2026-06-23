@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:auth:deny-by-default-permissions",
+  "type": "strategy",
+  "title": "Deny by default",
+  "description": "Unmatched permission requests are denied; new resources and roles start with no access and are granted explicitly.",
+  "body": "Use when designing or editing a permission model, adding a resource type, or introducing a role. Do not add a broad allow rule to make a feature work. Actions: confirm the policy's fallthrough is deny; grant the narrowest scope that satisfies the use case; add the new resource to the matrix with explicit allowed roles. Validation signals include a test asserting an undefined permission resolves to deny and that a new role cannot reach existing resources. Risk boundary: a default-allow fallthrough is a blocking finding requiring human review.",
+  "domain": "backend_auth",
+  "scope_hint": "code.backend.auth:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.auth",
+  "pack_id": "code.backend.auth"
+}

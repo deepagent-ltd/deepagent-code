@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:svc:design-a-retry-policy",
+  "type": "methodology",
+  "title": "Design a retry and timeout policy",
+  "description": "Choose per-dependency timeouts, retryable error classes, backoff parameters, and an overall deadline budget.",
+  "body": "Steps: 1. Set a per-call timeout shorter than the caller's deadline. 2. Enumerate which errors are retryable (timeout, 503, reset) vs terminal (4xx, validation). 3. Pick base, cap, and max attempts; use full jitter. 4. Enforce a total deadline budget across attempts so retries cannot exceed the caller's SLA. 5. Add circuit-breaking when failure rate is high. Rollback point: revert to no-retry single call. Validation: tests assert terminal errors are not retried, attempts stop at the cap, and the deadline budget is honored.",
+  "domain": "backend_service",
+  "scope_hint": "code.backend.service:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.service",
+  "pack_id": "code.backend.service"
+}

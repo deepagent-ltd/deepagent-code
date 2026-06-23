@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:tf:design-modules-with-clear-contracts",
+  "type": "strategy",
+  "title": "Design modules with explicit input/output contracts",
+  "description": "Compose infrastructure from modules that expose typed variables and outputs, avoiding hidden coupling and copy-paste resource blocks.",
+  "body": "Use when the same resource pattern repeats or a stack grows beyond a few files. Do not copy-paste resource blocks across environments, and do not reach into a module's internal resources from outside. Actions: extract reusable patterns into a module with typed input variables (with validation), expose only needed outputs, and pin module sources to a version. Validation signals include the module instantiated in multiple environments with only inputs differing and terraform validate passing. Risk boundary: an over-broad module that takes a provider or raw resource id as input can let a caller mutate unintended infrastructure; keep module surface minimal.",
+  "domain": "terraform",
+  "scope_hint": "platform.terraform:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.terraform",
+  "pack_id": "platform.terraform"
+}

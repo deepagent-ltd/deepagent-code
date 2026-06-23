@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:evt:design-idempotent-consumer",
+  "type": "methodology",
+  "title": "Design an idempotent consumer",
+  "description": "Build a consumer that dedups on event id, commits offset after the effect, and dead-letters poison events.",
+  "body": "Steps: 1. Extract the stable event id. 2. In one transaction, record the id (unique) and apply the effect; on duplicate id, skip. 3. Commit the offset/ack only after that transaction commits. 4. On transient failure retry with backoff; after the cap publish to a dead-letter topic and commit. 5. Add observability on lag and DLT rate. Rollback point: before enabling auto-commit changes. Validation: a redelivery test yields one effect, an offset is never committed before the effect is durable, and a poison event reaches the DLT without stalling the partition.",
+  "domain": "event_driven",
+  "scope_hint": "code.backend.event-driven:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.event-driven",
+  "pack_id": "code.backend.event-driven"
+}

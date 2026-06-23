@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:finance:reconcile-against-source-of-truth",
+  "type": "methodology",
+  "title": "Reconcile internal records against the external source of truth",
+  "description": "Compare internal ledger state against the processor or bank statement on a schedule, classifying every discrepancy before trusting internal balances.",
+  "body": "Steps: 1. Pull the external source of truth (processor settlement report, bank statement) for the period. 2. Match each external line to an internal ledger entry by reference and amount. 3. Classify unmatched items: timing differences, fees, missing entries, or genuine breaks. 4. Investigate breaks at the transaction level before adjusting anything. 5. Record matched/unmatched totals and the disposition of each break. Rollback point: before posting any reconciliation adjustment. Validation: external and internal totals agree after classified timing items, and every break has a documented cause. Risk boundary: advisory only; do not post an adjusting entry to force a match, and escalate unexplained breaks to a human rather than auto-balancing.",
+  "domain": "finance",
+  "scope_hint": "business.finance:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:business.finance",
+  "pack_id": "business.finance"
+}

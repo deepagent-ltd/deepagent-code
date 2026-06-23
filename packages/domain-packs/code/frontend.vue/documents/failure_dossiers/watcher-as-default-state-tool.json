@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:frontend_vue:watcher-as-default-state-tool",
+  "type": "failure_dossier",
+  "description": "Using watcher as default state tool",
+  "body": "Watchers used for pure derivation create ordering and cleanup risks. Safer path: computed for derived state, actions/events for mutations, watchers only for side effects with cleanup.\n\nUse only as a diagnostic do-not-use signal; do not expose this as positive strategy, methodology, knowledge, skill, or memory.",
+  "domain": "frontend_vue",
+  "scope_hint": "code.frontend.vue:failure_dossiers",
+  "evidence_strength": "medium",
+  "provenance_tag": "code.frontend.vue:failure_seed:paraphrased_common_failures",
+  "pack_id": "code.frontend.vue"
+}

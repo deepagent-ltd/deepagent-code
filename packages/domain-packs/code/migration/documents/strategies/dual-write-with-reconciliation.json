@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:migration:dual-write-with-reconciliation",
+  "type": "strategy",
+  "title": "Bridge stores with a dual-write window and reconciliation",
+  "description": "During a data-store migration write to both old and new systems for a window, reconcile differences, then cut over reads once parity is proven.",
+  "body": "Use when moving data between stores or representations without downtime. Do not flip reads to the new store before proving it matches the old one. Actions: backfill historical data first, enable dual-write for new mutations, run a reconciliation job comparing old vs new and log divergences, shadow-read the new store to compare results, then cut reads over and finally retire writes to the old store. Validation signals include a reconciliation report with zero (or explained) mismatches over the window and shadow reads matching production reads. Risk boundary: dual-write can diverge silently if one write fails; make writes transactional or idempotent, alert on reconciliation drift, and roll back to old-store reads rather than serving unverified data.",
+  "domain": "code",
+  "scope_hint": "code.migration:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.migration",
+  "pack_id": "code.migration"
+}

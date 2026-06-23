@@ -1,0 +1,69 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "code.database.mysql",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "mysql",
+      "innodb",
+      "mariadb"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "L3 smoke for code.database.mysql: InnoDB gap/next-key locks, clustered primary index, binlog replication, REPEATABLE READ, utf8mb4, online DDL"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "render a chart in the React dashboard"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "retrieval_query": "InnoDB gap lock clustered primary index binlog replication utf8mb4 online DDL isolation",
+  "expected_pack_id": "code.database.mysql",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "code.database.mysql L3 validation smoke",
+    "signals": [
+      "SHOW ENGINE INNODB STATUS confirms the expected lock waits cleared after the change",
+      "binlog position advances on the replica and Seconds_Behind_Master returns to zero",
+      "EXPLAIN shows the query uses the intended index instead of a full clustered scan",
+      "a concurrency test proves the gap-locked range no longer blocks unrelated inserts"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "code.database.mysql diagnosis smoke",
+    "signals": [
+      "deadlock section of SHOW ENGINE INNODB STATUS names two transactions on overlapping next-key ranges",
+      "replica lag climbs while a single long transaction holds the binlog",
+      "INFORMATION_SCHEMA.INNODB_TRX shows a transaction blocked on a gap lock",
+      "auto-increment counter jumps after rollbacks, leaving visible id gaps",
+      "Lock wait timeout exceeded errors cluster on one hot secondary index"
+    ]
+  },
+  "source_refs": [
+    "mysql:ref:innodb-locking-transaction-model",
+    "mysql:ref:replication-binlog-formats"
+  ]
+}

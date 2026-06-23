@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:sqlite:audit-connection-pragmas",
+  "type": "skill",
+  "title": "Audit connection pragmas",
+  "description": "Read connection setup and report whether WAL, busy_timeout, and foreign_keys are configured for the workload.",
+  "body": "Use when asked whether an SQLite setup is sound. Actions: inspect where connections are opened and report which pragmas are set — confirm journal_mode is WAL for concurrent access, busy_timeout is non-zero, foreign_keys is ON, and synchronous matches the durability need; check whether read-then-write paths use BEGIN IMMEDIATE. Do not assume defaults are safe (foreign_keys is off by default). Report and record the open routine and classify gaps as default-journal, no-busy-timeout, FKs-off, or upgrade-deadlock-prone. This skill is read-only against a copy. Validation signals include a startup pragma check confirming the settings. Risk boundary: foreign_keys left off on a relational schema is a data-integrity finding to flag.",
+  "domain": "sqlite",
+  "scope_hint": "code.database.sqlite:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.sqlite",
+  "pack_id": "code.database.sqlite"
+}

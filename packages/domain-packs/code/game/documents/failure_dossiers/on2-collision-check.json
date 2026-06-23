@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:game:on2-collision-check",
+  "type": "failure_dossier",
+  "description": "Testing every pair of entities for collision each frame, so cost grows quadratically and frame time collapses at scale.",
+  "body": "Failure mode: collision runs a nested loop comparing all entity pairs, so doubling entities quadruples the work and frame time degrades sharply as the world fills. Detection signals: frame rate fine with few objects but collapsing as entity count rises; profiler shows the collision system dominating; cost tracks n^2. Do not brute-force all pairs. Safer fallback: add a broad phase (uniform grid, quadtree/octree, or sweep-and-prune) to cull to nearby candidate pairs, then run narrow-phase tests only on those, and confirm collision cost scales well below n^2.",
+  "domain": "game",
+  "scope_hint": "code.game:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.game:human_authored",
+  "pack_id": "code.game"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:supply_chain:pinning-vs-ranges-tradeoff",
+  "type": "knowledge",
+  "title": "Version ranges trade reproducibility for silent updates",
+  "description": "Open version ranges let transitive dependencies change without a code change, so a pinned lockfile is what actually makes installs reproducible and reviewable.",
+  "body": "Use when reasoning about why a build changed with no code edit. A caret/tilde range in a manifest permits new matching versions to resolve at install time, and transitive dependencies float even more, so two installs days apart can pull different code; the lockfile pins the exact resolved tree that was reviewed. Do not treat the manifest's ranges as the installed versions. Actions: commit and install from the lockfile, review lockfile diffs as real changes, and update versions deliberately. Validation signals include a lockfile diff in code review and identical installs from the same lockfile. Risk boundary: an unreviewed lockfile change can introduce a malicious transitive version; treat lockfile diffs as security-relevant and escalate unexpected ones rather than auto-merging.",
+  "domain": "security",
+  "scope_hint": "risk.supply-chain:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.supply-chain",
+  "pack_id": "risk.supply-chain"
+}

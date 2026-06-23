@@ -1,0 +1,70 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "code.data-engineering",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "data_engineering",
+      "etl",
+      "pipeline"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "L3 smoke for code.data-engineering: Airflow-orchestrated ETL pipeline, batch vs Kafka streaming, idempotent partitioned writes, schema evolution, backfill, and data lineage tracking"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "build a React dashboard component with client-side state"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "retrieval_query": "etl elt data pipeline kafka spark airflow dagster data warehouse partition backfill idempotent schema evolution data lineage batch stream orchestration",
+  "expected_pack_id": "code.data-engineering",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "code.data-engineering L3 validation smoke",
+    "signals": [
+      "rerunning a pipeline run produces identical output (idempotent)",
+      "backfill partition matches a forward-run partition",
+      "schema change is additive and downstream consumers still parse",
+      "row counts reconcile between source and target",
+      "lineage graph resolves every target column to a source"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "code.data-engineering diagnosis smoke",
+    "signals": [
+      "a retried task double-inserts rows",
+      "a new source column breaks the loader",
+      "backfill overwrites a partition with partial data",
+      "streaming consumer reprocesses on rebalance without dedup",
+      "full-table reload instead of partition-scoped write"
+    ]
+  },
+  "source_refs": [
+    "source:idempotent-pipeline-practice:paraphrased",
+    "source:warehouse-schema-evolution:paraphrased"
+  ]
+}

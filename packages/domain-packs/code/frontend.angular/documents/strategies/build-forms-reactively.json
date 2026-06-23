@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:ng:build-forms-reactively",
+  "type": "strategy",
+  "title": "Build forms with the reactive forms model",
+  "description": "Define form structure and validation in the component as a typed FormGroup rather than scattering logic in the template.",
+  "body": "Use when a form has validation, dynamic controls, or cross-field rules. Do not drive complex validation through template-only ngModel bindings. Actions: build a typed FormGroup/FormControl tree, attach sync and async validators to controls, react to valueChanges/statusChanges streams (with teardown), and bind controls in the template via formControlName. Validation signals include a test that sets a control value and asserts the group's validity and error map, and that valueChanges emits as expected. Risk boundary: leaving validation only in the template means it is not enforced server-side or in tests; never treat client form validity as a security boundary, and unsubscribe from valueChanges streams.",
+  "domain": "angular",
+  "scope_hint": "code.frontend.angular:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.frontend.angular",
+  "pack_id": "code.frontend.angular"
+}

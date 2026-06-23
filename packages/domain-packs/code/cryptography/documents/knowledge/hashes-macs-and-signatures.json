@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:crypto:hashes-macs-and-signatures",
+  "type": "knowledge",
+  "title": "Hashes, MACs, and signatures differ",
+  "description": "A hash gives integrity only, a MAC adds authenticity with a shared key, and a signature adds non-repudiable authenticity with a public key.",
+  "body": "Use when choosing how to protect data from tampering or prove its origin. A cryptographic hash (SHA-256) detects accidental change but anyone can recompute it, so alone it does not prove authenticity; an HMAC adds a shared secret so only key holders can produce or verify the tag; a digital signature (Ed25519/ECDSA) lets anyone verify with a public key while only the private key can sign, giving non-repudiation. Do not protect a downloaded artifact with a bare hash an attacker could replace alongside it, and avoid using a hash where authenticity is required. Actions: pick hash for integrity, HMAC for shared-key authenticity, signature for public verification. Validation signals include verification failing on tamper. Risk boundary: a bare hash for authenticity is forgeable; verify the goal matches the primitive.",
+  "domain": "cryptography",
+  "scope_hint": "code.cryptography:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.cryptography",
+  "pack_id": "code.cryptography"
+}

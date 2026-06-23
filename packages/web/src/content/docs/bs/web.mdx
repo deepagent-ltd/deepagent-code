@@ -1,0 +1,142 @@
+---
+title: Web
+description: Korišćenje DeepAgent Code u vašem pretraživaču.
+---
+
+DeepAgent Code može raditi kao web aplikacija u vašem pretraživaču, pružajući isto moćno iskustvo AI kodiranja bez potrebe za terminalom.
+
+![DeepAgent Code Web - Nova sesija](../../../assets/web/web-homepage-new-session.png)
+
+## Početak rada
+
+Pokrenite web interfejs tako što ćete pokrenuti:
+
+```bash
+deepagent-code web
+```
+
+Ovo pokreće lokalni server na `127.0.0.1` sa nasumičnim dostupnim portom i automatski otvara DeepAgent Code u vašem podrazumevanom pretraživaču.
+
+:::caution
+Ako `DEEPAGENT_CODE_SERVER_PASSWORD` nije postavljen, server će biti nezaštićen. Ovo je u redu za lokalnu upotrebu, ali bi trebalo biti postavljeno za pristup mreži.
+:::
+
+:::tip[Windows korisnici]
+Za najbolje iskustvo, pokrenite `deepagent-code web` iz [WSL](/docs/windows-wsl) umjesto PowerShell-a. Ovo osigurava pravilan pristup sistemu datoteka i integraciju terminala.
+:::
+
+---
+
+## Konfiguracija
+
+Možete konfigurirati web server koristeći oznake komandne linije ili u vašoj [config file](/docs/config).
+
+### Port
+
+DeepAgent Code podrazumevano bira dostupni port. Možete odrediti port:
+
+```bash
+deepagent-code web --port 4096
+```
+
+### Ime hosta
+
+Podrazumevano, server se vezuje za `127.0.0.1` (samo lokalni host). Da biste DeepAgent Code učinili dostupnim na vašoj mreži:
+
+```bash
+deepagent-code web --hostname 0.0.0.0
+```
+
+Kada koristite `0.0.0.0`, DeepAgent Code će prikazati i lokalne i mrežne adrese:
+
+```
+  Local access:       http://localhost:4096
+  Network access:     http://192.168.1.100:4096
+```
+
+### mDNS Otkrivanje
+
+Omogućite mDNS kako bi vaš server bio vidljiv na lokalnoj mreži:
+
+```bash
+deepagent-code web --mdns
+```
+
+Ovo automatski postavlja ime hosta na `0.0.0.0` i oglašava server kao `deepagent-code.local`.
+
+Možete prilagoditi ime mDNS domene za pokretanje više instanci na istoj mreži:
+
+```bash
+deepagent-code web --mdns --mdns-domain myproject.local
+```
+
+### CORS
+
+Da biste omogućili dodatne domene za CORS (korisno za prilagođene frontendove):
+
+```bash
+deepagent-code web --cors https://example.com
+```
+
+### Autentifikacija
+
+Da biste zaštitili pristup, postavite lozinku koristeći varijablu okruženja `DEEPAGENT_CODE_SERVER_PASSWORD`:
+
+```bash
+DEEPAGENT_CODE_SERVER_PASSWORD=secret deepagent-code web
+```
+
+Korisničko ime podrazumevano je `deepagent-code`, ali se može promeniti sa `DEEPAGENT_CODE_SERVER_USERNAME`.
+
+---
+
+## Korištenje web sučelja
+
+Jednom pokrenut, web sučelje pruža pristup vašim DeepAgent Code sesijama.
+
+### Sesije
+
+Pregledajte i upravljajte svojim sesijama sa početne stranice. Možete vidjeti aktivne sesije i započeti nove.
+
+![DeepAgent Code Web - aktivna sesija](../../../assets/web/web-homepage-active-session.png)
+
+### Status servera
+
+Kliknite "Pogledajte servere" da vidite povezane servere i njihov status.
+
+![DeepAgent Code Web - Vidi servere](../../../assets/web/web-homepage-see-servers.png)
+
+---
+
+## Povezivanje terminala
+
+Možete priključiti TUI terminala na aktivni web server:
+
+```bash
+# Start the web server
+deepagent-code web --port 4096
+
+# In another terminal, attach the TUI
+deepagent-code attach http://localhost:4096
+```
+
+Ovo vam omogućava da istovremeno koristite i web sučelje i terminal, dijeleći iste sesije i stanje.
+
+---
+
+## Konfiguracioni fajl
+
+Također možete konfigurirati postavke servera u svom `deepagent-code.json` konfiguracijskom fajlu:
+
+```json
+{
+  "server": {
+    "port": 4096,
+    "hostname": "0.0.0.0",
+    "mdns": true,
+    "cors": ["https://example.com"]
+  }
+}
+```
+
+Oznake komandne linije imaju prednost nad postavkama konfiguracione datoteke.

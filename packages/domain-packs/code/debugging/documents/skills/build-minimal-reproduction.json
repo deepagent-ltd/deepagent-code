@@ -1,0 +1,11 @@
+{
+  "ref_id": "skill:debugging:build-minimal-repro",
+  "type": "skill",
+  "description": "Turn a failure report into the smallest runnable reproduction or explicitly record why reproduction is blocked.",
+  "body": "Inputs: error text, user steps, logs, failing command, changed files, and environment notes. Procedure: identify the observable failure signature, choose the narrowest runnable path, remove unrelated data or steps, and rerun until the same signature appears. Preserve command, cwd, input fixture, relevant env assumptions, and output. Do not patch before the reproduction or replace it with a broad suite pass. Output: minimal reproduction record with status reproduced, intermittent, or blocked. Failure handling: if reproduction requires external state or credentials, record the blocked reference and the next artifact needed. Use when Code Debugging work touches reproduction steps, stack traces, logs, state transitions, and controlled hypotheses. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: run the documented inspection and validation workflow; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include minimal repro, before/after trace, regression test, and command output. Risk boundary: escalate or stop when the task involves blind retries, wrapper fixes, broad rewrites, and unproven root cause, missing owner evidence, or live external state.",
+  "domain": "debugging",
+  "scope_hint": "code.debugging:skills",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.debugging:human_authored",
+  "pack_id": "code.debugging"
+}

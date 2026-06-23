@@ -1,0 +1,47 @@
+{
+  "schema_version": "domain_pack.v1",
+  "id": "code.feature-engineering",
+  "name": "Feature Engineering (stores, drift, leakage, encoding)",
+  "version": "1.0.0",
+  "scope": "system",
+  "risk": "medium",
+  "domains": [
+    "feature_engineering",
+    "feature_store",
+    "feature_drift",
+    "online_features"
+  ],
+  "provides": [
+    "knowledge",
+    "strategy",
+    "methodology",
+    "skill",
+    "diagnosis",
+    "validation"
+  ],
+  "depends_on": [
+    "code.ml-ai",
+    "code.data-engineering",
+    "code.data-quality"
+  ],
+  "conflicts_with": [],
+  "knowledge_store": "document_store",
+  "allowed_tools": [
+    "read",
+    "shell:test"
+  ],
+  "denied_tools": [
+    "shell:deploy-production"
+  ],
+  "data_policy": {
+    "sensitivity": [
+      "source_code"
+    ],
+    "default_admission": "summary_only",
+    "secret_policy": "deny"
+  },
+  "detector": {
+    "inline": "profile.code_domains.some(d=>['feature_engineering','feature_store','feature_drift','online_features'].includes(d)) || profile.repo_signals.some(s=>/\\b(feature store|train.?serve skew|temporal leakage|target leakage|feature drift|feature engineering|feast|tecton|one.?hot encoding|feature selection)\\b/i.test(s)) ? 0.9 : 0",
+    "threshold": 0.5
+  }
+}

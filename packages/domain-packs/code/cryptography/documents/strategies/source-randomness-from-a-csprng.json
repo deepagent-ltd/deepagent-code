@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:crypto:source-randomness-from-a-csprng",
+  "type": "strategy",
+  "title": "Source all secrets from a CSPRNG",
+  "description": "Generate keys, salts, nonces, and tokens from a cryptographically secure RNG, never from a general-purpose PRNG.",
+  "body": "Use whenever a value must be unpredictable: keys, salts, IVs/nonces, session tokens, password-reset codes. Do not use a language's default PRNG (Math.random, rand(), Mersenne Twister) for any secret, and avoid seeding from time or PID. Actions: call the platform CSPRNG (getrandom, crypto.randomBytes, SecureRandom, libsodium randombytes) and request enough bytes for the target security level. Validation signals include a code path where every secret traces to a CSPRNG and a test rejecting non-CSPRNG sources. Risk boundary: predictable randomness lets attackers reproduce keys and tokens, defeating the whole scheme; treat any secret derived from a non-cryptographic RNG as a critical defect.",
+  "domain": "cryptography",
+  "scope_hint": "code.cryptography:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.cryptography",
+  "pack_id": "code.cryptography"
+}

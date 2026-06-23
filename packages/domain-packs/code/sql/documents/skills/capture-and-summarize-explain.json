@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:sql:capture-and-summarize-explain",
+  "type": "skill",
+  "title": "Capture EXPLAIN output and summarize the bottleneck",
+  "description": "Run EXPLAIN/EXPLAIN ANALYZE on a target query and report the costliest node, row mis-estimates, and index usage.",
+  "body": "Use when a query is reported slow or before adding an index. Actions: run the dialect's plan command (Postgres EXPLAIN (ANALYZE, BUFFERS), MySQL EXPLAIN ANALYZE / FORMAT=JSON) against representative parameters, then report the top node by time, the estimate-vs-actual row counts, whether indexes are used or it falls back to a full scan, and any sort/hash spill to disk. Do not run EXPLAIN ANALYZE on a mutating statement in production (it executes the query). This skill exposes capability only and must not run against production without runtime permission. Validation signals include a plan node clearly dominating time and a concrete index/rewrite hypothesis. Risk boundary: ANALYZE actually executes the statement; for INSERT/UPDATE/DELETE use plain EXPLAIN or a transaction you roll back, and escalate before touching production data.",
+  "domain": "sql",
+  "scope_hint": "code.sql:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.sql",
+  "pack_id": "code.sql"
+}

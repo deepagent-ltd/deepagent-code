@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:scala:compose-an-effect-program",
+  "type": "methodology",
+  "title": "Compose an effect program and run it once",
+  "description": "Build a side-effecting workflow as composed IO/Future values and execute it only at the boundary.",
+  "body": "Steps: 1. Wrap each side effect (DB call, HTTP, file IO) in an IO/Task so it is a value. 2. Compose them with for-comprehensions/flatMap into one program, threading errors via the effect's error channel. 3. Add resource safety (Resource/bracket) so acquisition releases on failure. 4. Keep the body pure; perform no unsafe run until the top. 5. Run once via IOApp/unsafeRunSync at the edge. Rollback point: before changing where the program is run. Validation: a test asserts no effect fires on construction and that running yields the expected result and releases resources even on failure.",
+  "domain": "scala",
+  "scope_hint": "code.scala:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.scala",
+  "pack_id": "code.scala"
+}

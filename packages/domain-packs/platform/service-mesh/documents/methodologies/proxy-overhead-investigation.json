@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:mesh:proxy-overhead-investigation",
+  "type": "methodology",
+  "title": "Attribute latency to the mesh proxy vs the application",
+  "description": "Use mesh telemetry and per-hop spans to separate sidecar overhead and telemetry cost from real application latency.",
+  "body": "Use when adopting the mesh introduces a latency regression. Do not assume the application got slower. Actions: read distributed traces for the inbound/outbound proxy spans to measure per-hop overhead, check proxy CPU and whether full-detail telemetry/access logs are inflating cost, reduce telemetry sampling or scope sidecar config (Sidecar resource) to needed services, and compare meshed vs non-meshed latency. Validation signals include trace spans isolating proxy time and latency dropping after trimming telemetry or scoping the proxy. Risk boundary: changing telemetry or proxy resources on production warrants review.",
+  "domain": "service_mesh",
+  "scope_hint": "platform.service-mesh:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.service-mesh",
+  "pack_id": "platform.service-mesh"
+}

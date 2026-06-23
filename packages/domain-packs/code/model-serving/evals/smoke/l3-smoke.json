@@ -1,0 +1,70 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "code.model-serving",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "model_serving",
+      "inference_serving",
+      "batching"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "L3 smoke for code.model-serving: vLLM/Triton inference server, dynamic batching with queue timeout, p99 inference latency vs throughput, GPU utilization, model versioning rollout, and autoscaling on bursty load"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "write a cron job that emails a weekly CSV summary"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "retrieval_query": "model serving inference server dynamic batching triton vllm model versioning inference latency throughput gpu utilization autoscaling cold start quantization tensorrt p99",
+  "expected_pack_id": "code.model-serving",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "code.model-serving L3 validation smoke",
+    "signals": [
+      "p99 latency measured under realistic concurrent load",
+      "GPU utilization high without queue starvation",
+      "batch size and timeout tuned against the latency SLO",
+      "new model version passes health check before receiving traffic",
+      "rollback to the previous version verified"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "code.model-serving diagnosis smoke",
+    "signals": [
+      "GPU idle while requests queue (no batching)",
+      "p99 latency spikes from an oversized batch window",
+      "OOM at peak concurrency from unbounded batch",
+      "a bad model version served with no rollback path",
+      "cold start adds seconds on every scale-up"
+    ]
+  },
+  "source_refs": [
+    "source:inference-serving-practice:paraphrased",
+    "source:dynamic-batching-latency:paraphrased"
+  ]
+}
