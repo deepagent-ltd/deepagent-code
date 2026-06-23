@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:bazel:action-graph-and-keys",
+  "type": "knowledge",
+  "title": "How the action graph and action keys work",
+  "description": "Bazel builds a graph of actions keyed by their inputs, command, and environment, and reuses a cached output whenever the key matches.",
+  "body": "Use when reasoning about what triggers a rebuild or a cache hit. Do not assume Bazel rebuilds based on file timestamps. Each action's key is a hash of its declared inputs, command line, and relevant environment; a matching key returns the cached output, while any change to those produces a new key and re-execution. Inspect with the execution log to see action keys. Validation signals include a no-op rebuild hitting cache and a real input change producing a new key. Risk boundary: undeclared inputs are absent from the key, so the cache can return stale results, making hermeticity essential.",
+  "domain": "bazel",
+  "scope_hint": "code.build.bazel:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.build.bazel",
+  "pack_id": "code.build.bazel"
+}

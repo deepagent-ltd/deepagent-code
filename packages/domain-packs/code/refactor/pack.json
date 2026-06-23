@@ -1,0 +1,43 @@
+{
+  "schema_version": "domain_pack.v1",
+  "id": "code.refactor",
+  "name": "Code Refactor",
+  "version": "1.0.0",
+  "scope": "system",
+  "risk": "medium",
+  "domains": [
+    "code",
+    "refactor"
+  ],
+  "provides": [
+    "knowledge",
+    "strategy",
+    "methodology",
+    "skill",
+    "diagnosis",
+    "validation"
+  ],
+  "depends_on": [
+    "code.testing"
+  ],
+  "conflicts_with": [],
+  "knowledge_store": "document_store",
+  "allowed_tools": [
+    "read",
+    "shell:test"
+  ],
+  "denied_tools": [
+    "shell:deploy-production"
+  ],
+  "data_policy": {
+    "sensitivity": [
+      "source_code"
+    ],
+    "default_admission": "summary_only",
+    "secret_policy": "deny"
+  },
+  "detector": {
+    "inline": "profile.code_domains.includes('refactor') || profile.repo_signals.some(s=>/\\b(refactor|cleanup|simplify|consolidate|behavior.?preserving|extract (a |the )?(method|function|class|component|helper|interface|module)|rename(s|d)? (a |the |this )?([a-zA-Z0-9_]+ )?(function|method|class|variable|symbol|module|file|component|field|fn))\\b/i.test(s)) ? 0.82 : 0",
+    "threshold": 0.5
+  }
+}

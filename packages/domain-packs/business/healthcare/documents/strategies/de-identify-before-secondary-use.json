@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:healthcare:de-identify-before-secondary-use",
+  "type": "strategy",
+  "title": "De-identify PHI before analytics or non-clinical use",
+  "description": "Strip or transform identifiers before patient data flows into analytics, test, or model-training environments so secondary use does not expose individuals.",
+  "body": "Use when patient data leaves the clinical system for analytics, lower environments, or model training. Do not copy raw PHI into test/analytics stores, and avoid weak masking that leaves re-identifiable quasi-identifiers. Actions: remove or transform direct identifiers, generalize or suppress quasi-identifiers that enable re-identification, and verify the result against a de-identification standard before export; record the method and fields transformed. Validation signals include a de-identification review and a re-identification risk check on the output dataset. Risk boundary: advisory only; whether a dataset is adequately de-identified is a human privacy/compliance decision, so escalate rather than declaring data safe to share, and never relax de-identification to ease analytics.",
+  "domain": "healthcare",
+  "scope_hint": "business.healthcare:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:business.healthcare",
+  "pack_id": "business.healthcare"
+}

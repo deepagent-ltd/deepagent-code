@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:android:permissions-and-privacy-model",
+  "type": "knowledge",
+  "title": "Android permissions and privacy model",
+  "description": "Dangerous permissions are granted by the user at runtime and revocable, and Play enforces declared data use, so access is never guaranteed.",
+  "body": "Use when accessing protected data/capabilities. Normal permissions are granted at install, but dangerous ones (location, camera, contacts, etc.) require a runtime user grant that can be denied or later revoked, and newer Android versions add scoped storage, approximate location, and one-time grants. Play requires declaring data collection and justifying sensitive permissions. Do not assume a permission stays granted. Actions: check and request at use, handle denial/revocation, and request the minimum. Validation signals include graceful behavior when a permission is absent. Risk boundary: calling a protected API without a current grant throws SecurityException, and over-requesting or misdeclaring data risks Play rejection or removal — permission state is dynamic and policy-enforced.",
+  "domain": "android",
+  "scope_hint": "code.mobile.android:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.mobile.android",
+  "pack_id": "code.mobile.android"
+}

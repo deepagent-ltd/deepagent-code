@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:asm:disassemble-and-step",
+  "type": "skill",
+  "title": "Disassemble and single-step a function",
+  "description": "Disassemble a target function and step it in a debugger, reporting register, flag, and stack state against expectation.",
+  "body": "Use when verifying or debugging low-level behavior. Actions: disassemble the function (objdump -d / debugger / Godbolt), set a breakpoint, single-step while watching the argument and callee-saved registers, flags, and the stack pointer/alignment, and report where the observed state diverges from expectation. Do not infer machine behavior from source alone. This skill exposes capability only and must not attach a debugger to a production or privileged process without runtime permission. Validation signals include stepped register/stack state matching the intended computation at each instruction. Risk boundary: if the binary lacks symbols or cannot be stepped in the available environment, report the behavior as unverified rather than asserting correctness from the mnemonics.",
+  "domain": "assembly",
+  "scope_hint": "code.assembly:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.assembly",
+  "pack_id": "code.assembly"
+}

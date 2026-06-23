@@ -1,0 +1,44 @@
+{
+  "schema_version": "domain_pack.v1",
+  "id": "code.mobile.ios",
+  "name": "iOS App Development (SwiftUI/UIKit)",
+  "version": "1.0.0",
+  "scope": "system",
+  "risk": "medium",
+  "domains": [
+    "ios",
+    "swiftui",
+    "uikit",
+    "xcode"
+  ],
+  "provides": [
+    "knowledge",
+    "strategy",
+    "methodology",
+    "skill",
+    "diagnosis",
+    "validation"
+  ],
+  "depends_on": [
+    "code.swift",
+    "risk.privacy"
+  ],
+  "conflicts_with": [],
+  "knowledge_store": "document_store",
+  "allowed_tools": [
+    "read",
+    "shell:test"
+  ],
+  "denied_tools": [],
+  "data_policy": {
+    "sensitivity": [
+      "source_code"
+    ],
+    "default_admission": "summary_only",
+    "secret_policy": "deny"
+  },
+  "detector": {
+    "inline": "profile.code_domains.some(d=>['ios','swiftui','uikit','xcode'].includes(d)) || profile.repo_signals.some(s=>/\\b(swiftui|uikit|xcode|ios app|view controller|app store|provisioning profile|@state|combine framework|info\\.plist)\\b/i.test(s)) ? 0.9 : 0",
+    "threshold": 0.5
+  }
+}

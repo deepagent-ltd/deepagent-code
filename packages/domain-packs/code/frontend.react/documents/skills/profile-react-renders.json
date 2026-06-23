@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:frontend_react:profile-react-renders",
+  "type": "skill",
+  "title": "Profile React render and commit behavior",
+  "description": "Record a React Profiler session for a changed interaction and report which components rerendered, how often, and why.",
+  "body": "Use when validating that a change did not introduce excess rerenders. Actions: open the React DevTools Profiler (or instrument with the Profiler API), record the target interaction, and report the commit count, slowest components, and the trigger (props/state/context/parent) for each rerender. Do not infer render behavior from reading code alone. This skill exposes capability only and must not run a browser session without runtime permission. Validation signals include a render trace with commit timings and a before/after comparison. Risk boundary: if no profiling environment is available, report the render impact as unverified rather than claiming an improvement.",
+  "domain": "react",
+  "scope_hint": "code.frontend.react:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.frontend.react",
+  "pack_id": "code.frontend.react"
+}

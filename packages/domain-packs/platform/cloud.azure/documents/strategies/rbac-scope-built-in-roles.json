@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:azure:rbac-scope-built-in-roles",
+  "type": "strategy",
+  "title": "Assign Azure RBAC at the narrowest scope with built-in roles",
+  "description": "Bind a specific built-in role at the resource or resource-group scope rather than Owner/Contributor at subscription, respecting downward inheritance.",
+  "body": "Use when granting Azure access or reviewing a role assignment. Do not assign Owner or Contributor at subscription scope to make something work, and avoid custom roles when a built-in role fits. Actions: pick the most specific built-in role (e.g. Storage Blob Data Reader, AcrPull), assign it at the resource or resource-group scope since RBAC inherits downward, prefer assignments to a managed identity or Entra group, and review with az role assignment list. Validation signals include the principal holding only the intended role at the intended scope and a denied action on a sibling resource. Risk boundary: any assignment at subscription/management-group scope or any Owner grant is human-gated.",
+  "domain": "azure",
+  "scope_hint": "platform.cloud.azure:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.cloud.azure",
+  "pack_id": "platform.cloud.azure"
+}

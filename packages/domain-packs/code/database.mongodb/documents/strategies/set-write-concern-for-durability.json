@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:mongo:set-write-concern-for-durability",
+  "type": "strategy",
+  "title": "Set write concern to match durability needs",
+  "description": "Use w:majority for data that must survive a primary failover, accepting the latency it adds.",
+  "body": "Use when deciding how durable a write must be on a replica set. Do not leave durable writes at w:1, which acknowledges as soon as the primary has it; if that primary fails before replication, the write is rolled back and lost. Actions: set writeConcern w:majority for important data so acknowledgement waits for a majority of voting members, pair it with readConcern majority for read-your-write consistency, and verify with a failover test. Validation signals include the write surviving a stepDown of the primary and the rollback log staying empty. Risk boundary: w:majority adds latency proportional to the slowest majority member, so reserve w:1 for truly disposable data and document the tradeoff.",
+  "domain": "mongodb",
+  "scope_hint": "code.database.mongodb:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.mongodb",
+  "pack_id": "code.database.mongodb"
+}

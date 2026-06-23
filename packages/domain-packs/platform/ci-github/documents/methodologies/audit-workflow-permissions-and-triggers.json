@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:ghci:audit-workflow-permissions-and-triggers",
+  "type": "methodology",
+  "title": "Audit a workflow's triggers and token reach",
+  "description": "Map every trigger to the token scope and secrets it exposes, then narrow anything broader than the job needs.",
+  "body": "Steps: 1. List the on: triggers and flag any pull_request_target, workflow_run, or schedule that runs with elevated context. 2. Record the effective GITHUB_TOKEN permissions (default plus any permissions: block) per job. 3. Enumerate which jobs reference secrets and whether their trigger can be invoked by untrusted actors. 4. For each job, compare granted scope to the API calls it makes and tighten. 5. Re-read the rendered permissions to confirm. Rollback point: changes are to YAML only, revert by reverting the file. Validation: the audit is the gate; a job whose token or secret reach was not justified is unverified.",
+  "domain": "ci_github",
+  "scope_hint": "platform.ci-github:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.ci-github",
+  "pack_id": "platform.ci-github"
+}

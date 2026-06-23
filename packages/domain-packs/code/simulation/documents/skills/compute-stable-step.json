@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:sim:compute-stable-step",
+  "type": "skill",
+  "title": "Compute a stable explicit step size",
+  "description": "Derive the maximum stable step for an explicit solver from the system's fastest time constant.",
+  "body": "Use when setting a fixed step for an explicit integrator on a known system. Do not exceed the stability limit, since the solution diverges abruptly beyond it. Actions: find the fastest eigenvalue or time constant, apply the solver's stability factor to get the maximum step, and verify the solution stays bounded at that step. Validation signals include a bounded trajectory at the computed step and divergence appearing just beyond it. Risk boundary: running at the exact limit is fragile against parameter change, so flag a step at the boundary and back off with a safety margin.",
+  "domain": "simulation",
+  "scope_hint": "code.simulation:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.simulation",
+  "pack_id": "code.simulation"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:k8s:run-dry-run-diff",
+  "type": "skill",
+  "title": "Run a dry-run diff against the cluster",
+  "description": "Execute server-side dry-run and kubectl/helm diff to preview exactly what an apply would change.",
+  "body": "Use when validating a manifest or chart change before apply. Procedure: render manifests (kustomize build / helm template), run kubectl apply --dry-run=server for schema/admission validation, then kubectl diff or helm diff upgrade against the live release; read every changed, added, and removed field. Report the diff and flag any unexpected deletions, RBAC widening, or probe/limit removals. This skill is read-only against the cluster and must not run apply or target production without runtime permission. Validation signals include a clean, intent-matching diff. Risk boundary: if the diff shows destructive or privilege-expanding changes, stop and escalate rather than applying.",
+  "domain": "kubernetes",
+  "scope_hint": "platform.kubernetes:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.kubernetes",
+  "pack_id": "platform.kubernetes"
+}

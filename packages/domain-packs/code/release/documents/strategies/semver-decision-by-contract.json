@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:release:semver-decision-by-contract",
+  "type": "strategy",
+  "title": "Pick the semver bump from the observed contract change",
+  "description": "Derive major/minor/patch from whether the public surface broke, grew, or only got fixed, not from gut feel or release cadence.",
+  "body": "Use when deciding the next version number for a published library or service API. Do not bump major for an internal refactor that kept the contract, and avoid a patch bump when an exported signature, default, or wire format actually changed. Actions: diff the public surface (exports, types, CLI flags, response schema) against the last tag, classify each delta as break/add/fix, and choose major for any break, minor for additive-only, patch for fixes; record the classifying diff in the release notes. Validation signals include an API-diff tool report and a consumer contract test passing against the new version. Risk boundary: if a change might break downstream consumers and you cannot confirm, treat it as major and escalate rather than shipping a silent break under a patch.",
+  "domain": "code",
+  "scope_hint": "code.release:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.release",
+  "pack_id": "code.release"
+}

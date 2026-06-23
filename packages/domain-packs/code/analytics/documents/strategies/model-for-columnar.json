@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:analytics:model-for-columnar",
+  "type": "strategy",
+  "title": "Model and query for columnar stores",
+  "description": "Exploit columnar storage by pruning columns, partitioning, and clustering so warehouse scans stay cheap.",
+  "body": "Use when queries scan large fact tables on a columnar warehouse. Do not write SELECT * or filter on unpartitioned high-cardinality columns — columnar engines bill and slow on bytes scanned, not rows. Actions: select only needed columns, partition or cluster on the common filter/date key, and pre-aggregate hot rollups; inspect the query plan and bytes-scanned. Validation signals include a query plan showing partition pruning and a bytes-scanned drop after clustering. Risk boundary: an unpartitioned full-table scan can run up large cost on each run; if a frequent query scans the whole table, treat it as a cost risk and escalate to add partitioning before it recurs at scale.",
+  "domain": "analytics",
+  "scope_hint": "code.analytics:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.analytics",
+  "pack_id": "code.analytics"
+}

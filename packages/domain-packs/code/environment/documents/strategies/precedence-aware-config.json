@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:environment:precedence-aware-config",
+  "type": "strategy",
+  "title": "Resolve config by documented precedence",
+  "description": "When the same setting can come from flags, env vars, files, and defaults, resolve and report the effective value by the documented precedence order instead of guessing the source.",
+  "body": "Use when a setting could originate from multiple layers (CLI flag, environment variable, .env, config file, built-in default) and behavior depends on which wins. Do not assume a value from the file is active when an env var overrides it, and avoid editing the wrong layer. Actions: enumerate every layer that defines the key, apply the documented precedence (usually flag > env > file > default), and record the resolved effective value plus its winning source. Validation signals include printing the effective config at startup and a test asserting an env override beats the file. Risk boundary: if precedence is undocumented or ambiguous, surface the conflict rather than silently picking one; escalate when a security-relevant setting resolves unexpectedly.",
+  "domain": "code",
+  "scope_hint": "code.environment:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.environment",
+  "pack_id": "code.environment"
+}

@@ -1,0 +1,514 @@
+[
+  {
+    "ref_id": "strategy:eval:hold-out-and-prevent-leakage",
+    "type": "strategy",
+    "title": "Hold out the golden set and prevent leakage",
+    "summary": "Evaluation data is strictly separated from anything the system saw in training, prompts, or few-shot examples.",
+    "domains": [
+      "eval",
+      "evaluation",
+      "golden_data",
+      "regression",
+      "judge"
+    ],
+    "triggers": [
+      "holdout",
+      "leakage",
+      "golden",
+      "separate",
+      "contamination",
+      "split"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.eval"
+  },
+  {
+    "ref_id": "strategy:eval:choose-metrics-that-track-the-goal",
+    "type": "strategy",
+    "title": "Choose metrics that track the real goal",
+    "summary": "Select metrics that move only when the user-facing quality moves, and reject proxies a system can game without improving.",
+    "domains": [
+      "eval",
+      "evaluation",
+      "golden_data",
+      "regression",
+      "judge"
+    ],
+    "triggers": [
+      "metric",
+      "goal",
+      "proxy",
+      "game",
+      "select",
+      "track"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.eval"
+  },
+  {
+    "ref_id": "strategy:eval:require-significance-before-claiming-a-win",
+    "type": "strategy",
+    "title": "Require significance before claiming a win",
+    "summary": "A score difference is reported with variance and a significance check, not as a point estimate that may be noise.",
+    "domains": [
+      "eval",
+      "evaluation",
+      "golden_data",
+      "regression",
+      "judge"
+    ],
+    "triggers": [
+      "significance",
+      "variance",
+      "noise",
+      "win",
+      "confidence",
+      "estimate"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.eval"
+  },
+  {
+    "ref_id": "strategy:eval:treat-the-judge-as-a-biased-instrument",
+    "type": "strategy",
+    "title": "Treat the LLM judge as a biased instrument",
+    "summary": "An LLM-as-judge is calibrated against human labels and its known biases are controlled before its scores are trusted.",
+    "domains": [
+      "eval",
+      "evaluation",
+      "golden_data",
+      "regression",
+      "judge"
+    ],
+    "triggers": [
+      "judge",
+      "bias",
+      "calibrate",
+      "human",
+      "instrument",
+      "agreement"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.eval"
+  },
+  {
+    "ref_id": "strategy:eval:isolate-one-variable-per-ablation",
+    "type": "strategy",
+    "title": "Isolate one variable per ablation",
+    "summary": "Each ablation changes exactly one factor so the score delta is attributable to that factor, not a confound.",
+    "domains": [
+      "eval",
+      "evaluation",
+      "golden_data",
+      "regression",
+      "judge"
+    ],
+    "triggers": [
+      "ablation",
+      "variable",
+      "isolate",
+      "confound",
+      "factor",
+      "attribute"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.eval"
+  },
+  {
+    "ref_id": "strategy:eval:freeze-and-version-the-dataset",
+    "type": "strategy",
+    "title": "Freeze and version the evaluation dataset",
+    "summary": "Golden data is versioned and frozen so scores are comparable over time and the set is not edited to flatter a system.",
+    "domains": [
+      "eval",
+      "evaluation",
+      "golden_data",
+      "regression",
+      "judge"
+    ],
+    "triggers": [
+      "freeze",
+      "version",
+      "dataset",
+      "comparable",
+      "golden",
+      "drift"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.eval"
+  },
+  {
+    "ref_id": "strategy:eval:cover-failure-cases-not-just-happy-path",
+    "type": "strategy",
+    "title": "Cover failure cases, not just the happy path",
+    "summary": "The golden set deliberately includes hard, adversarial, and edge cases so the score reflects real-world robustness.",
+    "domains": [
+      "eval",
+      "evaluation",
+      "golden_data",
+      "regression",
+      "judge"
+    ],
+    "triggers": [
+      "coverage",
+      "edge",
+      "adversarial",
+      "hard",
+      "robustness",
+      "failure"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.eval"
+  },
+  {
+    "ref_id": "methodology:eval:build-the-golden-dataset",
+    "type": "methodology",
+    "title": "Build the golden dataset",
+    "summary": "Assemble a representative, leak-free, segmented dataset with trusted reference answers and freeze it under version control.",
+    "domains": [
+      "eval",
+      "evaluation",
+      "golden_data",
+      "regression",
+      "judge"
+    ],
+    "triggers": [
+      "golden",
+      "dataset",
+      "build",
+      "reference",
+      "segment",
+      "freeze"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.eval"
+  },
+  {
+    "ref_id": "methodology:eval:design-an-ablation-study",
+    "type": "methodology",
+    "title": "Design an ablation study",
+    "summary": "Plan arms that each change one variable against a fixed baseline, with a stable dataset, metric, and judge.",
+    "domains": [
+      "eval",
+      "evaluation",
+      "golden_data",
+      "regression",
+      "judge"
+    ],
+    "triggers": [
+      "ablation",
+      "arm",
+      "baseline",
+      "variable",
+      "design",
+      "fixed"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.eval"
+  },
+  {
+    "ref_id": "methodology:eval:calibrate-an-llm-judge",
+    "type": "methodology",
+    "title": "Calibrate an LLM judge",
+    "summary": "Measure judge-human agreement on a labeled sample and control known biases before using the judge at scale.",
+    "domains": [
+      "eval",
+      "evaluation",
+      "golden_data",
+      "regression",
+      "judge"
+    ],
+    "triggers": [
+      "calibrate",
+      "judge",
+      "agreement",
+      "human",
+      "bias",
+      "sample"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.eval"
+  },
+  {
+    "ref_id": "methodology:eval:build-a-regression-suite",
+    "type": "methodology",
+    "title": "Build a quality regression suite",
+    "summary": "Wire the golden set, metrics, and significance checks into a repeatable suite that flags quality regressions per change.",
+    "domains": [
+      "eval",
+      "evaluation",
+      "golden_data",
+      "regression",
+      "judge"
+    ],
+    "triggers": [
+      "regression",
+      "suite",
+      "repeatable",
+      "flag",
+      "ci",
+      "build"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.eval"
+  },
+  {
+    "ref_id": "knowledge:eval:offline-vs-online-evaluation",
+    "type": "knowledge",
+    "title": "Offline vs online evaluation",
+    "summary": "Offline eval on a fixed dataset is reproducible but may not reflect production; online eval measures real impact but is noisy and risky.",
+    "domains": [
+      "eval",
+      "evaluation",
+      "golden_data",
+      "regression",
+      "judge"
+    ],
+    "triggers": [
+      "offline",
+      "online",
+      "production",
+      "reproducible",
+      "ab",
+      "evaluation"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.eval"
+  },
+  {
+    "ref_id": "knowledge:eval:llm-as-judge-limits",
+    "type": "knowledge",
+    "title": "Limits of LLM-as-judge",
+    "summary": "LLM judges exhibit position, verbosity, and self-preference bias and can agree with humans on easy cases but not hard ones.",
+    "domains": [
+      "eval",
+      "evaluation",
+      "golden_data",
+      "regression",
+      "judge"
+    ],
+    "triggers": [
+      "judge",
+      "bias",
+      "position",
+      "verbosity",
+      "self-preference",
+      "limit"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.eval"
+  },
+  {
+    "ref_id": "knowledge:eval:metric-selection-pitfalls",
+    "type": "knowledge",
+    "title": "Metric selection pitfalls",
+    "summary": "Exact-match, BLEU/ROUGE overlap, and accuracy can each diverge from real quality and be gamed without improving the system.",
+    "domains": [
+      "eval",
+      "evaluation",
+      "golden_data",
+      "regression",
+      "judge"
+    ],
+    "triggers": [
+      "metric",
+      "exact-match",
+      "overlap",
+      "accuracy",
+      "game",
+      "pitfall"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.eval"
+  },
+  {
+    "ref_id": "knowledge:eval:data-leakage-forms",
+    "type": "knowledge",
+    "title": "Forms of evaluation data leakage",
+    "summary": "Leakage enters through training contamination, few-shot overlap, prompt inclusion, and editing the golden set to match outputs.",
+    "domains": [
+      "eval",
+      "evaluation",
+      "golden_data",
+      "regression",
+      "judge"
+    ],
+    "triggers": [
+      "leakage",
+      "contamination",
+      "few-shot",
+      "overlap",
+      "prompt",
+      "forms"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.eval"
+  },
+  {
+    "ref_id": "skill:eval:review-eval-for-leakage-and-significance",
+    "type": "skill",
+    "title": "Review an eval for leakage and significance",
+    "summary": "Read an evaluation setup and report whether the golden set is leak-free, the metric fits the goal, and wins are significant.",
+    "domains": [
+      "eval",
+      "evaluation",
+      "golden_data",
+      "regression",
+      "judge"
+    ],
+    "triggers": [
+      "review",
+      "leakage",
+      "significance",
+      "metric",
+      "audit",
+      "inspect"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.eval"
+  },
+  {
+    "ref_id": "skill:eval:run-regression-with-baseline",
+    "type": "skill",
+    "title": "Run a regression against a baseline",
+    "summary": "Execute or scaffold the regression suite, compare a candidate to a baseline with variance, and report per-segment deltas.",
+    "domains": [
+      "eval",
+      "evaluation",
+      "golden_data",
+      "regression",
+      "judge"
+    ],
+    "triggers": [
+      "regression",
+      "baseline",
+      "delta",
+      "segment",
+      "run",
+      "compare"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.eval"
+  }
+]

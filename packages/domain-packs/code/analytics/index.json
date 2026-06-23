@@ -1,0 +1,452 @@
+[
+  {
+    "ref_id": "strategy:analytics:define-metrics-once",
+    "type": "strategy",
+    "title": "Define each metric once in a governed layer",
+    "summary": "Encode business metrics in a single metrics layer so every dashboard and query derives the same number from one definition.",
+    "domains": [
+      "analytics",
+      "olap",
+      "data_warehouse",
+      "dbt",
+      "metrics_layer"
+    ],
+    "triggers": [
+      "metrics layer",
+      "looker",
+      "cube.js",
+      "consistency"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.analytics"
+  },
+  {
+    "ref_id": "strategy:analytics:layer-staging-to-mart",
+    "type": "strategy",
+    "title": "Layer models from staging to mart",
+    "summary": "Separate light source-shaped staging models from business-shaped mart models so logic is reusable and lineage is clear.",
+    "domains": [
+      "analytics",
+      "olap",
+      "data_warehouse",
+      "dbt",
+      "metrics_layer"
+    ],
+    "triggers": [
+      "dbt model",
+      "staging",
+      "mart",
+      "lineage"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.analytics"
+  },
+  {
+    "ref_id": "strategy:analytics:incremental-only-when-correct",
+    "type": "strategy",
+    "title": "Make a model incremental only when it stays correct",
+    "summary": "Adopt incremental materialization with a late-arriving window and idempotent merge so it matches a full refresh.",
+    "domains": [
+      "analytics",
+      "olap",
+      "data_warehouse",
+      "dbt",
+      "metrics_layer"
+    ],
+    "triggers": [
+      "incremental model",
+      "materialization",
+      "dbt model",
+      "idempotent"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.analytics"
+  },
+  {
+    "ref_id": "strategy:analytics:model-history-with-scd",
+    "type": "strategy",
+    "title": "Preserve attribute history with SCD type 2",
+    "summary": "Track changing dimension attributes as versioned rows with validity ranges so historical facts join to the values that were current then.",
+    "domains": [
+      "analytics",
+      "olap",
+      "data_warehouse",
+      "dbt",
+      "metrics_layer"
+    ],
+    "triggers": [
+      "slowly changing dimension",
+      "scd",
+      "history",
+      "dimension"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.analytics"
+  },
+  {
+    "ref_id": "strategy:analytics:model-for-columnar",
+    "type": "strategy",
+    "title": "Model and query for columnar stores",
+    "summary": "Exploit columnar storage by pruning columns, partitioning, and clustering so warehouse scans stay cheap.",
+    "domains": [
+      "analytics",
+      "olap",
+      "data_warehouse",
+      "dbt",
+      "metrics_layer"
+    ],
+    "triggers": [
+      "columnar store",
+      "olap",
+      "partition",
+      "query optimization"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.analytics"
+  },
+  {
+    "ref_id": "strategy:analytics:test-transformations",
+    "type": "strategy",
+    "title": "Test transformations like production code",
+    "summary": "Attach data tests to models so uniqueness, referential integrity, and freshness assumptions fail loudly before consumers see bad data.",
+    "domains": [
+      "analytics",
+      "olap",
+      "data_warehouse",
+      "dbt",
+      "metrics_layer"
+    ],
+    "triggers": [
+      "dbt model",
+      "data tests",
+      "data quality",
+      "validation"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.analytics"
+  },
+  {
+    "ref_id": "methodology:analytics:design-dimensional-model",
+    "type": "methodology",
+    "title": "Design a dimensional model from the grain up",
+    "summary": "Define the fact grain, then dimensions and measures, choosing star or snowflake to fit query and maintenance needs.",
+    "domains": [
+      "analytics",
+      "olap",
+      "data_warehouse",
+      "dbt",
+      "metrics_layer"
+    ],
+    "triggers": [
+      "star schema",
+      "snowflake schema",
+      "dimensional",
+      "fact"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.analytics"
+  },
+  {
+    "ref_id": "methodology:analytics:build-metrics-layer",
+    "type": "methodology",
+    "title": "Stand up a governed metrics layer",
+    "summary": "Centralize metric definitions, dimensions, and joins so consistent numbers flow to every BI tool and ad-hoc query.",
+    "domains": [
+      "analytics",
+      "olap",
+      "data_warehouse",
+      "dbt",
+      "metrics_layer"
+    ],
+    "triggers": [
+      "metrics layer",
+      "looker",
+      "cube.js",
+      "governance"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.analytics"
+  },
+  {
+    "ref_id": "methodology:analytics:reconcile-incremental",
+    "type": "methodology",
+    "title": "Reconcile incremental models against full refresh",
+    "summary": "Periodically rebuild an incremental model fully and diff it against the incremental output to catch silent drift.",
+    "domains": [
+      "analytics",
+      "olap",
+      "data_warehouse",
+      "dbt",
+      "metrics_layer"
+    ],
+    "triggers": [
+      "incremental model",
+      "reconciliation",
+      "materialization",
+      "drift"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.analytics"
+  },
+  {
+    "ref_id": "methodology:analytics:optimize-warehouse-query",
+    "type": "methodology",
+    "title": "Optimize a slow warehouse query",
+    "summary": "Use the query plan and bytes-scanned to cut scan volume on a columnar store rather than guessing at rewrites.",
+    "domains": [
+      "analytics",
+      "olap",
+      "data_warehouse",
+      "dbt",
+      "metrics_layer"
+    ],
+    "triggers": [
+      "query optimization",
+      "columnar store",
+      "olap",
+      "partition"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.analytics"
+  },
+  {
+    "ref_id": "knowledge:analytics:olap-vs-oltp",
+    "type": "knowledge",
+    "title": "OLAP versus OLTP workloads",
+    "summary": "Why analytical (columnar, scan-heavy) and transactional (row, point-write) systems are tuned oppositely.",
+    "domains": [
+      "analytics",
+      "olap",
+      "data_warehouse",
+      "dbt",
+      "metrics_layer"
+    ],
+    "triggers": [
+      "olap",
+      "oltp",
+      "columnar store",
+      "data warehouse"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.analytics"
+  },
+  {
+    "ref_id": "knowledge:analytics:star-vs-snowflake",
+    "type": "knowledge",
+    "title": "Star versus snowflake schema",
+    "summary": "How a denormalized star trades storage for query simplicity while a normalized snowflake trades joins for reuse.",
+    "domains": [
+      "analytics",
+      "olap",
+      "data_warehouse",
+      "dbt",
+      "metrics_layer"
+    ],
+    "triggers": [
+      "star schema",
+      "snowflake schema",
+      "dimensional",
+      "fact"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.analytics"
+  },
+  {
+    "ref_id": "knowledge:analytics:scd-types",
+    "type": "knowledge",
+    "title": "Slowly changing dimension types",
+    "summary": "How SCD type 1 (overwrite), type 2 (versioned rows), and type 3 (prior-value column) preserve different amounts of history.",
+    "domains": [
+      "analytics",
+      "olap",
+      "data_warehouse",
+      "dbt",
+      "metrics_layer"
+    ],
+    "triggers": [
+      "slowly changing dimension",
+      "scd",
+      "history",
+      "dimension"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.analytics"
+  },
+  {
+    "ref_id": "knowledge:analytics:materialization-strategies",
+    "type": "knowledge",
+    "title": "dbt materialization strategies",
+    "summary": "When view, table, incremental, and ephemeral materializations each fit a model's freshness and cost profile.",
+    "domains": [
+      "analytics",
+      "olap",
+      "data_warehouse",
+      "dbt",
+      "metrics_layer"
+    ],
+    "triggers": [
+      "materialization",
+      "dbt model",
+      "incremental model",
+      "view"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.analytics"
+  },
+  {
+    "ref_id": "skill:analytics:write-incremental-model",
+    "type": "skill",
+    "title": "Write a correct incremental dbt model",
+    "summary": "Steps to define the incremental predicate, late-arriving window, and idempotent merge so it matches a full refresh.",
+    "domains": [
+      "analytics",
+      "olap",
+      "data_warehouse",
+      "dbt",
+      "metrics_layer"
+    ],
+    "triggers": [
+      "incremental model",
+      "dbt model",
+      "materialization",
+      "merge"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.analytics"
+  },
+  {
+    "ref_id": "skill:analytics:add-model-tests",
+    "type": "skill",
+    "title": "Add data tests to a dbt model",
+    "summary": "Steps to attach uniqueness, not-null, relationship, and freshness tests so bad data fails the build, not the dashboard.",
+    "domains": [
+      "analytics",
+      "olap",
+      "data_warehouse",
+      "dbt",
+      "metrics_layer"
+    ],
+    "triggers": [
+      "data tests",
+      "dbt model",
+      "data quality",
+      "validation"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.analytics"
+  }
+]

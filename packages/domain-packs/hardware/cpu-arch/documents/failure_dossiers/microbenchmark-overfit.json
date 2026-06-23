@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:cpuarch:microbenchmark-overfit",
+  "type": "failure_dossier",
+  "description": "Tuning against a microbenchmark whose working set fits in cache and whose data is unrepresentative, so the 'win' vanishes in production.",
+  "body": "Failure mode: an optimization is validated on a tight loop over a small array that fits in L1 with predictable data, so cache and branch behavior bear no resemblance to production; the change ships and real workloads regress. Detection signals: speedup on the bench but no improvement (or a regression) on real input; counters look great in the bench but the working set is tiny; data is sorted/uniform unlike production. Do not trust a microbenchmark whose working set or data distribution differs from production. Safer fallback: benchmark on representative working-set sizes and real data distributions, confirm with hardware counters on that input, and gate the change on the realistic measurement.",
+  "domain": "cpu_arch",
+  "scope_hint": "hardware.cpu-arch:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.cpu-arch:human_authored",
+  "pack_id": "hardware.cpu-arch"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:dist:replicate-the-log-not-the-state",
+  "type": "strategy",
+  "title": "Replicate the log, derive the state",
+  "description": "Agree on an ordered log of commands via consensus and apply it deterministically on every replica, rather than shipping mutated state between nodes.",
+  "body": "Use when building any replicated service that must stay consistent across nodes. Do not ship snapshots of mutated in-memory state and hope they converge, and do not apply commands in different orders on different replicas. Actions: define a deterministic state machine, push every mutation as an ordered log entry through consensus, commit only after a quorum acknowledges, and apply entries in log order on each node. Verify replicas converge by comparing the applied state at a committed index. Validation signals include identical state-machine output across nodes at the same commit index and a Jepsen history with no divergence. Risk boundary: non-deterministic apply logic (map iteration order, local time, RNG) silently diverges replicas; treat any non-determinism in the apply path as a blocking defect and escalate before deploy.",
+  "domain": "distributed",
+  "scope_hint": "code.distributed:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.distributed",
+  "pack_id": "code.distributed"
+}

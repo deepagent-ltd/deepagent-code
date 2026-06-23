@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:mesh:identity-spiffe-certs",
+  "type": "knowledge",
+  "title": "Workload identity and SPIFFE certificates in the mesh",
+  "description": "Covers how the mesh issues SPIFFE/SVID certificates per workload identity (service account) and rotates them for mTLS and authorization.",
+  "body": "Use when reasoning about mesh authentication and authorization. Do not treat mesh mTLS identity as the same as network IP. Actions: know each workload gets a SPIFFE identity derived from its service account (spiffe://trust-domain/ns/<ns>/sa/<sa>), the mesh CA issues short-lived SVID certs that auto-rotate, and AuthorizationPolicies match on these identities rather than IPs. Inspect the issued cert and the principal in policy. Validation signals include the workload cert carrying the expected SPIFFE ID and an AuthorizationPolicy allowing/denying by principal. Risk boundary: AuthorizationPolicy changes alter who can call whom and warrant review.",
+  "domain": "service_mesh",
+  "scope_hint": "platform.service-mesh:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.service-mesh",
+  "pack_id": "platform.service-mesh"
+}

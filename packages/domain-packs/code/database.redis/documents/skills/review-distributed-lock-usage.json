@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:redis:review-distributed-lock-usage",
+  "type": "skill",
+  "title": "Review distributed lock usage",
+  "description": "Trace a Redis lock and report whether the protected operation stays correct if the lock fails or expires.",
+  "body": "Use when validating a Redis-based lock. Actions: trace lock acquisition and release; confirm SET uses NX with a PX TTL, that release deletes only if the caller still owns the key (Lua compare-and-delete), and crucially whether the protected operation remains correct if two holders overlap or the TTL fires mid-operation. Do not accept the lock as the sole correctness guarantee. Report and record the lock usage and classify it as efficiency-hint-with-idempotent/fenced-operation versus correctness-dependent-on-the-lock. This skill is read-only. Validation signals include an idempotent/fenced protected write that survives a mid-operation lock loss. Risk boundary: a Redis lock guarding a money/inventory operation with no fencing is a blocking finding to escalate.",
+  "domain": "redis",
+  "scope_hint": "code.database.redis:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.redis",
+  "pack_id": "code.database.redis"
+}

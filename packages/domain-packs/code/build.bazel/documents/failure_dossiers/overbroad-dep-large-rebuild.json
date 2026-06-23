@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:bazel:overbroad-dep-large-rebuild",
+  "type": "failure_dossier",
+  "description": "Depending on a coarse umbrella target couples unrelated code so any small change forces a large, slow rebuild.",
+  "body": "Failure mode: a target lists a broad dependency to avoid thinking about exact needs, so editing one file invalidates many downstream actions. Detection signals: a tiny edit rebuilds far more than the touched code; bazel query shows the target reaching unrelated libraries; build times stay high despite caching. Do not depend on umbrella targets for convenience. Safer fallback: split coarse targets along real dependency lines, depend only on what is used, and verify with bazel query that the rebuild scope shrank.",
+  "domain": "bazel",
+  "scope_hint": "code.build.bazel:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.build.bazel:human_authored",
+  "pack_id": "code.build.bazel"
+}

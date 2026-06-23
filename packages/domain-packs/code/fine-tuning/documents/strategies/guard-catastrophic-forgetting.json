@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:finetune:guard-catastrophic-forgetting",
+  "type": "strategy",
+  "title": "Guard against catastrophic forgetting",
+  "description": "Mix in general data, limit update scope, and use low learning rates so task adaptation does not erase pretrained capabilities.",
+  "body": "Use when fine-tuning on a narrow task corpus. Avoid training many epochs at a high learning rate on task-only data — the model overfits the task and forgets general behavior. Actions: prefer low-rank adapters, keep the learning rate small, blend a slice of general/instruction data, and early-stop on a capability holdout. Validation signals include a stable capability-holdout score across training and a task gain achieved without the general metric dropping. Risk boundary: forgetting is often discovered only after deployment on adjacent tasks; if the capability holdout falls during training, halt and treat it as a blocking signal rather than training longer.",
+  "domain": "fine_tuning",
+  "scope_hint": "code.fine-tuning:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.fine-tuning",
+  "pack_id": "code.fine-tuning"
+}

@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:database:rollback-untested",
+  "type": "failure_dossier",
+  "description": "Migration success was validated, but rollback or roll-forward recovery was never tested.",
+  "body": "Failure mode: a migration applies successfully in the forward direction but cannot be reversed after a later failure, leaving schema and code out of sync. Diagnostic trigger: validation report includes only migrate-up output and no down migration, restore, or roll-forward procedure. Do-not-use signal: do not mark migration validation complete without recovery evidence or an explicit irreversible-change approval. Recovery: run down migration on disposable data, test restore from snapshot, or document and test a roll-forward correction. Risk boundary: lossy transformations and destructive cleanup require stronger approval than additive schema changes.",
+  "domain": "sql",
+  "scope_hint": "code.database:failure_dossiers",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database:rollback_failure",
+  "pack_id": "code.database"
+}

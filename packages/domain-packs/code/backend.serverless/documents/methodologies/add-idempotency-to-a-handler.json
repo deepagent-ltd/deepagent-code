@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:sls:add-idempotency-to-a-handler",
+  "type": "methodology",
+  "title": "Add idempotency to a side-effecting handler",
+  "description": "Introduce an idempotency key and a conditional-write dedup store so retries of the same event are harmless.",
+  "body": "Steps: 1. Identify the non-idempotent side effects (charges, inserts, emails). 2. Derive a stable idempotency key from the event (message id, business key), not a timestamp. 3. Before acting, conditionally record the key (e.g. put-if-absent) in a store with TTL. 4. If the key already exists, return the prior result instead of re-acting. 5. Test by replaying the same event and asserting a single effect. Rollback point: before deploying, validate with the replay test. Validation: duplicate delivery yields exactly one side effect and a found key short-circuits; using a non-stable key (like now()) defeats the guard and must be caught in review.",
+  "domain": "serverless",
+  "scope_hint": "code.backend.serverless:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.serverless",
+  "pack_id": "code.backend.serverless"
+}

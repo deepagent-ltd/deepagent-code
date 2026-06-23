@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:observability:bounded-cardinality-labels",
+  "type": "strategy",
+  "title": "Keep metric label cardinality bounded",
+  "description": "Restrict metric labels to low-cardinality dimensions and push high-cardinality identifiers to logs or traces to avoid blowing up the metrics backend.",
+  "body": "Use when adding labels/tags to a metric. Do not attach user ids, request ids, full URLs, or unbounded values as metric labels, and avoid free-form strings in dimensions. Actions: enumerate the label's possible values, keep dimensions bounded (status class, route template, region), and route per-request detail to structured logs or trace attributes instead. Record the cardinality estimate per metric. Validation signals include a series-count check staying within budget and an alert if cardinality spikes. Risk boundary: an unbounded label can exhaust the metrics store and cause an observability outage during an incident — escalate before adding high-cardinality dimensions.",
+  "domain": "code",
+  "scope_hint": "code.observability:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.observability",
+  "pack_id": "code.observability"
+}

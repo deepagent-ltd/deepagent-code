@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:gfx:capture-and-inspect-a-frame",
+  "type": "skill",
+  "title": "Capture and inspect a GPU frame",
+  "description": "Use a GPU debugger to capture a frame and report bound state, inputs, and outputs at the failing pipeline stage.",
+  "body": "Use when a frame renders wrong and the cause is unclear. Actions: detect the available GPU debugger (RenderDoc, PIX, or browser WebGPU tools), capture one frame, and inspect per-draw state: bound pipeline, vertex inputs, descriptor/uniform values, textures, and the output of each stage. Report the failing draw, the stage where inputs first look wrong, and the offending state. Do not guess at shader math before locating the failing stage in a capture. This skill exposes capability only and must not attach to a production process without runtime permission. Validation signals include a capture pinpointing the stage with incorrect inputs. Risk boundary: if the capture shows a validation-layer hazard, report it as blocking rather than working-as-rendered.",
+  "domain": "graphics",
+  "scope_hint": "code.graphics:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.graphics",
+  "pack_id": "code.graphics"
+}

@@ -1,0 +1,51 @@
+{
+  "schema_version": "domain_pack.v1",
+  "id": "code.backend.auth",
+  "name": "Backend Authentication & Authorization",
+  "version": "1.0.0",
+  "scope": "system",
+  "risk": "high",
+  "domains": [
+    "backend_auth",
+    "authz",
+    "authn",
+    "session",
+    "permissions"
+  ],
+  "provides": [
+    "knowledge",
+    "strategy",
+    "methodology",
+    "skill",
+    "diagnosis",
+    "validation"
+  ],
+  "depends_on": [
+    "code.backend.api",
+    "risk.security",
+    "code.testing"
+  ],
+  "conflicts_with": [],
+  "knowledge_store": "document_store",
+  "allowed_tools": [
+    "read",
+    "shell:test"
+  ],
+  "denied_tools": [
+    "shell:deploy-production",
+    "shell:disable-security-control"
+  ],
+  "data_policy": {
+    "sensitivity": [
+      "source_code",
+      "user_data",
+      "secret_adjacent"
+    ],
+    "default_admission": "summary_only",
+    "secret_policy": "deny"
+  },
+  "detector": {
+    "inline": "profile.code_domains.some(d=>['backend_auth','authz','authn','session','permissions'].includes(d)) || profile.repo_signals.some(s=>/\\b(authorization|authentication|access control|rbac|abac|permission check|session fixation|jwt validation|oauth callback|token scope|privilege escalation|idor)\\b/i.test(s)) ? 0.9 : 0",
+    "threshold": 0.5
+  }
+}

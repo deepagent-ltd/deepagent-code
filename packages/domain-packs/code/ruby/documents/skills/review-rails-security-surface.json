@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:ruby:review-rails-security-surface",
+  "type": "skill",
+  "title": "Review Rails mass-assignment and query surface",
+  "description": "Scan controllers and models for permissive strong parameters and N+1-prone association access.",
+  "body": "Use when validating a Rails change. Procedure: read each controller's parameter handling for over-broad permit calls or raw params passed to create/update, check whether protected columns (role, admin, owner) could be set from input, and scan views/services for associations accessed per row without includes. Report which actions risk mass-assignment and which paths risk N+1, with file and line. This skill exposes findings only and must not change permit lists without runtime permission. Validation signals include identifying a forbidden attribute that the controller currently permits. Risk boundary: flag an over-broad permit on a privilege or ownership column as a blocking security finding.",
+  "domain": "ruby",
+  "scope_hint": "code.ruby:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.ruby",
+  "pack_id": "code.ruby"
+}

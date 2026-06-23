@@ -1,0 +1,436 @@
+[
+  {
+    "ref_id": "strategy:git:choose-branching-model-deliberately",
+    "type": "strategy",
+    "title": "Choose a branching model to fit release cadence",
+    "summary": "Pick trunk-based or a release-branch model from how often the team ships, not by habit, and keep long-lived branches few.",
+    "domains": [
+      "git_workflow",
+      "branching",
+      "merge",
+      "rebase",
+      "conflict"
+    ],
+    "triggers": [
+      "branch strategy",
+      "trunk based",
+      "gitflow"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.git-workflow"
+  },
+  {
+    "ref_id": "strategy:git:integrate-with-rebase-or-merge-by-context",
+    "type": "strategy",
+    "title": "Integrate with rebase locally, merge for shared history",
+    "summary": "Rebase a private feature branch onto the latest base for a linear story, but use a merge when the branch is shared so no one's commits are rewritten.",
+    "domains": [
+      "git_workflow",
+      "branching",
+      "merge",
+      "rebase",
+      "conflict"
+    ],
+    "triggers": [
+      "rebase vs merge",
+      "git rebase",
+      "integrate branch"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.git-workflow"
+  },
+  {
+    "ref_id": "strategy:git:guard-force-push-with-lease",
+    "type": "strategy",
+    "title": "Force-push only with --force-with-lease",
+    "summary": "When a push must rewrite remote history, use the lease variant so a teammate's intervening commits abort the push instead of being silently lost.",
+    "domains": [
+      "git_workflow",
+      "branching",
+      "merge",
+      "rebase",
+      "conflict"
+    ],
+    "triggers": [
+      "force push",
+      "force-with-lease",
+      "git push"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.git-workflow"
+  },
+  {
+    "ref_id": "strategy:git:resolve-conflicts-by-understanding-both-sides",
+    "type": "strategy",
+    "title": "Resolve conflicts by reconciling intent, not by picking a side",
+    "summary": "Read what each side changed and why before editing a conflict hunk, producing a result that preserves both intents rather than discarding one wholesale.",
+    "domains": [
+      "git_workflow",
+      "branching",
+      "merge",
+      "rebase",
+      "conflict"
+    ],
+    "triggers": [
+      "merge conflict",
+      "conflict resolution",
+      "resolve conflict"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.git-workflow"
+  },
+  {
+    "ref_id": "strategy:git:cherry-pick-narrowly-and-track-origin",
+    "type": "strategy",
+    "title": "Cherry-pick narrowly and record provenance",
+    "summary": "Move a single fix across branches with cherry-pick only when a merge is not appropriate, and use -x so the new commit references its origin.",
+    "domains": [
+      "git_workflow",
+      "branching",
+      "merge",
+      "rebase",
+      "conflict"
+    ],
+    "triggers": [
+      "cherry-pick",
+      "backport",
+      "hotfix"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.git-workflow"
+  },
+  {
+    "ref_id": "strategy:git:keep-commits-atomic-and-reviewable",
+    "type": "strategy",
+    "title": "Keep each commit atomic and self-describing",
+    "summary": "Shape commits so each one is a single coherent change that builds and tests on its own, making review, revert, and bisect reliable.",
+    "domains": [
+      "git_workflow",
+      "branching",
+      "merge",
+      "rebase",
+      "conflict"
+    ],
+    "triggers": [
+      "atomic commit",
+      "commit hygiene",
+      "squash commit"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.git-workflow"
+  },
+  {
+    "ref_id": "methodology:git:interactive-rebase-cleanup",
+    "type": "methodology",
+    "title": "Clean up a branch with interactive rebase",
+    "summary": "A procedure to reorder, squash, and reword commits on a private branch before review so the history reads as a deliberate sequence.",
+    "domains": [
+      "git_workflow",
+      "branching",
+      "merge",
+      "rebase",
+      "conflict"
+    ],
+    "triggers": [
+      "interactive rebase",
+      "squash",
+      "reword"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.git-workflow"
+  },
+  {
+    "ref_id": "methodology:git:conflict-resolution-procedure",
+    "type": "methodology",
+    "title": "Work through merge conflicts methodically",
+    "summary": "An ordered procedure for resolving a conflicted merge or rebase one file at a time with verification before continuing.",
+    "domains": [
+      "git_workflow",
+      "branching",
+      "merge",
+      "rebase",
+      "conflict"
+    ],
+    "triggers": [
+      "resolve conflict",
+      "git merge",
+      "rebase conflict"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.git-workflow"
+  },
+  {
+    "ref_id": "methodology:git:bisect-to-locate-regression",
+    "type": "methodology",
+    "title": "Locate a regression with git bisect",
+    "summary": "Use binary search over history with a reproducible test to pinpoint the exact commit that introduced a defect.",
+    "domains": [
+      "git_workflow",
+      "branching",
+      "merge",
+      "rebase",
+      "conflict"
+    ],
+    "triggers": [
+      "git bisect",
+      "regression",
+      "find bad commit"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.git-workflow"
+  },
+  {
+    "ref_id": "methodology:git:reflog-recovery",
+    "type": "methodology",
+    "title": "Recover lost commits through the reflog",
+    "summary": "Use the reflog to find and restore commits that became unreachable after a reset, rebase, or branch deletion.",
+    "domains": [
+      "git_workflow",
+      "branching",
+      "merge",
+      "rebase",
+      "conflict"
+    ],
+    "triggers": [
+      "reflog",
+      "recover commit",
+      "lost commit"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.git-workflow"
+  },
+  {
+    "ref_id": "knowledge:git:three-way-merge-mechanics",
+    "type": "knowledge",
+    "title": "How a three-way merge computes the result",
+    "summary": "A merge combines two tips relative to their common ancestor, and a conflict arises only when both sides changed the same region differently.",
+    "domains": [
+      "git_workflow",
+      "branching",
+      "merge",
+      "rebase",
+      "conflict"
+    ],
+    "triggers": [
+      "three-way merge",
+      "merge base",
+      "merge mechanics"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.git-workflow"
+  },
+  {
+    "ref_id": "knowledge:git:fast-forward-vs-no-ff",
+    "type": "knowledge",
+    "title": "Fast-forward versus no-ff merges",
+    "summary": "A fast-forward just advances the branch pointer with no merge commit, while --no-ff always records a merge commit that preserves the branch's shape.",
+    "domains": [
+      "git_workflow",
+      "branching",
+      "merge",
+      "rebase",
+      "conflict"
+    ],
+    "triggers": [
+      "fast-forward",
+      "no-ff",
+      "merge commit"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.git-workflow"
+  },
+  {
+    "ref_id": "knowledge:git:detached-head-state",
+    "type": "knowledge",
+    "title": "What detached HEAD means for new commits",
+    "summary": "When HEAD points directly at a commit instead of a branch, new commits are reachable only by hash and are lost once you check out elsewhere.",
+    "domains": [
+      "git_workflow",
+      "branching",
+      "merge",
+      "rebase",
+      "conflict"
+    ],
+    "triggers": [
+      "detached head",
+      "checkout commit",
+      "git switch"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.git-workflow"
+  },
+  {
+    "ref_id": "knowledge:git:squash-and-fixup-semantics",
+    "type": "knowledge",
+    "title": "Squash and fixup commit semantics",
+    "summary": "Squash combines commits and lets you edit the joined message, while fixup folds a commit into the previous one and discards its message automatically.",
+    "domains": [
+      "git_workflow",
+      "branching",
+      "merge",
+      "rebase",
+      "conflict"
+    ],
+    "triggers": [
+      "squash",
+      "fixup",
+      "git commit --fixup"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.git-workflow"
+  },
+  {
+    "ref_id": "skill:git:perform-interactive-rebase",
+    "type": "skill",
+    "title": "Run an interactive rebase to reshape commits",
+    "summary": "Reorder, squash, edit, and reword commits on a branch using git rebase -i, verifying the build at the end.",
+    "domains": [
+      "git_workflow",
+      "branching",
+      "merge",
+      "rebase",
+      "conflict"
+    ],
+    "triggers": [
+      "interactive rebase",
+      "git rebase -i",
+      "reshape history"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.git-workflow"
+  },
+  {
+    "ref_id": "skill:git:restore-commit-from-reflog",
+    "type": "skill",
+    "title": "Restore a commit found in the reflog",
+    "summary": "Find a dangling commit in git reflog and reattach it to a branch so the work becomes reachable again.",
+    "domains": [
+      "git_workflow",
+      "branching",
+      "merge",
+      "rebase",
+      "conflict"
+    ],
+    "triggers": [
+      "reflog recovery",
+      "restore commit",
+      "dangling commit"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.git-workflow"
+  }
+]

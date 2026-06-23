@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure_dossier:orch:non-idempotent-backfill",
+  "type": "failure_dossier",
+  "description": "A backfill double-writes because tasks append rather than overwrite their date partition.",
+  "body": "Failure mode: a backfill reruns historical dates against tasks that append rows keyed on insertion time, so each reprocessed date duplicates data already present and downstream aggregates overcount. Detection signals: row counts for backfilled dates higher than the original scheduled runs, and totals that climb each time a backfill is repeated. Do not re-run the backfill to 'refresh' the numbers. Safer fallback: make each task overwrite or merge its own execution-date partition idempotently, truncate the duplicated partitions, re-run the backfill within bounded concurrency, and reconcile a sample against the original scheduled output before trusting it.",
+  "domain": "orchestration",
+  "scope_hint": "code.data-pipeline-orchestration:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.data-pipeline-orchestration:human_authored",
+  "pack_id": "code.data-pipeline-orchestration"
+}

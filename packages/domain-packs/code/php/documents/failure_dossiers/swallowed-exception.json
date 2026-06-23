@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:php:swallowed-exception",
+  "type": "failure_dossier",
+  "description": "An empty catch or the @ operator hides a failure, so a corrupt or insecure state continues silently.",
+  "body": "Failure mode: a fallible call is wrapped in catch (\\Exception $e) {} or prefixed with @, so when it fails the program continues with missing or wrong data and the error never reaches logs or a handler. Detection signals: an empty catch block; the @ suppression operator on a real operation; a function's false/null return ignored; failures that produce no log entry. Do not suppress or swallow errors. Safer fallback: catch only the narrow exception you can handle and rethrow or log the rest, remove @ in favor of checking and throwing, route unrecoverable errors to a central handler, and test that the expected exception type propagates.",
+  "domain": "php",
+  "scope_hint": "code.php:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.php:human_authored",
+  "pack_id": "code.php"
+}

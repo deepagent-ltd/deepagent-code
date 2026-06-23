@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure_dossier:sim:monte-carlo-undersampled",
+  "type": "failure_dossier",
+  "description": "A Monte Carlo result is reported as precise when it is actually undersampled and the estimate has not converged.",
+  "body": "Failure mode: the run stops at a fixed sample count without checking the standard error, so a high-variance estimator returns a point estimate whose confidence interval is still wide. Detection signals: estimates that shift noticeably when the run is repeated, a standard error far above the claimed precision, and the interval not shrinking as expected. Do not report a point estimate without its confidence interval. Safer fallback: compute the standard error, draw more samples until the interval meets the target, and apply variance reduction if convergence is too slow.",
+  "domain": "simulation",
+  "scope_hint": "code.simulation:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.simulation:human_authored",
+  "pack_id": "code.simulation"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:conc:cooperative-cancellation-model",
+  "type": "knowledge",
+  "title": "Cooperative cancellation and structured concurrency",
+  "description": "Cancellation is usually cooperative: tasks must observe a token at checkpoints; structured scopes ensure children end with their parent.",
+  "body": "Use when implementing timeouts, shutdown, or request cancellation. Most runtimes cancel cooperatively: setting a cancellation token or cancelling a scope does not forcibly stop a running task; the task must poll the token or hit an await/yield point that observes it. Structured concurrency ties child tasks to a parent scope so the scope does not complete until children finish or are cancelled, preventing leaks. Do not assume cancelling means immediate stop, and do not detach tasks from any scope. Actions: check the token in loops and at await points, propagate it to callees, and release resources in finally/defer on cancel. Validation signals include a cancelled scope leaving no live children and timeouts actually halting work. Risk boundary: work that continues after cancellation can double-apply effects; make every long operation check the token.",
+  "domain": "concurrency",
+  "scope_hint": "code.concurrency:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.concurrency",
+  "pack_id": "code.concurrency"
+}

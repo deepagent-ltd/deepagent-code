@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:robot:mismatched-frame-or-timestamp",
+  "type": "failure_dossier",
+  "description": "Combining poses or sensor data across mismatched coordinate frames or transforms from the wrong time, sending the robot to the wrong place.",
+  "body": "Failure mode: code combines two measurements assuming a shared frame, or applies a tf transform looked up at a different time than the data, so the resulting pose is geometrically wrong and the robot moves to an incorrect physical location. Detection signals: a tf lookup uses now() instead of the data's stamp; transformed poses disagree with ground truth; the tf tree has a stale or missing link. Do not assume a common frame or a constant transform. Safer fallback: stamp every message with frame_id and time, look up transforms at the data's timestamp via tf2, keep the transform tree connected to one root, and verify a known pose transforms to the expected value before commanding motion.",
+  "domain": "robotics",
+  "scope_hint": "code.robotics:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.robotics:human_authored",
+  "pack_id": "code.robotics"
+}

@@ -1,0 +1,11 @@
+{
+  "ref_id": "strategy:go:boundary-validation",
+  "type": "strategy",
+  "description": "In Go, validate external input at the json.Unmarshal targets, channel close semantics, and io.Reader handling before internal use.",
+  "body": "In Go, parsing, environment, CLI, and network inputs reach the program through json.Unmarshal targets, channel close semantics, and io.Reader handling and must be checked before they are trusted. Use when handling untrusted or external input crossing into Go code. Do not pass raw external values into internal logic, and avoid assuming well-formed input. Actions: validate at the boundary, reject or normalize malformed values, verify the rejection path with a test, and record the accepted contract. Validation signals include tests on malformed input, a logged/trace rejection, and a defined schema for the boundary. Risk boundary: escalate when input feeds security-sensitive or non-reversible operations; deny by default rather than guessing intent.",
+  "domain": "go",
+  "scope_hint": "code.go:strategies",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.go:skill_survey",
+  "pack_id": "code.go"
+}

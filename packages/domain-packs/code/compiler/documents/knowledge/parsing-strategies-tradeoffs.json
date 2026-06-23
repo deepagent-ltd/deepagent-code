@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:comp:parsing-strategies-tradeoffs",
+  "type": "knowledge",
+  "title": "Parsing strategies and their trade-offs",
+  "description": "Recursive-descent/PEG parsers are hand-written and flexible; LR/LALR are generated and handle more grammars but give opaque conflicts.",
+  "body": "Use when choosing or debugging a parser. Recursive-descent (with Pratt for expression precedence) is readable, gives great error messages, and is easy to extend but requires the grammar to be LL-friendly; LR/LALR generators accept a broader class of grammars but report shift/reduce conflicts that are hard to diagnose; PEG removes ambiguity by ordered choice but can hide it. Do not pick a strategy without considering error-message quality and grammar shape. Actions: match the strategy to the grammar and the diagnostics you need. Validation signals include the parser accepting the language and producing clear errors on malformed input. Risk boundary: a grammar ambiguity silently resolved the wrong way changes the language; resolve conflicts explicitly rather than ignoring generator warnings.",
+  "domain": "compiler",
+  "scope_hint": "code.compiler:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.compiler",
+  "pack_id": "code.compiler"
+}

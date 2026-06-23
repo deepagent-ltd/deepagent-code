@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure_dossier:vsearch:oversized-chunks",
+  "type": "failure_dossier",
+  "description": "Documents are embedded as huge chunks, averaging away the signal so retrieval misses relevant passages.",
+  "body": "Failure mode: whole documents or very large sections are embedded into single vectors, so the relevant passage's signal is diluted by surrounding text and the chunk fails to match focused queries. Detection signals: low recall that persists even with exact (brute-force) search, and retrieved chunks where the answer is buried in mostly irrelevant text. Do not blame the ANN index when exact search also misses. Safer fallback: re-chunk on semantic boundaries with focused, modestly overlapping units, re-embed, and benchmark recall across chunk sizes on a labeled set, choosing the granularity that maximizes recall of the answer passage.",
+  "domain": "vector_search",
+  "scope_hint": "code.vector-search:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.vector-search:human_authored",
+  "pack_id": "code.vector-search"
+}

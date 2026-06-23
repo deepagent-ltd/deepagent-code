@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:tf:auto-approved-apply-destroys-resources",
+  "type": "failure_dossier",
+  "description": "Running terraform apply with auto-approve so an unreviewed destroy or replace executes against live infrastructure.",
+  "body": "Failure mode: a pipeline or operator runs terraform apply -auto-approve (or apply without a saved plan), and a diff that destroys or replaces a stateful resource executes with no human review. Detection signals: apply logs show destroy/replace of a database, volume, or load balancer; an outage follows a routine change; CI uses -auto-approve on production. Do not auto-approve applies on stateful or production infrastructure. Safer fallback: produce a saved plan, require human review of all destroys/replaces, apply only the reviewed plan file, and gate production applies behind manual approval.",
+  "domain": "terraform",
+  "scope_hint": "platform.terraform:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.terraform:human_authored",
+  "pack_id": "platform.terraform"
+}

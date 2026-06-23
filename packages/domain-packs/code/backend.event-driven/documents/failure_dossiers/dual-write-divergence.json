@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:evt:dual-write-divergence",
+  "type": "failure_dossier",
+  "description": "Code commits to the database then publishes to the broker as separate steps, so a crash between them loses or fabricates events.",
+  "body": "Failure mode: the handler does db.commit() then broker.publish() (or the reverse); a crash, timeout, or broker error between the two leaves state and the event stream inconsistent. Detection signals: publish called after commit with no outbox row; events missing for committed changes or present for rolled-back ones; reconciliation drift over time. Do not patch with retry-after-commit, which can still double-publish or lose on crash. Safer fallback: write the event to an outbox table in the business transaction and relay it separately with idempotent consumers.",
+  "domain": "event_driven",
+  "scope_hint": "code.backend.event-driven:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.event-driven:human_authored",
+  "pack_id": "code.backend.event-driven"
+}

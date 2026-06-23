@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:dist:order-events-with-logical-clocks",
+  "type": "strategy",
+  "title": "Order events with logical, not wall, clocks",
+  "description": "Use Lamport or vector clocks to capture causality between events, because wall-clock timestamps across nodes are unreliable for ordering.",
+  "body": "Use when you must order or compare events that originate on different nodes. Do not order distributed events by comparing wall-clock timestamps, and do not assume two clocks are synchronized within a meaningful bound. Actions: attach a Lamport counter for a total-ordering proxy, or a vector clock when you must detect concurrency, increment on local events, and merge incoming clocks element-wise. Validation signals include correct happens-before/concurrent classification in a causality test and reproducible ordering independent of clock skew. Risk boundary: ordering by NTP-synced wall clocks reorders causally-dependent events under skew; treat timestamp-based cross-node ordering as a latent bug and prefer logical clocks.",
+  "domain": "distributed",
+  "scope_hint": "code.distributed:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.distributed",
+  "pack_id": "code.distributed"
+}

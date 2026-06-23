@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:frontend_web:screenshot-without-interaction",
+  "type": "failure_dossier",
+  "description": "A static screenshot was treated as proof even though changed interactions were never exercised.",
+  "body": "Failure mode: the page loads and a screenshot looks plausible, but the changed menu, dialog, form, hover state, keyboard path, or error state is broken. Diagnostic trigger: validation mentions only first paint or visual inspection while the task changed interactive behavior. Do-not-use signal: do not claim browser validation passed until the changed interaction and at least one relevant alternate state were exercised. Recovery: rerun browser smoke with explicit steps, collect console/network output after interaction, and record the exact state that remains untested if automation is blocked. Risk boundary: this is especially dangerous for controls that submit data or hide destructive actions.",
+  "domain": "web",
+  "scope_hint": "code.frontend.web:failure_dossiers",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.frontend.web:interactive_validation_failure",
+  "pack_id": "code.frontend.web"
+}

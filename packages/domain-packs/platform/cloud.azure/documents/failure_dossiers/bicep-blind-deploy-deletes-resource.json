@@ -1,0 +1,11 @@
+{
+  "ref_id": "fail:azure:bicep-blind-deploy-deletes-resource",
+  "type": "failure_dossier",
+  "description": "Deploying a Bicep/ARM template without what-if and silently deleting a resource.",
+  "body": "Failure mode: a template is deployed without running what-if, and because it omits a resource the template owns (or uses complete mode), Azure deletes a live resource. Detection signals: activity log shows an unexpected Delete, the resource vanishes after deployment, and complete deployment mode was used. Do not deploy templates blindly, especially in complete mode. Safer fallback: always run az deployment what-if first, review Delete/Modify entries on stateful resources, deploy in incremental mode, and gate any previewed production deletion behind human approval.",
+  "domain": "azure",
+  "scope_hint": "platform.cloud.azure:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.cloud.azure:human_authored",
+  "pack_id": "platform.cloud.azure"
+}

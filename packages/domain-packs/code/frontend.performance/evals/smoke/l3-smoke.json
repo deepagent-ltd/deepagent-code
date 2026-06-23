@@ -1,0 +1,72 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "code.frontend.performance",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "optimize",
+    "code_domains": [
+      "frontend_performance"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "lighthouse web vitals bundle hydration long task layout shift frontend performance smoke"
+    ],
+    "round_signals": [
+      "l3_validation_smoke"
+    ],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "round_signals": [],
+    "user_overrides": [],
+    "repo_signals": [
+      "fix an authorization bypass at the API trust boundary"
+    ]
+  },
+  "retrieval_query": "Core Web Vitals LCP CLS INP bundle splitting lazy load render profiling long task",
+  "expected_pack_id": "code.frontend.performance",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "performance evidence L3 validation smoke",
+    "signals": [
+      "repeatable benchmark runs",
+      "profiler traces",
+      "baseline comparison",
+      "statistical threshold",
+      "resource budget",
+      "and correctness check"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "performance evidence diagnosis smoke",
+    "signals": [
+      "separate benchmark noise",
+      "workload mismatch",
+      "hot path",
+      "allocation",
+      "I/O",
+      "and concurrency causes"
+    ]
+  },
+  "source_refs": [
+    "source:mdn-web-docs:paraphrased",
+    "source:web.dev:paraphrased"
+  ]
+}

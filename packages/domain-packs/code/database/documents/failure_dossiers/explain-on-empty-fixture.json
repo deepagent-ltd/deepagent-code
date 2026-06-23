@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:database:explain-on-empty-fixture",
+  "type": "failure_dossier",
+  "description": "A query or index change was justified by EXPLAIN output from empty or unrealistic fixture data.",
+  "body": "Failure mode: a plan looks cheap in tests but scans or sorts too much real data because fixture cardinality and parameter distribution are unrealistic. Diagnostic trigger: plan evidence lacks row counts, representative predicates, or before/after comparison. Do-not-use signal: do not accept EXPLAIN proof without data-scale context for performance-sensitive queries. Recovery: build representative synthetic or anonymized data, capture before/after plans with common and worst-case predicates, and check write-path impact of new indexes. Risk boundary: if realistic data cannot be used, report limited confidence instead of presenting the index as proven.",
+  "domain": "sql",
+  "scope_hint": "code.database:failure_dossiers",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database:plan_evidence_failure",
+  "pack_id": "code.database"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:privacy:purpose-limitation",
+  "type": "strategy",
+  "title": "Purpose limitation",
+  "description": "Do not reuse personal data for unrelated workflows without explicit review and evidence of user-facing purpose.",
+  "body": "Use when data collected for account, billing, support, telemetry, or safety is proposed for analytics, training, personalization, debugging, or sharing. Do not make business or legal determinations about allowed reuse. Actions: identify original purpose, proposed purpose, data classes, affected users, and whether a less identifying alternative works. Validation signals include config or code paths limiting reuse and tests preventing accidental cross-use. Risk boundary: new secondary use, model training, or cross-product sharing requires a human privacy gate. Use when Privacy Risk Controls work touches personal-data classes, sinks, retention, consent, logs, prompts, and exports. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: choose the smallest direction that preserves the domain contract; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include data inventory, redaction tests, retention checks, export/delete tests, and approval evidence. Risk boundary: escalate or stop when the task involves PII disclosure, consent bypass, retention drift, and unapproved processor expansion, missing owner evidence, or live external state.",
+  "domain": "privacy",
+  "scope_hint": "risk.privacy:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.privacy",
+  "pack_id": "risk.privacy"
+}

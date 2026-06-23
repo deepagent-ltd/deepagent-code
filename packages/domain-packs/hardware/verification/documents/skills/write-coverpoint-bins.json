@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:hwverif:write-coverpoint-bins",
+  "type": "skill",
+  "title": "Define coverpoint bins for a value range",
+  "description": "Partition a signal's range into meaningful bins so coverage reflects boundaries and corner values, not just midrange.",
+  "body": "Use when adding a coverpoint for a multi-valued signal. Do not let the tool auto-bin a wide range uniformly, since that misses the boundaries where bugs hide. Actions: define explicit bins for minimum, maximum, and corner values, group the rest into ranges, and verify each bin can be hit. Validation signals include boundary bins present in the coverage report and stimulus reaching the corner bins. Risk boundary: a coverpoint without boundary bins overstates coverage, so flag any auto-binned wide signal that omits its extremes.",
+  "domain": "hw_verification",
+  "scope_hint": "hardware.verification:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.verification",
+  "pack_id": "hardware.verification"
+}

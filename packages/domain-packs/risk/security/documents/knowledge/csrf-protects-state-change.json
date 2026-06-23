@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:security:csrf-protects-state-change",
+  "type": "knowledge",
+  "title": "CSRF protects authenticated state changes",
+  "description": "Cookie-authenticated state-changing requests need CSRF or equivalent same-origin protections unless another proven mechanism applies.",
+  "body": "Use for forms, mutation routes, admin actions, billing changes, account settings, or destructive API calls that rely on browser cookies. Do not use for bearer-token APIs that are not automatically attached by browsers unless the project threat model says otherwise. Actions: confirm method, credential mode, origin checks, same-site settings, and token validation. Validation signals include cross-origin request tests that fail. Risk boundary: removing CSRF protection from production-facing state changes requires human approval. Use when Security Risk Controls work touches trust boundaries, authorization decisions, dangerous sinks, secrets, and dependency execution. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: use the fact to constrain the change and test plan; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include negative security tests, server-side checks, sink payload tests, and secret scans. Risk boundary: escalate or stop when the task involves client-only controls, injection, credential leakage, permissive fallback, and unsafe dependency changes, missing owner evidence, or live external state.",
+  "domain": "security",
+  "scope_hint": "risk.security:knowledge",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:risk.security",
+  "pack_id": "risk.security"
+}

@@ -1,0 +1,35 @@
+{
+  "schema_version": "domain_pack_quality.v1",
+  "pack_id": "code.core",
+  "maturity": "L3",
+  "counts": {
+    "strategy": 5,
+    "methodology": 3,
+    "knowledge": 0,
+    "skill": 1,
+    "memory": 0,
+    "failure_dossier": 0
+  },
+  "quality": {
+    "duplicate_ref": 0,
+    "weak_evidence": 0,
+    "failure_indexed": 0,
+    "thin_docs": 0
+  },
+  "l3_evidence": {
+    "activation_smoke": "evals/smoke/l3-smoke.json",
+    "retrieval_smoke": "pack-scoped activePackIds retrieval",
+    "validation_smoke": "Code Core L3 validation smoke",
+    "diagnosis_smoke": "Code Core diagnosis smoke"
+  },
+  "source_refs": [
+    "source:official-tooling-docs:paraphrased",
+    "source:engineering-practice:paraphrased"
+  ],
+  "structure_l3": true,
+  "validated_l3": true,
+  "activation_precision_checked": false,
+  "cross_pack_negative_checked": false,
+  "scaffold_ratio": 0,
+  "ablation_checked": false
+}

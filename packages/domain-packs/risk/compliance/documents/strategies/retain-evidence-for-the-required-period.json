@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:comp:retain-evidence-for-the-required-period",
+  "type": "strategy",
+  "title": "Retain evidence for the framework's required period",
+  "description": "Keep each control's evidence for its mandated retention window and prevent both early purge and indefinite hoarding.",
+  "body": "Use when handling logs, approvals, or attestations that serve as compliance evidence. Do not let a generic log-rotation policy purge evidence before its retention period, and do not retain regulated personal data past its lawful limit. Actions: tag each evidence class with its required retention window, configure storage lifecycle to block deletion until that window elapses, and reconcile against privacy minimization for personal data. Validation signals include a test that evidence cannot be deleted before its window and a report showing each class's effective retention. Risk boundary: evidence purged early is an audit failure and over-retained personal data is a privacy breach; both escalate, and retention conflicts go to a human.",
+  "domain": "compliance",
+  "scope_hint": "risk.compliance:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.compliance",
+  "pack_id": "risk.compliance"
+}

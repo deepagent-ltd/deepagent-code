@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:cass:design-a-schema-from-access-patterns",
+  "type": "methodology",
+  "title": "Design a schema from access patterns",
+  "description": "Drive the table design from a written list of queries, mapping each to a partition key and clustering order.",
+  "body": "Use at the start of any Cassandra data model. Actions: write down every read query the application will issue with its filter and sort; for each, define a table whose partition key is the equality filter and whose clustering columns give the required order; identify which writes must update multiple tables to keep the denormalized copies consistent; and document the fan-out. Verify by checking that every listed query maps to a single-partition seek. Validation signals include a query-to-table matrix where no query needs ALLOW FILTERING. Risk boundary: a new query that does not fit an existing table needs a new table and a backfill, so treat schema as query-coupled and review any access pattern added after launch.",
+  "domain": "cassandra",
+  "scope_hint": "code.database.cassandra:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.cassandra",
+  "pack_id": "code.database.cassandra"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:git:fast-forward-vs-no-ff",
+  "type": "knowledge",
+  "title": "Fast-forward versus no-ff merges",
+  "description": "A fast-forward just advances the branch pointer with no merge commit, while --no-ff always records a merge commit that preserves the branch's shape.",
+  "body": "Use when deciding whether feature merges should leave a visible merge commit. Do not assume every merge creates a merge commit. When the target has no new commits, git fast-forwards by moving the pointer, leaving linear history; --no-ff forces a merge commit so the feature's boundary is recorded. Inspect git log --graph to see which happened. Validation signals include a topology that matches the team's policy, such as merge commits marking each merged PR. Risk boundary: a fast-forward erases the grouping of a feature, so use --no-ff when auditability of merges matters.",
+  "domain": "git_workflow",
+  "scope_hint": "code.git-workflow:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.git-workflow",
+  "pack_id": "code.git-workflow"
+}

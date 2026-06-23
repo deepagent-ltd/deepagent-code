@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:php:eloquent-n-plus-one",
+  "type": "failure_dossier",
+  "description": "A lazy relation accessed inside a loop issues one query per row, degrading linearly and overloading the database.",
+  "body": "Failure mode: code iterates a collection of models and reads a relation per item (->author->name) without eager loading, so an N-row list fires N+1 queries, fast in development with little data and crippling in production. Detection signals: query count scales with row count; the relation is accessed in a loop with no with()/load(); slow list endpoints and database load spikes. Do not access lazy relations per row in a list. Safer fallback: eager-load the relation with with()/load() (or a Doctrine fetch join), select only needed columns, chunk large sets, and add a query-count assertion proving the count is constant regardless of rows.",
+  "domain": "php",
+  "scope_hint": "code.php:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.php:human_authored",
+  "pack_id": "code.php"
+}

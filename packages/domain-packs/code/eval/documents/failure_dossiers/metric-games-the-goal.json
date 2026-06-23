@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:eval:metric-games-the-goal",
+  "type": "failure_dossier",
+  "description": "A convenient proxy metric is optimized while user-facing quality stagnates or drops, hiding a regression behind a rising number.",
+  "body": "Failure mode: the team optimizes token overlap or exact-match because it is easy to compute, but the real goal is semantic correctness, so the system learns to maximize the proxy while answers get worse. Detection signals: the metric is a surface proxy unrelated to the goal; metric and human judgment diverge; a single blended number hides per-segment failures. Do not pick a metric for convenience. Safer fallback: state the user-facing goal, choose metrics that correlate with it, pair automatic metrics with human spot-checks, report per-segment, and trust human judgment when it disagrees with the metric.",
+  "domain": "eval",
+  "scope_hint": "code.eval:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.eval:human_authored",
+  "pack_id": "code.eval"
+}

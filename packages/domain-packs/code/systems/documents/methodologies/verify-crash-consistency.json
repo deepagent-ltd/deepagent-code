@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:sys:verify-crash-consistency",
+  "type": "methodology",
+  "title": "Verify crash consistency of a write path",
+  "description": "Inject crashes between write, fsync, and rename and assert the file is always either old-complete or new-complete.",
+  "body": "Steps: 1. Identify the durability invariant (after a crash the file is fully old or fully new, never partial). 2. Instrument the write path to allow stopping after each step (write, fsync temp, rename, fsync dir). 3. Simulate a crash at each point (kill -9 or a fault-injection layer) and then inspect the file. 4. Confirm every crash point yields a valid old or new file and the directory entry is consistent. 5. Fix any step ordering that can expose a partial file. Rollback point: the write-path change is reversible. Validation: across all injected crash points the file is always readable and complete.",
+  "domain": "systems",
+  "scope_hint": "code.systems:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.systems",
+  "pack_id": "code.systems"
+}

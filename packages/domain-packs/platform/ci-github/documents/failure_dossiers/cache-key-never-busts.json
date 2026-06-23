@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:ghci:cache-key-never-busts",
+  "type": "failure_dossier",
+  "description": "A static cache key serves stale dependencies forever, masking lockfile changes and hiding broken installs.",
+  "body": "Failure mode: actions/cache uses a constant key (no lockfile hash), so once written the cache is restored on every run regardless of dependency changes, meaning a lockfile bump is never actually installed and CI tests a different dependency set than production. Detection signals: cache key with no hashFiles of the lockfile; dependency updates not reflected in CI; green CI but broken install on a clean checkout. Do not use constant cache keys for dependency caches. Safer fallback: key on a prefix plus hashFiles(lockfile) with restore-keys for partial hits, and verify the cache misses and reinstalls when the lockfile changes.",
+  "domain": "ci_github",
+  "scope_hint": "platform.ci-github:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.ci-github:human_authored",
+  "pack_id": "platform.ci-github"
+}

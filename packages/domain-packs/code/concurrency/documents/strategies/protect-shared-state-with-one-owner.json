@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:conc:protect-shared-state-with-one-owner",
+  "type": "strategy",
+  "title": "Give shared mutable state a single synchronization owner",
+  "description": "Confine mutable state behind one lock or one owning task so every access goes through the same guard.",
+  "body": "Use when a value is read and written from more than one thread or task. Do not sprinkle locks ad hoc or assume a single write is atomic because it looks small. Actions: identify the shared variable, pick one synchronization mechanism (a mutex it lives behind, an owning actor/task, or an atomic), route every read and write through it, and remove direct accesses. Validation signals include a race detector running clean over the paths and every access site holding the same lock or going through the owner. Risk boundary: removing the guard on shared mutable state because 'it is probably fine' is a correctness regression; require a detector run before accepting it.",
+  "domain": "concurrency",
+  "scope_hint": "code.concurrency:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.concurrency",
+  "pack_id": "code.concurrency"
+}

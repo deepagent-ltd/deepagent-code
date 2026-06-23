@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:finance:eventual-settlement-vs-authorization",
+  "type": "knowledge",
+  "title": "Authorization is not settlement",
+  "description": "A payment authorization reserves funds but is not final money movement; settlement happens later and can fail or differ, so internal state must model both phases.",
+  "body": "Use when modeling payment state or explaining why a 'paid' order later reversed. An authorization holds funds and can be captured, expire, or be declined at capture; settlement/clearing is the actual transfer and may post a different amount or fail days later. Treating an authorization as completed revenue overstates balances. Do not collapse auth and capture into one 'paid' flag. Actions: model authorized, captured, settled, and reversed as distinct states and reconcile against settlement, not authorization. Validation signals include state transitions in the trace and reconciliation against settled amounts. Risk boundary: advisory only; do not recognize funds as final before settlement, and escalate discrepancies between authorized and settled amounts to a human.",
+  "domain": "finance",
+  "scope_hint": "business.finance:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:business.finance",
+  "pack_id": "business.finance"
+}

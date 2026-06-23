@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:mesh:sidecar-injection-scope",
+  "type": "strategy",
+  "title": "Control sidecar injection scope explicitly",
+  "description": "Opt namespaces into automatic injection with the right label and use pod annotations to exclude jobs/init traffic, verifying the proxy actually attached.",
+  "body": "Use when onboarding a workload to the mesh or when policy seems to be skipped. Do not assume a pod is meshed just because the namespace is labeled, and do not inject sidecars into Jobs that exit (the proxy keeps them running). Actions: label the namespace for automatic injection (istio-injection or the revision label), annotate pods to exclude where needed, set holdApplicationUntilProxyStarts for ordering, and verify with kubectl that the pod has the proxy container. Validation signals include the pod showing two containers and the proxy config dump listing expected clusters. Risk boundary: enabling injection on an existing production namespace re-creates pods and is human-gated.",
+  "domain": "service_mesh",
+  "scope_hint": "platform.service-mesh:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.service-mesh",
+  "pack_id": "platform.service-mesh"
+}

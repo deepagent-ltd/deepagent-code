@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:rag:chunk-to-preserve-meaning",
+  "type": "strategy",
+  "title": "Chunk to preserve meaning",
+  "description": "Documents are split on semantic boundaries with overlap so a chunk is a self-contained, retrievable unit of meaning.",
+  "body": "Use when ingesting documents into the index. Do not split on a fixed character count that cuts sentences or separates a claim from its context, and avoid chunks so large they dilute the embedding. Actions: split on structural/semantic boundaries (headings, paragraphs), add overlap to preserve cross-boundary context, and size chunks to the embedding model's effective range. Validation signals include a retrieval test that a query whose answer spans a boundary still retrieves a chunk containing the full answer. Risk boundary: chunking that strips the context needed to interpret a passage causes ungrounded answers; treat it as a quality defect, not a tuning knob.",
+  "domain": "rag",
+  "scope_hint": "code.rag:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.rag",
+  "pack_id": "code.rag"
+}

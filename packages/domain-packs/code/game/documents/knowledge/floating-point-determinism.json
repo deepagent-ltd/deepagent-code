@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:game:floating-point-determinism",
+  "type": "knowledge",
+  "title": "Floating-point determinism is fragile",
+  "description": "Float results can differ across compilers, hardware, and optimization levels, so cross-machine determinism needs deliberate control or fixed-point math.",
+  "body": "Use when a game needs identical simulation across machines (lockstep netcode, cross-platform replay). IEEE float operations can yield slightly different results depending on instruction selection, fused-multiply-add, x87 vs SSE, and compiler flags, so the same code can diverge across platforms and snowball over ticks. Do not assume float math is bit-identical everywhere. Actions: control compiler float settings, avoid order-dependent reductions, or use fixed-point/deterministic math for the networked sim. Validation signals include matching per-tick state checksums across target platforms. Risk boundary: float divergence in lockstep netcode causes desyncs that appear only across hardware combos and are extremely hard to debug after the fact — design determinism in, do not bolt it on.",
+  "domain": "game",
+  "scope_hint": "code.game:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.game",
+  "pack_id": "code.game"
+}

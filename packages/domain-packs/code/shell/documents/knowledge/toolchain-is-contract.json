@@ -1,0 +1,11 @@
+{
+  "ref_id": "knowledge:shell:toolchain-is-contract",
+  "type": "knowledge",
+  "description": "In shell, the target shell and the coreutils flavor (GNU vs BSD vs busybox) are part of the contract and changing them changes behavior.",
+  "body": "In shell, the target shell and the coreutils flavor (GNU vs BSD vs busybox) define how code compiles, lints, and resolves dependencies; bumping any of them can change diagnostics and emitted output. Use when you touch the target shell and the coreutils flavor (GNU vs BSD vs busybox) or when a build behaves differently than the pinned environment. Do not silently upgrade the toolchain or override the pinned version to make an error disappear. Actions: read the pinned config, match the project's the target shell and the coreutils flavor (GNU vs BSD vs busybox), then run shellcheck warnings (especially SC2086 word-splitting and SC2046) and the script under its declared shell (#!/usr/bin/env bash vs POSIX sh) to compare against the baseline. Validation signals include identical shellcheck warnings (especially SC2086 word-splitting and SC2046) output, a reproducible build, and unchanged lockfile resolution. Risk boundary: a toolchain bump is a deliberate, reviewed change; escalate rather than upgrading to unblock yourself.",
+  "domain": "shell",
+  "scope_hint": "code.shell:knowledge",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.shell:skill_survey",
+  "pack_id": "code.shell"
+}

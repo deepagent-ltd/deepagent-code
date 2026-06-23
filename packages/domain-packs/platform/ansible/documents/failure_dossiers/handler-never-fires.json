@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:ansible:handler-never-fires",
+  "type": "failure_dossier",
+  "description": "A handler is defined but no task notifies it, so the intended restart or reload silently never happens.",
+  "body": "Failure mode: a handler exists but the changing task never notifies it (typo in the name or missing notify), so a needed restart or reload silently never runs and the service keeps stale config. Detection signals: a service running old configuration after a successful play; the handler absent from the run summary; a notify name that does not match the handler name. Do not assume a defined handler runs. Safer fallback: match notify names exactly to handler names, verify the handler appears in a changed run, and flush handlers explicitly for critical restarts.",
+  "domain": "ansible",
+  "scope_hint": "platform.ansible:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.ansible:human_authored",
+  "pack_id": "platform.ansible"
+}

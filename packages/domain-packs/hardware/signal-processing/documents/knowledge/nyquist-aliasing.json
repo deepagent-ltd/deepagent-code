@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:sigproc:nyquist-aliasing",
+  "type": "knowledge",
+  "title": "Nyquist sampling and aliasing",
+  "description": "Frequencies above half the sample rate fold back into the baseband as aliases that cannot be separated after sampling.",
+  "body": "Use when reasoning about what an acquisition system can faithfully capture. Do not rely on digital filtering to remove aliases, because folding happens before any digital stage sees the data. Actions: identify the Nyquist frequency, verify the analog anti-alias filter attenuates everything above it, and record the fold-frequency margin. Validation signals include a swept-tone sweep showing no folded artifacts and an anti-alias response meeting attenuation at the fold edge. Risk boundary: aliasing is irreversible once sampled, so treat any out-of-band energy reaching the converter as a hard defect requiring analog rework.",
+  "domain": "signal_processing",
+  "scope_hint": "hardware.signal-processing:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.signal-processing",
+  "pack_id": "hardware.signal-processing"
+}

@@ -1,0 +1,69 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "code.backend.service",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "backend_service",
+      "queue",
+      "job"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "L3 smoke for code.backend.service: service layer worker with a job queue, idempotency keys, retry backoff, scheduler, and graceful shutdown draining"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "plain prose note with no repository or domain signal"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "retrieval_query": "backend service worker job queue idempotency key retry backoff jitter graceful shutdown scheduler dead letter concurrency limit",
+  "expected_pack_id": "code.backend.service",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "code.backend.service L3 validation smoke",
+    "signals": [
+      "idempotency-key replay test asserts single effect",
+      "retry backoff with jitter and max-attempts cap test",
+      "graceful shutdown drains in-flight jobs test",
+      "dead-letter routing after max attempts test"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "code.backend.service diagnosis smoke",
+    "signals": [
+      "non-idempotent retried side effect",
+      "retry without backoff (thundering herd)",
+      "no graceful shutdown drain",
+      "unbounded worker concurrency",
+      "poison message blocks the queue"
+    ]
+  },
+  "source_refs": [
+    "source:google-sre-workbook:paraphrased",
+    "source:aws-builders-library-timeouts-retries:paraphrased"
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:cpuarch:eliminate-false-sharing",
+  "type": "strategy",
+  "title": "Eliminate false sharing between cores",
+  "description": "Keep independently-written variables on separate cache lines so cores do not invalidate each other's lines on every write.",
+  "body": "Use when a multithreaded workload scales poorly despite independent per-thread data. Do not place hot counters or per-thread state adjacently within one cache line. Actions: identify variables written by different cores, pad each to its own line (alignas(64) or per-thread arrays spaced by line size), and confirm coherence traffic drops. Validation signals include a perf report showing fewer HITM / cache-line-bounce events and near-linear scaling after the fix. Risk boundary: over-padding wastes cache and can hurt single-threaded locality; verify the variables are genuinely contended before spacing them out, and re-measure scaling rather than assuming.",
+  "domain": "cpu_arch",
+  "scope_hint": "hardware.cpu-arch:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.cpu-arch",
+  "pack_id": "hardware.cpu-arch"
+}

@@ -1,0 +1,70 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "code.database.mongodb",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "mongodb",
+      "document_db",
+      "aggregation",
+      "bson"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "L3 smoke for code.database.mongodb: embed vs reference modelling, aggregation pipeline, compound and multikey indexes, sharding key choice, replica set read concern, schema validation"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "fix a Rust borrow checker error"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "retrieval_query": "MongoDB document model embed reference aggregation pipeline compound index sharding key replica set write concern",
+  "expected_pack_id": "code.database.mongodb",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "code.database.mongodb L3 validation smoke",
+    "signals": [
+      "explain(\"executionStats\") shows an IXSCAN instead of a COLLSCAN for the query",
+      "the aggregation pipeline reports the $match and $sort stages used an index before $group",
+      "a write with w:majority acknowledges only after a majority of the replica set persisted it",
+      "schema validation rejects a document that violates the required field rules"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "code.database.mongodb diagnosis smoke",
+    "signals": [
+      "explain shows totalDocsExamined far exceeding nReturned, signalling a missing or unselective index",
+      "an aggregation spills to disk because a $group or $sort exceeds the 100MB stage memory limit",
+      "a chosen shard key produces a jumbo chunk and a single hot shard absorbing most writes",
+      "the working set no longer fits in RAM and WiredTiger cache evictions spike read latency",
+      "an unbounded array grows a document toward the 16MB BSON limit"
+    ]
+  },
+  "source_refs": [
+    "mongo:ref:data-modelling-embed-vs-reference",
+    "mongo:ref:aggregation-pipeline-optimization"
+  ]
+}

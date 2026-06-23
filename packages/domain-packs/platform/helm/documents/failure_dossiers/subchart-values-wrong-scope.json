@@ -1,0 +1,11 @@
+{
+  "ref_id": "fail:helm:subchart-values-wrong-scope",
+  "type": "failure_dossier",
+  "description": "Subchart values placed at the parent top level and never applied.",
+  "body": "Failure mode: an operator sets a subchart's value at the parent chart's top-level values instead of nesting it under the subchart's name/alias, so the subchart keeps its default. Detection signals: helm template shows the subchart's manifest unchanged, the value appears in parent values but not in the rendered subchart output, and the dependency has an alias that wasn't used. Do not set subchart values at the parent root. Safer fallback: nest overrides under the subchart's name or alias (or use the global block for shared values), and confirm with helm template that the subchart picked them up.",
+  "domain": "helm",
+  "scope_hint": "platform.helm:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.helm:human_authored",
+  "pack_id": "platform.helm"
+}

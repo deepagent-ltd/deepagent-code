@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:mesh:virtualservice-destinationrule-routing",
+  "type": "strategy",
+  "title": "Pair VirtualService routing with DestinationRule subsets",
+  "description": "Define subsets and traffic policy in a DestinationRule, then route to them by match conditions in a VirtualService, keeping hosts and ports aligned.",
+  "body": "Use when routing traffic by version, header, or weight in the mesh. Do not reference a subset in a VirtualService that no DestinationRule defines, and keep host/port/gateway fields consistent. Actions: declare subsets (by pod labels like version) and connection policy in a DestinationRule, then in the VirtualService match on headers/uri and route to the named subsets with weights; ensure the host matches the Kubernetes service FQDN. Validation signals include requests reaching the intended subset confirmed by per-subset metrics and a header match routing as designed. Risk boundary: changing production route weights or hosts is human-gated.",
+  "domain": "service_mesh",
+  "scope_hint": "platform.service-mesh:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.service-mesh",
+  "pack_id": "platform.service-mesh"
+}

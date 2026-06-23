@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:mlai:build-a-correct-training-loop",
+  "type": "methodology",
+  "title": "Build a correct training loop",
+  "description": "Structure the epoch loop so gradients are zeroed, loss is on the right data, and validation runs without gradient tracking.",
+  "body": "Steps: 1. For each epoch, set the model to train mode and iterate batches. 2. Zero gradients, forward, compute loss, backward, optimizer step — in that order. 3. Track training loss as a running average, not the last batch. 4. After the epoch, switch to eval mode and run validation under no-grad, computing the same loss/metrics on the validation split. 5. Log both curves and checkpoint on best validation. Rollback point: before changing the optimizer or learning-rate schedule. Validation: training loss decreases, the missing zero-grad or eval-mode bug would show as exploding loss or train/val leakage; a loop without no-grad validation silently inflates memory and metrics.",
+  "domain": "ml",
+  "scope_hint": "code.ml-ai:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.ml-ai",
+  "pack_id": "code.ml-ai"
+}

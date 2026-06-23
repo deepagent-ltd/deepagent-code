@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:search:analyzers-and-tokenization",
+  "type": "knowledge",
+  "title": "Analyzers: tokenizer plus filters",
+  "description": "An analyzer is a tokenizer followed by token filters (lowercase, stemming, synonyms, stop words); it runs at both index and query time and must be consistent.",
+  "body": "Use when designing text fields or debugging matching. An analyzer splits text into tokens (tokenizer) then transforms them (lowercase, stem 'running'->'run', expand synonyms, drop stop words). The same analysis normally applies at index and query time so terms align; stemming and synonyms increase recall, stop-word removal can hurt phrase queries. Do not mix incompatible analyzers across index and query. Actions: pick analyzers per language and use case and verify with the analyze API. Validation signals include consistent tokens across index and query analysis. Risk boundary: an aggressive analyzer can over-stem or over-expand and tank precision; validate its tokens before relying on it.",
+  "domain": "search",
+  "scope_hint": "code.search:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.search",
+  "pack_id": "code.search"
+}

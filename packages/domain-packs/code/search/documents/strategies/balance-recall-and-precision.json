@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:search:balance-recall-and-precision",
+  "type": "strategy",
+  "title": "Balance recall against precision deliberately",
+  "description": "Decide where on the recall/precision tradeoff a query type belongs and tune operators and matching accordingly rather than maximizing one.",
+  "body": "Use when results are either too noisy or too sparse. Do not chase maximum recall (loose OR matching, aggressive fuzzy) — it floods users with irrelevant hits — nor maximum precision (strict AND) that returns nothing for reasonable queries. Actions: set the match operator, minimum_should_match, and fuzziness to fit the query type (navigational wants precision, exploratory tolerates recall), and report both metrics. Validation signals include precision@k and recall both reported and within the target for the query class. Risk boundary: optimizing one metric blind to the other ships a search that frustrates users in the opposite way; tune against both.",
+  "domain": "search",
+  "scope_hint": "code.search:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.search",
+  "pack_id": "code.search"
+}

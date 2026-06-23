@@ -1,0 +1,11 @@
+{
+  "ref_id": "fail:helm:override-lost-to-precedence",
+  "type": "failure_dossier",
+  "description": "An override silently ignored because a higher-precedence layer sets the same key.",
+  "body": "Failure mode: an operator edits values.yaml or an early -f file, but a later -f file or a --set on the command line overrides the same key, so the intended value never takes effect. Detection signals: helm template --debug shows the effective value differs from the edited file, the change has no runtime effect, and multiple value sources set the same path. Do not assume the file you edited wins. Safer fallback: render with helm template --debug to confirm the effective value, consolidate the key into the highest-precedence layer you control, and avoid setting the same deep key in two layers.",
+  "domain": "helm",
+  "scope_hint": "platform.helm:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.helm:human_authored",
+  "pack_id": "platform.helm"
+}

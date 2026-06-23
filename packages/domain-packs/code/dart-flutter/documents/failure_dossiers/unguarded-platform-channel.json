@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:flutter:unguarded-platform-channel",
+  "type": "failure_dossier",
+  "description": "A MethodChannel call assumes the native handler exists, crashing with MissingPluginException on a platform that lacks it.",
+  "body": "Failure mode: Dart invokes a platform-channel method that is only implemented on one platform (or not at all on web/desktop), so on the unsupported platform the call throws MissingPluginException and the feature crashes instead of degrading. Detection signals: MissingPluginException/PlatformException at runtime; invokeMethod with no platform branch or error handling; a native handler implemented for Android but not iOS (or vice versa). Do not call a channel without confirming support. Safer fallback: implement the handler on every supported native side, branch on platform or feature-detect before invoking, catch MissingPluginException/PlatformException to degrade gracefully, and cover the unsupported path in a mocked-channel test.",
+  "domain": "dart",
+  "scope_hint": "code.dart-flutter:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.dart-flutter:human_authored",
+  "pack_id": "code.dart-flutter"
+}

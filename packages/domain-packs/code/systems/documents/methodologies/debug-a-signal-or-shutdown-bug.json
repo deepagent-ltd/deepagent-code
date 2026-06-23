@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:sys:debug-a-signal-or-shutdown-bug",
+  "type": "methodology",
+  "title": "Debug a signal handling or shutdown bug",
+  "description": "Trace which signals are delivered, what the handler does, and where unsafe work or lost signals cause the failure.",
+  "body": "Steps: 1. Determine which signals are involved (SIGTERM/SIGINT for shutdown, SIGCHLD for child reaping, SIGPIPE for closed sockets) and their disposition. 2. Inspect the handler for non-async-signal-safe calls or long work. 3. Check for lost signals (standard signals do not queue; multiple SIGCHLD can collapse to one, so reap in a loop with waitpid WNOHANG). 4. Verify signals are unblocked where expected and blocked around critical sections. 5. Move real work out of the handler to the main loop. Rollback point: handler changes are reversible. Validation: shutdown completes cleanly under repeated signals and no child becomes a zombie.",
+  "domain": "systems",
+  "scope_hint": "code.systems:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.systems",
+  "pack_id": "code.systems"
+}

@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:sls:no-idempotency-under-retries",
+  "type": "failure_dossier",
+  "description": "A side-effecting handler with no idempotency guard, so at-least-once redelivery causes double charges, duplicate inserts, or repeated sends.",
+  "body": "Failure mode: a function performs a non-idempotent action (charge a card, insert a row, send an email) and the event source redelivers on timeout/error, so the action repeats. Detection signals: duplicate records, double charges, or repeated notifications under load; incidents spike when the source is busy and retries. Do not assume exactly-once delivery. Safer fallback: derive a stable idempotency key, conditionally record it before acting, short-circuit duplicates, and verify with a same-event replay test asserting a single effect.",
+  "domain": "serverless",
+  "scope_hint": "code.backend.serverless:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.serverless:human_authored",
+  "pack_id": "code.backend.serverless"
+}

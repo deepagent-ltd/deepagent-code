@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:tsdb:hypertable-chunking-model",
+  "type": "knowledge",
+  "title": "Hypertable chunking model",
+  "description": "Time-series engines partition data into time-bounded chunks so writes hit recent chunks and queries prune by time.",
+  "body": "Use when reasoning about why time-series query performance depends on time predicates. A hypertable is transparently partitioned into chunks by a time interval (and optionally a space dimension); inserts target the chunk for their timestamp and queries with a time predicate skip non-matching chunks. Do not treat it as one flat table — without a time filter the planner cannot prune. Actions: always bound queries by time and size chunks to the working set. Validation signals include EXPLAIN chunk exclusion. Risk boundary: chunk count and interval directly affect both write and plan cost.",
+  "domain": "timeseries_db",
+  "scope_hint": "code.database.timeseries:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.timeseries",
+  "pack_id": "code.database.timeseries"
+}

@@ -1,0 +1,75 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "risk.security",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "authz",
+      "injection",
+      "secrets"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [
+      "security",
+      "supply_chain"
+    ],
+    "repo_signals": [
+      "L3 smoke for risk.security: authorization, injection, dangerous sinks, secrets, dependency execution, trust boundaries, and secure defaults"
+    ],
+    "round_signals": [
+      "l3_validation_smoke"
+    ],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "plain prose note with no repository or domain signal"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "retrieval_query": "security risk control authorization, injection, dangerous sinks, secrets, dependency execution, trust boundaries, and secure defaults validation smoke diagnosis",
+  "expected_pack_id": "risk.security",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "security risk control L3 validation smoke",
+    "signals": [
+      "negative authorization tests",
+      "sink-specific payload tests",
+      "secret redaction checks",
+      "dependency provenance review",
+      "and audit notes"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "security risk control diagnosis smoke",
+    "signals": [
+      "separate client-only controls",
+      "missing server checks",
+      "unsafe sink construction",
+      "secret exposure",
+      "and dependency execution"
+    ]
+  },
+  "source_refs": [
+    "source:owasp-wstg:paraphrased",
+    "source:github-security-advisories:paraphrased"
+  ]
+}

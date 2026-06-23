@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:svelte:review-reactivity-correctness",
+  "type": "skill",
+  "title": "Review reactivity correctness",
+  "description": "Read a component and report mutations the compiler cannot track and effects that risk loops.",
+  "body": "Use when asked why a component is stale or looping. Actions: inspect each state change for in-place mutation vs assignment, check whether the file is legacy or runes mode and apply the right rule, and trace every $effect to confirm it does not write its own dependencies. Do not assume a value updates just because it was mutated. Report and record each untracked mutation, missing reactive declaration, and self-triggering effect with its file and line. This skill is read-only and must not refactor state without runtime permission. Validation signals include identifying the exact mutation site that fails to re-render. Risk boundary: flag a $effect feeding its own input as an infinite-loop risk and recommend converting it to $derived.",
+  "domain": "svelte",
+  "scope_hint": "code.frontend.svelte:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.frontend.svelte",
+  "pack_id": "code.frontend.svelte"
+}

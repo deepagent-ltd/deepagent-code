@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:supply_chain:require-sbom-for-provenance",
+  "type": "strategy",
+  "title": "Require an SBOM and provenance for shipped dependencies",
+  "description": "Generate a software bill of materials and capture build provenance so every shipped component has a known source, version, and origin that can be audited.",
+  "body": "Use when assembling a release whose dependency origins must be auditable. Do not ship a build whose component set is unknown, and avoid trusting a binary with no recorded source. Actions: generate an SBOM (CycloneDX/SPDX) listing each component with version and source, capture build provenance/attestation tying artifacts to the source commit and builder, and inspect the SBOM against the lockfile for completeness; record it alongside the release. Validation signals include an SBOM that matches the resolved dependency tree and a provenance attestation verifiable against the build. Risk boundary: a component with no identifiable source or provenance is an unaudited supply-chain risk; flag it for human review and deny promotion rather than shipping an unknown origin.",
+  "domain": "security",
+  "scope_hint": "risk.supply-chain:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.supply-chain",
+  "pack_id": "risk.supply-chain"
+}

@@ -1,0 +1,11 @@
+{
+  "ref_id": "knowledge:csharp_dotnet:aspnet-cancellation-token-is-request-scope",
+  "type": "knowledge",
+  "description": "HttpContext.RequestAborted and action CancellationToken represent client/request cancellation.",
+  "body": "Use when long-running handlers or IO calls change. Do not drop tokens through service layers if existing code propagates them. Verify tests or code path passes token to async operations. Risk boundary: wasted work after disconnected clients and graceful shutdown behavior. Use when C# / .NET Engineering work touches repository conventions, toolchain files, changed symbols, validation commands, and runtime output. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: use the fact to constrain the change and test plan; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include package-local checks, focused tests, build output, smoke runs, and command logs. Risk boundary: escalate or stop when the task involves broad rewrites, generated-file drift, stale assumptions, and unvalidated behavior changes, missing owner evidence, or live external state.",
+  "domain": "csharp_dotnet",
+  "scope_hint": "code.csharp-dotnet:knowledges",
+  "evidence_strength": "strong",
+  "provenance_tag": "code.csharp-dotnet:seed:dotnet_cli_csharp_docs:paraphrased",
+  "pack_id": "code.csharp-dotnet"
+}

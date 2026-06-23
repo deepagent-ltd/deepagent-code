@@ -1,0 +1,11 @@
+{
+  "ref_id": "strategy:docs:docs-as-artifact",
+  "type": "strategy",
+  "description": "Treat generated docs as declared artifacts tied to source evidence.",
+  "body": "Documentation materialization should cite code paths, schemas, commands, or decisions rather than free-floating prose.\n\nDerived from local skill survey outputs under /Users/xiuranli/code/agent/skill, especially reviewed canonical rules, coverage reports, and trusted local skill notes. Paraphrased into domain-pack seed form.\n\nSource rule: this is a generalized, paraphrased seed from local skill survey material; apply only with current repository evidence and more specific pack precedence. Use when Code Documentation work touches repository conventions, toolchain files, changed symbols, validation commands, and runtime output. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: choose the smallest direction that preserves the domain contract; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include package-local checks, focused tests, build output, smoke runs, and command logs. Risk boundary: escalate or stop when the task involves broad rewrites, generated-file drift, stale assumptions, and unvalidated behavior changes, missing owner evidence, or live external state.",
+  "domain": "docs",
+  "scope_hint": "code.docs:strategies",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.docs:skill_survey",
+  "pack_id": "code.docs"
+}

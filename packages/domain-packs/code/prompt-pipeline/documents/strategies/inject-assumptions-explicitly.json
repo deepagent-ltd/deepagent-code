@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:prompt:inject-assumptions-explicitly",
+  "type": "strategy",
+  "title": "Inject assumptions explicitly",
+  "description": "Implicit context the model needs (date, locale, units, persona constraints) is injected as explicit, labeled parameters, not assumed.",
+  "body": "Use when the model's answer depends on context it cannot reliably infer. Do not rely on the model to guess the current date, the user's locale, or the unit system, and avoid hardcoding one set of assumptions. Actions: pass needed context as explicit labeled parameters in the prompt, make each assumption visible and overridable, and default conservatively when a value is unknown. Validation signals include a test that changing the injected locale or date changes the output appropriately and that a missing value uses a safe default. Risk boundary: silent wrong assumptions (stale date, wrong locale) produce confidently wrong answers; make assumptions explicit and auditable rather than implicit.",
+  "domain": "prompt_pipeline",
+  "scope_hint": "code.prompt-pipeline:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.prompt-pipeline",
+  "pack_id": "code.prompt-pipeline"
+}

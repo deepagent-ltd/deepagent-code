@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:cache:stampede-on-expiry",
+  "type": "failure_dossier",
+  "description": "A hot key expires and all concurrent requests recompute it at once, multiplying origin load until the backend degrades.",
+  "body": "Failure mode: a hot key expires and every concurrent request recomputes it simultaneously, multiplying origin load until the backend slows or falls over. Detection signals: periodic origin load spikes aligned with TTL boundaries; latency cliffs on popular keys; database connection saturation at expiry. Do not let unprotected hot keys expire under load. Safer fallback: add a single-flight recompute lock with a timeout, serve stale-while-revalidate during refill, and stagger TTLs with jitter.",
+  "domain": "caching",
+  "scope_hint": "code.caching:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.caching:human_authored",
+  "pack_id": "code.caching"
+}

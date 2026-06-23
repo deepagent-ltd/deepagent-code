@@ -1,0 +1,11 @@
+{
+  "ref_id": "knowledge:go:runtime-errors-differ",
+  "type": "knowledge",
+  "description": "In Go, a clean build does not prevent data races, goroutine leaks, and nil-map writes that panic at runtime.",
+  "body": "In Go, passing go vet ./... and the compiler's unused-variable/import errors says nothing about runtime: data races, goroutine leaks, and nil-map writes that panic at runtime surface only when the code actually runs. Use when a change touches control flow, IO, concurrency, or data shapes that the build cannot prove safe. Do not use a green compile as evidence that behavior is correct, and avoid shipping without exercising the path. Actions: run go test ./... -race on the changed package, reproduce the runtime path, and where relevant run the race detector and pprof goroutine/heap profiles to catch latent defects. Validation signals include the test/trace logs, a clean the race detector and pprof goroutine/heap profiles run, and observed correct output on representative input. Risk boundary: escalate or hold the change when the failure mode is data loss or memory corruption you cannot reproduce locally.",
+  "domain": "go",
+  "scope_hint": "code.go:knowledge",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.go:skill_survey",
+  "pack_id": "code.go"
+}

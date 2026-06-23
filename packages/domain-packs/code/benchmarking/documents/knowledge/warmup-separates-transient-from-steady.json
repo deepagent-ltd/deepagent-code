@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:benchmarking:warmup-separates-transient-from-steady",
+  "type": "knowledge",
+  "title": "Warmup separates transient from steady state",
+  "description": "Early iterations pay JIT compilation, cold caches, and lazy initialization costs that do not reflect steady-state performance.",
+  "body": "Use when interpreting why early benchmark iterations are slower. The first runs absorb JIT/AOT compilation, cold CPU and disk caches, lazy class/module loading, and allocator warmup, so including them conflates transient and steady-state cost. Do not average cold and warm iterations together when steady-state throughput is the question. Actions: discard or separately report warmup iterations, then measure steady state. Validation signals include a per-iteration time curve that flattens after warmup. Risk boundary: when cold start is the actual user-facing metric, measuring only steady state hides the real cost; choose warm vs cold deliberately based on what users experience.",
+  "domain": "code",
+  "scope_hint": "code.benchmarking:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.benchmarking",
+  "pack_id": "code.benchmarking"
+}

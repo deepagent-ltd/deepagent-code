@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:frontend_web:div-button",
+  "type": "failure_dossier",
+  "description": "Using non-semantic elements as controls often breaks keyboard and names.",
+  "body": "Prefer native controls unless custom semantics are fully implemented.\n\nUse only as a diagnostic do-not-use signal; do not expose this as positive strategy, methodology, or memory. Use when a proposed approach skips visible UI behavior, browser console output, DOM state, assets, viewport behavior, and interaction evidence or claims success without domain evidence. Do not use this dossier as a positive implementation strategy; it is a do-not-use signal. Actions: block the shortcut, name the missing evidence, and switch to a safer methodology or ask for human approval. Validation signals include absence or contradiction in browser smoke, component tests, viewport screenshots, console/network checks, and accessibility assertions. Risk boundary: treat repeated recurrence as a blocker when it can cause visual regressions, inaccessible interaction, hydration mismatch, and browser-only failures.",
+  "domain": "web",
+  "scope_hint": "code.frontend.web:failure_dossiers",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.frontend.web",
+  "pack_id": "code.frontend.web"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:git:keep-commits-atomic-and-reviewable",
+  "type": "strategy",
+  "title": "Keep each commit atomic and self-describing",
+  "description": "Shape commits so each one is a single coherent change that builds and tests on its own, making review, revert, and bisect reliable.",
+  "body": "Use when staging work for review or preparing a branch to merge. Do not bundle unrelated refactors, formatting, and behavior changes into one commit. Actions: stage hunks selectively so each commit is one logical change; write a message stating what and why; ensure each commit compiles so bisect stays meaningful. Validation signals include a history where any single commit can be reverted cleanly and bisect lands on a real culprit. Risk boundary: a commit mixing a fix with broad churn makes a later revert risky, so split it before pushing.",
+  "domain": "git_workflow",
+  "scope_hint": "code.git-workflow:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.git-workflow",
+  "pack_id": "code.git-workflow"
+}

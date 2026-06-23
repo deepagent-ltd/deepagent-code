@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:tf:providers-and-versioning",
+  "type": "knowledge",
+  "title": "Providers, version pinning, and the lock file",
+  "description": "Providers translate HCL into provider API calls; unpinned provider/module versions make plans non-reproducible across runs and machines.",
+  "body": "Use when a plan differs between machines or breaks after an upgrade. Providers are versioned plugins; the .terraform.lock.hcl records exact provider versions and hashes so every run resolves the same plugin. Loose version constraints let a new provider release change defaults or schema unexpectedly. Do not leave provider versions unconstrained on shared infrastructure. Actions: set explicit version constraints, commit the lock file, and upgrade deliberately with terraform init -upgrade plus a review. Validation signals include identical provider versions across CI and local and a clean plan after upgrade. Risk boundary: an accidental major-version provider bump can rewrite resource defaults; treat provider upgrades as reviewable changes.",
+  "domain": "terraform",
+  "scope_hint": "platform.terraform:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.terraform",
+  "pack_id": "platform.terraform"
+}

@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:database:drop-column-same-release",
+  "type": "failure_dossier",
+  "description": "A column or table was dropped in the same release that stopped writing it, breaking old code or rollback.",
+  "body": "Failure mode: deploy order or rollback runs old code against a schema where the old column no longer exists, or data needed for recovery has already been deleted. Diagnostic trigger: migration combines code switch, backfill, read change, and destructive cleanup in one step. Do-not-use signal: do not approve destructive cleanup without evidence that no active code path reads or writes the old shape. Recovery: split into expand, compatible code, backfill, read switch, verification, and later contract cleanup; keep source data until verification passes. Risk boundary: irreversible drops require backup or explicit roll-forward plan and human approval for production-sized data.",
+  "domain": "sql",
+  "scope_hint": "code.database:failure_dossiers",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database:destructive_migration_failure",
+  "pack_id": "code.database"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:risk.security:security-risk-triage",
+  "type": "skill",
+  "title": "Security Risk Triage",
+  "description": "Classify a change by asset, actor, trust boundary, sink, data sensitivity, and required human gate.",
+  "body": "Inputs: changed files, user request, repo signals, and any test or scanner output. Use when deciding whether security, privacy, production, or supply-chain constraints should block automation. Do not use to provide exploit instructions or to approve policy relaxation. Procedure: list protected assets, identify who can influence the input, identify the enforcement point, name dangerous sinks, mark secret or personal data exposure, and decide whether a human gate is required. Output: risk class, required checks, denied shortcuts, and residual risk. Validation signals include specific file or route evidence and a conservative gate when evidence is incomplete.",
+  "domain": "security",
+  "scope_hint": "risk.security:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.security",
+  "pack_id": "risk.security"
+}

@@ -1,0 +1,11 @@
+{
+  "ref_id": "methodology:rust:dependency-update-check",
+  "type": "methodology",
+  "description": "In Rust, when Cargo.toml / Cargo.lock, feature unification across the workspace, and crate versions change, verify the lockfile, generated artifacts, and a runtime smoke.",
+  "body": "In Rust, a dependency change ripples through Cargo.toml / Cargo.lock, feature unification across the workspace, and crate versions, generated bindings, and runtime behavior, so it needs more than a recompile. Use when Cargo.toml / Cargo.lock, feature unification across the workspace, and crate versions are added, removed, or version-bumped. Do not merge a dependency bump on a green compile alone, and avoid editing the lockfile by hand. Actions: inspect the dependency delta, re-resolve and review Cargo.toml / Cargo.lock, feature unification across the workspace, and crate versions, regenerate affected build.rs output, bindgen bindings, and macro-expanded code (cargo expand), then run cargo test on the affected crate with the relevant features and smoke the import/runtime path. Validation signals include a reviewed lockfile diff, a clean cargo clippy -D warnings and rustc lint output pass, and a passing runtime smoke. Risk boundary: escalate on a major-version bump, a transitive conflict you cannot resolve, or a license/security flag.",
+  "domain": "rust",
+  "scope_hint": "code.rust:methodologies",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.rust:skill_survey",
+  "pack_id": "code.rust"
+}

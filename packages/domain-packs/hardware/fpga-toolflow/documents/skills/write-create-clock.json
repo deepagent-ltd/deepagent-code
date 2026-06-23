@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:fpgatf:write-create-clock",
+  "type": "skill",
+  "title": "Write a create_clock constraint",
+  "description": "Specify a clock's period and waveform on the correct source port so STA derives the right timing window.",
+  "body": "Use when a primary clock arrives at a device port and must be declared. Do not omit the source object or guess the period, since the constraint anchors all dependent timing. Actions: identify the clock input port, set the period to the real frequency, and verify the timing summary now lists the clock as constrained. Validation signals include the clock appearing constrained in the summary and dependent paths showing meaningful slack. Risk boundary: a wrong period silently scales every related slack, so flag any clock whose declared period disagrees with the board oscillator.",
+  "domain": "fpga_toolflow",
+  "scope_hint": "hardware.fpga-toolflow:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.fpga-toolflow",
+  "pack_id": "hardware.fpga-toolflow"
+}

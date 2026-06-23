@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:mlops:rollback-on-regression",
+  "type": "strategy",
+  "title": "Keep a one-command rollback to the last good model",
+  "description": "Maintain the previously serving model version warm and a single switch to restore it when live metrics regress after a rollout.",
+  "body": "Use when cutting production traffic over to a newly promoted model. Do not delete or unload the prior version on cutover — if the new model regresses you need an instant restore, not a rebuild. Actions: keep the last-good version registered and loadable, wire a single rollback switch, and run it as a drill before relying on it. Validation signals include a rehearsed rollback that restores the prior version inside the SLO and a serving config that records which version is live. Risk boundary: a stuck-forward rollout with no escape harms users every request; if rollback is untested, treat the deployment as blocked and escalate.",
+  "domain": "mlops",
+  "scope_hint": "code.mlops:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.mlops",
+  "pack_id": "code.mlops"
+}

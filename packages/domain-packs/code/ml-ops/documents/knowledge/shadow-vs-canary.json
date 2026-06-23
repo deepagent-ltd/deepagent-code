@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:mlops:shadow-vs-canary",
+  "type": "knowledge",
+  "title": "Shadow deployment versus canary rollout",
+  "description": "How shadow serving (mirror, discard) and canary (small live share) differ in risk and what each validates.",
+  "body": "Use when choosing how to expose a new model to production conditions. Shadow mirrors live requests to the candidate and discards its output, validating shapes and latency at zero user risk; canary routes a small real share and measures user-facing impact. Do not canary before shadow clears — a crashing candidate then hits real users. Actions: shadow first to confirm I/O and latency, then canary with guardrails to measure outcomes. Validation signals include a shadow trace matching production shapes and a canary report on the primary metric. Risk boundary: skipping shadow exposes users to integration faults; if shadow surfaces a contract break, deny the canary and escalate.",
+  "domain": "mlops",
+  "scope_hint": "code.mlops:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.mlops",
+  "pack_id": "code.mlops"
+}

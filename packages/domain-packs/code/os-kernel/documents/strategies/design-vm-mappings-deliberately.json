@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:kernel:design-vm-mappings-deliberately",
+  "type": "strategy",
+  "title": "Design virtual-memory mappings deliberately",
+  "description": "Set page protections, mapping lifetimes, and TLB flushes correctly so memory is no more permissive than needed and mappings stay coherent.",
+  "body": "Use when manipulating page tables, mmap handlers, or kernel mappings. Do not leave pages writable-and-executable, forget a TLB flush after changing a mapping, or map more than the driver needs. Actions: set the least-permissive page protections, flush the TLB/caches after changing mappings, validate user mmap requests against allowed ranges, and tear mappings down on cleanup. Validation signals include correct fault behavior on protected accesses and no stale-TLB corruption under stress. Risk boundary: a missing TLB flush causes silent data corruption and a W+X or over-broad mapping is an exploit primitive; treat mapping-permission and flush errors as blocking and review them.",
+  "domain": "kernel",
+  "scope_hint": "code.os-kernel:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.os-kernel",
+  "pack_id": "code.os-kernel"
+}

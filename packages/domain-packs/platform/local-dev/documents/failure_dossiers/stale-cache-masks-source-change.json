@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:local_dev:stale-cache-masks-source-change",
+  "type": "failure_dossier",
+  "description": "A dev build serving stale cached output so source edits appear to have no effect, sending the developer down a false debugging path.",
+  "body": "Failure mode: the dev server or bundler serves a cached/previous build because the watcher missed the change or a cache was not invalidated, so edits seem ignored and the developer debugs code that is not actually running. Detection signals: changes only appear after a manual restart or cache clear; the watcher silently missed the file; hashes/timestamps show stale assets. Do not keep editing assuming the new code runs. Safer fallback: confirm the watcher covers the edited path, clear the build cache, restart the dev process, and verify the change is live before debugging further. Risk boundary: when reload reliability is uncertain, force a clean rebuild rather than trusting cached output.",
+  "domain": "platform",
+  "scope_hint": "platform.local-dev:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.local-dev:human_authored",
+  "pack_id": "platform.local-dev"
+}

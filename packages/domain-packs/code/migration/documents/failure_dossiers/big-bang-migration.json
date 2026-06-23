@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:migration:big-bang-migration",
+  "type": "failure_dossier",
+  "description": "Changing all layers at once makes failures hard to attribute.",
+  "body": "Use phases and compatibility windows.\n\nDerived from local skill survey outputs under /Users/xiuranli/code/agent/skill, especially reviewed canonical rules, coverage reports, and trusted local skill notes. Paraphrased into domain-pack seed form.\n\nDiagnostic use only: keep this out of index.json and use it only as a blocked/do-not-use signal.",
+  "domain": "migration",
+  "scope_hint": "code.migration:failure_dossiers",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.migration:skill_survey",
+  "pack_id": "code.migration"
+}

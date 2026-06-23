@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:apidesign:inconsistent-resource-modeling",
+  "type": "failure_dossier",
+  "description": "Modeling the same concept differently across endpoints forces clients to write per-endpoint code and makes the surface unpredictable.",
+  "body": "Failure mode: the same domain concept appears under different names, casings, or shapes on different endpoints because each was designed in isolation. Detection signals: a client maps the same entity twice with different field names; reviewers cannot predict an endpoint's shape from another; the style guide is absent or unenforced. Do not design endpoints independently of the existing surface. Safer fallback: define one convention and a canonical model per concept, reuse names, and converge outliers additively with deprecation rather than ad hoc renames.",
+  "domain": "api_design",
+  "scope_hint": "code.api-design:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.api-design:human_authored",
+  "pack_id": "code.api-design"
+}

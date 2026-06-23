@@ -1,0 +1,11 @@
+{
+  "ref_id": "methodology:backend_api:observability-contract-check",
+  "type": "methodology",
+  "description": "Preserve request IDs and safe error logging around API changes.",
+  "body": "Steps: confirm correlation IDs; ensure errors are logged without secrets; verify status metrics remain meaningful; avoid logging full bodies.\n\nEvidence boundary: apply only when current task, repository, or validation evidence matches this pack boundary. Do not override a more specific pack or explicit project contract. Use when Backend API work touches repository conventions, toolchain files, changed symbols, validation commands, and runtime output. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: follow the ordered review, edit, and validation sequence; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include package-local checks, focused tests, build output, smoke runs, and command logs. Risk boundary: escalate or stop when the task involves broad rewrites, generated-file drift, stale assumptions, and unvalidated behavior changes, missing owner evidence, or live external state.",
+  "domain": "api",
+  "scope_hint": "code.backend.api:methodologies",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.backend.api",
+  "pack_id": "code.backend.api"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:rust:structure-cargo-workspace",
+  "type": "methodology",
+  "title": "Structure a multi-crate cargo workspace",
+  "description": "Split a growing crate into a workspace with shared dependency versions and a clear dependency direction to cut compile times and coupling.",
+  "body": "Steps: 1. Create a root Cargo.toml with [workspace] members and [workspace.dependencies] so all member crates share one resolved version per dep. 2. Split by responsibility (core lib, IO/adapters, binary) with dependencies pointing one direction (no cycles). 3. Reference shared deps with `dep = { workspace = true }` and gate optional behavior behind additive features only. 4. Build with `cargo build --workspace` and check feature unification with `cargo tree -e features`. 5. Run `cargo test --workspace`. Rollback point: before moving public types between crates (it breaks downstream paths). Validation: cargo tree shows a single version per shared dep and incremental rebuilds touch only changed crates. Risk boundary: a non-additive (mutually exclusive) feature breaks when the workspace unifies features; record feature semantics and verify with --all-features.",
+  "domain": "rust",
+  "scope_hint": "code.rust:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.rust",
+  "pack_id": "code.rust"
+}

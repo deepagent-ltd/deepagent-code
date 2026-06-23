@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:embed:watchdog-disabled-to-hide-hang",
+  "type": "failure_dossier",
+  "description": "Widening or disabling the watchdog to stop spurious resets, removing the safety net that would recover a hung device in the field.",
+  "body": "Failure mode: the watchdog keeps resetting the device, so the period is extended or the watchdog disabled to 'fix' it; the underlying hang (deadlock, ISR storm, infinite loop) remains and now the device can lock up permanently in the field with no recovery. Detection signals: reset-cause register shows watchdog resets before the change; resets stop but occasional permanent hangs begin; the kick path contains a blocking or unbounded operation. Do not disable or lengthen the watchdog to mask a hang. Safer fallback: capture the reset cause and the blocked kick path, fix the root-cause hang, keep the watchdog at a tight period, and verify recovery by injecting the failure.",
+  "domain": "embedded",
+  "scope_hint": "code.embedded:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.embedded:human_authored",
+  "pack_id": "code.embedded"
+}

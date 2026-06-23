@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:comp:parser-aborts-on-first-error",
+  "type": "failure_dossier",
+  "description": "A parser that stops at the first syntax error instead of recovering, so users see only one error per compile and waste iterations.",
+  "body": "Failure mode: the parser throws or returns on the first unexpected token with no resynchronization, so a file with several independent syntax errors reports only the first; the user fixes it, recompiles, and discovers the next, repeating slowly. Detection signals: only one diagnostic ever appears regardless of how many errors exist; the parser exits the moment it sees an unexpected token. Do not abort parsing on the first error. Safer fallback: add panic-mode or phrase-level recovery that skips to a synchronizing token and continues, suppress cascaded errors from an already-reported failure, and test on a corpus of multi-error programs expecting multiple accurate diagnostics.",
+  "domain": "compiler",
+  "scope_hint": "code.compiler:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.compiler:human_authored",
+  "pack_id": "code.compiler"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:dist:design-for-idempotent-retries",
+  "type": "strategy",
+  "title": "Make every remote operation idempotent",
+  "description": "Attach a dedup key to each request so the unavoidable retries from timeouts do not apply an operation twice.",
+  "body": "Use when a client or peer can time out and retry a request, which is always in an asynchronous network. Do not assume a timeout means the operation did not happen, and avoid 'exactly-once' delivery promises that the network cannot keep. Actions: give every mutating request a stable idempotency key, record applied keys on the server, and return the prior result on a duplicate instead of re-applying. Validation signals include a duplicate-delivery test where the effect occurs exactly once and a log showing deduped retries. Risk boundary: non-idempotent retries double-charge, double-ship, or double-increment; treat any retried mutation without a dedup key as a correctness bug requiring fix before release.",
+  "domain": "distributed",
+  "scope_hint": "code.distributed:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.distributed",
+  "pack_id": "code.distributed"
+}

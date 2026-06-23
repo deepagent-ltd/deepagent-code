@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:sdk:paginate-the-full-collection",
+  "type": "strategy",
+  "title": "Expose pagination as a complete iterator",
+  "description": "Provide automatic page-following iteration in generated clients so callers traverse a whole collection without hand-managing cursors.",
+  "body": "Use when an SDK wraps a list/collection endpoint that returns partial pages. Do not force every caller to read next-page tokens and loop manually, and do not silently return only the first page. Actions: surface both a raw page accessor and an auto-paginating iterator/async-iterable that follows the cursor, document the page size and ordering guarantees, and bound memory by streaming rather than buffering all pages. Validation signals include a contract test that iterates a multi-page fixture and a count matching the server total. Risk boundary: an auto-paginator that hides rate limits can hammer the API; record and respect server paging limits, and surface partial-failure rather than an infinite loop.",
+  "domain": "sdk",
+  "scope_hint": "code.sdk:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.sdk",
+  "pack_id": "code.sdk"
+}
