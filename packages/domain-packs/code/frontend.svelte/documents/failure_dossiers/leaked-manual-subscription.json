@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:svelte:leaked-manual-subscription",
+  "type": "failure_dossier",
+  "description": "A store is subscribed manually without unsubscribing, leaking callbacks across navigations.",
+  "body": "Failure mode: a component calls store.subscribe directly and never calls the returned unsubscribe, so every time the component mounts a new subscription is added and old ones keep firing after destroy, leaking memory and duplicating side effects. Detection signals: callbacks run more times than mounted components; memory grows across SPA navigations; subscribe is called without capturing its return. Do not manually subscribe in a component when $store auto-subscription works. Safer fallback: use the $store syntax which unsubscribes on destroy, or capture the unsubscribe and call it in onDestroy / an $effect cleanup return.",
+  "domain": "svelte",
+  "scope_hint": "code.frontend.svelte:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.frontend.svelte:human_authored",
+  "pack_id": "code.frontend.svelte"
+}

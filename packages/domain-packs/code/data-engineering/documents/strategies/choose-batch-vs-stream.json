@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:dataeng:choose-batch-vs-stream",
+  "type": "strategy",
+  "title": "Choose batch or streaming by latency need",
+  "description": "Default to batch for its simplicity and reprocessability; adopt streaming only when end-to-end latency truly requires it.",
+  "body": "Use when deciding a pipeline's processing model. Do not reach for streaming because it sounds modern — streaming adds stateful operators, exactly-once complexity, and harder backfills for latency most use cases do not need. Actions: quantify the required freshness; if minutes-to-hours suffice, use scheduled batch with idempotent partitions; if seconds matter, use streaming with explicit dedup and watermarking. Validation signals include meeting the freshness SLO and a batch path that is trivially replayable. Risk boundary: streaming's operational burden is easy to underestimate; before committing, confirm the latency requirement is real and the team can run stateful infrastructure.",
+  "domain": "data_engineering",
+  "scope_hint": "code.data-engineering:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.data-engineering",
+  "pack_id": "code.data-engineering"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:edge:keep-functions-within-runtime-limits",
+  "type": "strategy",
+  "title": "Keep edge functions within runtime limits",
+  "description": "Design edge functions for tight CPU/memory budgets and no persistent filesystem, unlike origin servers.",
+  "body": "Use when moving logic to Cloudflare Workers or Lambda@Edge. Do not port origin code assuming a full Node runtime — edge runtimes cap CPU-ms and memory, lack a writable filesystem, and limit bundle size. Actions: measure CPU-ms and memory of the function, remove filesystem/long-lived-connection assumptions, and keep dependencies small. Validation signals include the function staying under the platform's CPU/memory cap and cold-start within budget. Risk boundary: an edge function that exceeds limits is killed mid-request, dropping traffic globally — escalate before shipping unbounded work to the edge.",
+  "domain": "cdn",
+  "scope_hint": "platform.cdn-edge:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.cdn-edge",
+  "pack_id": "platform.cdn-edge"
+}

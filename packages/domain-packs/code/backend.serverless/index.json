@@ -1,0 +1,468 @@
+[
+  {
+    "ref_id": "strategy:sls:design-stateless-handlers",
+    "type": "strategy",
+    "title": "Design handlers to be stateless",
+    "summary": "Treat each invocation as if it runs on a fresh instance; never rely on in-memory or local-disk state surviving between calls.",
+    "domains": [
+      "serverless",
+      "lambda",
+      "faas",
+      "functions"
+    ],
+    "triggers": [
+      "stateless",
+      "state",
+      "global",
+      "instance",
+      "ephemeral",
+      "memory"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.serverless"
+  },
+  {
+    "ref_id": "strategy:sls:make-handlers-idempotent",
+    "type": "strategy",
+    "title": "Make event handlers idempotent",
+    "summary": "Assume at-least-once delivery and design handlers so processing the same event twice produces one effect, using an idempotency key.",
+    "domains": [
+      "serverless",
+      "lambda",
+      "faas",
+      "functions"
+    ],
+    "triggers": [
+      "idempotent",
+      "at-least-once",
+      "retry",
+      "duplicate",
+      "dedup",
+      "exactly-once"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.serverless"
+  },
+  {
+    "ref_id": "strategy:sls:tame-cold-starts",
+    "type": "strategy",
+    "title": "Measure and tame cold starts",
+    "summary": "Quantify cold-start latency, then reduce it by shrinking the package, reusing connections, and using provisioned concurrency only where it matters.",
+    "domains": [
+      "serverless",
+      "lambda",
+      "faas",
+      "functions"
+    ],
+    "triggers": [
+      "cold start",
+      "latency",
+      "init",
+      "provisioned concurrency",
+      "package size",
+      "warm"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.serverless"
+  },
+  {
+    "ref_id": "strategy:sls:least-privilege-per-function",
+    "type": "strategy",
+    "title": "Scope IAM to one function's needs",
+    "summary": "Give each function its own execution role with only the permissions that handler uses, never a shared wildcard role.",
+    "domains": [
+      "serverless",
+      "lambda",
+      "faas",
+      "functions"
+    ],
+    "triggers": [
+      "iam",
+      "least privilege",
+      "role",
+      "permission",
+      "wildcard",
+      "policy"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.serverless"
+  },
+  {
+    "ref_id": "strategy:sls:respect-execution-limits",
+    "type": "strategy",
+    "title": "Design within execution limits",
+    "summary": "Account for timeout, memory, payload-size, and concurrency limits explicitly instead of discovering them under load.",
+    "domains": [
+      "serverless",
+      "lambda",
+      "faas",
+      "functions"
+    ],
+    "triggers": [
+      "timeout",
+      "memory",
+      "payload",
+      "limit",
+      "concurrency",
+      "quota"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.serverless"
+  },
+  {
+    "ref_id": "strategy:sls:handle-failures-with-dlq",
+    "type": "strategy",
+    "title": "Route unprocessable events to a dead-letter queue",
+    "summary": "Configure DLQs/retry policies so poison events do not retry forever or vanish, and can be inspected and replayed.",
+    "domains": [
+      "serverless",
+      "lambda",
+      "faas",
+      "functions"
+    ],
+    "triggers": [
+      "dlq",
+      "dead-letter",
+      "retry",
+      "poison",
+      "failure",
+      "redrive"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.serverless"
+  },
+  {
+    "ref_id": "methodology:sls:diagnose-cold-start-latency",
+    "type": "methodology",
+    "title": "Diagnose and reduce cold-start latency",
+    "summary": "Separate init from execution duration in traces, find the dominant init cost, and reduce it before reaching for provisioned concurrency.",
+    "domains": [
+      "serverless",
+      "lambda",
+      "faas",
+      "functions"
+    ],
+    "triggers": [
+      "cold start",
+      "init",
+      "trace",
+      "latency",
+      "diagnose",
+      "duration"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.serverless"
+  },
+  {
+    "ref_id": "methodology:sls:design-an-event-driven-fanout",
+    "type": "methodology",
+    "title": "Design an event-driven fan-out",
+    "summary": "Decompose a workload into a producer plus parallel consumers via a queue/topic, with idempotency and backpressure, instead of synchronous chaining.",
+    "domains": [
+      "serverless",
+      "lambda",
+      "faas",
+      "functions"
+    ],
+    "triggers": [
+      "fan-out",
+      "event-driven",
+      "queue",
+      "topic",
+      "parallel",
+      "backpressure"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.serverless"
+  },
+  {
+    "ref_id": "methodology:sls:add-idempotency-to-a-handler",
+    "type": "methodology",
+    "title": "Add idempotency to a side-effecting handler",
+    "summary": "Introduce an idempotency key and a conditional-write dedup store so retries of the same event are harmless.",
+    "domains": [
+      "serverless",
+      "lambda",
+      "faas",
+      "functions"
+    ],
+    "triggers": [
+      "idempotency",
+      "dedup",
+      "key",
+      "conditional write",
+      "retry",
+      "side effect"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.serverless"
+  },
+  {
+    "ref_id": "methodology:sls:right-size-memory-and-timeout",
+    "type": "methodology",
+    "title": "Right-size memory and timeout",
+    "summary": "Use load measurements to pick memory (which scales CPU) and a timeout above worst-case downstream latency, not defaults.",
+    "domains": [
+      "serverless",
+      "lambda",
+      "faas",
+      "functions"
+    ],
+    "triggers": [
+      "memory",
+      "timeout",
+      "right-size",
+      "cpu",
+      "tuning",
+      "cost"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.serverless"
+  },
+  {
+    "ref_id": "knowledge:sls:the-faas-execution-model",
+    "type": "knowledge",
+    "title": "The FaaS execution model",
+    "summary": "The platform creates, freezes, reuses, and reaps instances; your code runs as short-lived invocations on instances you do not control.",
+    "domains": [
+      "serverless",
+      "lambda",
+      "faas",
+      "functions"
+    ],
+    "triggers": [
+      "execution model",
+      "instance",
+      "freeze",
+      "reuse",
+      "lifecycle",
+      "ephemeral"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.serverless"
+  },
+  {
+    "ref_id": "knowledge:sls:at-least-once-delivery",
+    "type": "knowledge",
+    "title": "Event delivery is usually at-least-once",
+    "summary": "Most async event sources retry on failure or ambiguity, so the same event can be delivered more than once; exactly-once is rare and costly.",
+    "domains": [
+      "serverless",
+      "lambda",
+      "faas",
+      "functions"
+    ],
+    "triggers": [
+      "at-least-once",
+      "delivery",
+      "retry",
+      "duplicate",
+      "exactly-once",
+      "semantics"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.serverless"
+  },
+  {
+    "ref_id": "knowledge:sls:cold-start-anatomy",
+    "type": "knowledge",
+    "title": "Anatomy of a cold start",
+    "summary": "A cold start adds instance provisioning, runtime bootstrap, and init code before the first invocation; warm instances skip all of it.",
+    "domains": [
+      "serverless",
+      "lambda",
+      "faas",
+      "functions"
+    ],
+    "triggers": [
+      "cold start",
+      "init",
+      "bootstrap",
+      "provision",
+      "warm",
+      "latency"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.serverless"
+  },
+  {
+    "ref_id": "knowledge:sls:platform-limits-shape-design",
+    "type": "knowledge",
+    "title": "Platform limits shape the design",
+    "summary": "Timeout, memory, payload size, /tmp size, and account concurrency are hard ceilings that force architectural choices, not tunables to ignore.",
+    "domains": [
+      "serverless",
+      "lambda",
+      "faas",
+      "functions"
+    ],
+    "triggers": [
+      "limits",
+      "timeout",
+      "payload",
+      "concurrency",
+      "quota",
+      "constraints"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.serverless"
+  },
+  {
+    "ref_id": "skill:sls:inspect-handler-for-idempotency-and-state",
+    "type": "skill",
+    "title": "Inspect a handler for state and idempotency risks",
+    "summary": "Statically review a function for shared-state leakage, non-idempotent side effects, and timeout-vs-downstream mismatches.",
+    "domains": [
+      "serverless",
+      "lambda",
+      "faas",
+      "functions"
+    ],
+    "triggers": [
+      "inspect",
+      "idempotency",
+      "state",
+      "review",
+      "side effect",
+      "audit"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.serverless"
+  },
+  {
+    "ref_id": "skill:sls:audit-function-iam-and-limits",
+    "type": "skill",
+    "title": "Audit function IAM and execution limits",
+    "summary": "Review a function's execution role for least privilege and its memory/timeout/concurrency config against its workload.",
+    "domains": [
+      "serverless",
+      "lambda",
+      "faas",
+      "functions"
+    ],
+    "triggers": [
+      "iam",
+      "audit",
+      "role",
+      "timeout",
+      "concurrency",
+      "limits"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.serverless"
+  }
+]

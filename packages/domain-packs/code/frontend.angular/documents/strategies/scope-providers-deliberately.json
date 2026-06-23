@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:ng:scope-providers-deliberately",
+  "type": "strategy",
+  "title": "Scope providers deliberately",
+  "description": "Declare where an injectable lives (root, route, or component) so instance count and lifetime are intentional.",
+  "body": "Use when creating or wiring a service. Do not provide the same service in multiple component providers arrays when you expect one shared instance. Actions: use providedIn: 'root' for an app-wide singleton, a route/component provider for a scoped instance whose lifetime matches that subtree, and understand that each component-level provider creates a new instance per component. Validation signals include a test asserting two components share or do not share state as intended. Risk boundary: an accidental second instance splits state silently (one component writes, another reads stale), and a service holding secrets must not be provided into a lazily loaded client bundle it should not reach.",
+  "domain": "angular",
+  "scope_hint": "code.frontend.angular:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.frontend.angular",
+  "pack_id": "code.frontend.angular"
+}

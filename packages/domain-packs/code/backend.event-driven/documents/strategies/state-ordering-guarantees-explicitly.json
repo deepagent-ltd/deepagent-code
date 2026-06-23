@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:evt:state-ordering-guarantees-explicitly",
+  "type": "strategy",
+  "title": "State ordering guarantees explicitly",
+  "description": "Ordering holds only within a partition/key; cross-partition order is not guaranteed and must not be assumed.",
+  "body": "Use when consumer logic depends on event order (created before updated). Do not assume global ordering across a topic with multiple partitions or across topics. Actions: choose a partition key (e.g. aggregate id) so all events for one entity land on one partition and stay ordered; for cross-entity flows, design handlers to tolerate out-of-order arrival or use a sequence/version field. Validation signals include a test that two events for the same key are applied in order and that an out-of-order arrival for different keys is handled. Risk boundary: assuming order where the broker gives none causes silent state corruption.",
+  "domain": "event_driven",
+  "scope_hint": "code.backend.event-driven:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.event-driven",
+  "pack_id": "code.backend.event-driven"
+}

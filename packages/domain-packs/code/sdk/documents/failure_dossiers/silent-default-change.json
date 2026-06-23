@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:sdk:silent-default-change",
+  "type": "failure_dossier",
+  "description": "Changing a client default such as timeout, retry count, or base URL in a non-major release, altering behavior for existing users.",
+  "body": "Failure mode: a default timeout, retry policy, page size, or endpoint is changed in a minor/patch, so consumers who relied on the old behavior see new latency, duplicate calls, or wrong-environment traffic without changing their code. Detection signals: behavior shifts after a non-major upgrade; defaults edited without a changelog entry; tests pinned to old defaults break. Do not change a public default outside a major bump without a deliberate migration note. Safer fallback: treat defaults as semver surface, change them only at a major version with changelog and migration guidance, or make the new behavior opt-in.",
+  "domain": "sdk",
+  "scope_hint": "code.sdk:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.sdk:human_authored",
+  "pack_id": "code.sdk"
+}

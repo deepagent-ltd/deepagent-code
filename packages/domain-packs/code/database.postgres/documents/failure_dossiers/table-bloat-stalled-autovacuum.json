@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:pg:table-bloat-stalled-autovacuum",
+  "type": "failure_dossier",
+  "description": "Dead tuples accumulate because autovacuum can't keep up or a long transaction pins the xmin horizon, bloating tables and indexes.",
+  "body": "Failure mode: a high-churn table's UPDATE/DELETE traffic creates dead tuples faster than autovacuum reclaims them, or an idle-in-transaction session or replication slot holds back the xmin horizon so VACUUM cannot remove recent dead tuples; scans slow and storage grows. Detection signals: rising n_dead_tup in pg_stat_user_tables; old last_autovacuum; a long-lived transaction in pg_stat_activity. Do not run VACUUM FULL on a hot table without a window (it locks exclusively). Safer fallback: tune per-table autovacuum to trigger sooner, kill stuck long transactions, and monitor dead tuples back down.",
+  "domain": "postgres",
+  "scope_hint": "code.database.postgres:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.postgres:human_authored",
+  "pack_id": "code.database.postgres"
+}

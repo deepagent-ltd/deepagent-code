@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:stream:delivery-semantics",
+  "type": "knowledge",
+  "title": "At-most-once, at-least-once, exactly-once",
+  "description": "What each delivery guarantee means and why exactly-once requires cooperation between source, state, and sink.",
+  "body": "Use when reasoning about delivery guarantees. At-most-once may drop on failure; at-least-once may duplicate; exactly-once means each event affects state and output once despite failures. Do not assume the engine alone gives exactly-once — it needs replayable sources, checkpointed state, and a transactional or idempotent sink working together. Actions: identify each component's guarantee and close gaps with idempotent upserts or two-phase commit. Validation signals include a recovery drill with input-matching output counts and a sink that absorbs replays. Risk boundary: at-least-once into a non-idempotent sink silently double-counts; if any link breaks the chain, escalate before advertising exactly-once downstream.",
+  "domain": "streaming",
+  "scope_hint": "code.streaming:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.streaming",
+  "pack_id": "code.streaming"
+}

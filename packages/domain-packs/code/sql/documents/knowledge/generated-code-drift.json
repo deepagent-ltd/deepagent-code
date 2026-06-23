@@ -1,0 +1,11 @@
+{
+  "ref_id": "knowledge:sql:generated-code-drift",
+  "type": "knowledge",
+  "description": "In SQL, never hand-edit ORM-generated DDL and migration files emitted by the schema tool; change the source and rerun the generator.",
+  "body": "In SQL, ORM-generated DDL and migration files emitted by the schema tool are derived artifacts: editing them directly drifts from the generator and is overwritten on the next run. Use when a diff touches generated files, codegen inputs, or the the database engine and version, and its SQL dialect that produces them. Do not use this to justify patching generated output by hand or skipping regeneration. Actions: locate the generator and its inputs, edit the source, rerun the generation step, then run the migration applied against a scratch database (the same engine/version as prod) so the regenerated output is what ships. Validation signals include a clean regeneration diff, a passing a transaction that runs the statement, asserts row counts, then rolls back, and no manual edits left in the generated tree. Risk boundary: escalate before regenerating if the generator is pinned, vendored, or owned by another team, and roll back if regeneration changes unrelated files.",
+  "domain": "sql",
+  "scope_hint": "code.sql:knowledge",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.sql:skill_survey",
+  "pack_id": "code.sql"
+}

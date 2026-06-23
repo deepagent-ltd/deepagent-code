@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:production:green-tests-are-not-deploy-approval",
+  "type": "knowledge",
+  "title": "Green tests are not deploy approval",
+  "description": "Passing tests prove a validation subset, not permission to deploy, migrate, shift traffic, or alter production state.",
+  "body": "Use when a task asks to continue from local validation into live action. Do not devalue tests; use them as evidence for a human release decision. Actions: present test results, identify remaining deployment gates, and stop before live changes. Validation signals include commands and outputs, plus explicit approval if production action follows. Risk boundary: automatic deployment from a coding task is denied by default. Use when Production Change Risk Controls work touches repository conventions, toolchain files, changed symbols, validation commands, and runtime output. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: use the fact to constrain the change and test plan; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include package-local checks, focused tests, build output, smoke runs, and command logs. Risk boundary: escalate or stop when the task involves broad rewrites, generated-file drift, stale assumptions, and unvalidated behavior changes, missing owner evidence, or live external state.",
+  "domain": "production",
+  "scope_hint": "risk.production:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.production",
+  "pack_id": "risk.production"
+}

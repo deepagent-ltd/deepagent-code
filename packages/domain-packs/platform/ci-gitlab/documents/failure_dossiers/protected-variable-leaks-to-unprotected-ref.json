@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:glci:protected-variable-leaks-to-unprotected-ref",
+  "type": "failure_dossier",
+  "description": "A secret stored as an unprotected variable is exposed to feature branches and fork merge-request pipelines.",
+  "body": "Failure mode: a credential is added as a CI/CD variable without the Protected flag, so it is injected into pipelines on every branch and into fork merge-request pipelines, where the MR author's code runs with the secret in scope. Detection signals: a secret variable not marked Protected; a feature-branch or fork MR pipeline able to read it; the value usable from attacker-controlled job scripts. Do not store secrets as unprotected variables. Safer fallback: mark the variable Protected and Masked, protect the branches/tags that deploy, scope it to its environment, and verify a non-protected branch pipeline cannot read it.",
+  "domain": "ci_gitlab",
+  "scope_hint": "platform.ci-gitlab:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.ci-gitlab:human_authored",
+  "pack_id": "platform.ci-gitlab"
+}

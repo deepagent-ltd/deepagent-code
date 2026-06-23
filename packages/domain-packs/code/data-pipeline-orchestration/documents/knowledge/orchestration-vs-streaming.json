@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:orch:orchestration-vs-streaming",
+  "type": "knowledge",
+  "title": "Batch orchestration versus stream processing",
+  "description": "When scheduled DAGs over bounded intervals fit versus when continuous stream processing is the right tool.",
+  "body": "Use when deciding between a scheduled pipeline and a streaming job. Batch orchestration runs bounded work per interval with clear reprocessing and backfill semantics; stream processing handles unbounded low-latency event flows with windows and watermarks. Do not force sub-minute latency needs into a cron DAG, nor run simple periodic batch as an always-on stream. Actions: choose batch orchestration when latency tolerance is minutes-to-hours and backfills matter, streaming when freshness must be near-real-time. Validation signals include latency met by the chosen model and backfills that reproduce history in the batch case. Risk boundary: a misfit choice bakes in cost or latency problems; if requirements straddle both, escalate the architecture decision rather than defaulting to the familiar tool.",
+  "domain": "orchestration",
+  "scope_hint": "code.data-pipeline-orchestration:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.data-pipeline-orchestration",
+  "pack_id": "code.data-pipeline-orchestration"
+}

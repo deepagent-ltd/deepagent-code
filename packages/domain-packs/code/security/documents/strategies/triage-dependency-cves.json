@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:security:triage-dependency-cves",
+  "type": "strategy",
+  "title": "Triage dependency CVEs by reachability and fix path",
+  "description": "When a vulnerability advisory hits a dependency, assess exploitability in this codebase and choose patch, pin, or mitigate rather than reflexively bumping or ignoring.",
+  "body": "Use when an audit, advisory, or scanner flags a CVE in a direct or transitive dependency. Do not blindly upgrade across major versions without testing, and avoid silently muting an advisory you have not assessed. Actions: identify the affected version range, whether the vulnerable code path is reachable from this app, the available fixed version, and the breaking-change risk; record severity, reachability, and the chosen action. Validation signals include the scanner reporting the advisory resolved and the regression test suite passing post-bump. Risk boundary: for a reachable critical/high CVE with no fix, escalate to a human and apply a compensating control rather than shipping unpatched.",
+  "domain": "security",
+  "scope_hint": "code.security:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.security",
+  "pack_id": "code.security"
+}

@@ -1,0 +1,73 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "code.dart-flutter",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "dart",
+      "flutter",
+      "mobile"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [
+      "dart"
+    ],
+    "frameworks": [
+      "flutter"
+    ],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "L3 smoke for code.dart-flutter: pubspec dependencies, widget tree and setState lifecycle, Dart Futures and Streams and isolates, flutter build, and platform channels"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "plain prose note with no repository or domain signal"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "retrieval_query": "dart flutter pubspec widget tree state setState build method Future Stream async isolate platform channel hot reload dispose const widget",
+  "expected_pack_id": "code.dart-flutter",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "code.dart-flutter L3 validation smoke",
+    "signals": [
+      "flutter pub get resolves from pubspec.lock and flutter test passes",
+      "a widget test pumps the widget and asserts the UI after a state change",
+      "expensive work runs in an isolate or off the build method, keeping frames under budget",
+      "controllers/streams created by a State are disposed in dispose()"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "code.dart-flutter diagnosis smoke",
+    "signals": [
+      "setState mutating state but rebuilding the wrong subtree or doing heavy work in build",
+      "a controller/stream/animation not disposed, leaking across navigation",
+      "blocking or CPU-heavy work on the UI isolate causing dropped frames (jank)",
+      "platform-channel call assuming a feature exists on a platform that lacks it",
+      "rebuilding the whole tree on every change because state sits too high or widgets are non-const"
+    ]
+  },
+  "source_refs": [
+    "source:flutter-docs:paraphrased",
+    "source:dart-language-tour:paraphrased"
+  ]
+}

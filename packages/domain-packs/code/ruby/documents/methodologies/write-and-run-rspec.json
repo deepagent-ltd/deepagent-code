@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:ruby:write-and-run-rspec",
+  "type": "methodology",
+  "title": "Write and run RSpec specs",
+  "description": "Structure specs with describe/context/it, isolate collaborators with doubles, and run via the project's command.",
+  "body": "Steps: 1. Place specs under spec/ mirroring the app structure (models, requests, services). 2. Use describe/context to group and it for behavior, with let for lazily-built fixtures. 3. Isolate collaborators with instance_double/spy and stub external calls; avoid hitting real services. 4. For Rails, use request specs for controllers and model specs for validations/associations. 5. Run via bundle exec rspec (or the project's bin/rspec). Rollback point: before changing spec/rails_helper config. Validation: the suite runs green and a deliberately broken expectation fails, proving specs execute rather than being skipped.",
+  "domain": "ruby",
+  "scope_hint": "code.ruby:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.ruby",
+  "pack_id": "code.ruby"
+}

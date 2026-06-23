@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:hwprot:i2c-address-ack-discipline",
+  "type": "strategy",
+  "title": "Verify I2C addressing and ACK handshake first",
+  "description": "Confirm the seven-bit device address and per-byte acknowledgement on a capture before debugging any higher-level register logic.",
+  "body": "Use when an I2C peripheral does not respond as expected. Do not assume the address from documentation alone, since many parts shift the address by the read/write bit in their datasheet. Actions: capture the bus, inspect the start condition and address byte, and verify the slave drives ACK low after the address and each data byte. Validation signals include a logic-analyzer trace showing ACK after the address and clean stop conditions. Risk boundary: writing to a wrong address can corrupt an unrelated device's registers, so deny blind register writes until the address ACK is confirmed.",
+  "domain": "hw_protocols",
+  "scope_hint": "hardware.protocols:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.protocols",
+  "pack_id": "hardware.protocols"
+}

@@ -1,0 +1,11 @@
+{
+  "ref_id": "knowledge:debugging:regression-lock-proves-fix",
+  "type": "knowledge",
+  "description": "A fix is not proven until the original failure mode is locked by a regression signal.",
+  "body": "Apply after a suspected fix changes implementation behavior. The validation must connect to the original failure: the same reproduction passes, a new or existing test fails on the old code and passes on the new code, or a trace/log signal shows the invalid transition no longer occurs. Do not rely only on broad suite pass if the original failure was never represented. Execution action: name the reproduction, name the regression guard, and report any remaining surfaces not covered. Verification signals include failing-before/passing-after evidence, runner output, or trace comparison. This knowledge is about debugging closure, not coverage design; code.testing owns broader coverage strategy. Use when Code Debugging work touches reproduction steps, stack traces, logs, state transitions, and controlled hypotheses. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: use the fact to constrain the change and test plan; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include minimal repro, before/after trace, regression test, and command output. Risk boundary: escalate or stop when the task involves blind retries, wrapper fixes, broad rewrites, and unproven root cause, missing owner evidence, or live external state.",
+  "domain": "debugging",
+  "scope_hint": "code.debugging:knowledge",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.debugging:human_authored",
+  "pack_id": "code.debugging"
+}

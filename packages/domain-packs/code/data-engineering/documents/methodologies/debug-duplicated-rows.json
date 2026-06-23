@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:dataeng:debug-duplicated-rows",
+  "type": "methodology",
+  "title": "Debug duplicated rows in a target",
+  "description": "Trace duplicates to a non-idempotent write, an at-least-once delivery, or a join fan-out, then fix the root cause.",
+  "body": "Steps: 1. Quantify duplicates by key and find when they appeared. 2. Check the load: a retried append-insert double-writes — switch to replace-by-partition or upsert. 3. Check delivery: a streaming consumer reprocessing after rebalance needs dedup on an event key or exactly-once semantics. 4. Check joins: a one-to-many join fan-out multiplies rows — verify cardinality. 5. Re-run and confirm counts. Rollback point: rewrite the affected partition from landing data. Validation: distinct-key counts equal total counts after the fix; assuming the source is at fault before checking the load logic wastes time.",
+  "domain": "data_engineering",
+  "scope_hint": "code.data-engineering:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.data-engineering",
+  "pack_id": "code.data-engineering"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:serving:mitigate-cold-starts",
+  "type": "strategy",
+  "title": "Mitigate cold starts on scale-up",
+  "description": "Pre-warm replicas and keep weights resident so a newly scaled instance does not add model-load latency to live requests.",
+  "body": "Use when a serving deployment scales out or restarts. Do not mark a replica ready before its model is loaded and a warm-up inference has run — the first real requests then pay seconds of load and lazy-init latency. Actions: load weights and run a synthetic warm-up at startup, gate readiness on warm-up completion, and keep a warm headroom of replicas for bursts. Validation signals include the first post-scale request meeting the latency SLO and a readiness probe tied to warm-up. Risk boundary: cold-start latency on every scale event silently violates the SLO during exactly the traffic spikes that triggered scaling; pre-warm before serving.",
+  "domain": "model_serving",
+  "scope_hint": "code.model-serving:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.model-serving",
+  "pack_id": "code.model-serving"
+}

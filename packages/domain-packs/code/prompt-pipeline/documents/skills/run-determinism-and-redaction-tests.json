@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:prompt:run-determinism-and-redaction-tests",
+  "type": "skill",
+  "title": "Run determinism and redaction tests",
+  "description": "Execute or scaffold tests that assert byte-identical assembly for fixed inputs and that seeded PII is redacted before the request.",
+  "body": "Use when validating a prompt-pipeline change. Procedure: run a snapshot test that the same inputs assemble a byte-identical prompt across runs, and run redaction tests that seed PII and assert it is absent from the assembled outbound request; if such tests are absent, scaffold the minimal cases (snapshot, seeded email/id, delimiter-breakout). Report which cases pass and which leak or vary. This skill exposes capability only and must not run against production data with real PII. Risk boundary: a pipeline change without passing determinism and redaction tests is unverified and must not be reported as done.",
+  "domain": "prompt_pipeline",
+  "scope_hint": "code.prompt-pipeline:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.prompt-pipeline",
+  "pack_id": "code.prompt-pipeline"
+}

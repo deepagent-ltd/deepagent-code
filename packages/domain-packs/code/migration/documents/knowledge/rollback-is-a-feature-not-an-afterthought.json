@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:migration:rollback-is-a-feature-not-an-afterthought",
+  "type": "knowledge",
+  "title": "Rollback must be designed, tested, and time-bounded",
+  "description": "A migration is only safe if its rollback path is built and exercised before cutover, not improvised when production breaks.",
+  "body": "Use when planning any migration that touches production data or schema. Every forward step needs a known reverse: a down migration, a feature flag to flip back, or a documented manual recovery, and it must be tested on production-like data before cutover. Do not treat rollback as something to figure out during an incident. Actions: write and run the down path in staging, confirm it restores a working state, and define the point-of-no-return (after which only roll-forward is possible) explicitly. Validation signals include a rehearsed rollback that returns the system to green and a documented recovery time objective. Risk boundary: destructive forward steps (dropping data, irreversible backfills) remove the rollback option; gate them behind explicit human approval and a verified backup, and escalate before crossing the point of no return.",
+  "domain": "code",
+  "scope_hint": "code.migration:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.migration",
+  "pack_id": "code.migration"
+}

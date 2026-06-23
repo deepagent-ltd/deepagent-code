@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:hwpwr:verify-retention-sequencing",
+  "type": "methodology",
+  "title": "Verify retention and power-up sequencing",
+  "description": "Confirm save and restore controls and supply sequencing keep state correct across power cycles.",
+  "body": "Use when a domain uses retention registers to survive power-down. Do not assume retention works without exercising the exact save and restore control sequence. Actions: drive the save signal before power-down, sequence the supplies in the right order on wake, and compare restored state against the pre-power-down values. Validation signals include restored state matching the saved values and a power-up sequence that meets the supply ordering requirement. Risk boundary: a wrong sequence loses or corrupts retained state, so treat any mismatch after a cycle as a blocking defect.",
+  "domain": "power_design",
+  "scope_hint": "hardware.power:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.power",
+  "pack_id": "hardware.power"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:serving:set-up-an-inference-server",
+  "type": "methodology",
+  "title": "Stand up an inference server",
+  "description": "Wrap a model artifact in a serving runtime with batching, health/readiness probes, versioning, and metrics from the start.",
+  "body": "Steps: 1. Load the model artifact into a serving runtime (Triton, vLLM, TorchServe, or a custom server). 2. Configure dynamic batching with a max size and queue timeout. 3. Add health and readiness probes gated on a warm-up inference. 4. Expose latency/throughput/utilization metrics and a model-version label. 5. Load-test before exposing traffic. Rollback point: keep the prior server/version image to revert. Validation: probes reflect real readiness, metrics emit, and a load test meets the SLO; a server with a liveness probe that passes before the model loads will route traffic to a cold instance.",
+  "domain": "model_serving",
+  "scope_hint": "code.model-serving:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.model-serving",
+  "pack_id": "code.model-serving"
+}

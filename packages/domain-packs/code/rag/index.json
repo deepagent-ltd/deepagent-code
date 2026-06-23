@@ -1,0 +1,514 @@
+[
+  {
+    "ref_id": "strategy:rag:ground-every-claim-in-retrieval",
+    "type": "strategy",
+    "title": "Ground every claim in a retrieved passage",
+    "summary": "Each factual statement in the answer must trace to a specific retrieved passage; unsupported claims are removed or abstained on.",
+    "domains": [
+      "rag",
+      "retrieval",
+      "chunking",
+      "rerank",
+      "grounding"
+    ],
+    "triggers": [
+      "ground",
+      "claim",
+      "passage",
+      "cite",
+      "support",
+      "trace"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.rag"
+  },
+  {
+    "ref_id": "strategy:rag:abstain-when-retrieval-is-empty",
+    "type": "strategy",
+    "title": "Abstain when retrieval finds nothing relevant",
+    "summary": "When retrieval returns no sufficiently relevant passages, the system says it does not know rather than answering from parametric memory.",
+    "domains": [
+      "rag",
+      "retrieval",
+      "chunking",
+      "rerank",
+      "grounding"
+    ],
+    "triggers": [
+      "abstain",
+      "empty",
+      "relevant",
+      "unknown",
+      "fallback",
+      "threshold"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.rag"
+  },
+  {
+    "ref_id": "strategy:rag:chunk-to-preserve-meaning",
+    "type": "strategy",
+    "title": "Chunk to preserve meaning",
+    "summary": "Documents are split on semantic boundaries with overlap so a chunk is a self-contained, retrievable unit of meaning.",
+    "domains": [
+      "rag",
+      "retrieval",
+      "chunking",
+      "rerank",
+      "grounding"
+    ],
+    "triggers": [
+      "chunk",
+      "split",
+      "boundary",
+      "overlap",
+      "semantic",
+      "unit"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.rag"
+  },
+  {
+    "ref_id": "strategy:rag:retrieve-then-rerank",
+    "type": "strategy",
+    "title": "Retrieve broadly, then rerank precisely",
+    "summary": "Cast a wide first-stage retrieval net, then apply a precise reranker to order the small top-k the model actually sees.",
+    "domains": [
+      "rag",
+      "retrieval",
+      "chunking",
+      "rerank",
+      "grounding"
+    ],
+    "triggers": [
+      "retrieve",
+      "rerank",
+      "top-k",
+      "precision",
+      "recall",
+      "stage"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.rag"
+  },
+  {
+    "ref_id": "strategy:rag:curate-context-not-stuff",
+    "type": "strategy",
+    "title": "Curate context, do not stuff it",
+    "summary": "Selected passages are deduplicated and trimmed to fit the window with output headroom, never packed until truncation.",
+    "domains": [
+      "rag",
+      "retrieval",
+      "chunking",
+      "rerank",
+      "grounding"
+    ],
+    "triggers": [
+      "context",
+      "stuff",
+      "curate",
+      "dedupe",
+      "window",
+      "trim"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.rag"
+  },
+  {
+    "ref_id": "strategy:rag:match-embedding-to-query-distribution",
+    "type": "strategy",
+    "title": "Match the embedding to the query distribution",
+    "summary": "The embedding model and index are chosen for the actual query and document distribution, not a default, and re-evaluated when either shifts.",
+    "domains": [
+      "rag",
+      "retrieval",
+      "chunking",
+      "rerank",
+      "grounding"
+    ],
+    "triggers": [
+      "embedding",
+      "distribution",
+      "index",
+      "model",
+      "query",
+      "match"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.rag"
+  },
+  {
+    "ref_id": "strategy:rag:make-citations-verifiable",
+    "type": "strategy",
+    "title": "Make citations verifiable",
+    "summary": "Each citation points to a specific retrievable passage with enough locator that a user or test can confirm it supports the claim.",
+    "domains": [
+      "rag",
+      "retrieval",
+      "chunking",
+      "rerank",
+      "grounding"
+    ],
+    "triggers": [
+      "citation",
+      "verifiable",
+      "locator",
+      "passage",
+      "confirm",
+      "source"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.rag"
+  },
+  {
+    "ref_id": "methodology:rag:design-the-chunking-strategy",
+    "type": "methodology",
+    "title": "Design the chunking strategy",
+    "summary": "Choose split boundaries, size, and overlap from the document structure and embedding limits, then validate retrievability.",
+    "domains": [
+      "rag",
+      "retrieval",
+      "chunking",
+      "rerank",
+      "grounding"
+    ],
+    "triggers": [
+      "chunking",
+      "strategy",
+      "boundary",
+      "size",
+      "overlap",
+      "design"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.rag"
+  },
+  {
+    "ref_id": "methodology:rag:build-the-retrieval-pipeline",
+    "type": "methodology",
+    "title": "Build the two-stage retrieval pipeline",
+    "summary": "Assemble embed, first-stage retrieve, rerank, and context-assembly stages, measuring recall and precision at each.",
+    "domains": [
+      "rag",
+      "retrieval",
+      "chunking",
+      "rerank",
+      "grounding"
+    ],
+    "triggers": [
+      "pipeline",
+      "retrieve",
+      "rerank",
+      "stage",
+      "assemble",
+      "build"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.rag"
+  },
+  {
+    "ref_id": "methodology:rag:evaluate-retrieval-quality",
+    "type": "methodology",
+    "title": "Evaluate retrieval quality",
+    "summary": "Use a labeled query-passage set to measure recall, precision, and grounding, separating retrieval failures from generation failures.",
+    "domains": [
+      "rag",
+      "retrieval",
+      "chunking",
+      "rerank",
+      "grounding"
+    ],
+    "triggers": [
+      "evaluate",
+      "recall",
+      "precision",
+      "grounding",
+      "labeled",
+      "quality"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.rag"
+  },
+  {
+    "ref_id": "methodology:rag:diagnose-an-ungrounded-answer",
+    "type": "methodology",
+    "title": "Diagnose an ungrounded answer",
+    "summary": "Trace a wrong answer back through grounding, retrieval, and chunking to find where the supporting passage was lost.",
+    "domains": [
+      "rag",
+      "retrieval",
+      "chunking",
+      "rerank",
+      "grounding"
+    ],
+    "triggers": [
+      "diagnose",
+      "ungrounded",
+      "trace",
+      "retrieval",
+      "chunk",
+      "answer"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.rag"
+  },
+  {
+    "ref_id": "knowledge:rag:why-rag-over-finetuning",
+    "type": "knowledge",
+    "title": "When RAG beats fine-tuning",
+    "summary": "RAG injects fresh, citable knowledge at query time; fine-tuning bakes patterns into weights but cannot cite or update cheaply.",
+    "domains": [
+      "rag",
+      "retrieval",
+      "chunking",
+      "rerank",
+      "grounding"
+    ],
+    "triggers": [
+      "rag",
+      "finetuning",
+      "knowledge",
+      "fresh",
+      "cite",
+      "update"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.rag"
+  },
+  {
+    "ref_id": "knowledge:rag:embedding-and-index-tradeoffs",
+    "type": "knowledge",
+    "title": "Embedding and index tradeoffs",
+    "summary": "Dense embeddings capture semantics but miss exact terms; sparse/keyword matches exact tokens; index types trade recall for speed.",
+    "domains": [
+      "rag",
+      "retrieval",
+      "chunking",
+      "rerank",
+      "grounding"
+    ],
+    "triggers": [
+      "embedding",
+      "index",
+      "dense",
+      "sparse",
+      "hnsw",
+      "tradeoff"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.rag"
+  },
+  {
+    "ref_id": "knowledge:rag:context-stuffing-and-lost-in-the-middle",
+    "type": "knowledge",
+    "title": "Context stuffing and lost-in-the-middle",
+    "summary": "Packing many passages into the window wastes tokens and buries relevant ones in the middle where models attend least.",
+    "domains": [
+      "rag",
+      "retrieval",
+      "chunking",
+      "rerank",
+      "grounding"
+    ],
+    "triggers": [
+      "stuffing",
+      "context",
+      "middle",
+      "attention",
+      "relevant",
+      "window"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.rag"
+  },
+  {
+    "ref_id": "knowledge:rag:retrieval-vs-generation-failures",
+    "type": "knowledge",
+    "title": "Retrieval vs generation failures",
+    "summary": "A wrong answer can come from a missing passage (retrieval) or from ignoring a passage that was present (generation).",
+    "domains": [
+      "rag",
+      "retrieval",
+      "chunking",
+      "rerank",
+      "grounding"
+    ],
+    "triggers": [
+      "retrieval",
+      "generation",
+      "failure",
+      "attribute",
+      "missing",
+      "ignore"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.rag"
+  },
+  {
+    "ref_id": "skill:rag:review-grounding-and-citations",
+    "type": "skill",
+    "title": "Review grounding and citations",
+    "summary": "Read a RAG answer path and report whether claims are grounded, citations resolve to supporting passages, and abstention fires.",
+    "domains": [
+      "rag",
+      "retrieval",
+      "chunking",
+      "rerank",
+      "grounding"
+    ],
+    "triggers": [
+      "review",
+      "grounding",
+      "citation",
+      "abstain",
+      "audit",
+      "inspect"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.rag"
+  },
+  {
+    "ref_id": "skill:rag:run-retrieval-recall-eval",
+    "type": "skill",
+    "title": "Run a retrieval recall evaluation",
+    "summary": "Execute or scaffold an evaluation over a labeled query set that measures recall, rerank precision, and grounding rate.",
+    "domains": [
+      "rag",
+      "retrieval",
+      "chunking",
+      "rerank",
+      "grounding"
+    ],
+    "triggers": [
+      "recall",
+      "eval",
+      "labeled",
+      "precision",
+      "grounding",
+      "run"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.rag"
+  }
+]

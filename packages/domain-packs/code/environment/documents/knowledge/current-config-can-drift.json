@@ -1,0 +1,11 @@
+{
+  "ref_id": "knowledge:environment:current-config-can-drift",
+  "type": "knowledge",
+  "description": "Current configuration and runtime state can drift between turns, sessions, shells, and workspaces.",
+  "body": "Use when interpreting active config, local services, environment variables, selected model/provider, package manager state, or generated artifacts. Do not rely on memorized values, previous runs, or examples unless the task explicitly asks for historical context. Actions: inspect the live source of truth, compare it to any claimed value, record the scope such as cwd, workspace, shell, process, or config file, and label stale or missing evidence as unverified. Validation signals include exact file reads, command output, run artifacts, environment snapshots, and timestamps. Risk boundary: environment state is local and time-sensitive; do not generalize it to other machines or production without separate proof.",
+  "domain": "environment",
+  "scope_hint": "code.environment:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.environment:docs38",
+  "pack_id": "code.environment"
+}

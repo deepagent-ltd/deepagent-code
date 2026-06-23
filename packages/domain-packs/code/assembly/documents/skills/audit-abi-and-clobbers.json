@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:asm:audit-abi-and-clobbers",
+  "type": "skill",
+  "title": "Audit ABI compliance and inline-asm clobbers",
+  "description": "Review an assembly function or inline-asm block and report ABI argument/return usage, callee-saved balance, alignment, and missing clobbers.",
+  "body": "Use when reviewing low-level code for correctness. Actions: for an asm function, report which registers carry arguments/return, whether every callee-saved register used is saved and restored on all paths, and whether the stack stays aligned; for inline asm, report whether the clobber list covers every trashed register, 'cc', and 'memory', and whether volatile is needed. Do not assume compliance because it ran once. This skill exposes capability only and reports findings; it must not modify the code without runtime permission. Validation signals include a complete ABI/clobber accounting with no gaps. Risk boundary: a missing clobber or unbalanced callee-saved save is a latent corruption that appears only under certain optimization or call patterns; flag it as blocking.",
+  "domain": "assembly",
+  "scope_hint": "code.assembly:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.assembly",
+  "pack_id": "code.assembly"
+}

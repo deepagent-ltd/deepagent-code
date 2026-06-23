@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:orch:monitor-slas-explicitly",
+  "type": "strategy",
+  "title": "Define and monitor pipeline SLAs",
+  "description": "Attach explicit completion-time SLAs to critical tasks so a late pipeline pages someone instead of silently slipping.",
+  "body": "Use when downstream consumers depend on a pipeline finishing by a deadline. Do not rely on someone noticing a stale dashboard — a slipping pipeline should announce itself. Actions: set an SLA on the critical task or DAG, emit a notification when the deadline is missed, and track run duration trends to catch creeping slowness before it breaches. Validation signals include an SLA-miss alert firing on a deliberately delayed run and a duration trend exposing gradual slowdown. Risk boundary: an unmonitored late pipeline feeds stale data to decisions; if a critical task has no SLA, treat the gap as an operational risk and escalate to define one before consumers depend on its timeliness.",
+  "domain": "orchestration",
+  "scope_hint": "code.data-pipeline-orchestration:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.data-pipeline-orchestration",
+  "pack_id": "code.data-pipeline-orchestration"
+}

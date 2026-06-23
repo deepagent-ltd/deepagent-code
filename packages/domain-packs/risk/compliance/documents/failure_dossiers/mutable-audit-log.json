@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:comp:mutable-audit-log",
+  "type": "failure_dossier",
+  "description": "Audit records live in a table the application can update or delete, so the trail can be silently rewritten.",
+  "body": "Failure mode: the audit log is an ordinary table the application's own role can UPDATE/DELETE, or it is a log file that rotates and is editable, so a compromised or careless actor can alter or remove evidence without detection. Detection signals: the app role holds write/delete on the audit store; no hash chain or WORM policy; deleting a record leaves no trace. Do not store audit evidence where the audited application can modify it. Safer fallback: move records to append-only storage (WORM, hash-chained, or a separate-account sink), remove update/delete from the app role, and verify tampering is blocked or chain-detectable in a test.",
+  "domain": "compliance",
+  "scope_hint": "risk.compliance:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.compliance:human_authored",
+  "pack_id": "risk.compliance"
+}

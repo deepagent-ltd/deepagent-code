@@ -1,0 +1,11 @@
+{
+  "ref_id": "skill:frontend_web:keyboard-and-role-smoke",
+  "type": "skill",
+  "description": "Verify keyboard reachability, activation, focus visibility, and accessible names for changed controls.",
+  "body": "Inputs: changed controls, dialogs, menus, forms, and expected enabled or expanded states. Procedure: navigate with Tab and Shift+Tab; activate with Enter or Space where appropriate; verify focus ring visibility; inspect role and accessible name for icon-only or custom controls; check focus containment and restoration for modal surfaces. This skill covers platform-level accessibility smoke, not a full WCAG audit or framework-specific component pattern. Outputs: focus order, activation result, role/name gaps, trapped focus or lost focus findings, and recommended local fixes. Validation signals include predictable keyboard sequence, visible focus, correct disabled semantics, and state parity between visual appearance and accessibility tree. Failure handling: do not replace semantic controls with divs plus click handlers unless the custom role/keyboard/name behavior is fully implemented and tested. Use when Frontend Web work touches visible UI behavior, browser console output, DOM state, assets, viewport behavior, and interaction evidence. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: run the documented inspection and validation workflow; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include browser smoke, component tests, viewport screenshots, console/network checks, and accessibility assertions. Risk boundary: escalate or stop when the task involves visual regressions, inaccessible interaction, hydration mismatch, and browser-only failures, missing owner evidence, or live external state.",
+  "domain": "web",
+  "scope_hint": "code.frontend.web:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.frontend.web:keyboard_smoke_skill",
+  "pack_id": "code.frontend.web"
+}

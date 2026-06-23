@@ -1,0 +1,44 @@
+{
+  "schema_version": "domain_pack.v1",
+  "id": "code.observability",
+  "name": "Observability",
+  "version": "1.0.0",
+  "scope": "system",
+  "risk": "medium",
+  "domains": [
+    "code",
+    "observability",
+    "debugging"
+  ],
+  "provides": [
+    "knowledge",
+    "strategy",
+    "methodology",
+    "skill",
+    "diagnosis",
+    "validation"
+  ],
+  "depends_on": [
+    "code.debugging"
+  ],
+  "conflicts_with": [],
+  "knowledge_store": "document_store",
+  "allowed_tools": [
+    "read",
+    "shell:test"
+  ],
+  "denied_tools": [
+    "shell:deploy-production"
+  ],
+  "data_policy": {
+    "sensitivity": [
+      "source_code"
+    ],
+    "default_admission": "summary_only",
+    "secret_policy": "deny"
+  },
+  "detector": {
+    "inline": "profile.code_domains.includes('observability') || profile.repo_signals.some(s=>/\\b(structured logging|log aggregation|distributed trac(e|ing)|traces|otel|opentelemetry|app insights|correlation id|prometheus|grafana|(emit|export|scrape) metrics|metrics (endpoint|exporter|pipeline)|span|instrumentation)\\b|可观测性|链路追踪|指标采集|结构化日志/i.test(s)) ? 0.86 : 0",
+    "threshold": 0.5
+  }
+}

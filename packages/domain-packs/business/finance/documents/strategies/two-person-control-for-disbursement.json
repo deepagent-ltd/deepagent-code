@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:finance:two-person-control-for-disbursement",
+  "type": "strategy",
+  "title": "Require two-person control for outbound disbursement",
+  "description": "Gate any code path that moves money out (payouts, refunds, transfers) behind separation of duties and explicit human authorization, not automated approval.",
+  "body": "Use when building or reviewing a path that sends funds to an external party. Do not let a single automated actor both initiate and approve a disbursement, and avoid hardcoding an auto-approve for amounts above zero. Actions: separate initiation from approval, require a distinct authorized human to approve outbound movement, log who approved what, and inspect that the path cannot self-approve; record the control in the change. Validation signals include an audit log linking each disbursement to a distinct approver and a test that single-actor approval is rejected. Risk boundary: this is advisory engineering guidance, not authorization to move funds; never weaken or bypass the human approval gate, and escalate any request to auto-approve disbursements.",
+  "domain": "finance",
+  "scope_hint": "business.finance:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:business.finance",
+  "pack_id": "business.finance"
+}

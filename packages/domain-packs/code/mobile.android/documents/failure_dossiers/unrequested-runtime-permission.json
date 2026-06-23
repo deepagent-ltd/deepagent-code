@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:android:unrequested-runtime-permission",
+  "type": "failure_dossier",
+  "description": "Calling a dangerous-permission API without requesting it at runtime, causing a SecurityException crash.",
+  "body": "Failure mode: the app uses a protected API (location, camera, contacts) assuming the permission is granted, but on modern Android dangerous permissions need a runtime grant, so the call throws SecurityException and crashes the feature. Detection signals: a crash with SecurityException when the feature first runs; the permission is declared in the manifest but never requested at runtime; works only after the user grants it elsewhere. Do not assume a dangerous permission is granted. Safer fallback: check the grant at point of use, request via the permissions launcher with a rationale when appropriate, handle denial and permanent-denial gracefully, and test all denial paths.",
+  "domain": "android",
+  "scope_hint": "code.mobile.android:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.mobile.android:human_authored",
+  "pack_id": "code.mobile.android"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:serving:tune-batching-for-slo",
+  "type": "methodology",
+  "title": "Tune batching against the latency SLO",
+  "description": "Sweep batch size and queue timeout under load to find the point that maximizes throughput while keeping p99 under the SLO.",
+  "body": "Steps: 1. Define the latency SLO (target p99) and target QPS. 2. Load-test at increasing batch size and queue-wait combinations. 3. For each, record throughput, p99, and GPU utilization. 4. Pick the largest batch/wait that still meets p99, not the absolute max throughput. 5. Lock the config and re-verify under burst. Rollback point: revert to the prior batching config if p99 regresses. Validation: chosen config meets p99 at target QPS with high utilization; tuning for peak throughput alone will quietly push the tail past the SLO.",
+  "domain": "model_serving",
+  "scope_hint": "code.model-serving:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.model-serving",
+  "pack_id": "code.model-serving"
+}

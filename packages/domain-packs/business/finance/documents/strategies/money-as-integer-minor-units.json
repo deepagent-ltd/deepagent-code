@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:finance:money-as-integer-minor-units",
+  "type": "strategy",
+  "title": "Represent money as integer minor units",
+  "description": "Store and compute monetary amounts as integers in the currency's smallest unit with an explicit currency code, never as binary floating point.",
+  "body": "Use when modeling, storing, or computing any monetary amount. Do not use float/double for money, and avoid mixing amounts of different currencies in one field. Actions: store amounts as integer minor units (cents/pence) or a fixed-precision decimal with a separate currency code, perform arithmetic in that integer/decimal space, and inspect that no float ever touches a balance; record the currency alongside every amount. Validation signals include unit tests proving 0.1 + 0.2 style sums are exact and a schema where money columns are integer/decimal, not float. Risk boundary: this is advisory engineering guidance, not financial advice; any change to how stored balances are represented must go through human review and not be silently migrated.",
+  "domain": "finance",
+  "scope_hint": "business.finance:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:business.finance",
+  "pack_id": "business.finance"
+}

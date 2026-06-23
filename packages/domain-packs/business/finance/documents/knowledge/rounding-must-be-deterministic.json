@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:finance:rounding-must-be-deterministic",
+  "type": "knowledge",
+  "title": "Rounding rules must be explicit and consistent",
+  "description": "Monetary rounding mode and the point at which it is applied are business decisions that change totals; applying them inconsistently creates penny discrepancies that fail reconciliation.",
+  "body": "Use when splitting, taxing, or converting monetary amounts. The rounding mode (half-up vs half-even/banker's) and whether you round per line or only on the total materially change results, and allocating a rounded total across lines can leave leftover pennies that must be distributed deterministically. Do not let rounding vary by code path or default to language-specific float rounding. Actions: define one rounding mode and rounding point, allocate remainders deterministically, and verify sums of parts equal the rounded whole. Validation signals include tests that allocated parts re-sum to the total and reconciliation showing no rounding drift. Risk boundary: advisory only; a change to rounding rules affects real balances and must go through human review, never a silent default.",
+  "domain": "finance",
+  "scope_hint": "business.finance:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:business.finance",
+  "pack_id": "business.finance"
+}

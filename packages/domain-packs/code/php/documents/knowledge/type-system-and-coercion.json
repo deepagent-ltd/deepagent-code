@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:php:type-system-and-coercion",
+  "type": "knowledge",
+  "title": "PHP's gradual type system and coercion modes",
+  "description": "PHP types are optional and, by default, coercive; strict_types makes scalar type hints reject mismatches per calling file.",
+  "body": "Use when reasoning about how PHP treats types. PHP supports optional scalar, union, nullable, and return type declarations, but enforcement depends on mode: in default (weak) mode a '5' passed to an int parameter is coerced to 5, while declare(strict_types=1) makes the same call throw a TypeError. Crucially strict mode is set per file at the call site, not globally, so a strict file calling weak code still benefits at its own boundary. Loose == compares after coercion while === compares type and value. Do not assume a type hint enforces strictly without strict_types. Actions: declare strict_types in authored files and use === for comparisons that must not coerce. Validation signals include a test that a wrong-typed argument throws under strict mode. Risk boundary: silent coercion produces wrong data far from its cause.",
+  "domain": "php",
+  "scope_hint": "code.php:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.php",
+  "pack_id": "code.php"
+}

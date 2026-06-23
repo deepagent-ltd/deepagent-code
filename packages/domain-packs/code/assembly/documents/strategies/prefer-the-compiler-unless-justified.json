@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:asm:prefer-the-compiler-unless-justified",
+  "type": "strategy",
+  "title": "Prefer compiler output unless hand-asm is justified",
+  "description": "Write assembly by hand only for a measured, specific need the compiler cannot meet, keeping it small, isolated, and backed by a high-level fallback.",
+  "body": "Use when tempted to write a routine in assembly. Do not hand-write code the compiler already generates well, and do not scatter assembly through the codebase. Actions: confirm a concrete reason (a specific instruction with no intrinsic, an ABI shim, a precise timing/atomic sequence), keep the asm in a small isolated function, prefer intrinsics over raw asm where possible, and keep a portable high-level fallback. Validation signals include a measured benefit over compiler output and the asm function passing the same tests as the fallback. Risk boundary: hand-written assembly is unportable and hard to maintain, and the compiler often beats it; if there is no measured, specific justification, do not introduce it.",
+  "domain": "assembly",
+  "scope_hint": "code.assembly:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.assembly",
+  "pack_id": "code.assembly"
+}

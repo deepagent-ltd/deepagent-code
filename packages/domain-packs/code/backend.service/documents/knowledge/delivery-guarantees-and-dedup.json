@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:svc:delivery-guarantees-and-dedup",
+  "type": "knowledge",
+  "title": "At-least-once vs exactly-once delivery",
+  "description": "Most queues guarantee at-least-once delivery; exactly-once is achieved by idempotent handlers, not by the transport.",
+  "body": "Use when reasoning about duplicate processing. Practical messaging (SQS, most Kafka setups, RabbitMQ) is at-least-once: a message can be redelivered after a consumer crash between effect and ack. Do not assume the broker gives true exactly-once end to end. Actions: achieve effective exactly-once by making the handler idempotent on the message id (dedup store or idempotent upsert) so redelivery is harmless. Validation signals include a redelivery test asserting one effect. Risk boundary: relying on broker 'exactly-once' marketing for a money path without handler-level dedup is unsafe and should be escalated.",
+  "domain": "backend_service",
+  "scope_hint": "code.backend.service:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.service",
+  "pack_id": "code.backend.service"
+}

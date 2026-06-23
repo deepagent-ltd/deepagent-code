@@ -1,0 +1,49 @@
+{
+  "schema_version": "domain_pack.v1",
+  "id": "code.backend.service",
+  "name": "Backend Service & Background Work",
+  "version": "1.0.0",
+  "scope": "system",
+  "risk": "medium",
+  "domains": [
+    "backend_service",
+    "service",
+    "queue",
+    "job",
+    "scheduler"
+  ],
+  "provides": [
+    "knowledge",
+    "strategy",
+    "methodology",
+    "skill",
+    "diagnosis",
+    "validation"
+  ],
+  "depends_on": [
+    "code.backend.api",
+    "code.observability",
+    "code.testing"
+  ],
+  "conflicts_with": [],
+  "knowledge_store": "document_store",
+  "allowed_tools": [
+    "read",
+    "shell:test"
+  ],
+  "denied_tools": [
+    "shell:deploy-production"
+  ],
+  "data_policy": {
+    "sensitivity": [
+      "source_code",
+      "user_data"
+    ],
+    "default_admission": "summary_only",
+    "secret_policy": "deny"
+  },
+  "detector": {
+    "inline": "profile.code_domains.some(d=>['backend_service','service','queue','job','scheduler'].includes(d)) || profile.repo_signals.some(s=>/\\b(service layer|job queue|background (job|worker|task)|task queue|message queue|(worker|consumer) (pool|process|thread)|scheduler|idempotenc|retry (logic|policy|with backoff)|exponential backoff|graceful shutdown|dead letter)\\b|后台(任务|作业)|任务队列|消息队列/i.test(s)) ? 0.9 : 0",
+    "threshold": 0.5
+  }
+}

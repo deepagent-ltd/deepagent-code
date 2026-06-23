@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:architecture:assess-coupling-and-cohesion",
+  "type": "methodology",
+  "title": "Assess coupling and cohesion before changing a module",
+  "description": "Map a module's responsibilities and its inbound/outbound dependencies to judge whether it is cohesive and loosely coupled before reshaping it.",
+  "body": "Steps: 1. List the module's responsibilities and check they form one coherent purpose (cohesion). 2. Enumerate inbound (fan-in) and outbound (fan-out) dependencies. 3. Flag high fan-out to volatile modules and low cohesion (unrelated responsibilities bundled together). 4. Decide whether to split low-cohesion modules or narrow couplings before adding to them. 5. Record the assessment as evidence. Rollback point: before splitting or merging modules. Validation: the target module has a single clear responsibility and dependencies justified by that purpose; piling new behavior onto an already low-cohesion module increases change cost and is the wrong move.",
+  "domain": "code",
+  "scope_hint": "code.architecture:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.architecture",
+  "pack_id": "code.architecture"
+}

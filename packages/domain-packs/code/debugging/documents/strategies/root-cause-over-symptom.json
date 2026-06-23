@@ -1,0 +1,11 @@
+{
+  "ref_id": "strategy:debugging:root-cause-over-symptom",
+  "type": "strategy",
+  "description": "Prefer fixing the state, contract, or ordering error that creates the symptom over masking the symptom itself.",
+  "body": "Use when the observed failure is an exception wrapper, timeout, missing field, null value, or secondary assertion. Trace backward to the first invalid state transition, contract mismatch, ordering violation, or resource leak. Do not hide the symptom with default values, catch-all handling, longer timeout, or skipped assertions unless evidence proves that behavior is the intended contract. Execution actions include following stack frames to project-owned code, comparing expected state transitions, and checking callers that create the invalid input. Verification signals include the original reproduction failing before the fix and passing after, plus a regression test that fails on the root condition. Use when Code Debugging work touches reproduction steps, stack traces, logs, state transitions, and controlled hypotheses. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: choose the smallest direction that preserves the domain contract; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include minimal repro, before/after trace, regression test, and command output. Risk boundary: escalate or stop when the task involves blind retries, wrapper fixes, broad rewrites, and unproven root cause, missing owner evidence, or live external state.",
+  "domain": "debugging",
+  "scope_hint": "code.debugging:strategies",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.debugging:human_authored",
+  "pack_id": "code.debugging"
+}

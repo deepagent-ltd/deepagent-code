@@ -1,0 +1,47 @@
+{
+  "schema_version": "domain_pack.v1",
+  "id": "hardware.cpu-arch",
+  "name": "CPU Architecture and Microarchitecture Optimization",
+  "version": "1.0.0",
+  "scope": "system",
+  "risk": "medium",
+  "domains": [
+    "cpu_arch",
+    "microarchitecture",
+    "cache",
+    "simd",
+    "memory_model"
+  ],
+  "provides": [
+    "knowledge",
+    "strategy",
+    "methodology",
+    "skill",
+    "diagnosis",
+    "validation"
+  ],
+  "depends_on": [
+    "code.performance",
+    "code.systems"
+  ],
+  "conflicts_with": [],
+  "knowledge_store": "document_store",
+  "allowed_tools": [
+    "read",
+    "shell:test"
+  ],
+  "denied_tools": [
+    "shell:deploy-production"
+  ],
+  "data_policy": {
+    "sensitivity": [
+      "source_code"
+    ],
+    "default_admission": "summary_only",
+    "secret_policy": "deny"
+  },
+  "detector": {
+    "inline": "profile.code_domains.some(d=>['cpu_arch','microarchitecture','simd'].includes(d)) || profile.repo_signals.some(s=>/\\b(cache line|branch predict|simd|avx|sse|neon|memory barrier|false sharing|numa|pipeline stall|cpu microarchitecture|cache miss)\\b/i.test(s)) ? 0.9 : 0",
+    "threshold": 0.5
+  }
+}

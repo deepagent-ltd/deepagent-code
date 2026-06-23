@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:java_jvm:resource-leak-no-try-with-resources",
+  "type": "failure_dossier",
+  "description": "Opening streams, connections, or files without try-with-resources, leaking handles when an exception skips close().",
+  "body": "Failure mode: a stream or JDBC connection is closed in normal flow but an exception before close() leaks the handle; under load file descriptors or DB connections exhaust. Detection signals: 'Too many open files' or connection-pool-timeout errors over time; descriptor count grows in monitoring; close() is in a code path an exception can bypass. Do not manage closeable resources with manual close in plain try/finally that misses paths. Safer fallback: use try-with-resources (try (var c = open()) { ... }) so AutoCloseable.close runs on every exit, and verify descriptor/connection counts stay flat under sustained load.",
+  "domain": "java",
+  "scope_hint": "code.java-jvm:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.java-jvm:human_authored",
+  "pack_id": "code.java-jvm"
+}

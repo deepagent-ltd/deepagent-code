@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:ecom:audit-reservation-leaks",
+  "type": "methodology",
+  "title": "Audit reservation leaks",
+  "description": "Quantify stock pinned by stale reservations and confirm expiry returns it to the pool.",
+  "body": "Steps: 1. Sum reserved quantity per SKU and compare against active, payable carts. 2. Identify reservations older than the cart TTL with no progress. 3. Confirm the expiry job actually releases them back to available. 4. Reconcile on-hand = available + sold + valid-reserved. 5. Fix any reservation that never releases. Rollback point: before bulk-releasing reservations on a live SKU. Validation: reserved stock equals only what active carts justify and the identity reconciles.",
+  "domain": "ecommerce",
+  "scope_hint": "business.ecommerce:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:business.ecommerce",
+  "pack_id": "business.ecommerce"
+}

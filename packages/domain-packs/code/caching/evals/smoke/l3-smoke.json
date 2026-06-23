@@ -1,0 +1,70 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "code.caching",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "caching",
+      "cache_invalidation",
+      "cache_layer",
+      "cdn_cache"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "L3 smoke for code.caching: cache patterns aside/through/behind, invalidation strategies, stampede and thundering-herd protection, TTL with jitter, multi-layer caching, negative caching"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "write a UVM testbench for the FSM"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "retrieval_query": "cache aside write through write behind invalidation stampede thundering herd ttl jitter cache key multi layer cdn negative caching coherence stale while revalidate",
+  "expected_pack_id": "code.caching",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "code.caching L3 validation smoke",
+    "signals": [
+      "hit rate meets target with bounded origin load",
+      "writes reflected in reads within the staleness bound",
+      "single-flight lock holds origin to one recompute per expiry",
+      "distinct cache key count stays within capacity"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "code.caching diagnosis smoke",
+    "signals": [
+      "synchronized TTL expiry causing an origin load spike",
+      "stale reads after write from a missed invalidation path",
+      "low hit rate from unbounded key cardinality",
+      "cache penetration from uncached negative lookups",
+      "additive staleness across uncoordinated cache layers"
+    ]
+  },
+  "source_refs": [
+    "source:caching-patterns-aws:paraphrased",
+    "source:cache-stampede-mitigation:paraphrased"
+  ]
+}

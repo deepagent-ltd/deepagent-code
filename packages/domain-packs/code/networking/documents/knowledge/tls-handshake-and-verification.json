@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:net:tls-handshake-and-verification",
+  "type": "knowledge",
+  "title": "TLS handshake and certificate verification",
+  "description": "The handshake negotiates keys and proves server identity via a certificate chain and hostname match; skipping verification enables MITM.",
+  "body": "Use when configuring or debugging TLS. The handshake negotiates a cipher and session keys and the client verifies the server by validating its certificate chain to a trusted CA, checking validity dates, and matching the hostname (and SNI). If any step is bypassed, an attacker can present their own certificate and intercept the traffic. Common real failures are an expired certificate, a missing intermediate in the chain, the wrong SNI/hostname, or client clock skew. Do not disable verification to get past these; that defeats TLS entirely. Actions: diagnose the specific verification failure and fix the certificate/chain/clock. Validation signals include a clean handshake to the real CA and rejection of a wrong/expired cert. Risk boundary: disabling verification on real traffic is a critical MITM exposure.",
+  "domain": "networking",
+  "scope_hint": "code.networking:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.networking",
+  "pack_id": "code.networking"
+}

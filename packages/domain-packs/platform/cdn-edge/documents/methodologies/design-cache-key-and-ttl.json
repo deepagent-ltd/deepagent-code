@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:edge:design-cache-key-and-ttl",
+  "type": "methodology",
+  "title": "Design the cache key and TTL",
+  "description": "Define what varies the response, build the minimal cache key, and set TTLs with jitter per content class.",
+  "body": "Steps: 1. Classify responses (static asset, semi-static, per-user dynamic). 2. For each, list the fields that genuinely change the body. 3. Build the cache key from only those; drop tracking/noise. 4. Set s-maxage per class, add jitter to avoid synchronized expiry, mark private/no-store for per-user. 5. Verify HIT/MISS behavior at the edge. Rollback point: before changing Vary/key on a live property. Validation: equivalent requests share a HIT and private content is never publicly cached.",
+  "domain": "cdn",
+  "scope_hint": "platform.cdn-edge:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.cdn-edge",
+  "pack_id": "platform.cdn-edge"
+}

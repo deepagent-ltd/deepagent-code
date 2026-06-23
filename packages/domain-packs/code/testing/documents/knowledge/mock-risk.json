@@ -1,0 +1,11 @@
+{
+  "ref_id": "knowledge:testing:mock-risk",
+  "type": "knowledge",
+  "description": "Mocks can hide integration contract drift.",
+  "body": "Mocks are useful at boundaries, but over-mocking internal collaborators can make tests pass while real contracts break. Prefer real implementation when cheap and stable.\n\nEvidence boundary: apply only when current task, repository, or validation evidence matches this pack boundary. Do not override a more specific pack or explicit project contract. Use when Code Testing work touches test runner output, fixture intent, coverage boundaries, flake history, and negative paths. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: use the fact to constrain the change and test plan; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include focused test output, regression tests, fixture assertions, and rerun evidence. Risk boundary: escalate or stop when the task involves testing implementation details only, masking flakes, and claiming coverage without behavior proof, missing owner evidence, or live external state.",
+  "domain": "testing",
+  "scope_hint": "code.testing:knowledge",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.testing",
+  "pack_id": "code.testing"
+}

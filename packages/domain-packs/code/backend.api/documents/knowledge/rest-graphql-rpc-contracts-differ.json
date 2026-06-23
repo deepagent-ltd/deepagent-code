@@ -1,0 +1,11 @@
+{
+  "ref_id": "knowledge:backend_api:rest-graphql-rpc-contracts-differ",
+  "type": "knowledge",
+  "description": "REST, GraphQL, and RPC expose different compatibility and error surfaces.",
+  "body": "Use this when a repository mixes protocols or when a user describes an API change without naming the transport. REST commonly exposes method, path, status, headers, and body shape; GraphQL exposes schema fields, nullability, resolver behavior, and partial errors; RPC exposes procedure names, input/output schemas, and transport-specific error codes. This does not choose a protocol or cover internal storage. Execution impact: locate the protocol-specific contract source and validate the protocol's observable surface instead of applying one generic endpoint checklist. Validation signals include OpenAPI or route tests for REST, schema diff and partial error checks for GraphQL, and procedure schema/client generation checks for RPC. Risk boundary: changing nullability, enum values, required inputs, or error codes can break clients even when handler tests pass. Use when Backend API work touches repository conventions, toolchain files, changed symbols, validation commands, and runtime output. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: use the fact to constrain the change and test plan; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include package-local checks, focused tests, build output, smoke runs, and command logs. Risk boundary: escalate or stop when the task involves broad rewrites, generated-file drift, stale assumptions, and unvalidated behavior changes, missing owner evidence, or live external state.",
+  "domain": "api",
+  "scope_hint": "code.backend.api:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.api:protocol_contract_practice",
+  "pack_id": "code.backend.api"
+}

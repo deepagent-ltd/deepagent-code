@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:python:no-blocking-in-event-loop",
+  "type": "strategy",
+  "title": "Keep blocking work out of the asyncio event loop",
+  "description": "Offload synchronous file, network, or CPU work to executors so a single coroutine cannot stall every other task on the loop.",
+  "body": "Use when writing or reviewing async def code under asyncio. Do not call blocking APIs (requests.get, time.sleep, heavy json on big payloads, sync DB drivers) directly inside a coroutine — they freeze the whole loop, not just that task. Actions: replace requests with aiohttp/httpx, use asyncio.sleep, and push unavoidable sync/CPU work to loop.run_in_executor or asyncio.to_thread; inspect with asyncio debug mode (PYTHONASYNCIODEBUG=1) which logs callbacks slower than 100ms. Validation signals include the 'Executing took N seconds' slow-callback log disappearing and concurrent tasks making progress under load. Risk boundary: a single blocking call can deadlock an entire async service; escalate rather than sprinkle threads if the hot path is CPU-bound (consider multiprocessing).",
+  "domain": "python",
+  "scope_hint": "code.python:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.python",
+  "pack_id": "code.python"
+}

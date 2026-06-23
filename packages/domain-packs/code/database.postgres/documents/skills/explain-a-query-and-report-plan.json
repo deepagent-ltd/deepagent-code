@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:pg:explain-a-query-and-report-plan",
+  "type": "skill",
+  "title": "EXPLAIN a query and report the plan",
+  "description": "Run EXPLAIN (ANALYZE, BUFFERS) and report the dominant cost node, stats accuracy, and the indicated fix.",
+  "body": "Use when asked why a query is slow. Actions: run EXPLAIN (ANALYZE, BUFFERS) on representative data, identify the node consuming the most actual time, compare estimated vs actual rows to judge whether statistics are stale, and check buffers for heavy heap reads or a sort spilling to disk. Do not infer the plan from the SQL text alone. Report and record the costly node, the estimate gap, and the smallest indicated fix (index, sargable rewrite, ANALYZE, work_mem). This skill is read-only and runs against non-production or a replica. Validation signals include a confirmed plan change after the fix. Risk boundary: running ANALYZE-heavy queries against a busy primary can add load; prefer a replica.",
+  "domain": "postgres",
+  "scope_hint": "code.database.postgres:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.postgres",
+  "pack_id": "code.database.postgres"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:electron:native-module-abi",
+  "type": "knowledge",
+  "title": "Native modules and the Electron ABI",
+  "description": "Native addons are compiled against a specific Node/V8 ABI; Electron ships its own, so modules built for system Node may fail to load.",
+  "body": "Use when a native addon crashes or refuses to load. Native modules link against a particular Node/V8 ABI version; Electron bundles its own Node build, so a module installed/compiled for the system Node can be ABI-incompatible and error on load. N-API modules are ABI-stable and avoid this; others need rebuilding for the app's Electron version. Do not assume an npm-installed native module just works in Electron. Actions: use N-API/prebuilt addons or electron-rebuild per target. Validation signals include the module loading on every shipped platform/arch. Risk boundary: an ABI mismatch can crash the process at startup on a user's machine even if it worked in dev — rebuild and test natives per platform before shipping.",
+  "domain": "electron",
+  "scope_hint": "code.desktop.electron:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.desktop.electron",
+  "pack_id": "code.desktop.electron"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:analytics:build-metrics-layer",
+  "type": "methodology",
+  "title": "Stand up a governed metrics layer",
+  "description": "Centralize metric definitions, dimensions, and joins so consistent numbers flow to every BI tool and ad-hoc query.",
+  "body": "Use when metrics are recomputed inconsistently across tools and teams. Do not solve it with a shared SQL snippet copied around — copies drift. Actions: model entities, dimensions, and metrics in a semantic layer (LookML/Cube/MetricFlow), encode joins and grain once, expose the layer to BI and query tools, and version it. Validation signals include identical metric values across two consuming tools and a single versioned definition. Risk boundary: an ungoverned metric is reinterpreted per team and undermines trust; if a key metric still has multiple definitions, escalate to consolidate ownership before more dashboards depend on it.",
+  "domain": "analytics",
+  "scope_hint": "code.analytics:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.analytics",
+  "pack_id": "code.analytics"
+}

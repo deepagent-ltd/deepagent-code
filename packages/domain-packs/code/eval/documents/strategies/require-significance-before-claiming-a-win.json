@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:eval:require-significance-before-claiming-a-win",
+  "type": "strategy",
+  "title": "Require significance before claiming a win",
+  "description": "A score difference is reported with variance and a significance check, not as a point estimate that may be noise.",
+  "body": "Use when comparing two systems or versions. Do not declare a change better from a single-run point difference, and avoid ignoring run-to-run variance from sampling temperature or data order. Actions: run multiple seeds or bootstrap the dataset, report a confidence interval, and apply a significance test sized to the dataset. Validation signals include a reported interval and a test that a within-noise difference is not called a win. Risk boundary: shipping on a non-significant difference wastes the eval and may ship a regression; require a meaningful, measured difference before claiming improvement.",
+  "domain": "eval",
+  "scope_hint": "code.eval:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.eval",
+  "pack_id": "code.eval"
+}

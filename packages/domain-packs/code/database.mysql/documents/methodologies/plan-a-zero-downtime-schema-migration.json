@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:mysql:plan-a-zero-downtime-schema-migration",
+  "type": "methodology",
+  "title": "Plan a zero-downtime schema migration",
+  "description": "Sequence an expand-migrate-contract rollout so reads and writes never see a missing or half-populated column.",
+  "body": "Use when a schema change must ship without a maintenance window. Actions: expand by adding the new nullable column or table with online DDL; backfill in bounded batches with a sleep between chunks to spare the binlog and replicas; dual-write from the application so old and new shapes stay consistent; cut reads over once backfill verification passes; then contract by dropping the old column in a later release. Verify each phase with row-count reconciliation between old and new shapes. Validation signals include replica lag staying bounded during backfill and a reconciliation query returning zero mismatches. Risk boundary: the contract step is irreversible, so keep the old column until a full deploy cycle proves the new path and a human signs off on the drop.",
+  "domain": "mysql",
+  "scope_hint": "code.database.mysql:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.mysql",
+  "pack_id": "code.database.mysql"
+}

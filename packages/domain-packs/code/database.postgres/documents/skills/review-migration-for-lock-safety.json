@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:pg:review-migration-for-lock-safety",
+  "type": "skill",
+  "title": "Review a migration for lock safety",
+  "description": "Read a migration and report which locks it takes and whether it is safe to run on a live, populated table.",
+  "body": "Use when validating a schema change before deploy. Actions: inspect each DDL statement and determine its lock level — flag plain CREATE INDEX (use CONCURRENTLY), ALTER TABLE forms that rewrite or validate while holding ACCESS EXCLUSIVE, and adding NOT NULL/CHECK without the NOT VALID then VALIDATE split; confirm lock_timeout/statement_timeout are set. Do not assume a migration that passes on an empty dev table is safe on a large hot one. Report and record each statement's lock level and a safer rewrite. This skill is read-only and does not run the migration. Validation signals include each step taking a short, weak lock. Risk boundary: any unavoidable long ACCESS EXCLUSIVE lock on a hot table is a blocking finding requiring a maintenance window and human gate.",
+  "domain": "postgres",
+  "scope_hint": "code.database.postgres:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.postgres",
+  "pack_id": "code.database.postgres"
+}

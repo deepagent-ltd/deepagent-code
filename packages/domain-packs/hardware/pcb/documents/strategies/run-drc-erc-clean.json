@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:pcb:run-drc-erc-clean",
+  "type": "strategy",
+  "title": "Drive DRC and ERC to zero before fab",
+  "description": "Resolve every design-rule and electrical-rule violation, distinguishing real errors from intentional waivers, before release.",
+  "body": "Use when preparing a board for fabrication or assembly handoff. Do not release with unreviewed violations, since a single clearance or connectivity error can scrap a batch. Actions: run DRC and ERC, triage each violation, and document any intentional waiver with rationale. Validation signals include a clean rule check or an explicit waiver list and a connectivity check matching the netlist. Risk boundary: an unwaived short or clearance error can destroy assembled boards, so deny fab release until every violation is resolved or justified.",
+  "domain": "pcb",
+  "scope_hint": "hardware.pcb:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.pcb",
+  "pack_id": "hardware.pcb"
+}

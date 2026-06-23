@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:sim:numerical-stability-concept",
+  "type": "knowledge",
+  "title": "Numerical stability and error amplification",
+  "description": "A scheme is stable when errors stay bounded over time rather than growing, which depends on step size and the method.",
+  "body": "Use when reasoning about why a simulation blows up. Do not confuse stability with accuracy, since a stable scheme can still be inaccurate and an accurate-looking step can be unstable. Actions: relate stability to whether the per-step error amplification factor stays bounded, check the step against the stability region, and watch for unbounded growth. Validation signals include a bounded solution over long times and error that does not amplify each step. Risk boundary: an unstable scheme produces meaningless results that may look plausible early, so flag any unbounded growth as a stability failure, not a tuning issue.",
+  "domain": "simulation",
+  "scope_hint": "code.simulation:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.simulation",
+  "pack_id": "code.simulation"
+}

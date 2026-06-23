@@ -1,0 +1,11 @@
+{
+  "ref_id": "skill:javascript:run-js-package-script",
+  "type": "skill",
+  "description": "Detect manager and execute the narrow package script with reproducible command output.",
+  "body": "Inputs: package directory, changed files, intended script. Actions: inspect packageManager and lockfile, list relevant scripts, choose npm/pnpm/yarn/bun consistently, run the narrow script from the package directory, capture exit status and notable diagnostics. Do not install or mutate lockfiles unless requested. Verification signal is a one-shot command that exits. Risk boundary: workspace root scripts may be expensive or guarded by repo policy. Use when JavaScript Runtime and Tooling work touches repository conventions, toolchain files, changed symbols, validation commands, and runtime output. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: run the documented inspection and validation workflow; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include package-local checks, focused tests, build output, smoke runs, and command logs. Risk boundary: escalate or stop when the task involves broad rewrites, generated-file drift, stale assumptions, and unvalidated behavior changes, missing owner evidence, or live external state.",
+  "domain": "javascript",
+  "scope_hint": "code.javascript:skills",
+  "evidence_strength": "medium",
+  "provenance_tag": "code.javascript:seed:official_docs_and_common_tooling_behavior:paraphrased",
+  "pack_id": "code.javascript"
+}

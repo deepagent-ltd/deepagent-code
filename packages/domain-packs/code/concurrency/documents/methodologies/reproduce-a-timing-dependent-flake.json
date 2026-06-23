@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:conc:reproduce-a-timing-dependent-flake",
+  "type": "methodology",
+  "title": "Reproduce a timing-dependent flaky failure",
+  "description": "Amplify the interleaving with stress, scheduling jitter, and detectors until the intermittent failure becomes reliable.",
+  "body": "Steps: 1. Characterize the flake: which assertion fails, how often, under what load. 2. Run the test in a tight loop with high parallelism to raise the failure rate. 3. Add scheduling pressure (more threads than cores, sleeps/yields at suspect points, a race detector) to widen the race window. 4. Once it fails reliably, capture the interleaving (logs/trace with thread ids and timestamps). 5. Form a hypothesis about the unsynchronized access and confirm with the detector. Rollback point: none needed; this is diagnostic and read-only. Validation: the failure reproduces on demand and the detector points at a specific shared access.",
+  "domain": "concurrency",
+  "scope_hint": "code.concurrency:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.concurrency",
+  "pack_id": "code.concurrency"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:agent:budget-and-prune-context",
+  "type": "methodology",
+  "title": "Budget and prune context",
+  "description": "Establish a token budget and a deterministic pruning/summarization policy that preserves instructions and recent state.",
+  "body": "Steps: 1. Measure the per-turn token budget against the model's window with output headroom. 2. Classify content: system instructions, recent turns, older history, tool results. 3. Define a deterministic policy: always keep instructions and the most recent turns, summarize or evict the rest. 4. Verify the assembled context fits before each call. 5. Add a long-run test that stays within the window. Rollback point: before changing what gets evicted. Validation: a long run never overflows and instructions survive pruning.",
+  "domain": "agent",
+  "scope_hint": "code.agent:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.agent",
+  "pack_id": "code.agent"
+}

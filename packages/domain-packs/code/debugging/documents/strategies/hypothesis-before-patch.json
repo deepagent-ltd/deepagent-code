@@ -1,0 +1,11 @@
+{
+  "ref_id": "strategy:debugging:hypothesis-before-patch",
+  "type": "strategy",
+  "description": "Write the current failure hypothesis and expected observation before changing implementation code.",
+  "body": "Apply when a failure reproduces or when logs point to a plausible cause. State the hypothesis, the evidence that supports it, and one observation that would falsify it. Then run the smallest inspection, log query, test, or code read needed to confirm or reject it. Do not patch several suspected causes at once; that destroys the ability to know what fixed the defect. Verification signals include a reproduced failure, changed diagnostic output, narrowed stack frame, or a test that fails for the predicted reason. Risk boundary: if evidence cannot be collected because environment, credentials, or external state are missing, mark the diagnosis blocked rather than inventing root cause. Use when Code Debugging work touches reproduction steps, stack traces, logs, state transitions, and controlled hypotheses. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: choose the smallest direction that preserves the domain contract; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include minimal repro, before/after trace, regression test, and command output. Risk boundary: escalate or stop when the task involves blind retries, wrapper fixes, broad rewrites, and unproven root cause, missing owner evidence, or live external state.",
+  "domain": "debugging",
+  "scope_hint": "code.debugging:strategies",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.debugging:human_authored",
+  "pack_id": "code.debugging"
+}

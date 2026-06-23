@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:frontend_performance:unbounded-third-party",
+  "type": "failure_dossier",
+  "description": "Adding third-party scripts without budget or failure handling risks performance and privacy.",
+  "body": "Review load behavior and data flow.\n\nDerived from local skill survey outputs under /Users/xiuranli/code/agent/skill, especially reviewed canonical rules, coverage reports, and trusted local skill notes. Paraphrased into domain-pack seed form.\n\nDiagnostic use only: keep this out of index.json and use it only as a blocked/do-not-use signal.",
+  "domain": "performance",
+  "scope_hint": "code.frontend.performance:failure_dossiers",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.frontend.performance:skill_survey",
+  "pack_id": "code.frontend.performance"
+}

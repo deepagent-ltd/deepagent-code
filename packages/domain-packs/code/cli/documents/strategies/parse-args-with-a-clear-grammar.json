@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:cli:parse-args-with-a-clear-grammar",
+  "type": "strategy",
+  "title": "Parse arguments with a clear, conventional grammar",
+  "description": "Use a real argument parser with consistent flag conventions, subcommands, and a -- separator, not ad-hoc string matching.",
+  "body": "Use when a CLI takes options or subcommands. Do not hand-roll positional argv indexing or invent inconsistent flag styles, and do not silently ignore unknown flags. Actions: use the platform's arg-parsing library, follow conventions (short -v / long --verbose, --key=value or --key value, -- to end option parsing), define subcommands explicitly, and error on unknown options. Validation signals include `--help` listing every flag, unknown flags producing a usage error (exit 2), and `--` letting filenames starting with - through. Risk boundary: silently ignoring an unrecognized flag can make a destructive command run with unintended defaults — fail loudly on unknown options.",
+  "domain": "cli",
+  "scope_hint": "code.cli:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.cli",
+  "pack_id": "code.cli"
+}

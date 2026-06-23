@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure_dossier:mongo:monotonic-shard-key-hotspot",
+  "type": "failure_dossier",
+  "description": "A monotonically increasing shard key sends all new writes to one shard.",
+  "body": "Failure mode: sharding on an increasing field such as a timestamp or default ObjectId routes every new insert to the chunk holding the maximum value, so one shard absorbs all writes while others sit idle. Detection signals: sh.status() shows a single shard owning the top chunk, write latency concentrates on one node, and the balancer churns trying to split a hot chunk. Do not use a monotonic field alone as the shard key. Safer fallback: use a hashed shard key or a compound key whose leading field has high, non-sequential cardinality, and reshard the collection onto the new key during a maintenance window.",
+  "domain": "mongodb",
+  "scope_hint": "code.database.mongodb:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.mongodb:human_authored",
+  "pack_id": "code.database.mongodb"
+}

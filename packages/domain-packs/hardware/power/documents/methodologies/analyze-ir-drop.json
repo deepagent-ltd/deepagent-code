@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:hwpwr:analyze-ir-drop",
+  "type": "methodology",
+  "title": "Analyze IR drop across the power grid",
+  "description": "Check that the supply voltage reaching each block stays within droop limits under peak switching current.",
+  "body": "Use when verifying the power delivery network of a placed design. Do not assume the nominal supply reaches every cell, since grid resistance causes droop under load. Actions: run static and dynamic IR-drop analysis, identify high-droop regions, and reinforce the grid with more straps or vias. Validation signals include supply droop within the allowed limit across the grid and no timing-critical block starved of voltage. Risk boundary: excessive IR drop slows logic and can cause functional failure, so escalate grid reinforcement when droop exceeds the budget.",
+  "domain": "power_design",
+  "scope_hint": "hardware.power:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.power",
+  "pack_id": "hardware.power"
+}

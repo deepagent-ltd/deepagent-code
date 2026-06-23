@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:mt:add-row-level-security",
+  "type": "methodology",
+  "title": "Introduce row-level security to an existing schema",
+  "description": "A procedure to add database-enforced tenant isolation incrementally without breaking existing access.",
+  "body": "Use when hardening a pooled schema that relies only on application scoping. Do not enable broad policies without testing every access path. Steps: ensure each table carries a tenant column; define policies keyed on a session tenant variable; set that variable from the authenticated principal per connection; enable policies in staging and run the full test suite; verify both allowed and denied access. Validation signals include the database denying cross-tenant rows while legitimate access still works. Risk boundary: a misconfigured policy can either leak or lock out tenants, so verify in staging with negative tests before production and gate the rollout.",
+  "domain": "multi_tenant",
+  "scope_hint": "code.backend.multi-tenant:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.multi-tenant",
+  "pack_id": "code.backend.multi-tenant"
+}

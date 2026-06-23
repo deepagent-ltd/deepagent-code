@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:frontend_react:suspense-boundary-review",
+  "type": "methodology",
+  "title": "Review Suspense and error boundary placement",
+  "description": "Verify async UI is wrapped by a Suspense fallback and an error boundary at the right granularity so failures and loading stay localized.",
+  "body": "Steps: 1. Map each async/lazy/data-fetching subtree in the changed UI. 2. Confirm a Suspense boundary wraps it with a fallback that reserves layout space. 3. Confirm an error boundary wraps it so a thrown error or rejected resource shows recovery UI instead of unmounting the whole tree. 4. Check the boundary is at a granularity that does not collapse the whole page on one widget failure. 5. Trigger a forced error and a slow resource to observe behavior. Rollback point: before moving boundaries higher in the tree. Validation: a forced rejection renders the error fallback and a throttled load renders the Suspense fallback, evidenced in the browser, not just unit tests.",
+  "domain": "react",
+  "scope_hint": "code.frontend.react:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.frontend.react",
+  "pack_id": "code.frontend.react"
+}

@@ -1,0 +1,47 @@
+{
+  "schema_version": "domain_pack.v1",
+  "id": "code.release",
+  "name": "Code Release",
+  "version": "1.0.0",
+  "scope": "system",
+  "risk": "high",
+  "domains": [
+    "code",
+    "release",
+    "delivery"
+  ],
+  "provides": [
+    "knowledge",
+    "strategy",
+    "methodology",
+    "skill",
+    "diagnosis",
+    "validation"
+  ],
+  "depends_on": [
+    "code.testing",
+    "risk.supply-chain"
+  ],
+  "conflicts_with": [],
+  "knowledge_store": "document_store",
+  "allowed_tools": [
+    "read",
+    "shell:test"
+  ],
+  "denied_tools": [
+    "shell:deploy-production"
+  ],
+  "data_policy": {
+    "sensitivity": [
+      "source_code",
+      "user_data",
+      "pii"
+    ],
+    "default_admission": "summary_only",
+    "secret_policy": "deny"
+  },
+  "detector": {
+    "inline": "profile.code_domains.includes('release') || profile.repo_signals.some(s=>/\\b(release (the |a |new )?(build|version|candidate|notes|branch)|cut (a |the )?release|publish (the |a |new )?(package|artifact|npm|image|docker|release)|version bump|bump (the )?version|semver|changelog|tag (a |the )?(release|version|commit)|git tag|ship (the |to )?(release|production)|release pipeline)\\b|发布(版本|包|镜像)|版本发布|打(版本)?标签/i.test(s)) ? 0.88 : 0",
+    "threshold": 0.5
+  }
+}

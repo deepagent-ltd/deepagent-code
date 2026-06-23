@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:vsearch:build-retrieval-eval",
+  "type": "methodology",
+  "title": "Build a labeled retrieval evaluation set",
+  "description": "Assemble queries with judged relevant documents so recall and precision can gate every index or model change.",
+  "body": "Use before tuning any vector retrieval system. Do not tune by eyeballing a few queries — you cannot detect regressions or compare options without measured recall/precision. Actions: collect representative queries, label relevant documents per query, and compute recall@k and precision@k as the standard gate. Validation signals include a labeled query set with relevance judgments and a baseline recall/precision recorded before changes. Risk boundary: tuning without an eval ships silent regressions; if no labeled set exists, escalate to build one before approving index or embedder changes that affect production retrieval.",
+  "domain": "vector_search",
+  "scope_hint": "code.vector-search:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.vector-search",
+  "pack_id": "code.vector-search"
+}

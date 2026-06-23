@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:gpu:optimization-without-correctness-baseline",
+  "type": "failure_dossier",
+  "description": "Optimizing a kernel before locking a correctness baseline, so a faster-but-wrong kernel is reported as an improvement.",
+  "body": "Failure mode: the kernel is optimized (shared-memory staging, vectorized loads, padding) and the benchmark shows a speedup, but no reference-comparison baseline was captured first, so a silent numerical regression is reported as a win.\n\nDetection signals: no CPU/reference comparison in the run log; benchmark numbers present but no max-error figure; index math changed alongside a padding or vectorization change without a re-run of the correctness harness.\n\nDo not use: do not treat a speedup as success without a passing correctness comparison at the same commit. Do not apply padding or vectorization mechanically.\n\nSafer fallback: capture a reference-comparison baseline first (skill:gpu:run-correctness-harness), re-run it after every index-math change, and only then compare benchmarks.",
+  "domain": "gpu_kernel",
+  "scope_hint": "gpu_kernel:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:gpu_kernel:human_authored",
+  "pack_id": "code.gpu-kernel"
+}

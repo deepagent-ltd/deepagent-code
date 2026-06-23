@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:chain:reentrancy-mechanism",
+  "type": "knowledge",
+  "title": "How reentrancy actually works",
+  "description": "An external call can hand control to attacker code that calls back into the original function before its state finished updating.",
+  "body": "Use when reasoning about why external calls are dangerous. When a contract sends ETH or calls another contract, the recipient's code runs synchronously and can call back into the original function; if the original updates state after the call, the re-entrant call sees stale state (e.g. an un-decremented balance) and can withdraw repeatedly. This is not concurrency but synchronous nested execution. Do not perform external calls before finalizing state. Actions: apply checks-effects-interactions and a reentrancy guard, and treat every value transfer as a potential callback. Validation signals include an adversarial reentrancy test that fails to drain funds. Risk boundary: reentrancy has caused some of the largest losses in the ecosystem; treat any external call preceding a state update as a critical exposure.",
+  "domain": "blockchain",
+  "scope_hint": "code.blockchain:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.blockchain",
+  "pack_id": "code.blockchain"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:ghci:workflow-job-step-model",
+  "type": "knowledge",
+  "title": "Workflow, job, and step execution model",
+  "description": "Jobs run on separate runners in parallel by default; steps share a runner and filesystem; needs creates ordering and artifact handoff.",
+  "body": "Use when structuring or debugging a multi-job workflow. A workflow contains jobs; jobs run on independent runners (fresh filesystem, parallel unless ordered by needs); steps within a job share that runner's filesystem and environment. State does not cross jobs except via artifacts, outputs, or external storage. Do not assume a file written in one job exists in another, and do not rely on step order across jobs without needs. Actions: use job outputs for small values, upload/download-artifact for files, and needs to express dependency and gating. Validation signals include a downstream job receiving the expected output/artifact and parallel jobs not racing on shared external state. Risk boundary: cross-job data passed through a mutable shared store can be tampered by an untrusted parallel job; treat it as untrusted input.",
+  "domain": "ci_github",
+  "scope_hint": "platform.ci-github:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.ci-github",
+  "pack_id": "platform.ci-github"
+}

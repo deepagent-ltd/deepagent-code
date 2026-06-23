@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:game:build-an-asset-pipeline",
+  "type": "methodology",
+  "title": "Build an asset pipeline that avoids runtime stalls",
+  "description": "Move asset import/conversion to build time and load at runtime asynchronously so the main loop never blocks on disk.",
+  "body": "Steps: 1. Convert source assets (textures, models, audio) into engine-ready, compressed formats at build/import time, not at runtime. 2. Pack assets to reduce file count and seek overhead. 3. Load at runtime on a worker thread or via async streaming, never synchronously on the main loop. 4. Stream by proximity/level and unload what is out of range. 5. Show placeholders until a load completes rather than stalling. Rollback point: before changing the on-disk format (invalidates cached assets). Validation: entering a new area causes no main-thread stall and frame time stays within budget while assets stream in; a synchronous load on the game loop is the stall this pipeline prevents.",
+  "domain": "game",
+  "scope_hint": "code.game:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.game",
+  "pack_id": "code.game"
+}

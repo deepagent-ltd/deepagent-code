@@ -1,0 +1,47 @@
+{
+  "schema_version": "domain_pack.v1",
+  "id": "code.os-kernel",
+  "name": "Operating System Kernel and Device Drivers",
+  "version": "1.0.0",
+  "scope": "system",
+  "risk": "high",
+  "domains": [
+    "kernel",
+    "syscall",
+    "driver",
+    "scheduler",
+    "memory_management"
+  ],
+  "provides": [
+    "knowledge",
+    "strategy",
+    "methodology",
+    "skill",
+    "diagnosis",
+    "validation"
+  ],
+  "depends_on": [
+    "code.systems",
+    "code.concurrency"
+  ],
+  "conflicts_with": [],
+  "knowledge_store": "document_store",
+  "allowed_tools": [
+    "read",
+    "shell:test"
+  ],
+  "denied_tools": [
+    "shell:deploy-production"
+  ],
+  "data_policy": {
+    "sensitivity": [
+      "source_code"
+    ],
+    "default_admission": "summary_only",
+    "secret_policy": "deny"
+  },
+  "detector": {
+    "inline": "profile.code_domains.some(d=>['kernel','syscall','driver','scheduler','memory_management'].includes(d)) || profile.repo_signals.some(s=>/(kernel module|syscall|device driver|page table|kernel space|scheduler|\\/dev\\/|ioctl|interrupt handler|virtual memory)/i.test(s)) ? 0.9 : 0",
+    "threshold": 0.5
+  }
+}

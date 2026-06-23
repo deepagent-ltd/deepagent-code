@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:mobile:deep-link-bypasses-auth",
+  "type": "failure_dossier",
+  "description": "A deep link that navigates straight to a protected screen without checking authentication or validating parameters.",
+  "body": "Failure mode: a deep/universal link routes directly to a gated destination, assuming the user is logged in and the parameters are trusted, so it can expose protected content or be exploited via tampered values. Detection signals: opening the link while logged out reaches the screen; parameters are used unvalidated; no auth gate in the link handler. Do not navigate to protected targets from a link without auth and parameter checks. Safer fallback: validate and sanitize link parameters, gate protected routes behind authentication with a redirect to login, and test cold-start and logged-out link entry.",
+  "domain": "mobile",
+  "scope_hint": "code.mobile:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.mobile:human_authored",
+  "pack_id": "code.mobile"
+}

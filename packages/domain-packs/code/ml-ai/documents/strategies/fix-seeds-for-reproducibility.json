@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:mlai:fix-seeds-for-reproducibility",
+  "type": "strategy",
+  "title": "Fix every seed before trusting a result",
+  "description": "Seed Python, NumPy, and the framework RNGs and set deterministic flags so a reported improvement is real, not run-to-run noise.",
+  "body": "Use when comparing two configurations or reporting an improvement. Do not conclude that a change helped from a single unseeded run — initialization and shuffling variance can exceed the effect. Actions: set seeds for the language RNG, NumPy, and the framework (and enable deterministic kernels where available), then run each config across several seeds and compare distributions. Validation signals include a reproduced metric under the same seed and a mean improvement larger than the seed-to-seed standard deviation. Risk boundary: shipping a change justified by noise wastes compute and misleads; require multi-seed evidence before claiming a win.",
+  "domain": "ml",
+  "scope_hint": "code.ml-ai:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.ml-ai",
+  "pack_id": "code.ml-ai"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:flutter:audit-isolate-and-channel-safety",
+  "type": "skill",
+  "title": "Audit isolate and platform-channel safety",
+  "description": "Check for CPU-heavy work on the UI isolate and platform-channel calls that assume a feature exists everywhere.",
+  "body": "Use when validating Flutter performance and cross-platform robustness. Procedure: scan for CPU-bound work (large parsing, image/crypto loops) running on the UI isolate rather than via compute()/Isolate.run, and find MethodChannel/invokeMethod calls that lack platform guarding or error handling for MissingPluginException/PlatformException. Report which operations risk frame drops and which channel calls risk crashing on an unsupported platform, with location. This skill exposes findings only and must not move work to isolates or change native code without runtime permission. Validation signals include a frame trace showing UI-isolate stalls and a missing native handler. Risk boundary: flag heavy UI-isolate work as a jank source and an unguarded channel call as a platform-crash risk.",
+  "domain": "dart",
+  "scope_hint": "code.dart-flutter:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.dart-flutter",
+  "pack_id": "code.dart-flutter"
+}

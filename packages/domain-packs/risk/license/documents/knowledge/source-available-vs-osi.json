@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:lic:source-available-vs-osi",
+  "type": "knowledge",
+  "title": "Source-available licenses are not open source",
+  "description": "BSL, SSPL, and Elastic-style licenses ship source but restrict use, so they fail OSI criteria and break OSS assumptions.",
+  "body": "Use when a dependency relicenses or a new dependency declares an unfamiliar license. Source-available licenses (Business Source License, SSPL, Elastic License 2.0) publish source code but add field-of-use or competition restrictions, so they are not OSI-approved open source and an OSS allowlist must not silently accept them. Projects increasingly relicense from Apache/MPL to these between versions. Do not treat 'we can see the source' as equivalent to 'we may use it freely'. Actions: detect these identifiers in the inventory, halt automatic acceptance, and review the field-of-use clause against your usage. Validation signals include the policy gate failing on a source-available identifier. Risk boundary: any source-available license requires explicit human approval before use, since the restriction may forbid your specific deployment.",
+  "domain": "license",
+  "scope_hint": "risk.license:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.license",
+  "pack_id": "risk.license"
+}

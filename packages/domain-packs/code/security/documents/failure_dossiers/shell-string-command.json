@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:security:shell-string-command",
+  "type": "failure_dossier",
+  "description": "Building shell commands from untrusted strings risks injection.",
+  "body": "Use argument arrays or avoid shell. Use when a proposed approach skips trusted boundaries, dangerous sinks, authorization checks, secret flows, and negative-path tests or claims success without domain evidence. Do not use this dossier as a positive implementation strategy; it is a do-not-use signal. Actions: block the shortcut, name the missing evidence, and switch to a safer methodology or ask for human approval. Validation signals include absence or contradiction in server-side deny tests, sink-specific payload tests, secret redaction checks, dependency evidence, and audit notes. Risk boundary: treat repeated recurrence as a blocker when it can cause client-only enforcement, secret disclosure, injection, permissive fallback, and unsafe shortcuts.",
+  "domain": "security",
+  "scope_hint": "code.security:failure",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.security:skill_survey",
+  "pack_id": "code.security"
+}

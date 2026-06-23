@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:pcb:thermal-relief-planning",
+  "type": "methodology",
+  "title": "Plan thermal relief for power components",
+  "description": "Size copper pour and thermal vias for heat-dissipating parts and verify against the expected power load.",
+  "body": "Use when the board hosts regulators, power transistors, or other heat sources. Do not rely on default pad copper for parts dissipating real power, since heat will concentrate and degrade reliability. Actions: estimate the dissipated power, add copper pour and thermal vias under the part, and verify junction temperature against the budget. Validation signals include a thermal scan showing no hot spot above the limit and copper area matching the dissipation estimate. Risk boundary: an overheated part shortens life or fails, so escalate to a heatsink or more copper when the thermal margin is thin.",
+  "domain": "pcb",
+  "scope_hint": "hardware.pcb:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.pcb",
+  "pack_id": "hardware.pcb"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "failure_dossier:production:production-env-ambiguous",
+  "type": "failure_dossier",
+  "title": "Production environment ambiguous",
+  "description": "A command or script could target production because environment, account, namespace, or database is unclear.",
+  "body": "Failure mode: tooling uses defaults, inherited env vars, shared credentials, or similarly named contexts and the agent cannot prove it is local or staging. Detection signals include missing --dry-run, absent namespace/account output, production-like URLs, or secret-adjacent env vars. Remediation is require explicit environment proof and human approval before any write. Use when a proposed approach skips repository conventions, toolchain files, changed symbols, validation commands, and runtime output or claims success without domain evidence. Do not use this dossier as a positive implementation strategy; it is a do-not-use signal. Actions: block the shortcut, name the missing evidence, and switch to a safer methodology or ask for human approval. Validation signals include absence or contradiction in package-local checks, focused tests, build output, smoke runs, and command logs. Risk boundary: treat repeated recurrence as a blocker when it can cause broad rewrites, generated-file drift, stale assumptions, and unvalidated behavior changes.",
+  "domain": "production",
+  "scope_hint": "risk.production:failure_dossiers",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.production",
+  "pack_id": "risk.production"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:hdl:run-synthesis-lint",
+  "type": "skill",
+  "title": "Run synthesis/lint and report structural issues",
+  "description": "Run synthesis or a linter and extract inferred latches, multi-driven nets, and unconstrained CDC with file locations.",
+  "body": "Use when checking an RTL change for hardware-level defects. Actions: run the synthesis/lint flow (or Verilator --lint-only), parse the report for inferred latches, multi-driver nets, incomplete sensitivity, and unconstrained clock-domain crossings, and report each with file/line and severity. Do not treat lint warnings as cosmetic. This skill exposes capability only and must not invoke vendor synthesis without runtime permission. Validation signals include a clean lint summary. Risk boundary: inferred-latch, multi-driver, and CDC findings are blocking; recommend escalation rather than suppression.",
+  "domain": "hdl",
+  "scope_hint": "hardware.hdl:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.hdl",
+  "pack_id": "hardware.hdl"
+}

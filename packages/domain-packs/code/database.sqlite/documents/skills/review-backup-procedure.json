@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:sqlite:review-backup-procedure",
+  "type": "skill",
+  "title": "Review the backup procedure",
+  "description": "Trace how the database is backed up and report whether the method yields a consistent, verifiable copy.",
+  "body": "Use when validating data safety for an SQLite app. Actions: trace the backup path and report whether it uses the online backup API / VACUUM INTO / .backup versus a live file copy; in WAL mode confirm a plain copy is not taken without checkpoint and sidecar files; check that backups are verified with integrity_check and that restore is rehearsed. Do not accept a cron cp of a live .db as a backup. Report and record the method and classify it as consistent-and-verified or unsafe-file-copy. This skill is read-only. Validation signals include a restored backup passing integrity_check and smoke queries. Risk boundary: an unverified live-file-copy backup may be silently corrupt — flag it as a data-loss risk.",
+  "domain": "sqlite",
+  "scope_hint": "code.database.sqlite:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.sqlite",
+  "pack_id": "code.database.sqlite"
+}

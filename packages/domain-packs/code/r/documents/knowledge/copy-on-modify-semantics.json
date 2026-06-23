@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:rlang:copy-on-modify-semantics",
+  "type": "knowledge",
+  "title": "Copy-on-modify semantics",
+  "description": "R vectors are copied when modified through a name with multiple bindings, which drives loop cost.",
+  "body": "Use when reasoning about why growing structures in loops is slow in R. R uses copy-on-modify: a value is shared until a modification through one binding forces a copy. Growing a vector with c() rebinds and copies the whole thing each iteration, so the loop becomes quadratic. Do not assume in-place mutation. Actions: preallocate to final size or vectorize so copies do not accumulate. Validation signals include a benchmark that stays linear in n. Risk boundary: hidden copies inflate memory on large objects, not just time.",
+  "domain": "r_lang",
+  "scope_hint": "code.r:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.r",
+  "pack_id": "code.r"
+}

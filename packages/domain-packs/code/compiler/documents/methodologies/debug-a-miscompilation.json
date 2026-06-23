@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:comp:debug-a-miscompilation",
+  "type": "methodology",
+  "title": "Debug a miscompilation",
+  "description": "Localize a wrong-code bug by bisecting passes and reducing the input until a single transformation is shown to break semantics.",
+  "body": "Steps: 1. Confirm it is a compiler bug by comparing against unoptimized/reference output, not an application bug. 2. Bisect the optimization pipeline (disable passes / lower opt level) to find the pass that introduces the divergence. 3. Reduce the input program (delta debugging) to a minimal case that still misbehaves. 4. Inspect the offending pass's transform on that case against its legality condition. 5. Fix the precondition or the rewrite and add the minimal case as a regression test. Rollback point: disable the suspect pass to unblock users while fixing. Validation: the reduced case passes after the fix and the differential corpus stays clean; never 'fix' a miscompile by tweaking the input that exposed it.",
+  "domain": "compiler",
+  "scope_hint": "code.compiler:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.compiler",
+  "pack_id": "code.compiler"
+}

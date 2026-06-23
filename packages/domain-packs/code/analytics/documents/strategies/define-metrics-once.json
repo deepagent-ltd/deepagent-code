@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:analytics:define-metrics-once",
+  "type": "strategy",
+  "title": "Define each metric once in a governed layer",
+  "description": "Encode business metrics in a single metrics layer so every dashboard and query derives the same number from one definition.",
+  "body": "Use when the same metric (revenue, active users) is consumed by multiple tools or teams. Do not let each dashboard re-implement the calculation in its own SQL — definitions drift and reported numbers disagree. Actions: define the metric, its grain, and its filters once in a metrics layer (LookML, Cube, MetricFlow), and have every consumer query through it. Validation signals include the same metric returning identical values across two consuming tools and a single source-of-truth definition under version control. Risk boundary: divergent metric definitions erode trust in the warehouse; if two surfaces report different numbers for one metric, treat it as a governance defect and consolidate before publishing.",
+  "domain": "analytics",
+  "scope_hint": "code.analytics:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.analytics",
+  "pack_id": "code.analytics"
+}

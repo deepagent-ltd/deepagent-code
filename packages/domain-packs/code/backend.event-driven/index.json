@@ -1,0 +1,484 @@
+[
+  {
+    "ref_id": "strategy:evt:publish-via-transactional-outbox",
+    "type": "strategy",
+    "title": "Publish via a transactional outbox",
+    "summary": "Write the event to an outbox table in the same transaction as the state change, then relay it to the broker separately.",
+    "domains": [
+      "event_driven",
+      "events",
+      "messaging",
+      "outbox",
+      "streaming"
+    ],
+    "triggers": [
+      "outbox",
+      "transactional",
+      "publish",
+      "dual",
+      "write",
+      "relay"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.event-driven"
+  },
+  {
+    "ref_id": "strategy:evt:make-consumers-idempotent",
+    "type": "strategy",
+    "title": "Make every consumer idempotent",
+    "summary": "Consumers dedup on event id so at-least-once redelivery produces a single effect.",
+    "domains": [
+      "event_driven",
+      "events",
+      "messaging",
+      "outbox",
+      "streaming"
+    ],
+    "triggers": [
+      "idempotent",
+      "consumer",
+      "dedup",
+      "event",
+      "id",
+      "redelivery"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.event-driven"
+  },
+  {
+    "ref_id": "strategy:evt:state-ordering-guarantees-explicitly",
+    "type": "strategy",
+    "title": "State ordering guarantees explicitly",
+    "summary": "Ordering holds only within a partition/key; cross-partition order is not guaranteed and must not be assumed.",
+    "domains": [
+      "event_driven",
+      "events",
+      "messaging",
+      "outbox",
+      "streaming"
+    ],
+    "triggers": [
+      "ordering",
+      "partition",
+      "key",
+      "sequence",
+      "guarantee",
+      "fifo"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.event-driven"
+  },
+  {
+    "ref_id": "strategy:evt:dead-letter-poison-events",
+    "type": "strategy",
+    "title": "Dead-letter poison events",
+    "summary": "Events that fail processing after bounded attempts move to a dead-letter topic instead of blocking the partition.",
+    "domains": [
+      "event_driven",
+      "events",
+      "messaging",
+      "outbox",
+      "streaming"
+    ],
+    "triggers": [
+      "dead-letter",
+      "dlq",
+      "poison",
+      "event",
+      "attempts",
+      "skip"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.event-driven"
+  },
+  {
+    "ref_id": "strategy:evt:version-event-schemas-compatibly",
+    "type": "strategy",
+    "title": "Evolve event schemas compatibly",
+    "summary": "Event payloads change only in backward/forward-compatible ways so old and new producers and consumers coexist.",
+    "domains": [
+      "event_driven",
+      "events",
+      "messaging",
+      "outbox",
+      "streaming"
+    ],
+    "triggers": [
+      "schema",
+      "version",
+      "compatibility",
+      "evolution",
+      "payload",
+      "contract"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.event-driven"
+  },
+  {
+    "ref_id": "strategy:evt:choose-events-not-commands-for-decoupling",
+    "type": "strategy",
+    "title": "Publish events, not commands, for decoupling",
+    "summary": "Producers emit facts about what happened; consumers decide reactions, so producers stay unaware of subscribers.",
+    "domains": [
+      "event_driven",
+      "events",
+      "messaging",
+      "outbox",
+      "streaming"
+    ],
+    "triggers": [
+      "event",
+      "command",
+      "fact",
+      "decouple",
+      "producer",
+      "subscriber"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.event-driven"
+  },
+  {
+    "ref_id": "methodology:evt:implement-the-outbox-pattern",
+    "type": "methodology",
+    "title": "Implement the transactional outbox",
+    "summary": "Add an outbox table, write events within the business transaction, and relay them to the broker at-least-once.",
+    "domains": [
+      "event_driven",
+      "events",
+      "messaging",
+      "outbox",
+      "streaming"
+    ],
+    "triggers": [
+      "outbox",
+      "relay",
+      "cdc",
+      "poller",
+      "transaction",
+      "implement"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.event-driven"
+  },
+  {
+    "ref_id": "methodology:evt:design-idempotent-consumer",
+    "type": "methodology",
+    "title": "Design an idempotent consumer",
+    "summary": "Build a consumer that dedups on event id, commits offset after the effect, and dead-letters poison events.",
+    "domains": [
+      "event_driven",
+      "events",
+      "messaging",
+      "outbox",
+      "streaming"
+    ],
+    "triggers": [
+      "consumer",
+      "idempotent",
+      "offset",
+      "dedup",
+      "handler",
+      "dlq"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.event-driven"
+  },
+  {
+    "ref_id": "methodology:evt:plan-an-event-replay",
+    "type": "methodology",
+    "title": "Plan an event replay",
+    "summary": "Re-process historical events safely by relying on consumer idempotency, isolating side effects, and bounding scope.",
+    "domains": [
+      "event_driven",
+      "events",
+      "messaging",
+      "outbox",
+      "streaming"
+    ],
+    "triggers": [
+      "replay",
+      "reprocess",
+      "history",
+      "backfill",
+      "offset",
+      "rebuild"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.event-driven"
+  },
+  {
+    "ref_id": "methodology:evt:migrate-event-schema",
+    "type": "methodology",
+    "title": "Migrate an event schema safely",
+    "summary": "Roll out an event payload change behind compatibility checks so producers and consumers never break mid-deploy.",
+    "domains": [
+      "event_driven",
+      "events",
+      "messaging",
+      "outbox",
+      "streaming"
+    ],
+    "triggers": [
+      "schema",
+      "migrate",
+      "compatibility",
+      "rollout",
+      "field",
+      "version"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.event-driven"
+  },
+  {
+    "ref_id": "knowledge:evt:dual-write-problem",
+    "type": "knowledge",
+    "title": "The dual-write problem",
+    "summary": "Writing to the database and publishing to a broker as two steps cannot be made atomic and will eventually diverge.",
+    "domains": [
+      "event_driven",
+      "events",
+      "messaging",
+      "outbox",
+      "streaming"
+    ],
+    "triggers": [
+      "dual",
+      "write",
+      "atomic",
+      "outbox",
+      "consistency",
+      "broker"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.event-driven"
+  },
+  {
+    "ref_id": "knowledge:evt:delivery-semantics-tradeoffs",
+    "type": "knowledge",
+    "title": "At-least-once, at-most-once, exactly-once",
+    "summary": "Brokers practically offer at-least-once; exactly-once processing is an application property built from idempotency.",
+    "domains": [
+      "event_driven",
+      "events",
+      "messaging",
+      "outbox",
+      "streaming"
+    ],
+    "triggers": [
+      "delivery",
+      "semantics",
+      "exactly-once",
+      "at-least-once",
+      "idempotent",
+      "offset"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.event-driven"
+  },
+  {
+    "ref_id": "knowledge:evt:ordering-and-partitioning",
+    "type": "knowledge",
+    "title": "Ordering and partitioning",
+    "summary": "Order is preserved per partition; the partition key determines which events stay ordered relative to each other.",
+    "domains": [
+      "event_driven",
+      "events",
+      "messaging",
+      "outbox",
+      "streaming"
+    ],
+    "triggers": [
+      "ordering",
+      "partition",
+      "key",
+      "throughput",
+      "parallelism",
+      "sequence"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.event-driven"
+  },
+  {
+    "ref_id": "knowledge:evt:event-sourcing-vs-event-notification",
+    "type": "knowledge",
+    "title": "Event sourcing vs event notification",
+    "summary": "Event notification signals that something happened; event sourcing makes the event log the system of record.",
+    "domains": [
+      "event_driven",
+      "events",
+      "messaging",
+      "outbox",
+      "streaming"
+    ],
+    "triggers": [
+      "event-sourcing",
+      "notification",
+      "log",
+      "projection",
+      "state",
+      "rebuild"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.event-driven"
+  },
+  {
+    "ref_id": "skill:evt:audit-publish-path-for-dual-write",
+    "type": "skill",
+    "title": "Audit a publish path for dual writes",
+    "summary": "Trace where a state change publishes an event and report whether it is atomic via an outbox or a risky dual write.",
+    "domains": [
+      "event_driven",
+      "events",
+      "messaging",
+      "outbox",
+      "streaming"
+    ],
+    "triggers": [
+      "audit",
+      "publish",
+      "dual",
+      "write",
+      "outbox",
+      "review"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.event-driven"
+  },
+  {
+    "ref_id": "skill:evt:review-consumer-idempotency-and-dlq",
+    "type": "skill",
+    "title": "Review consumer idempotency and dead-lettering",
+    "summary": "Read a consumer and report whether redelivery is safe, offsets commit after effects, and poison events are dead-lettered.",
+    "domains": [
+      "event_driven",
+      "events",
+      "messaging",
+      "outbox",
+      "streaming"
+    ],
+    "triggers": [
+      "consumer",
+      "idempotent",
+      "dlq",
+      "offset",
+      "review",
+      "audit"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.event-driven"
+  }
+]

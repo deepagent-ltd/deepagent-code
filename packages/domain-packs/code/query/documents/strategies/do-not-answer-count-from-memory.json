@@ -1,0 +1,11 @@
+{
+  "ref_id": "strategy:query:do-not-answer-count-from-memory",
+  "type": "strategy",
+  "description": "Counts and enumerations require fresh tool evidence; stale context or model memory is not a data source.",
+  "body": "Apply this to questions such as how many files, rows, errors, tests, warnings, changed files, or matching items exist. Counts and lists are high-determinism facts. They require a current tool result with the scope preserved: path, branch, query, filters, time window, or command. Do not use old chat context, a previous run, or model memory as the answer source. If the result was truncated, say so and avoid claiming completeness beyond the collected scope. Use when a read-only query, count, list, status, diff, or inspection request must be answered from repository or tool evidence. Do not use when the user asks to edit, fix, deploy, migrate, delete, insert, update, or alter state. Actions: identify the exact scope, run read-only search or inspection tools, cite the source artifact, and preserve the command or file evidence used for the answer. Validation signals include matching counts against tool output, source references, scope labels, and no modified working-tree files. Risk boundary: stop or ask for confirmation if the task changes from query to mutation, if evidence is stale, or if the answer would expose secrets or excessive output.",
+  "domain": "query",
+  "scope_hint": "code.query:counts-and-lists",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.query",
+  "pack_id": "code.query"
+}

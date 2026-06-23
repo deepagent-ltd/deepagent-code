@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:agent:budget-the-context-window",
+  "type": "strategy",
+  "title": "Budget the context window each turn",
+  "description": "Conversation history, tool results, and instructions are pruned or summarized to fit a token budget before each model call.",
+  "body": "Use when the agent accumulates history across many steps. Do not append every observation and let the window overflow, and avoid dropping the most recent or the system instructions to make room. Actions: compute a token budget, keep system instructions and recent turns, summarize or evict older content deterministically, and verify the assembled context fits before sending. Validation signals include a test that a long run stays within the window and that pruning preserves instructions and recent state. Risk boundary: silent overflow truncates instructions and changes behavior unpredictably; treat an unbudgeted loop as a blocking finding.",
+  "domain": "agent",
+  "scope_hint": "code.agent:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.agent",
+  "pack_id": "code.agent"
+}

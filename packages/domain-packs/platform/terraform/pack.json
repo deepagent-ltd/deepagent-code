@@ -1,0 +1,48 @@
+{
+  "schema_version": "domain_pack.v1",
+  "id": "platform.terraform",
+  "name": "Terraform & Infrastructure as Code (HCL)",
+  "version": "1.0.0",
+  "scope": "system",
+  "risk": "high",
+  "domains": [
+    "terraform",
+    "iac",
+    "infrastructure",
+    "hcl"
+  ],
+  "provides": [
+    "knowledge",
+    "strategy",
+    "methodology",
+    "skill",
+    "diagnosis",
+    "validation"
+  ],
+  "depends_on": [
+    "platform.cloud",
+    "risk.production",
+    "risk.security"
+  ],
+  "conflicts_with": [],
+  "knowledge_store": "document_store",
+  "allowed_tools": [
+    "read",
+    "shell:test"
+  ],
+  "denied_tools": [
+    "shell:deploy-production",
+    "shell:apply-infrastructure"
+  ],
+  "data_policy": {
+    "sensitivity": [
+      "source_code"
+    ],
+    "default_admission": "summary_only",
+    "secret_policy": "deny"
+  },
+  "detector": {
+    "inline": "profile.code_domains.some(d=>['terraform','iac','infrastructure','hcl'].includes(d)) || profile.repo_signals.some(s=>/\\b(terraform|\\.tf |hcl|terraform state|terraform plan|terraform apply|tfstate|infrastructure as code|terraform module|provider block)\\b/i.test(s)) ? 0.9 : 0",
+    "threshold": 0.5
+  }
+}

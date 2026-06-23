@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:gfx:synchronize-resource-hazards",
+  "type": "strategy",
+  "title": "Insert barriers for read-after-write hazards",
+  "description": "Use pipeline barriers and correct layout transitions so a resource is never read while a prior write is still in flight on the GPU.",
+  "body": "Use when a render target or storage image is written in one pass and read in another (e.g. shadow map then lighting). Do not assume passes finish in submission order, and avoid sampling an attachment without transitioning its layout and inserting a barrier. Actions: identify each read-after-write and write-after-read dependency, insert the matching pipeline barrier with correct src/dst stage and access masks, and transition image layouts to the required usage. Validation signals include a clean run under the Vulkan/WebGPU validation layer and stable output across drivers. Risk boundary: missing synchronization produces driver-dependent corruption that may look fine locally; treat any validation-layer hazard warning as blocking and escalate before release.",
+  "domain": "graphics",
+  "scope_hint": "code.graphics:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.graphics",
+  "pack_id": "code.graphics"
+}
