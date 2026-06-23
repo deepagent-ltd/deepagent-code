@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:kernel:validate-every-user-boundary",
+  "type": "strategy",
+  "title": "Validate every value crossing the user boundary",
+  "description": "Treat all data from user space as hostile: copy it in with the accessor APIs, bounds-check sizes and indices, and never trust a user pointer.",
+  "body": "Use when implementing a syscall, ioctl, or any kernel entry that takes user-supplied data. Do not dereference a user pointer directly and do not trust a user-provided length or index. Actions: copy scalars/buffers with copy_from_user/get_user, check the return for faults, validate sizes and indices against bounds before use, and re-validate after copy (no TOCTOU on shared user memory). Validation signals include checked accessor return values and fault-injection tests that pass an EFAULT/invalid pointer without crashing. Risk boundary: an unchecked user pointer or missing bounds check is a kernel-privilege exploit, not just a bug; treat any direct user-pointer dereference as a security-blocking defect and escalate for review.",
+  "domain": "kernel",
+  "scope_hint": "code.os-kernel:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.os-kernel",
+  "pack_id": "code.os-kernel"
+}

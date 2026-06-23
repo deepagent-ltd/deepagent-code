@@ -1,0 +1,11 @@
+{
+  "ref_id": "knowledge:frontend_web:css-overflow-is-visible-state",
+  "type": "knowledge",
+  "description": "CSS overflow, clipping, stacking, and containment can make correct DOM unusable.",
+  "body": "Apply this when source inspection shows the right element exists but the user cannot see, reach, or read it. Overflow, transforms, z-index, sticky positioning, containment, and absolute positioning can hide or occlude content without failing typecheck or unit tests. This knowledge is not a framework lifecycle rule and should not override component-specific state diagnosis. Execution impact: inspect computed styles, bounding boxes, scroll containers, stacking contexts, and pointer target coverage before changing business logic. Validation signals include visible bounding boxes within viewport, expected scroll behavior, clickable topmost targets, and no text or focus ring hidden under overlays. Risk boundary: changing global overflow or z-index can destabilize unrelated pages; prefer local constraints and run adjacent-route smoke when touching shared layout CSS. Use when Frontend Web work touches visible UI behavior, browser console output, DOM state, assets, viewport behavior, and interaction evidence. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: use the fact to constrain the change and test plan; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include browser smoke, component tests, viewport screenshots, console/network checks, and accessibility assertions. Risk boundary: escalate or stop when the task involves visual regressions, inaccessible interaction, hydration mismatch, and browser-only failures, missing owner evidence, or live external state.",
+  "domain": "web",
+  "scope_hint": "code.frontend.web:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.frontend.web:css_layout_practice",
+  "pack_id": "code.frontend.web"
+}

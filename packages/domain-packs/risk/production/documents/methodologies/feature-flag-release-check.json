@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:production:feature-flag-release-check",
+  "type": "methodology",
+  "title": "Feature flag release check",
+  "description": "Check default state, targeting, both code paths, metrics, rollback, and cleanup owner before flag-mediated release.",
+  "body": "Use when a change introduces or modifies feature flags, kill switches, rollout percentages, or config gates. Do not treat flags as a reason to skip validation. Steps: verify conservative default, test enabled and disabled paths, document target cohort, define stop conditions, and create cleanup or removal follow-up. Validation signals include tests for both states and monitoring queries. Risk boundary: enabling for production users requires human approval. Use when Production Change Risk Controls work touches repository conventions, toolchain files, changed symbols, validation commands, and runtime output. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: follow the ordered review, edit, and validation sequence; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include package-local checks, focused tests, build output, smoke runs, and command logs. Risk boundary: escalate or stop when the task involves broad rewrites, generated-file drift, stale assumptions, and unvalidated behavior changes, missing owner evidence, or live external state.",
+  "domain": "deployment",
+  "scope_hint": "risk.production:methodologies",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:risk.production",
+  "pack_id": "risk.production"
+}

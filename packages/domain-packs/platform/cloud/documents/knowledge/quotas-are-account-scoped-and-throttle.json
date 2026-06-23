@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:cloud:quotas-are-account-scoped-and-throttle",
+  "type": "knowledge",
+  "title": "Quotas are account-scoped and enforced by throttling",
+  "description": "Cloud limits apply per account/region and are enforced as rate limiting or hard caps, so one noisy workload can throttle unrelated ones sharing the account.",
+  "body": "Use when diagnosing throttling or planning multi-workload accounts. Many cloud limits (API request rates, function concurrency, connection counts) are shared across everything in the same account and region, so a batch job can exhaust the quota and throttle the production API next to it. Do not assume each service or team gets an isolated allotment within one account. Actions: separate blast radius with distinct accounts/projects or reserved concurrency, and monitor per-service quota utilization. Validation signals include throttling (429/throttle) metrics correlated to a specific consumer and quota-utilization dashboards. Risk boundary: when a shared quota threatens production, isolate or reserve capacity and escalate rather than silently competing for the limit.",
+  "domain": "platform",
+  "scope_hint": "platform.cloud:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.cloud",
+  "pack_id": "platform.cloud"
+}

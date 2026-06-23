@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:svc:lost-work-on-shutdown",
+  "type": "failure_dossier",
+  "description": "The service exits immediately on SIGTERM, dropping in-flight requests or unacked jobs on every deploy.",
+  "body": "Failure mode: SIGTERM kills the process while handlers are mid-flight, so in-flight HTTP requests fail and unacked jobs are lost or, if already acked, never completed. Detection signals: no signal handler or one that calls exit immediately; readiness does not flip before exit; users see errors during every rollout. Do not depend on the orchestrator's hard kill. Safer fallback: trap SIGTERM, stop accepting work, drain in-flight handlers within a bounded deadline, re-queue the rest, and add a SIGTERM-under-load test.",
+  "domain": "backend_service",
+  "scope_hint": "code.backend.service:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.service:human_authored",
+  "pack_id": "code.backend.service"
+}

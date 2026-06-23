@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:game:profile-frame-and-allocations",
+  "type": "skill",
+  "title": "Profile frame time and per-frame allocations",
+  "description": "Capture frame timing and allocation behavior to surface budget overruns, GC hitches, and O(n^2) systems.",
+  "body": "Use when investigating stutter or low frame rate. Actions: capture a frame-time graph and an allocation/GC profile during representative play, identify spikes exceeding the budget, and attribute each to GC from per-frame garbage, synchronous asset I/O, or a system whose cost grows with entity count. Report the dominant cause with evidence. Do not change engine code. This skill exposes capability only and must not deploy or modify build settings without runtime permission. Validation signals include a frame-time graph annotated with spike causes. Risk boundary: report main-thread blocking loads and hot-path allocations as the priority fixes; chasing average frame time while spikes remain leaves the player-visible hitches unaddressed.",
+  "domain": "game",
+  "scope_hint": "code.game:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.game",
+  "pack_id": "code.game"
+}

@@ -1,0 +1,44 @@
+{
+  "schema_version": "domain_pack.v1",
+  "id": "code.desktop.electron",
+  "name": "Electron Desktop Applications",
+  "version": "1.0.0",
+  "scope": "system",
+  "risk": "medium",
+  "domains": [
+    "electron",
+    "desktop",
+    "ipc"
+  ],
+  "provides": [
+    "knowledge",
+    "strategy",
+    "methodology",
+    "skill",
+    "diagnosis",
+    "validation"
+  ],
+  "depends_on": [
+    "code.typescript",
+    "code.frontend.web",
+    "platform.local-dev"
+  ],
+  "conflicts_with": [],
+  "knowledge_store": "document_store",
+  "allowed_tools": [
+    "read",
+    "shell:test"
+  ],
+  "denied_tools": [],
+  "data_policy": {
+    "sensitivity": [
+      "source_code"
+    ],
+    "default_admission": "summary_only",
+    "secret_policy": "deny"
+  },
+  "detector": {
+    "inline": "profile.code_domains.some(d=>['electron','desktop','ipc'].includes(d)) || profile.repo_signals.some(s=>/\\b(electron|main process|renderer process|ipcmain|ipcrenderer|context isolation|preload script|electron-builder|nodeintegration)\\b/i.test(s)) ? 0.9 : 0",
+    "threshold": 0.5
+  }
+}

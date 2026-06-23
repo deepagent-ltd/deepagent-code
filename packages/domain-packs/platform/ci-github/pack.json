@@ -1,0 +1,47 @@
+{
+  "schema_version": "domain_pack.v1",
+  "id": "platform.ci-github",
+  "name": "GitHub Actions CI Workflows",
+  "version": "1.0.0",
+  "scope": "system",
+  "risk": "medium",
+  "domains": [
+    "ci_github",
+    "github_actions",
+    "workflow",
+    "ci"
+  ],
+  "provides": [
+    "knowledge",
+    "strategy",
+    "methodology",
+    "skill",
+    "diagnosis",
+    "validation"
+  ],
+  "depends_on": [
+    "code.testing",
+    "risk.supply-chain"
+  ],
+  "conflicts_with": [],
+  "knowledge_store": "document_store",
+  "allowed_tools": [
+    "read",
+    "shell:test"
+  ],
+  "denied_tools": [
+    "shell:deploy-production"
+  ],
+  "data_policy": {
+    "sensitivity": [
+      "source_code",
+      "secret_adjacent"
+    ],
+    "default_admission": "summary_only",
+    "secret_policy": "deny"
+  },
+  "detector": {
+    "inline": "profile.code_domains.some(d=>['ci_github','github_actions','workflow','ci'].includes(d)) || profile.repo_signals.some(s=>/\\b(github actions|workflow_dispatch|pull_request_target|actions\\/checkout|matrix strategy|github_token|reusable workflow)\\b/i.test(s)) ? 0.9 : 0",
+    "threshold": 0.5
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:scala:non-exhaustive-match",
+  "type": "failure_dossier",
+  "description": "A match on a sealed type ignores the exhaustiveness warning, so adding a variant later throws MatchError at runtime.",
+  "body": "Failure mode: a pattern match over a sealed trait/enum omits a case (or relied on a catch-all _) and the non-exhaustiveness warning was suppressed, so when a new subtype is added the match has no branch and throws a scala.MatchError in production. Detection signals: compiler 'match may not be exhaustive' warning that is ignored; a blanket _ case on a domain ADT; a MatchError at runtime after a new variant. Do not suppress exhaustiveness warnings or hide variants behind _. Safer fallback: keep the hierarchy sealed, match every case explicitly, enable -Xfatal-warnings so a missing case fails compilation, and test each variant.",
+  "domain": "scala",
+  "scope_hint": "code.scala:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.scala:human_authored",
+  "pack_id": "code.scala"
+}

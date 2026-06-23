@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:sls:design-stateless-handlers",
+  "type": "strategy",
+  "title": "Design handlers to be stateless",
+  "description": "Treat each invocation as if it runs on a fresh instance; never rely on in-memory or local-disk state surviving between calls.",
+  "body": "Use when writing any function handler. Do not store request state in module globals, in-memory caches, or /tmp expecting it to persist for the next caller, and do not assume two requests share an instance. Actions: keep durable state in an external store (database, cache, object store), use globals only for read-only config or connection reuse within one warm instance, and write handlers that work correctly on a brand-new instance. Validation signals include a function that behaves identically on cold and warm invocations and passes a test that runs each request on a fresh container. Risk boundary: leaking user data through a reused module global across tenants is a security defect — never put per-request data in shared scope.",
+  "domain": "serverless",
+  "scope_hint": "code.backend.serverless:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.serverless",
+  "pack_id": "code.backend.serverless"
+}

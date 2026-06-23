@@ -1,0 +1,11 @@
+{
+  "ref_id": "knowledge:database:backfills-must-be-restartable",
+  "type": "knowledge",
+  "description": "Data backfills should be bounded, idempotent, and restartable after partial failure.",
+  "body": "Apply this when transforming existing rows, populating new columns, normalizing data, repairing derived state, or moving data between tables. Long unbounded updates can lock tables, time out, or leave unknown progress after failure. This does not define product-specific data retention or privacy policy. Execution impact: batch by stable key or timestamp, record progress, make each batch safe to retry, verify counts after each phase, and avoid mixing schema cleanup with the backfill. Validation signals include bounded batch size, resume behavior after interruption, unchanged already-processed rows on retry, and before/after counts or checksums. Risk boundary: if transformation is lossy, preserve source data until downstream reads are switched and verified. Use when Database Engineering work touches schema deltas, query shape, transaction ownership, constraints, locks, and data volume. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: use the fact to constrain the change and test plan; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include migration dry-runs, rollback checks, EXPLAIN output, constraint tests, and fixture data comparisons. Risk boundary: escalate or stop when the task involves data loss, long locks, non-rollbackable writes, silent query-plan regressions, and unsafe backfills, missing owner evidence, or live external state.",
+  "domain": "sql",
+  "scope_hint": "code.database:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database:backfill_safety_practice",
+  "pack_id": "code.database"
+}

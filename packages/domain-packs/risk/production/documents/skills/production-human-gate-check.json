@@ -1,0 +1,11 @@
+{
+  "ref_id": "skill:production:human-gate-check",
+  "type": "skill",
+  "description": "Check whether a production or external-state action has the evidence needed to proceed.",
+  "body": "Use before executing or recommending deploys, migrations, deletes, secret rotations, traffic shifts, production config writes, or external service mutations. Do not use to perform the mutation itself. Actions: list the intended action, target environment, reversibility, user-visible impact, approval evidence, backup or rollback evidence, and monitoring guardrails; return proceed only when explicit approval and environment proof are present. Validation signals include ticket, runbook, dry-run output, backup confirmation, canary guardrail, and incident commander approval. Risk boundary: missing approval yields needs_human or blocked, not automatic failure and not silent execution.",
+  "domain": "production",
+  "scope_hint": "risk.production:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.production:docs38",
+  "pack_id": "risk.production"
+}

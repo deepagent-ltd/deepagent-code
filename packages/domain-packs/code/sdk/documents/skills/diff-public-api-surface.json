@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:sdk:diff-public-api-surface",
+  "type": "skill",
+  "title": "Diff the public API surface of an SDK change",
+  "description": "Compute the public symbol/type diff between two SDK versions and report additions, removals, and signature changes.",
+  "body": "Use when classifying an SDK change for a version bump. Actions: enumerate exported symbols, types, defaults, and error shapes for the baseline and candidate, then report added, removed, and changed members and whether each is breaking. Do not infer compatibility from the commit message; compare the actual surface. This skill exposes capability only and must not publish or regenerate clients without runtime permission. Validation signals include an api-diff report mapping each change to patch/minor/major. Risk boundary: if the surface cannot be extracted, report the compatibility class as unverified rather than assuming non-breaking.",
+  "domain": "sdk",
+  "scope_hint": "code.sdk:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.sdk",
+  "pack_id": "code.sdk"
+}

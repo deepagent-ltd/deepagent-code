@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:apidesign:plan-a-deprecation",
+  "type": "methodology",
+  "title": "Plan a field or endpoint deprecation",
+  "description": "A procedure to retire part of the contract without breaking clients, through announcement, overlap, and monitored removal.",
+  "body": "Use when a field or endpoint must be removed or replaced. Do not delete it outright from a live version. Steps: mark the element deprecated in the spec with a successor and timeline; keep the old and new paths working in parallel; monitor usage of the deprecated element; remove only after usage drops or the version is retired. Validation signals include clients migrating before removal and telemetry showing the deprecated path unused. Risk boundary: removing a field clients still call breaks them, so gate removal on observed disuse and a communicated timeline.",
+  "domain": "api_design",
+  "scope_hint": "code.api-design:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.api-design",
+  "pack_id": "code.api-design"
+}

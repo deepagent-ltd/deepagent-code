@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:auth:authn-vs-authz",
+  "type": "knowledge",
+  "title": "Authentication vs authorization",
+  "description": "Authentication establishes identity; authorization decides permitted actions. They fail independently and need separate tests.",
+  "body": "Use when a bug or feature blurs login and permission. Authentication answers 'who is this principal' (login, token, session). Authorization answers 'may this principal perform this action on this resource'. A system can authenticate correctly yet authorize wrongly (any logged-in user reaching admin) or authorize correctly but authenticate weakly (token forgery). Do not treat 'is logged in' as sufficient for a privileged action. Actions: confirm an authz check runs after authn on every protected path. Because they fail independently, validation signals must cover both: identity spoofing/forgery tests on the authn side, and privilege-escalation / object-level tests on the authz side. Risk boundary: conflating the two on a sensitive path is a blocking finding requiring human review.",
+  "domain": "backend_auth",
+  "scope_hint": "code.backend.auth:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.auth",
+  "pack_id": "code.backend.auth"
+}

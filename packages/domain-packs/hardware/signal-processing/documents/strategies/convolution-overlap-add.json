@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:sigproc:convolution-overlap-add",
+  "type": "strategy",
+  "title": "Implement long convolution via overlap-add",
+  "description": "For filtering a long stream with a fixed kernel, block the input and use FFT-based overlap-add instead of direct time-domain convolution.",
+  "body": "Use when the kernel is long and the input stream is effectively unbounded. Do not run direct convolution for long kernels, since its cost grows with the product of both lengths. Actions: choose a block size, FFT each block and the zero-padded kernel, multiply in the frequency domain, and verify the overlapped tails sum correctly. Validation signals include a sample-accurate comparison against a short direct-convolution reference on a test sequence and a benchmark showing the expected speedup. Risk boundary: if block boundaries show discontinuities, deny the optimization and fall back to direct convolution until the overlap bookkeeping is proven correct.",
+  "domain": "signal_processing",
+  "scope_hint": "hardware.signal-processing:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.signal-processing",
+  "pack_id": "hardware.signal-processing"
+}

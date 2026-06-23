@@ -1,0 +1,11 @@
+{
+  "ref_id": "skill:query:extract-count-from-tool-output",
+  "type": "skill",
+  "description": "Extract counts from explicit tool output and preserve the command, query, path, or filter that produced the count.",
+  "body": "Inputs: tool output, command or query, and scope. Procedure: identify whether the tool output contains a total count, a line count, a row count, or only a partial sample; keep the filter and path/query visible; avoid recomputing from truncated output; mark partial results as partial. Failure handling: if the output is truncated or lacks a count, do not invent a total. Output: a concise count statement with source scope and verified/unverified status. Use when a read-only query, count, list, status, diff, or inspection request must be answered from repository or tool evidence. Do not use when the user asks to edit, fix, deploy, migrate, delete, insert, update, or alter state. Actions: identify the exact scope, run read-only search or inspection tools, cite the source artifact, and preserve the command or file evidence used for the answer. Validation signals include matching counts against tool output, source references, scope labels, and no modified working-tree files. Risk boundary: stop or ask for confirmation if the task changes from query to mutation, if evidence is stale, or if the answer would expose secrets or excessive output.",
+  "domain": "query",
+  "scope_hint": "code.query:skill",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.query",
+  "pack_id": "code.query"
+}

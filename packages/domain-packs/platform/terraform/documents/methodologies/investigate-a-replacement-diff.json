@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:tf:investigate-a-replacement-diff",
+  "type": "methodology",
+  "title": "Investigate an unexpected replace in a plan",
+  "description": "When plan shows destroy-and-recreate, find the forcing attribute and decide whether the replacement is acceptable.",
+  "body": "Steps: 1. In the plan, locate the resource marked '-/+ destroy and then create replacement'. 2. Read the attribute annotated '# forces replacement'. 3. Determine if changing that attribute in place is possible (lifecycle, separate resource) or if recreation is inherent. 4. Assess data loss / downtime: will the recreate drop a disk, IP, or stateful store? 5. Decide to proceed, use create_before_destroy, or avoid the change. Rollback point: before apply, while it is still only a plan. Validation: the forcing attribute and blast radius are understood and documented; an unexplained replacement of a database or volume must be escalated, not applied.",
+  "domain": "terraform",
+  "scope_hint": "platform.terraform:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.terraform",
+  "pack_id": "platform.terraform"
+}

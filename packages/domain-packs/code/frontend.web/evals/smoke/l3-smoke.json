@@ -1,0 +1,75 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "code.frontend.web",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "frontend",
+      "browser",
+      "css",
+      "accessibility"
+    ],
+    "business_domains": [],
+    "platforms": [
+      "web"
+    ],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "L3 smoke for code.frontend.web: DOM, CSS, browser APIs, responsive viewports, console/network errors, a11y, images, and canvas"
+    ],
+    "round_signals": [
+      "l3_validation_smoke"
+    ],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "round_signals": [],
+    "user_overrides": [],
+    "repo_signals": [
+      "optimize a Postgres query plan and add a covering index on the orders table"
+    ]
+  },
+  "retrieval_query": "DOM CSS responsive accessibility browser console network playwright viewport smoke",
+  "expected_pack_id": "code.frontend.web",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "browser-visible web UI L3 validation smoke",
+    "signals": [
+      "Playwright or browser smoke",
+      "viewport matrix screenshots",
+      "console/network checks",
+      "keyboard/focus checks",
+      "and asset/canvas pixel evidence"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "browser-visible web UI diagnosis smoke",
+    "signals": [
+      "separate layout overflow",
+      "missing accessible names",
+      "browser API failure",
+      "network error",
+      "and non-rendering asset causes"
+    ]
+  },
+  "source_refs": [
+    "source:mdn-web-docs:paraphrased",
+    "source:web.dev:paraphrased"
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:ruby:mass-assignment-exposure",
+  "type": "failure_dossier",
+  "description": "A controller permits all params or a protected column, letting a user set role/owner fields by adding request params.",
+  "body": "Failure mode: a controller passes raw params to create/update or calls permit! / permits a column like role or user_id, so a client can supply that attribute and escalate privilege or reassign ownership. Detection signals: params.require(...).permit! or a permit list including role/admin/owner columns; raw params passed to a model; a request setting an unexpected attribute succeeds. Do not permit attributes the user should not control. Safer fallback: permit an explicit allowlist excluding privilege/ownership columns, set those server-side from the authenticated principal, and add a request spec asserting a forbidden attribute from the client is ignored.",
+  "domain": "ruby",
+  "scope_hint": "code.ruby:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.ruby:human_authored",
+  "pack_id": "code.ruby"
+}

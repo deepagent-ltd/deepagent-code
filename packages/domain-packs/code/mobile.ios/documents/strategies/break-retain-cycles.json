@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:ios:break-retain-cycles",
+  "type": "strategy",
+  "title": "Break retain cycles with weak/unowned",
+  "description": "Capture self weakly in escaping closures and delegate references so view controllers and objects deallocate instead of leaking.",
+  "body": "Use when a closure, timer, delegate, or Combine subscription captures self. Do not strongly capture self in an escaping closure stored by the same object, and do not use strong delegate references. Actions: use [weak self] (then guard) in escaping closures, unowned only when self is guaranteed to outlive the closure, weak delegates, and store/cancel Combine subscriptions so they release. Validation signals include Instruments/leak checks showing view controllers deallocate on dismiss and no growing object counts. Risk boundary: a retain cycle leaks the whole view controller and its subtree, growing memory until the app is jettisoned — under ARC there is no GC to clean it up, so the cycle must be broken explicitly.",
+  "domain": "ios",
+  "scope_hint": "code.mobile.ios:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.mobile.ios",
+  "pack_id": "code.mobile.ios"
+}

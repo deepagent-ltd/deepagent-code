@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:apidesign:choose-versioning-scheme",
+  "type": "methodology",
+  "title": "Choose a versioning scheme for the surface",
+  "description": "A decision procedure for selecting URI, header, or media-type versioning based on client needs and how the surface will evolve.",
+  "body": "Use when launching an API or formalizing how versions will be expressed. Do not pick a scheme by habit without weighing consumer ergonomics. Steps: assess whether clients are browsers, SDKs, or services; compare URI major versioning for visibility, header versioning for cleaner URLs, and media-type versioning for fine-grained content negotiation; decide what constitutes a breaking change that warrants a bump; document the policy. Validation signals include consumers selecting a version predictably and additive changes not requiring a bump. Risk boundary: switching schemes after launch is itself breaking, so choose deliberately and record the rule for what triggers a new version.",
+  "domain": "api_design",
+  "scope_hint": "code.api-design:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.api-design",
+  "pack_id": "code.api-design"
+}

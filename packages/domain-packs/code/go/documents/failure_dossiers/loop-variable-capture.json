@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:go:loop-variable-capture",
+  "type": "failure_dossier",
+  "description": "Capturing a loop variable by reference in a goroutine or closure (pre-Go 1.22 semantics), so all closures observe the final value.",
+  "body": "Failure mode: `for _, v := range items { go func(){ use(v) }() }` captures the single loop variable, so on Go versions before 1.22 every goroutine sees the last element instead of its own. Detection signals: all goroutines process the same item; results depend on scheduling; `go vet` loopclosure warns. Do not rely on the loop variable inside a goroutine/closure on older toolchains. Safer fallback: shadow it with `v := v` inside the loop or pass it as a func argument go func(v T){...}(v), and confirm with a test asserting each distinct item was handled; verify the module's go directive if depending on 1.22 per-iteration scoping.",
+  "domain": "go",
+  "scope_hint": "code.go:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.go:human_authored",
+  "pack_id": "code.go"
+}

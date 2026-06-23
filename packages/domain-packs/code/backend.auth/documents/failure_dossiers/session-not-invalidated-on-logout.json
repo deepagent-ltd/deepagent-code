@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:auth:session-not-invalidated-on-logout",
+  "type": "failure_dossier",
+  "description": "Logout or credential change leaves the old session/token valid, so a stolen or shared token keeps working.",
+  "body": "Failure mode: logout clears only the client cookie, or a password reset does not revoke existing sessions/tokens, so a previously issued token remains valid until natural expiry. Detection signals: no server-side session deletion or token revocation on logout; password change keeps old refresh tokens alive; long access-token TTL with no revocation. Do not treat client-side cookie clearing as logout. Safer fallback: revoke the server session / refresh token on logout and on credential change, keep access tokens short, and add a test that a logged-out or reset token is rejected.",
+  "domain": "backend_auth",
+  "scope_hint": "code.backend.auth:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.auth:human_authored",
+  "pack_id": "code.backend.auth"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:frontend_react:rsc-vs-client-component",
+  "type": "knowledge",
+  "title": "Server vs client components differ in capabilities",
+  "description": "React Server Components run only on the server with no hooks/state/effects, while client components ship JS and own interactivity; the boundary controls bundle and hydration.",
+  "body": "Use when deciding where a component runs in an RSC/SSR app. Server components can fetch data and access server resources but cannot use state, effects, or browser APIs and ship no JS; client components (marked 'use client') own interactivity and are hydrated. Do not add hooks or event handlers to a server component or import server-only code into a client one. Actions: keep interactive leaves as client components and data/layout as server components to shrink the client bundle. Validation signals include a smaller hydration payload and a build with no server/client import-boundary errors. Risk boundary: leaking secrets or server-only modules across the boundary is a security issue; verify imports before shipping.",
+  "domain": "react",
+  "scope_hint": "code.frontend.react:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.frontend.react",
+  "pack_id": "code.frontend.react"
+}

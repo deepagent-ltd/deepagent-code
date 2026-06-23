@@ -1,0 +1,12 @@
+{
+  "ref_id": "failure_dossier:security:ssrf-url-allowlist-bypass",
+  "type": "failure_dossier",
+  "title": "SSRF allowlist bypass",
+  "description": "URL validation checks strings but not canonical destination, redirects, or resolved network address.",
+  "body": "Failure mode: outbound fetch code permits user-provided URLs after regex or hostname checks, but redirects, encoded hosts, DNS rebinding, IPv6 forms, or private ranges still reach internal services. Detection signals include fetch of user URLs, missing redirect policy, no resolved-address check, and tests that only cover obvious localhost strings. Remediation is strict destination allowlist with canonicalization and network-layer restrictions. Human gate is required for new SSRF-capable features. Use when a proposed approach skips trust boundaries, authorization decisions, dangerous sinks, secrets, and dependency execution or claims success without domain evidence. Do not use this dossier as a positive implementation strategy; it is a do-not-use signal. Actions: block the shortcut, name the missing evidence, and switch to a safer methodology or ask for human approval. Validation signals include absence or contradiction in negative security tests, server-side checks, sink payload tests, and secret scans. Risk boundary: treat repeated recurrence as a blocker when it can cause client-only controls, injection, credential leakage, permissive fallback, and unsafe dependency changes.",
+  "domain": "injection",
+  "scope_hint": "risk.security:failure_dossiers",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.security",
+  "pack_id": "risk.security"
+}

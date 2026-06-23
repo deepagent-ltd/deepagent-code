@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:frontend_accessibility:screen-reader-walkthrough",
+  "type": "methodology",
+  "title": "Walk a changed flow with a screen reader",
+  "description": "Navigate the changed UI with a real screen reader to confirm names, roles, states, and dynamic updates are announced in a sensible order.",
+  "body": "Steps: 1. Pick the screen reader for the platform (VoiceOver, NVDA, JAWS, TalkBack). 2. Tab and use reading commands through the changed flow, listening for each control's name, role, and state. 3. Trigger dynamic changes (validation errors, async results) and confirm a live region or focus move announces them. 4. Confirm reading order matches visual order and no content is orphaned. 5. Record what was announced versus expected. Rollback point: before restructuring DOM order. Validation: the screen reader announces every control correctly and dynamic updates are heard; an automated scan alone is not sufficient evidence of a screen-reader-usable flow.",
+  "domain": "frontend",
+  "scope_hint": "code.frontend.accessibility:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.frontend.accessibility",
+  "pack_id": "code.frontend.accessibility"
+}

@@ -1,0 +1,11 @@
+{
+  "ref_id": "strategy:ui_frontend_vue:composition-contract-first",
+  "type": "strategy",
+  "description": "Design Composition API state, computed values, effects, and exposed events before editing templates.",
+  "body": "Use when changing <script setup>, composables, or component state. Do not copy React hook patterns or move all logic into templates. Identify props, emits, refs/reactive state, computed derivations, and lifecycle effects, then edit the smallest owner. Verify with component/unit tests and a browser smoke if user-visible. Risk boundary: implicit template unwrapping can hide ref misuse until runtime. Use when Vue Frontend Engineering work touches visible UI behavior, browser console output, DOM state, assets, viewport behavior, and interaction evidence. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: choose the smallest direction that preserves the domain contract; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include browser smoke, component tests, viewport screenshots, console/network checks, and accessibility assertions. Risk boundary: escalate or stop when the task involves visual regressions, inaccessible interaction, hydration mismatch, and browser-only failures, missing owner evidence, or live external state.",
+  "domain": "frontend_vue",
+  "scope_hint": "code.frontend.vue:strategys",
+  "evidence_strength": "medium",
+  "provenance_tag": "code.frontend.vue:seed:vue_nuxt_pinia_vite_docs:paraphrased",
+  "pack_id": "code.frontend.vue"
+}

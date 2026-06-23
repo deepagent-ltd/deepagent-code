@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:analytics:reconcile-incremental",
+  "type": "methodology",
+  "title": "Reconcile incremental models against full refresh",
+  "description": "Periodically rebuild an incremental model fully and diff it against the incremental output to catch silent drift.",
+  "body": "Use when an important table is materialized incrementally for speed. Do not trust an incremental model indefinitely — late data, updates, and logic changes cause it to drift from the truth. Actions: on a schedule, full-refresh into a staging copy, diff it against the incremental table on keys and measures, and alert on any mismatch beyond tolerance. Validation signals include a scheduled reconciliation diff near zero and an alert that fires on a seeded backdated row the incremental missed. Risk boundary: an undetected drift reports wrong business numbers; if the diff exceeds tolerance, treat the incremental output as untrustworthy, full-refresh it, and widen the lookback window.",
+  "domain": "analytics",
+  "scope_hint": "code.analytics:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.analytics",
+  "pack_id": "code.analytics"
+}

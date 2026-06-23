@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:embed:heap-fragmentation-on-long-run",
+  "type": "failure_dossier",
+  "description": "Using malloc/free in long-running firmware, where heap fragmentation eventually causes an allocation to fail on an unattended device.",
+  "body": "Failure mode: firmware allocates and frees variable-size buffers over weeks of uptime; the heap fragments until a request that should fit cannot be satisfied, and the device — with no operator — faults or stops servicing events. Detection signals: failures appear only after long uptime, never on the bench; allocation returns null intermittently; free heap is sufficient but the largest free block is too small. Do not rely on dynamic allocation in long-running or real-time firmware. Safer fallback: switch to static buffers or fixed-size memory pools sized for the worst case, eliminate heap use on hot paths, and run a multi-day soak test to confirm no allocation failure.",
+  "domain": "embedded",
+  "scope_hint": "code.embedded:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.embedded:human_authored",
+  "pack_id": "code.embedded"
+}

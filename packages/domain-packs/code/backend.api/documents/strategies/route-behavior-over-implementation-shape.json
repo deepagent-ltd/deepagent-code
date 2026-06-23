@@ -1,0 +1,11 @@
+{
+  "ref_id": "strategy:backend_api:route-behavior-over-implementation-shape",
+  "type": "strategy",
+  "description": "Judge API changes by observable route behavior, not only internal handler structure.",
+  "body": "Use this when refactoring controllers, routers, middleware, resolvers, or service boundaries. A cleaner internal shape is not safe unless observable request parsing, validation, status, headers, body, side effects, and error shape remain intended. This does not require preserving private helper names or framework internals. Execution actions include selecting representative route smoke cases, exercising success and negative paths, comparing response contract and safe logs, and verifying middleware ordering that affects parsing or errors. Validation signals include expected status codes, content type, response body fields, headers such as request ID or cache policy, and no unhandled errors. Risk boundary: when behavior differs from existing clients or docs, treat it as a contract change rather than a refactor. Use when Backend API work touches repository conventions, toolchain files, changed symbols, validation commands, and runtime output. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: choose the smallest direction that preserves the domain contract; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include package-local checks, focused tests, build output, smoke runs, and command logs. Risk boundary: escalate or stop when the task involves broad rewrites, generated-file drift, stale assumptions, and unvalidated behavior changes, missing owner evidence, or live external state.",
+  "domain": "api",
+  "scope_hint": "code.backend.api:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.api:behavioral_contract_practice",
+  "pack_id": "code.backend.api"
+}

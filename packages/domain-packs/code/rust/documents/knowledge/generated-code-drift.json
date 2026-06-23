@@ -1,0 +1,11 @@
+{
+  "ref_id": "knowledge:rust:generated-code-drift",
+  "type": "knowledge",
+  "description": "In Rust, never hand-edit build.rs output, bindgen bindings, and macro-expanded code (cargo expand); change the source and rerun the generator.",
+  "body": "In Rust, build.rs output, bindgen bindings, and macro-expanded code (cargo expand) are derived artifacts: editing them directly drifts from the generator and is overwritten on the next run. Use when a diff touches generated files, codegen inputs, or the the toolchain channel (rust-toolchain.toml), edition, and enabled features that produces them. Do not use this to justify patching generated output by hand or skipping regeneration. Actions: locate the generator and its inputs, edit the source, rerun the generation step, then run cargo build (and cargo build --release) with the workspace's feature flags so the regenerated output is what ships. Validation signals include a clean regeneration diff, a passing cargo test on the affected crate with the relevant features, and no manual edits left in the generated tree. Risk boundary: escalate before regenerating if the generator is pinned, vendored, or owned by another team, and roll back if regeneration changes unrelated files.",
+  "domain": "rust",
+  "scope_hint": "code.rust:knowledge",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.rust:skill_survey",
+  "pack_id": "code.rust"
+}

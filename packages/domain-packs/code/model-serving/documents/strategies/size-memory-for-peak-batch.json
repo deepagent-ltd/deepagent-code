@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:serving:size-memory-for-peak-batch",
+  "type": "strategy",
+  "title": "Size accelerator memory for the worst concurrent batch",
+  "description": "Provision and cap memory for the largest batch and longest sequences that can occur together, not the average request.",
+  "body": "Use when configuring batch limits and instance size for serving. Do not size memory for the typical request — the OOM happens at peak concurrency with the longest inputs (and, for generative models, the largest KV cache). Actions: compute worst-case memory as max-batch times max-sequence footprint plus model weights, set batch caps so that fits, and reject or queue beyond capacity rather than OOM. Validation signals include no OOM under a peak-concurrency stress test and headroom on the memory graph. Risk boundary: an OOM crashes the whole server and drops every in-flight request; treat peak-batch memory as a hard cap, not a soft target.",
+  "domain": "model_serving",
+  "scope_hint": "code.model-serving:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.model-serving",
+  "pack_id": "code.model-serving"
+}

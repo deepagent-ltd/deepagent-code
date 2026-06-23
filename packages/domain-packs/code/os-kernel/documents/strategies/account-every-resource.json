@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:kernel:account-every-resource",
+  "type": "strategy",
+  "title": "Account for every allocation and reference",
+  "description": "Balance allocations, references, and locks on all paths — especially error paths — so the kernel never leaks memory or refcounts.",
+  "body": "Use when writing kernel code that allocates memory, takes references, or acquires locks. Do not return early from an error path without unwinding what was acquired, and do not assume the caller cleans up. Actions: pair every alloc/get/lock with a free/put/unlock, use goto-based unwind labels for ordered cleanup, and audit each error return. Validation signals include a clean kmemleak/KASAN report and balanced refcounts across a stress workload with fault injection on every allocation. Risk boundary: a kernel memory or refcount leak degrades the whole system over uptime and a double-free is exploitable; treat leak/double-free findings as blocking and verify error paths with injected failures.",
+  "domain": "kernel",
+  "scope_hint": "code.os-kernel:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.os-kernel",
+  "pack_id": "code.os-kernel"
+}

@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure_dossier:hwpwr:missing-level-shifter",
+  "type": "failure_dossier",
+  "description": "Logic behaves unreliably because a signal crosses between voltage domains without a level shifter.",
+  "body": "Failure mode: a low-voltage output drives a high-voltage input directly, so the receiving gate cannot reliably distinguish a logic high, producing marginal or wrong levels. Detection signals: a level-shifter rule violation between domains, intermittent logic errors at the crossing, and behavior sensitive to the voltage difference. Do not close timing while a voltage crossing lacks a shifter. Safer fallback: insert the appropriate level shifter on the crossing, declare it in the power-intent file, and re-check the multi-voltage rules.",
+  "domain": "power_design",
+  "scope_hint": "hardware.power:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.power:human_authored",
+  "pack_id": "hardware.power"
+}

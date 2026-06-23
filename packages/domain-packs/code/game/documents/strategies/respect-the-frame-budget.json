@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:game:respect-the-frame-budget",
+  "type": "strategy",
+  "title": "Treat the frame budget as a hard deadline",
+  "description": "Hold each frame's total work under the budget (16.6 ms at 60 FPS) by profiling and moving expensive work off the critical path.",
+  "body": "Use when targeting a smooth frame rate. Do not do unbounded work per frame, and do not block the main thread on I/O, asset loads, or long computations. Actions: profile per-frame CPU/GPU time, attribute cost to systems, keep total under budget (16.6 ms for 60 FPS, 8.3 ms for 120), and stream assets, amortize work across frames, or move it to worker threads. Validation signals include a frame-time graph staying under budget at p99 with no spikes during play. Risk boundary: a single blocking load or GC pause that exceeds the budget shows the player a visible hitch; budget overruns on the main thread are correctness issues for a real-time game, not just slowness.",
+  "domain": "game",
+  "scope_hint": "code.game:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.game",
+  "pack_id": "code.game"
+}

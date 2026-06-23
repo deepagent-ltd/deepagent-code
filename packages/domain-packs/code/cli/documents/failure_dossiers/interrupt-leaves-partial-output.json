@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:cli:interrupt-leaves-partial-output",
+  "type": "failure_dossier",
+  "description": "Failing to handle SIGINT/SIGTERM so a Ctrl-C leaves a half-written output file or orphaned child processes.",
+  "body": "Failure mode: the tool writes its output file in place and spawns children, but installs no signal handlers, so interrupting it leaves a truncated/corrupt file and child processes still running. Detection signals: after Ctrl-C an output file is partially written and looks valid; orphaned processes linger in the process table; a pipeline consumes a truncated file. Do not write in place without interrupt handling. Safer fallback: write to a temp file and rename atomically on success, trap SIGINT/SIGTERM to clean up temp files and terminate children, and exit with 128+signal.",
+  "domain": "cli",
+  "scope_hint": "code.cli:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.cli:human_authored",
+  "pack_id": "code.cli"
+}

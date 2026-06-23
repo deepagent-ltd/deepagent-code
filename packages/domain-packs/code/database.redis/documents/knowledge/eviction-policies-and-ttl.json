@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:redis:eviction-policies-and-ttl",
+  "type": "knowledge",
+  "title": "Eviction policies and TTL semantics",
+  "description": "maxmemory plus a policy decides what is dropped under pressure; TTL and eviction are distinct mechanisms.",
+  "body": "Use when bounding Redis memory. TTL expires individual keys at a set time; eviction removes keys when maxmemory is hit regardless of TTL. Policies: noeviction (writes error when full), allkeys-lru/lfu (evict least-recently/frequently used among all keys — good for a cache), and volatile-lru/lfu/ttl (evict only keys that have a TTL — use when some keys must persist). Do not run a growing cache with noeviction, and do not assume a key with no TTL is safe from eviction under allkeys policies. Actions: match the policy to whether all keys are disposable. Validation signals include memory plateauing at maxmemory under load. Risk boundary: mixing must-keep keys with a cache under an allkeys policy can evict the must-keep keys — isolate them.",
+  "domain": "redis",
+  "scope_hint": "code.database.redis:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.redis",
+  "pack_id": "code.database.redis"
+}

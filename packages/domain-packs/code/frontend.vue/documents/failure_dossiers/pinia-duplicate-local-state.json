@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:frontend_vue:pinia-duplicate-local-state",
+  "type": "failure_dossier",
+  "description": "Duplicating Pinia state locally without sync",
+  "body": "Copying store state into component refs without a sync plan creates stale UI. Safer path: use storeToRefs/computed, or explicitly define local draft/edit state and commit behavior.\n\nUse only as a diagnostic do-not-use signal; do not expose this as positive strategy, methodology, knowledge, skill, or memory.",
+  "domain": "frontend_vue",
+  "scope_hint": "code.frontend.vue:failure_dossiers",
+  "evidence_strength": "medium",
+  "provenance_tag": "code.frontend.vue:failure_seed:paraphrased_common_failures",
+  "pack_id": "code.frontend.vue"
+}

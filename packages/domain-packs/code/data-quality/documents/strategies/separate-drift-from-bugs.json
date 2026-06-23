@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:dq:separate-drift-from-bugs",
+  "type": "strategy",
+  "title": "Distinguish data drift from pipeline bugs",
+  "description": "When a distribution shifts, determine whether the world changed or the pipeline broke before alerting or retraining.",
+  "body": "Use when a monitored distribution or metric moves unexpectedly. Do not assume a shift means genuine drift (warranting retraining) — a join change, unit change, or partial load produces the same symptom and a different fix. Actions: compare the suspect feature against its baseline, check upstream for schema/logic changes and load completeness, and confirm row counts before concluding drift. Validation signals include a drift metric tied to a baseline plus a clean pipeline-integrity check. Risk boundary: retraining on a pipeline bug bakes the bug into the model; rule out a data defect before attributing a shift to real drift.",
+  "domain": "data_quality",
+  "scope_hint": "code.data-quality:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.data-quality",
+  "pack_id": "code.data-quality"
+}

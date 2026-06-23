@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:frontend_vue:mutate-props-directly",
+  "type": "failure_dossier",
+  "description": "Mutating props directly",
+  "body": "Direct prop mutation breaks one-way data flow and can be overwritten by parent updates. Safer path: emit update events, use v-model contract, or copy to local state with explicit sync rules.\n\nUse only as a diagnostic do-not-use signal; do not expose this as positive strategy, methodology, knowledge, skill, or memory.",
+  "domain": "frontend_vue",
+  "scope_hint": "code.frontend.vue:failure_dossiers",
+  "evidence_strength": "medium",
+  "provenance_tag": "code.frontend.vue:failure_seed:paraphrased_common_failures",
+  "pack_id": "code.frontend.vue"
+}

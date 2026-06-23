@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:gcp:bigquery-slot-model",
+  "type": "knowledge",
+  "title": "BigQuery slots, on-demand vs reservations, and pricing",
+  "description": "Covers the slot as the unit of compute, on-demand bytes-billed vs flat-rate reservations, and how concurrency contends for slots.",
+  "body": "Use when reasoning about BigQuery performance and cost. Do not equate slow queries with needing more data scanned — it may be slot contention. Actions: know a slot is a unit of compute; on-demand pricing bills by bytes scanned while reservations buy a fixed slot capacity shared across queries; concurrent queries share the reservation so heavy jobs starve others. Inspect the query plan's slot-ms and wait time. Validation signals include slot utilization in the admin panel and reduced wait time after right-sizing a reservation. Risk boundary: changing a shared reservation affects all workloads on it and warrants review.",
+  "domain": "gcp",
+  "scope_hint": "platform.cloud.gcp:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.cloud.gcp",
+  "pack_id": "platform.cloud.gcp"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:vdb:match-the-distance-metric-to-the-model",
+  "type": "strategy",
+  "title": "Match the distance metric to the embedding model",
+  "description": "Use the same metric the embedding model was trained for, since cosine, L2, and dot product rank differently.",
+  "body": "Use when defining a vector column and its operator class. Do not pick a distance metric arbitrarily; cosine similarity, Euclidean L2, and inner (dot) product produce different rankings, and a model trained for cosine returns wrong neighbours under L2. Actions: read the model card for the intended metric, normalize vectors to unit length if using cosine so dot product and cosine agree, and build the index with the matching operator class (e.g. vector_cosine_ops in pgvector). Validation signals include top-k results matching a known-good reference set for the model. Risk boundary: querying with a different metric than the index was built with silently returns meaningless results, so assert the metric is consistent end to end before trusting output.",
+  "domain": "vector_db",
+  "scope_hint": "code.database.vector:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.vector",
+  "pack_id": "code.database.vector"
+}

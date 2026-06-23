@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:ghci:github-token-left-write-all",
+  "type": "failure_dossier",
+  "description": "The workflow runs with the default write-all GITHUB_TOKEN, giving every job and dependency push and admin reach.",
+  "body": "Failure mode: no permissions block is declared, so GITHUB_TOKEN keeps the repository default (often write-all), and any compromised step or malicious dependency can push commits, alter releases, or comment as the bot across the repo. Detection signals: no top-level or per-job permissions:; jobs that only test still hold contents:write; an injected step can push to branches. Do not rely on the default token scope. Safer fallback: set a top-level permissions: contents: read and grant the minimal write scope only on the specific job that needs it, then verify the token cannot reach protected branches.",
+  "domain": "ci_github",
+  "scope_hint": "platform.ci-github:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.ci-github:human_authored",
+  "pack_id": "platform.ci-github"
+}

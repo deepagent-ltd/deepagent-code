@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:svc:unbounded-concurrency-pool-exhaustion",
+  "type": "failure_dossier",
+  "description": "A consumer spawns one task per message with no limit, exhausting the DB connection pool or memory.",
+  "body": "Failure mode: work is pulled and processed with unbounded concurrency, so a burst opens more DB connections or holds more buffers than the pool allows, starving the service and its neighbors. Detection signals: a goroutine/promise per message with no semaphore; connection-pool-timeout errors under load; memory grows with queue depth. Do not fan out without a bound. Safer fallback: cap concurrency to downstream capacity, apply backpressure by pausing fetch at the limit, and load-test that in-flight work plateaus.",
+  "domain": "backend_service",
+  "scope_hint": "code.backend.service:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.service:human_authored",
+  "pack_id": "code.backend.service"
+}

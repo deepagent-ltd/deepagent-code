@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure_dossier:mlops:registry-overwrite",
+  "type": "failure_dossier",
+  "description": "A model version is overwritten in place, destroying the lineage needed to explain a production incident.",
+  "body": "Failure mode: a CI job re-registers a model under an existing version or mutable path, overwriting metadata so the artifact serving in production no longer matches its recorded lineage. Detection signals: a registry version whose dataset hash or commit no longer resolves, and an incident where the live model's behavior cannot be reproduced from its logged metadata. Do not patch by guessing the original config — unverified lineage is worse than none. Safer fallback: enforce immutable, monotonically increasing versions in the registry, restore provenance from CI logs and artifact stores, and block promotions that target an existing version until lineage is rebuilt.",
+  "domain": "mlops",
+  "scope_hint": "code.mlops:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.mlops:human_authored",
+  "pack_id": "code.mlops"
+}

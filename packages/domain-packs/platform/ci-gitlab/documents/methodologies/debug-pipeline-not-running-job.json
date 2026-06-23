@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:glci:debug-pipeline-not-running-job",
+  "type": "methodology",
+  "title": "Debug a job that never runs or always runs",
+  "description": "Trace rules/only-except evaluation against the pipeline source to find why a job is created or skipped unexpectedly.",
+  "body": "Steps: 1. Identify the pipeline source (push, merge_request_event, schedule, trigger, tag) for the run in question. 2. Read the job's rules (or only/except) top to bottom and find the first matching clause and its when. 3. Check for a rules/only-except mix (mutually exclusive) or a missing default that drops the job. 4. Use the pipeline editor or a CI lint to preview which jobs the config produces for that ref. 5. Adjust the conditions and re-preview. Rollback point: revert the .gitlab-ci.yml change. Validation: the job appears exactly in the intended pipeline sources and the CI lint confirms it.",
+  "domain": "ci_gitlab",
+  "scope_hint": "platform.ci-gitlab:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.ci-gitlab",
+  "pack_id": "platform.ci-gitlab"
+}

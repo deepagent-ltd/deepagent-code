@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:cli:return-meaningful-exit-codes",
+  "type": "strategy",
+  "title": "Return meaningful exit codes",
+  "description": "Exit 0 only on success and use distinct non-zero codes for distinct failure classes so scripts and CI can branch on them.",
+  "body": "Use when a CLI can succeed or fail. Do not return 0 after an error, and do not print 'error' to the screen while exiting 0. Actions: exit 0 on success, reserve non-zero codes for failure classes (e.g. 1 general error, 2 usage error), document them, and ensure every error path sets the code before exit. Validation signals include `tool; echo $?` showing 0 on success and the documented non-zero on each failure, and CI correctly detecting failures. Risk boundary: an exit 0 on failure makes a broken step look green in CI and silently passes bad data downstream — a wrong exit code is a real defect.",
+  "domain": "cli",
+  "scope_hint": "code.cli:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.cli",
+  "pack_id": "code.cli"
+}

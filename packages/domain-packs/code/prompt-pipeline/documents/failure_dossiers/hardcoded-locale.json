@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:prompt:hardcoded-locale",
+  "type": "failure_dossier",
+  "description": "Language, date, number, or currency formatting is hardcoded for one locale, mis-serving users in other regions.",
+  "body": "Failure mode: the template embeds English phrasing and one region's date/number/currency format, so users in other locales get mislocalized, sometimes wrong-meaning output, and the system assumes output language equals system language. Detection signals: no locale parameter; hardcoded format strings; output language fixed regardless of user; no cross-locale test. Do not bake one locale into the template. Safer fallback: take locale as an explicit input, select localized fragments, format dates/numbers/currency per locale, specify output language, and test that switching locale localizes correctly without changing instruction structure.",
+  "domain": "prompt_pipeline",
+  "scope_hint": "code.prompt-pipeline:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.prompt-pipeline:human_authored",
+  "pack_id": "code.prompt-pipeline"
+}

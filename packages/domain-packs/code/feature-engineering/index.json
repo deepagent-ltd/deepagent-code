@@ -1,0 +1,436 @@
+[
+  {
+    "ref_id": "strategy:feat:single-feature-definition",
+    "type": "strategy",
+    "title": "Define each feature once for offline and online",
+    "summary": "Express every feature transform in a single shared definition so backfill and serving compute identical values and skew cannot creep in.",
+    "domains": [
+      "feature_engineering",
+      "feature_store",
+      "feature_drift",
+      "online_features"
+    ],
+    "triggers": [
+      "feature store",
+      "train serve skew",
+      "online features",
+      "consistency"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.feature-engineering"
+  },
+  {
+    "ref_id": "strategy:feat:point-in-time-correctness",
+    "type": "strategy",
+    "title": "Join features at the label's point in time",
+    "summary": "Construct training rows with a point-in-time join so each feature reflects only data available before the label timestamp.",
+    "domains": [
+      "feature_engineering",
+      "feature_store",
+      "feature_drift",
+      "online_features"
+    ],
+    "triggers": [
+      "temporal leakage",
+      "point in time",
+      "feature store",
+      "backfill"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.feature-engineering"
+  },
+  {
+    "ref_id": "strategy:feat:guard-against-target-leakage",
+    "type": "strategy",
+    "title": "Exclude features derived from the target",
+    "summary": "Audit each feature for hidden dependence on the label so the model does not learn a proxy for the answer it should predict.",
+    "domains": [
+      "feature_engineering",
+      "feature_store",
+      "feature_drift",
+      "online_features"
+    ],
+    "triggers": [
+      "target leakage",
+      "feature selection",
+      "leakage",
+      "audit"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.feature-engineering"
+  },
+  {
+    "ref_id": "strategy:feat:choose-encoding-by-cardinality",
+    "type": "strategy",
+    "title": "Pick encodings by cardinality and model type",
+    "summary": "Match categorical encoding to feature cardinality and the downstream model so representation does not waste capacity or leak.",
+    "domains": [
+      "feature_engineering",
+      "feature_store",
+      "feature_drift",
+      "online_features"
+    ],
+    "triggers": [
+      "one hot encoding",
+      "encoding",
+      "categorical",
+      "embedding"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.feature-engineering"
+  },
+  {
+    "ref_id": "strategy:feat:contract-normalization-stats",
+    "type": "strategy",
+    "title": "Version normalization statistics as a contract",
+    "summary": "Persist and version the means, scales, and vocabularies used to normalize features so serving applies the exact training-time transform.",
+    "domains": [
+      "feature_engineering",
+      "feature_store",
+      "feature_drift",
+      "online_features"
+    ],
+    "triggers": [
+      "normalization",
+      "feature store",
+      "online features",
+      "contract"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.feature-engineering"
+  },
+  {
+    "ref_id": "strategy:feat:select-features-on-validation",
+    "type": "strategy",
+    "title": "Select features against a held-out fold",
+    "summary": "Drive feature selection from validation-fold importance and stability, not from full-dataset correlations that overfit.",
+    "domains": [
+      "feature_engineering",
+      "feature_store",
+      "feature_drift",
+      "online_features"
+    ],
+    "triggers": [
+      "feature selection",
+      "validation",
+      "stability",
+      "importance"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.feature-engineering"
+  },
+  {
+    "ref_id": "methodology:feat:author-a-store-feature",
+    "type": "methodology",
+    "title": "Author a feature for the offline/online store",
+    "summary": "The end-to-end path from raw source to a materialized, point-in-time-correct, dual-served feature.",
+    "domains": [
+      "feature_engineering",
+      "feature_store",
+      "feature_drift",
+      "online_features"
+    ],
+    "triggers": [
+      "feature store",
+      "feast",
+      "online features",
+      "materialization"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.feature-engineering"
+  },
+  {
+    "ref_id": "methodology:feat:detect-feature-drift",
+    "type": "methodology",
+    "title": "Monitor each feature for drift over time",
+    "summary": "Compare live feature distributions to the training reference and route material drift to investigation or retraining.",
+    "domains": [
+      "feature_engineering",
+      "feature_store",
+      "feature_drift",
+      "online_features"
+    ],
+    "triggers": [
+      "feature drift",
+      "monitoring",
+      "psi",
+      "distribution"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.feature-engineering"
+  },
+  {
+    "ref_id": "methodology:feat:leakage-audit",
+    "type": "methodology",
+    "title": "Run a leakage audit before training",
+    "summary": "A checklist pass over features for temporal and target leakage so an inflated offline metric is caught early.",
+    "domains": [
+      "feature_engineering",
+      "feature_store",
+      "feature_drift",
+      "online_features"
+    ],
+    "triggers": [
+      "temporal leakage",
+      "target leakage",
+      "audit",
+      "validation"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.feature-engineering"
+  },
+  {
+    "ref_id": "methodology:feat:encoding-experiment",
+    "type": "methodology",
+    "title": "Compare encodings as a controlled experiment",
+    "summary": "Benchmark candidate encodings on a fixed split with out-of-fold statistics so the choice is evidence-based, not habit.",
+    "domains": [
+      "feature_engineering",
+      "feature_store",
+      "feature_drift",
+      "online_features"
+    ],
+    "triggers": [
+      "encoding",
+      "one hot encoding",
+      "benchmark",
+      "embedding"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.feature-engineering"
+  },
+  {
+    "ref_id": "knowledge:feat:train-serve-skew-anatomy",
+    "type": "knowledge",
+    "title": "Anatomy of train/serve skew",
+    "summary": "The three skew sources — schema, distribution, and computation — and how each manifests between offline and online.",
+    "domains": [
+      "feature_engineering",
+      "feature_store",
+      "feature_drift",
+      "online_features"
+    ],
+    "triggers": [
+      "train serve skew",
+      "online features",
+      "feature store",
+      "consistency"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.feature-engineering"
+  },
+  {
+    "ref_id": "knowledge:feat:feature-store-architecture",
+    "type": "knowledge",
+    "title": "Offline and online stores in a feature platform",
+    "summary": "How a feature store splits a batch offline store for training from a low-latency online store for serving, synced from one definition.",
+    "domains": [
+      "feature_engineering",
+      "feature_store",
+      "feature_drift",
+      "online_features"
+    ],
+    "triggers": [
+      "feature store",
+      "feast",
+      "tecton",
+      "online features"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.feature-engineering"
+  },
+  {
+    "ref_id": "knowledge:feat:encoding-tradeoffs",
+    "type": "knowledge",
+    "title": "Categorical encoding tradeoffs",
+    "summary": "How ordinal, one-hot, target, and embedding encodings trade dimensionality, leakage risk, and model fit.",
+    "domains": [
+      "feature_engineering",
+      "feature_store",
+      "feature_drift",
+      "online_features"
+    ],
+    "triggers": [
+      "encoding",
+      "one hot encoding",
+      "embedding",
+      "categorical"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.feature-engineering"
+  },
+  {
+    "ref_id": "knowledge:feat:leakage-taxonomy",
+    "type": "knowledge",
+    "title": "Temporal versus target leakage",
+    "summary": "How temporal leakage (future data in a row) and target leakage (label-derived features) differ and how each is detected.",
+    "domains": [
+      "feature_engineering",
+      "feature_store",
+      "feature_drift",
+      "online_features"
+    ],
+    "triggers": [
+      "temporal leakage",
+      "target leakage",
+      "leakage",
+      "point in time"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.feature-engineering"
+  },
+  {
+    "ref_id": "skill:feat:replay-skew-check",
+    "type": "skill",
+    "title": "Replay an entity to check offline/online skew",
+    "summary": "Steps to pull an entity's offline and online feature vectors and diff them to catch skew before serving.",
+    "domains": [
+      "feature_engineering",
+      "feature_store",
+      "feature_drift",
+      "online_features"
+    ],
+    "triggers": [
+      "train serve skew",
+      "online features",
+      "feature store",
+      "test"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.feature-engineering"
+  },
+  {
+    "ref_id": "skill:feat:build-point-in-time-join",
+    "type": "skill",
+    "title": "Build a point-in-time training join",
+    "summary": "Steps to assemble a leakage-free training set with an as-of join keyed on entity and event time.",
+    "domains": [
+      "feature_engineering",
+      "feature_store",
+      "feature_drift",
+      "online_features"
+    ],
+    "triggers": [
+      "temporal leakage",
+      "point in time",
+      "backfill",
+      "feature store"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.feature-engineering"
+  }
+]

@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:ruby:diagnose-an-n-plus-one",
+  "type": "methodology",
+  "title": "Diagnose an ActiveRecord N+1",
+  "description": "Confirm and fix a query explosion by reading the log and adding the right eager-load.",
+  "body": "Steps: 1. Reproduce the slow path and watch the development log or use the bullet gem to spot repeated identical queries. 2. Identify the association accessed per row in the loop or view. 3. Add .includes(:assoc) at the query that feeds the loop; use eager_load when you also filter on the association. 4. Re-run and confirm the query count collapsed to a bounded number. 5. Add a spec asserting the count. Rollback point: before changing the query, since includes can change memory/profile. Validation: the log shows one or two queries for the association regardless of row count and a query-count spec passes.",
+  "domain": "ruby",
+  "scope_hint": "code.ruby:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.ruby",
+  "pack_id": "code.ruby"
+}

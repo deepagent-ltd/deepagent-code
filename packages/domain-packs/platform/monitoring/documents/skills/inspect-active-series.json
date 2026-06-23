@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:mon:inspect-active-series",
+  "type": "skill",
+  "title": "Inspect active series and cardinality",
+  "description": "Report top series counts per metric and label to ground cardinality decisions in measured state.",
+  "body": "Use when diagnosing Prometheus memory or cardinality concerns. Actions: query TSDB stats and top series counts per metric and label, and report the largest contributors with numbers and the offending label. Do not propose relabeling or metric changes without these measurements. This skill is read-only and exposes capability only; it must not edit scrape configs without runtime permission. Validation signals include a per-metric and per-label cardinality breakdown. Risk boundary: if active series are near the instance limit, report it as a capacity risk and recommend escalation before adding scrape targets.",
+  "domain": "monitoring",
+  "scope_hint": "platform.monitoring:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.monitoring",
+  "pack_id": "platform.monitoring"
+}

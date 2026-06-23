@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:pg:isolation-levels-and-anomalies",
+  "type": "knowledge",
+  "title": "Isolation levels and the anomalies they allow",
+  "description": "Read-committed allows non-repeatable reads and lost updates; serializable prevents anomalies but can abort.",
+  "body": "Use when a transaction's correctness depends on concurrent behavior. Postgres defaults to read-committed, where each statement sees a fresh snapshot, so non-repeatable reads and read-modify-write lost updates are possible. Repeatable-read gives a stable snapshot for the whole transaction (no non-repeatable reads, blocks some anomalies) but can fail with a serialization error on conflicting updates. Serializable adds predicate tracking to prevent write skew, at the cost of more serialization-failure aborts the app must retry. Do not assume the default protects a read-modify-write. Actions: use FOR UPDATE or raise the level and add retry logic. Validation signals include a concurrency test producing correct results. Risk boundary: a money/inventory update without locking or sufficient isolation can silently lose writes.",
+  "domain": "postgres",
+  "scope_hint": "code.database.postgres:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.postgres",
+  "pack_id": "code.database.postgres"
+}

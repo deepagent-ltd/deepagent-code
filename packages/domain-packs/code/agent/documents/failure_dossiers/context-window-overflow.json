@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:agent:context-window-overflow",
+  "type": "failure_dossier",
+  "description": "History and tool results are appended without budgeting, so the context overflows and instructions get silently truncated.",
+  "body": "Failure mode: every observation is appended to the message history with no pruning, so after enough steps the prompt exceeds the model's window and the provider truncates content, often dropping the system instructions and changing behavior. Detection signals: append-everything history; no token budget check before a call; no pruning or summarization; behavior degrades on long runs. Do not let the window overflow or drop instructions to make room. Safer fallback: compute a token budget, always keep instructions and recent turns, deterministically summarize or evict older content, and verify the assembled context fits before sending.",
+  "domain": "agent",
+  "scope_hint": "code.agent:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.agent:human_authored",
+  "pack_id": "code.agent"
+}

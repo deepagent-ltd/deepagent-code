@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:finetune:evaluate-against-base",
+  "type": "strategy",
+  "title": "Always evaluate the adapted model against its base",
+  "description": "Compare the fine-tuned model to the base on both the target task and a general-capability holdout to catch regressions.",
+  "body": "Use when judging whether a fine-tune is worth shipping. Do not report only the task metric — a model can gain task accuracy while losing general reasoning, instruction following, or safety behavior. Actions: run the fine-tuned and base models on the task eval and a fixed capability/safety holdout, then compare deltas on both. Validation signals include a benchmark table showing a task gain with no material capability regression and a recorded base-vs-tuned comparison. Risk boundary: shipping a model that quietly lost capabilities harms unrelated use cases; if the capability holdout regresses, deny release and escalate to rebalance the data or method.",
+  "domain": "fine_tuning",
+  "scope_hint": "code.fine-tuning:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.fine-tuning",
+  "pack_id": "code.fine-tuning"
+}

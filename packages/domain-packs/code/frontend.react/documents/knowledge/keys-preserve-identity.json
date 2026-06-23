@@ -1,0 +1,11 @@
+{
+  "ref_id": "knowledge:frontend_react:keys-preserve-identity",
+  "type": "knowledge",
+  "description": "React keys control identity during list reconciliation.",
+  "body": "Unstable keys can move state between rows or remount components unexpectedly. Use when React component behavior work touches component ownership, hook dependencies, render paths, hydration output, router state, and browser smoke evidence. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: use the fact to constrain the change and test plan; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include component tests, React Testing Library assertions, Playwright smoke, console logs, hydration warnings, and viewport checks. Risk boundary: escalate or stop when the task involves state identity leaks, stale closures, inaccessible controls, hydration mismatch, and user-visible regressions, missing owner evidence, or live external state.",
+  "domain": "react",
+  "scope_hint": "code.frontend.react:knowledge",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.frontend.react:skill_survey",
+  "pack_id": "code.frontend.react"
+}

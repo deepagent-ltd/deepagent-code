@@ -1,0 +1,69 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "business.ecommerce",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [
+      "ecommerce",
+      "cart",
+      "inventory"
+    ],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "L3 smoke for business.ecommerce: cart and checkout state machine, inventory reservation versus overselling, order lifecycle from pending to paid to shipped to delivered cancelled or refunded, idempotent payment, stock concurrency, refund and cancellation flows"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "fix a CUDA kernel bank conflict"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "retrieval_query": "shopping cart checkout state machine inventory reservation oversell order lifecycle pending paid shipped refunded idempotent payment stock concurrency cancellation sku",
+  "expected_pack_id": "business.ecommerce",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "business.ecommerce L3 validation smoke",
+    "signals": [
+      "reserved stock never exceeds available quantity",
+      "duplicate payment request charges exactly once",
+      "order transitions follow the allowed state graph",
+      "refund returns stock and reverses state atomically"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "business.ecommerce diagnosis smoke",
+    "signals": [
+      "oversell from concurrent checkouts on the same SKU",
+      "double charge from a retried payment without idempotency key",
+      "order stuck between paid and fulfilled after a partial failure",
+      "reserved stock leaked by abandoned carts that never release",
+      "refund issued without restocking or state reversal"
+    ]
+  },
+  "source_refs": [
+    "source:ecommerce-order-state-patterns:paraphrased",
+    "source:inventory-reservation-concurrency:paraphrased"
+  ]
+}

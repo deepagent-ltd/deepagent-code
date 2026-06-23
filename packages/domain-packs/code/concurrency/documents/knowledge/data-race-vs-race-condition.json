@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:conc:data-race-vs-race-condition",
+  "type": "knowledge",
+  "title": "Data race versus race condition",
+  "description": "A data race is unsynchronized concurrent access to the same memory with a write; a race condition is any outcome-dependent-on-timing bug, which may have no data race.",
+  "body": "Use when classifying a concurrency bug. A data race is the specific situation where two threads access the same memory location concurrently, at least one writes, and there is no synchronization ordering them; in many languages this is undefined behavior. A race condition is broader: any bug whose result depends on timing or interleaving, such as a check-then-act that two synchronized threads both pass. Do not assume making accesses atomic removes all race conditions; you can have a correctly-synchronized program that is still logically racy. Actions: use a detector to find data races, and reason about invariants to find higher-level race conditions. Validation signals include a clean detector run plus an invariant that holds under stress. Risk boundary: a data race is always a defect (UB); fix it even if the program 'seems to work'.",
+  "domain": "concurrency",
+  "scope_hint": "code.concurrency:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.concurrency",
+  "pack_id": "code.concurrency"
+}

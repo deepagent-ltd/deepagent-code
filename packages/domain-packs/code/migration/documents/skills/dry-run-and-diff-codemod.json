@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:migration:dry-run-and-diff-codemod",
+  "type": "skill",
+  "title": "Dry-run a codemod and review the diff before applying",
+  "description": "Run an automated code transformation in dry-run mode, summarize the diff scope, and surface risky or over-matched changes for review.",
+  "body": "Use before applying any automated code transformation across a repo. Actions: run the codemod in dry-run/print mode (jscodeshift --dry, ast-grep --dry-run, comby without -i), count affected files and changed sites, and inspect a sample plus any change touching public APIs, generated code, or test fixtures. Report the file count, representative diffs, and any suspicious over-matches (string literals, comments, unrelated identifiers). Do not apply a codemod repo-wide without a dry-run review. This skill exposes capability only and must not write changes without runtime permission. Validation signals include a dry-run diff scoped to the intended pattern and the project's build/tests still passing after a trial apply on one module. Risk boundary: AST codemods can over-match similar identifiers and silently change semantics; if the diff touches code outside the intended scope, narrow the pattern and escalate rather than bulk-applying.",
+  "domain": "code",
+  "scope_hint": "code.migration:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.migration",
+  "pack_id": "code.migration"
+}

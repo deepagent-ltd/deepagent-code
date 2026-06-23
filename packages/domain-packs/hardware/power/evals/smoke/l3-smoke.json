@@ -1,0 +1,71 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "hardware.power",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "power_design",
+      "clock_gating",
+      "low_power",
+      "voltage_domain",
+      "power_analysis"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "L3 smoke for hardware.power: clock and power gating, voltage domains, dynamic and static power, IR drop, retention registers, UPF and CPF power intent, power-aware simulation"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "add a database migration with a unique constraint"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "retrieval_query": "clock gating power gating voltage domain dynamic power leakage power ir drop upf cpf power intent retention register isolation level shifter power aware simulation",
+  "expected_pack_id": "hardware.power",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "hardware.power L3 validation smoke",
+    "signals": [
+      "power-aware simulation drives every power-state transition with isolation and retention behaving correctly",
+      "the power-intent file declares isolation and level shifters on every crossing between power domains",
+      "retention registers restore the saved state correctly after a power-down and power-up cycle",
+      "IR-drop analysis shows the supply stays within the allowed droop across the power grid under peak current"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "hardware.power diagnosis smoke",
+    "signals": [
+      "functional corruption only after a power-down indicates missing or wrong retention on state registers",
+      "X propagation out of a gated domain points to a missing isolation cell on the domain crossing",
+      "a level-shifter warning between domains means a voltage crossing lacks the required cell",
+      "higher-than-expected static power suggests leakage from an ungated or under-gated always-on region",
+      "supply droop on a timing-critical block hints at IR drop from an undersized power grid"
+    ]
+  },
+  "source_refs": [
+    "source:ieee-1801-upf:paraphrased",
+    "source:keating-low-power:paraphrased"
+  ]
+}

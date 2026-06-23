@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:hwverif:verify-cdc-rdc",
+  "type": "strategy",
+  "title": "Verify clock- and reset-domain crossings",
+  "description": "Run structural CDC and RDC analysis and add metastability and reset checks beyond functional simulation.",
+  "body": "Use when a design has multiple clock or reset domains. Do not rely on functional simulation to catch crossing bugs, since metastability and reset glitches rarely appear in nominal simulation. Actions: run CDC and RDC structural analysis, confirm synchronizers on every crossing, and add metastability injection in simulation. Validation signals include a CDC report with no unsynchronized crossings and RDC analysis confirming clean reset crossings. Risk boundary: an unverified crossing causes intermittent field failures, so treat any flagged crossing as a blocking defect before tapeout.",
+  "domain": "hw_verification",
+  "scope_hint": "hardware.verification:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.verification",
+  "pack_id": "hardware.verification"
+}

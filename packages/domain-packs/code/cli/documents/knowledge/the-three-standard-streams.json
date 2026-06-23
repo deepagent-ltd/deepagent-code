@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:cli:the-three-standard-streams",
+  "type": "knowledge",
+  "title": "The three standard streams",
+  "description": "stdin, stdout, and stderr are independent file descriptors (0/1/2); stdout carries data for the next stage and stderr carries diagnostics for humans.",
+  "body": "Use when deciding where output should go. Every process gets fd 0 (stdin), fd 1 (stdout), fd 2 (stderr); pipes connect one program's stdout to the next's stdin, while stderr stays visible even when stdout is redirected. This is why diagnostics belong on stderr: they reach the user without polluting piped data. Do not conflate the two output streams. Actions: classify each message as data (stdout) or diagnostic (stderr). Validation signals include `tool > /dev/null` still showing errors on screen. Risk boundary: mixing diagnostics into stdout corrupts whatever consumes the pipe — the separation is functional, not stylistic.",
+  "domain": "cli",
+  "scope_hint": "code.cli:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.cli",
+  "pack_id": "code.cli"
+}

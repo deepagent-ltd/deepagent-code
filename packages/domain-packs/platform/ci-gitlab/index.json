@@ -1,0 +1,468 @@
+[
+  {
+    "ref_id": "strategy:glci:protect-and-mask-variables",
+    "type": "strategy",
+    "title": "Protect and mask sensitive CI/CD variables",
+    "summary": "Mark secret variables protected so only protected branches/tags see them, and masked so they are scrubbed from logs.",
+    "domains": [
+      "ci_gitlab",
+      "gitlab_ci",
+      "pipeline",
+      "runner"
+    ],
+    "triggers": [
+      "protected",
+      "masked",
+      "variable",
+      "secret",
+      "branch",
+      "scope"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.ci-gitlab"
+  },
+  {
+    "ref_id": "strategy:glci:route-jobs-with-runner-tags",
+    "type": "strategy",
+    "title": "Route jobs to runners with explicit tags",
+    "summary": "Match each job to a runner via tags so untrusted MR builds never land on a privileged or production-adjacent runner.",
+    "domains": [
+      "ci_gitlab",
+      "gitlab_ci",
+      "pipeline",
+      "runner"
+    ],
+    "triggers": [
+      "tags",
+      "runner",
+      "shared",
+      "privileged",
+      "route",
+      "isolation"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.ci-gitlab"
+  },
+  {
+    "ref_id": "strategy:glci:control-jobs-with-rules",
+    "type": "strategy",
+    "title": "Control job creation with rules, not only/except",
+    "summary": "Express when a job runs using rules with explicit if/changes/when, and avoid mixing the legacy only/except syntax.",
+    "domains": [
+      "ci_gitlab",
+      "gitlab_ci",
+      "pipeline",
+      "runner"
+    ],
+    "triggers": [
+      "rules",
+      "only",
+      "except",
+      "if",
+      "changes",
+      "when"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.ci-gitlab"
+  },
+  {
+    "ref_id": "strategy:glci:scope-cache-and-artifacts",
+    "type": "strategy",
+    "title": "Scope cache by key and artifacts by path with expiry",
+    "summary": "Key caches on the lockfile, scope artifacts:paths to real outputs, and set expire_in so storage and staleness stay bounded.",
+    "domains": [
+      "ci_gitlab",
+      "gitlab_ci",
+      "pipeline",
+      "runner"
+    ],
+    "triggers": [
+      "cache",
+      "artifacts",
+      "paths",
+      "key",
+      "expire_in",
+      "dependencies"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.ci-gitlab"
+  },
+  {
+    "ref_id": "strategy:glci:decompose-with-child-pipelines",
+    "type": "strategy",
+    "title": "Decompose large pipelines with child pipelines",
+    "summary": "Split monorepo or multi-component builds into triggered child pipelines for isolation, parallelism, and clearer rules.",
+    "domains": [
+      "ci_gitlab",
+      "gitlab_ci",
+      "pipeline",
+      "runner"
+    ],
+    "triggers": [
+      "child",
+      "parent",
+      "trigger",
+      "pipeline",
+      "monorepo",
+      "decompose"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.ci-gitlab"
+  },
+  {
+    "ref_id": "strategy:glci:isolate-fork-merge-request-pipelines",
+    "type": "strategy",
+    "title": "Isolate fork merge-request pipelines from secrets",
+    "summary": "Keep protected variables and deploy steps out of merge-request pipelines that build code from forks.",
+    "domains": [
+      "ci_gitlab",
+      "gitlab_ci",
+      "pipeline",
+      "runner"
+    ],
+    "triggers": [
+      "merge_request",
+      "fork",
+      "secret",
+      "untrusted",
+      "pipeline",
+      "isolate"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.ci-gitlab"
+  },
+  {
+    "ref_id": "methodology:glci:audit-variable-exposure",
+    "type": "methodology",
+    "title": "Audit CI/CD variable exposure",
+    "summary": "Enumerate every variable, its protected/masked flags, and the pipelines that can read it, then tighten over-exposed ones.",
+    "domains": [
+      "ci_gitlab",
+      "gitlab_ci",
+      "pipeline",
+      "runner"
+    ],
+    "triggers": [
+      "audit",
+      "variable",
+      "protected",
+      "masked",
+      "exposure",
+      "review"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.ci-gitlab"
+  },
+  {
+    "ref_id": "methodology:glci:debug-pipeline-not-running-job",
+    "type": "methodology",
+    "title": "Debug a job that never runs or always runs",
+    "summary": "Trace rules/only-except evaluation against the pipeline source to find why a job is created or skipped unexpectedly.",
+    "domains": [
+      "ci_gitlab",
+      "gitlab_ci",
+      "pipeline",
+      "runner"
+    ],
+    "triggers": [
+      "debug",
+      "rules",
+      "skip",
+      "never",
+      "pipeline source",
+      "evaluate"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.ci-gitlab"
+  },
+  {
+    "ref_id": "methodology:glci:diagnose-runner-and-job-failure",
+    "type": "methodology",
+    "title": "Diagnose a runner or job execution failure",
+    "summary": "Separate config errors from runner/environment issues by checking tags, executor, image, and resource limits.",
+    "domains": [
+      "ci_gitlab",
+      "gitlab_ci",
+      "pipeline",
+      "runner"
+    ],
+    "triggers": [
+      "runner",
+      "executor",
+      "image",
+      "tags",
+      "stuck",
+      "diagnose"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.ci-gitlab"
+  },
+  {
+    "ref_id": "methodology:glci:harden-deploy-stage",
+    "type": "methodology",
+    "title": "Harden a deploy stage in the pipeline",
+    "summary": "Gate deployment behind protected refs, environments, manual approval, and least-privilege credentials.",
+    "domains": [
+      "ci_gitlab",
+      "gitlab_ci",
+      "pipeline",
+      "runner"
+    ],
+    "triggers": [
+      "deploy",
+      "environment",
+      "manual",
+      "protected",
+      "approval",
+      "harden"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.ci-gitlab"
+  },
+  {
+    "ref_id": "knowledge:glci:stages-jobs-and-dag",
+    "type": "knowledge",
+    "title": "Stages, jobs, and needs-based DAG ordering",
+    "summary": "Jobs in a stage run in parallel and stages run in sequence, but needs: builds a DAG that lets jobs start before their stage.",
+    "domains": [
+      "ci_gitlab",
+      "gitlab_ci",
+      "pipeline",
+      "runner"
+    ],
+    "triggers": [
+      "stages",
+      "jobs",
+      "needs",
+      "dag",
+      "parallel",
+      "ordering"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.ci-gitlab"
+  },
+  {
+    "ref_id": "knowledge:glci:protected-variables-and-refs",
+    "type": "knowledge",
+    "title": "Protected variables, branches, and exposure rules",
+    "summary": "Protected CI/CD variables are exposed only to pipelines on protected branches/tags; unprotected ones reach every branch and fork MR.",
+    "domains": [
+      "ci_gitlab",
+      "gitlab_ci",
+      "pipeline",
+      "runner"
+    ],
+    "triggers": [
+      "protected",
+      "variable",
+      "branch",
+      "ref",
+      "exposure",
+      "fork"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.ci-gitlab"
+  },
+  {
+    "ref_id": "knowledge:glci:cache-vs-artifacts",
+    "type": "knowledge",
+    "title": "Cache versus artifacts semantics",
+    "summary": "Cache is a best-effort speedup keyed and reused across pipelines; artifacts are guaranteed job outputs passed downstream and expirable.",
+    "domains": [
+      "ci_gitlab",
+      "gitlab_ci",
+      "pipeline",
+      "runner"
+    ],
+    "triggers": [
+      "cache",
+      "artifacts",
+      "dependencies",
+      "key",
+      "expire_in",
+      "downstream"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.ci-gitlab"
+  },
+  {
+    "ref_id": "knowledge:glci:rules-evaluation-and-pipeline-sources",
+    "type": "knowledge",
+    "title": "Rules evaluation and pipeline sources",
+    "summary": "Rules are evaluated top-down to the first match against the pipeline source and predefined variables; mixing with only/except is invalid.",
+    "domains": [
+      "ci_gitlab",
+      "gitlab_ci",
+      "pipeline",
+      "runner"
+    ],
+    "triggers": [
+      "rules",
+      "if",
+      "pipeline source",
+      "merge_request",
+      "evaluation",
+      "when"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.ci-gitlab"
+  },
+  {
+    "ref_id": "skill:glci:read-pipeline-for-secret-and-trust-gaps",
+    "type": "skill",
+    "title": "Read a pipeline for secret and trust gaps",
+    "summary": "Inspect .gitlab-ci.yml and variable settings and report exposure, runner-trust, rules, and artifact risks.",
+    "domains": [
+      "ci_gitlab",
+      "gitlab_ci",
+      "pipeline",
+      "runner"
+    ],
+    "triggers": [
+      "read",
+      "pipeline",
+      "review",
+      "inspect",
+      "audit",
+      "gaps"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.ci-gitlab"
+  },
+  {
+    "ref_id": "skill:glci:run-ci-lint-and-pipeline-preview",
+    "type": "skill",
+    "title": "Run CI lint and preview the pipeline",
+    "summary": "Validate .gitlab-ci.yml with CI lint and preview which jobs run for a given ref before pushing.",
+    "domains": [
+      "ci_gitlab",
+      "gitlab_ci",
+      "pipeline",
+      "runner"
+    ],
+    "triggers": [
+      "ci-lint",
+      "lint",
+      "preview",
+      "validate",
+      "dry-run",
+      "editor"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.ci-gitlab"
+  }
+]

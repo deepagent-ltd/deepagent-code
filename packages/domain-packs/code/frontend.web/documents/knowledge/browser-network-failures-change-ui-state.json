@@ -1,0 +1,11 @@
+{
+  "ref_id": "knowledge:frontend_web:browser-network-failures-change-ui-state",
+  "type": "knowledge",
+  "description": "Failed browser requests often explain blank, stale, or partially rendered UI states.",
+  "body": "Use this when a route renders loading spinners, empty panels, missing images, broken navigation, or disabled controls despite apparently correct DOM code. Network failures include non-2xx API responses, blocked CORS requests, missing assets, wrong base paths, service worker cache misses, and aborted fetches. This does not define backend API correctness; it only treats browser-observed network results as frontend evidence. Execution actions include observing the network panel or Playwright request events, separating optional telemetry failures from required data failures, and tying each failed request to a visible state. Validation signals are required requests succeeding or expected fallbacks rendering, no unhandled promise errors, and no infinite loading. Risk boundary: do not mask required data failures by suppressing errors; escalate to backend/api packs when the server contract is inconsistent. Use when Frontend Web work touches visible UI behavior, browser console output, DOM state, assets, viewport behavior, and interaction evidence. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: use the fact to constrain the change and test plan; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include browser smoke, component tests, viewport screenshots, console/network checks, and accessibility assertions. Risk boundary: escalate or stop when the task involves visual regressions, inaccessible interaction, hydration mismatch, and browser-only failures, missing owner evidence, or live external state.",
+  "domain": "web",
+  "scope_hint": "code.frontend.web:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.frontend.web:browser_diagnostics",
+  "pack_id": "code.frontend.web"
+}

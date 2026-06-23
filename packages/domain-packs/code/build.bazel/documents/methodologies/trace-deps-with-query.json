@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:bazel:trace-deps-with-query",
+  "type": "methodology",
+  "title": "Trace dependencies with bazel query",
+  "description": "A procedure to inspect the real dependency graph and explain why one target depends on another.",
+  "body": "Use when a rebuild is larger than expected or a dependency edge is surprising. Do not guess the graph from reading BUILD files alone. Steps: run bazel query to list a target's deps; use somepath or allpaths to find why target A reaches target B; use rdeps to find reverse dependents before a refactor. Validation signals include the query output matching the intended edges and explaining the rebuild scope. Risk boundary: refactoring without checking rdeps can silently break distant consumers, so map reverse dependents first.",
+  "domain": "bazel",
+  "scope_hint": "code.build.bazel:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.build.bazel",
+  "pack_id": "code.build.bazel"
+}

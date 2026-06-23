@@ -1,0 +1,452 @@
+[
+  {
+    "ref_id": "strategy:ruby:resolve-gems-through-bundler",
+    "type": "strategy",
+    "title": "Resolve gems through Bundler and commit the lock",
+    "summary": "Declare gems in the Gemfile and pin the resolved graph in Gemfile.lock so every environment runs identical versions.",
+    "domains": [
+      "ruby",
+      "rails",
+      "bundler"
+    ],
+    "triggers": [
+      "bundler",
+      "gemfile",
+      "lock",
+      "install",
+      "pin",
+      "gem"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.ruby"
+  },
+  {
+    "ref_id": "strategy:ruby:avoid-activerecord-n-plus-one",
+    "type": "strategy",
+    "title": "Avoid ActiveRecord N+1 with eager loading",
+    "summary": "Eager-load associations with includes/preload so a collection issues a bounded number of queries.",
+    "domains": [
+      "ruby",
+      "rails",
+      "bundler"
+    ],
+    "triggers": [
+      "activerecord",
+      "n+1",
+      "includes",
+      "preload",
+      "eager",
+      "association"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.ruby"
+  },
+  {
+    "ref_id": "strategy:ruby:lock-down-mass-assignment",
+    "type": "strategy",
+    "title": "Lock down mass assignment with strong parameters",
+    "summary": "Permit only the attributes a request may set so users cannot assign protected columns by passing extra params.",
+    "domains": [
+      "ruby",
+      "rails",
+      "bundler"
+    ],
+    "triggers": [
+      "strong",
+      "parameters",
+      "mass-assignment",
+      "permit",
+      "params",
+      "security"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.ruby"
+  },
+  {
+    "ref_id": "strategy:ruby:follow-rails-conventions",
+    "type": "strategy",
+    "title": "Follow Rails conventions over configuration",
+    "summary": "Name and place code where Rails expects so autoloading, routing, and associations work without manual wiring.",
+    "domains": [
+      "ruby",
+      "rails",
+      "bundler"
+    ],
+    "triggers": [
+      "rails",
+      "convention",
+      "autoload",
+      "naming",
+      "zeitwerk",
+      "routing"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.ruby"
+  },
+  {
+    "ref_id": "strategy:ruby:use-metaprogramming-sparingly",
+    "type": "strategy",
+    "title": "Use metaprogramming sparingly and test it",
+    "summary": "Reserve method_missing/define_method for real need and pin the dynamic behavior with tests since tools cannot see it.",
+    "domains": [
+      "ruby",
+      "rails",
+      "bundler"
+    ],
+    "triggers": [
+      "metaprogramming",
+      "method_missing",
+      "define_method",
+      "dynamic",
+      "respond_to",
+      "test"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.ruby"
+  },
+  {
+    "ref_id": "strategy:ruby:mind-block-proc-lambda-semantics",
+    "type": "strategy",
+    "title": "Mind block, proc, and lambda semantics",
+    "summary": "Choose the right callable because procs and lambdas differ in arity checking and what return does.",
+    "domains": [
+      "ruby",
+      "rails",
+      "bundler"
+    ],
+    "triggers": [
+      "block",
+      "proc",
+      "lambda",
+      "yield",
+      "return",
+      "arity"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.ruby"
+  },
+  {
+    "ref_id": "methodology:ruby:manage-a-bundler-change",
+    "type": "methodology",
+    "title": "Manage a Bundler dependency change",
+    "summary": "Add or upgrade a gem deliberately, regenerating Gemfile.lock and verifying the suite and Ruby version constraints.",
+    "domains": [
+      "ruby",
+      "rails",
+      "bundler"
+    ],
+    "triggers": [
+      "bundler",
+      "gem",
+      "update",
+      "lock",
+      "constraint",
+      "upgrade"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.ruby"
+  },
+  {
+    "ref_id": "methodology:ruby:write-and-run-rspec",
+    "type": "methodology",
+    "title": "Write and run RSpec specs",
+    "summary": "Structure specs with describe/context/it, isolate collaborators with doubles, and run via the project's command.",
+    "domains": [
+      "ruby",
+      "rails",
+      "bundler"
+    ],
+    "triggers": [
+      "rspec",
+      "spec",
+      "double",
+      "let",
+      "expect",
+      "test"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.ruby"
+  },
+  {
+    "ref_id": "methodology:ruby:diagnose-an-n-plus-one",
+    "type": "methodology",
+    "title": "Diagnose an ActiveRecord N+1",
+    "summary": "Confirm and fix a query explosion by reading the log and adding the right eager-load.",
+    "domains": [
+      "ruby",
+      "rails",
+      "bundler"
+    ],
+    "triggers": [
+      "n+1",
+      "diagnose",
+      "query",
+      "log",
+      "includes",
+      "bullet"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.ruby"
+  },
+  {
+    "ref_id": "methodology:ruby:safely-evolve-a-schema",
+    "type": "methodology",
+    "title": "Safely evolve a schema with migrations",
+    "summary": "Change the database through reversible migrations sequenced so the app stays deployable at each step.",
+    "domains": [
+      "ruby",
+      "rails",
+      "bundler"
+    ],
+    "triggers": [
+      "migration",
+      "schema",
+      "reversible",
+      "deploy",
+      "rollback",
+      "activerecord"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.ruby"
+  },
+  {
+    "ref_id": "knowledge:ruby:blocks-procs-lambdas",
+    "type": "knowledge",
+    "title": "Blocks, procs, and lambdas",
+    "summary": "Ruby's three closure forms differ in arity strictness and return behavior, which changes control flow.",
+    "domains": [
+      "ruby",
+      "rails",
+      "bundler"
+    ],
+    "triggers": [
+      "block",
+      "proc",
+      "lambda",
+      "closure",
+      "arity",
+      "return"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.ruby"
+  },
+  {
+    "ref_id": "knowledge:ruby:activerecord-query-and-loading",
+    "type": "knowledge",
+    "title": "ActiveRecord lazy queries and loading strategies",
+    "summary": "Relations are lazy and chainable; includes/preload/eager_load batch associations differently to avoid N+1.",
+    "domains": [
+      "ruby",
+      "rails",
+      "bundler"
+    ],
+    "triggers": [
+      "activerecord",
+      "relation",
+      "lazy",
+      "includes",
+      "preload",
+      "eager_load"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.ruby"
+  },
+  {
+    "ref_id": "knowledge:ruby:rails-convention-and-autoloading",
+    "type": "knowledge",
+    "title": "Rails conventions and Zeitwerk autoloading",
+    "summary": "Rails maps class names to file paths via Zeitwerk and infers tables, routes, and associations from naming conventions.",
+    "domains": [
+      "ruby",
+      "rails",
+      "bundler"
+    ],
+    "triggers": [
+      "rails",
+      "zeitwerk",
+      "autoload",
+      "convention",
+      "naming",
+      "inflection"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.ruby"
+  },
+  {
+    "ref_id": "knowledge:ruby:gem-packaging-and-loading",
+    "type": "knowledge",
+    "title": "Gem packaging and the load path",
+    "summary": "A gem is defined by a gemspec and loaded onto the $LOAD_PATH; require pulls files relative to lib, distinct from Bundler resolution.",
+    "domains": [
+      "ruby",
+      "rails",
+      "bundler"
+    ],
+    "triggers": [
+      "gem",
+      "gemspec",
+      "require",
+      "load_path",
+      "lib",
+      "packaging"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.ruby"
+  },
+  {
+    "ref_id": "skill:ruby:audit-gem-and-lock-health",
+    "type": "skill",
+    "title": "Audit gem and lock health",
+    "summary": "Read the Gemfile and Gemfile.lock and report uncommitted locks, loose constraints, and risky monkey-patch gems.",
+    "domains": [
+      "ruby",
+      "rails",
+      "bundler"
+    ],
+    "triggers": [
+      "audit",
+      "gemfile",
+      "lock",
+      "bundler",
+      "dependency",
+      "review"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.ruby"
+  },
+  {
+    "ref_id": "skill:ruby:review-rails-security-surface",
+    "type": "skill",
+    "title": "Review Rails mass-assignment and query surface",
+    "summary": "Scan controllers and models for permissive strong parameters and N+1-prone association access.",
+    "domains": [
+      "ruby",
+      "rails",
+      "bundler"
+    ],
+    "triggers": [
+      "review",
+      "rails",
+      "strong-parameters",
+      "mass-assignment",
+      "n+1",
+      "security"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.ruby"
+  }
+]

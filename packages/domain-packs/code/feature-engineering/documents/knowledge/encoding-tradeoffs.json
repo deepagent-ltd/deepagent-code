@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:feat:encoding-tradeoffs",
+  "type": "knowledge",
+  "title": "Categorical encoding tradeoffs",
+  "description": "How ordinal, one-hot, target, and embedding encodings trade dimensionality, leakage risk, and model fit.",
+  "body": "Use when selecting a categorical encoding. Ordinal injects a false order unless the field is truly ordered; one-hot is safe but explodes width on high cardinality; target encoding is compact but leaks unless computed out-of-fold; embeddings capture similarity but need a neural model and enough data. Do not target-encode in-fold. Actions: weigh cardinality, model family, and leakage risk, then pick and verify on validation. Validation signals include a dimensionality check and a leakage-free encoder fit out-of-fold. Risk boundary: an in-fold target encoder produces optimistic metrics that collapse in production; if statistics were fit on all rows, refit out-of-fold before trusting the result.",
+  "domain": "feature_engineering",
+  "scope_hint": "code.feature-engineering:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.feature-engineering",
+  "pack_id": "code.feature-engineering"
+}

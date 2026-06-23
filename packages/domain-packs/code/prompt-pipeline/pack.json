@@ -1,0 +1,49 @@
+{
+  "schema_version": "domain_pack.v1",
+  "id": "code.prompt-pipeline",
+  "name": "Prompt Assembly & Preparation Pipeline",
+  "version": "1.0.0",
+  "scope": "system",
+  "risk": "medium",
+  "domains": [
+    "prompt_pipeline",
+    "prompt",
+    "scrubbing",
+    "templating",
+    "locale"
+  ],
+  "provides": [
+    "knowledge",
+    "strategy",
+    "methodology",
+    "skill",
+    "diagnosis",
+    "validation"
+  ],
+  "depends_on": [
+    "code.llm-app",
+    "risk.privacy"
+  ],
+  "conflicts_with": [],
+  "knowledge_store": "document_store",
+  "allowed_tools": [
+    "read",
+    "shell:test"
+  ],
+  "denied_tools": [
+    "shell:deploy-production"
+  ],
+  "data_policy": {
+    "sensitivity": [
+      "source_code",
+      "user_data",
+      "pii"
+    ],
+    "default_admission": "summary_only",
+    "secret_policy": "deny"
+  },
+  "detector": {
+    "inline": "profile.code_domains.some(d=>['prompt_pipeline','prompt','scrubbing','templating','locale'].includes(d)) || profile.repo_signals.some(s=>/\\b(prompt template|prompt pipeline|prompt assembly|input scrubbing|prompt version|system prompt|prompt injection scrub|prompt preparation)\\b/i.test(s)) ? 0.9 : 0",
+    "threshold": 0.5
+  }
+}

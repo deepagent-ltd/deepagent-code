@@ -1,0 +1,47 @@
+{
+  "schema_version": "domain_pack.v1",
+  "id": "platform.ci-gitlab",
+  "name": "GitLab CI/CD Pipelines",
+  "version": "1.0.0",
+  "scope": "system",
+  "risk": "medium",
+  "domains": [
+    "ci_gitlab",
+    "gitlab_ci",
+    "pipeline",
+    "runner"
+  ],
+  "provides": [
+    "knowledge",
+    "strategy",
+    "methodology",
+    "skill",
+    "diagnosis",
+    "validation"
+  ],
+  "depends_on": [
+    "code.testing",
+    "risk.supply-chain"
+  ],
+  "conflicts_with": [],
+  "knowledge_store": "document_store",
+  "allowed_tools": [
+    "read",
+    "shell:test"
+  ],
+  "denied_tools": [
+    "shell:deploy-production"
+  ],
+  "data_policy": {
+    "sensitivity": [
+      "source_code",
+      "secret_adjacent"
+    ],
+    "default_admission": "summary_only",
+    "secret_policy": "deny"
+  },
+  "detector": {
+    "inline": "profile.code_domains.some(d=>['ci_gitlab','gitlab_ci','pipeline','runner'].includes(d)) || profile.repo_signals.some(s=>/\\b(gitlab.?ci|gitlab runner|ci stages|protected variable|gitlab pipeline|artifacts:paths|child pipeline)\\b/i.test(s)) ? 0.9 : 0",
+    "threshold": 0.5
+  }
+}

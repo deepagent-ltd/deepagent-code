@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:ruby:mind-block-proc-lambda-semantics",
+  "type": "strategy",
+  "title": "Mind block, proc, and lambda semantics",
+  "description": "Choose the right callable because procs and lambdas differ in arity checking and what return does.",
+  "body": "Use when passing or storing a callable. Do not assume a proc behaves like a lambda. Actions: use a block with yield/&block for the common case; use lambda (->) when you need strict arity checking and a return that returns only from the lambda; use Proc.new/proc only when you intend lenient arity and aware that a bare return inside it returns from the enclosing method. Validation signals include a test asserting the callable returns the expected value and that arity mismatches are handled as intended. Risk boundary: a return inside a non-lambda proc can unexpectedly return from the surrounding method, causing control-flow bugs; pick lambda when return semantics matter.",
+  "domain": "ruby",
+  "scope_hint": "code.ruby:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.ruby",
+  "pack_id": "code.ruby"
+}

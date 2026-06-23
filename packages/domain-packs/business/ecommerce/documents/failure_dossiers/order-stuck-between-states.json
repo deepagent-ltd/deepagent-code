@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:ecom:order-stuck-between-states",
+  "type": "failure_dossier",
+  "description": "A partial failure leaves an order paid but never fulfilled, with money taken and nothing shipped.",
+  "body": "Failure mode: a failure between charging and fulfilment leaves the order paid but never marked shipped, so money is taken while no goods move and no recovery runs. Detection signals: orders sitting in paid past the fulfilment threshold; payments with no matching shipment; support tickets about charged-but-not-received purchases. Do not leave paid-but-unfulfilled orders unreconciled. Safer fallback: run an idempotent reconciliation that drives stuck orders forward to fulfilment or backward to refund-and-restock, gating money moves on business.finance.",
+  "domain": "ecommerce",
+  "scope_hint": "business.ecommerce:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:business.ecommerce:human_authored",
+  "pack_id": "business.ecommerce"
+}

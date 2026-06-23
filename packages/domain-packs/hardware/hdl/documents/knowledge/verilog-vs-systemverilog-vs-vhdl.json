@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:hdl:verilog-vs-systemverilog-vs-vhdl",
+  "type": "knowledge",
+  "title": "Verilog vs SystemVerilog vs VHDL",
+  "description": "VHDL is strongly typed and verbose; Verilog is terse and weakly typed; SystemVerilog adds verification features (classes, assertions, interfaces).",
+  "body": "Use when choosing or porting between HDLs. VHDL catches width/type mismatches at elaboration (strong typing) but is verbose; Verilog is concise but silently truncates/extends widths; SystemVerilog extends Verilog with always_ff/always_comb, interfaces, packed/unpacked types, classes, and SVA for verification. Do not assume Verilog will catch a width mismatch VHDL would. Actions: match constructs to each language's rules and use SystemVerilog's verification layer for testbenches. Validation signals include elaboration warnings on width mismatch. Risk boundary: a silent Verilog width mismatch is a real functional bug; enable and read width warnings.",
+  "domain": "hdl",
+  "scope_hint": "hardware.hdl:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.hdl",
+  "pack_id": "hardware.hdl"
+}

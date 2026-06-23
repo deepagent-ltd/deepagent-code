@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:security:client-state-is-untrusted",
+  "type": "knowledge",
+  "title": "Client state is untrusted",
+  "description": "Hidden form fields, route guards, local storage, mobile flags, and disabled UI controls are attacker-controlled signals.",
+  "body": "Use when a task relies on client-only checks for permission, pricing, workflow state, feature access, or data filtering. Do not use to remove client validation that improves usability. Actions: duplicate or move the decision to trusted server or policy enforcement and test by calling the trusted boundary directly. Validation signals include bypass attempts against the API or service. Risk boundary: production access decisions based only on client state must be escalated.",
+  "domain": "security",
+  "scope_hint": "risk.security:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.security",
+  "pack_id": "risk.security"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:ghci:read-workflow-for-supply-chain-gaps",
+  "type": "skill",
+  "title": "Read a workflow for supply-chain and token gaps",
+  "description": "Inspect a workflow YAML and report unpinned actions, broad token scope, risky triggers, and secret exposure.",
+  "body": "Use when asked whether a GitHub Actions workflow is safe to merge. Actions: read the YAML and verify every external uses: is pinned to a full commit SHA, the permissions block exists and is least-privilege, triggers do not combine pull_request_target with PR-head checkout and secrets, caches are keyed on lockfiles and not shared across trust boundaries, and cloud auth uses OIDC rather than stored keys. Do not assume defaults are safe (the default token can be write-all). Record each gap with the file/job/step and classify as supply-chain, privilege, secret-exposure, or determinism. This skill is read-only and must not modify or run the workflow without runtime permission. Validation signals include a concrete list of jobs/steps and their risk class. Risk boundary: report any secret-to-fork or mutable-ref-with-write as a blocking finding and recommend escalation.",
+  "domain": "ci_github",
+  "scope_hint": "platform.ci-github:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.ci-github",
+  "pack_id": "platform.ci-github"
+}

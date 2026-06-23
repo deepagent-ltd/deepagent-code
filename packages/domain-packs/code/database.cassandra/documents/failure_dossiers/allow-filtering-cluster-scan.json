@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure_dossier:cass:allow-filtering-cluster-scan",
+  "type": "failure_dossier",
+  "description": "A query that needs ALLOW FILTERING scans partitions instead of seeking and does not scale.",
+  "body": "Failure mode: a query filters on a column that is not the partition key, so it requires ALLOW FILTERING and scans across partitions and nodes, performing acceptably on a small dataset but degrading badly as data grows. Detection signals: the query fails without ALLOW FILTERING, tracing shows it contacting many nodes, and latency scales with total data rather than result size. Do not ship a production query that needs ALLOW FILTERING. Safer fallback: create a denormalized table whose partition key matches the query's filter, or a materialized view, backfill it, and route the query to the seek-friendly table.",
+  "domain": "cassandra",
+  "scope_hint": "code.database.cassandra:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.cassandra:human_authored",
+  "pack_id": "code.database.cassandra"
+}

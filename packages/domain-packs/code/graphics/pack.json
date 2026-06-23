@@ -1,0 +1,46 @@
+{
+  "schema_version": "domain_pack.v1",
+  "id": "code.graphics",
+  "name": "Real-Time Graphics (Rendering, Shaders, GPU Pipeline)",
+  "version": "1.0.0",
+  "scope": "system",
+  "risk": "medium",
+  "domains": [
+    "graphics",
+    "rendering",
+    "shader",
+    "gpu_graphics"
+  ],
+  "provides": [
+    "knowledge",
+    "strategy",
+    "methodology",
+    "skill",
+    "diagnosis",
+    "validation"
+  ],
+  "depends_on": [
+    "code.performance",
+    "code.cpp"
+  ],
+  "conflicts_with": [],
+  "knowledge_store": "document_store",
+  "allowed_tools": [
+    "read",
+    "shell:test"
+  ],
+  "denied_tools": [
+    "shell:deploy-production"
+  ],
+  "data_policy": {
+    "sensitivity": [
+      "source_code"
+    ],
+    "default_admission": "summary_only",
+    "secret_policy": "deny"
+  },
+  "detector": {
+    "inline": "profile.code_domains.some(d=>['graphics','rendering','shader','gpu_graphics'].includes(d)) || profile.repo_signals.some(s=>/\\b(shader|glsl|hlsl|wgsl|rendering pipeline|rasteriz|opengl|vulkan|webgpu|framebuffer|vertex shader|fragment shader)\\b/i.test(s)) ? 0.9 : 0",
+    "threshold": 0.5
+  }
+}

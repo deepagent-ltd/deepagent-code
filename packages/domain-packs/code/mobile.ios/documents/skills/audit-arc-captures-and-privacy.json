@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:ios:audit-arc-captures-and-privacy",
+  "type": "skill",
+  "title": "Audit ARC captures and privacy strings",
+  "description": "Inspect closures/delegates for retain-cycle risk and Info.plist for required usage strings against the APIs used.",
+  "body": "Use when reviewing memory and privacy hygiene. Actions: scan escaping closures, timers, delegates, and Combine subscriptions for strong self captures that form cycles, and cross-check the sensitive APIs the code calls (location, camera, photos, etc.) against Info.plist usage strings and App Privacy declarations. Report missing [weak self], strong delegates, and missing/incorrect usage strings with location. Do not modify code. This skill exposes capability only and must not access protected data without runtime permission. Validation signals include no obvious cycles and a usage string per sensitive API. Risk boundary: a missing usage string is a guaranteed crash and a strong capture cycle leaks the screen; both are blocking findings to fix before release.",
+  "domain": "ios",
+  "scope_hint": "code.mobile.ios:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.mobile.ios",
+  "pack_id": "code.mobile.ios"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:mesh:istio-vs-linkerd-tradeoffs",
+  "type": "methodology",
+  "title": "Choose between Istio and Linkerd by feature and footprint",
+  "description": "Weigh Istio's Envoy-based feature breadth against Linkerd's lighter Rust micro-proxy and simpler operations for the workload's needs.",
+  "body": "Use when selecting a mesh implementation. Do not pick the heaviest mesh by default. Actions: weigh Istio (Envoy data plane, rich traffic management, gateways, WASM extensibility, larger footprint and operational surface) against Linkerd (Rust micro-proxy, lower latency/memory, simpler mTLS and ops, narrower feature set); match to whether you need advanced routing/extensibility or minimal overhead. Validation signals include a proof-of-concept showing the proxy's per-hop latency and memory fit the SLO and the feature set covering the routing requirements. Risk boundary: migrating an existing production mesh between implementations is a major change and is human-gated.",
+  "domain": "service_mesh",
+  "scope_hint": "platform.service-mesh:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.service-mesh",
+  "pack_id": "platform.service-mesh"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:azure:bicep-whatif-deployment",
+  "type": "strategy",
+  "title": "Preview Bicep/ARM changes with what-if before deploying",
+  "description": "Author idempotent Bicep modules and run az deployment what-if so the exact resource delta is reviewed before any apply.",
+  "body": "Use when authoring infrastructure as Bicep/ARM or before a deployment. Do not deploy a template blindly or hand-edit live resources that a template owns. Actions: structure resources into Bicep modules with parameters, run az deployment group what-if to see Create/Modify/Delete deltas, review especially any Delete or property change on stateful resources, and deploy in incremental mode. Validation signals include what-if showing only the intended changes and no unexpected deletions, and the deployment succeeding idempotently on re-run. Risk boundary: a what-if showing deletion or replacement of a production resource is human-gated.",
+  "domain": "azure",
+  "scope_hint": "platform.cloud.azure:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.cloud.azure",
+  "pack_id": "platform.cloud.azure"
+}

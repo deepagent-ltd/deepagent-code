@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:hwprot:spi-mode-matrix",
+  "type": "knowledge",
+  "title": "SPI clock polarity and phase mode matrix",
+  "description": "The four SPI modes combine clock polarity and phase to define on which edge data is driven and sampled.",
+  "body": "Use when matching an SPI controller to a peripheral's required mode. Do not memorize a single mode as universal, because peripherals differ in their idle clock level and sampling edge. Actions: identify the peripheral's CPOL and CPHA, map them to the controller mode number, and verify the sampling edge on a capture. Validation signals include data stable before the sampling edge and a correct read-back of a known register. Risk boundary: a phase mismatch shifts every bit, so treat a one-bit offset as a mode error and re-verify before configuring the device.",
+  "domain": "hw_protocols",
+  "scope_hint": "hardware.protocols:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.protocols",
+  "pack_id": "hardware.protocols"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:ghci:pull-request-vs-target-context",
+  "type": "knowledge",
+  "title": "pull_request vs pull_request_target context",
+  "description": "pull_request runs fork code with no secrets and a read token; pull_request_target runs in the base repo context with secrets and write token.",
+  "body": "Use when a workflow needs to react to PRs, especially from forks. pull_request checks out the PR head and runs with a read-only token and no secrets for fork PRs, so it is safe to build untrusted code. pull_request_target runs in the context of the base branch with the base repo's secrets and a write-capable token, but using the base workflow file, so checking out and executing the PR head there hands attackers your secrets and token. Do not check out PR head in pull_request_target with secrets in scope. Actions: build/test untrusted code under pull_request; reserve pull_request_target for trusted base-repo logic like labeling. Validation signals include no secret usage on any job that runs fork-controlled code. Risk boundary: PR-head execution under pull_request_target is a known critical exfiltration pattern; escalate.",
+  "domain": "ci_github",
+  "scope_hint": "platform.ci-github:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.ci-github",
+  "pack_id": "platform.ci-github"
+}

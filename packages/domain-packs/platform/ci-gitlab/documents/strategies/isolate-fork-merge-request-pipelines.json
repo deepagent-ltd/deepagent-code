@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:glci:isolate-fork-merge-request-pipelines",
+  "type": "strategy",
+  "title": "Isolate fork merge-request pipelines from secrets",
+  "description": "Keep protected variables and deploy steps out of merge-request pipelines that build code from forks.",
+  "body": "Use when external contributors open merge requests from forks. Do not expose protected/masked variables or run deploy jobs in a merge-request pipeline built from fork code, since the MR author controls the code that would run with those secrets in scope. Actions: gate secret-bearing and deploy jobs with rules so they run only on protected branches after merge, run fork MR builds with no protected variables, and require maintainer approval to run pipelines for fork MRs. Validation signals include fork MR pipelines having no protected variables and no deploy job. Risk boundary: combining fork MR code execution with protected variables is a critical exposure requiring a human gate.",
+  "domain": "ci_gitlab",
+  "scope_hint": "platform.ci-gitlab:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.ci-gitlab",
+  "pack_id": "platform.ci-gitlab"
+}

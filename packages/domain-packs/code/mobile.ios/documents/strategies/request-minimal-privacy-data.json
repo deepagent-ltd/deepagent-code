@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:ios:request-minimal-privacy-data",
+  "type": "strategy",
+  "title": "Request only the privacy data you use",
+  "description": "Add a usage-description string for every sensitive API, request access at point of use, and collect the minimum needed.",
+  "body": "Use when touching location, camera, photos, contacts, microphone, or tracking. Do not access a protected API without its Info.plist usage string, and do not request permissions you do not need or before they make sense. Actions: add a clear, specific NSUsageDescription for each API, request authorization in context at first use, handle denial gracefully, and reflect real data use in App Privacy details. Validation signals include no launch crash from a missing usage string and permission prompts appearing only when relevant. Risk boundary: accessing a sensitive API with no usage string crashes the app on use, and misdeclaring data collection risks App Store rejection or privacy-policy violations — request the minimum and describe it honestly.",
+  "domain": "ios",
+  "scope_hint": "code.mobile.ios:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.mobile.ios",
+  "pack_id": "code.mobile.ios"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:git:reflog-recovery",
+  "type": "methodology",
+  "title": "Recover lost commits through the reflog",
+  "description": "Use the reflog to find and restore commits that became unreachable after a reset, rebase, or branch deletion.",
+  "body": "Use when commits seem lost after a hard reset, an aborted rebase, or a deleted branch. Do not assume the work is gone before checking the reflog. Steps: run git reflog to find the dangling commit's hash; inspect it with git show; create a branch at that hash or cherry-pick it back; verify the restored content. Validation signals include the recovered commit reachable from a new ref and its diff matching the lost work. Risk boundary: reflog entries expire with garbage collection, so recover promptly and avoid running aggressive gc while work is missing.",
+  "domain": "git_workflow",
+  "scope_hint": "code.git-workflow:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.git-workflow",
+  "pack_id": "code.git-workflow"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:mysql:validate-a-replica-is-consistent",
+  "type": "methodology",
+  "title": "Validate a replica is consistent with its primary",
+  "description": "Use checksum tooling to prove a replica matches the primary instead of trusting that replication merely runs.",
+  "body": "Use before promoting a replica or after suspected drift. Actions: run pt-table-checksum from the primary to compute per-chunk checksums that propagate through the binlog, then read the checksum results table on the replica to find any DIFFS; for divergent chunks, use pt-table-sync in print mode first to review the repair SQL. Verify the second checksum pass reports zero differing chunks. Validation signals include the checksums table showing zero diffs and Seconds_Behind_Master at zero throughout. Risk boundary: never run pt-table-sync in execute mode against production without reviewing the generated statements, because it writes directly to rows; gate the repair behind a human.",
+  "domain": "mysql",
+  "scope_hint": "code.database.mysql:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.mysql",
+  "pack_id": "code.database.mysql"
+}

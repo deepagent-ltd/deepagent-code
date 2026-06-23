@@ -1,0 +1,48 @@
+{
+  "schema_version": "domain_pack.v1",
+  "id": "code.simulation",
+  "name": "Numerical Simulation & Solvers",
+  "version": "1.0.0",
+  "scope": "system",
+  "risk": "medium",
+  "domains": [
+    "simulation",
+    "numerical",
+    "physics_engine",
+    "ode_solver",
+    "monte_carlo"
+  ],
+  "provides": [
+    "knowledge",
+    "strategy",
+    "methodology",
+    "skill",
+    "diagnosis",
+    "validation"
+  ],
+  "depends_on": [
+    "code.python",
+    "code.performance",
+    "code.cpp"
+  ],
+  "conflicts_with": [],
+  "knowledge_store": "document_store",
+  "allowed_tools": [
+    "read",
+    "shell:test"
+  ],
+  "denied_tools": [
+    "shell:deploy-production"
+  ],
+  "data_policy": {
+    "sensitivity": [
+      "source_code"
+    ],
+    "default_admission": "summary_only",
+    "secret_policy": "deny"
+  },
+  "detector": {
+    "inline": "profile.code_domains.some(d=>['simulation','numerical','physics_engine','ode_solver','monte_carlo'].includes(d)) || profile.repo_signals.some(s=>/\\b(ode solver|runge.?kutta|euler method|monte carlo|numerical stability|physics engine|discretization|finite element|finite difference|numerical simulation)\\b/i.test(s)) ? 0.9 : 0",
+    "threshold": 0.5
+  }
+}
