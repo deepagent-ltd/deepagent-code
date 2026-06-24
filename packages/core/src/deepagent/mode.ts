@@ -1,7 +1,9 @@
-// V3.1 agent-strength ladder. Monotonic: each strength adds exactly one capability.
-//   general -> high (control plane + automatic micro-rounds) -> max (+ durable knowledge)
-//   -> ultra (+ autonomy: supervisor auto-advances macro-rounds, human removed from the loop).
-export type AgentMode = "general" | "high" | "max" | "ultra"
+// V3.2 agent-strength ladder. Monotonic: each strength adds exactly one capability.
+//   general -> high  (control plane + micro-rounds + skills + project context/fact memory)
+//           -> xhigh (+ domain knowledge + cross-project fact memory)
+//           -> max   (+ strategies/methodologies)
+//           -> ultra (+ autonomous workspace + auto macro-rounds)
+export type AgentMode = "general" | "high" | "xhigh" | "max" | "ultra"
 
 export type ActivationStage =
   | "first_fast_design"
@@ -26,8 +28,19 @@ export type RoundDecision = "continue" | "revise" | "rollback" | "escalate" | "c
 
 export type ReviewDecision = "approve" | "revise" | "block"
 
-// ultra inherits max's full capability set, including durable knowledge retrieval.
-export const knowledgeEnabled = (mode: AgentMode) => mode === "max" || mode === "ultra"
+// Any durable retrieval is enabled for all non-general modes (docs/39 §3).
+// high: skills + project context/fact memory.
+// xhigh: + domain knowledge + cross-project fact memory.
+// max/ultra: + strategies/methodologies.
+export const knowledgeEnabled = (mode: AgentMode) => mode !== "general"
+
+// Strategies and methodologies are injected only for max/ultra; they are the most powerful but
+// also most likely to mislead the model on wrong task contexts (docs/39 §3.1).
+export const strategyMethodologyEnabled = (mode: AgentMode) => mode === "max" || mode === "ultra"
+
+// Domain knowledge docs are available from xhigh onwards (docs/39 §3.1).
+export const domainKnowledgeEnabled = (mode: AgentMode) =>
+  mode === "xhigh" || mode === "max" || mode === "ultra"
 
 // ultra is the only autonomous strength: its supervisor thread advances macro-rounds without a
 // human. All other strengths require human approval to advance a macro-round.

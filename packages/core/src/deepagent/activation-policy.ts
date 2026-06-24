@@ -53,7 +53,9 @@ export const decide = (ctx: ActivationContext): ActivationDecision => {
 
 const firstFastDesign = (ctx: ActivationContext): ActivationDecision => ({
   stage: "first_fast_design",
-  allowKnowledgeRetrieval: false,
+  // docs/39 §3.3: non-general modes retrieve skills + context memory on round 1 so that
+  // cross-session context is available from the very first turn of a new conversation.
+  allowKnowledgeRetrieval: ctx.mode !== "general",
   allowFullRedesign: false,
   maxPromptChars: 12000,
   maxInlineChars: 6000,
@@ -78,10 +80,7 @@ const firstFastDesign = (ctx: ActivationContext): ActivationDecision => ({
     "",
     "Do NOT load full knowledge bases or do extensive reasoning upfront.",
     "If validation passes on first attempt, the task is complete.",
-    ctx.mode === "high" ? "Knowledge retrieval is disabled in this mode." : "",
-  ]
-    .filter(Boolean)
-    .join("\n"),
+  ].join("\n"),
 })
 
 const revisionMinimal = (ctx: ActivationContext): ActivationDecision => ({
@@ -143,7 +142,9 @@ const knowledgeRefresh = (ctx: ActivationContext): ActivationDecision => ({
   guidance: [
     `Round ${ctx.round}: refresh knowledge and attempt an informed solution.`,
     knowledgeEnabled(ctx.mode)
-      ? "Knowledge retrieval is enabled. Use strategy synthesis and methodology refs to guide the approach."
+      ? ctx.mode === "max" || ctx.mode === "ultra"
+        ? "Knowledge retrieval is enabled. Use strategy synthesis and methodology refs to guide the approach."
+        : "Knowledge retrieval is enabled. Use skill and memory refs to guide the approach."
       : "Knowledge retrieval not available in this mode. Use diagnostic evidence and general expertise.",
     "After applying the fix, run validation.",
   ].join("\n"),
