@@ -72,8 +72,25 @@ describe("V3 knowledge gates", () => {
     expect(evidenceFromConfidence(0)).toBe("none")
   })
 
-  test("retrieve: high mode carries no durable knowledge", () => {
-    expect(retrieve({ mode: "high", task, tools, round: 1, previousFailures: 0 })).toBeNull()
+  test("retrieve: general mode carries no durable knowledge", () => {
+    expect(retrieve({ mode: "general", task, tools, round: 1, previousFailures: 0 })).toBeNull()
+  })
+
+  test("retrieve: high mode injects no strategy/methodology (docs/39 §3.1)", () => {
+    // high does durable retrieval (skills + memory) but never strategies/methodologies.
+    const r = retrieve({ mode: "high", task, tools, round: 1, previousFailures: 0 })
+    if (r) {
+      expect(r.strategyRefs).toEqual([])
+      expect(r.methodologyRefs).toEqual([])
+    }
+  })
+
+  test("retrieve: xhigh injects no strategy/methodology, but allows domain knowledge (docs/39 §3.1)", () => {
+    const r = retrieve({ mode: "xhigh", task, tools, round: 1, previousFailures: 0 })
+    if (r) {
+      expect(r.strategyRefs).toEqual([])
+      expect(r.methodologyRefs).toEqual([])
+    }
   })
 
   test("retrieve: max mode is bounded, advisory, and evidence-annotated", () => {

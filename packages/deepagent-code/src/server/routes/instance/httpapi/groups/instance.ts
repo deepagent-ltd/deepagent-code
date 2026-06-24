@@ -29,7 +29,7 @@ const PathInfo = Schema.Struct({
   agent: Schema.Struct({
     schemaVersion: Schema.Literal("deepagent_generic_agent_runtime.v1"),
     mode: Schema.Literals(["unavailable", "off", "enabled", "blocked", "degraded"]),
-    agentMode: Schema.Literals(["general", "high", "max", "ultra"]),
+    agentMode: Schema.Literals(["general", "high", "xhigh", "max", "ultra"]),
     implementation: Schema.Literals(["visible_skeleton", "gateway_passthrough", "gateway_enforced"]),
     agentManaged: Schema.Boolean,
     originalPathAllowed: Schema.Boolean,
