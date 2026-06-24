@@ -738,7 +738,8 @@ export const dict = {
   "settings.general.row.appearance.title": "Зовнішній вигляд",
   "settings.general.row.appearance.description": "Налаштуйте вигляд DeepAgent Code на вашому пристрої",
   "settings.general.row.colorScheme.title": "Кольорова схема",
-  "settings.general.row.colorScheme.description": "Виберіть, чи DeepAgent Code використовує системну, світлу або темну тему",
+  "settings.general.row.colorScheme.description":
+    "Виберіть, чи DeepAgent Code використовує системну, світлу або темну тему",
   "settings.general.row.theme.title": "Тема",
   "settings.general.row.theme.description": "Налаштуйте тему DeepAgent Code.",
   "settings.general.row.font.title": "Шрифт коду",
@@ -783,7 +784,8 @@ export const dict = {
   "settings.general.row.releaseNotes.description": 'Показувати спливаючі вікна "Що нового" після оновлень',
 
   "settings.updates.row.startup.title": "Перевіряти оновлення під час запуску",
-  "settings.updates.row.startup.description": "Автоматично перевіряти наявність оновлень під час запуску DeepAgent Code",
+  "settings.updates.row.startup.description":
+    "Автоматично перевіряти наявність оновлень під час запуску DeepAgent Code",
   "settings.updates.row.check.title": "Перевірити оновлення",
   "settings.updates.row.check.description": "Вручну перевірити наявність оновлень і встановити, якщо доступні",
   "settings.updates.action.checkNow": "Перевірити зараз",
@@ -959,4 +961,51 @@ export const dict = {
   "workspace.reset.archived.one": "1 сесію буде заархівовано.",
   "workspace.reset.archived.many": "{{count}} сесій буде заархівовано.",
   "workspace.reset.note": "Це скине робочу область, щоб вона відповідала гілці за замовчуванням.",
+  "settings.section.about": "Про застосунок",
+  "settings.tab.about": "Про застосунок",
+  "settings.about.product.title": "Продукт",
+  "settings.about.product.description": "Назва і версія застосунку.",
+  "settings.about.attribution.title": "Побудовано на opencode",
+  "settings.about.attribution.description":
+    "DeepAgent Code побудовано на opencode, що використовується за ліцензією MIT.",
+  "settings.about.license.title": "Ліцензія",
+  "settings.general.section.deepagent": "DeepAgent",
+  "settings.general.deepagent.mode.title": "Агент",
+  "settings.general.deepagent.mode.description": "Виберіть інтенсивність роботи DeepAgent.",
+  "settings.general.deepagent.mode.general": "general",
+  "settings.general.deepagent.mode.high": "high",
+  "settings.general.deepagent.mode.xhigh": "xhigh",
+  "settings.general.deepagent.mode.max": "max",
+  "settings.general.deepagent.mode.ultra": "ultra",
+  "settings.general.deepagent.mode.ultraRequiresWish": "ultra потребує режиму сценарію wish.",
+  "settings.general.deepagent.prompt.title": "Режим сценарію",
+  "settings.general.deepagent.prompt.description": "Выберите, как композер обрабатывает ваш промпт перед отправкой.",
+  "settings.general.deepagent.prompt.direct": "Прямий режим",
+  "settings.general.deepagent.prompt.direct.description":
+    "Отправлять промпт как написано, без подготовки черновика DeepAgent.",
+  "settings.general.deepagent.prompt.wish": "Режим wish",
+  "settings.general.deepagent.prompt.wish.description":
+    "DeepAgent сначала готовит полный промпт, затем позволяет проверить и отредактировать его.",
+  "settings.general.deepagent.wishModel.title": "Модель режиму wish",
+  "settings.general.deepagent.wishModel.description":
+    "Выберите модель, используемую только для подготовки черновиков промптов в режиме wish.",
+  "settings.general.deepagent.selfLearning.title": "Схвалення самонавчання",
+  "settings.general.deepagent.selfLearning.description":
+    "Определите, как знания, полученные DeepAgent из ваших сессий, становятся доступными для поиска.",
+  "settings.general.deepagent.selfLearning.manual": "Ручне схвалення",
+  "settings.general.deepagent.selfLearning.manual.description":
+    "Изученные знания ожидают в Review, пока вы их не одобрите.",
+  "settings.general.deepagent.selfLearning.auto": "Автоматичне схвалення",
+  "settings.general.deepagent.selfLearning.auto.description":
+    "Изученные знания сразу становятся доступными без проверки.",
+  "settings.general.row.showCustomAgents.title": "Користувацькі агенти",
+  "settings.general.row.showCustomAgents.description": "Показывать выбор агента в desktop-композере v2",
+  "settings.general.row.newLayoutDesigns.title": "Новий макет і дизайн",
+  "settings.general.row.newLayoutDesigns.description":
+    "Включить обновленный макет, главную страницу, композер и интерфейс сессии",
+  "settings.general.row.pinchZoom.title": "Масштабування щипком",
+  "settings.general.row.pinchZoom.description": "Разрешить масштабирование щипком на трекпаде и Ctrl-прокруткой",
+  "settings.updates.action.downloading": "Завантаження...",
+  "settings.updates.action.installing": "Встановлення...",
+  "settings.providers.section.deepagentBackends": "Бекенди моделей DeepAgent",
 }
