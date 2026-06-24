@@ -221,6 +221,7 @@ export const SettingsGeneralV2: Component = () => {
     const options: { value: DeepAgentMode; label: string }[] = [
       { value: "general", label: language.t("settings.general.deepagent.mode.general") },
       { value: "high", label: language.t("settings.general.deepagent.mode.high") },
+      { value: "xhigh", label: language.t("settings.general.deepagent.mode.xhigh") },
       { value: "max", label: language.t("settings.general.deepagent.mode.max") },
     ]
     if (!ultraDisabled() || deepAgentMode() === "ultra") {

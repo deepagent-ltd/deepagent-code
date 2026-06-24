@@ -1,5 +1,5 @@
 import type { AgentMode } from "./mode"
-import { knowledgeEnabled } from "./mode"
+import { knowledgeEnabled, strategyMethodologyEnabled, domainKnowledgeEnabled } from "./mode"
 import type { KnowledgeRefProjection, KnowledgeSynthesis, TaskContext, ToolContext } from "./prompt-policy"
 import * as knowledgeSource from "./knowledge-source"
 import { type ProblemProfile, type ActivateOptions } from "./domain-pack"
@@ -406,13 +406,17 @@ export const retrieve = (input: RetrievalInput): KnowledgeSynthesis | null => {
   const activeDomains = activation.activeDomains
 
   const primaryPackSet = new Set(activation.primaryPackIds)
-  const strategyPool = [...contextualStrategies(input, activation)]
+  // docs/39 §3.1: strategies/methodologies only for max/ultra — they are highest-value but most
+  // likely to mislead on wrong task context. Empty pools are handled gracefully by all downstream gates.
+  const canUseStrategies = strategyMethodologyEnabled(input.mode)
+  const strategyPool = canUseStrategies ? [...contextualStrategies(input, activation)] : []
   const strategyGate = gateRefs(strategyPool, "strategy", threshold, blocked, undefined, (s) => s.pack_id, primaryPackSet)
-  const methodologyPool = [...selectMethodologies(input, activation)]
+  const methodologyPool = canUseStrategies ? [...selectMethodologies(input, activation)] : []
   const methodologyGate = gateRefs(methodologyPool, "methodology", threshold, blocked, undefined, (m) => m.pack_id, primaryPackSet)
   // review_4 M1/M4: knowledge + skill are now retrieved through the same gate (relevance → evidence →
   // per-type top-k → primary-pack guarantee) so the 682 knowledge/skill docs are no longer dead.
-  const knowledgePool = loadDiskKnowledge(input.workspacePath, activation)
+  // docs/39 §3.1: domain knowledge from xhigh onwards; skills from high onwards.
+  const knowledgePool = domainKnowledgeEnabled(input.mode) ? loadDiskKnowledge(input.workspacePath, activation) : []
   const knowledgeGate = gateRefs(knowledgePool, "knowledge", threshold, blocked, undefined, (k) => k.pack_id, primaryPackSet)
   const skillPool = loadDiskSkills(input.workspacePath, activation)
   const skillGate = gateRefs(skillPool, "skill", threshold, blocked, undefined, (s) => s.pack_id, primaryPackSet)

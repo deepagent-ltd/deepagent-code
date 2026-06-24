@@ -6,7 +6,7 @@ import { InvalidRequestReason, LLMError, LLMEvent, LLMRequest, registerClientMid
 import { buildRunContext } from "./deepagent/run-context"
 import { DocumentStore } from "./deepagent/document-store"
 import { buildRunGraph } from "./deepagent/run-graph"
-import { knowledgeEnabled } from "./deepagent/mode"
+import { knowledgeEnabled, strategyMethodologyEnabled, domainKnowledgeEnabled } from "./deepagent/mode"
 import type { AgentMode } from "./deepagent/mode"
 import { resolveDeepAgentCodeHome } from "./deepagent/workspace"
 import * as KnowledgeRetriever from "./deepagent/knowledge-retriever"
@@ -2193,7 +2193,7 @@ function parseAllowlist(value: string | undefined) {
 }
 
 function parseAgentMode(value: string | undefined): AgentMode {
-  return value === "general" || value === "high" || value === "max" || value === "ultra" ? value : "high"
+  return value === "general" || value === "high" || value === "xhigh" || value === "max" || value === "ultra" ? value : "high"
 }
 
 const retrieveKnowledge = (run: RunRecord) => {
@@ -2308,9 +2308,11 @@ const bootMessage = (mode: AgentMode) =>
   mode === "ultra"
     ? `${DEEPAGENT_BOOT_MESSAGE}\n当前模式: ultra。具备 max 的全部能力（bounded knowledge retrieval，仅 refs/摘要），并由监督线程自动推进宏轮直至收敛；遇到范围变化、反复无进展或预算阈值时升级给人。`
     : mode === "max"
-    ? `${DEEPAGENT_BOOT_MESSAGE}\n当前模式: max。启用 bounded knowledge retrieval，仅使用策略/记忆/方法摘要和 refs，不注入完整知识库、skill body、日志或 hidden/evaluator 信息。`
+    ? `${DEEPAGENT_BOOT_MESSAGE}\n当前模式: max。启用完整 bounded knowledge retrieval（strategies/methodologies/knowledge/skills/memory），仅使用摘要和 refs，不注入完整知识库正文。`
+    : mode === "xhigh"
+    ? `${DEEPAGENT_BOOT_MESSAGE}\n当前模式: xhigh。启用领域知识 + skills + 跨项目事实记忆的 bounded retrieval；strategies/methodologies 不开放，避免在错误任务上下文中误导模型。`
     : mode === "high"
-    ? `${DEEPAGENT_BOOT_MESSAGE}\n当前模式: high。知识系统关闭；首轮采用 first_fast_design，优先短设计、可执行方案和最小验证。`
+    ? `${DEEPAGENT_BOOT_MESSAGE}\n当前模式: high。启用 skills + 项目上下文记忆 / 事实记忆的 bounded retrieval；领域知识和策略不开放，首轮采用 first_fast_design。`
     : ""
 
 const promptPolicy = (mode: AgentMode) => ({
@@ -2332,6 +2334,9 @@ const knowledgePolicyHash = (mode: AgentMode) =>
     mode_id: mode,
     enabled: knowledgeEnabled(mode),
     retrieval_policy: knowledgeEnabled(mode) ? "bounded_retrieval_refs_only" : "disabled",
+    // strategy/methodology injection is a sub-capability of durable retrieval (docs/39 §3.1).
+    strategy_methodology_enabled: strategyMethodologyEnabled(mode),
+    domain_knowledge_enabled: domainKnowledgeEnabled(mode),
     selected_ref_budget: knowledgeEnabled(mode) ? 5 : 0,
     inject_full_strategy_body: false,
     inject_full_memory_body: false,

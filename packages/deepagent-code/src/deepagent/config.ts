@@ -13,7 +13,7 @@ const bool = (value: unknown) => (typeof value === "boolean" ? value : undefined
 const string = (value: unknown) => (typeof value === "string" && value.length > 0 ? value : undefined)
 
 const agentMode = (value: unknown): AgentMode | undefined =>
-  value === "general" || value === "high" || value === "max" || value === "ultra" ? value : undefined
+  value === "general" || value === "high" || value === "xhigh" || value === "max" || value === "ultra" ? value : undefined
 
 type SelfLearningPolicy = NonNullable<NonNullable<AgentGatewayConfig>["selfLearning"]>
 
