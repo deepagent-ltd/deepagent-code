@@ -45,7 +45,9 @@ jobs:
         env:
           PLATFORMS: ${{ github.event.inputs.platforms || 'mac+linux' }}
         run: |
-          mac='{"host":"macos-14","target":"mac-arm64","platform_flag":"--mac --arm64","group":"mac"},{"host":"macos-13","target":"mac-x64","platform_flag":"--mac --x64","group":"mac"}'
+          # macOS arm64 only — Apple Silicon covers current Macs. The Intel (macos-13)
+          # runner is queue-starved and the x64 cross-compile is unreliable, so it is dropped.
+          mac='{"host":"macos-14","target":"mac-arm64","platform_flag":"--mac --arm64","group":"mac"}'
           linux='{"host":"ubuntu-24.04","target":"linux-x64","platform_flag":"--linux --x64","group":"linux"},{"host":"ubuntu-24.04-arm","target":"linux-arm64","platform_flag":"--linux --arm64","group":"linux"}'
           win='{"host":"windows-2025","target":"win-x64","platform_flag":"--win --x64","group":"win"}'
           case "$PLATFORMS" in
