@@ -49,6 +49,26 @@
   padding: 0 40px 40px;
 }
 
+.settings-v2-tab-body.deepagent-dialog-body {
+  flex: 1;
+  min-height: 0;
+  height: 100%;
+  gap: 12px;
+  overflow: hidden;
+  box-sizing: border-box;
+}
+
+.deepagent-dialog-scroll {
+  min-height: 0;
+  flex: 1;
+  overflow-y: auto;
+}
+
+.deepagent-dialog-actions {
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
 [data-slot="settings-v2-row-description"] a.settings-v2-link {
   color: var(--v2-text-text-accent);
   cursor: pointer;

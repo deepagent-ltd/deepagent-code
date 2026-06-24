@@ -1,6 +1,6 @@
 {
   "name": "@deepagent-code/console-support",
-  "version": "1.16.2",
+  "version": "1.0.0-beta",
   "type": "module",
   "license": "MIT",
   "scripts": {
