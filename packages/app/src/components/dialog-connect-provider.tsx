@@ -417,7 +417,7 @@ export function DialogConnectProvider(props: { provider: string }) {
       baseURL:
         typeof serverSync.data.config.provider?.[props.provider]?.options?.baseURL === "string"
           ? serverSync.data.config.provider[props.provider]!.options!.baseURL
-          : providerBaseURL[props.provider] ?? "",
+          : (providerBaseURL[props.provider] ?? ""),
       error: undefined as string | undefined,
       baseURLError: undefined as string | undefined,
       discovered: [] as DiscoveredProviderModel[],
@@ -698,6 +698,7 @@ export function DialogConnectProvider(props: { provider: string }) {
 
   return (
     <Dialog
+      class="[&_[data-slot=dialog-body]]:min-h-0"
       title={
         <IconButton
           tabIndex={-1}
@@ -708,7 +709,7 @@ export function DialogConnectProvider(props: { provider: string }) {
         />
       }
     >
-      <div class="flex flex-col gap-6 px-2.5 pb-3">
+      <div class="flex h-full min-h-0 flex-col gap-6 overflow-y-auto px-2.5 pb-3">
         <div class="px-2.5 flex gap-4 items-center">
           <ProviderIcon id={props.provider} class="size-5 shrink-0 icon-strong-base" />
           <div class="text-16-medium text-text-strong">
@@ -720,7 +721,7 @@ export function DialogConnectProvider(props: { provider: string }) {
             </Switch>
           </div>
         </div>
-        <div class="px-2.5 pb-10 flex flex-col gap-6">
+        <div class="min-h-0 px-2.5 pb-10 flex flex-col gap-6">
           <div onKeyDown={handleKey} tabIndex={0} autofocus={store.methodIndex === undefined ? true : undefined}>
             <Switch>
               <Match when={loading()}>

@@ -1519,7 +1519,10 @@ export const layer = Layer.effect(
           if (!isProviderAllowed(providerID)) continue
           const data = database[providerID]
           if (!data) {
-            log.error("Provider does not exist in model list " + providerID)
+            // The deepagent-code hosted provider only has a models.dev catalog entry when
+            // the product gateway is configured. On a plain local install it is absent, so
+            // skipping it is expected — debug, not error (avoids a scary startup log line).
+            log.debug("Provider not in model list, skipping custom loader: " + providerID)
             continue
           }
           const result = yield* fn(data)

@@ -333,7 +333,13 @@ export const WISH_REFINEMENT_SYSTEM_PROMPT = [
   "- Every inference you add while completing intent MUST be listed in `assumptions` (one per",
   "  item), so the user can review and correct it. Do not hide inferences inside the prose.",
   "- Do not invent unrelated work or scope. Prefer the minimal complete instruction.",
-  "Return only valid JSON matching the structured object schema.",
+  "Output format:",
+  "- Respond with a single JSON object and nothing else — no prose, no explanation before or after.",
+  "- Keys: route ('code'|'general'), refined_prompt (string), goal (string),",
+  "  task_type ('implementation'|'review'|'test'|'research'|'document'|'unknown'),",
+  "  constraints (string[]), acceptance (string[]), assumptions (string[]).",
+  "- Use [] for any array you cannot fill. refined_prompt is always required.",
+  "- A fenced ```json block is acceptable, but raw JSON is preferred.",
 ].join("\n")
 
 export const wishRefinementSystemPrompt = (outputLanguage: WishRefinementOutputLanguage = "english") =>
