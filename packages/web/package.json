@@ -2,7 +2,7 @@
   "name": "@deepagent-code/web",
   "type": "module",
   "license": "MIT",
-  "version": "1.16.2",
+  "version": "1.0.0-beta",
   "scripts": {
     "dev": "astro dev",
     "dev:remote": "VITE_API_URL=https://api.deepagent-code.ai astro dev",

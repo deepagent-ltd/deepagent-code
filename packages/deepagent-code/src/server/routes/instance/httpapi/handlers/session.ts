@@ -36,7 +36,7 @@ import {
   SummarizePayload,
   UpdatePayload,
 } from "../groups/session"
-import { InvalidRequestError, PermissionNotFoundError } from "../errors"
+import { PermissionNotFoundError } from "../errors"
 import * as SessionError from "./session-errors"
 
 const tryParseJson = (text: string) =>
@@ -324,13 +324,19 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
         rawInput,
         outputLanguage: ctx.payload.output_language ?? "english",
       }).pipe(
-        Effect.mapError(
-          () =>
-            new InvalidRequestError({
-              message: "Wish prompt preparation failed. Switch to direct mode or try again with a more specific request.",
-              kind: "wish_prompt_prepare_failed",
-            }),
-        ),
+        // Fail soft: refinement is an enhancement, not a gate. If the model can't produce a
+        // usable refined prompt (parse failure, weak model, etc.), degrade to the direct path
+        // with the user's raw input instead of blocking the turn. The client treats a "general"
+        // route as direct_override, so the user's message still goes through.
+        Effect.orElseSucceed(() => ({
+          route: "general" as const,
+          prompt_draft_id: "",
+          context_plan_id: "",
+          state: "general_ready",
+          mode: "wish" as const,
+          goal: rawInput,
+          preview: rawInput,
+        })),
       )
     })
 
