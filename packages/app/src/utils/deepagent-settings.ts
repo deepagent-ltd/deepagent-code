@@ -1,6 +1,6 @@
 import type { useServerSync } from "@/context/server-sync"
 
-export type DeepAgentMode = "general" | "high" | "max" | "ultra"
+export type DeepAgentMode = "general" | "high" | "xhigh" | "max" | "ultra"
 export type DeepAgentPromptMode = "direct" | "wish"
 export type DeepAgentWishModel = string
 export type DeepAgentSelfLearning = "manual" | "auto"
@@ -8,7 +8,7 @@ export type DeepAgentSelfLearning = "manual" | "auto"
 type ServerSync = ReturnType<typeof useServerSync>
 
 const isDeepAgentMode = (value: unknown): value is DeepAgentMode =>
-  value === "general" || value === "high" || value === "max" || value === "ultra"
+  value === "general" || value === "high" || value === "xhigh" || value === "max" || value === "ultra"
 
 const isDeepAgentPromptMode = (value: unknown): value is DeepAgentPromptMode =>
   value === "direct" || value === "wish"

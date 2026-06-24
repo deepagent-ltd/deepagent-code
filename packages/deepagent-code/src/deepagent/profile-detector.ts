@@ -12,7 +12,7 @@ type ExtendedProblemProfile = Parameters<typeof AgentGateway.DeepAgentDomainPack
 
 export type WorkspaceSignals = {
   readonly cwd: string
-  readonly agentMode: "general" | "high" | "max" | "ultra"
+  readonly agentMode: "general" | "high" | "xhigh" | "max" | "ultra"
   readonly scenarioMode: "direct" | "wish"
   readonly userRequest: string
   readonly languages?: readonly string[]
