@@ -824,6 +824,7 @@ export const dict = {
   "settings.general.deepagent.mode.description": "Choose the work intensity of DeepAgent.",
   "settings.general.deepagent.mode.general": "general",
   "settings.general.deepagent.mode.high": "high",
+  "settings.general.deepagent.mode.xhigh": "xhigh",
   "settings.general.deepagent.mode.max": "max",
   "settings.general.deepagent.mode.ultra": "ultra",
   "settings.general.deepagent.mode.ultraRequiresWish": "ultra requires the wish scenario mode.",

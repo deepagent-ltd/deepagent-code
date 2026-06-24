@@ -60,8 +60,8 @@ describe("DeepAgent control-plane artifacts", () => {
       })
       expect(await readJson(runDir, "ACTIVATION_POLICY.json")).toMatchObject({
         agent_mode: "high",
-        default_activation_mode: "first_fast_design",
-        knowledge_enabled: false,
+        default_activation_mode: "first_fast_design_bounded_knowledge",
+        knowledge_enabled: true,
         full_skill_body_in_prompt_allowed: false,
       })
       expect(await readJson(runDir, "MCP_CAPABILITY_INDEX.json")).toMatchObject({

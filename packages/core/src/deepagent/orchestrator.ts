@@ -1,5 +1,4 @@
 import type { AgentMode, RoundDecision } from "./mode"
-import { knowledgeEnabled } from "./mode"
 import * as SessionState from "./session-state"
 import * as Activation from "./activation-policy"
 import * as Knowledge from "./knowledge-retriever"
@@ -58,7 +57,7 @@ export const buildPromptContext = (input: OrchestratorInput): PromptContext => {
   const activation = Activation.decide(activationCtx)
 
   let knowledge = state.knowledgeSynthesis
-  if (!knowledge && knowledgeEnabled(state.mode) && activation.allowKnowledgeRetrieval) {
+  if (!knowledge && state.mode !== "general" && activation.allowKnowledgeRetrieval) {
     const failedCount = roundState.candidates.filter((c) => c.status === "failed").length
     // V3: feed diagnosis-blocked refs into retrieval so they are surfaced as do_not_use
     // and never re-injected (docs/30 §4 conflict/do_not_use; diagnosis -> retrieval link).
