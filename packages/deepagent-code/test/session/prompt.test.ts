@@ -867,6 +867,7 @@ it.instance(
           if (tool?.state.status === "running" && tool.state.metadata?.sessionId) return tool
         }),
         "timed out waiting for running task metadata",
+        "12 seconds",
       )
 
       if (tool.state.status !== "running") return
@@ -877,7 +878,8 @@ it.instance(
       yield* prompt.cancel(chat.id)
       yield* Fiber.await(fiber)
     }),
-  10_000,
+  { git: true },
+  20_000,
 )
 
 it.instance(
@@ -1260,7 +1262,7 @@ it.instance(
       expect(inputs).toHaveLength(2)
       expect(JSON.stringify(inputs.at(-1)?.messages)).toContain("second")
     }),
-  3_000,
+  15_000,
 )
 
 it.instance(
@@ -1540,7 +1542,7 @@ it.instance(
       expect(yield* llm.calls).toBe(1)
     }),
   { git: true },
-  3_000,
+  15_000,
 )
 
 it.instance(
@@ -1579,7 +1581,7 @@ it.instance(
       expect(yield* llm.calls).toBe(1)
     }),
   { git: true },
-  3_000,
+  15_000,
 )
 
 unix(

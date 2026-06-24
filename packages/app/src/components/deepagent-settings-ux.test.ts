@@ -12,8 +12,8 @@ describe("DeepAgent settings UX", () => {
     expect(v2).toContain('data-action="settings-deepagent-mode"')
     expect(v2).toContain('data-action="settings-deepagent-prompt-mode"')
     expect(v2).toContain('data-action="settings-deepagent-wish-model"')
-    expect(v2).toContain('settings.general.deepagent.prompt.direct')
-    expect(v2).toContain('settings.general.deepagent.prompt.wish')
+    expect(v2).toContain("settings.general.deepagent.prompt.direct")
+    expect(v2).toContain("settings.general.deepagent.prompt.wish")
     expect(v2.indexOf('data-action="settings-language"')).toBeLessThan(
       v2.indexOf('data-action="settings-deepagent-mode"'),
     )
@@ -32,6 +32,30 @@ describe("DeepAgent settings UX", () => {
     const source = await readFile(path.join(here, "dialog-settings.tsx"), "utf8")
 
     expect(source).toContain('export { DialogSettings } from "./settings-v2/dialog-settings-v2"')
+  })
+
+  test("keeps the legacy desktop layout as the default with an opt-in switch for the new layout", async () => {
+    const settings = await readFile(path.join(here, "../context/settings.tsx"), "utf8")
+    const v2 = await readFile(path.join(here, "settings-v2/general.tsx"), "utf8")
+
+    expect(settings).toContain("export const newLayoutDesignsDefault = false")
+    expect(v2).toContain('data-action="settings-new-layout-designs"')
+    expect(v2).toContain("settings.general.setNewLayoutDesigns(checked)")
+  })
+
+  test("keeps DeepAgent review, packs, and provider connect dialogs scroll-safe", async () => {
+    const review = await readFile(path.join(here, "review/dialog-review.tsx"), "utf8")
+    const packs = await readFile(path.join(here, "packs/dialog-packs.tsx"), "utf8")
+    const connectProvider = await readFile(path.join(here, "dialog-connect-provider.tsx"), "utf8")
+    const css = await readFile(path.join(here, "settings-v2/settings-v2.css"), "utf8")
+
+    expect(review).toContain("settings-v2-tab-body deepagent-dialog-body")
+    expect(review).toContain("deepagent-dialog-scroll")
+    expect(packs).toContain("settings-v2-tab-body deepagent-dialog-body")
+    expect(packs).toContain("deepagent-dialog-scroll")
+    expect(connectProvider).toContain("overflow-y-auto")
+    expect(css).toContain(".settings-v2-tab-body.deepagent-dialog-body")
+    expect(css).toContain(".deepagent-dialog-scroll")
   })
 
   test("does not keep a separate DeepAgent provider dialog", async () => {
