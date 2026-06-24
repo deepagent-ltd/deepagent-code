@@ -4,6 +4,9 @@ dist-*
 gen
 app.log
 script/build-*.ts
+# build-node.ts is a committed source entrypoint for the desktop sidecar build, not a
+# generated artifact — keep it tracked despite the build-*.ts rule above.
+!script/build-node.ts
 temporary-*.md
 .artifacts
 
