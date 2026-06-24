@@ -1,7 +1,7 @@
 {
   "$schema": "https://json.schemastore.org/package.json",
   "name": "@deepagent-code/cli",
-  "version": "1.16.2",
+  "version": "1.0.0-beta",
   "type": "module",
   "license": "MIT",
   "bin": {

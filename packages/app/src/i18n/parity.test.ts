@@ -30,4 +30,14 @@ describe("i18n parity", () => {
       }
     }
   })
+
+  test("non-English locales include every settings key", () => {
+    const settingsKeys = Object.keys(en).filter((key) => key.startsWith("settings.")) as Array<keyof typeof en>
+
+    for (const locale of locales) {
+      for (const key of settingsKeys) {
+        expect(Object.prototype.hasOwnProperty.call(locale, key)).toBe(true)
+      }
+    }
+  })
 })

@@ -94,16 +94,18 @@ export const DialogPacks: Component<{ client: RawSdkClient }> = (props) => {
   const PackRow = (p: Pack) => (
     <div class="flex items-start gap-3 border-b border-v2-border-border-muted px-3 py-2.5 last:border-b-0 hover:bg-v2-background-bg-layer-01">
       <div class="flex min-w-0 flex-1 flex-col gap-1">
-        <div class="flex items-center gap-2">
-          <span class="text-13-medium text-v2-text-text-base">{p.name}</span>
-          <span class={`rounded px-1.5 py-0.5 text-11-medium ${RISK_CLASSES[p.risk]}`}>{language.t(riskKey(p.risk))}</span>
+        <div class="flex min-w-0 flex-wrap items-center gap-2">
+          <span class="min-w-0 break-words text-13-medium text-v2-text-text-base">{p.name}</span>
+          <span class={`rounded px-1.5 py-0.5 text-11-medium ${RISK_CLASSES[p.risk]}`}>
+            {language.t(riskKey(p.risk))}
+          </span>
         </div>
-        <span class="text-11-regular text-v2-text-text-faint">{p.id}</span>
+        <span class="break-all text-11-regular text-v2-text-text-faint">{p.id}</span>
         <Show when={p.domains.length > 0}>
           <div class="flex flex-wrap gap-1">
             <For each={p.domains}>
               {(d) => (
-                <span class="rounded bg-v2-background-bg-layer-01 border border-v2-border-border-muted px-1.5 py-0.5 text-11-regular text-v2-text-text-faint">
+                <span class="break-all rounded bg-v2-background-bg-layer-01 border border-v2-border-border-muted px-1.5 py-0.5 text-11-regular text-v2-text-text-faint">
                   {d}
                 </span>
               )}
@@ -111,7 +113,13 @@ export const DialogPacks: Component<{ client: RawSdkClient }> = (props) => {
           </div>
         </Show>
       </div>
-      <Button variant="secondary" size="small" onClick={() => void callPack("unpin", p.id)} disabled={busy()}>
+      <Button
+        class="shrink-0"
+        variant="secondary"
+        size="small"
+        onClick={() => void callPack("unpin", p.id)}
+        disabled={busy()}
+      >
         {language.t("packs.unpin")}
       </Button>
     </div>
@@ -119,47 +127,68 @@ export const DialogPacks: Component<{ client: RawSdkClient }> = (props) => {
 
   return (
     <Dialog size="x-large" variant="settings" title={language.t("packs.title")}>
-      <div class="flex h-full flex-col gap-3" data-component="packs-dialog">
-        <Show when={!data.loading} fallback={<div class="p-4 text-13-regular text-v2-text-text-faint">{language.t("review.loading")}</div>}>
-          <Show when={!data.error} fallback={<div class="p-4 text-13-regular text-red-600">{String(data.error)}</div>}>
+      <div class="settings-v2-panel" data-component="packs-dialog">
+        <div class="settings-v2-tab-body deepagent-dialog-body">
+          <div class="deepagent-dialog-scroll flex flex-col gap-3">
             <Show
-              when={(data()?.packs.length ?? 0) > 0}
-              fallback={<div class="p-4 text-13-regular text-v2-text-text-faint">{language.t("packs.empty")}</div>}
+              when={!data.loading}
+              fallback={<div class="p-4 text-13-regular text-v2-text-text-faint">{language.t("review.loading")}</div>}
             >
-              <Show when={pinnedPacks().length > 0}>
-                <div class="flex flex-col gap-1">
-                  <span class="px-3 text-11-medium text-v2-text-text-faint uppercase tracking-wide">{language.t("packs.pinLabel")}</span>
-                  <div class="rounded-lg border border-v2-border-border-muted overflow-hidden">
-                    <For each={pinnedPacks()}>{(p) => <PackRow {...p} />}</For>
-                  </div>
-                </div>
-              </Show>
-              <Show when={autoPacks().length > 0}>
-                <div class="flex flex-col gap-1">
-                  <span class="px-3 text-11-medium text-v2-text-text-faint uppercase tracking-wide">{language.t("packs.active")}</span>
-                  <div class="rounded-lg border border-v2-border-border-muted overflow-hidden">
-                    <For each={autoPacks()}>{(p) => <PackRow {...p} />}</For>
-                  </div>
-                </div>
+              <Show
+                when={!data.error}
+                fallback={<div class="p-4 text-13-regular text-red-600">{String(data.error)}</div>}
+              >
+                <Show
+                  when={(data()?.packs.length ?? 0) > 0}
+                  fallback={<div class="p-4 text-13-regular text-v2-text-text-faint">{language.t("packs.empty")}</div>}
+                >
+                  <Show when={pinnedPacks().length > 0}>
+                    <div class="flex flex-col gap-1">
+                      <span class="px-3 text-11-medium text-v2-text-text-faint uppercase tracking-wide">
+                        {language.t("packs.pinLabel")}
+                      </span>
+                      <div class="rounded-lg border border-v2-border-border-muted overflow-hidden">
+                        <For each={pinnedPacks()}>{(p) => <PackRow {...p} />}</For>
+                      </div>
+                    </div>
+                  </Show>
+                  <Show when={autoPacks().length > 0}>
+                    <div class="flex flex-col gap-1">
+                      <span class="px-3 text-11-medium text-v2-text-text-faint uppercase tracking-wide">
+                        {language.t("packs.active")}
+                      </span>
+                      <div class="rounded-lg border border-v2-border-border-muted overflow-hidden">
+                        <For each={autoPacks()}>{(p) => <PackRow {...p} />}</For>
+                      </div>
+                    </div>
+                  </Show>
+                </Show>
+                <Show when={data()?.snapshotId}>
+                  <span class="text-11-regular text-v2-text-text-faint">
+                    {language.t("packs.snapshot", { id: data()!.snapshotId })}
+                  </span>
+                </Show>
               </Show>
             </Show>
-            <Show when={data()?.snapshotId}>
-              <span class="text-11-regular text-v2-text-text-faint">{language.t("packs.snapshot", { id: data()!.snapshotId })}</span>
-            </Show>
-          </Show>
-        </Show>
+          </div>
 
-        <div class="flex items-center gap-2 pt-1">
-          <input
-            class="flex-1 rounded border border-v2-border-border-muted bg-v2-background-bg-layer-01 px-2 py-1 text-13-regular text-v2-text-text-base focus:outline-none focus:ring-1 focus:ring-v2-border-border-focus"
-            placeholder={language.t("packs.pinLabel")}
-            value={pinInput()}
-            onInput={(e) => setPinInput(e.currentTarget.value)}
-            onKeyDown={(e) => e.key === "Enter" && void handlePin()}
-          />
-          <Button variant="primary" size="small" onClick={() => void handlePin()} disabled={!pinInput().trim() || busy()}>
-            {language.t("packs.pinButton")}
-          </Button>
+          <div class="flex flex-wrap items-center gap-2 pt-1">
+            <input
+              class="min-w-0 flex-1 rounded border border-v2-border-border-muted bg-v2-background-bg-layer-01 px-2 py-1 text-13-regular text-v2-text-text-base focus:outline-none focus:ring-1 focus:ring-v2-border-border-focus"
+              placeholder={language.t("packs.pinLabel")}
+              value={pinInput()}
+              onInput={(e) => setPinInput(e.currentTarget.value)}
+              onKeyDown={(e) => e.key === "Enter" && void handlePin()}
+            />
+            <Button
+              variant="primary"
+              size="small"
+              onClick={() => void handlePin()}
+              disabled={!pinInput().trim() || busy()}
+            >
+              {language.t("packs.pinButton")}
+            </Button>
+          </div>
         </div>
       </div>
     </Dialog>

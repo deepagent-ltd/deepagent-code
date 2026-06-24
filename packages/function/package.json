@@ -1,6 +1,6 @@
 {
   "name": "@deepagent-code/function",
-  "version": "1.16.2",
+  "version": "1.0.0-beta",
   "$schema": "https://json.schemastore.org/package.json",
   "private": true,
   "type": "module",

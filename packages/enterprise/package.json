@@ -1,6 +1,6 @@
 {
   "name": "@deepagent-code/enterprise",
-  "version": "1.16.2",
+  "version": "1.0.0-beta",
   "private": true,
   "type": "module",
   "license": "MIT",

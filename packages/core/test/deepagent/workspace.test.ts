@@ -1,5 +1,5 @@
 import { describe, expect, test, beforeEach, afterEach } from "bun:test"
-import { existsSync, lstatSync, readFileSync, rmSync, unlinkSync, symlinkSync } from "node:fs"
+import { existsSync, lstatSync, mkdirSync, readFileSync, rmSync, unlinkSync, symlinkSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { mkdtempSync } from "node:fs"
@@ -40,6 +40,18 @@ describe("V3.1 DeepAgent Code workspace", () => {
     expect(second.root).toBe(first.root)
     expect(existsSync(first.publicLink) || existsSync(`${first.publicLink}.link.json`)).toBe(true)
     if (existsSync(first.publicLink)) expect(lstatSync(first.publicLink).isSymbolicLink()).toBe(true)
+  })
+
+  test("repairs project root that exists without manifest", () => {
+    const paths = home.projectPaths("projA")
+    mkdirSync(paths.root, { recursive: true })
+
+    home.ensureProject("projA", "/repo/worktree")
+
+    const manifest = JSON.parse(readFileSync(paths.projectJson, "utf8"))
+    expect(manifest.schema_version).toBe(PROJECT_SCHEMA_VERSION)
+    expect(manifest.project_id).toBe("projA")
+    expect(existsSync(paths.sessionsDir)).toBe(true)
   })
 
   test("creates session and run prompt templates", () => {
