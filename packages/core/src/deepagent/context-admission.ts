@@ -27,13 +27,13 @@ export type AdmissionResult = {
 export type GateParams = {
   readonly max_index_refs?: number       // hard limit on total refs admitted to context
   readonly max_estimated_tokens?: number  // rough token ceiling (1 token ≈ 4 chars of summary text)
-  readonly allowed_strengths?: readonly ("high" | "max" | "ultra")[]  // filter by agent strength
+  readonly allowed_strengths?: readonly ("high" | "xhigh" | "max" | "ultra")[]  // filter by agent strength
 }
 
 const DEFAULT_GATE: Required<GateParams> = {
   max_index_refs: 20,
   max_estimated_tokens: 4000,
-  allowed_strengths: ["high", "max", "ultra"],
+  allowed_strengths: ["high", "xhigh", "max", "ultra"],
 }
 
 const estimateTokens = (entries: readonly DomainPackIndexEntry[]): number =>
@@ -44,7 +44,7 @@ const estimateTokens = (entries: readonly DomainPackIndexEntry[]): number =>
 // Truncation is recorded so the prompt-builder can surface "more knowledge available" to the model.
 export const admitIndexRefs = (
   entries: readonly DomainPackIndexEntry[],
-  agentStrength: "general" | "high" | "max" | "ultra",
+  agentStrength: "general" | "high" | "xhigh" | "max" | "ultra",
   params: GateParams = {},
 ): AdmissionResult => {
   const p = { ...DEFAULT_GATE, ...params }
@@ -53,7 +53,7 @@ export const admitIndexRefs = (
     return { admitted: [], truncated: [...entries], admitted_ref_count: 0, estimated_tokens: 0 }
   }
   // agentStrength is narrowed past "general" by the early return above.
-  const s: "high" | "max" | "ultra" = agentStrength
+  const s: "high" | "xhigh" | "max" | "ultra" = agentStrength
 
   const strengthOk = (e: DomainPackIndexEntry): boolean =>
     p.allowed_strengths.includes(s) && e.allowed_strengths.includes(s)
@@ -61,9 +61,10 @@ export const admitIndexRefs = (
   const evidenceOk = (e: DomainPackIndexEntry): boolean =>
     e.evidence_strength === "strong" || e.evidence_strength === "medium"
 
-  // Skills are admitted at high+; knowledge/strategy/methodology at max/ultra only.
+  // docs/39 §3.1: skills at high+; domain knowledge at xhigh+; strategy/methodology at max/ultra only.
   const typeOk = (e: DomainPackIndexEntry): boolean => {
     if (e.type === "skill") return true // already gated by strengthOk
+    if (e.type === "knowledge") return s === "xhigh" || s === "max" || s === "ultra"
     return s === "max" || s === "ultra"
   }
 

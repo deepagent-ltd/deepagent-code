@@ -154,6 +154,36 @@ describe("S6 ContextAdmissionGate", () => {
     expect(r.admitted.map((e) => e.ref_id).sort()).toEqual(["skill:a", "strategy:b"])
   })
 
+  test("xhigh admits skills + domain knowledge but not strategy (docs/39 §3.1)", () => {
+    const strengths = ["high", "xhigh", "max", "ultra"] as const
+    const r = admitIndexRefs(
+      [
+        mkEntry({ type: "skill", ref_id: "skill:a", allowed_strengths: strengths }),
+        mkEntry({ type: "knowledge", ref_id: "knowledge:b", allowed_strengths: strengths }),
+        mkEntry({ type: "strategy", ref_id: "strategy:c", allowed_strengths: strengths }),
+      ],
+      "xhigh",
+    )
+    const ids = r.admitted.map((e) => e.ref_id)
+    expect(ids).toContain("skill:a")
+    expect(ids).toContain("knowledge:b")
+    expect(ids).not.toContain("strategy:c")
+  })
+
+  test("high admits skills but not domain knowledge (docs/39 §3.1)", () => {
+    const strengths = ["high", "xhigh", "max", "ultra"] as const
+    const r = admitIndexRefs(
+      [
+        mkEntry({ type: "skill", ref_id: "skill:a", allowed_strengths: strengths }),
+        mkEntry({ type: "knowledge", ref_id: "knowledge:b", allowed_strengths: strengths }),
+      ],
+      "high",
+    )
+    const ids = r.admitted.map((e) => e.ref_id)
+    expect(ids).toContain("skill:a")
+    expect(ids).not.toContain("knowledge:b")
+  })
+
   test("weak/none evidence is excluded", () => {
     const r = admitIndexRefs([mkEntry({ evidence_strength: "weak", ref_id: "w" }), mkEntry({ evidence_strength: "strong", ref_id: "s" })], "max")
     expect(r.admitted.map((e) => e.ref_id)).toEqual(["s"])

@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { cleanupRunsDir, readJson, runDeepAgentStream, tempRunsDir } from "./_gateway"
 
 describe("DeepAgent work package context", () => {
-  test("keeps high mode global runtime context refs without knowledge retrieval", async () => {
+  test("high mode carries bounded knowledge but never strategy refs (docs/39)", async () => {
     const dir = await tempRunsDir()
     try {
       const runDir = await runDeepAgentStream(dir)
@@ -23,10 +23,10 @@ describe("DeepAgent work package context", () => {
       )
       expect(workPackage.required_outputs).toEqual(expect.arrayContaining(["DESIGN.md", "HANDOFF.md", "TEST.md", "HISTORY.md"]))
       expect(workPackage.agent_mode).toBe("high")
-      expect(workPackage.knowledge_enabled).toBe(false)
-      expect(workPackage.selected_memory_refs).toEqual([])
+      // docs/39 §3.1: high has durable retrieval enabled, but strategies/methodologies stay off.
+      expect(workPackage.knowledge_enabled).toBe(true)
       expect(workPackage.selected_strategy_refs).toEqual([])
-      expect(workPackage.knowledge_retrieval).toMatchObject({ enabled: false, mode: "disabled" })
+      expect(workPackage.knowledge_retrieval).toMatchObject({ enabled: true })
       expect(workPackage.mcp_capability_summary).toMatchObject({
         ref: "MCP_CAPABILITY_INDEX.json",
         execution_owner: "generic_agent_tool_registry_or_mcp",
