@@ -32,8 +32,8 @@ describe("DeepAgent max knowledge mode", () => {
       const refIds = knowledge.selected_refs.map((ref: { ref_id: string }) => ref.ref_id)
       expect(refIds.length).toBeGreaterThan(0)
       expect(refIds.some((id: string) => id.startsWith("doc:strategy:"))).toBe(true)
-      expect(knowledge.selected_refs.every((ref: { kind: string }) => ["strategy", "methodology", "memory"].includes(ref.kind))).toBe(true)
-      expect(knowledge.retrieval_policy.topk_by_kind).toEqual({ strategy: 3, methodology: 1, memory: 3 })
+      expect(knowledge.selected_refs.every((ref: { kind: string }) => ["strategy", "methodology", "knowledge", "skill", "memory"].includes(ref.kind))).toBe(true)
+      expect(knowledge.retrieval_policy.topk_by_kind).toEqual({ strategy: 3, methodology: 2, knowledge: 2, skill: 2, memory: 3 })
 
       const workPackage = await readJson(runDir, "MODEL_WORK_PACKAGE.json")
       expect(workPackage).toMatchObject({
