@@ -15,7 +15,7 @@ import { ProviderTransform } from "@/provider/transform"
 import { Auth } from "@/auth"
 import { configureGateway } from "@/deepagent/config"
 
-import { type Tool as AITool, tool, jsonSchema, generateObject, streamObject, type ModelMessage } from "ai"
+import { type Tool as AITool, tool, jsonSchema, generateText, streamText, type ModelMessage } from "ai"
 import type { JSONSchema7 } from "@ai-sdk/provider"
 import { SessionCompaction } from "./compaction"
 import { SystemPrompt } from "./system"
@@ -735,6 +735,31 @@ export const layer = Layer.effect(
       return typeof value === "string" && value.length > 0 ? value : undefined
     }
 
+    // Wish refinement asks the model for a JSON object describing the refined prompt, but we do
+    // NOT force a structured/tool-call output: LLMs are non-deterministic, and a hard schema gate
+    // makes weaker models (e.g. small/flash variants) fail the whole turn instead of producing a
+    // usable result. We generate plain text and extract the JSON leniently — the goal is a clear,
+    // readable refinement, not strict format compliance. If parsing fails, the caller fails soft.
+    const extractWishJson = (text: string): unknown => {
+      const trimmed = text.trim()
+      // Prefer a fenced ```json block when present, else the first balanced-looking {...} span.
+      const fence = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i)
+      const candidates: string[] = []
+      if (fence?.[1]) candidates.push(fence[1].trim())
+      const first = trimmed.indexOf("{")
+      const last = trimmed.lastIndexOf("}")
+      if (first !== -1 && last > first) candidates.push(trimmed.slice(first, last + 1))
+      candidates.push(trimmed)
+      for (const c of candidates) {
+        try {
+          return JSON.parse(c)
+        } catch {
+          /* try next candidate */
+        }
+      }
+      return undefined
+    }
+
     const generateWishRefinement = Effect.fnUntraced(function* (input: {
       sessionID: SessionID
       rawInput: string
@@ -753,14 +778,11 @@ export const layer = Layer.effect(
       const params = {
         temperature: 0.2,
         messages: [
-          ...(isOpenaiOauth
-            ? []
-            : ([{ role: "system", content: system }] satisfies ModelMessage[])),
+          ...(isOpenaiOauth ? [] : ([{ role: "system", content: system }] satisfies ModelMessage[])),
           { role: "user", content: input.rawInput },
         ],
         model: language,
-        schema: jsonSchema(AgentGateway.DeepAgentPromptPipeline.WISH_REFINEMENT_OUTPUT_JSON_SCHEMA as Record<string, unknown>),
-      } satisfies Parameters<typeof generateObject>[0]
+      } satisfies Parameters<typeof generateText>[0]
       const run = {
         callKind: "auxiliary_ai_call" as const,
         feature: "wish_prompt_prepare",
@@ -779,24 +801,26 @@ export const layer = Layer.effect(
         return yield* AgentGateway.runAuxiliary(
           run,
           Effect.tryPromise(async () => {
-            const result = streamObject({
+            const result = streamText({
               ...params,
-              providerOptions: ProviderTransform.providerOptions(resolved, {
-                instructions: system,
-                store: false,
-              }),
+              providerOptions: ProviderTransform.providerOptions(resolved, { instructions: system, store: false }),
               onError: () => {},
             })
+            let text = ""
             for await (const part of result.fullStream) {
               if (part.type === "error") throw part.error
+              if (part.type === "text-delta") text += part.text
             }
-            return result.object
+            return extractWishJson(text)
           }),
         )
       }
 
       configureGateway(cfg)
-      return yield* AgentGateway.runAuxiliary(run, Effect.tryPromise(() => generateObject(params).then((r) => r.object)))
+      return yield* AgentGateway.runAuxiliary(
+        run,
+        Effect.tryPromise(() => generateText(params).then((r) => extractWishJson(r.text))),
+      )
     })
 
     // A2: model-driven wish first-turn refinement. Calls the user-specified model to turn a raw

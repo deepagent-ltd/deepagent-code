@@ -130,6 +130,7 @@ export class DeepAgentCodeHome {
   ensureProject(projectID: string, worktree: string | null = null): ProjectPaths {
     const paths = this.projectPaths(projectID)
     if (!existsSync(paths.root)) this.createProjectAtomically(paths, projectID, worktree)
+    if (!existsSync(paths.projectJson)) this.initializeProject(paths, projectID, worktree)
     this.validateProject(paths, projectID)
     return paths
   }
@@ -209,29 +210,7 @@ export class DeepAgentCodeHome {
       projectJson: path.join(tempRoot, "project.json"),
     } satisfies ProjectPaths
     try {
-      for (const dir of [
-        tempPaths.projectMemoryDir,
-        tempPaths.projectRulesDir,
-        tempPaths.projectKnowledgeDir,
-        tempPaths.handoffDir,
-        tempPaths.questDir,
-        tempPaths.indexesDir,
-        tempPaths.sessionsDir,
-      ]) mkdirSync(dir, { recursive: true })
-      writeJsonIfMissing(tempPaths.projectJson, {
-        schema_version: PROJECT_SCHEMA_VERSION,
-        project_id: projectID,
-        worktree,
-        created_at: new Date().toISOString(),
-      } satisfies ProjectManifest)
-      writeJsonIfMissing(path.join(tempPaths.indexesDir, "manifest.json"), {
-        schema_version: PROJECT_INDEX_SCHEMA_VERSION,
-        project_id: projectID,
-        rebuildable: true,
-        indexes: ["project-memory", "project-rules", "project-knowledge", "handoff", "quest"],
-      })
-      this.createPublicPointer(tempPaths.publicLink)
-      ensureFile(path.join(tempRoot, ".initialized"), new Date().toISOString() + "\n")
+      this.initializeProject(tempPaths, projectID, worktree)
       renameSync(tempRoot, paths.root)
     } catch (error) {
       rmSync(tempRoot, { recursive: true, force: true })
@@ -245,6 +224,32 @@ export class DeepAgentCodeHome {
     } catch {
       writeFileSync(`${publicPath}.link.json`, JSON.stringify({ target: "../../public", readonly: true }, null, 2), "utf8")
     }
+  }
+
+  private initializeProject(paths: ProjectPaths, projectID: string, worktree: string | null): void {
+    for (const dir of [
+      paths.projectMemoryDir,
+      paths.projectRulesDir,
+      paths.projectKnowledgeDir,
+      paths.handoffDir,
+      paths.questDir,
+      paths.indexesDir,
+      paths.sessionsDir,
+    ]) mkdirSync(dir, { recursive: true })
+    writeJsonIfMissing(paths.projectJson, {
+      schema_version: PROJECT_SCHEMA_VERSION,
+      project_id: projectID,
+      worktree,
+      created_at: new Date().toISOString(),
+    } satisfies ProjectManifest)
+    writeJsonIfMissing(path.join(paths.indexesDir, "manifest.json"), {
+      schema_version: PROJECT_INDEX_SCHEMA_VERSION,
+      project_id: projectID,
+      rebuildable: true,
+      indexes: ["project-memory", "project-rules", "project-knowledge", "handoff", "quest"],
+    })
+    if (!existsSync(paths.publicLink) && !existsSync(`${paths.publicLink}.link.json`)) this.createPublicPointer(paths.publicLink)
+    ensureFile(path.join(paths.root, ".initialized"), new Date().toISOString() + "\n")
   }
 
   private validateProject(paths: ProjectPaths, projectID: string): void {

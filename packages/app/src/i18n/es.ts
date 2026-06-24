@@ -467,7 +467,8 @@ export const dict = {
   "error.chain.didYouMean": "¿Quisiste decir: {{suggestions}}",
   "error.chain.modelNotFound": "Modelo no encontrado: {{provider}}/{{model}}",
   "error.chain.checkConfig": "Comprueba los nombres de proveedor/modelo en tu configuración (deepagent-code.json)",
-  "error.chain.mcpFailed": 'El servidor MCP "{{name}}" falló. Nota, DeepAgent Code no soporta autenticación MCP todavía.',
+  "error.chain.mcpFailed":
+    'El servidor MCP "{{name}}" falló. Nota, DeepAgent Code no soporta autenticación MCP todavía.',
   "error.chain.providerAuthFailed": "Autenticación de proveedor fallida ({{provider}}): {{message}}",
   "error.chain.providerInitFailed":
     'Fallo al inicializar proveedor "{{provider}}". Comprueba credenciales y configuración.',
@@ -933,4 +934,71 @@ export const dict = {
   "error.childStore.persistedProjectIconCreateFailed": "Error al crear icono de proyecto persistente",
   "error.childStore.storeCreateFailed": "Error al crear almacén",
   "terminal.connectionLost.abnormalClose": "WebSocket cerrado anormalmente: {{code}}",
+  "settings.section.about": "Acerca de",
+  "settings.tab.about": "Acerca de",
+  "settings.about.product.title": "Producto",
+  "settings.about.product.description": "El nombre y la versión de la aplicación.",
+  "settings.about.attribution.title": "Basado en opencode",
+  "settings.about.attribution.description": "DeepAgent Code está basado en opencode, usado bajo la licencia MIT.",
+  "settings.about.license.title": "Licencia",
+  "settings.general.section.advanced": "Avanzado",
+  "settings.general.section.deepagent": "DeepAgent",
+  "settings.general.deepagent.mode.title": "Agente",
+  "settings.general.deepagent.mode.description": "Elige la intensidad de trabajo de DeepAgent.",
+  "settings.general.deepagent.mode.general": "general",
+  "settings.general.deepagent.mode.high": "high",
+  "settings.general.deepagent.mode.xhigh": "xhigh",
+  "settings.general.deepagent.mode.max": "max",
+  "settings.general.deepagent.mode.ultra": "ultra",
+  "settings.general.deepagent.mode.ultraRequiresWish": "ultra requiere el modo de escenario wish.",
+  "settings.general.deepagent.prompt.title": "Modo de escenario",
+  "settings.general.deepagent.prompt.description": "Elige cómo el compositor gestiona tu prompt antes de enviarlo.",
+  "settings.general.deepagent.prompt.direct": "Modo directo",
+  "settings.general.deepagent.prompt.direct.description":
+    "Envía tu prompt tal como está escrito, sin que DeepAgent prepare un borrador.",
+  "settings.general.deepagent.prompt.wish": "Modo wish",
+  "settings.general.deepagent.prompt.wish.description":
+    "DeepAgent prepara primero un prompt completo y luego te permite revisarlo y editarlo.",
+  "settings.general.deepagent.wishModel.title": "Modelo del modo wish",
+  "settings.general.deepagent.wishModel.description":
+    "Elige el modelo usado solo para preparar borradores de prompts del modo wish.",
+  "settings.general.deepagent.selfLearning.title": "Aprobación de autoaprendizaje",
+  "settings.general.deepagent.selfLearning.description":
+    "Decide cómo el conocimiento que DeepAgent aprende de tus sesiones se vuelve recuperable.",
+  "settings.general.deepagent.selfLearning.manual": "Aprobación manual",
+  "settings.general.deepagent.selfLearning.manual.description":
+    "El conocimiento aprendido espera en Revisión hasta que lo apruebes.",
+  "settings.general.deepagent.selfLearning.auto": "Aprobación automática",
+  "settings.general.deepagent.selfLearning.auto.description":
+    "El conocimiento aprendido se vuelve recuperable de inmediato, sin revisión.",
+  "settings.general.row.shell.title": "Shell de terminal",
+  "settings.general.row.shell.description":
+    "Elige la shell usada para tu terminal. Las shells compatibles también se usan para llamadas a herramientas del agente.",
+  "settings.general.row.shell.autoDefault": "Automático (predeterminado)",
+  "settings.general.row.shell.terminalOnly": "solo terminal",
+  "settings.general.row.showFileTree.title": "Árbol de archivos",
+  "settings.general.row.showFileTree.description": "Mostrar el panel de árbol de archivos en sesiones de escritorio",
+  "settings.general.row.showNavigation.title": "Controles de navegación",
+  "settings.general.row.showNavigation.description":
+    "Mostrar los botones atrás y adelante en la barra de título del escritorio",
+  "settings.general.row.showSearch.title": "Paleta de comandos",
+  "settings.general.row.showSearch.description":
+    "Mostrar el botón de búsqueda y paleta de comandos en la barra de título del escritorio",
+  "settings.general.row.showTerminal.title": "Terminal",
+  "settings.general.row.showTerminal.description": "Mostrar el botón de terminal en la barra de título del escritorio",
+  "settings.general.row.showStatus.title": "Estado del servidor",
+  "settings.general.row.showStatus.description":
+    "Mostrar el botón de estado del servidor en la barra de título del escritorio",
+  "settings.general.row.showCustomAgents.title": "Agentes personalizados",
+  "settings.general.row.showCustomAgents.description":
+    "Mostrar el selector de agentes en el compositor de escritorio v2",
+  "settings.general.row.newLayoutDesigns.title": "Nuevo diseño e interfaz",
+  "settings.general.row.newLayoutDesigns.description":
+    "Activar el diseño, inicio, compositor e interfaz de sesión rediseñados",
+  "settings.general.row.pinchZoom.title": "Pellizcar para ampliar",
+  "settings.general.row.pinchZoom.description":
+    "Permitir gestos de pellizco en trackpad y Ctrl-desplazamiento para ampliar",
+  "settings.updates.action.downloading": "Descargando...",
+  "settings.updates.action.installing": "Instalando...",
+  "settings.providers.section.deepagentBackends": "Backends de modelos DeepAgent",
 }
