@@ -46,7 +46,7 @@ export type DomainPackIndexEntry = {
   readonly evidence_strength: EvidenceStrength
   readonly risk: RiskLevel
   readonly sensitivity: "public" | "source_code" | "pii" | "secret_adjacent" | "secret"
-  readonly allowed_strengths: readonly ("high" | "max" | "ultra")[]
+  readonly allowed_strengths: readonly ("high" | "xhigh" | "max" | "ultra")[]
   readonly pack_id: string
 }
 
@@ -81,7 +81,7 @@ export type PackScore = {
 // docs/34 §4.1. The simpler profile in domain-pack.ts is retained for backward compat.
 export type ExtendedProblemProfile = {
   readonly scenario_mode: "direct" | "wish"
-  readonly agent_strength: "general" | "high" | "max" | "ultra"
+  readonly agent_strength: "general" | "high" | "xhigh" | "max" | "ultra"
   readonly task_kind: "implement" | "debug" | "review" | "test" | "migrate" | "optimize" | "explain" | "operate"
   readonly code_domains: readonly string[]
   readonly business_domains: readonly string[]
