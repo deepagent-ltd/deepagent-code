@@ -88,6 +88,10 @@ export function BasicTool(props: BasicToolProps) {
   const open = () => props.open ?? state.open
   const ready = () => state.ready
   const pending = () => props.status === "pending" || props.status === "running"
+  // A tool that has not produced anything yet (queued, not executing) stays non-interactive.
+  // Once it is "running" it streams partial output, so the user must be able to expand it to
+  // watch progress instead of waiting for completion.
+  const notStarted = () => props.status === "pending"
   const hasChildren = () => (props.defer ? "children" in props : props.children)
 
   let cancelReady: (() => void) | undefined
@@ -173,7 +177,7 @@ export function BasicTool(props: BasicToolProps) {
   })
 
   const handleOpenChange = (value: boolean) => {
-    if (pending()) return
+    if (notStarted()) return
     if (props.locked && !value) return
     setOpen(value)
   }
@@ -243,7 +247,7 @@ export function BasicTool(props: BasicToolProps) {
           </Switch>
         </div>
       </div>
-      <Show when={hasChildren() && !props.hideDetails && !props.locked && !pending()}>
+      <Show when={hasChildren() && !props.hideDetails && !props.locked && !notStarted()}>
         <Collapsible.Arrow />
       </Show>
     </div>
