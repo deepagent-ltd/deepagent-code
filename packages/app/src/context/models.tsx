@@ -3,7 +3,7 @@ import { createStore } from "solid-js/store"
 import { DateTime } from "luxon"
 import { filter, firstBy, flat, groupBy, mapValues, pipe, uniqueBy, values } from "remeda"
 import { createSimpleContext } from "@deepagent-code/ui/context"
-import { isVisibleProvider, useProviders } from "@/hooks/use-providers"
+import { useProviders } from "@/hooks/use-providers"
 import { Persist, persisted } from "@/utils/persist"
 
 export type ModelKey = { providerID: string; modelID: string }
@@ -98,7 +98,7 @@ export const { use: useModels, provider: ModelsProvider } = createSimpleContext(
         ...m,
         name: m.name.replace("(latest)", "").trim(),
         latest: m.name.includes("(latest)"),
-      })).filter((m) => isVisibleProvider(m.provider)),
+      })),
     )
 
     const find = (key: ModelKey) => list().find((m) => m.id === key.modelID && m.provider.id === key.providerID)
