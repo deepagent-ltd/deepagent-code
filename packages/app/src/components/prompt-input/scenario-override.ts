@@ -1,6 +1,8 @@
 // D1/D3: scenario-mode override, set by the send-adjacent scenario toggle (D1).
-// It overrides the configured promptMode for a turn. Reset to `direct` on stop (D3) so any
-// interrupt returns to the fail-safe mode until the user re-engages wish.
+// It overrides the configured promptMode for a turn. Cleared on stop (D3) so the override is
+// strictly per-turn: once a turn ends, resolution falls back to the configured default (e.g. wish)
+// rather than being pinned to a stale value. The next turn re-enters the configured scenario unless
+// the user toggles again.
 //
 // Keys: the toggle writes a DIRECTORY-scoped key (stable before a session exists, e.g. on the
 // new-session composer); submit reads the SESSION key first, then falls back to the directory
@@ -34,10 +36,13 @@ export const getScenarioOverride = (key: string): ScenarioOverride | undefined =
 export const resolveScenarioOverride = (sessionKey: string, dirKey: string): ScenarioOverride | undefined =>
   scenarioOverride.get(sessionKey) ?? scenarioOverride.get(dirKey)
 
-// D3: any stop resets the scenario to `direct` (fail-safe) for both the session and its directory
-// scope, so the next user message is a plain direct submission until they re-engage wish.
+// D3: any stop CLEARS the per-turn override for both the session and its directory scope. Clearing
+// (not pinning "direct") is deliberate: a pinned "direct" would permanently shadow the configured
+// default and, because submit resolves the session key before the dir key, the toggle (which only
+// writes the dir key) could never re-engage wish. After clearing, the next turn falls back to the
+// configured scenario default.
 export const resetScenarioOnStop = (sessionKey: string, dirKey?: string): void => {
-  scenarioOverride.set(sessionKey, "direct")
-  if (dirKey) scenarioOverride.set(dirKey, "direct")
+  scenarioOverride.delete(sessionKey)
+  if (dirKey) scenarioOverride.delete(dirKey)
   notifyScenarioOverrideListeners()
 }
