@@ -37,7 +37,7 @@ export const DialogSelectProvider: Component = () => {
           language.locale()
           return [
             { id: CUSTOM_ID, name: customLabel() },
-            ...Array.from(providers.all().values()).filter((provider) => popularProviders.includes(provider.id)),
+            ...Array.from(providers.all().values()),
           ]
         }}
         filterKeys={["id", "name"]}
