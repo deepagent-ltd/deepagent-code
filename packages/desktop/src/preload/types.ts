@@ -96,6 +96,6 @@ export type ElectronAPI = {
   setTitlebar: (theme: TitlebarTheme) => Promise<void>
   runDesktopMenuAction: (action: DesktopMenuAction) => Promise<void>
   setBackgroundColor: (color: string) => Promise<void>
-  exportDebugLogs: () => Promise<string>
+  exportDebugLogs: (options?: { windowMs?: number; pick?: boolean }) => Promise<string | null>
   recordFatalRendererError: (error: FatalRendererError) => Promise<void>
 }

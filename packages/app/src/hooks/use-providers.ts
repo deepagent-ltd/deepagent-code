@@ -28,6 +28,7 @@ export function useProviders() {
   return {
     all: () => providers().all,
     default: () => providers().default,
+    errors: () => providers().errors ?? [],
     popular: () =>
       pipe(
         providers().all,

@@ -15,6 +15,7 @@ import { SnapshotCommand } from "./snapshot"
 import { AgentCommand } from "./agent"
 import { StartupCommand } from "./startup"
 import { V2Command } from "./v2"
+import { LogsCommand } from "./logs"
 
 export const DebugCommand = cmd({
   command: "debug",
@@ -33,6 +34,7 @@ export const DebugCommand = cmd({
       .command(V2Command)
       .command(InfoCommand)
       .command(PathsCommand)
+      .command(LogsCommand)
       .command(WaitCommand)
       .demandCommand(),
   async handler() {},
