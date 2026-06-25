@@ -104,7 +104,7 @@ type PlatformBase = {
   readClipboardImage?(): Promise<File | null>
 
   /** Export collected diagnostic logs (desktop only) */
-  exportDebugLogs?(): Promise<string>
+  exportDebugLogs?(options?: { windowMs?: number; pick?: boolean }): Promise<string | null>
 
   /** Record a fatal renderer error in platform logs (desktop only) */
   recordFatalRendererError?(error: FatalRendererErrorLog): Promise<void>
