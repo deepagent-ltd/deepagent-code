@@ -45,7 +45,6 @@ export const SettingsProvidersV2: Component = () => {
     return providers
       .connected()
       .filter((p) => p.id !== DEEPAGENT_PROVIDER_ID)
-      .filter((p) => popularProviders.includes(p.id) || isConfigCustom(p.id))
   })
 
   const configErrors = createMemo(() => providers.errors())
