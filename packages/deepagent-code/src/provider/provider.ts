@@ -44,7 +44,6 @@ import {
 
 const log = Log.create({ service: "provider" })
 const OPENAI_HEADER_TIMEOUT_DEFAULT = 10_000
-const PRODUCT_PROVIDER_IDS = new Set(["openai", "deepseek", "anthropic", "deepagent", "deepagent-code"])
 
 function providerEnvKey(configuredEnv: string[], envs: Record<string, string | undefined>) {
   const configured = configuredEnv.find((item) => envs[item])
@@ -937,7 +936,7 @@ const ProviderModalities = Schema.Struct({
 const ProviderInterleaved = Schema.Union([
   Schema.Boolean,
   Schema.Struct({
-    field: Schema.Literals(["reasoning_content", "reasoning_details"]),
+    field: Schema.Literals(["reasoning", "reasoning_content", "reasoning_details"]),
   }),
 ])
 
@@ -1324,33 +1323,12 @@ export const layer = Layer.effect(
         const configProviders = Object.entries(cfg.provider ?? {})
         const disabled = new Set(cfg.disabled_providers ?? [])
         const enabled = cfg.enabled_providers ? new Set(cfg.enabled_providers) : null
-        const configuredProviderIDs = new Set(configProviders.map(([id]) => id))
         const envs = yield* env.all()
         const allAuths = yield* auth.all().pipe(Effect.orDie)
-        const authProviderIDs = new Set(Object.keys(allAuths))
-        const envProviderIDs = new Set(
-          Object.entries(database)
-            .filter(([, provider]) => providerEnvKey(provider.env, envs) !== undefined)
-            .map(([id]) => id),
-        )
-
-        function isProductProvider(providerID: string): boolean {
-          return PRODUCT_PROVIDER_IDS.has(providerID)
-        }
-
-        function isExplicitCompatibilityProvider(providerID: string): boolean {
-          if (isProductProvider(providerID)) return true
-          if (enabled?.has(providerID)) return true
-          if (configuredProviderIDs.has(providerID)) return true
-          if (authProviderIDs.has(providerID)) return true
-          if (envProviderIDs.has(providerID)) return true
-          return false
-        }
 
         function isProviderAllowed(providerID: ProviderV2.ID): boolean {
           if (enabled && !enabled.has(providerID)) return false
           if (disabled.has(providerID)) return false
-          if (!isExplicitCompatibilityProvider(providerID)) return false
           return true
         }
 
@@ -1583,6 +1561,25 @@ export const layer = Layer.effect(
 
           for (const [modelID, model] of Object.entries(provider.models)) {
             model.api.id = model.api.id ?? model.id ?? modelID
+            // Registration-time boundary for the hosted "deepagent" gateway provider only. Third-party
+            // providers are unrestricted (parity with upstream opencode). We validate once here at load
+            // time instead of throwing per-request in resolveSDK/transform: the hosted gateway only
+            // routes to a vetted set of upstream providers/packages, so an out-of-policy model is dropped
+            // from the catalog rather than failing mid-request.
+            if (providerID === "deepagent") {
+              const upstreamProviderID = deepagentUpstreamProviderID(model)
+              const packageAllowed =
+                model.api.npm.startsWith("file://") || SUPPORTED_DEEPAGENT_PROVIDER_PACKAGES.has(model.api.npm)
+              if (!SUPPORTED_DEEPAGENT_PROVIDER_IDS.has(upstreamProviderID) || !packageAllowed) {
+                log.warn("dropping unsupported deepagent upstream model", {
+                  modelID,
+                  upstreamProviderID,
+                  npm: model.api.npm,
+                })
+                delete provider.models[modelID]
+                continue
+              }
+            }
             if (
               // These chat aliases are invalid for the special handling in the
               // built-in providers below, but custom providers may support them.
@@ -1636,18 +1633,6 @@ export const layer = Layer.effect(
 
     const list = Effect.fn("Provider.list")(() => InstanceState.use(state, (s) => s.providers))
 
-    function assertDeepAgentRuntimeBoundary(model: Model) {
-      if (model.providerID !== "deepagent") return
-      const upstreamProviderID = deepagentUpstreamProviderID(model)
-      if (!SUPPORTED_DEEPAGENT_PROVIDER_IDS.has(upstreamProviderID)) {
-        throw new Error(`Unsupported DeepAgent upstream provider: ${upstreamProviderID}`)
-      }
-      if (model.api.npm.startsWith("file://")) return
-      if (!SUPPORTED_DEEPAGENT_PROVIDER_PACKAGES.has(model.api.npm)) {
-        throw new Error(`Unsupported DeepAgent upstream provider package: ${model.api.npm}`)
-      }
-    }
-
     function deepagentModelAuthProviderID(model: Model) {
       if (model.providerID !== "deepagent") return
       const value = model.options?.authProviderID
@@ -1662,7 +1647,6 @@ export const layer = Layer.effect(
       modelAuth?: Auth.Info,
     ) {
       try {
-        assertDeepAgentRuntimeBoundary(model)
         using _ = log.time("getSDK", {
           providerID: model.providerID,
         })
