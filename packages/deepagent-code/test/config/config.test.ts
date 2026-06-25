@@ -29,6 +29,7 @@ import { CrossSpawnSpawner } from "@deepagent-code/core/cross-spawn-spawner"
 import { testEffect } from "../lib/effect"
 import path from "path"
 import fs from "fs/promises"
+import { existsSync } from "fs"
 import os from "os"
 import { pathToFileURL } from "url"
 import { Global } from "@deepagent-code/core/global"
@@ -668,6 +669,98 @@ it.effect("captures invalid fields in a global config file as a schema error", (
           const schemaError = errors.find((e) => e.source.endsWith("config.json"))
           expect(schemaError?.kind).toBe("schema")
           expect(schemaError?.message).toContain("not_a_real_field")
+        }),
+      ),
+    )
+  }),
+)
+
+it.effect("consolidates legacy global config files into deepagent-code.jsonc and removes them", () =>
+  Effect.gen(function* () {
+    const globalDir = yield* tmpdirScoped()
+    const projectDir = yield* tmpdirScoped()
+    // Plugins in one legacy file, model in another — the exact split that confused users.
+    yield* FSUtil.use.writeWithDirs(
+      path.join(globalDir, "config.json"),
+      JSON.stringify({ $schema: "https://deepagent-code.ai/config.json", model: "kept/model" }),
+    )
+    yield* FSUtil.use.writeWithDirs(
+      path.join(globalDir, "deepagent-code.json"),
+      JSON.stringify({ plugin: ["my-plugin"] }),
+    )
+
+    yield* withGlobalConfigDir(
+      globalDir,
+      withInstanceDir(
+        projectDir,
+        Effect.gen(function* () {
+          const config = yield* Config.use.get()
+          // Both settings survive the merge.
+          expect(config.model).toBe("kept/model")
+          expect(config.plugin).toContain("my-plugin")
+
+          // Legacy files are gone; the single canonical file remains.
+          expect(existsSync(path.join(globalDir, "config.json"))).toBe(false)
+          expect(existsSync(path.join(globalDir, "deepagent-code.json"))).toBe(false)
+          expect(existsSync(path.join(globalDir, "deepagent-code.jsonc"))).toBe(true)
+        }),
+      ),
+    )
+  }),
+)
+
+it.effect("merges legacy keys into an existing .jsonc while preserving its comments", () =>
+  Effect.gen(function* () {
+    const globalDir = yield* tmpdirScoped()
+    const projectDir = yield* tmpdirScoped()
+    yield* FSUtil.use.writeWithDirs(
+      path.join(globalDir, "deepagent-code.jsonc"),
+      '{\n  // my providers\n  "model": "canonical/wins"\n}',
+    )
+    yield* FSUtil.use.writeWithDirs(
+      path.join(globalDir, "deepagent-code.json"),
+      JSON.stringify({ model: "legacy/loses", plugin: ["legacy-plugin"] }),
+    )
+
+    yield* withGlobalConfigDir(
+      globalDir,
+      withInstanceDir(
+        projectDir,
+        Effect.gen(function* () {
+          const config = yield* Config.use.get()
+          // Canonical value wins; legacy-only key is merged in.
+          expect(config.model).toBe("canonical/wins")
+          expect(config.plugin).toContain("legacy-plugin")
+
+          const text = yield* FSUtil.use.readFileString(path.join(globalDir, "deepagent-code.jsonc"))
+          expect(text).toContain("// my providers")
+          expect(existsSync(path.join(globalDir, "deepagent-code.json"))).toBe(false)
+        }),
+      ),
+    )
+  }),
+)
+
+it.effect("does not migrate (or delete) legacy files when one is broken", () =>
+  Effect.gen(function* () {
+    const globalDir = yield* tmpdirScoped()
+    const projectDir = yield* tmpdirScoped()
+    yield* FSUtil.use.writeWithDirs(
+      path.join(globalDir, "config.json"),
+      JSON.stringify({ $schema: "https://deepagent-code.ai/config.json", model: "kept/model" }),
+    )
+    yield* FSUtil.use.writeWithDirs(path.join(globalDir, "deepagent-code.json"), "{ not valid json }")
+
+    yield* withGlobalConfigDir(
+      globalDir,
+      withInstanceDir(
+        projectDir,
+        Effect.gen(function* () {
+          yield* Config.use.get()
+          // Broken legacy file present -> migration bails; both legacy files stay put so the broken
+          // one keeps surfacing its error in place.
+          expect(existsSync(path.join(globalDir, "config.json"))).toBe(true)
+          expect(existsSync(path.join(globalDir, "deepagent-code.json"))).toBe(true)
         }),
       ),
     )
