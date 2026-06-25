@@ -32,12 +32,24 @@ describe("scenario override (D1/D3)", () => {
     expect(resolveScenarioOverride("ses_new", "dir_x")).toBe("direct")
   })
 
-  test("stop resets both session and directory keys to direct (fail-safe)", () => {
+  test("stop clears both session and directory overrides so the next turn uses the configured default", () => {
     setScenarioOverride("ses_d", "wish")
     setScenarioOverride("dir_d", "wish")
     resetScenarioOnStop("ses_d", "dir_d")
-    expect(getScenarioOverride("ses_d")).toBe("direct")
-    expect(getScenarioOverride("dir_d")).toBe("direct")
+    // Cleared, not pinned to "direct": resolution now falls through to the configured default,
+    // and a pinned session key can no longer shadow a later dir-key toggle back to wish.
+    expect(getScenarioOverride("ses_d")).toBeUndefined()
+    expect(getScenarioOverride("dir_d")).toBeUndefined()
+    expect(resolveScenarioOverride("ses_d", "dir_d")).toBeUndefined()
+  })
+
+  test("after stop, re-toggling wish on the directory key re-engages wish at submit time", () => {
+    // Repro of the 'exit wish -> can never re-enter' bug: previously stop pinned the SESSION key to
+    // "direct", which submit resolves before the dir key, so the toggle (dir key only) was shadowed.
+    setScenarioOverride("ses_f", "wish")
+    resetScenarioOnStop("ses_f", "dir_f")
+    setScenarioOverride("dir_f", "wish") // user re-selects wish via the toggle
+    expect(resolveScenarioOverride("ses_f", "dir_f")).toBe("wish")
   })
 
   test("listeners are notified when overrides change", () => {
