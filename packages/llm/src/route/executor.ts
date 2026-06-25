@@ -201,9 +201,28 @@ const responseBody = (body: string | void, request: HttpClientRequest.HttpClient
   return { body: redacted.slice(0, BODY_LIMIT), bodyTruncated: true }
 }
 
-const providerMessage = (status: number, body: { readonly body?: string }) => {
-  if (body.body && body.body.length <= 500) return `Provider request failed with HTTP ${status}: ${body.body}`
-  return `Provider request failed with HTTP ${status}`
+// Surface the endpoint host + requestId alongside the upstream body so logs can identify *which*
+// gateway failed and how — many users point baseURL at OpenAI-compatible relays whose error bodies
+// (e.g. "服务暂时繁忙") are otherwise indistinguishable from one another. The url is already redacted
+// by redactUrl (sensitive query stripped) and the body by redactBody, so no new secret surface.
+const endpointHost = (url: string) => {
+  if (!URL.canParse(url)) return undefined
+  return new URL(url).host || undefined
+}
+
+const providerMessage = (input: {
+  readonly status: number
+  readonly body: { readonly body?: string }
+  readonly host?: string | undefined
+  readonly requestId?: string | undefined
+}) => {
+  const context = [
+    input.host ? `host=${input.host}` : undefined,
+    input.requestId ? `requestId=${input.requestId}` : undefined,
+  ].filter(Boolean)
+  const suffix = context.length > 0 ? ` (${context.join(", ")})` : ""
+  const body = input.body.body && input.body.body.length <= 500 ? `: ${input.body.body}` : ""
+  return `Provider request failed with HTTP ${input.status}${suffix}${body}`
 }
 
 const responseHttp = (input: {
@@ -284,12 +303,18 @@ const statusError =
       const retryAfter = retryAfterMs(headers)
       const rateLimit = rateLimitDetails(headers, retryAfter)
       const details = responseBody(body, request)
+      const id = requestId(headers)
       return yield* new LLMError({
         module: "RequestExecutor",
         method: "execute",
         reason: statusReason({
           status: response.status,
-          message: providerMessage(response.status, details),
+          message: providerMessage({
+            status: response.status,
+            body: details,
+            host: endpointHost(request.url),
+            requestId: id,
+          }),
           retryAfterMs: retryAfter,
           rateLimit,
           http: responseHttp({
@@ -297,7 +322,7 @@ const statusError =
             response,
             redactedNames,
             body: details,
-            requestId: requestId(headers),
+            requestId: id,
             rateLimit,
           }),
         }),
