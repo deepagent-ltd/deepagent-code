@@ -24,10 +24,24 @@ import type {
   ConfigProvidersResponses,
   ConfigUpdateErrors,
   ConfigUpdateResponses,
+  DeepagentKnowledgeApproveErrors,
+  DeepagentKnowledgeApproveResponses,
+  DeepagentKnowledgePendingErrors,
+  DeepagentKnowledgePendingResponses,
   DeepagentKnowledgePromoteErrors,
   DeepagentKnowledgePromoteResponses,
   DeepagentKnowledgeRejectErrors,
+  DeepagentKnowledgeRejectIdsErrors,
+  DeepagentKnowledgeRejectIdsResponses,
   DeepagentKnowledgeRejectResponses,
+  DeepagentKnowledgeShipGateErrors,
+  DeepagentKnowledgeShipGateResponses,
+  DeepagentPacksActiveErrors,
+  DeepagentPacksActiveResponses,
+  DeepagentPacksPinErrors,
+  DeepagentPacksPinResponses,
+  DeepagentPacksUnpinErrors,
+  DeepagentPacksUnpinResponses,
   DeepagentReviewsErrors,
   DeepagentReviewsResponses,
   EventSubscribeResponses,
@@ -214,6 +228,8 @@ import type {
   SessionPromptPrepareErrors,
   SessionPromptPrepareResponses,
   SessionPromptResponses,
+  SessionPromptSuggestionErrors,
+  SessionPromptSuggestionResponses,
   SessionRevertErrors,
   SessionRevertResponses,
   SessionShareErrors,
@@ -1606,6 +1622,175 @@ export class Knowledge extends HeyApiClient {
       },
     })
   }
+
+  /**
+   * List DeepAgent knowledge awaiting review
+   *
+   * List durable knowledge that is pending approval or rejected, for the self-learning Review UI.
+   */
+  public pending<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<
+      DeepagentKnowledgePendingResponses,
+      DeepagentKnowledgePendingErrors,
+      ThrowOnError
+    >({
+      url: "/deepagent/knowledge/pending",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Approve DeepAgent knowledge by id
+   *
+   * Flag durable knowledge entries as approved (retrievable). Reversible; does not move files.
+   */
+  public approve<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      ids?: Array<string>
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "ids" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      DeepagentKnowledgeApproveResponses,
+      DeepagentKnowledgeApproveErrors,
+      ThrowOnError
+    >({
+      url: "/deepagent/knowledge/approve",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Reject DeepAgent knowledge by id
+   *
+   * Flag durable knowledge entries as rejected (not retrievable). Reversible; does not move files.
+   */
+  public rejectIds<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      ids?: Array<string>
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "ids" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      DeepagentKnowledgeRejectIdsResponses,
+      DeepagentKnowledgeRejectIdsErrors,
+      ThrowOnError
+    >({
+      url: "/deepagent/knowledge/reject-ids",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Run the ablation regression ship gate
+   *
+   * CI/eval posts measured per-group/per-task metrics; if MAX regresses vs HIGH the candidate refs are demoted (rejected) so misleading knowledge cannot ship (docs/30 §7).
+   */
+  public shipGate<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      tasks?: Array<string>
+      metrics?: Array<{
+        group: "general" | "high" | "max"
+        task: string
+        metric: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      }>
+      candidateRefs?: Array<string>
+      tolerance?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      repeats?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "tasks" },
+            { in: "body", key: "metrics" },
+            { in: "body", key: "candidateRefs" },
+            { in: "body", key: "tolerance" },
+            { in: "body", key: "repeats" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      DeepagentKnowledgeShipGateResponses,
+      DeepagentKnowledgeShipGateErrors,
+      ThrowOnError
+    >({
+      url: "/deepagent/knowledge/ship-gate",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
 }
 
 export class Deepagent extends HeyApiClient {
@@ -1637,6 +1822,101 @@ export class Deepagent extends HeyApiClient {
       ...options,
       ...params,
     })
+  }
+
+  public packsActive<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<
+      DeepagentPacksActiveResponses,
+      DeepagentPacksActiveErrors,
+      ThrowOnError
+    >({
+      url: "/deepagent/packs/active",
+      ...options,
+      ...params,
+    })
+  }
+
+  public packsPin<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      packId?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "packId" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<DeepagentPacksPinResponses, DeepagentPacksPinErrors, ThrowOnError>({
+      url: "/deepagent/packs/pin",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  public packsUnpin<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      packId?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "packId" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<DeepagentPacksUnpinResponses, DeepagentPacksUnpinErrors, ThrowOnError>(
+      {
+        url: "/deepagent/packs/unpin",
+        ...options,
+        ...params,
+        headers: {
+          "Content-Type": "application/json",
+          ...options?.headers,
+          ...params.headers,
+        },
+      },
+    )
   }
 
   private _knowledge?: Knowledge
@@ -4370,6 +4650,42 @@ export class Session2 extends HeyApiClient {
         ...options?.headers,
         ...params.headers,
       },
+    })
+  }
+
+  /**
+   * Get latest next-round suggestion
+   *
+   * Read the latest DeepAgent macro-round suggestion ({status, body}) persisted for human approval (high/max).
+   */
+  public promptSuggestion<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<
+      SessionPromptSuggestionResponses,
+      SessionPromptSuggestionErrors,
+      ThrowOnError
+    >({
+      url: "/session/{sessionID}/prompt_suggestion",
+      ...options,
+      ...params,
     })
   }
 

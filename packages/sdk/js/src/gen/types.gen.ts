@@ -2350,7 +2350,7 @@ export type Path = {
   agent: {
     schemaVersion: "deepagent_generic_agent_runtime.v1"
     mode: "unavailable" | "off" | "enabled" | "blocked" | "degraded"
-    agentMode: "general" | "high" | "max" | "ultra"
+    agentMode: "general" | "high" | "xhigh" | "max" | "ultra"
     implementation: "visible_skeleton" | "gateway_passthrough" | "gateway_enforced"
     agentManaged: boolean
     originalPathAllowed: boolean
@@ -2570,6 +2570,12 @@ export type PermissionRequest = {
 export type PermissionNotFoundError = {
   _tag: "PermissionNotFoundError"
   requestID: string
+  message: string
+}
+
+export type ProviderConfigError = {
+  source: string
+  kind: "json" | "schema"
   message: string
 }
 
@@ -5763,7 +5769,7 @@ export type DeepagentKnowledgePromoteData = {
       confidence: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
     }
     origin: "run_local" | "external_trace" | "sealed"
-    verdict: {
+    verdict?: {
       pass: boolean
       reason?: string
       evidence: Array<string>
@@ -5858,6 +5864,265 @@ export type DeepagentKnowledgeRejectResponses = {
 
 export type DeepagentKnowledgeRejectResponse =
   DeepagentKnowledgeRejectResponses[keyof DeepagentKnowledgeRejectResponses]
+
+export type DeepagentKnowledgePendingData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/deepagent/knowledge/pending"
+}
+
+export type DeepagentKnowledgePendingErrors = {
+  /**
+   * DeepAgentPromotionError | InvalidRequestError
+   */
+  400: DeepAgentPromotionError | InvalidRequestError
+}
+
+export type DeepagentKnowledgePendingError = DeepagentKnowledgePendingErrors[keyof DeepagentKnowledgePendingErrors]
+
+export type DeepagentKnowledgePendingResponses = {
+  /**
+   * Pending and rejected durable knowledge awaiting review
+   */
+  200: {
+    items: Array<{
+      id: string
+      type: "knowledge" | "strategy" | "methodology" | "memory" | "skill" | "failure_dossier"
+      summary: string
+      evidence_strength: "strong" | "medium" | "weak" | "none"
+      evidence_refs: Array<string>
+      approval_status: "pending" | "approved" | "rejected"
+    }>
+  }
+}
+
+export type DeepagentKnowledgePendingResponse =
+  DeepagentKnowledgePendingResponses[keyof DeepagentKnowledgePendingResponses]
+
+export type DeepagentKnowledgeApproveData = {
+  body?: {
+    ids: Array<string>
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/deepagent/knowledge/approve"
+}
+
+export type DeepagentKnowledgeApproveErrors = {
+  /**
+   * DeepAgentPromotionError | InvalidRequestError
+   */
+  400: DeepAgentPromotionError | InvalidRequestError
+}
+
+export type DeepagentKnowledgeApproveError = DeepagentKnowledgeApproveErrors[keyof DeepagentKnowledgeApproveErrors]
+
+export type DeepagentKnowledgeApproveResponses = {
+  /**
+   * Ids that were marked approved (accessible)
+   */
+  200: {
+    updated: Array<string>
+  }
+}
+
+export type DeepagentKnowledgeApproveResponse =
+  DeepagentKnowledgeApproveResponses[keyof DeepagentKnowledgeApproveResponses]
+
+export type DeepagentKnowledgeRejectIdsData = {
+  body?: {
+    ids: Array<string>
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/deepagent/knowledge/reject-ids"
+}
+
+export type DeepagentKnowledgeRejectIdsErrors = {
+  /**
+   * DeepAgentPromotionError | InvalidRequestError
+   */
+  400: DeepAgentPromotionError | InvalidRequestError
+}
+
+export type DeepagentKnowledgeRejectIdsError =
+  DeepagentKnowledgeRejectIdsErrors[keyof DeepagentKnowledgeRejectIdsErrors]
+
+export type DeepagentKnowledgeRejectIdsResponses = {
+  /**
+   * Ids that were marked rejected (inaccessible)
+   */
+  200: {
+    updated: Array<string>
+  }
+}
+
+export type DeepagentKnowledgeRejectIdsResponse =
+  DeepagentKnowledgeRejectIdsResponses[keyof DeepagentKnowledgeRejectIdsResponses]
+
+export type DeepagentKnowledgeShipGateData = {
+  body?: {
+    tasks: Array<string>
+    metrics: Array<{
+      group: "general" | "high" | "max"
+      task: string
+      metric: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    }>
+    candidateRefs: Array<string>
+    tolerance?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    repeats?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/deepagent/knowledge/ship-gate"
+}
+
+export type DeepagentKnowledgeShipGateErrors = {
+  /**
+   * DeepAgentPromotionError | InvalidRequestError
+   */
+  400: DeepAgentPromotionError | InvalidRequestError
+}
+
+export type DeepagentKnowledgeShipGateError = DeepagentKnowledgeShipGateErrors[keyof DeepagentKnowledgeShipGateErrors]
+
+export type DeepagentKnowledgeShipGateResponses = {
+  /**
+   * Ablation ship-gate verdict; offending refs demoted on failure
+   */
+  200: {
+    ship: boolean
+    reason: string
+    offenders: Array<string>
+    demoted: Array<string>
+    not_in_store: Array<string>
+    per_group: {
+      gen: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      high: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      max: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    }
+  }
+}
+
+export type DeepagentKnowledgeShipGateResponse =
+  DeepagentKnowledgeShipGateResponses[keyof DeepagentKnowledgeShipGateResponses]
+
+export type DeepagentPacksActiveData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/deepagent/packs/active"
+}
+
+export type DeepagentPacksActiveErrors = {
+  /**
+   * DeepAgentPromotionError | InvalidRequestError
+   */
+  400: DeepAgentPromotionError | InvalidRequestError
+}
+
+export type DeepagentPacksActiveError = DeepagentPacksActiveErrors[keyof DeepagentPacksActiveErrors]
+
+export type DeepagentPacksActiveResponses = {
+  /**
+   * Active domain pack set for this workspace
+   */
+  200: {
+    packs: Array<{
+      id: string
+      name: string
+      version: string
+      risk: "low" | "medium" | "high" | "regulated"
+      domains: Array<string>
+      pinned: boolean
+    }>
+    snapshotId: string
+  }
+}
+
+export type DeepagentPacksActiveResponse = DeepagentPacksActiveResponses[keyof DeepagentPacksActiveResponses]
+
+export type DeepagentPacksPinData = {
+  body?: {
+    packId: string
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/deepagent/packs/pin"
+}
+
+export type DeepagentPacksPinErrors = {
+  /**
+   * DeepAgentPromotionError | InvalidRequestError
+   */
+  400: DeepAgentPromotionError | InvalidRequestError
+}
+
+export type DeepagentPacksPinError = DeepagentPacksPinErrors[keyof DeepagentPacksPinErrors]
+
+export type DeepagentPacksPinResponses = {
+  /**
+   * Pin a domain pack for this workspace
+   */
+  200: {
+    ok: boolean
+    packId: string
+  }
+}
+
+export type DeepagentPacksPinResponse = DeepagentPacksPinResponses[keyof DeepagentPacksPinResponses]
+
+export type DeepagentPacksUnpinData = {
+  body?: {
+    packId: string
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/deepagent/packs/unpin"
+}
+
+export type DeepagentPacksUnpinErrors = {
+  /**
+   * DeepAgentPromotionError | InvalidRequestError
+   */
+  400: DeepAgentPromotionError | InvalidRequestError
+}
+
+export type DeepagentPacksUnpinError = DeepagentPacksUnpinErrors[keyof DeepagentPacksUnpinErrors]
+
+export type DeepagentPacksUnpinResponses = {
+  /**
+   * Unpin a domain pack for this workspace
+   */
+  200: {
+    ok: boolean
+    packId: string
+  }
+}
+
+export type DeepagentPacksUnpinResponse = DeepagentPacksUnpinResponses[keyof DeepagentPacksUnpinResponses]
 
 export type ExperimentalConsoleGetData = {
   body?: never
@@ -7740,6 +8005,7 @@ export type ProviderListResponses = {
       [key: string]: string
     }
     connected: Array<string>
+    errors?: Array<ProviderConfigError>
   }
 }
 
@@ -8676,6 +8942,43 @@ export type SessionPromptPrepareResponses = {
 }
 
 export type SessionPromptPrepareResponse = SessionPromptPrepareResponses[keyof SessionPromptPrepareResponses]
+
+export type SessionPromptSuggestionData = {
+  body?: never
+  path: {
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/session/{sessionID}/prompt_suggestion"
+}
+
+export type SessionPromptSuggestionErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+}
+
+export type SessionPromptSuggestionError = SessionPromptSuggestionErrors[keyof SessionPromptSuggestionErrors]
+
+export type SessionPromptSuggestionResponses = {
+  /**
+   * Latest next-round suggestion
+   */
+  200: {
+    status: string
+    body: string
+  }
+}
+
+export type SessionPromptSuggestionResponse = SessionPromptSuggestionResponses[keyof SessionPromptSuggestionResponses]
 
 export type SessionPromptAsyncData = {
   body?: {
