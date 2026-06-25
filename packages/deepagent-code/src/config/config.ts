@@ -17,7 +17,8 @@ import { isRecord } from "@/util/record"
 import type { ConsoleState } from "@deepagent-code/core/v1/config/console-state"
 import { FSUtil } from "@deepagent-code/core/fs-util"
 import { InstanceState } from "@/effect/instance-state"
-import { Context, Duration, Effect, Exit, Fiber, Layer, Option, Schema } from "effect"
+import { Cause, Context, Duration, Effect, Exit, Fiber, Layer, Option, Schema } from "effect"
+import { JsonError, InvalidError } from "@deepagent-code/core/v1/config/error"
 import { FetchHttpClient, HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 import { EffectFlock } from "@deepagent-code/core/util/effect-flock"
 import { containsPath, type InstanceContext } from "../project/instance-context"
@@ -60,6 +61,34 @@ function normalizeLoadedConfig(data: unknown, source: string) {
   delete copy.tui
   log.warn("tui keys in deepagent-code config are deprecated; move them to tui.json", { path: source })
   return copy
+}
+
+// Classify a thrown config-load error into a user-facing ConfigError, or return undefined when the error is
+// not a known config parse/validation failure (so callers can rethrow unexpected defects). ConfigParse throws
+// JsonError for JSONC syntax problems and InvalidError for schema/field validation problems
+// (see config/parse.ts); both carry a `path` and a descriptive message we surface verbatim.
+function toConfigError(error: unknown, fallbackSource: string): ConfigError | undefined {
+  if (JsonError.isInstance(error)) {
+    return {
+      source: error.data.path || fallbackSource,
+      kind: "json",
+      message: error.data.message ?? "Invalid JSON",
+    }
+  }
+  if (InvalidError.isInstance(error)) {
+    const issues = error.data.issues
+    const message =
+      error.data.message ??
+      (issues && issues.length
+        ? issues.map((issue) => (issue.path.length ? `${issue.path.join(".")}: ${issue.message}` : issue.message)).join("; ")
+        : "Invalid configuration")
+    return {
+      source: error.data.path || fallbackSource,
+      kind: "schema",
+      message,
+    }
+  }
+  return undefined
 }
 
 async function substituteWellKnownRemoteConfig(input: {
@@ -115,17 +144,28 @@ type Info = ConfigV1.Info & {
   plugin_origins?: ConfigPlugin.Origin[]
 }
 
+// A non-fatal config-load problem surfaced to the user (e.g. in Settings → Providers) so they can tell
+// *why* a provider/config file was not imported, instead of it being silently dropped. `kind` distinguishes
+// a JSONC syntax error ("json") from a schema/field validation failure ("schema").
+export type ConfigError = {
+  source: string
+  kind: "json" | "schema"
+  message: string
+}
+
 type State = {
   config: Info
   directories: string[]
   deps: Fiber.Fiber<void>[]
   consoleState: ConsoleState
+  errors: ConfigError[]
 }
 
 export interface Interface {
   readonly get: () => Effect.Effect<Info>
   readonly getGlobal: () => Effect.Effect<Info>
   readonly getConsoleState: () => Effect.Effect<ConsoleState>
+  readonly getErrors: () => Effect.Effect<ConfigError[]>
   readonly update: (config: Info) => Effect.Effect<void>
   readonly updateGlobal: (config: Info) => Effect.Effect<{ info: Info; changed: boolean }>
   readonly invalidate: () => Effect.Effect<void>
@@ -237,6 +277,20 @@ export const layer = Layer.effect(
 
     const loadGlobal = Effect.fnUntraced(function* (env?: Record<string, string>) {
       let result: Info = {}
+      const errors: ConfigError[] = []
+      // A single broken global config file (bad JSON or invalid field) must not wipe the whole global config
+      // and must tell the user *why*. loadFileSafe captures the parse/validation error into `errors` and
+      // returns an empty config instead of letting the failure propagate and silently zero everything out.
+      const loadFileSafe = (filepath: string) =>
+        loadFile(filepath, env).pipe(
+          Effect.catchCause((cause) => {
+            const classified = toConfigError(Cause.squash(cause), filepath)
+            if (!classified) return Effect.failCause(cause)
+            errors.push(classified)
+            log.warn("config file skipped due to error", { path: filepath, kind: classified.kind })
+            return Effect.succeed({} as Info)
+          }),
+        )
       // Seed the default global config with the schema for editor completion, but avoid writing when the user
       // explicitly routes config through env-provided paths or content.
       if (!Flag.DEEPAGENT_CODE_CONFIG && !Flag.DEEPAGENT_CODE_CONFIG_DIR && !Flag.DEEPAGENT_CODE_CONFIG_CONTENT) {
@@ -247,9 +301,9 @@ export const layer = Layer.effect(
             .pipe(Effect.catch(() => Effect.void))
         }
       }
-      result = mergeConfig(result, yield* loadFile(path.join(Global.Path.config, "config.json"), env))
-      result = mergeConfig(result, yield* loadFile(path.join(Global.Path.config, "deepagent-code.json"), env))
-      result = mergeConfig(result, yield* loadFile(path.join(Global.Path.config, "deepagent-code.jsonc"), env))
+      result = mergeConfig(result, yield* loadFileSafe(path.join(Global.Path.config, "config.json")))
+      result = mergeConfig(result, yield* loadFileSafe(path.join(Global.Path.config, "deepagent-code.json")))
+      result = mergeConfig(result, yield* loadFileSafe(path.join(Global.Path.config, "deepagent-code.jsonc")))
 
       const legacy = path.join(Global.Path.config, "config")
       if (existsSync(legacy)) {
@@ -267,7 +321,7 @@ export const layer = Layer.effect(
         )
       }
 
-      return result
+      return { config: result, errors }
     })
 
     const [cachedGlobal, invalidateGlobal] = yield* Effect.cachedInvalidateWithTTL(
@@ -275,13 +329,13 @@ export const layer = Layer.effect(
         Effect.tapError((error) =>
           Effect.sync(() => log.error("failed to load global config, using defaults", { error: String(error) })),
         ),
-        Effect.orElseSucceed((): Info => ({})),
+        Effect.orElseSucceed((): { config: Info; errors: ConfigError[] } => ({ config: {}, errors: [] })),
       ),
       Duration.infinity,
     )
 
     const getGlobal = Effect.fn("Config.getGlobal")(function* () {
-      return yield* cachedGlobal
+      return (yield* cachedGlobal).config
     })
 
     const ensureGitignore = Effect.fn("Config.ensureGitignore")(function* (dir: string) {
@@ -309,6 +363,7 @@ export const layer = Layer.effect(
         let result: Info = {}
         const authEnv: Record<string, string> = {}
         const consoleManagedProviders = new Set<string>()
+        const configErrors: ConfigError[] = []
         let activeOrgName: string | undefined
 
         const pluginScopeForSource = Effect.fnUntraced(function* (source: string) {
@@ -386,8 +441,15 @@ export const layer = Layer.effect(
           }
         }
 
-        const global = Object.keys(authEnv).length ? yield* loadGlobal(authEnv) : yield* getGlobal()
-        yield* merge(Global.Path.config, global, "global")
+        if (Object.keys(authEnv).length) {
+          const loaded = yield* loadGlobal(authEnv)
+          configErrors.push(...loaded.errors)
+          yield* merge(Global.Path.config, loaded.config, "global")
+        } else {
+          const cached = yield* cachedGlobal
+          configErrors.push(...cached.errors)
+          yield* merge(Global.Path.config, cached.config, "global")
+        }
 
         if (Flag.DEEPAGENT_CODE_CONFIG) {
           yield* merge(Flag.DEEPAGENT_CODE_CONFIG, yield* loadFile(Flag.DEEPAGENT_CODE_CONFIG, authEnv))
@@ -586,6 +648,7 @@ export const layer = Layer.effect(
             activeOrgName,
             switchableOrgCount: 0,
           },
+          errors: configErrors,
         }
       },
       Effect.provideService(FSUtil.Service, fs),
@@ -607,6 +670,10 @@ export const layer = Layer.effect(
 
     const getConsoleState = Effect.fn("Config.getConsoleState")(function* () {
       return yield* InstanceState.use(state, (s) => s.consoleState)
+    })
+
+    const getErrors = Effect.fn("Config.getErrors")(function* () {
+      return yield* InstanceState.use(state, (s) => s.errors)
     })
 
     const waitForDependencies = Effect.fn("Config.waitForDependencies")(function* () {
@@ -657,6 +724,7 @@ export const layer = Layer.effect(
       get,
       getGlobal,
       getConsoleState,
+      getErrors,
       update,
       updateGlobal,
       invalidate,

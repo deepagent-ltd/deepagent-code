@@ -1039,16 +1039,20 @@ export default function Layout(props: ParentProps) {
         onSelect: () => openSettings(),
       },
       ...(platform.platform === "desktop" && platform.exportDebugLogs
-        ? [
-            {
-              id: "logs.export",
-              title: "Export logs",
-              category: language.t("command.category.settings"),
-              onSelect: () => {
-                void platform.exportDebugLogs?.()
-              },
+        ? (
+            [
+              ["1h", 60 * 60 * 1000],
+              ["4h", 4 * 60 * 60 * 1000],
+              ["1d", 24 * 60 * 60 * 1000],
+            ] as const
+          ).map(([label, windowMs]) => ({
+            id: `logs.export.${label}`,
+            title: `${language.t("command.logs.export")} (${label})`,
+            category: language.t("command.category.settings"),
+            onSelect: () => {
+              void platform.exportDebugLogs?.({ windowMs, pick: true })
             },
-          ]
+          }))
         : []),
       {
         id: "session.previous",
