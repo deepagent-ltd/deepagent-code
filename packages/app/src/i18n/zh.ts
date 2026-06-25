@@ -34,6 +34,7 @@ export const dict = {
   "command.server.switch": "切换服务器",
 
   "command.settings.open": "打开设置",
+  "command.logs.export": "导出日志",
 
   "command.session.previous": "上一个会话",
   "command.session.next": "下一个会话",
@@ -825,6 +826,9 @@ export const dict = {
   "settings.providers.tag.config": "配置",
   "settings.providers.tag.custom": "自定义",
   "settings.providers.tag.other": "其他",
+  "settings.providers.tag.configError": "配置错误",
+  "settings.providers.error.json": "JSON 语法错误",
+  "settings.providers.error.schema": "字段校验失败",
 
   "settings.models.title": "模型",
   "settings.models.description": "模型设置将在此处可配置。",

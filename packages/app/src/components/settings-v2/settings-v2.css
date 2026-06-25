@@ -277,6 +277,17 @@
   color: var(--v2-text-text-muted);
 }
 
+.settings-v2-provider-error-tag {
+  border-color: var(--v2-state-border-danger);
+  color: var(--v2-state-fg-danger);
+}
+
+[data-component="provider-config-error"] .settings-v2-provider-description {
+  color: var(--v2-state-fg-danger);
+  line-height: 1.35;
+  word-break: break-word;
+}
+
 .settings-v2-provider-empty {
   padding-block: 20px;
   font-size: 13px;
