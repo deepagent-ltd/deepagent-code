@@ -3,7 +3,7 @@ import { mergeDeep, unique } from "remeda"
 import type { JSONSchema7 } from "@ai-sdk/provider"
 import type * as Provider from "./provider"
 import type * as ModelsDev from "@deepagent-code/core/models-dev"
-import { SUPPORTED_DEEPAGENT_PROVIDER_IDS, deepagentUpstreamProviderID } from "./compatibility"
+import { deepagentUpstreamProviderID } from "./compatibility"
 import { iife } from "@/util/iife"
 
 type Modality = NonNullable<ModelsDev.Model["modalities"]>["input"][number]
@@ -22,11 +22,6 @@ export const OUTPUT_TOKEN_MAX = 32_000
 // needed for stateless multi-turn reasoning (store: false). Hoisted so every
 // branch that requests it stays in lockstep.
 const INCLUDE_ENCRYPTED_REASONING = ["reasoning.encrypted_content"] as const
-const MAIN_TRANSFORM_PACKAGES = new Set(["@ai-sdk/openai", "@ai-sdk/openai-compatible", "@ai-sdk/anthropic"])
-
-function mainTransformProvider(model: Provider.Model) {
-  return model.providerID === "deepagent" ? model.api.npm.startsWith("file://") : true
-}
 
 export function sanitizeSurrogates(content: string) {
   return content.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, "\uFFFD")
@@ -645,7 +640,6 @@ function googleThinkingVariants(model: Provider.Model): Record<string, Record<st
 
 export function variants(model: Provider.Model): Record<string, Record<string, any>> {
   if (!model.capabilities.reasoning) return {}
-  if (!mainTransformProvider(model)) return {}
 
   const id = model.id.toLowerCase()
   const adaptiveOpus = anthropicOpus47OrLater(model.api.id)
@@ -1023,15 +1017,6 @@ export function options(input: {
     input.model.providerID === "deepagent"
       ? deepagentUpstreamProviderID(input.model)
       : input.model.providerID
-
-  if (input.model.providerID === "deepagent") {
-    if (!SUPPORTED_DEEPAGENT_PROVIDER_IDS.has(upstreamProviderID)) {
-      throw new Error(`Unsupported DeepAgent upstream provider: ${upstreamProviderID}`)
-    }
-    if (!input.model.api.npm.startsWith("file://") && !MAIN_TRANSFORM_PACKAGES.has(input.model.api.npm)) {
-      throw new Error(`Unsupported DeepAgent upstream provider package: ${input.model.api.npm}`)
-    }
-  }
 
   if (
     input.model.api.npm === "@ai-sdk/google-vertex/anthropic" ||
