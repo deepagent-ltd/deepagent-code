@@ -48,6 +48,13 @@ export const SettingsProvidersV2: Component = () => {
       .filter((p) => popularProviders.includes(p.id) || isConfigCustom(p.id))
   })
 
+  const configErrors = createMemo(() => providers.errors())
+
+  const errorKindLabel = (kind: string) =>
+    kind === "json"
+      ? language.t("settings.providers.error.json")
+      : language.t("settings.providers.error.schema")
+
   const popular = createMemo(() => {
     const connectedIDs = new Set(connected().map((p) => p.id))
     const items = providers
@@ -141,11 +148,36 @@ export const SettingsProvidersV2: Component = () => {
           <h3 class="settings-v2-section-title">{language.t("settings.providers.section.connected")}</h3>
           <SettingsListV2>
             <Show
-              when={connected().length > 0}
+              when={connected().length > 0 || configErrors().length > 0}
               fallback={
                 <div class="settings-v2-provider-empty">{language.t("settings.providers.connected.empty")}</div>
               }
             >
+              <For each={configErrors()}>
+                {(error) => (
+                  <div class="settings-v2-provider-row" data-component="provider-config-error">
+                    <div class="settings-v2-provider-lead">
+                      <ProviderIcon
+                        id="synthetic"
+                        width={PROVIDER_ICON_SIZE}
+                        height={PROVIDER_ICON_SIZE}
+                        class="settings-v2-provider-icon shrink-0"
+                      />
+                      <div class="settings-v2-provider-copy">
+                        <div class="settings-v2-provider-main">
+                          <span class="settings-v2-provider-name truncate">{error.source}</span>
+                          <Tag class="settings-v2-provider-error-tag">
+                            {language.t("settings.providers.tag.configError")}
+                          </Tag>
+                        </div>
+                        <p class="settings-v2-provider-description">
+                          {errorKindLabel(error.kind)}: {error.message}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </For>
               <For each={connected()}>
                 {(item) => (
                   <div

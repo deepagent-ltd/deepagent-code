@@ -616,6 +616,64 @@ it.instance("throws error for invalid JSON", () =>
   }),
 )
 
+it.effect("captures invalid JSON in a global config file without wiping other settings", () =>
+  Effect.gen(function* () {
+    const globalDir = yield* tmpdirScoped()
+    const projectDir = yield* tmpdirScoped()
+    // A valid global config alongside a broken one: the good settings must survive and the broken
+    // file must be reported via getErrors() so the UI can tell the user *why* it was skipped.
+    yield* FSUtil.use.writeWithDirs(
+      path.join(globalDir, "config.json"),
+      JSON.stringify({ $schema: "https://deepagent-code.ai/config.json", model: "kept/model" }),
+    )
+    yield* FSUtil.use.writeWithDirs(path.join(globalDir, "deepagent-code.json"), "{ not valid json }")
+
+    yield* withGlobalConfigDir(
+      globalDir,
+      withInstanceDir(
+        projectDir,
+        Effect.gen(function* () {
+          const config = yield* Config.use.get()
+          expect(config.model).toBe("kept/model")
+
+          const errors = yield* Config.use.getErrors()
+          const jsonError = errors.find((e) => e.source.endsWith("deepagent-code.json"))
+          expect(jsonError?.kind).toBe("json")
+          expect(jsonError?.message).toBeTruthy()
+        }),
+      ),
+    )
+  }),
+)
+
+it.effect("captures invalid fields in a global config file as a schema error", () =>
+  Effect.gen(function* () {
+    const globalDir = yield* tmpdirScoped()
+    const projectDir = yield* tmpdirScoped()
+    yield* FSUtil.use.writeWithDirs(
+      path.join(globalDir, "config.json"),
+      JSON.stringify({ $schema: "https://deepagent-code.ai/config.json", not_a_real_field: true }),
+    )
+
+    yield* withGlobalConfigDir(
+      globalDir,
+      withInstanceDir(
+        projectDir,
+        Effect.gen(function* () {
+          // Load must not throw; the broken global file is reported instead of crashing startup.
+          const config = yield* Config.use.get()
+          expect(config).toBeDefined()
+
+          const errors = yield* Config.use.getErrors()
+          const schemaError = errors.find((e) => e.source.endsWith("config.json"))
+          expect(schemaError?.kind).toBe("schema")
+          expect(schemaError?.message).toContain("not_a_real_field")
+        }),
+      ),
+    )
+  }),
+)
+
 it.instance("handles agent configuration", () =>
   Effect.gen(function* () {
     const test = yield* TestInstance

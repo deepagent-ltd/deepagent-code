@@ -160,6 +160,33 @@ describe("RequestExecutor", () => {
     ),
   )
 
+  it.effect("surfaces endpoint host and requestId in the provider error message", () =>
+    Effect.gen(function* () {
+      const executor = yield* RequestExecutor.Service
+      const error = yield* executor.execute(request).pipe(Effect.flip)
+
+      expectLLMError(error)
+      const message = "message" in error.reason ? error.reason.message : ""
+      expect(message).toContain("HTTP 429")
+      expect(message).toContain("host=provider.test")
+      expect(message).toContain("requestId=req_456")
+      expect(message).toContain("服务暂时繁忙")
+    }).pipe(
+      Effect.provide(
+        responsesLayer(
+          Array.from(
+            { length: 3 },
+            () =>
+              new Response("服务暂时繁忙，请稍后重试。", {
+                status: 429,
+                headers: { "retry-after-ms": "0", "x-request-id": "req_456" },
+              }),
+          ),
+        ),
+      ),
+    ),
+  )
+
   it.effect("honors current redacted header names in diagnostics", () =>
     Effect.gen(function* () {
       const executor = yield* RequestExecutor.Service
