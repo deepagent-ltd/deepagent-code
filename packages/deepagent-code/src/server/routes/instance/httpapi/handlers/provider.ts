@@ -66,10 +66,12 @@ export const providerHandlers = HttpApiBuilder.group(InstanceHttpApi, "provider"
         mapValues(filtered, (item) => Provider.fromModelsDevProvider(item)),
         filteredConnected,
       )
+      const errors = yield* cfg.getErrors()
       return {
         all: Object.values(providers).map(Provider.toPublicInfo),
         default: Provider.defaultModelIDs(providers),
         connected: Object.keys(filteredConnected),
+        errors: errors.length ? errors : undefined,
       }
     })
 

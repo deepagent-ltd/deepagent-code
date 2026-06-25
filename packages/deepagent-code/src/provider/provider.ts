@@ -1016,10 +1016,20 @@ export type Info = Types.DeepMutable<Schema.Schema.Type<typeof Info>>
 
 const DefaultModelIDs = Schema.Record(Schema.String, Schema.String)
 
+// A non-fatal config-load problem (bad JSON or invalid fields in a config/provider file) surfaced to the UI
+// so the user can tell *why* a provider was not imported. `source` is the offending file path.
+export const ConfigError = Schema.Struct({
+  source: Schema.String,
+  kind: Schema.Literals(["json", "schema"]),
+  message: Schema.String,
+}).annotate({ identifier: "ProviderConfigError" })
+export type ConfigError = Types.DeepMutable<Schema.Schema.Type<typeof ConfigError>>
+
 export const ListResult = Schema.Struct({
   all: Schema.Array(Info),
   default: DefaultModelIDs,
   connected: Schema.Array(Schema.String),
+  errors: optionalOmitUndefined(Schema.Array(ConfigError)),
 })
 export type ListResult = Types.DeepMutable<Schema.Schema.Type<typeof ListResult>>
 

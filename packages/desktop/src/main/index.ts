@@ -264,7 +264,7 @@ const main = Effect.gen(function* () {
     updater,
     showUpdater: () => showUpdaterDialog(updater, true),
     setBackgroundColor: (color) => setBackgroundColor(color),
-    exportDebugLogs: () => exportDebugLogs(),
+    exportDebugLogs: (options) => exportDebugLogs({ ...options, pick: options?.pick ?? true }),
     recordFatalRendererError: (error) => writeLog("renderer", "fatal renderer error", { ...error }, "error"),
   })
   registerWslIpcHandlers(wslServers)
