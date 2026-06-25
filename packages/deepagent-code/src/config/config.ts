@@ -187,6 +187,68 @@ function globalConfigFile() {
   return candidates[0]
 }
 
+// Single canonical global config file. We still LOAD the legacy names for backward compatibility
+// (loadGlobal merges all of them), but users should only ever have to edit ONE file. This
+// consolidates any legacy config.json / deepagent-code.json into deepagent-code.jsonc at startup
+// and removes the old files, so plugins and providers no longer end up split across files.
+const CANONICAL_GLOBAL_CONFIG = "deepagent-code.jsonc"
+const LEGACY_GLOBAL_CONFIGS = ["config.json", "deepagent-code.json"]
+
+async function migrateGlobalConfigFiles() {
+  const dir = Global.Path.config
+  const canonicalPath = path.join(dir, CANONICAL_GLOBAL_CONFIG)
+  const legacyPaths = LEGACY_GLOBAL_CONFIGS.map((name) => path.join(dir, name)).filter((file) => existsSync(file))
+  if (legacyPaths.length === 0) return
+
+  // Parse strictly: if ANY legacy or canonical file is broken (bad JSON OR invalid schema), skip
+  // migration entirely so the normal load path still surfaces the error via getErrors() against the
+  // original file. We must not silently move/drop content from a file the user needs to be told is
+  // broken — moving it would also relabel the error against the wrong (canonical) filename.
+  const parseStrict = (raw: string): Record<string, unknown> | undefined => {
+    try {
+      const value = ConfigParse.jsonc(raw, "migrate")
+      if (!value || typeof value !== "object" || Array.isArray(value)) return undefined
+      // Schema-validate too: an invalid-field file must keep surfacing its schema error in place.
+      ConfigParse.schema(ConfigV1.Info, value, "migrate")
+      return value as Record<string, unknown>
+    } catch {
+      return undefined
+    }
+  }
+
+  // Load order = config.json -> deepagent-code.json -> deepagent-code.jsonc, so the canonical
+  // .jsonc wins over legacy. Build the merged object in that precedence.
+  let merged: Record<string, unknown> = {}
+  for (const file of legacyPaths) {
+    const parsed = parseStrict(await fsNode.readFile(file, "utf8").catch(() => ""))
+    if (!parsed) return // broken legacy file — leave everything in place for error reporting
+    merged = { ...merged, ...parsed }
+  }
+
+  let canonicalExisting: Record<string, unknown> | undefined
+  if (existsSync(canonicalPath)) {
+    canonicalExisting = parseStrict(await fsNode.readFile(canonicalPath, "utf8").catch(() => ""))
+    if (!canonicalExisting) return // broken canonical file — don't touch anything
+  }
+
+  if (canonicalExisting) {
+    // Preserve the user's existing .jsonc (and its comments): patch in only the legacy keys that
+    // aren't already set in the canonical file.
+    let text = await fsNode.readFile(canonicalPath, "utf8").catch(() => "{}")
+    for (const [key, value] of Object.entries(merged)) {
+      if (key in canonicalExisting) continue
+      text = patchJsonc(text, { [key]: value })
+    }
+    await fsNode.writeFile(canonicalPath, text)
+  } else {
+    merged.$schema ??= "https://deepagent-code.ai/config.json"
+    await fsNode.mkdir(dir, { recursive: true }).catch(() => {})
+    await fsNode.writeFile(canonicalPath, JSON.stringify(merged, null, 2))
+  }
+
+  for (const file of legacyPaths) await fsNode.unlink(file).catch(() => {})
+}
+
 function patchJsonc(input: string, patch: unknown, path: string[] = []): string {
   if (!isRecord(patch)) {
     const edits = modify(input, path, patch, {
@@ -294,6 +356,10 @@ export const layer = Layer.effect(
       // Seed the default global config with the schema for editor completion, but avoid writing when the user
       // explicitly routes config through env-provided paths or content.
       if (!Flag.DEEPAGENT_CODE_CONFIG && !Flag.DEEPAGENT_CODE_CONFIG_DIR && !Flag.DEEPAGENT_CODE_CONFIG_CONTENT) {
+        // Consolidate any legacy config.json / deepagent-code.json into the single canonical
+        // deepagent-code.jsonc and remove the old files, so there is one config file to edit.
+        // Best-effort: a failure here must not block config loading (we still merge all names below).
+        yield* Effect.promise(() => migrateGlobalConfigFiles()).pipe(Effect.catch(() => Effect.void))
         const file = globalConfigFile()
         if (!existsSync(file)) {
           yield* fs
