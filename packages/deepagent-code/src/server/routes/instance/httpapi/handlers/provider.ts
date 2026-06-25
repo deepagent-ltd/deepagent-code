@@ -13,16 +13,6 @@ import { InstanceHttpApi } from "../api"
 import { ProviderAuthApiError, ProviderModelDiscoverError } from "../groups/provider"
 import { ProviderV2 } from "@deepagent-code/core/provider"
 
-const builtinProviderIDs = new Set(["openai", "deepseek", "anthropic"])
-
-function allowedProviderIDs(config: { provider?: Record<string, unknown> }, catalog: Record<string, unknown>) {
-  const ids = new Set(builtinProviderIDs)
-  for (const id of Object.keys(config.provider ?? {})) {
-    if (!builtinProviderIDs.has(id) && catalog[id] === undefined) ids.add(id)
-  }
-  return ids
-}
-
 function mapProviderAuthError<A, R>(self: Effect.Effect<A, ProviderAuth.Error, R>) {
   return self.pipe(
     Effect.mapError((error) => {
@@ -55,22 +45,20 @@ export const providerHandlers = HttpApiBuilder.group(InstanceHttpApi, "provider"
       const all = yield* ModelsDev.Service.use((s) => s.get())
       const disabled = new Set(config.disabled_providers ?? [])
       const enabled = config.enabled_providers ? new Set(config.enabled_providers) : undefined
-      const allowed = allowedProviderIDs(config, all)
       const filtered: Record<string, (typeof all)[string]> = {}
       for (const [key, value] of Object.entries(all)) {
-        if (allowed.has(key) && (enabled ? enabled.has(key) : true) && !disabled.has(key)) filtered[key] = value
+        if ((enabled ? enabled.has(key) : true) && !disabled.has(key)) filtered[key] = value
       }
       const connected = yield* provider.list()
-      const filteredConnected = Object.fromEntries(Object.entries(connected).filter(([key]) => allowed.has(key)))
       const providers = Object.assign(
         mapValues(filtered, (item) => Provider.fromModelsDevProvider(item)),
-        filteredConnected,
+        connected,
       )
       const errors = yield* cfg.getErrors()
       return {
         all: Object.values(providers).map(Provider.toPublicInfo),
         default: Provider.defaultModelIDs(providers),
-        connected: Object.keys(filteredConnected),
+        connected: Object.keys(connected),
         errors: errors.length ? errors : undefined,
       }
     })

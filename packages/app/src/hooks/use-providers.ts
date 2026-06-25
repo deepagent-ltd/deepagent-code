@@ -11,9 +11,6 @@ export const popularProviders = [
 ]
 const popularProviderSet = new Set(popularProviders)
 
-export const isVisibleProvider = (provider: { id: string; source?: string }) =>
-  popularProviderSet.has(provider.id) || provider.id === "deepagent" || provider.source === "custom"
-
 export function useProviders() {
   const serverSync = useServerSync()
   const params = useParams()
@@ -41,19 +38,13 @@ export function useProviders() {
       return pipe(
         providers().all,
         Iterable.map(([, p]) => p),
-        Iterable.filter((p) => connected.has(p.id) && isVisibleProvider(p)),
+        Iterable.filter((p) => connected.has(p.id)),
         (v) => Array.from(v),
       )
     },
     paid: () => {
       const connected = new Set(providers().connected)
-      return [
-        ...Iterable.filter(
-          providers().all,
-          ([id, provider]) =>
-            connected.has(id) && isVisibleProvider(provider),
-        ),
-      ]
+      return [...Iterable.filter(providers().all, ([id]) => connected.has(id))]
     },
   }
 }
