@@ -49,7 +49,9 @@ jobs:
           # runner is queue-starved and the x64 cross-compile is unreliable, so it is dropped.
           mac='{"host":"macos-14","target":"mac-arm64","platform_flag":"--mac --arm64","group":"mac"}'
           linux='{"host":"ubuntu-24.04","target":"linux-x64","platform_flag":"--linux --x64","group":"linux"},{"host":"ubuntu-24.04-arm","target":"linux-arm64","platform_flag":"--linux --arm64","group":"linux"}'
-          win='{"host":"windows-2025","target":"win-x64","platform_flag":"--win --x64","group":"win"}'
+          # Windows arm64 builds natively on the GA windows-11-arm runner (no cross-compile);
+          # both native deps ship win32-arm64 prebuilds (@lydell/node-pty, @parcel/watcher).
+          win='{"host":"windows-2025","target":"win-x64","platform_flag":"--win --x64","group":"win"},{"host":"windows-11-arm","target":"win-arm64","platform_flag":"--win --arm64","group":"win"}'
           case "$PLATFORMS" in
             mac)       items="$mac" ;;
             linux)     items="$linux" ;;
