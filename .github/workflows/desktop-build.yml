@@ -70,7 +70,10 @@ jobs:
       # Mapped here so step-level `if` can test them (the `secrets` context is not
       # available in `if`, but `env` is).
       HAS_APPLE_CERT: ${{ secrets.APPLE_CERTIFICATE != '' }}
-      HAS_APPLE_NOTARY: ${{ secrets.APPLE_API_KEY != '' }}
+      # Notarization uses the Apple ID method (matches packages/desktop/signing.env), so it
+      # needs the Apple ID + app-specific password + team id. electron-builder.config.ts treats
+      # mac signing as available when all three are set.
+      HAS_APPLE_NOTARY: ${{ secrets.APPLE_ID != '' && secrets.APPLE_APP_SPECIFIC_PASSWORD != '' && secrets.APPLE_TEAM_ID != '' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -111,13 +114,17 @@ jobs:
         timeout-minutes: 60
         env:
           DEEPAGENT_CODE_CHANNEL: ${{ github.event.inputs.channel || 'beta' }}
-          # Sign on macOS only when the notarization key is present; otherwise build
-          # unsigned instead of failing.
-          DEEPAGENT_CODE_ALLOW_UNSIGNED: ${{ (matrix.group == 'mac' && env.HAS_APPLE_NOTARY == 'true') && '0' || '1' }}
-          CSC_LINK: ${{ secrets.APPLE_CERTIFICATE }}
-          CSC_KEY_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY }}
-          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          # Sign + notarize on macOS only when BOTH the signing cert and the Apple ID
+          # notarization secrets are present; otherwise build unsigned instead of failing.
+          DEEPAGENT_CODE_ALLOW_UNSIGNED: ${{ (matrix.group == 'mac' && env.HAS_APPLE_CERT == 'true' && env.HAS_APPLE_NOTARY == 'true') && '0' || '1' }}
+          # Code-signing identity (Developer ID Application). The cert is imported into the
+          # keychain by the step above; CSC_NAME selects it by subject name.
+          CSC_NAME: ${{ secrets.APPLE_CSC_NAME }}
+          # Notarization via Apple ID (App Store Connect). electron-builder picks up these
+          # standard env vars; config.ts enables notarize when all three are set.
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: npx electron-builder ${{ matrix.platform_flag }} --publish never --config electron-builder.config.ts
 
       - name: Upload package artifacts
