@@ -23,6 +23,12 @@ const providerBaseURL: Record<string, string> = {
   anthropic: "https://api.anthropic.com/v1",
 }
 
+// Built-in providers ship a fixed protocol (npm) tied to their canonical endpoint. Letting users
+// point a built-in's baseURL at a relay/local server silently breaks because the protocol no longer
+// matches the endpoint. Those users must add a custom provider instead. So the connect dialog hides
+// the baseURL field for built-ins and only exposes it for config/custom providers.
+const isBuiltinProvider = (providerID: string) => providerID in providerBaseURL
+
 const providerKind = (providerID: string) => (providerID === "anthropic" ? "anthropic" : "openai-compatible")
 
 type DiscoveredProviderModel = { id: string; name: string }
@@ -431,7 +437,11 @@ export function DialogConnectProvider(props: { provider: string }) {
       const form = e.currentTarget as HTMLFormElement
       const formData = new FormData(form)
       const apiKey = formData.get("apiKey") as string
-      const baseURL = (formData.get("baseURL") as string).trim()
+      // Built-in providers don't render a baseURL field; use their canonical endpoint instead of
+      // letting users override it (which would break the fixed protocol).
+      const baseURL = isBuiltinProvider(props.provider)
+        ? providerBaseURL[props.provider]
+        : ((formData.get("baseURL") as string | null)?.trim() ?? "")
       const key = apiKey.trim()
 
       if (!key && !hasStoredAuth()) {
@@ -524,16 +534,18 @@ export function DialogConnectProvider(props: { provider: string }) {
           {language.t("provider.connect.apiKey.description", { provider: provider().name })}
         </div>
         <form onSubmit={handleSubmit} class="flex flex-col items-start gap-4">
-          <TextField
-            type="text"
-            label={language.t("provider.custom.field.baseURL.label")}
-            placeholder={providerBaseURL[props.provider] ?? language.t("provider.custom.field.baseURL.placeholder")}
-            name="baseURL"
-            value={formStore.baseURL}
-            onChange={(v) => setFormStore("baseURL", v)}
-            validationState={formStore.baseURLError ? "invalid" : undefined}
-            error={formStore.baseURLError}
-          />
+          <Show when={!isBuiltinProvider(props.provider)}>
+            <TextField
+              type="text"
+              label={language.t("provider.custom.field.baseURL.label")}
+              placeholder={providerBaseURL[props.provider] ?? language.t("provider.custom.field.baseURL.placeholder")}
+              name="baseURL"
+              value={formStore.baseURL}
+              onChange={(v) => setFormStore("baseURL", v)}
+              validationState={formStore.baseURLError ? "invalid" : undefined}
+              error={formStore.baseURLError}
+            />
+          </Show>
           <TextField
             autofocus
             type="text"
