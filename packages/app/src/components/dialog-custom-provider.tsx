@@ -173,22 +173,32 @@ export function DialogCustomProvider(props: Props) {
       const baseURL = form.baseURL.trim()
       const key = form.apiKey.trim()
       const env = key.match(/^\{env:([^}]+)\}$/)?.[1]?.trim()
+      // Whether the user already typed at least one model id by hand.
+      const hasManualModels = form.models.some((m) => m.id.trim().length > 0)
       if (providerID && baseURL && key && !env) {
-        const discovered = await serverSDK.client.provider.models.discover(
-          {
-            providerID,
-            baseURL,
-            apiKey: key,
-            headers: headerConfig(),
-            kind: "openai-compatible",
-          },
-          { throwOnError: true },
-        )
-        const models = discovered.data?.models ?? []
-        if (!models.length) throw new Error(language.t("provider.custom.error.required"))
-        const rows = discoveredRows(models)
-        setForm("models", rows)
-        nextForm = { ...form, models: rows }
+        // Model discovery is a convenience, not a requirement: many OpenAI-compatible servers
+        // (some vLLM setups, local runtimes) don't implement GET /v1/models and return 400/404.
+        // Treat discovery as best-effort — only use its result to auto-fill models when the user
+        // hasn't entered any. If it fails (or returns nothing) we keep the user's manual models and
+        // let validation handle the empty case, instead of blocking save on a missing endpoint.
+        const discovered = await serverSDK.client.provider.models
+          .discover(
+            {
+              providerID,
+              baseURL,
+              apiKey: key,
+              headers: headerConfig(),
+              kind: "openai-compatible",
+            },
+            { throwOnError: true },
+          )
+          .then((res) => res.data?.models ?? [])
+          .catch(() => [])
+        if (discovered.length > 0 && !hasManualModels) {
+          const rows = discoveredRows(discovered)
+          setForm("models", rows)
+          nextForm = { ...form, models: rows }
+        }
       }
 
       const result = validate(nextForm)
