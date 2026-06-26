@@ -134,6 +134,7 @@ export const dict = {
   "dialog.provider.deepagent-code.note": "使用 DeepAgent Code API key 连接 DeepAgent Code",
   "dialog.provider.deepagent-code.tagline": "DeepAgent Code 托管模型网关",
   "dialog.provider.deepseek.note": "使用 API key 连接 DeepSeek 模型",
+  "dialog.provider.zhipuai.note": "使用 API key 连接智谱 GLM 模型",
   "dialog.provider.opencodeGo.tagline": "适合所有人的低成本订阅",
   "dialog.provider.anthropic.note": "使用 Claude Pro/Max 或 API 密钥连接",
   "dialog.provider.copilot.note": "使用 Copilot 或 API 密钥连接",
