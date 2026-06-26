@@ -22,6 +22,7 @@ const PROVIDER_NOTES = [
   { match: (id: string) => id === "anthropic", key: "dialog.provider.anthropic.note" },
   { match: (id: string) => id === "openai", key: "dialog.provider.openai.note" },
   { match: (id: string) => id === "deepseek", key: "dialog.provider.deepseek.note" },
+  { match: (id: string) => id === "zhipuai", key: "dialog.provider.zhipuai.note" },
 ] as const
 
 const PROVIDER_ICON_SIZE = 16

@@ -574,7 +574,7 @@ export function Titlebar(props: { update?: TitlebarUpdate }) {
                 {/*<div class="h-full shrink-0" style={{ width: `${72 / zoom()}px` }} />*/}
                 <div class="xl:hidden w-10 shrink-0 flex items-center justify-center">
                   <IconButton
-                    icon="menu"
+                    icon={layout.mobileSidebar.opened() ? "sidebar-active" : "sidebar"}
                     variant="ghost"
                     class="titlebar-icon rounded-md"
                     onClick={layout.mobileSidebar.toggle}
@@ -586,7 +586,7 @@ export function Titlebar(props: { update?: TitlebarUpdate }) {
               <Show when={!mac()}>
                 <div class="xl:hidden w-[48px] shrink-0 flex items-center justify-center">
                   <IconButton
-                    icon="menu"
+                    icon={layout.mobileSidebar.opened() ? "sidebar-active" : "sidebar"}
                     variant="ghost"
                     class="titlebar-icon rounded-md"
                     onClick={layout.mobileSidebar.toggle}
