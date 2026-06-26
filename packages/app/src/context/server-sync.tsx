@@ -482,16 +482,24 @@ export function createServerSyncContextInner(_serverSDK?: ServerSDK) {
     },
   }
 
+  // Refresh the cached provider lists (global + every directory scope) and re-run bootstrap.
+  // Shared by config updates and by disconnect flows that change provider state on the backend
+  // (e.g. auth.remove + global.dispose) but don't go through updateConfig — without this the
+  // connected-provider list would not re-render after disconnecting a built-in provider.
+  const refreshProviders = () => {
+    bootstrap.refetch()
+    queryClient.invalidateQueries({ queryKey: [serverSDK.scope, null, "providers"] })
+    queryClient.invalidateQueries({
+      predicate: (query) => query.queryKey[0] === serverSDK.scope && query.queryKey[2] === "providers",
+    })
+  }
+
   const updateConfigMutation = useMutation(() => ({
     mutationFn: (config: Config) => serverSDK.client.global.config.update({ config }),
     onSuccess: () => {
-      bootstrap.refetch()
       // Invalidate all provider queries so newly configured custom providers
       // appear immediately in the available provider list across all directories.
-      queryClient.invalidateQueries({ queryKey: [serverSDK.scope, null, "providers"] })
-      queryClient.invalidateQueries({
-        predicate: (query) => query.queryKey[0] === serverSDK.scope && query.queryKey[2] === "providers",
-      })
+      refreshProviders()
     },
   }))
 
@@ -510,6 +518,7 @@ export function createServerSyncContextInner(_serverSDK?: ServerSDK) {
     queryOptions: queryOptionsApi,
     // bootstrap,
     updateConfig: updateConfigMutation.mutateAsync,
+    refreshProviders,
     project: projectApi,
     todo: {
       set: setSessionTodo,
