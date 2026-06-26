@@ -32,6 +32,14 @@ const channel = (() => {
 // produce an UNSIGNED package instead of failing the build. The signed path is the same
 // config; it just flips on when the credentials appear, so adding a cert later needs no
 // code change.
+//
+// electron-builder 26 rejects a CSC_NAME that still carries the "Developer ID Application: "
+// prefix; it wants the subject name only. scripts/package.ts strips it, but CI invokes
+// electron-builder directly (bypassing package.ts), so strip here too to be safe.
+if (process.env.CSC_NAME) {
+  process.env.CSC_NAME = process.env.CSC_NAME.replace(/^Developer ID Application:\s*/i, "")
+}
+
 const macSigningAvailable = Boolean(
   process.env.CSC_LINK ||
     process.env.CSC_NAME ||
