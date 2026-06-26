@@ -119,6 +119,9 @@ export const SettingsProvidersV2: Component = () => {
       .remove({ providerID })
       .then(async () => {
         await serverSdk.client.global.dispose()
+        // global.dispose() rebuilds backend state but does not touch the frontend provider cache,
+        // so the connected list must be refreshed explicitly or the row won't disappear.
+        serverSync.refreshProviders()
         showToast({
           variant: "success",
           icon: "circle-check",
