@@ -110,6 +110,7 @@ export const dict = {
   "dialog.provider.deepagent-code.note": "Connect with an DeepAgent Code API key",
   "dialog.provider.deepagent-code.tagline": "DeepAgent Code managed model gateway",
   "dialog.provider.deepseek.note": "DeepSeek models via API key",
+  "dialog.provider.zhipuai.note": "GLM models from Zhipu AI via API key",
   "dialog.provider.opencodeGo.tagline": "Low cost subscription for everyone",
   "dialog.provider.anthropic.note": "Direct access to Claude models, including Pro and Max",
   "dialog.provider.copilot.note": "AI models for coding assistance via GitHub Copilot",
