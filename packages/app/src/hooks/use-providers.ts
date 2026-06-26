@@ -8,6 +8,7 @@ export const popularProviders = [
   "openai",
   "deepseek",
   "anthropic",
+  "zhipuai",
 ]
 const popularProviderSet = new Set(popularProviders)
 
