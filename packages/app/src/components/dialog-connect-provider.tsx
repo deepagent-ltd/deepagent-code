@@ -17,16 +17,17 @@ import { useServerSync } from "@/context/server-sync"
 import { useLanguage } from "@/context/language"
 import { useProviders } from "@/hooks/use-providers"
 
+// Recommended/official providers ship a fixed protocol (npm) tied to a canonical endpoint. Letting
+// users point one of these at a relay/local server silently breaks because the protocol no longer
+// matches the endpoint — those users must add a custom provider instead. So the connect dialog hides
+// the baseURL field for these and only exposes it for ad-hoc config/custom providers.
 const providerBaseURL: Record<string, string> = {
   openai: "https://api.openai.com/v1",
   deepseek: "https://api.deepseek.com",
   anthropic: "https://api.anthropic.com/v1",
+  zhipuai: "https://open.bigmodel.cn/api/paas/v4",
 }
 
-// Built-in providers ship a fixed protocol (npm) tied to their canonical endpoint. Letting users
-// point a built-in's baseURL at a relay/local server silently breaks because the protocol no longer
-// matches the endpoint. Those users must add a custom provider instead. So the connect dialog hides
-// the baseURL field for built-ins and only exposes it for config/custom providers.
 const isBuiltinProvider = (providerID: string) => providerID in providerBaseURL
 
 const providerKind = (providerID: string) => (providerID === "anthropic" ? "anthropic" : "openai-compatible")
