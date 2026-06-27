@@ -2,7 +2,7 @@ import { describe, expect, test, beforeEach, afterEach } from "bun:test"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
-import { DocumentStore } from "../../src/deepagent/document-store"
+import { DocumentStore, knowledgeSimilarity, tokenizeForSimilarity } from "../../src/deepagent/document-store"
 
 let root: string
 let store: DocumentStore
@@ -64,5 +64,34 @@ describe("V3 DocumentStore", () => {
   test("sealed scope never listed (INV-7)", () => {
     store.create({ type: "memory", scope: "sealed", body: "leak", description: "sealed", confidence: { evidence_strength: "none", support_count: 0 }, provenance: { source: "runner" } })
     expect(store.list({ type: "memory" }).length).toBe(0)
+  })
+})
+
+describe("knowledge similarity (dedup helper)", () => {
+  test("tokenize drops punctuation and 1-char noise, lowercases", () => {
+    expect([...tokenizeForSimilarity("Use Redis, for X!")].sort()).toEqual(["for", "redis", "use"])
+  })
+
+  test("identical text scores 1; reworded scores high; unrelated scores low", () => {
+    expect(knowledgeSimilarity("use redis for the rate limiter", "use redis for the rate limiter")).toBe(1)
+    expect(knowledgeSimilarity("cache the session in redis to speed auth", "cache the session in redis to speed up auth")).toBeGreaterThanOrEqual(0.8)
+    expect(knowledgeSimilarity("use redis for the rate limiter", "validate webhook signatures before processing")).toBeLessThan(0.3)
+  })
+
+  test("a short summary fully contained in a longer one scores high (overlap coefficient)", () => {
+    expect(knowledgeSimilarity("redis rate limiter", "we should use a redis rate limiter for the api")).toBe(1)
+  })
+
+  test("empty / no-token input scores 0", () => {
+    expect(knowledgeSimilarity("", "redis")).toBe(0)
+    expect(knowledgeSimilarity("!!! ???", "redis")).toBe(0)
+  })
+
+  test("findSimilarKnowledge merges only same type+scope+domain non-rejected docs", () => {
+    const a = store.create({ type: "memory", scope: "user-global", domain: "code", body: "b", description: "use redis for the rate limiter", confidence: { evidence_strength: "weak", support_count: 1 }, provenance: { source: "runner" } })
+    // near-duplicate, same type/scope/domain -> found
+    expect(store.findSimilarKnowledge({ type: "memory", scope: "user-global", domain: "code", description: "use redis for the rate limiter please" })?.id).toBe(a.id)
+    // different domain -> not found
+    expect(store.findSimilarKnowledge({ type: "memory", scope: "user-global", domain: "infra", description: "use redis for the rate limiter" })).toBeNull()
   })
 })
