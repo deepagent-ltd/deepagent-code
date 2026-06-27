@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "code.concurrency",
   "name": "Concurrency, Races & Synchronization",
+  "description": "并发编程:竞态、锁、异步与死锁排查",
   "version": "1.0.0",
   "scope": "system",
   "risk": "medium",

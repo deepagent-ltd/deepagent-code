@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "code.prompt-pipeline",
   "name": "Prompt Assembly & Preparation Pipeline",
+  "description": "提示词流水线:模板拼装、输入清洗与多语言准备",
   "version": "1.0.0",
   "scope": "system",
   "risk": "medium",

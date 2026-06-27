@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "code.caching",
   "name": "Caching Patterns",
+  "description": "缓存模式:缓存失效、分层缓存与 CDN",
   "version": "1.0.0",
   "scope": "system",
   "risk": "medium",

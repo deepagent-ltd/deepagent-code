@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "platform.cloud.azure",
   "name": "Microsoft Azure Platform",
+  "description": "Azure 云平台:AKS、Azure Functions 与 Entra ID",
   "version": "1.0.0",
   "scope": "system",
   "risk": "high",

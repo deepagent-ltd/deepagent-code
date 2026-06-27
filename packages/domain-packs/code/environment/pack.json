@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "code.environment",
   "name": "Development Environment",
+  "description": "开发环境:本地配置与工具链搭建",
   "version": "1.0.0",
   "scope": "system",
   "risk": "low",

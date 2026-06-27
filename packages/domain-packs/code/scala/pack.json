@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "code.scala",
   "name": "Scala, sbt & the JVM",
+  "description": "Scala 开发:sbt 构建、函数式特性与 JVM 生态",
   "version": "1.0.0",
   "scope": "system",
   "risk": "medium",

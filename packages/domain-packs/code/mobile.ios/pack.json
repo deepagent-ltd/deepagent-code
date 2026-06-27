@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "code.mobile.ios",
   "name": "iOS App Development (SwiftUI/UIKit)",
+  "description": "iOS 开发:SwiftUI、UIKit 与 Xcode 工程",
   "version": "1.0.0",
   "scope": "system",
   "risk": "medium",

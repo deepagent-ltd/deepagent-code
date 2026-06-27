@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "code.model-serving",
   "name": "Model Serving (inference serving, batching, latency)",
+  "description": "模型服务:推理部署、批处理与延迟优化",
   "version": "1.0.0",
   "scope": "system",
   "risk": "medium",

@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "code.database.timeseries",
   "name": "Time-Series Databases",
+  "description": "时序数据库:InfluxDB、TimescaleDB 与 Prometheus",
   "version": "1.0.0",
   "scope": "system",
   "risk": "medium",

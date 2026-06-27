@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "code.database.vector",
   "name": "Vector Database Engine",
+  "description": "向量数据库:pgvector、Milvus、Qdrant 与 ANN 索引",
   "version": "1.0.0",
   "scope": "system",
   "risk": "medium",

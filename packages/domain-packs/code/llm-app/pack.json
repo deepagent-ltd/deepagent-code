@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "code.llm-app",
   "name": "LLM Application Engineering",
+  "description": "LLM 应用开发:模型 API、工具调用与结构化输出",
   "version": "1.0.0",
   "scope": "system",
   "risk": "medium",

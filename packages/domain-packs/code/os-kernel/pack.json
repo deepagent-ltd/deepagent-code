@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "code.os-kernel",
   "name": "Operating System Kernel and Device Drivers",
+  "description": "操作系统内核:系统调用、设备驱动、调度与内存管理",
   "version": "1.0.0",
   "scope": "system",
   "risk": "high",

@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "platform.kubernetes",
   "name": "Kubernetes Workloads & Cluster Operations",
+  "description": "Kubernetes 编排:工作负载部署、滚动发布与集群运维",
   "version": "1.0.0",
   "scope": "system",
   "risk": "high",

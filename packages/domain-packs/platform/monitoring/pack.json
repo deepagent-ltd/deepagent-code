@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "platform.monitoring",
   "name": "Prometheus and Grafana Monitoring",
+  "description": "监控告警:Prometheus、Grafana、PromQL 与 SLO",
   "version": "1.0.0",
   "scope": "system",
   "risk": "medium",

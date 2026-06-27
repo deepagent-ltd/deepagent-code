@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "code.backend.serverless",
   "name": "Serverless & Function-as-a-Service",
+  "description": "无服务器:Lambda、FaaS 函数开发与部署",
   "version": "1.0.0",
   "scope": "system",
   "risk": "medium",
