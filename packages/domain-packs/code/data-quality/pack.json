@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "code.data-quality",
   "name": "Data Quality (validation, freshness, contracts, drift)",
+  "description": "数据质量:校验、新鲜度、契约与血缘追踪",
   "version": "1.0.0",
   "scope": "system",
   "risk": "medium",

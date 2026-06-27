@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "code.streaming",
   "name": "Stream Processing (Flink, Kafka Streams, windowing)",
+  "description": "流处理:Flink、Kafka Streams、窗口与水位线",
   "version": "1.0.0",
   "scope": "system",
   "risk": "medium",

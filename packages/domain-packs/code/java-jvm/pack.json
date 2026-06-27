@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "code.java-jvm",
   "name": "Java JVM",
+  "description": "Java 开发:JVM、GC 调优与生态框架",
   "version": "1.0.0",
   "scope": "system",
   "risk": "low",

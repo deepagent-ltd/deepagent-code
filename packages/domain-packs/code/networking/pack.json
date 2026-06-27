@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "code.networking",
   "name": "Network Clients, Retries & Resilience",
+  "description": "网络客户端:连接重试、超时与背压韧性",
   "version": "1.0.0",
   "scope": "system",
   "risk": "medium",

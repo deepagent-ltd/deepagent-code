@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "code.database.mysql",
   "name": "MySQL / InnoDB Engine",
+  "description": "MySQL:InnoDB 引擎、MariaDB 调优与运维",
   "version": "1.0.0",
   "scope": "system",
   "risk": "medium",

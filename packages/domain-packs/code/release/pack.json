@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "code.release",
   "name": "Code Release",
+  "description": "代码发布:版本管理、打包、打标签与交付上线",
   "version": "1.0.0",
   "scope": "system",
   "risk": "high",

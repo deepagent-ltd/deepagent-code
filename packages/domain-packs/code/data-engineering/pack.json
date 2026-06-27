@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "code.data-engineering",
   "name": "Data Engineering (ETL/ELT, pipelines, warehouses)",
+  "description": "数据工程:ETL/ELT、数据管道与数仓建设",
   "version": "1.0.0",
   "scope": "system",
   "risk": "medium",

@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "code.cryptography",
   "name": "Applied Cryptography (Defensive Use of Primitives)",
+  "description": "应用密码学:加密、哈希与密钥管理的安全用法",
   "version": "1.0.0",
   "scope": "system",
   "risk": "high",

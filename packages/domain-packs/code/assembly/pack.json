@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "code.assembly",
   "name": "Assembly Language and Low-Level ABI",
+  "description": "汇编与底层 ABI:x86/ARM 指令与调用约定",
   "version": "1.0.0",
   "scope": "system",
   "risk": "medium",

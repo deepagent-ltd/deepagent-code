@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "code.database.mongodb",
   "name": "MongoDB / Document Database",
+  "description": "MongoDB:文档数据库、聚合查询与 BSON",
   "version": "1.0.0",
   "scope": "system",
   "risk": "medium",

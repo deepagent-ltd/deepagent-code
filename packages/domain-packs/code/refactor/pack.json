@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "code.refactor",
   "name": "Code Refactor",
+  "description": "代码重构:保持行为不变地简化与结构优化",
   "version": "1.0.0",
   "scope": "system",
   "risk": "medium",

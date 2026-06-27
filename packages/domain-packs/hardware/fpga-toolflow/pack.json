@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "hardware.fpga-toolflow",
   "name": "FPGA Toolflow & Timing Closure",
+  "description": "FPGA 工具流:综合、布局布线、时序约束与比特流生成",
   "version": "1.0.0",
   "scope": "system",
   "risk": "medium",
