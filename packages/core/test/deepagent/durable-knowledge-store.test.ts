@@ -164,4 +164,34 @@ describe("S0 durable store root resolution (docs/34 §7.2)", () => {
     expect(projectIdForWorkspace("/work/projectA")).toBe(projectIdForWorkspace("/work/projectA"))
     expect(projectIdForWorkspace("/work/projectA")).not.toBe(projectIdForWorkspace("/work/projectB"))
   })
+
+  test("stageCandidate dedups exact duplicates and reinforces instead of creating rows", () => {
+    const first = store.stageCandidate(mem({ description: "use redis for the rate limiter", confidence: { evidence_strength: "weak", support_count: 1 } }))
+    const again = store.stageCandidate(mem({ description: "use redis for the rate limiter", confidence: { evidence_strength: "medium", support_count: 1 } }))
+    // Same logical knowledge -> same doc id, support_count bumped, evidence raised to the stronger.
+    expect(again.id).toBe(first.id)
+    expect(store.documentStore.list({ type: "memory" })).toHaveLength(1)
+    expect(again.confidence?.support_count).toBe(2)
+    expect(again.confidence?.evidence_strength).toBe("medium")
+  })
+
+  test("stageCandidate merges near-duplicates (same point, different wording)", () => {
+    const first = store.stageCandidate(mem({ description: "cache the user session in redis to speed up auth" }))
+    const reworded = store.stageCandidate(mem({ description: "cache the user session in redis to speed auth up" }))
+    expect(reworded.id).toBe(first.id)
+    expect(store.documentStore.list({ type: "memory" })).toHaveLength(1)
+    expect(reworded.confidence?.support_count).toBe((first.confidence?.support_count ?? 0) + 1)
+  })
+
+  test("stageCandidate keeps unrelated knowledge as separate rows", () => {
+    store.stageCandidate(mem({ description: "use redis for the rate limiter" }))
+    store.stageCandidate(mem({ description: "validate webhook signatures before processing" }))
+    expect(store.documentStore.list({ type: "memory" })).toHaveLength(2)
+  })
+
+  test("stageCandidate does not merge across different scope/domain", () => {
+    store.stageCandidate(mem({ description: "use redis for the rate limiter", domain: "code" }))
+    store.stageCandidate(mem({ description: "use redis for the rate limiter", domain: "infra" }))
+    expect(store.documentStore.list({ type: "memory" })).toHaveLength(2)
+  })
 })
