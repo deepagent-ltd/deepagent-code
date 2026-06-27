@@ -775,10 +775,34 @@ export const layer = Layer.effect(
       const authInfo = model.providerID === "deepagent" ? (modelAuth ?? providerAuth) : providerAuth
       const isOpenaiOauth = (model.providerID === "openai" || modelAuthID === "openai") && authInfo?.type === "oauth"
       const system = AgentGateway.DeepAgentPromptPipeline.wishRefinementSystemPrompt(input.outputLanguage ?? "english")
+
+      // Feed the refiner the recent conversation so it reuses already-stated facts (target
+      // directory, paths, prior decisions) instead of guessing them and emitting misleading
+      // assumptions. Best-effort: history failures must not block refinement (first turn => none).
+      const recent = yield* sessions
+        .messages({ sessionID: input.sessionID, limit: 8 })
+        .pipe(Effect.orElseSucceed(() => [] as SessionV1.WithParts[]))
+      const turns: AgentGateway.DeepAgentPromptPipeline.WishContextTurn[] = recent
+        .filter((m) => m.info.role === "user" || m.info.role === "assistant")
+        .map((m) => ({
+          role: m.info.role as "user" | "assistant",
+          text: m.parts
+            .filter((p): p is Extract<typeof p, { type: "text" }> => p.type === "text" && !p.synthetic && !p.ignored)
+            .map((p) => p.text)
+            .join("\n")
+            .trim(),
+        }))
+        .filter((t) => t.text.length > 0)
+      const briefing = AgentGateway.DeepAgentPromptPipeline.buildWishContextBriefing(turns)
+      const contextMessages: ModelMessage[] = briefing
+        ? [{ role: "user", content: AgentGateway.DeepAgentPromptPipeline.wishContextMessage(briefing) }]
+        : []
+
       const params = {
         temperature: 0.2,
         messages: [
           ...(isOpenaiOauth ? [] : ([{ role: "system", content: system }] satisfies ModelMessage[])),
+          ...contextMessages,
           { role: "user", content: input.rawInput },
         ],
         model: language,
