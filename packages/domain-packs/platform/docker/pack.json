@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "platform.docker",
   "name": "Docker Platform",
+  "description": "Docker 容器:镜像构建、多阶段编译与 Compose 编排",
   "version": "1.0.0",
   "scope": "system",
   "risk": "medium",

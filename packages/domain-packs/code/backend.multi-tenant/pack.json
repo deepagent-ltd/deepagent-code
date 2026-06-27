@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "code.backend.multi-tenant",
   "name": "Multi-Tenant Backend",
+  "description": "多租户后端:租户隔离、数据分域与路由",
   "version": "1.0.0",
   "scope": "system",
   "risk": "high",

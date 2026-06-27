@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "hardware.pcb",
   "name": "PCB Layout & Signal Integrity",
+  "description": "PCB 布局:布线、信号完整性、EMI 与散热设计",
   "version": "1.0.0",
   "scope": "system",
   "risk": "medium",

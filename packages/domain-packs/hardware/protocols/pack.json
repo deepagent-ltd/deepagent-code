@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "hardware.protocols",
   "name": "Hardware Serial & Bus Protocols",
+  "description": "硬件总线协议:I2C、SPI、UART、CAN、USB 与 PCIe",
   "version": "1.0.0",
   "scope": "system",
   "risk": "medium",

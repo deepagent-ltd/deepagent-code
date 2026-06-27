@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "hardware.hdl",
   "name": "Hardware Description Languages (Verilog/SystemVerilog/VHDL)",
+  "description": "硬件描述语言:Verilog/SystemVerilog/VHDL 的 RTL 开发",
   "version": "1.0.0",
   "scope": "system",
   "risk": "medium",

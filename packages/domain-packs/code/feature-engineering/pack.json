@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "code.feature-engineering",
   "name": "Feature Engineering (stores, drift, leakage, encoding)",
+  "description": "特征工程:特征库、漂移、泄漏与编码",
   "version": "1.0.0",
   "scope": "system",
   "risk": "medium",

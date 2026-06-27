@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "code.backend.service",
   "name": "Backend Service & Background Work",
+  "description": "后端服务:后台任务、队列与定时调度",
   "version": "1.0.0",
   "scope": "system",
   "risk": "medium",

@@ -145,6 +145,20 @@ export const DeepAgentPacksResult = Schema.Struct({
 export const DeepAgentPackPinInput = Schema.Struct({ packId: Schema.String })
 export const DeepAgentPackPinResult = Schema.Struct({ ok: Schema.Boolean, packId: Schema.String })
 
+// docs/34 §9 S10: the full installed pack catalog (built-in + external), independent of which packs
+// are active for the current workspace. Shown in the packs UI so users see every available pack.
+export const DeepAgentPackCatalogItem = Schema.Struct({
+  id: Schema.String,
+  name: Schema.String,
+  description: Schema.optional(Schema.String),
+  version: Schema.String,
+  risk: Schema.Literals(["low", "medium", "high", "regulated"]),
+  domains: Schema.Array(Schema.String),
+  builtin: Schema.Boolean, // scope === "system" => bundled built-in pack
+  pinned: Schema.Boolean,
+})
+export const DeepAgentPackCatalogResult = Schema.Struct({ packs: Schema.Array(DeepAgentPackCatalogItem) })
+
 // V3.2 ablation ship gate (docs/30 §7). The CI/eval harness POSTs the REAL measured primary
 // metric for each (group, task) cell — this is the honest seam: the runtime never fabricates eval
 // numbers, it consumes them. candidateRefs are the durable ids whose shipping is under test; on a
@@ -274,6 +288,13 @@ export const DeepAgentApi = HttpApi.make("deepagent").add(
       HttpApiEndpoint.get("packsActive", `${root}/packs/active`, {
         query: WorkspaceRoutingQuery,
         success: described(DeepAgentPacksResult, "Active domain pack set for this workspace"),
+        error: DeepAgentPromotionError,
+      }),
+    )
+    .add(
+      HttpApiEndpoint.get("packsAll", `${root}/packs/all`, {
+        query: WorkspaceRoutingQuery,
+        success: described(DeepAgentPackCatalogResult, "Full installed domain pack catalog (built-in + external)"),
         error: DeepAgentPromotionError,
       }),
     )

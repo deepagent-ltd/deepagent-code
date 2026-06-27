@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "hardware.signal-processing",
   "name": "Signal Processing & DSP",
+  "description": "信号处理:FFT、滤波器、采样与 ADC/DAC 相关开发",
   "version": "1.0.0",
   "scope": "system",
   "risk": "medium",

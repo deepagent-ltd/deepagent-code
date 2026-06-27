@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "platform.cloud",
   "name": "Cloud Platform",
+  "description": "云平台通用:多云环境、资源管理与基础设施开发",
   "version": "1.0.0",
   "scope": "system",
   "risk": "high",

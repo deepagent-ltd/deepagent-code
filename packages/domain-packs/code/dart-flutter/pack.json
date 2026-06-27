@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "code.dart-flutter",
   "name": "Dart & Flutter",
+  "description": "Dart 与 Flutter:跨平台移动端 UI 开发",
   "version": "1.0.0",
   "scope": "system",
   "risk": "medium",

@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "hardware.cpu-arch",
   "name": "CPU Architecture and Microarchitecture Optimization",
+  "description": "CPU 架构调优:缓存、SIMD、内存模型与微架构优化",
   "version": "1.0.0",
   "scope": "system",
   "risk": "medium",

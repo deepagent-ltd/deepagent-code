@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "platform.cdn-edge",
   "name": "CDN & Edge Compute",
+  "description": "CDN 与边缘计算:边缘函数、缓存策略与回源优化",
   "version": "1.0.0",
   "scope": "system",
   "risk": "medium",

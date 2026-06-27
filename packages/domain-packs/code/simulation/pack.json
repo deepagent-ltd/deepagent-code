@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "code.simulation",
   "name": "Numerical Simulation & Solvers",
+  "description": "数值仿真:微分方程求解、蒙特卡洛与数值稳定性",
   "version": "1.0.0",
   "scope": "system",
   "risk": "medium",

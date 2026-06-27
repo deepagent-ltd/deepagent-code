@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "code.debugging",
   "name": "Code Debugging",
+  "description": "代码调试:定位 bug、断点与问题复现",
   "version": "1.0.0",
   "scope": "system",
   "risk": "low",

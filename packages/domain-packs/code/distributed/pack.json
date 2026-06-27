@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "code.distributed",
   "name": "Distributed Systems (Consensus, Replication, Consistency)",
+  "description": "分布式系统:共识、复制与一致性",
   "version": "1.0.0",
   "scope": "system",
   "risk": "high",

@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "code.testing",
   "name": "Code Testing",
+  "description": "代码测试:单元、集成、端到端与测试覆盖率",
   "version": "1.0.0",
   "scope": "system",
   "risk": "low",

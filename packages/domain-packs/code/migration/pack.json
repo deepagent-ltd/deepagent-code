@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "code.migration",
   "name": "Code Migration",
+  "description": "代码迁移:版本升级、依赖替换与兼容层改造",
   "version": "1.0.0",
   "scope": "system",
   "risk": "medium",
