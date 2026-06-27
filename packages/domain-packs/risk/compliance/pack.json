@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "risk.compliance",
   "name": "Regulated Compliance, Audit & Change Control",
+  "description": "合规审计:监管要求、审计追踪与变更审批",
   "version": "1.0.0",
   "scope": "system",
   "risk": "regulated",

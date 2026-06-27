@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "code.ci-triage",
   "name": "CI Triage",
+  "description": "CI 排障:定位流水线失败与不稳定测试",
   "version": "1.0.0",
   "scope": "system",
   "risk": "medium",

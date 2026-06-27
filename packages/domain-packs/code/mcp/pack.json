@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "code.mcp",
   "name": "MCP Integration",
+  "description": "MCP 集成:工具服务器、工具调用与能力协商",
   "version": "1.0.0",
   "scope": "system",
   "risk": "medium",

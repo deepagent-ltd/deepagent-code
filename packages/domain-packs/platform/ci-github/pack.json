@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "platform.ci-github",
   "name": "GitHub Actions CI Workflows",
+  "description": "GitHub Actions:工作流、矩阵构建与可复用流水线",
   "version": "1.0.0",
   "scope": "system",
   "risk": "medium",

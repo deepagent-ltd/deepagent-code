@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "code.frontend.svelte",
   "name": "Svelte & SvelteKit Frontend",
+  "description": "Svelte 前端:SvelteKit 应用与组件开发",
   "version": "1.0.0",
   "scope": "system",
   "risk": "medium",

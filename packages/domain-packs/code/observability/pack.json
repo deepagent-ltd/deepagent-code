@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "code.observability",
   "name": "Observability",
+  "description": "可观测性:结构化日志、链路追踪与指标采集",
   "version": "1.0.0",
   "scope": "system",
   "risk": "medium",

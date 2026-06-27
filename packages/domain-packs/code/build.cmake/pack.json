@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "code.build.cmake",
   "name": "CMake Build System",
+  "description": "CMake 构建:目标管理与 C/C++ 项目构建",
   "version": "1.0.0",
   "scope": "system",
   "risk": "medium",

@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "code.gpu-kernel",
   "name": "GPU Kernel",
+  "description": "GPU 内核:CUDA、ROCm 算子开发",
   "version": "1.0.0",
   "scope": "system",
   "risk": "medium",

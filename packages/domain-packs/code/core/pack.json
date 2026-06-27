@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "code.core",
   "name": "Code Core",
+  "description": "通用编程基础:跨语言的代码核心能力",
   "version": "1.0.0",
   "scope": "system",
   "risk": "low",

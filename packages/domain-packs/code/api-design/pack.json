@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "code.api-design",
   "name": "API Design",
+  "description": "API 设计:接口契约、版本管理与资源建模",
   "version": "1.0.0",
   "scope": "system",
   "risk": "medium",

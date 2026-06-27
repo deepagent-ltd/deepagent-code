@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "code.csharp-dotnet",
   "name": "C# / .NET Engineering",
+  "description": "C#/.NET 开发:ASP.NET、NuGet 与生态工具",
   "version": "1.0.0",
   "scope": "system",
   "risk": "low",

@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "code.data-pipeline-orchestration",
   "name": "Data Pipeline Orchestration (Airflow, Dagster, Prefect)",
+  "description": "数据管道编排:Airflow、Dagster、Prefect 调度",
   "version": "1.0.0",
   "scope": "system",
   "risk": "medium",

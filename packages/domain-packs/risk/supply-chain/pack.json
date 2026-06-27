@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "risk.supply-chain",
   "name": "Supply Chain Risk",
+  "description": "供应链风险:依赖审查、锁文件与安装脚本防护",
   "version": "1.0.0",
   "scope": "system",
   "risk": "high",

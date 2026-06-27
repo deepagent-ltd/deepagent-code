@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "code.database.postgres",
   "name": "PostgreSQL Engineering",
+  "description": "PostgreSQL:查询优化、索引与 SQL 高级特性",
   "version": "1.0.0",
   "scope": "system",
   "risk": "medium",

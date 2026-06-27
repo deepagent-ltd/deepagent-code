@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "code.ml-ai",
   "name": "Machine Learning Engineering (training, inference, datasets)",
+  "description": "机器学习工程:模型训练、推理与数据集处理",
   "version": "1.0.0",
   "scope": "system",
   "risk": "medium",

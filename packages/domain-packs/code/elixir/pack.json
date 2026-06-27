@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "code.elixir",
   "name": "Elixir, OTP & Phoenix",
+  "description": "Elixir:OTP、Phoenix 与 BEAM 虚拟机",
   "version": "1.0.0",
   "scope": "system",
   "risk": "medium",
