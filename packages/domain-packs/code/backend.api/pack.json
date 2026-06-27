@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "code.backend.api",
   "name": "Backend API",
+  "description": "后端 API:REST 与 GraphQL 接口开发",
   "version": "1.1.0",
   "scope": "system",
   "risk": "medium",

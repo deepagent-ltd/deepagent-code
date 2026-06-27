@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "code.sql",
   "name": "SQL",
+  "description": "SQL:查询编写、DDL/DML 与数据库操作",
   "version": "1.0.0",
   "scope": "system",
   "risk": "low",

@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "code.backend.event-driven",
   "name": "Event-Driven & Messaging Systems",
+  "description": "事件驱动:消息队列、Outbox 与流式处理",
   "version": "1.0.0",
   "scope": "system",
   "risk": "medium",

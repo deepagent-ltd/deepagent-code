@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "code.search",
   "name": "Search Engineering (inverted index, ranking, Elasticsearch)",
+  "description": "搜索工程:倒排索引、相关性排序与 Elasticsearch",
   "version": "1.0.0",
   "scope": "system",
   "risk": "medium",

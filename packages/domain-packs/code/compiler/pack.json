@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "code.compiler",
   "name": "Compiler and Language Implementation",
+  "description": "编译器开发:解析、IR、代码生成与优化",
   "version": "1.0.0",
   "scope": "system",
   "risk": "medium",

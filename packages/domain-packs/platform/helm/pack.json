@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "platform.helm",
   "name": "Helm Charts",
+  "description": "Helm Chart:模板、values 配置与发布管理",
   "version": "1.0.0",
   "scope": "system",
   "risk": "medium",

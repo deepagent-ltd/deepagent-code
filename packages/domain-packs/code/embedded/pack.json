@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "code.embedded",
   "name": "Embedded Firmware and Real-Time Systems",
+  "description": "嵌入式固件:RTOS、单片机与裸机实时系统",
   "version": "1.0.0",
   "scope": "system",
   "risk": "high",

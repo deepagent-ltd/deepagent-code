@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "code.frontend.performance",
   "name": "Frontend Performance",
+  "description": "前端性能:加载优化、渲染与浏览器调优",
   "version": "1.0.0",
   "scope": "system",
   "risk": "medium",

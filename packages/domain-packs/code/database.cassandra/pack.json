@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "code.database.cassandra",
   "name": "Cassandra / Wide-Column Engine",
+  "description": "Cassandra:宽列存储、ScyllaDB 与 CQL",
   "version": "1.0.0",
   "scope": "system",
   "risk": "medium",

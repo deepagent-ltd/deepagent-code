@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "code.backend.auth",
   "name": "Backend Authentication & Authorization",
+  "description": "后端认证授权:登录会话、权限与访问控制",
   "version": "1.0.0",
   "scope": "system",
   "risk": "high",

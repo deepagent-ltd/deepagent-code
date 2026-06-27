@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "code.build.bazel",
   "name": "Bazel Build System",
+  "description": "Bazel 构建:构建图、密闭构建与远程缓存",
   "version": "1.0.0",
   "scope": "system",
   "risk": "medium",

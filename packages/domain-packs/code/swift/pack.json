@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "code.swift",
   "name": "Swift",
+  "description": "Swift 开发:语言特性、SwiftUI 与苹果生态",
   "version": "1.0.0",
   "scope": "system",
   "risk": "low",
