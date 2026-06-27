@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "code.agent",
   "name": "Agent Loop & Tool Orchestration",
+  "description": "智能体开发:agent 循环、工具编排、记忆与 MCP 集成",
   "version": "1.0.0",
   "scope": "system",
   "risk": "medium",

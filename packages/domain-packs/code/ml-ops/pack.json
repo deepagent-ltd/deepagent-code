@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "code.mlops",
   "name": "MLOps (lifecycle, registry, CI/CD for ML)",
+  "description": "MLOps:模型生命周期、注册表与机器学习 CI/CD",
   "version": "1.0.0",
   "scope": "system",
   "risk": "medium",

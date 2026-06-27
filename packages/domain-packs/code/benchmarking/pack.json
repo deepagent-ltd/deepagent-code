@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "code.benchmarking",
   "name": "Benchmarking",
+  "description": "性能基准测试:压测、跑分与性能对比",
   "version": "1.0.0",
   "scope": "system",
   "risk": "medium",

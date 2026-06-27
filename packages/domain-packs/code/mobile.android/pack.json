@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "code.mobile.android",
   "name": "Android App Development (Jetpack Compose/Kotlin)",
+  "description": "安卓开发:Jetpack Compose、Kotlin 与应用生命周期",
   "version": "1.0.0",
   "scope": "system",
   "risk": "medium",

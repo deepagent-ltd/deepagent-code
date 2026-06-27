@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "platform.cloud.aws",
   "name": "AWS Cloud Platform",
+  "description": "AWS 云平台:IAM、Lambda、ECS 与 CloudWatch 运维",
   "version": "1.0.0",
   "scope": "system",
   "risk": "high",

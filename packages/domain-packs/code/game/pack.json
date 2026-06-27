@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "code.game",
   "name": "Game Engine & Real-Time Simulation",
+  "description": "游戏开发:游戏循环、物理与实时渲染",
   "version": "1.0.0",
   "scope": "system",
   "risk": "medium",

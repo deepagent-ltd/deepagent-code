@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "code.systems",
   "name": "Systems Programming: OS, Filesystem & Processes",
+  "description": "系统编程:操作系统、文件系统、进程与资源限制",
   "version": "1.0.0",
   "scope": "system",
   "risk": "medium",

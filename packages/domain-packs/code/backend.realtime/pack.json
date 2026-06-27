@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "code.backend.realtime",
   "name": "Realtime Connections & Pub/Sub",
+  "description": "实时连接:WebSocket、SSE 与发布订阅",
   "version": "1.0.0",
   "scope": "system",
   "risk": "medium",

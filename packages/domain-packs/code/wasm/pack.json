@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "code.wasm",
   "name": "WebAssembly: Build, Interop & Runtimes",
+  "description": "WebAssembly:构建、互操作与运行时",
   "version": "1.0.0",
   "scope": "system",
   "risk": "medium",

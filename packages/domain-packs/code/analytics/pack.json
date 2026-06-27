@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "code.analytics",
   "name": "Analytics Engineering (OLAP, dbt, metrics layer)",
+  "description": "分析工程:OLAP、dbt、数据仓库与指标层建模",
   "version": "1.0.0",
   "scope": "system",
   "risk": "medium",

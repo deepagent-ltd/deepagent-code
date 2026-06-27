@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "code.database.sqlite",
   "name": "SQLite Engineering",
+  "description": "SQLite:嵌入式数据库与本地存储",
   "version": "1.0.0",
   "scope": "system",
   "risk": "low",

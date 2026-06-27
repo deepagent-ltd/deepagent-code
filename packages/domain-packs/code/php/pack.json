@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "code.php",
   "name": "PHP, Composer & Laravel/Symfony",
+  "description": "PHP 开发:Composer、Laravel 与 Symfony 框架",
   "version": "1.0.0",
   "scope": "system",
   "risk": "medium",

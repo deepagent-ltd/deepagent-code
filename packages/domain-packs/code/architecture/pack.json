@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "code.architecture",
   "name": "Software Architecture",
+  "description": "软件架构:系统设计、分层与模块边界划分",
   "version": "1.0.0",
   "scope": "system",
   "risk": "medium",

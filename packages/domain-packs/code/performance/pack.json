@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "code.performance",
   "name": "Code Performance",
+  "description": "代码性能:延迟、吞吐、性能剖析与热点优化",
   "version": "1.0.0",
   "scope": "system",
   "risk": "medium",

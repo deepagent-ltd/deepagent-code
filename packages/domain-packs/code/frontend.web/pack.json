@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "code.frontend.web",
   "name": "Frontend Web",
+  "description": "前端 Web:HTML、CSS、浏览器与无障碍",
   "version": "1.1.0",
   "scope": "system",
   "risk": "medium",

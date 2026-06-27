@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "code.go",
   "name": "Go",
+  "description": "Go 开发:goroutine、channel 与标准库",
   "version": "1.0.0",
   "scope": "system",
   "risk": "low",

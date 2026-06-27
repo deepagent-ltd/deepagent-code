@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "code.desktop.electron",
   "name": "Electron Desktop Applications",
+  "description": "Electron 桌面应用:主进程、渲染进程与 IPC",
   "version": "1.0.0",
   "scope": "system",
   "risk": "medium",

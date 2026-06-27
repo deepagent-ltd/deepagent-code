@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "code.rust",
   "name": "Rust",
+  "description": "Rust 开发:所有权、并发安全、Cargo 与系统级编程",
   "version": "1.0.0",
   "scope": "system",
   "risk": "low",

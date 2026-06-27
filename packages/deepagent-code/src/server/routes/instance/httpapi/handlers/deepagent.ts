@@ -250,6 +250,30 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
       })
     })
 
+    const packsAll = Effect.fn("DeepAgentHttpApi.packsAll")(function* () {
+      const memoryDir = yield* workspaceMemoryDir()
+      return yield* Effect.try({
+        try: () => {
+          const pinned = new Set(readPinned(memoryDir))
+          const manifests = AgentGateway.DeepAgentDomainPackRegistry.discover()
+          const packs = manifests
+            .map((m) => ({
+              id: m.id,
+              name: m.name,
+              ...(m.description ? { description: m.description } : {}),
+              version: m.version,
+              risk: m.risk,
+              domains: m.domains,
+              builtin: m.scope === "system",
+              pinned: pinned.has(m.id),
+            }))
+            .sort((a, b) => a.id.localeCompare(b.id))
+          return { packs }
+        },
+        catch: (error) => new DeepAgentPromotionError({ message: error instanceof Error ? error.message : String(error) }),
+      })
+    })
+
     const packsPin = Effect.fn("DeepAgentHttpApi.packsPin")(function* (ctx) {
       const memoryDir = yield* workspaceMemoryDir()
       return yield* Effect.try({
@@ -281,6 +305,7 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
       .handle("knowledgeRejectIds", knowledgeRejectIds)
       .handle("knowledgeShipGate", knowledgeShipGate)
       .handle("packsActive", packsActive)
+      .handle("packsAll", packsAll)
       .handle("packsPin", packsPin)
       .handle("packsUnpin", packsUnpin)
   }),

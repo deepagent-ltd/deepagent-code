@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "code.fine-tuning",
   "name": "Fine-Tuning (LoRA, quantization, distillation, adapters)",
+  "description": "模型微调:LoRA、量化、蒸馏与适配器",
   "version": "1.0.0",
   "scope": "system",
   "risk": "medium",

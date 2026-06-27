@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "code.ruby",
   "name": "Ruby, Bundler & Rails",
+  "description": "Ruby 开发:Bundler、Rails 与 RSpec 测试",
   "version": "1.0.0",
   "scope": "system",
   "risk": "medium",

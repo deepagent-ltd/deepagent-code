@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "code.review",
   "name": "Code Review",
+  "description": "代码评审:问题发现、风险评估与审查反馈",
   "version": "1.0.0",
   "scope": "system",
   "risk": "low",

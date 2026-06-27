@@ -8,15 +8,16 @@ import "../settings-v2/settings-v2.css"
 type Pack = {
   id: string
   name: string
+  description?: string
   version: string
   risk: "low" | "medium" | "high" | "regulated"
   domains: string[]
-  pinned?: boolean
+  builtin: boolean
+  pinned: boolean
 }
 
 type PacksResponse = {
   packs: Pack[]
-  snapshotId: string
 }
 
 type RawSdkClient = {
@@ -39,19 +40,19 @@ const RISK_CLASSES: Record<Pack["risk"], string> = {
 
 export const DialogPacks: Component<{ client: RawSdkClient }> = (props) => {
   const language = useLanguage()
-  const [pinInput, setPinInput] = createSignal("")
   const [busy, setBusy] = createSignal(false)
 
   const [data, { refetch }] = createResource(async (): Promise<PacksResponse> => {
     const res = await props.client.client.request<PacksResponse>({
       method: "GET",
-      url: "/deepagent/packs/active",
+      url: "/deepagent/packs/all",
     })
-    return res.data ?? { packs: [], snapshotId: "" }
+    return res.data ?? { packs: [] }
   })
 
-  const pinnedPacks = createMemo(() => (data()?.packs ?? []).filter((p) => p.pinned))
-  const autoPacks = createMemo(() => (data()?.packs ?? []).filter((p) => !p.pinned))
+  const sortPacks = (list: Pack[]) => list.slice().sort((a, b) => a.id.localeCompare(b.id))
+  const builtinPacks = createMemo(() => sortPacks((data()?.packs ?? []).filter((p) => p.builtin)))
+  const externalPacks = createMemo(() => sortPacks((data()?.packs ?? []).filter((p) => !p.builtin)))
 
   const riskKey = (risk: Pack["risk"]) =>
     risk === "low"
@@ -84,13 +85,6 @@ export const DialogPacks: Component<{ client: RawSdkClient }> = (props) => {
     }
   }
 
-  const handlePin = async () => {
-    const id = pinInput().trim()
-    if (!id) return
-    await callPack("pin", id)
-    setPinInput("")
-  }
-
   const PackRow = (p: Pack) => (
     <div class="flex items-start gap-3 border-b border-v2-border-border-muted px-3 py-2.5 last:border-b-0 hover:bg-v2-background-bg-layer-01">
       <div class="flex min-w-0 flex-1 flex-col gap-1">
@@ -99,30 +93,40 @@ export const DialogPacks: Component<{ client: RawSdkClient }> = (props) => {
           <span class={`rounded px-1.5 py-0.5 text-11-medium ${RISK_CLASSES[p.risk]}`}>
             {language.t(riskKey(p.risk))}
           </span>
+          <Show when={p.pinned}>
+            <span class="rounded bg-v2-background-bg-layer-01 border border-v2-border-border-muted px-1.5 py-0.5 text-11-medium text-v2-text-text-faint">
+              {language.t("packs.pinnedTag")}
+            </span>
+          </Show>
         </div>
-        <span class="break-all text-11-regular text-v2-text-text-faint">{p.id}</span>
-        <Show when={p.domains.length > 0}>
-          <div class="flex flex-wrap gap-1">
-            <For each={p.domains}>
-              {(d) => (
-                <span class="break-all rounded bg-v2-background-bg-layer-01 border border-v2-border-border-muted px-1.5 py-0.5 text-11-regular text-v2-text-text-faint">
-                  {d}
-                </span>
-              )}
-            </For>
-          </div>
+        <Show when={p.description}>
+          <span class="break-words text-12-regular text-v2-text-text-weak">{p.description}</span>
         </Show>
+        <span class="break-all text-11-regular text-v2-text-text-faint">{p.id}</span>
       </div>
       <Button
         class="shrink-0"
         variant="secondary"
         size="small"
-        onClick={() => void callPack("unpin", p.id)}
+        onClick={() => void callPack(p.pinned ? "unpin" : "pin", p.id)}
         disabled={busy()}
       >
-        {language.t("packs.unpin")}
+        {language.t(p.pinned ? "packs.unpin" : "packs.pinButton")}
       </Button>
     </div>
+  )
+
+  const Section = (props: { label: string; count: number; packs: Pack[] }) => (
+    <Show when={props.packs.length > 0}>
+      <div class="flex flex-col gap-1">
+        <span class="px-3 text-11-medium text-v2-text-text-faint uppercase tracking-wide">
+          {props.label} ({props.count})
+        </span>
+        <div class="rounded-lg border border-v2-border-border-muted overflow-hidden">
+          <For each={props.packs}>{(p) => <PackRow {...p} />}</For>
+        </div>
+      </div>
+    </Show>
   )
 
   return (
@@ -142,52 +146,19 @@ export const DialogPacks: Component<{ client: RawSdkClient }> = (props) => {
                   when={(data()?.packs.length ?? 0) > 0}
                   fallback={<div class="p-4 text-13-regular text-v2-text-text-faint">{language.t("packs.empty")}</div>}
                 >
-                  <Show when={pinnedPacks().length > 0}>
-                    <div class="flex flex-col gap-1">
-                      <span class="px-3 text-11-medium text-v2-text-text-faint uppercase tracking-wide">
-                        {language.t("packs.pinLabel")}
-                      </span>
-                      <div class="rounded-lg border border-v2-border-border-muted overflow-hidden">
-                        <For each={pinnedPacks()}>{(p) => <PackRow {...p} />}</For>
-                      </div>
-                    </div>
-                  </Show>
-                  <Show when={autoPacks().length > 0}>
-                    <div class="flex flex-col gap-1">
-                      <span class="px-3 text-11-medium text-v2-text-text-faint uppercase tracking-wide">
-                        {language.t("packs.active")}
-                      </span>
-                      <div class="rounded-lg border border-v2-border-border-muted overflow-hidden">
-                        <For each={autoPacks()}>{(p) => <PackRow {...p} />}</For>
-                      </div>
-                    </div>
-                  </Show>
-                </Show>
-                <Show when={data()?.snapshotId}>
-                  <span class="text-11-regular text-v2-text-text-faint">
-                    {language.t("packs.snapshot", { id: data()!.snapshotId })}
-                  </span>
+                  <Section
+                    label={language.t("packs.builtin")}
+                    count={builtinPacks().length}
+                    packs={builtinPacks()}
+                  />
+                  <Section
+                    label={language.t("packs.external")}
+                    count={externalPacks().length}
+                    packs={externalPacks()}
+                  />
                 </Show>
               </Show>
             </Show>
-          </div>
-
-          <div class="flex flex-wrap items-center gap-2 pt-1">
-            <input
-              class="min-w-0 flex-1 rounded border border-v2-border-border-muted bg-v2-background-bg-layer-01 px-2 py-1 text-13-regular text-v2-text-text-base focus:outline-none focus:ring-1 focus:ring-v2-border-border-focus"
-              placeholder={language.t("packs.pinLabel")}
-              value={pinInput()}
-              onInput={(e) => setPinInput(e.currentTarget.value)}
-              onKeyDown={(e) => e.key === "Enter" && void handlePin()}
-            />
-            <Button
-              variant="primary"
-              size="small"
-              onClick={() => void handlePin()}
-              disabled={!pinInput().trim() || busy()}
-            >
-              {language.t("packs.pinButton")}
-            </Button>
           </div>
         </div>
       </div>
