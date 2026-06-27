@@ -325,14 +325,21 @@ export const WISH_REFINEMENT_SYSTEM_PROMPT = [
   "- If it is a normal conversation, identity question, writing/chat request, or otherwise not a",
   "  coding task, set `route` to `general`. The main model will answer directly in general mode.",
   "- If it is a coding task, set `route` to `code` and prepare it for the coding agent.",
-  "- Understand the user's intent and fill in gaps, ambiguities, and missing decisions so the",
-  "  executing agent can act WITHOUT re-interpreting the original request.",
-  "- Produce `refined_prompt` as a complete, self-contained instruction in the requested output language.",
+  "- Refine ONLY the task description itself: clarify wording, structure it, and remove ambiguity.",
+  "- Produce `refined_prompt` as a clear, well-structured instruction in the requested output language.",
   "Hard rules:",
-  "- Do NOT change the user's core goal. Clarify and structure only.",
-  "- Every inference you add while completing intent MUST be listed in `assumptions` (one per",
-  "  item), so the user can review and correct it. Do not hide inferences inside the prose.",
-  "- Do not invent unrelated work or scope. Prefer the minimal complete instruction.",
+  "- Do NOT change the user's core goal. Clarify and structure only; do not expand scope.",
+  "- A conversation context block may be provided. Treat anything stated there (target directory,",
+  "  paths, prior decisions, environment) as ALREADY KNOWN — use it directly and do NOT list it as",
+  "  an assumption.",
+  "- Do NOT decide the user's environment for them: never invent a working directory, file path,",
+  "  branch, framework, version, or similar unless the user or the context stated it.",
+  "- When a detail is genuinely missing and cannot be derived from the request or the context, do",
+  "  NOT guess a concrete value. Leave it for the user: insert an explicit placeholder in",
+  "  `refined_prompt` (e.g. `<待用户填写: 目标目录>` / `<TODO: target directory>`) and add a single",
+  "  'needs user confirmation' note in `assumptions` describing what is missing.",
+  "- `assumptions` must be few and meaningful — only inferences that materially affect understanding",
+  "  of the task AND cannot be read from the context. Do not pad it with environment guesses.",
   "Output format:",
   "- Respond with a single JSON object and nothing else — no prose, no explanation before or after.",
   "- Keys: route ('code'|'general'), refined_prompt (string), goal (string),",
@@ -349,6 +356,41 @@ export const wishRefinementSystemPrompt = (outputLanguage: WishRefinementOutputL
       ? "Output language: generate `refined_prompt`, `goal`, `constraints`, `acceptance`, and `assumptions` in Chinese."
       : "Output language: generate `refined_prompt`, `goal`, `constraints`, `acceptance`, and `assumptions` in English.",
   ].join("\n")
+
+export type WishContextTurn = { readonly role: "user" | "assistant"; readonly text: string }
+
+// Build the compact conversation-context block fed to wish refinement. It lets the refiner reuse
+// what the user already established (target directory, paths, prior decisions) instead of guessing
+// and emitting misleading assumptions. Pure + dependency-free so it can be unit tested in core and
+// shared by the session layer. Returns "" when there is no usable prior context (first turn), in
+// which case the caller should omit the context message entirely.
+export const buildWishContextBriefing = (
+  turns: ReadonlyArray<WishContextTurn>,
+  options: { maxTurns?: number; maxCharsPerTurn?: number } = {},
+): string => {
+  const maxTurns = options.maxTurns ?? 6
+  const maxChars = options.maxCharsPerTurn ?? 500
+  const cleaned = turns
+    .map((turn) => ({ role: turn.role, text: turn.text.trim() }))
+    .filter((turn) => turn.text.length > 0)
+    .slice(-maxTurns)
+  if (cleaned.length === 0) return ""
+  return cleaned
+    .map((turn) => {
+      const label = turn.role === "user" ? "User" : "Assistant"
+      const body = turn.text.length > maxChars ? turn.text.slice(0, maxChars) + "…" : turn.text
+      return `${label}: ${body}`
+    })
+    .join("\n")
+}
+
+// The user message wrapper that carries the context briefing into the refiner. Kept here so the
+// exact instruction (use context, don't re-guess established facts) lives next to the system prompt.
+export const wishContextMessage = (briefing: string) =>
+  `<conversation_context>\n${briefing}\n</conversation_context>\n\n` +
+  "Refine ONLY the new request below. Use the context above as already-known facts (target " +
+  "directory, paths, prior decisions) — do not restate them as assumptions and do not guess values " +
+  "that contradict it."
 
 export const WISH_REFINEMENT_OUTPUT_JSON_SCHEMA = {
   type: "object",

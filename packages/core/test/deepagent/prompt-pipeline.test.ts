@@ -7,6 +7,7 @@ import {
   PromptDraftStore,
   PromptRefiner,
   WISH_REFINEMENT_SYSTEM_PROMPT,
+  buildWishContextBriefing,
   classifyWishRoute,
   draftFromWishRefinement,
   isWishRefinementOutput,
@@ -14,6 +15,7 @@ import {
   normalizeWishRefinementOutput,
   renderDraftMarkdown,
   scrubMemoryContext,
+  wishContextMessage,
   wishRefinementSystemPrompt,
 } from "../../src/deepagent/prompt-pipeline"
 
@@ -213,5 +215,46 @@ describe("V3.1 Prompt Pipeline", () => {
     expect(classifyWishRoute("你好")).toBe("general")
     expect(classifyWishRoute("你是谁")).toBe("general")
     expect(classifyWishRoute("修复登录测试")).toBe("code")
+  })
+
+  test("wish refinement system prompt forbids guessing the environment and asks to leave gaps", () => {
+    const prompt = WISH_REFINEMENT_SYSTEM_PROMPT.toLowerCase()
+    expect(prompt).toContain("already known")
+    expect(prompt).toContain("not guess a concrete value")
+    expect(prompt).toContain("placeholder")
+    expect(prompt).toContain("never invent a working directory")
+    // It must tell the model to refine the task description only, not expand scope.
+    expect(prompt).toContain("only the task description")
+  })
+
+  test("buildWishContextBriefing keeps recent turns and is empty on first turn", () => {
+    expect(buildWishContextBriefing([])).toBe("")
+    expect(buildWishContextBriefing([{ role: "user", text: "   " }])).toBe("")
+
+    const briefing = buildWishContextBriefing([
+      { role: "user", text: "work in packages/app" },
+      { role: "assistant", text: "ok, scoped to packages/app" },
+    ])
+    expect(briefing).toContain("User: work in packages/app")
+    expect(briefing).toContain("Assistant: ok, scoped to packages/app")
+  })
+
+  test("buildWishContextBriefing caps turns and truncates long messages", () => {
+    const turns = Array.from({ length: 12 }, (_, i) => ({ role: "user" as const, text: `turn ${i}` }))
+    const briefing = buildWishContextBriefing(turns, { maxTurns: 4 })
+    expect(briefing.split("\n")).toHaveLength(4)
+    expect(briefing).toContain("turn 11")
+    expect(briefing).not.toContain("turn 7")
+
+    const long = buildWishContextBriefing([{ role: "user", text: "x".repeat(50) }], { maxCharsPerTurn: 10 })
+    expect(long).toContain("…")
+    expect(long.length).toBeLessThan("User: ".length + 50)
+  })
+
+  test("wishContextMessage wraps the briefing and instructs reuse over guessing", () => {
+    const msg = wishContextMessage("User: target dir is packages/app")
+    expect(msg).toContain("<conversation_context>")
+    expect(msg).toContain("target dir is packages/app")
+    expect(msg.toLowerCase()).toContain("do not")
   })
 })
