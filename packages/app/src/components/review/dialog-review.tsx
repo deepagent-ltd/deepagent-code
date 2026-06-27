@@ -7,11 +7,12 @@ import "../settings-v2/settings-v2.css"
 
 type KnowledgeItem = {
   id: string
-  type: "memory" | "strategy" | "methodology" | "anti_pattern"
+  type: "knowledge" | "strategy" | "methodology" | "memory" | "skill" | "failure_dossier"
   summary: string
-  confidence: number
+  // The durable model carries a discrete evidence strength, NOT a raw confidence number.
+  // (Backend route /deepagent/knowledge/pending returns DeepAgentKnowledgeItem.)
+  evidence_strength: "strong" | "medium" | "weak" | "none"
   evidence_refs: string[]
-  created_at: string
   approval_status: "pending" | "approved" | "rejected"
 }
 
@@ -143,7 +144,9 @@ export const DialogReview: Component<{ client: ReviewClient }> = (props) => {
                             {" · "}
                             {language.t(statusKey())}
                             {" · "}
-                            {language.t("review.confidence", { value: item.confidence.toFixed(2) })}
+                            {language.t("review.strength", {
+                              value: language.t(`review.strength.${item.evidence_strength}`),
+                            })}
                             <Show when={item.evidence_refs.length > 0}>
                               {" · "}
                               {language.t("review.evidence", { count: item.evidence_refs.length })}

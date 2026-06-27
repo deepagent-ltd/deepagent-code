@@ -23,7 +23,14 @@ describe("DeepAgent review dialog route contract", () => {
   test("listPending GETs /deepagent/knowledge/pending and unwraps items", async () => {
     const calls: Recorded[] = []
     const items = [
-      { id: "memory:1", type: "memory" as const, summary: "s", confidence: 0.9, evidence_refs: [], created_at: "t", approval_status: "pending" as const },
+      {
+        id: "memory:1",
+        type: "memory" as const,
+        summary: "s",
+        evidence_strength: "strong" as const,
+        evidence_refs: [],
+        approval_status: "pending" as const,
+      },
     ]
     const result = await listPending(client(calls, { items }))
 
