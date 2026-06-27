@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "risk.privacy",
   "name": "Privacy Risk Controls",
+  "description": "隐私风险管控:PII/PHI、数据最小化与脱敏留存",
   "version": "1.1.0",
   "scope": "system",
   "risk": "high",

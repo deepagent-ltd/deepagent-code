@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "business.finance",
   "name": "Business Finance Engineering",
+  "description": "金融业务:支付、账本、对账与风控相关开发",
   "version": "1.0.0",
   "scope": "system",
   "risk": "high",

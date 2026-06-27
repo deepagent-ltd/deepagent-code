@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "platform.ansible",
   "name": "Ansible Configuration Management",
+  "description": "Ansible 配置管理:Playbook、角色与幂等化部署",
   "version": "1.0.0",
   "scope": "system",
   "risk": "high",

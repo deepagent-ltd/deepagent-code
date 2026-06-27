@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "code.graphics",
   "name": "Real-Time Graphics (Rendering, Shaders, GPU Pipeline)",
+  "description": "实时图形:渲染、着色器与 GPU 管线",
   "version": "1.0.0",
   "scope": "system",
   "risk": "medium",

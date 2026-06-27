@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "code.database",
   "name": "Database Engineering",
+  "description": "数据库工程:SQL、迁移与事务处理",
   "version": "1.1.0",
   "scope": "system",
   "risk": "medium",

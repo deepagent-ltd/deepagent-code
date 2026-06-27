@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "business.healthcare",
   "name": "Business Healthcare Engineering",
+  "description": "医疗业务:患者数据、PHI 与合规隐私场景开发",
   "version": "1.0.0",
   "scope": "system",
   "risk": "regulated",

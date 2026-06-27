@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "code.rag",
   "name": "Retrieval-Augmented Generation",
+  "description": "检索增强生成:分块、检索、重排与答案落地引用",
   "version": "1.0.0",
   "scope": "system",
   "risk": "medium",

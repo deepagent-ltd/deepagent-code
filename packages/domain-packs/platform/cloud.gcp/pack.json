@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "platform.cloud.gcp",
   "name": "Google Cloud Platform",
+  "description": "GCP 云平台:Cloud Run、GKE、BigQuery 与 IAM",
   "version": "1.0.0",
   "scope": "system",
   "risk": "high",

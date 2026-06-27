@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "code.typescript",
   "name": "TypeScript / JavaScript",
+  "description": "TypeScript/JavaScript 开发:类型系统与前后端工程",
   "version": "1.0.0",
   "scope": "system",
   "risk": "low",

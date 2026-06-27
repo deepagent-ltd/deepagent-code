@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "code.sdk",
   "name": "SDK Engineering",
+  "description": "SDK 工程:客户端生成、接口设计与版本兼容",
   "version": "1.0.0",
   "scope": "system",
   "risk": "medium",

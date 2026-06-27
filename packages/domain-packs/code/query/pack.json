@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "code.query",
   "name": "Deterministic Query Controls",
+  "description": "确定性查询:只读统计、检索与状态查看",
   "version": "1.0.0",
   "scope": "system",
   "risk": "low",

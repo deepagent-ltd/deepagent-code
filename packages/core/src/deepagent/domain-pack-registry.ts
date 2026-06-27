@@ -16,6 +16,7 @@ export type PackManifest = {
   readonly schema_version: "domain_pack.v1"
   readonly id: string         // e.g. "code.frontend.react"
   readonly name: string
+  readonly description?: string // one-line human summary shown in the packs UI
   readonly version: string
   readonly scope: PackScope
   readonly risk: RiskLevel

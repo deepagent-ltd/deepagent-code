@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "code.eval",
   "name": "LLM Evaluation & Regression Harnesses",
+  "description": "LLM 评测:黄金集、回归测试与评判器",
   "version": "1.0.0",
   "scope": "system",
   "risk": "medium",

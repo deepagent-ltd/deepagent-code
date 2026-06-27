@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "code.javascript",
   "name": "JavaScript Runtime and Tooling",
+  "description": "JavaScript:Node、浏览器运行时与工具链",
   "version": "1.0.0",
   "scope": "system",
   "risk": "low",

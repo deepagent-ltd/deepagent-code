@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "code.frontend.react",
   "name": "React Frontend Engineering",
+  "description": "React 前端:组件、Hooks 与 TypeScript 开发",
   "version": "1.0.0",
   "scope": "system",
   "risk": "medium",
