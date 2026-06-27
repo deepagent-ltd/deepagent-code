@@ -115,6 +115,35 @@ const fingerprint = (d: Doc): string =>
 const slugify = (text: string, max = 48): string =>
   (text.toLowerCase().replace(/[^a-z0-9\s_-]/g, "").trim().replace(/[\s_]+/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "") || "doc").slice(0, max).replace(/-$/g, "")
 
+// Token-set similarity for near-duplicate knowledge detection (no embedding model needed). Splits
+// on non-alphanumeric (covers latin words and CJK runs), lowercases, drops 1-char noise, and scores
+// with the overlap coefficient |A∩B| / min(|A|,|B|) — chosen over Jaccard so a short summary that is
+// fully contained in a longer one still scores high (the common "same point, more words" case).
+// Exported for unit testing. Returns 0 when either side has no usable tokens.
+export const tokenizeForSimilarity = (text: string): Set<string> => {
+  const tokens = text
+    .toLowerCase()
+    .split(/[^\p{L}\p{N}]+/u)
+    .filter((t) => t.length >= 2)
+  return new Set(tokens)
+}
+
+export const knowledgeSimilarity = (a: string, b: string): number => {
+  const ta = tokenizeForSimilarity(a)
+  const tb = tokenizeForSimilarity(b)
+  if (ta.size === 0 || tb.size === 0) return 0
+  let inter = 0
+  const [small, large] = ta.size <= tb.size ? [ta, tb] : [tb, ta]
+  for (const t of small) if (large.has(t)) inter++
+  return inter / small.size
+}
+
+export const KNOWLEDGE_SIMILARITY_THRESHOLD = 0.8
+
+const STRENGTH_RANK: Record<EvidenceStrength, number> = { none: 0, weak: 1, medium: 2, strong: 3 }
+const strongerEvidence = (a: EvidenceStrength, b: EvidenceStrength): EvidenceStrength =>
+  STRENGTH_RANK[a] >= STRENGTH_RANK[b] ? a : b
+
 const idToFile = (id: string): string => id.replace(/:/g, "__")
 
 export class DocumentStore {
@@ -161,6 +190,40 @@ export class DocumentStore {
     this.persist(next)
     this.replace({ ...cur, status: "superseded", superseded_by: `${id}@v${next.version}` })
     return next
+  }
+
+  // Find an existing non-rejected knowledge doc that near-duplicates `input` (same type + scope +
+  // domain, description token-similarity >= threshold). Used by the self-learning write path to
+  // merge "same point, different wording" candidates instead of creating duplicate rows.
+  findSimilarKnowledge(input: { type: DocType; scope: string; domain: string | null; description: string }, threshold = KNOWLEDGE_SIMILARITY_THRESHOLD): Doc | null {
+    let best: { doc: Doc; score: number } | null = null
+    for (const ref of this.list({ type: input.type, scope: input.scope })) {
+      const doc = this.get(ref.id)
+      if (!doc || doc.status === "rejected" || doc.status === "superseded") continue
+      if ((doc.domain ?? null) !== (input.domain ?? null)) continue
+      const score = knowledgeSimilarity(doc.description, input.description)
+      if (score >= threshold && (!best || score > best.score)) best = { doc, score }
+    }
+    return best?.doc ?? null
+  }
+
+  // Reinforce an existing knowledge doc when a duplicate/near-duplicate is observed again: bump
+  // support_count and raise evidence_strength to the stronger of the two. Returns the updated doc.
+  // This is the "merge" half of dedup — one knowledge row accrues support instead of many rows.
+  reinforceConfidence(id: string, incoming?: Confidence | null): Doc {
+    const cur = this.get(id)
+    if (!cur) throw new Error(`reinforceConfidence: unknown doc ${id}`)
+    const base = cur.confidence ?? { evidence_strength: "weak" as EvidenceStrength, support_count: 0 }
+    const nextConfidence: Confidence = {
+      evidence_strength: strongerEvidence(base.evidence_strength, incoming?.evidence_strength ?? "none"),
+      support_count: base.support_count + 1,
+      ...(base.last_validated_round != null ? { last_validated_round: base.last_validated_round } : {}),
+    }
+    const next: Doc = { ...cur, confidence: nextConfidence, version: cur.version + 1, superseded_by: null, hash: "" }
+    const hashed = { ...next, hash: computeHash(next) }
+    this.persist(hashed)
+    this.replace({ ...cur, status: "superseded", superseded_by: `${id}@v${hashed.version}` })
+    return hashed
   }
 
   link(from: string, rel: LinkRel, to: string, note?: string): void {
