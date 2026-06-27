@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "platform.service-mesh",
   "name": "Service Mesh",
+  "description": "服务网格:Istio/Linkerd 的流量治理、mTLS 与边车",
   "version": "1.0.0",
   "scope": "system",
   "risk": "medium",

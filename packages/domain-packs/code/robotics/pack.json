@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "code.robotics",
   "name": "Robotics (ROS/ROS2, Control, Sensing)",
+  "description": "机器人开发:ROS/ROS2、控制回路与传感器融合",
   "version": "1.0.0",
   "scope": "system",
   "risk": "high",

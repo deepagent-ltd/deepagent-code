@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "business.ecommerce",
   "name": "E-Commerce Cart and Order Flow",
+  "description": "电商购物车与订单流:库存、下单状态与超卖防护",
   "version": "1.0.0",
   "scope": "system",
   "risk": "high",

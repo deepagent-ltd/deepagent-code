@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "code.vector-search",
   "name": "Vector Search (embeddings, ANN, hybrid retrieval)",
+  "description": "向量检索:嵌入、近似最近邻与混合检索",
   "version": "1.0.0",
   "scope": "system",
   "risk": "medium",

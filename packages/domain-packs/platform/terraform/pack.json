@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "platform.terraform",
   "name": "Terraform & Infrastructure as Code (HCL)",
+  "description": "Terraform 基础设施即代码:HCL 模块、状态与变更管理",
   "version": "1.0.0",
   "scope": "system",
   "risk": "high",

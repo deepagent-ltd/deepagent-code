@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "platform.ci-gitlab",
   "name": "GitLab CI/CD Pipelines",
+  "description": "GitLab CI/CD:流水线、Runner 与多阶段构建",
   "version": "1.0.0",
   "scope": "system",
   "risk": "medium",

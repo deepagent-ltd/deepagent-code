@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "hardware.verification",
   "name": "Hardware Verification & Coverage",
+  "description": "硬件验证:UVM、形式验证、覆盖率与断言",
   "version": "1.0.0",
   "scope": "system",
   "risk": "medium",

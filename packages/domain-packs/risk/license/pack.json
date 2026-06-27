@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "risk.license",
   "name": "Open-Source License & Attribution Risk",
+  "description": "开源许可风险:协议合规、署名与 SPDX 标注",
   "version": "1.0.0",
   "scope": "system",
   "risk": "high",

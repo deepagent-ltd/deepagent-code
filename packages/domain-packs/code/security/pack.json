@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "code.security",
   "name": "Code Secure Coding",
+  "description": "安全编码:漏洞防护与安全开发实践",
   "version": "1.0.0",
   "scope": "system",
   "risk": "high",

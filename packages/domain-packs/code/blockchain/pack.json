@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "code.blockchain",
   "name": "Blockchain & Smart Contracts (Solidity/EVM)",
+  "description": "区块链:Solidity 智能合约、EVM 与 Web3 开发",
   "version": "1.0.0",
   "scope": "system",
   "risk": "high",

@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "hardware.power",
   "name": "Low-Power Design & Power Intent",
+  "description": "低功耗设计:时钟门控、电压域与功耗分析",
   "version": "1.0.0",
   "scope": "system",
   "risk": "medium",

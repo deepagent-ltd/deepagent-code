@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "code.frontend.accessibility",
   "name": "Frontend Accessibility",
+  "description": "前端无障碍:ARIA、键盘导航与可访问性",
   "version": "1.0.0",
   "scope": "system",
   "risk": "medium",

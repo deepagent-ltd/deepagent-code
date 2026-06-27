@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "code.frontend.vue",
   "name": "Vue Frontend Engineering",
+  "description": "Vue 前端:Nuxt、Vite、Pinia 与组件开发",
   "version": "1.0.0",
   "scope": "system",
   "risk": "medium",

@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "code.git-workflow",
   "name": "Git Workflow",
+  "description": "Git 工作流:分支、合并、变基与冲突处理",
   "version": "1.0.0",
   "scope": "system",
   "risk": "medium",

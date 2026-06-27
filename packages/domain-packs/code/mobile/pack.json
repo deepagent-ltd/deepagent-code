@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "code.mobile",
   "name": "Mobile Engineering",
+  "description": "移动端开发:iOS 与 Android 应用工程",
   "version": "1.0.0",
   "scope": "system",
   "risk": "medium",

@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "code.shell",
   "name": "Shell Scripting",
+  "description": "Shell 脚本:Bash 编写、自动化与脚本检查",
   "version": "1.0.0",
   "scope": "system",
   "risk": "low",

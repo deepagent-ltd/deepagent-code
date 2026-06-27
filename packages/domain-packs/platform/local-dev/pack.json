@@ -2,6 +2,7 @@
   "schema_version": "domain_pack.v1",
   "id": "platform.local-dev",
   "name": "Local Development Platform",
+  "description": "本地开发环境:本地服务、热重载与项目初始化",
   "version": "1.0.0",
   "scope": "system",
   "risk": "low",
