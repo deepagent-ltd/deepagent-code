@@ -2,9 +2,14 @@ import { describe, expect, test, beforeEach, afterEach } from "bun:test"
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
+import { fileURLToPath, pathToFileURL } from "node:url"
 import * as Registry from "../../src/deepagent/domain-pack-registry"
 import { admitIndexRefs, formatPackIndexSection } from "../../src/deepagent/context-admission"
-import type { ExtendedProblemProfile, PackManifest, DomainPackIndexEntry } from "../../src/deepagent/domain-pack-registry"
+import type {
+  ExtendedProblemProfile,
+  PackManifest,
+  DomainPackIndexEntry,
+} from "../../src/deepagent/domain-pack-registry"
 
 let dir: string
 
@@ -30,7 +35,17 @@ const writePack = (id: string, manifest: Partial<PackManifest>, index: DomainPac
   mkdirSync(packDir, { recursive: true })
   writeFileSync(
     path.join(packDir, "pack.json"),
-    JSON.stringify({ schema_version: "domain_pack.v1", id, name: id, version: "1.0.0", scope: "system", risk: "low", domains: [], provides: [], ...manifest }),
+    JSON.stringify({
+      schema_version: "domain_pack.v1",
+      id,
+      name: id,
+      version: "1.0.0",
+      scope: "system",
+      risk: "low",
+      domains: [],
+      provides: [],
+      ...manifest,
+    }),
   )
   writeFileSync(path.join(packDir, "index.json"), JSON.stringify(index))
 }
@@ -51,6 +66,18 @@ describe("S4 DomainPackRegistry", () => {
     expect(ids).toContain("business.finance")
     expect(ids.length).toBeGreaterThanOrEqual(9)
     Registry.configureRegistry(dir) // restore test isolation
+  })
+
+  test("built-in pack resolver supports desktop bundled chunk paths", () => {
+    const packagesDir = path.resolve(fileURLToPath(import.meta.url), "../../../..")
+    const resolved = Registry.resolveBuiltinPackDirForMetaUrl(
+      pathToFileURL(path.join(packagesDir, "desktop/out/main/chunks/node-test.js")).href,
+    )
+    expect(resolved).not.toBeNull()
+    if (!resolved) return
+    expect([path.join(packagesDir, "desktop/out/main/domain-packs"), path.join(packagesDir, "domain-packs")]).toContain(
+      resolved,
+    )
   })
 
   test("discover reads manifests (not bodies), skips malformed", () => {
@@ -117,9 +144,18 @@ describe("S4 DomainPackRegistry", () => {
 
   test("loadIndexRefs returns only the active pack's entries", () => {
     const entry: DomainPackIndexEntry = {
-      ref_id: "strategy:code.core:x", type: "strategy", title: "X", summary: "do x",
-      domains: ["code"], triggers: [], scope: "system", evidence_strength: "strong",
-      risk: "low", sensitivity: "public", allowed_strengths: ["high", "max", "ultra"], pack_id: "code.core",
+      ref_id: "strategy:code.core:x",
+      type: "strategy",
+      title: "X",
+      summary: "do x",
+      domains: ["code"],
+      triggers: [],
+      scope: "system",
+      evidence_strength: "strong",
+      risk: "low",
+      sensitivity: "public",
+      allowed_strengths: ["high", "max", "ultra"],
+      pack_id: "code.core",
     }
     writePack("code.core", { domains: ["code"] }, [entry])
     const snap = Registry.lockSnapshot(["code.core"])
@@ -130,9 +166,18 @@ describe("S4 DomainPackRegistry", () => {
 
 describe("S6 ContextAdmissionGate", () => {
   const mkEntry = (over: Partial<DomainPackIndexEntry> = {}): DomainPackIndexEntry => ({
-    ref_id: "strategy:x", type: "strategy", title: "T", summary: "summary text",
-    domains: ["code"], triggers: [], scope: "system", evidence_strength: "strong",
-    risk: "low", sensitivity: "public", allowed_strengths: ["high", "max", "ultra"], pack_id: "p",
+    ref_id: "strategy:x",
+    type: "strategy",
+    title: "T",
+    summary: "summary text",
+    domains: ["code"],
+    triggers: [],
+    scope: "system",
+    evidence_strength: "strong",
+    risk: "low",
+    sensitivity: "public",
+    allowed_strengths: ["high", "max", "ultra"],
+    pack_id: "p",
     ...over,
   })
 
@@ -143,14 +188,20 @@ describe("S6 ContextAdmissionGate", () => {
   })
 
   test("high admits skills but not strategy/knowledge", () => {
-    const r = admitIndexRefs([mkEntry({ type: "skill", ref_id: "skill:a" }), mkEntry({ type: "strategy", ref_id: "strategy:b" })], "high")
+    const r = admitIndexRefs(
+      [mkEntry({ type: "skill", ref_id: "skill:a" }), mkEntry({ type: "strategy", ref_id: "strategy:b" })],
+      "high",
+    )
     const ids = r.admitted.map((e) => e.ref_id)
     expect(ids).toContain("skill:a")
     expect(ids).not.toContain("strategy:b")
   })
 
   test("max admits strategy + skill", () => {
-    const r = admitIndexRefs([mkEntry({ type: "skill", ref_id: "skill:a" }), mkEntry({ type: "strategy", ref_id: "strategy:b" })], "max")
+    const r = admitIndexRefs(
+      [mkEntry({ type: "skill", ref_id: "skill:a" }), mkEntry({ type: "strategy", ref_id: "strategy:b" })],
+      "max",
+    )
     expect(r.admitted.map((e) => e.ref_id).sort()).toEqual(["skill:a", "strategy:b"])
   })
 
@@ -185,7 +236,10 @@ describe("S6 ContextAdmissionGate", () => {
   })
 
   test("weak/none evidence is excluded", () => {
-    const r = admitIndexRefs([mkEntry({ evidence_strength: "weak", ref_id: "w" }), mkEntry({ evidence_strength: "strong", ref_id: "s" })], "max")
+    const r = admitIndexRefs(
+      [mkEntry({ evidence_strength: "weak", ref_id: "w" }), mkEntry({ evidence_strength: "strong", ref_id: "s" })],
+      "max",
+    )
     expect(r.admitted.map((e) => e.ref_id)).toEqual(["s"])
   })
 
@@ -197,7 +251,9 @@ describe("S6 ContextAdmissionGate", () => {
   })
 
   test("formatPackIndexSection emits nothing when empty, header when populated", () => {
-    expect(formatPackIndexSection({ admitted: [], truncated: [], admitted_ref_count: 0, estimated_tokens: 0 }, [])).toBe("")
+    expect(
+      formatPackIndexSection({ admitted: [], truncated: [], admitted_ref_count: 0, estimated_tokens: 0 }, []),
+    ).toBe("")
     const section = formatPackIndexSection(
       { admitted: [mkEntry()], truncated: [], admitted_ref_count: 1, estimated_tokens: 10 },
       ["code"],

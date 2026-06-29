@@ -24,6 +24,7 @@ export type { ProjectAvatarVariant }
 const AVATAR_COLOR_KEYS = ["pink", "mint", "orange", "purple", "cyan", "lime"] as const
 const DEFAULT_SIDEBAR_WIDTH = 344
 const DEFAULT_FILE_TREE_WIDTH = 200
+const DEFAULT_RIGHT_PANEL_WIDTH = 360
 const DEFAULT_SESSION_WIDTH = 600
 const DEFAULT_TERMINAL_HEIGHT = 280
 export type AvatarColorKey = (typeof AVATAR_COLOR_KEYS)[number]
@@ -59,6 +60,9 @@ type SessionTabs = {
 type SessionView = {
   scroll: Record<string, SessionScroll>
   reviewOpen?: string[]
+  // U3/U4/U7: added "worktree" (isolated worktree diff/merge), "subagents" (child-session list),
+  // "browser" (isolated WebContentsView).
+  rightPanelMode?: "menu" | "review" | "files" | "status" | "worktree" | "subagents" | "browser"
   pendingMessage?: string
   pendingMessageAt?: number
   todoCollapsed?: boolean
@@ -261,6 +265,9 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
           opened: false,
           width: DEFAULT_FILE_TREE_WIDTH,
           tab: "changes" as "changes" | "all",
+        },
+        rightPanel: {
+          width: DEFAULT_RIGHT_PANEL_WIDTH,
         },
         session: {
           width: DEFAULT_SESSION_WIDTH,
@@ -675,6 +682,16 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
           setStore("fileTree", "width", width)
         },
       },
+      rightPanel: {
+        width: createMemo(() => store.rightPanel?.width ?? DEFAULT_RIGHT_PANEL_WIDTH),
+        resize(width: number) {
+          if (!store.rightPanel) {
+            setStore("rightPanel", { width })
+            return
+          }
+          setStore("rightPanel", "width", width)
+        },
+      },
       session: {
         width: createMemo(() => store.session?.width ?? DEFAULT_SESSION_WIDTH),
         resize(width: number) {
@@ -745,6 +762,19 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
         const s = createMemo(() => store.sessionView[key()] ?? { scroll: {} })
         const terminalOpened = createMemo(() => store.terminal?.opened ?? false)
         const reviewPanelOpened = createMemo(() => store.review?.panelOpened ?? true)
+        const rightPanelMode = createMemo(() => store.sessionView[key()]?.rightPanelMode)
+
+        function setRightPanelMode(next: SessionView["rightPanelMode"]) {
+          const session = key()
+          const current = store.sessionView[session]
+          if (!current) {
+            setStore("sessionView", session, { scroll: {}, rightPanelMode: next })
+            return
+          }
+
+          if (current.rightPanelMode === next) return
+          setStore("sessionView", session, "rightPanelMode", next)
+        }
 
         function setTerminalOpened(next: boolean) {
           const current = store.terminal
@@ -811,6 +841,19 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
             },
             toggle() {
               setReviewPanelOpened(!reviewPanelOpened())
+            },
+          },
+          rightPanel: {
+            mode: rightPanelMode,
+            opened: createMemo(() => rightPanelMode() !== undefined),
+            open(mode: NonNullable<SessionView["rightPanelMode"]>) {
+              setRightPanelMode(mode)
+            },
+            close() {
+              setRightPanelMode(undefined)
+            },
+            toggle(mode: NonNullable<SessionView["rightPanelMode"]>) {
+              setRightPanelMode(rightPanelMode() === mode ? undefined : mode)
             },
           },
           review: {

@@ -20,14 +20,11 @@ type PacksResponse = {
   packs: Pack[]
 }
 
-type RawSdkClient = {
-  client: {
-    request<TData>(options: {
-      method: string
-      url: string
-      body?: unknown
-      headers?: Record<string, string>
-    }): Promise<{ data?: TData }>
+type PackClient = {
+  deepagent: {
+    packsAll(): Promise<{ data?: PacksResponse; response: Response }>
+    packsPin(input: { packId: string }): Promise<unknown>
+    packsUnpin(input: { packId: string }): Promise<unknown>
   }
 }
 
@@ -38,17 +35,30 @@ const RISK_CLASSES: Record<Pack["risk"], string> = {
   regulated: "text-purple-600 bg-purple-100",
 }
 
-export const DialogPacks: Component<{ client: RawSdkClient }> = (props) => {
+export const listPacks = async (client: PackClient): Promise<PacksResponse> => {
+  console.debug("[packs-dialog] request start url=/deepagent/packs/all")
+  try {
+    const res = await client.deepagent.packsAll()
+    console.debug(
+      `[packs-dialog] request success status=${res.response.status} contentType=${res.response.headers.get("content-type") ?? ""} packs=${res.data?.packs.length ?? 0}`,
+    )
+    return res.data ?? { packs: [] }
+  } catch (error) {
+    console.error("[packs-dialog] request failed", error)
+    throw error
+  }
+}
+
+export const setPackPinned = async (client: PackClient, action: "pin" | "unpin", packId: string) => {
+  if (action === "pin") return client.deepagent.packsPin({ packId })
+  return client.deepagent.packsUnpin({ packId })
+}
+
+export const DialogPacks: Component<{ client: PackClient }> = (props) => {
   const language = useLanguage()
   const [busy, setBusy] = createSignal(false)
 
-  const [data, { refetch }] = createResource(async (): Promise<PacksResponse> => {
-    const res = await props.client.client.request<PacksResponse>({
-      method: "GET",
-      url: "/deepagent/packs/all",
-    })
-    return res.data ?? { packs: [] }
-  })
+  const [data, { refetch }] = createResource(async () => listPacks(props.client))
 
   const sortPacks = (list: Pack[]) => list.slice().sort((a, b) => a.id.localeCompare(b.id))
   const builtinPacks = createMemo(() => sortPacks((data()?.packs ?? []).filter((p) => p.builtin)))
@@ -67,12 +77,7 @@ export const DialogPacks: Component<{ client: RawSdkClient }> = (props) => {
     if (busy()) return
     setBusy(true)
     try {
-      await props.client.client.request({
-        method: "POST",
-        url: `/deepagent/packs/${action}`,
-        body: { packId },
-        headers: { "Content-Type": "application/json" },
-      })
+      await setPackPinned(props.client, action, packId)
       await refetch()
     } catch (error) {
       showToast({
@@ -146,11 +151,7 @@ export const DialogPacks: Component<{ client: RawSdkClient }> = (props) => {
                   when={(data()?.packs.length ?? 0) > 0}
                   fallback={<div class="p-4 text-13-regular text-v2-text-text-faint">{language.t("packs.empty")}</div>}
                 >
-                  <Section
-                    label={language.t("packs.builtin")}
-                    count={builtinPacks().length}
-                    packs={builtinPacks()}
-                  />
+                  <Section label={language.t("packs.builtin")} count={builtinPacks().length} packs={builtinPacks()} />
                   <Section
                     label={language.t("packs.external")}
                     count={externalPacks().length}

@@ -21,8 +21,18 @@ import { Log } from "@deepagent-code/core/util/log"
 import { EffectBridge } from "@/effect/bridge"
 import { ProviderV2 } from "@deepagent-code/core/provider"
 import { ModelV2 } from "@deepagent-code/core/model"
+import { AgentGateway } from "@deepagent-code/core/agent-gateway"
 
 const log = Log.create({ service: "session.tools" })
+
+// U1 PlanController soft gate: a HookPolicy with the before_tool_use plan gate. While the runtime
+// has flagged the plan as stale, mutating tools (write/edit/patch/shell) are soft-blocked until the
+// model calls `plan` to update it; read/diagnosis/`todowrite`/`plan` always pass. Lightweight modes
+// (general/direct) only warn. Evaluated at the per-tool dispatch chokepoint below.
+const PlanHook = new AgentGateway.DeepAgentHooks.HookPolicy().on(
+  "before_tool_use",
+  AgentGateway.DeepAgentHooks.planGate(),
+)
 
 export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
   agent: Agent.Info
@@ -93,6 +103,37 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
               { tool: item.id, sessionID: ctx.sessionID, callID: ctx.callID },
               { args },
             )
+            // U1 soft gate: if the runtime flagged the plan stale, soft-block mutating tools so the
+            // model must call `plan` to update it first. We return a soft tool-result (not a throw)
+            // matching the "rewrite your input" feedback model — read/diagnosis/`plan` pass through,
+            // and the escape hatch (too many replans -> needs_human) is honored via planStale.
+            const latch = AgentGateway.DeepAgentSessionState.planLatch(ctx.sessionID)
+            const planStale =
+              latch?.latch === "stale" && !AgentGateway.DeepAgentPlanController.shouldEscapeToHuman(latch)
+            const agentMode = AgentGateway.snapshot().agentMode ?? "high"
+            const lightweight = AgentGateway.DeepAgentPlanController.isLightweightMode(agentMode)
+            // U9 hard gate (high+ only, never lightweight): a mutating tool must be bound to an active
+            // plan step. high warns + auto-replans; xhigh/max/ultra hard-block.
+            const hardGate = !lightweight && AgentGateway.DeepAgentPlanController.hardGateEnabled(agentMode)
+            const plan = AgentGateway.DeepAgentSessionState.getPlan(ctx.sessionID)
+            const gateDecision = PlanHook.evaluate({
+              name: "before_tool_use",
+              payload: {
+                planStale,
+                isMutating: AgentGateway.DeepAgentPlanController.isMutatingTool(item.id),
+                lightweight,
+                hardGate,
+                hasActiveStep: AgentGateway.DeepAgentPlanController.hasActiveStep(plan),
+                hardGateMissBlocks: hardGate && AgentGateway.DeepAgentPlanController.hardGateStrict(agentMode),
+              },
+            })
+            if (gateDecision.decision === "block") {
+              const reason =
+                latch?.stale_reason != null
+                  ? `The plan is stale (${latch.stale_reason}). ${gateDecision.blockReason}. Call the \`plan\` tool to update your plan, then retry this edit.`
+                  : `${gateDecision.blockReason}. Call the \`plan\` tool first.`
+              return { title: "Plan update required", output: reason, metadata: {} }
+            }
             const result = yield* item.execute(args, ctx)
             const output = {
               ...result,

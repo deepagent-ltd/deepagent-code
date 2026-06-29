@@ -1,4 +1,4 @@
-import type { Config, OpencodeClient, Path, Project, ProviderAuthResponse, Todo } from "@deepagent-code/sdk/v2/client"
+import type { Config, McpLocalConfig, McpRemoteConfig, OpencodeClient, Path, Project, ProviderAuthResponse, Todo } from "@deepagent-code/sdk/v2/client"
 import { showToast } from "@/utils/toast"
 import { getFilename } from "@deepagent-code/core/util/path"
 import { batch, getOwner, onCleanup, onMount, untrack } from "solid-js"
@@ -37,6 +37,9 @@ import { retry } from "@deepagent-code/core/util/retry"
 import type { ServerScope } from "@/utils/server-scope"
 import { persisted } from "@/utils/persist"
 import { toggleMcp } from "./global-sync/mcp"
+import type { SessionPlan, SessionPlanStep } from "./global-sync/types"
+
+export type { SessionPlan, SessionPlanStep }
 
 type GlobalStore = {
   ready: boolean
@@ -45,6 +48,11 @@ type GlobalStore = {
   project: Project[]
   session_todo: {
     [sessionID: string]: Todo[]
+  }
+  // U2: the live plan per session (goal + steps + progress) pushed by the `plan` tool's
+  // plan.updated event. Persistent — survives a session going idle (unlike the todo cache).
+  session_plan: {
+    [sessionID: string]: SessionPlan
   }
   provider: NormalizedProviderListResponse
   provider_auth: ProviderAuthResponse
@@ -119,6 +127,7 @@ export function createServerSyncContextInner(_serverSDK?: ServerSDK) {
     },
     project: [],
     session_todo: {},
+    session_plan: {},
     provider_auth: {},
     get path() {
       const EMPTY: Path = {
@@ -232,6 +241,21 @@ export function createServerSyncContextInner(_serverSDK?: ServerSDK) {
       return
     }
     setGlobalStore("session_todo", sessionID, reconcile(todos, { key: "id" }))
+  }
+
+  // U2: set/clear the live plan for a session.
+  const setSessionPlan = (sessionID: string, plan: SessionPlan | undefined) => {
+    if (!sessionID) return
+    if (!plan) {
+      setGlobalStore(
+        "session_plan",
+        produce((draft) => {
+          delete draft[sessionID]
+        }),
+      )
+      return
+    }
+    setGlobalStore("session_plan", sessionID, reconcile(plan, { key: "plan_id" }))
   }
 
   const paused = () => untrack(() => globalStore.reload) !== undefined
@@ -437,6 +461,7 @@ export function createServerSyncContextInner(_serverSDK?: ServerSDK) {
       setStore,
       push: queue.push,
       setSessionTodo,
+      setSessionPlan,
       retainedLimit: sessionMeta.get(key)?.limit,
       vcsCache: children.vcsCache.get(key),
       loadLsp: () => {
@@ -503,6 +528,39 @@ export function createServerSyncContextInner(_serverSDK?: ServerSDK) {
     },
   }))
 
+  const updateMcpConfig = async (
+    directory: string,
+    input: { name: string; config: McpLocalConfig | McpRemoteConfig },
+  ) => {
+    const key = directoryKey(directory)
+    const sdk = sdkFor(key)
+    await updateConfigMutation.mutateAsync({
+      ...globalStore.config,
+      mcp: {
+        ...(globalStore.config.mcp ?? {}),
+        [input.name]: input.config,
+      },
+    })
+    await queryClient.refetchQueries(queryOptionsApi.globalConfig())
+    if (input.config.enabled === false) await sdk.mcp.disconnect({ name: input.name })
+    else await sdk.mcp.connect({ name: input.name })
+    await queryClient.refetchQueries(queryOptionsApi.mcp(key))
+  }
+
+  const removeMcpConfig = async (directory: string, name: string) => {
+    const key = directoryKey(directory)
+    const sdk = sdkFor(key)
+    await sdk.mcp.disconnect({ name }).catch(() => {})
+    const nextMcp = { ...(globalStore.config.mcp ?? {}) }
+    delete nextMcp[name]
+    await updateConfigMutation.mutateAsync({
+      ...globalStore.config,
+      mcp: nextMcp,
+    })
+    await queryClient.refetchQueries(queryOptionsApi.globalConfig())
+    await queryClient.refetchQueries(queryOptionsApi.mcp(key))
+  }
+
   return {
     data: globalStore,
     set,
@@ -522,6 +580,9 @@ export function createServerSyncContextInner(_serverSDK?: ServerSDK) {
     project: projectApi,
     todo: {
       set: setSessionTodo,
+    },
+    plan: {
+      set: setSessionPlan,
     },
     mcp: {
       toggle: async (directory: string, name: string) => {
@@ -544,6 +605,11 @@ export function createServerSyncContextInner(_serverSDK?: ServerSDK) {
           },
         })
       },
+      add: async (directory: string, input: { name: string; config: McpLocalConfig | McpRemoteConfig }) => {
+        await updateMcpConfig(directory, input)
+      },
+      update: updateMcpConfig,
+      remove: removeMcpConfig,
     },
   }
 }

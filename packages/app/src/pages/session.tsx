@@ -22,7 +22,6 @@ import { debounce } from "@solid-primitives/scheduled"
 import { useLocal } from "@/context/local"
 import { selectionFromLines, useFile, type FileSelection, type SelectedLineRange } from "@/context/file"
 import { createStore } from "solid-js/store"
-import { ResizeHandle } from "@deepagent-code/ui/resize-handle"
 import { Select } from "@deepagent-code/ui/select"
 import { Tabs } from "@deepagent-code/ui/tabs"
 import { createAutoScroll } from "@deepagent-code/ui/hooks"
@@ -31,7 +30,7 @@ import { Button } from "@deepagent-code/ui/button"
 import { showToast } from "@/utils/toast"
 import { checksum } from "@deepagent-code/core/util/encode"
 import { useLocation, useSearchParams } from "@solidjs/router"
-import { NewSessionDesignView, NewSessionView, SessionHeader } from "@/components/session"
+import { NewSessionView, SessionHeader } from "@/components/session"
 import { useComments } from "@/context/comments"
 import { getSessionPrefetch, SESSION_PREFETCH_TTL } from "@/context/global-sync/session-prefetch"
 import { useServerSync } from "@/context/server-sync"
@@ -45,7 +44,12 @@ import { useSettings } from "@/context/settings"
 import { useSync } from "@/context/sync"
 import { useTerminal } from "@/context/terminal"
 import { DialogDeepAgentPromptConfirm } from "@/components/dialog-deepagent-prompt-confirm"
-import { type DeepAgentPromptPrepareResult, type FollowupDraft, fetchLatestSuggestion, sendFollowupDraft } from "@/components/prompt-input/submit"
+import {
+  type DeepAgentPromptPrepareResult,
+  type FollowupDraft,
+  fetchLatestSuggestion,
+  sendFollowupDraft,
+} from "@/components/prompt-input/submit"
 import { createSessionComposerState, SessionComposerRegion } from "@/pages/session/composer"
 import {
   createOpenReviewFile,
@@ -63,7 +67,6 @@ import { SessionSidePanel } from "@/pages/session/session-side-panel"
 import { TerminalPanel } from "@/pages/session/terminal-panel"
 import { useSessionCommands } from "@/pages/session/use-session-commands"
 import { useSessionHashScroll } from "@/pages/session/use-session-hash-scroll"
-import { shouldUseV2NewSessionPage } from "@/pages/session/new-session-layout"
 import { Identifier } from "@/utils/id"
 import { diffs as list } from "@/utils/diffs"
 import { Persist, persisted } from "@/utils/persist"
@@ -202,8 +205,6 @@ export default function Page() {
   const [searchParams, setSearchParams] = useSearchParams<{ prompt?: string }>()
   const location = useLocation()
   const { params, sessionKey, workspaceKey, tabs, view } = useSessionLayout()
-  const newSessionDesign = createMemo(() => settings.general.newLayoutDesigns())
-
   createEffect(() => {
     if (!prompt.ready()) return
     untrack(() => {
@@ -296,17 +297,14 @@ export default function Page() {
 
   const isDesktop = createMediaQuery("(min-width: 768px)")
   const size = createSizing()
-  const isV2NewSessionPage = () =>
-    shouldUseV2NewSessionPage({ newLayoutDesigns: newSessionDesign(), sessionID: params.id })
-  const desktopReviewOpen = createMemo(() => isDesktop() && view().reviewPanel.opened() && !isV2NewSessionPage())
-  const desktopFileTreeOpen = createMemo(() => isDesktop() && layout.fileTree.opened() && !isV2NewSessionPage())
-  const desktopSidePanelOpen = createMemo(() => desktopReviewOpen() || desktopFileTreeOpen())
+  const desktopReviewOpen = createMemo(() => isDesktop() && view().rightPanel.mode() === "review")
+  const desktopFileTreeOpen = createMemo(() => isDesktop() && view().rightPanel.mode() === "files")
+  const desktopRightPanelOpen = createMemo(() => isDesktop() && view().rightPanel.opened())
   const sessionPanelWidth = createMemo(() => {
-    if (!desktopSidePanelOpen()) return "100%"
-    if (desktopReviewOpen()) return `${layout.session.width()}px`
-    return `calc(100% - ${layout.fileTree.width()}px)`
+    if (!desktopRightPanelOpen()) return "100%"
+    return `calc(100% - ${layout.rightPanel.width()}px)`
   })
-  const centered = createMemo(() => isDesktop() && !desktopReviewOpen())
+  const centered = createMemo(() => isDesktop() && !desktopRightPanelOpen())
 
   function normalizeTab(tab: string) {
     if (!tab.startsWith("file://")) return tab
@@ -326,7 +324,7 @@ export default function Page() {
   }
 
   const openReviewPanel = () => {
-    if (!view().reviewPanel.opened()) view().reviewPanel.open()
+    view().rightPanel.open("review")
   }
 
   const info = createMemo(() => (params.id ? sync.session.get(params.id) : undefined))
@@ -482,9 +480,7 @@ export default function Page() {
   })
   const mobileChanges = createMemo(() => !isDesktop() && store.mobileTab === "changes")
   const wantsReview = createMemo(() =>
-    isDesktop()
-      ? desktopFileTreeOpen() || (desktopReviewOpen() && activeTab() === "review")
-      : store.mobileTab === "changes",
+    isDesktop() ? desktopFileTreeOpen() || desktopReviewOpen() : store.mobileTab === "changes",
   )
   const vcsMode = createMemo<VcsMode | undefined>(() => {
     if (store.changes === "git" || store.changes === "branch") return store.changes
@@ -919,7 +915,10 @@ export default function Page() {
             if (params.id !== sessionID) return
             if (sync.data.session_status[sessionID]?.type !== "idle") return
             if (composer.blocked()) return
-            const currentText = prompt.current().map((part) => ("content" in part ? part.content : "")).join("")
+            const currentText = prompt
+              .current()
+              .map((part) => ("content" in part ? part.content : ""))
+              .join("")
             if (currentText.trim().length > 0) return
             prompt.set([{ type: "text", content: body, start: 0, end: body.length }], body.length)
           })
@@ -1228,7 +1227,7 @@ export default function Page() {
   createEffect(() => {
     const dir = sdk.directory
     if (!isDesktop()) return
-    if (!layout.fileTree.opened()) return
+    if (!desktopFileTreeOpen()) return
     if (sync.status === "loading") return
 
     fileTreeTab()
@@ -1772,12 +1771,7 @@ export default function Page() {
     <div class="relative size-full overflow-hidden flex flex-col">
       {sessionSync() ?? ""}
       <SessionHeader />
-      <div
-        class="flex-1 min-h-0 flex flex-col md:flex-row "
-        classList={{
-          "gap-2 p-2": settings.general.newLayoutDesigns(),
-        }}
-      >
+      <div class="flex-1 min-h-0 flex flex-col md:flex-row ">
         <Show when={!isDesktop() && !!params.id}>
           <Tabs value={store.mobileTab} class="h-auto">
             <Tabs.List>
@@ -1808,19 +1802,13 @@ export default function Page() {
             "@container relative shrink-0 flex flex-col min-h-0 h-full bg-background-stronger flex-1 md:flex-none": true,
             "duration-[240ms] ease-[cubic-bezier(0.22,1,0.36,1)] will-change-[width] motion-reduce:transition-none":
               !size.active() && !ui.reviewSnap,
-            "transition-[width]": !isV2NewSessionPage(),
-            "rounded-[10px] shadow-[var(--v2-elevation-raised)]": settings.general.newLayoutDesigns() && !!params.id,
+            "transition-[width]": true,
           }}
           style={{
             width: sessionPanelWidth(),
           }}
         >
-          <div
-            class="flex-1 min-h-0 overflow-hidden"
-            classList={{
-              "rounded-[10px]": settings.general.newLayoutDesigns(),
-            }}
-          >
+          <div class="flex-1 min-h-0 overflow-hidden">
             <Switch>
               <Match when={params.id && mobileChanges()}>
                 <div class="relative h-full overflow-hidden">
@@ -1871,32 +1859,12 @@ export default function Page() {
                 </Show>
               </Match>
               <Match when={true}>
-                <Show when={newSessionDesign()} fallback={<NewSessionView worktree={newSessionWorktree()} />}>
-                  <NewSessionDesignView>{composerRegion("inline")}</NewSessionDesignView>
-                </Show>
+                <NewSessionView worktree={newSessionWorktree()} />
               </Match>
             </Switch>
           </div>
 
-          <Show when={params.id || !newSessionDesign()}>{composerRegion("dock")}</Show>
-
-          <Show when={desktopReviewOpen()}>
-            <div onPointerDown={() => size.start()}>
-              <ResizeHandle
-                classList={{
-                  "-right-1": settings.general.newLayoutDesigns(),
-                }}
-                direction="horizontal"
-                size={layout.session.width()}
-                min={450}
-                max={typeof window === "undefined" ? 1000 : window.innerWidth * 0.45}
-                onResize={(width) => {
-                  size.touch()
-                  layout.session.resize(width)
-                }}
-              />
-            </div>
-          </Show>
+          {composerRegion("dock")}
         </div>
 
         <SessionSidePanel

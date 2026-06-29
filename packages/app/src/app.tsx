@@ -41,7 +41,7 @@ import { NotificationProvider } from "@/context/notification"
 import { PermissionProvider } from "@/context/permission"
 import { PromptProvider } from "@/context/prompt"
 import { ServerConnection, ServerProvider, serverName, useServer } from "@/context/server"
-import { SettingsProvider, useSettings } from "@/context/settings"
+import { SettingsProvider } from "@/context/settings"
 import { TerminalProvider } from "@/context/terminal"
 import { TabsProvider } from "@/context/tabs"
 import { WslServersProvider } from "@/wsl/context"
@@ -95,16 +95,11 @@ function QueryProvider(props: ParentProps) {
 }
 
 function BodyDesignClass() {
-  const settings = useSettings()
-
   createEffect(() => {
     if (typeof document === "undefined") return
 
-    const enabled = settings.general.newLayoutDesigns()
-    document.body.classList.toggle("text-12-regular", !enabled)
-    document.body.classList.toggle("font-(family-name:--font-family-text)", enabled)
-    document.body.classList.toggle("text-[13px]", enabled)
-    document.body.classList.toggle("font-[440]", enabled)
+    document.body.classList.add("text-12-regular")
+    document.body.classList.remove("font-(family-name:--font-family-text)", "text-[13px]", "font-[440]")
   })
 
   return null

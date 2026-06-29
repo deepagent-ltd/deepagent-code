@@ -169,10 +169,18 @@
     display: flex;
     flex-grow: 1;
     min-width: 0;
+    cursor: text;
+    -webkit-user-select: text;
+    user-select: text;
 
     font-family: var(--font-family-sans);
     font-size: var(--font-size-small);
     line-height: var(--line-height-large);
+  }
+
+  [data-slot="session-turn-diff-path"] * {
+    -webkit-user-select: text;
+    user-select: text;
   }
 
   [data-slot="session-turn-diff-directory"] {
