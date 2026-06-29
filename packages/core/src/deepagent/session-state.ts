@@ -7,6 +7,7 @@ import { createInitialRoundState, advanceRound, addCandidate, addDiagnosis, upda
 import type { BudgetCheck, BudgetConfig } from "./budget"
 import { defaultBudget, check as budgetCheck } from "./budget"
 import type { KnowledgeSynthesis } from "./prompt-policy"
+import { initialPlanLatch, markStale, clearStale, type PlanLatchState, type StaleReason, type PlanDoc } from "./plan-controller"
 
 export type SessionRunState = {
   sessionId: string
@@ -20,6 +21,13 @@ export type SessionRunState = {
   userRequest: string | null
   workspacePath: string | null
   runId: string
+  // U1 PlanController: the runtime plan latch (fresh/stale + reason + replan count). The structural
+  // plan lives in DocumentStore; only this hot-path value object is carried on session state.
+  planLatch: PlanLatchState
+  // U1: the live working plan (goal/steps) the model writes via the `plan` tool and the UI renders.
+  // Kept on run state (hot path, atomically persisted) — graduated into the durable run-graph as a
+  // `plan` doc at run close, mirroring how DESIGN.md is materialized.
+  plan: PlanDoc | null
   createdAt: string
   completedAt: string | null
 }
@@ -48,6 +56,8 @@ export const getOrCreate = (sessionId: string, mode: AgentMode): SessionRunState
     userRequest: null,
     workspacePath: null,
     runId: `run_${randomUUID()}`,
+    planLatch: initialPlanLatch(),
+    plan: null,
     createdAt: new Date().toISOString(),
     completedAt: null,
   }
@@ -93,6 +103,11 @@ export const recordValidation = (sessionId: string, results: ValidationResult[],
   if (!state) return
   state.lastValidationResults = results
   state.lastValidationOutput = output
+  // U1: a failing validation is a runtime fact that the current plan no longer matches reality —
+  // flip the latch from truth, not from the model's self-report.
+  if (results.some((r) => !r.passed)) {
+    state.planLatch = markStale(state.planLatch, "validation_failed")
+  }
   saveToDisk()
 }
 
@@ -102,6 +117,39 @@ export const advanceToNextRound = (sessionId: string, decision: import("./mode")
   state.roundState = advanceRound(state.roundState, decision)
   saveToDisk()
 }
+
+// U1 PlanController: the model writes/updates its structural plan via the `plan` tool. Storing a
+// plan is exactly the "I updated the plan" event that clears a stale latch (and bumps replan_count
+// via clearStale for the escape hatch). Binds the plan id to the latch.
+export const setPlan = (sessionId: string, plan: PlanDoc): void => {
+  const state = sessions.get(sessionId)
+  if (!state) return
+  state.plan = plan
+  state.planLatch = clearStale({ ...state.planLatch, plan_id: plan.plan_id })
+  saveToDisk()
+}
+
+export const getPlan = (sessionId: string): PlanDoc | null => sessions.get(sessionId)?.plan ?? null
+
+// U1: flip the latch to stale from a RUNTIME signal (never from the model). Idempotent on reason.
+export const markPlanStale = (sessionId: string, reason: StaleReason): void => {
+  const state = sessions.get(sessionId)
+  if (!state) return
+  const next = markStale(state.planLatch, reason)
+  if (next === state.planLatch) return
+  state.planLatch = next
+  saveToDisk()
+}
+
+// U1: clear the latch directly (used by tests / explicit replan); setPlan is the normal path.
+export const clearPlanStale = (sessionId: string): void => {
+  const state = sessions.get(sessionId)
+  if (!state) return
+  state.planLatch = clearStale(state.planLatch)
+  saveToDisk()
+}
+
+export const planLatch = (sessionId: string): PlanLatchState | undefined => sessions.get(sessionId)?.planLatch
 
 export const complete = (sessionId: string): void => {
   const state = sessions.get(sessionId)
@@ -170,6 +218,9 @@ function normalizeState(state: SessionRunState): SessionRunState {
       maxTotalTokens: nextBudget.maxTotalTokens,
       maxRounds: nextBudget.maxRounds,
     },
+    // Backfill: sessions persisted before U1 have no planLatch/plan on disk.
+    planLatch: state.planLatch ?? initialPlanLatch(),
+    plan: state.plan ?? null,
   }
   sessions.set(state.sessionId, normalized)
   return normalized

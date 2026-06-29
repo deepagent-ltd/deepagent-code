@@ -5,7 +5,7 @@ import { Switch } from "@deepagent-code/ui/switch"
 import { Tabs } from "@deepagent-code/ui/tabs"
 import { showToast } from "@/utils/toast"
 import { useNavigate } from "@solidjs/router"
-import { type Accessor, createEffect, createMemo, For, type JSXElement, onCleanup, Show } from "solid-js"
+import { type Accessor, createEffect, createMemo, createSignal, For, type JSXElement, onCleanup, Show } from "solid-js"
 import { createStore } from "solid-js/store"
 import { ServerHealthIndicator, ServerRow } from "@/components/server/server-row"
 import { useLanguage } from "@/context/language"
@@ -14,8 +14,9 @@ import { ServerConnection, useServer } from "@/context/server"
 import { useSync } from "@/context/sync"
 import { type ServerHealth } from "@/utils/server-health"
 import { useGlobal } from "@/context/global"
-import { useSettings } from "@/context/settings"
-import { useMcpToggle } from "@/context/mcp"
+import { useMcpRemove, useMcpToggle } from "@/context/mcp"
+import { DialogAddMcp } from "@/components/dialog-add-mcp"
+import { DialogConfigureMcp } from "@/components/dialog-configure-mcp"
 
 const pluginEmptyMessage = (value: string, file: string): JSXElement => {
   const parts = value.split(file)
@@ -256,7 +257,6 @@ export function StatusPopoverBody(props: { shown: Accessor<boolean> }) {
   const dialog = useDialog()
   const language = useLanguage()
   const navigate = useNavigate()
-  const settings = useSettings()
 
   const fail = (err: unknown) => {
     showToast({
@@ -278,8 +278,10 @@ export function StatusPopoverBody(props: { shown: Accessor<boolean> }) {
   })
   const sortedServers = createMemo(() => listServersByHealth(global.servers.list(), server.key, global.servers.health))
   const toggleMcp = useMcpToggle()
+  const removeMcp = useMcpRemove()
   const defaultServer = useDefaultServerKey(platform.getDefaultServer)
   const mcpNames = createMemo(() => Object.keys(sync.data.mcp ?? {}).sort((a, b) => a.localeCompare(b)))
+  const [selectedMcp, setSelectedMcp] = createSignal<string>()
   const mcpStatus = (name: string) => sync.data.mcp?.[name]?.status
   const mcpConnected = createMemo(() => mcpNames().filter((name) => mcpStatus(name) === "connected").length)
   const lspItems = createMemo(() => sync.data.lsp ?? [])
@@ -290,23 +292,37 @@ export function StatusPopoverBody(props: { shown: Accessor<boolean> }) {
   const pluginCount = createMemo(() => plugins().length)
   const pluginEmpty = createMemo(() => pluginEmptyMessage(language.t("dialog.plugins.empty"), "deepagent-code.json"))
 
+  createEffect(() => {
+    const names = mcpNames()
+    if (names.length === 0) {
+      setSelectedMcp(undefined)
+      return
+    }
+    if (!selectedMcp() || !names.includes(selectedMcp()!)) setSelectedMcp(names[0])
+  })
+
+  const deleteSelectedMcp = () => {
+    const name = selectedMcp()
+    if (!name || removeMcp.isPending) return
+    if (!window.confirm(language.t("dialog.mcp.delete.confirm", { name }))) return
+    removeMcp.mutate(name)
+  }
+
   return (
     <div class="flex items-center gap-1 w-[360px] rounded-xl shadow-[var(--shadow-lg-border-base)]">
       <Tabs
         aria-label={language.t("status.popover.ariaLabel")}
         class="tabs bg-background-strong rounded-xl overflow-hidden"
         data-component="tabs"
-        data-active={settings.general.newLayoutDesigns() ? "mcp" : "servers"}
-        defaultValue={settings.general.newLayoutDesigns() ? "mcp" : "servers"}
+        data-active="servers"
+        defaultValue="servers"
         variant="alt"
       >
         <Tabs.List data-slot="tablist" class="bg-transparent border-b-0 px-4 pt-2 pb-0 gap-4 h-10">
-          {!settings.general.newLayoutDesigns() && (
-            <Tabs.Trigger value="servers" data-slot="tab" class="text-12-regular">
-              {global.servers.list().length > 0 ? `${global.servers.list().length} ` : ""}
-              {language.t("status.popover.tab.servers")}
-            </Tabs.Trigger>
-          )}
+          <Tabs.Trigger value="servers" data-slot="tab" class="text-12-regular">
+            {global.servers.list().length > 0 ? `${global.servers.list().length} ` : ""}
+            {language.t("status.popover.tab.servers")}
+          </Tabs.Trigger>
           <Tabs.Trigger value="mcp" data-slot="tab" class="text-12-regular">
             {mcpConnected() > 0 ? `${mcpConnected()} ` : ""}
             {language.t("status.popover.tab.mcp")}
@@ -321,75 +337,98 @@ export function StatusPopoverBody(props: { shown: Accessor<boolean> }) {
           </Tabs.Trigger>
         </Tabs.List>
 
-        {!settings.general.newLayoutDesigns() && (
-          <Tabs.Content value="servers">
-            <div class="flex flex-col px-2 pb-2">
-              <div class="flex flex-col p-3 bg-background-base rounded-sm min-h-14">
-                <For each={sortedServers()}>
-                  {(s) => {
-                    const key = ServerConnection.key(s)
-                    const blocked = () => global.servers.health[key]?.healthy === false
-                    return (
-                      <button
-                        type="button"
-                        class="flex items-center gap-2 w-full h-8 pl-3 pr-1.5 py-1.5 rounded-md transition-colors text-left"
-                        classList={{
-                          "hover:bg-surface-raised-base-hover": !blocked(),
-                          "cursor-not-allowed": blocked(),
-                        }}
-                        aria-disabled={blocked()}
-                        onClick={() => {
-                          if (blocked()) return
-                          navigate("/")
-                          queueMicrotask(() => server.setActive(key))
-                        }}
-                      >
-                        <ServerHealthIndicator health={global.servers.health[key]} />
-                        <ServerRow
-                          conn={s}
-                          dimmed={blocked()}
-                          status={global.servers.health[key]}
-                          class="flex items-center gap-2 w-full min-w-0"
-                          nameClass="text-14-regular text-text-base truncate"
-                          versionClass="text-12-regular text-text-weak truncate"
-                          badge={
-                            <Show when={key === defaultServer.key()}>
-                              <span class="text-11-regular text-text-base bg-surface-base px-1.5 py-0.5 rounded-md">
-                                {language.t("common.default")}
-                              </span>
-                            </Show>
-                          }
-                        >
-                          <div class="flex-1" />
-                          <Show when={server.current && key === ServerConnection.key(server.current)}>
-                            <Icon name="check" size="small" class="text-icon-weak shrink-0" />
+        <Tabs.Content value="servers">
+          <div class="flex flex-col px-2 pb-2">
+            <div class="flex flex-col p-3 bg-background-base rounded-sm min-h-14">
+              <For each={sortedServers()}>
+                {(s) => {
+                  const key = ServerConnection.key(s)
+                  const blocked = () => global.servers.health[key]?.healthy === false
+                  return (
+                    <button
+                      type="button"
+                      class="flex items-center gap-2 w-full h-8 pl-3 pr-1.5 py-1.5 rounded-md transition-colors text-left"
+                      classList={{
+                        "hover:bg-surface-raised-base-hover": !blocked(),
+                        "cursor-not-allowed": blocked(),
+                      }}
+                      aria-disabled={blocked()}
+                      onClick={() => {
+                        if (blocked()) return
+                        navigate("/")
+                        queueMicrotask(() => server.setActive(key))
+                      }}
+                    >
+                      <ServerHealthIndicator health={global.servers.health[key]} />
+                      <ServerRow
+                        conn={s}
+                        dimmed={blocked()}
+                        status={global.servers.health[key]}
+                        class="flex items-center gap-2 w-full min-w-0"
+                        nameClass="text-14-regular text-text-base truncate"
+                        versionClass="text-12-regular text-text-weak truncate"
+                        badge={
+                          <Show when={key === defaultServer.key()}>
+                            <span class="text-11-regular text-text-base bg-surface-base px-1.5 py-0.5 rounded-md">
+                              {language.t("common.default")}
+                            </span>
                           </Show>
-                        </ServerRow>
-                      </button>
-                    )
-                  }}
-                </For>
+                        }
+                      >
+                        <div class="flex-1" />
+                        <Show when={server.current && key === ServerConnection.key(server.current)}>
+                          <Icon name="check" size="small" class="text-icon-weak shrink-0" />
+                        </Show>
+                      </ServerRow>
+                    </button>
+                  )
+                }}
+              </For>
 
-                <Button
-                  variant="secondary"
-                  class="mt-3 self-start h-8 px-3 py-1.5"
-                  onClick={() => {
-                    const run = ++dialogRun
-                    void import("./dialog-select-server").then((x) => {
-                      if (dialogDead || dialogRun !== run) return
-                      dialog.show(() => <x.DialogSelectServer />, defaultServer.refresh)
-                    })
-                  }}
-                >
-                  {language.t("status.popover.action.manageServers")}
-                </Button>
-              </div>
+              <Button
+                variant="secondary"
+                class="mt-3 self-start h-8 px-3 py-1.5"
+                onClick={() => {
+                  const run = ++dialogRun
+                  void import("./dialog-select-server").then((x) => {
+                    if (dialogDead || dialogRun !== run) return
+                    dialog.show(() => <x.DialogSelectServer />, defaultServer.refresh)
+                  })
+                }}
+              >
+                {language.t("status.popover.action.manageServers")}
+              </Button>
             </div>
-          </Tabs.Content>
-        )}
+          </div>
+        </Tabs.Content>
 
         <Tabs.Content value="mcp">
           <div class="flex flex-col px-2 pb-2">
+            <div class="flex items-center gap-2 px-1 pt-2 pb-2">
+              <Button variant="secondary" icon="plus" onClick={() => dialog.show(() => <DialogAddMcp />)}>
+                {language.t("dialog.mcp.add")}
+              </Button>
+              <Button
+                variant="secondary"
+                icon="settings-gear"
+                disabled={!selectedMcp()}
+                onClick={() => {
+                  const name = selectedMcp()
+                  if (!name) return
+                  dialog.show(() => <DialogConfigureMcp name={name} />)
+                }}
+              >
+                {language.t("dialog.mcp.configure")}
+              </Button>
+              <Button
+                variant="secondary"
+                icon="trash"
+                disabled={!selectedMcp() || removeMcp.isPending}
+                onClick={deleteSelectedMcp}
+              >
+                {language.t("dialog.mcp.delete")}
+              </Button>
+            </div>
             <div class="flex flex-col p-3 bg-background-base rounded-sm min-h-14">
               <Show
                 when={mcpNames().length > 0}
@@ -405,11 +444,12 @@ export function StatusPopoverBody(props: { shown: Accessor<boolean> }) {
                       <button
                         type="button"
                         class="flex items-center gap-2 w-full min-h-8 pl-3 pr-2 py-1 rounded-md hover:bg-surface-raised-base-hover transition-colors text-left"
-                        onClick={() => {
-                          if (toggleMcp.isPending) return
-                          toggleMcp.mutate(name)
+                        classList={{
+                          "bg-surface-raised-base": selectedMcp() === name,
                         }}
-                        disabled={toggleMcp.isPending && toggleMcp.variables === name}
+                        onClick={() => {
+                          setSelectedMcp(name)
+                        }}
                       >
                         <div
                           classList={{

@@ -16,10 +16,10 @@ import type { EvidenceStrength } from "./document-store"
 export type SeedDoc = {
   readonly ref_id: string
   readonly type: "strategy" | "methodology" | "knowledge" | "skill" | "memory"
-  readonly description: string    // index-facing summary (retrieved as KnowledgeRef)
-  readonly body: string           // full text, loaded on demand
+  readonly description: string // index-facing summary (retrieved as KnowledgeRef)
+  readonly body: string // full text, loaded on demand
   readonly domain: string | null
-  readonly scope_hint: string     // human label, not enforced; kept for authoring context
+  readonly scope_hint: string // human label, not enforced; kept for authoring context
   readonly evidence_strength: EvidenceStrength
   readonly provenance_tag: string
   readonly pack_id: string
@@ -30,12 +30,19 @@ export type SeedReport = {
   readonly byPack: Readonly<Record<string, number>>
 }
 
-// Resolve the built-in pack directory (same resolver as domain-pack-registry.ts builtinPackDir).
+// Resolve the built-in pack directory (same candidates as domain-pack-registry.ts).
 const builtinPackDir = (): string | null => {
   try {
-    const dir = path.resolve(fileURLToPath(import.meta.url), "../../../..", "domain-packs")
-    return existsSync(dir) ? dir : null
-  } catch { return null }
+    return (
+      [
+        path.resolve(fileURLToPath(import.meta.url), "../..", "domain-packs"),
+        path.resolve(fileURLToPath(import.meta.url), "../../../..", "domain-packs"),
+        path.resolve(fileURLToPath(import.meta.url), "../../../../../", "domain-packs"),
+      ].find((dir) => existsSync(dir)) ?? null
+    )
+  } catch {
+    return null
+  }
 }
 
 // Recursively find all *.json files under <packDir>/documents/
@@ -65,7 +72,11 @@ const collectSeedDocs = (baseDir: string): SeedDoc[] => {
       if (existsSync(path.join(sub, "pack.json"))) {
         // This is a pack root — collect its documents
         for (const file of findDocuments(sub)) {
-          try { docs.push(JSON.parse(readFileSync(file, "utf8")) as SeedDoc) } catch { /* skip malformed */ }
+          try {
+            docs.push(JSON.parse(readFileSync(file, "utf8")) as SeedDoc)
+          } catch {
+            /* skip malformed */
+          }
         }
       } else {
         scan(sub) // recurse into category dirs
@@ -76,8 +87,7 @@ const collectSeedDocs = (baseDir: string): SeedDoc[] => {
   return docs
 }
 
-const slugFromRef = (refId: string): string =>
-  refId.replace(/[^A-Za-z0-9]+/g, "-").replace(/^-|-$/g, "")
+const slugFromRef = (refId: string): string => refId.replace(/[^A-Za-z0-9]+/g, "-").replace(/^-|-$/g, "")
 
 const docToInput = (doc: SeedDoc): KnowledgeDocInput => ({
   type: doc.type,
@@ -111,5 +121,4 @@ export const seedCoreKnowledge = (store: DurableKnowledgeStore): SeedReport => {
 }
 
 // Convenience: open the user-global store under baseDir and seed into it.
-export const seedCoreKnowledgeAt = (baseDir: string): SeedReport =>
-  seedCoreKnowledge(openUserGlobalStore(baseDir))
+export const seedCoreKnowledgeAt = (baseDir: string): SeedReport => seedCoreKnowledge(openUserGlobalStore(baseDir))

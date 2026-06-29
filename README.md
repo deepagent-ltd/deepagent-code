@@ -43,6 +43,34 @@
 
 ---
 
+### What is DeepAgent Code?
+
+DeepAgent Code is a document-centered AI coding agent. It keeps the opencode runtime, tool, MCP, session, and provider foundations, then adds the DeepAgent control plane for document memory, context assembly, retrieval gates, learning, and domain adapters.
+
+The core design is simple: the document system is the agent's durable body. Knowledge, strategy, methodology, skill, memory, diagnosis, decisions, worklogs, and context snapshots are typed documents. The context system is the bandwidth manager that selects the smallest useful slice of those documents for each provider turn, then writes new evidence back into the document graph.
+
+DeepAgent Code is not a rewrite of opencode. The default opencode loop remains the `general` strength. DeepAgent adds stronger modes on top of that loop without rewriting the underlying runtime.
+
+### DeepAgent Additions
+
+- **Document System**: a single typed-document graph for run state and durable knowledge, with versioning, provenance, links, snapshots, promotion gates, and reviewable evidence.
+- **Context System**: deterministic context admission at safe provider-turn boundaries, with baseline system context, context epochs, snapshots, bounded tool output, and progressive disclosure.
+- **Work strength modes**: `general`, `high`, `xhigh`, `max`, and `ultra` form a strict capability ladder. Higher modes add capabilities without silently changing the lower-mode contract.
+- **Scenario modes**: `direct` preserves the user's prompt for immediate execution; `wish` first refines and confirms the task prompt before stronger automation.
+- **Retrieval and anti-misleading gates**: durable knowledge is advisory, top-k bounded, evidence-gated, conflict-aware, snapshot-locked, and guarded by regression checks.
+- **Domain Adapter Packs**: domain packs are DocumentStore views plus detectors, indexes, skills, validation, diagnosis, and policy profiles. They do not own a separate agent loop.
+- **Learning lifecycle**: completed work can produce candidate memories, skills, facts, failure dossiers, strategies, and methodologies. Promotion is controlled by evidence, sensitivity, approval status, and review policy.
+
+### Work Strengths
+
+| Strength | Contract |
+| --- | --- |
+| `general` | opencode-inherited capability with the lightest DeepAgent control plane |
+| `high` | adds DeepAgent context control, automatic micro-rounds, skills, validation, diagnosis, and project context memory |
+| `xhigh` | adds domain knowledge and cross-project factual memory |
+| `max` | adds strategies and methodologies under retrieval gates |
+| `ultra` | adds autonomous workspace and macro-round execution; intended for confirmed `wish` tasks with stricter progress, budget, and escalation gates |
+
 ### Installation
 
 ```bash
@@ -97,20 +125,17 @@ DEEPAGENT_CODE_INSTALL_DIR=/usr/local/bin curl -fsSL https://deepagent-code.ai/i
 XDG_BIN_DIR=$HOME/.local/bin curl -fsSL https://deepagent-code.ai/install | bash
 ```
 
-### Agents
+### Modes and Domain Packs
 
-DeepAgent Code includes two built-in agents you can switch between with the `Tab` key.
+DeepAgent Code separates the user's scenario from the agent strength:
 
-- **build** - Default, full-access agent for development work
-- **plan** - Read-only agent for analysis and code exploration
-  - Denies file edits by default
-  - Asks permission before running bash commands
-  - Ideal for exploring unfamiliar codebases or planning changes
+- `direct` keeps the original prompt and runs immediately.
+- `wish` refines the task prompt first, then runs the confirmed work package.
+- `general`, `high`, `xhigh`, `max`, and `ultra` control how much DeepAgent machinery may participate.
 
-Also included is a **general** subagent for complex searches and multistep tasks.
-This is used internally and can be invoked using `@general` in messages.
+Domain packs can be activated automatically from the problem profile or selected explicitly. They expose refs, summaries, skills, validation adapters, diagnosis signals, and policy profiles; the context and retrieval gates decide what is allowed into the model context.
 
-Learn more about [agents](https://deepagent-code.ai/docs/agents).
+Learn more in the design docs under [`docs/`](./docs/README.md).
 
 ### Documentation
 

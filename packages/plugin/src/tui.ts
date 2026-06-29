@@ -26,7 +26,7 @@ import {
   type SequenceBindingLike,
 } from "@opentui/keymap/extras"
 import type { JSX, SolidPlugin } from "@opentui/solid"
-import type { Config as PluginConfig, PluginOptions } from "./index.js"
+import type { Config as PluginConfig, PluginOptions } from "./index.ts"
 
 export type { CliRenderer, KeyEvent, Renderable, SlotMode } from "@opentui/core"
 export { stringifyKeySequence, stringifyKeyStroke } from "@opentui/keymap"

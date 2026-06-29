@@ -34,15 +34,6 @@ describe("DeepAgent settings UX", () => {
     expect(source).toContain('export { DialogSettings } from "./settings-v2/dialog-settings-v2"')
   })
 
-  test("keeps the legacy desktop layout as the default with an opt-in switch for the new layout", async () => {
-    const settings = await readFile(path.join(here, "../context/settings.tsx"), "utf8")
-    const v2 = await readFile(path.join(here, "settings-v2/general.tsx"), "utf8")
-
-    expect(settings).toContain("export const newLayoutDesignsDefault = false")
-    expect(v2).toContain('data-action="settings-new-layout-designs"')
-    expect(v2).toContain("settings.general.setNewLayoutDesigns(checked)")
-  })
-
   test("keeps DeepAgent review, packs, and provider connect dialogs scroll-safe", async () => {
     const review = await readFile(path.join(here, "review/dialog-review.tsx"), "utf8")
     const packs = await readFile(path.join(here, "packs/dialog-packs.tsx"), "utf8")

@@ -236,6 +236,8 @@ const createPlatform = (): Platform => {
 
     wslServers: wslServersApi,
 
+    browser: window.api.browser,
+
     getDisplayBackend: async () => {
       return window.api.getDisplayBackend().catch(() => null)
     },

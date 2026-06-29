@@ -84,6 +84,7 @@ export type Event =
   | EventSessionStatus
   | EventSessionIdle
   | EventSessionCompacted
+  | EventPlanUpdated
   | EventVcsBranchUpdated
   | EventWorktreeReady
   | EventWorktreeFailed
@@ -1572,6 +1573,25 @@ export type GlobalEvent = {
       }
     | {
         id: string
+        type: "plan.updated"
+        properties: {
+          sessionID: string
+          plan_id: string
+          goal: string
+          active_step_id: string
+          steps: Array<{
+            step_id: string
+            title: string
+            status: string
+            acceptance?: string
+            assigned_agent?: string
+          }>
+          done: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          total: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        }
+      }
+    | {
+        id: string
         type: "vcs.branch.updated"
         properties: {
           branch?: string
@@ -1721,6 +1741,7 @@ export type PermissionConfig =
       task?: PermissionRuleConfig
       external_directory?: PermissionRuleConfig
       todowrite?: PermissionActionConfig
+      plan?: PermissionActionConfig
       question?: PermissionActionConfig
       webfetch?: PermissionActionConfig
       websearch?: PermissionActionConfig
@@ -2195,6 +2216,8 @@ export type WorktreeError = {
     | "WorktreeRemoveFailedError"
     | "WorktreeResetFailedError"
     | "WorktreeListFailedError"
+    | "WorktreeMergeFailedError"
+    | "WorktreeUnsafeRemoveError"
   data: {
     message: string
   }
@@ -2220,6 +2243,43 @@ export type WorktreeRemoveInput = {
 
 export type WorktreeResetInput = {
   directory: string
+}
+
+export type WorktreeChangeCount = {
+  uncommitted: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  ahead: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  clean: boolean
+}
+
+export type WorktreeDiffEntry = {
+  file: string
+  status: string
+  additions: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  deletions: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+}
+
+export type WorktreeDiffResult = {
+  entries: Array<WorktreeDiffEntry>
+  patch: string
+  truncated: boolean
+}
+
+export type WorktreeBranchSummary = {
+  base: string
+  additions: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  deletions: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  files: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+}
+
+export type WorktreeMergeResult = {
+  merged: boolean
+  conflicted: Array<string>
+  message: string
+}
+
+export type WorktreeSafeRemoveInput = {
+  directory: string
+  force?: boolean
 }
 
 export type ProjectSummary = {
@@ -5223,6 +5283,26 @@ export type EventSessionCompacted = {
   }
 }
 
+export type EventPlanUpdated = {
+  id: string
+  type: "plan.updated"
+  properties: {
+    sessionID: string
+    plan_id: string
+    goal: string
+    active_step_id: string
+    steps: Array<{
+      step_id: string
+      title: string
+      status: string
+      acceptance?: string
+      assigned_agent?: string
+    }>
+    done: number | "NaN" | "Infinity" | "-Infinity"
+    total: number | "NaN" | "Infinity" | "-Infinity"
+  }
+}
+
 export type EventVcsBranchUpdated = {
   id: string
   type: "vcs.branch.updated"
@@ -6058,6 +6138,45 @@ export type DeepagentPacksActiveResponses = {
 
 export type DeepagentPacksActiveResponse = DeepagentPacksActiveResponses[keyof DeepagentPacksActiveResponses]
 
+export type DeepagentPacksAllData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/deepagent/packs/all"
+}
+
+export type DeepagentPacksAllErrors = {
+  /**
+   * DeepAgentPromotionError | InvalidRequestError
+   */
+  400: DeepAgentPromotionError | InvalidRequestError
+}
+
+export type DeepagentPacksAllError = DeepagentPacksAllErrors[keyof DeepagentPacksAllErrors]
+
+export type DeepagentPacksAllResponses = {
+  /**
+   * Full installed domain pack catalog (built-in + external)
+   */
+  200: {
+    packs: Array<{
+      id: string
+      name: string
+      description?: string
+      version: string
+      risk: "low" | "medium" | "high" | "regulated"
+      domains: Array<string>
+      builtin: boolean
+      pinned: boolean
+    }>
+  }
+}
+
+export type DeepagentPacksAllResponse = DeepagentPacksAllResponses[keyof DeepagentPacksAllResponses]
+
 export type DeepagentPacksPinData = {
   body?: {
     packId: string
@@ -6391,6 +6510,146 @@ export type WorktreeResetResponses = {
 }
 
 export type WorktreeResetResponse = WorktreeResetResponses[keyof WorktreeResetResponses]
+
+export type WorktreeChangesData = {
+  body?: WorktreeRemoveInput
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/experimental/worktree/changes"
+}
+
+export type WorktreeChangesErrors = {
+  /**
+   * WorktreeError | InvalidRequestError
+   */
+  400: WorktreeError | InvalidRequestError
+}
+
+export type WorktreeChangesError = WorktreeChangesErrors[keyof WorktreeChangesErrors]
+
+export type WorktreeChangesResponses = {
+  /**
+   * Worktree change count
+   */
+  200: WorktreeChangeCount
+}
+
+export type WorktreeChangesResponse = WorktreeChangesResponses[keyof WorktreeChangesResponses]
+
+export type WorktreeDiffData = {
+  body?: WorktreeRemoveInput
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/experimental/worktree/diff"
+}
+
+export type WorktreeDiffErrors = {
+  /**
+   * WorktreeError | InvalidRequestError
+   */
+  400: WorktreeError | InvalidRequestError
+}
+
+export type WorktreeDiffError = WorktreeDiffErrors[keyof WorktreeDiffErrors]
+
+export type WorktreeDiffResponses = {
+  /**
+   * Worktree diff
+   */
+  200: WorktreeDiffResult
+}
+
+export type WorktreeDiffResponse = WorktreeDiffResponses[keyof WorktreeDiffResponses]
+
+export type WorktreeSummaryData = {
+  body?: WorktreeRemoveInput
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/experimental/worktree/summary"
+}
+
+export type WorktreeSummaryErrors = {
+  /**
+   * WorktreeError | InvalidRequestError
+   */
+  400: WorktreeError | InvalidRequestError
+}
+
+export type WorktreeSummaryError = WorktreeSummaryErrors[keyof WorktreeSummaryErrors]
+
+export type WorktreeSummaryResponses = {
+  /**
+   * Worktree branch summary
+   */
+  200: WorktreeBranchSummary
+}
+
+export type WorktreeSummaryResponse = WorktreeSummaryResponses[keyof WorktreeSummaryResponses]
+
+export type WorktreeMergeData = {
+  body?: WorktreeRemoveInput
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/experimental/worktree/merge"
+}
+
+export type WorktreeMergeErrors = {
+  /**
+   * WorktreeError | InvalidRequestError
+   */
+  400: WorktreeError | InvalidRequestError
+}
+
+export type WorktreeMergeError = WorktreeMergeErrors[keyof WorktreeMergeErrors]
+
+export type WorktreeMergeResponses = {
+  /**
+   * Worktree merge result
+   */
+  200: WorktreeMergeResult
+}
+
+export type WorktreeMergeResponse = WorktreeMergeResponses[keyof WorktreeMergeResponses]
+
+export type WorktreeSafeRemoveData = {
+  body?: WorktreeSafeRemoveInput
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/experimental/worktree/safe-remove"
+}
+
+export type WorktreeSafeRemoveErrors = {
+  /**
+   * WorktreeError | InvalidRequestError
+   */
+  400: WorktreeError | InvalidRequestError
+}
+
+export type WorktreeSafeRemoveError = WorktreeSafeRemoveErrors[keyof WorktreeSafeRemoveErrors]
+
+export type WorktreeSafeRemoveResponses = {
+  /**
+   * Worktree removed
+   */
+  200: boolean
+}
+
+export type WorktreeSafeRemoveResponse = WorktreeSafeRemoveResponses[keyof WorktreeSafeRemoveResponses]
 
 export type ExperimentalSessionListData = {
   body?: never

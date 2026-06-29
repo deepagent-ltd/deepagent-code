@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron"
-import type { ElectronAPI, WslServersEvent } from "./types"
+import type { ElectronAPI, WslServersEvent, BrowserState } from "./types"
 import type { UpdaterState } from "@deepagent-code/app/updater"
 
 const updaterCallbacks = new Set<(state: UpdaterState) => void>()
@@ -14,6 +14,23 @@ const api: ElectronAPI = {
   killSidecar: () => ipcRenderer.invoke("kill-sidecar"),
   installCli: () => ipcRenderer.invoke("install-cli"),
   awaitInitialization: () => ipcRenderer.invoke("await-initialization"),
+  // U7 isolated browser — navigation-only bridge. No method reads page content; onState delivers
+  // address-bar metadata (url/title/canGoBack) only.
+  browser: {
+    show: (rect) => ipcRenderer.invoke("browser-show", rect),
+    hide: () => ipcRenderer.invoke("browser-hide"),
+    setBounds: (rect) => ipcRenderer.invoke("browser-set-bounds", rect),
+    navigate: (url) => ipcRenderer.invoke("browser-navigate", url),
+    back: () => ipcRenderer.invoke("browser-back"),
+    forward: () => ipcRenderer.invoke("browser-forward"),
+    reload: () => ipcRenderer.invoke("browser-reload"),
+    openExternal: () => ipcRenderer.invoke("browser-open-external"),
+    onState: (cb) => {
+      const handler = (_: unknown, state: BrowserState) => cb(state)
+      ipcRenderer.on("browser-state", handler)
+      return () => ipcRenderer.removeListener("browser-state", handler)
+    },
+  },
   wslServers: {
     getState: () => ipcRenderer.invoke("wsl-servers-get-state"),
     subscribe: (cb) => {

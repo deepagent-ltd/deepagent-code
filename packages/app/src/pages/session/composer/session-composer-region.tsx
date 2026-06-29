@@ -17,7 +17,6 @@ import type { SessionComposerState } from "@/pages/session/composer/session-comp
 import { SessionTodoDock } from "@/pages/session/composer/session-todo-dock"
 import type { FollowupDraft } from "@/components/prompt-input/submit"
 import { createResizeObserver } from "@solid-primitives/resize-observer"
-import { NEW_SESSION_CONTENT_WIDTH } from "@/pages/session/new-session-layout"
 
 export function SessionComposerRegion(props: {
   state: SessionComposerState
@@ -146,14 +145,13 @@ export function SessionComposerRegion(props: {
       data-component="session-prompt-dock"
       classList={{
         "w-full flex flex-col justify-center items-center pointer-events-none": true,
-        "shrink-0 pb-3 bg-background-stronger": props.placement !== "inline",
+        "shrink-0 pb-3 bg-background-stronger": true,
       }}
     >
       <div
         classList={{
           "w-full pointer-events-auto": true,
-          "px-3": props.placement !== "inline",
-          [NEW_SESSION_CONTENT_WIDTH]: props.placement === "inline",
+          "px-3": true,
           "md:max-w-200 md:mx-auto 2xl:max-w-[1000px]": props.centered,
         }}
       >
