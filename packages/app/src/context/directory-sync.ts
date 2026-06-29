@@ -612,6 +612,9 @@ export const createDirSyncContext = (
     },
     mcp: {
       toggle: (name: string) => serverSync.mcp.toggle(directory, name),
+      add: (input: Parameters<typeof serverSync.mcp.add>[1]) => serverSync.mcp.add(directory, input),
+      update: (input: Parameters<typeof serverSync.mcp.update>[1]) => serverSync.mcp.update(directory, input),
+      remove: (name: string) => serverSync.mcp.remove(directory, name),
     },
     absolute,
     get directory() {

@@ -30,6 +30,24 @@ export type ProjectMeta = {
   }
 }
 
+// U2: live plan (goal + steps + progress) mirrored from the backend plan.updated event. Defined
+// here (not in server-sync) so both the reducer and the sync context import it without a cycle.
+export type SessionPlanStep = {
+  step_id: string
+  title: string
+  status: string // pending | active | done | cancelled
+  acceptance?: string | null
+  assigned_agent?: string | null
+}
+export type SessionPlan = {
+  plan_id: string
+  goal: string
+  active_step_id: string | null
+  steps: SessionPlanStep[]
+  done: number
+  total: number
+}
+
 export type State = {
   status: "loading" | "partial" | "complete"
   agent: Agent[]

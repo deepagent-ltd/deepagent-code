@@ -4,6 +4,7 @@ import appPlugin from "@deepagent-code/app/vite"
 import * as fs from "node:fs/promises"
 
 const DEEPAGENT_CODE_SERVER_DIST = "../deepagent-code/dist/node"
+const DOMAIN_PACKS_DIST = "../domain-packs"
 
 const channel = (() => {
   const raw = process.env.DEEPAGENT_CODE_CHANNEL
@@ -64,6 +65,8 @@ export default defineConfig({
             if (!l.endsWith(".wasm")) continue
             await fs.writeFile(`./out/main/chunks/${l}`, await fs.readFile(`${DEEPAGENT_CODE_SERVER_DIST}/${l}`))
           }
+          await fs.rm("./out/main/domain-packs", { recursive: true, force: true })
+          await fs.cp(DOMAIN_PACKS_DIST, "./out/main/domain-packs", { recursive: true })
         },
       },
     ],
