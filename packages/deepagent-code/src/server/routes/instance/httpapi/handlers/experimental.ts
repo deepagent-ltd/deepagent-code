@@ -131,6 +131,45 @@ export const experimentalHandlers = HttpApiBuilder.group(InstanceHttpApi, "exper
       return true
     })
 
+    // U3: change-count for the fail-closed delete gate.
+    const worktreeChanges = Effect.fn("ExperimentalHttpApi.worktreeChanges")(function* (ctx: {
+      payload: Worktree.RemoveInput
+    }) {
+      return yield* mapWorktreeError(worktreeSvc.countChanges(ctx.payload))
+    })
+
+    // U3: tracked + untracked diff.
+    const worktreeDiff = Effect.fn("ExperimentalHttpApi.worktreeDiff")(function* (ctx: {
+      payload: Worktree.RemoveInput
+    }) {
+      return yield* mapWorktreeError(worktreeSvc.diff(ctx.payload))
+    })
+
+    // U3: committed branch summary vs default branch.
+    const worktreeSummary = Effect.fn("ExperimentalHttpApi.worktreeSummary")(function* (ctx: {
+      payload: Worktree.RemoveInput
+    }) {
+      return yield* mapWorktreeError(worktreeSvc.branchSummary(ctx.payload))
+    })
+
+    // U3: merge back (preflight, no auto-commit). Outward-facing write — the UI gates this behind
+    // explicit user confirmation; the service never force-merges.
+    const worktreeMerge = Effect.fn("ExperimentalHttpApi.worktreeMerge")(function* (ctx: {
+      payload: Worktree.RemoveInput
+    }) {
+      return yield* mapWorktreeError(worktreeSvc.mergeBack(ctx.payload))
+    })
+
+    // U3: fail-closed delete — refuses unless clean (or force). Also drops the project sandbox entry.
+    const worktreeSafeRemove = Effect.fn("ExperimentalHttpApi.worktreeSafeRemove")(function* (input: {
+      payload: Worktree.SafeRemoveInput
+    }) {
+      const ctx = yield* InstanceState.context
+      yield* mapWorktreeError(worktreeSvc.safeRemove(input.payload))
+      yield* project.removeSandbox(ctx.project.id, input.payload.directory)
+      return true
+    })
+
     const session = Effect.fn("ExperimentalHttpApi.session")(function* (ctx: { query: typeof SessionListQuery.Type }) {
       const limit = ctx.query.limit ?? 100
       const all = yield* sessions.listGlobal({
@@ -180,6 +219,11 @@ export const experimentalHandlers = HttpApiBuilder.group(InstanceHttpApi, "exper
       .handle("worktreeCreate", worktreeCreate)
       .handle("worktreeRemove", worktreeRemove)
       .handle("worktreeReset", worktreeReset)
+      .handle("worktreeChanges", worktreeChanges)
+      .handle("worktreeDiff", worktreeDiff)
+      .handle("worktreeSummary", worktreeSummary)
+      .handle("worktreeMerge", worktreeMerge)
+      .handle("worktreeSafeRemove", worktreeSafeRemove)
       .handle("session", session)
       .handle("sessionBackground", sessionBackground)
       .handle("resource", resource)

@@ -65,6 +65,8 @@ const WorktreeErrorName = Schema.Union([
   Schema.Literal("WorktreeRemoveFailedError"),
   Schema.Literal("WorktreeResetFailedError"),
   Schema.Literal("WorktreeListFailedError"),
+  Schema.Literal("WorktreeMergeFailedError"),
+  Schema.Literal("WorktreeUnsafeRemoveError"),
 ])
 export class WorktreeApiError extends Schema.ErrorClass<WorktreeApiError>("WorktreeError")(
   {
@@ -91,6 +93,11 @@ export const ExperimentalPaths = {
   toolIDs: "/experimental/tool/ids",
   worktree: "/experimental/worktree",
   worktreeReset: "/experimental/worktree/reset",
+  worktreeChanges: "/experimental/worktree/changes",
+  worktreeDiff: "/experimental/worktree/diff",
+  worktreeSummary: "/experimental/worktree/summary",
+  worktreeMerge: "/experimental/worktree/merge",
+  worktreeSafeRemove: "/experimental/worktree/safe-remove",
   session: "/experimental/session",
   sessionBackground: "/experimental/session/:sessionID/background",
   resource: "/experimental/resource",
@@ -204,6 +211,71 @@ export const ExperimentalApi = HttpApi.make("experimental")
             identifier: "worktree.reset",
             summary: "Reset worktree",
             description: "Reset a worktree branch to the primary default branch.",
+          }),
+        ),
+        // U3: change-count for the fail-closed delete gate.
+        HttpApiEndpoint.post("worktreeChanges", ExperimentalPaths.worktreeChanges, {
+          query: WorkspaceRoutingQuery,
+          payload: Worktree.RemoveInput,
+          success: described(Worktree.ChangeCount, "Worktree change count"),
+          error: WorktreeApiError,
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "worktree.changes",
+            summary: "Count worktree changes",
+            description: "Count uncommitted changes and commits ahead of base (fail-closed: null on uncertainty).",
+          }),
+        ),
+        // U3: tracked + untracked diff for the worktree.
+        HttpApiEndpoint.post("worktreeDiff", ExperimentalPaths.worktreeDiff, {
+          query: WorkspaceRoutingQuery,
+          payload: Worktree.RemoveInput,
+          success: described(Worktree.DiffResult, "Worktree diff"),
+          error: WorktreeApiError,
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "worktree.diff",
+            summary: "Worktree diff",
+            description: "Tracked + untracked changes for a worktree, with a unified patch.",
+          }),
+        ),
+        // U3: branch summary (additions/deletions vs default branch).
+        HttpApiEndpoint.post("worktreeSummary", ExperimentalPaths.worktreeSummary, {
+          query: WorkspaceRoutingQuery,
+          payload: Worktree.RemoveInput,
+          success: described(Worktree.BranchSummary, "Worktree branch summary"),
+          error: WorktreeApiError,
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "worktree.summary",
+            summary: "Worktree branch summary",
+            description: "Committed additions/deletions on the worktree branch vs the default branch.",
+          }),
+        ),
+        // U3: merge the worktree branch back to the default branch (preflight, no auto-commit).
+        HttpApiEndpoint.post("worktreeMerge", ExperimentalPaths.worktreeMerge, {
+          query: WorkspaceRoutingQuery,
+          payload: Worktree.RemoveInput,
+          success: described(Worktree.MergeResult, "Worktree merge result"),
+          error: WorktreeApiError,
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "worktree.merge",
+            summary: "Merge worktree back",
+            description: "Merge the worktree branch into the default branch (staged, requires confirmation).",
+          }),
+        ),
+        // U3: fail-closed delete — refuses unless clean, unless force.
+        HttpApiEndpoint.delete("worktreeSafeRemove", ExperimentalPaths.worktreeSafeRemove, {
+          query: WorkspaceRoutingQuery,
+          payload: Worktree.SafeRemoveInput,
+          success: described(Schema.Boolean, "Worktree removed"),
+          error: WorktreeApiError,
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "worktree.safeRemove",
+            summary: "Safe-remove worktree",
+            description: "Remove a worktree only when it has no uncommitted/unmerged work, unless force is set.",
           }),
         ),
         HttpApiEndpoint.get("session", ExperimentalPaths.session, {

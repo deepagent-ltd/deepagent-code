@@ -29,6 +29,9 @@ type GlobalStore = {
   session_todo: {
     [sessionID: string]: Todo[]
   }
+  session_plan: {
+    [sessionID: string]: import("./types").SessionPlan
+  }
   provider: NormalizedProviderListResponse
   provider_auth: ProviderAuthResponse
   config: Config
