@@ -7,10 +7,8 @@ import { useLanguage } from "@/context/language"
 import { useLayout } from "@/context/layout"
 import { useLocal } from "@/context/local"
 import { usePermission } from "@/context/permission"
-import { usePlatform } from "@/context/platform"
 import { usePrompt } from "@/context/prompt"
 import { useSDK } from "@/context/sdk"
-import { useSettings } from "@/context/settings"
 import { useSync } from "@/context/sync"
 import { useTerminal } from "@/context/terminal"
 import { showToast } from "@/utils/toast"
@@ -42,10 +40,8 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
   const language = useLanguage()
   const local = useLocal()
   const permission = usePermission()
-  const platform = usePlatform()
   const prompt = usePrompt()
   const sdk = useSDK()
-  const settings = useSettings()
   const sync = useSync()
   const terminal = useTerminal()
   const layout = useLayout()
@@ -71,8 +67,6 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
   })
   const activeFileTab = tabState.activeFileTab
   const closableTab = tabState.closableTab
-  const desktopV2 = () => platform.platform === "desktop" && settings.general.newLayoutDesigns()
-  const shown = () => (desktopV2() ? settings.general.showFileTree() : true)
   const createNewSession = async () => {
     const created = await sdk.client.session
       .create()
@@ -472,28 +466,48 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
 
   const viewCmds = () => [
     viewCommand({
+      id: "sidePanel.toggle",
+      title: language.t("session.sidePanel.toggle"),
+      onSelect: () => {
+        if (view().rightPanel.opened()) {
+          view().rightPanel.close()
+          return
+        }
+
+        view().reviewPanel.close()
+        layout.fileTree.close()
+        view().rightPanel.open("menu")
+      },
+    }),
+    viewCommand({
       id: "terminal.toggle",
       title: language.t("command.terminal.toggle"),
       keybind: "ctrl+`",
       slash: "terminal",
-      onSelect: () => view().terminal.toggle(),
+      onSelect: () => {
+        view().terminal.toggle()
+      },
     }),
     viewCommand({
       id: "review.toggle",
       title: language.t("command.review.toggle"),
       keybind: "mod+shift+r",
-      onSelect: () => view().reviewPanel.toggle(),
+      onSelect: () => {
+        view().reviewPanel.close()
+        layout.fileTree.close()
+        view().rightPanel.toggle("review")
+      },
     }),
-    ...(shown()
-      ? [
-          viewCommand({
-            id: "fileTree.toggle",
-            title: language.t("command.fileTree.toggle"),
-            keybind: "mod+\\",
-            onSelect: () => layout.fileTree.toggle(),
-          }),
-        ]
-      : []),
+    viewCommand({
+      id: "fileTree.toggle",
+      title: language.t("command.fileTree.toggle"),
+      keybind: "mod+\\",
+      onSelect: () => {
+        view().reviewPanel.close()
+        layout.fileTree.close()
+        view().rightPanel.toggle("files")
+      },
+    }),
     viewCommand({
       id: "input.focus",
       title: language.t("command.input.focus"),
@@ -567,7 +581,6 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
       description: language.t("command.agent.cycle.description"),
       keybind: "mod+.",
       slash: "agent",
-      disabled: desktopV2() && !settings.general.showCustomAgents(),
       onSelect: () => local.agent.move(1),
     }),
     agentCommand({
@@ -575,7 +588,6 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
       title: language.t("command.agent.cycle.reverse"),
       description: language.t("command.agent.cycle.reverse.description"),
       keybind: "shift+mod+.",
-      disabled: desktopV2() && !settings.general.showCustomAgents(),
       onSelect: () => local.agent.move(-1),
     }),
   ]

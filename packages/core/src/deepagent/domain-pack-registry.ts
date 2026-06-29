@@ -14,7 +14,7 @@ export type RiskLevel = "low" | "medium" | "high" | "regulated"
 
 export type PackManifest = {
   readonly schema_version: "domain_pack.v1"
-  readonly id: string         // e.g. "code.frontend.react"
+  readonly id: string // e.g. "code.frontend.react"
   readonly name: string
   readonly description?: string // one-line human summary shown in the packs UI
   readonly version: string
@@ -61,20 +61,20 @@ export type PackConflict = {
 
 export type PackResolution = {
   readonly activePackIds: readonly string[]
-  readonly transitiveDeps: readonly string[]   // all packs including resolved dependencies
+  readonly transitiveDeps: readonly string[] // all packs including resolved dependencies
   readonly conflicts: readonly PackConflict[]
   readonly denied: readonly { readonly packId: string; readonly reason: string }[]
 }
 
 export type PackSnapshot = {
-  readonly id: string          // deterministic hash of sorted activePackIds+versions
+  readonly id: string // deterministic hash of sorted activePackIds+versions
   readonly packs: readonly { readonly id: string; readonly version: string }[]
   readonly created_at: string
 }
 
 export type PackScore = {
   readonly packId: string
-  readonly score: number       // [0,1] from the pack's detector
+  readonly score: number // [0,1] from the pack's detector
   readonly evidence: readonly string[]
 }
 
@@ -111,17 +111,24 @@ const evalInlineDetector = (expr: string, profile: ExtendedProblemProfile): numb
   }
 }
 
-// Resolve the built-in pack directory bundled with the application — packages/domain-packs/
-// relative to this source file (packages/core/src/deepagent/ → ../../domain-packs/).
-// Returns null if the directory doesn't exist (e.g. running from a stripped dist).
-const builtinPackDir = (): string | null => {
+// Resolve the built-in pack directory bundled with the application.
+// Source/dist server code resolves via the first candidate; Electron's desktop bundle executes from
+// packages/desktop/out/main/chunks, which needs the second candidate to reach packages/domain-packs.
+export const resolveBuiltinPackDirForMetaUrl = (metaUrl: string): string | null => {
   try {
-    const dir = path.resolve(fileURLToPath(import.meta.url), "../../../..", "domain-packs")
-    return existsSync(dir) ? dir : null
+    return (
+      [
+        path.resolve(fileURLToPath(metaUrl), "../..", "domain-packs"),
+        path.resolve(fileURLToPath(metaUrl), "../../../..", "domain-packs"),
+        path.resolve(fileURLToPath(metaUrl), "../../../../../", "domain-packs"),
+      ].find((dir) => existsSync(dir)) ?? null
+    )
   } catch {
     return null
   }
 }
+
+const builtinPackDir = (): string | null => resolveBuiltinPackDirForMetaUrl(import.meta.url)
 
 // Multi-source registry: a list of directories, searched in order. Built-in packs (bundled with
 // the app) are always appended automatically so the 9 seed packs in packages/domain-packs/ are
@@ -139,7 +146,15 @@ export const configureRegistry = (userDir?: string): void => {
 export const isRegistryConfigured = (): boolean => registryDirs.length > 0
 
 const dirsToScan = (): readonly string[] =>
-  registryDirs.length > 0 ? registryDirs : [builtinPackDir()].filter(Boolean) as string[]
+  registryDirs.length > 0 ? registryDirs : ([builtinPackDir()].filter(Boolean) as string[])
+
+// TEMP DEBUG: expose the resolved scan dirs + builtin dir so the server can log why discover() is
+// empty in the desktop/dist runtime. Remove once the packs-empty issue is diagnosed.
+export const dirsToScanDebug = (): { dirs: readonly string[]; builtin: string | null; metaUrl: string } => ({
+  dirs: dirsToScan(),
+  builtin: builtinPackDir(),
+  metaUrl: import.meta.url,
+})
 
 const PACK_SCHEMA = "domain_pack.v1"
 export const discover = (): readonly PackManifest[] => {
@@ -158,7 +173,9 @@ export const discover = (): readonly PackManifest[] => {
             seen.add(m.id)
             results.push(m)
           }
-        } catch { /* malformed — skip */ }
+        } catch {
+          /* malformed — skip */
+        }
       } else {
         scan(sub) // recurse one level (category/pack-id/)
       }
@@ -203,9 +220,15 @@ export const resolve = (selected: readonly string[], manifests?: readonly PackMa
   while (queue.length > 0) {
     const id = queue.shift()!
     const m = byId.get(id)
-    if (!m) { denied.push({ packId: id, reason: "manifest not found" }); continue }
+    if (!m) {
+      denied.push({ packId: id, reason: "manifest not found" })
+      continue
+    }
     for (const dep of m.depends_on ?? []) {
-      if (!active.has(dep)) { active.add(dep); queue.push(dep) }
+      if (!active.has(dep)) {
+        active.add(dep)
+        queue.push(dep)
+      }
     }
   }
 
@@ -216,7 +239,7 @@ export const resolve = (selected: readonly string[], manifests?: readonly PackMa
     for (const conflictId of m.conflicts_with ?? []) {
       if (active.has(conflictId)) {
         // Risk level determines severity: high/regulated conflict is a block
-        const severity: "block" | "warn" = (m.risk === "high" || m.risk === "regulated") ? "block" : "warn"
+        const severity: "block" | "warn" = m.risk === "high" || m.risk === "regulated" ? "block" : "warn"
         conflicts.push({
           kind: "policy",
           refs: [],
@@ -263,7 +286,9 @@ export const loadIndexRefs = (snapshot: PackSnapshot): readonly DomainPackIndexE
     try {
       const entries = JSON.parse(readFileSync(indexFile, "utf8")) as DomainPackIndexEntry[]
       refs.push(...entries.filter((e) => e.pack_id === id))
-    } catch { /* malformed — skip */ }
+    } catch {
+      /* malformed — skip */
+    }
   }
   return refs
 }
@@ -287,7 +312,9 @@ const findPackDirUnder = (dir: string, packId: string): string | null => {
       try {
         const m = JSON.parse(readFileSync(packFile, "utf8")) as { id?: string }
         if (m.id === packId) return sub
-      } catch { /* skip */ }
+      } catch {
+        /* skip */
+      }
     }
     // recurse one level
     for (const sub2 of readdirSync(sub, { withFileTypes: true }).filter((e) => e.isDirectory())) {
@@ -297,7 +324,9 @@ const findPackDirUnder = (dir: string, packId: string): string | null => {
         try {
           const m = JSON.parse(readFileSync(f, "utf8")) as { id?: string }
           if (m.id === packId) return subDir
-        } catch { /* skip */ }
+        } catch {
+          /* skip */
+        }
       }
     }
   }

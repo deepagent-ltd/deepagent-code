@@ -8,6 +8,7 @@ import type { ProjectPaths } from "./workspace"
 import { DurableKnowledgeStore, openProjectStore, type KnowledgeDocInput } from "./durable-knowledge-store"
 import type { DocType, EvidenceStrength } from "./document-store"
 import { evidenceFromConfidence } from "./knowledge-retriever"
+import * as Governance from "./memory-governance"
 
 export const MEMORY_INBOX_SCHEMA_VERSION = "deepagent-code.memory_inbox_item.v1"
 export const SKILL_RECORD_SCHEMA_VERSION = "deepagent-code.skill_record.v1"
@@ -95,20 +96,44 @@ export class LearningWorker {
     const skipped: string[] = []
 
     for (const candidate of extraction.candidates) {
-      // docs/34 §8 + DAP-8/DAP-12: stage durable knowledge into the DocumentStore as a CANDIDATE.
-      // Only type=memory, non-sensitive, confidence>=0.6 candidates auto-approve under auto policy;
-      // everything else stays candidate for human review (anti_pattern/strategy never auto-approve).
-      // anti_pattern is mapped to failure_dossier (negative knowledge, never positive injection).
-      const safeAutoApprove = policy === "auto_merge_safe_project" && isSafeProjectCandidate(candidate)
-      if (safeAutoApprove || candidate.status === "staged") {
+      // U6 governance pipeline (S1 §P1): default fully automatic; route to a human ONLY for the four
+      // cases a machine can't safely decide (sensitive / high-trust contradiction / pack promotion /
+      // global promotion). Gates 3/4 (exact dedup + near-dup merge) live in the store's
+      // stageCandidate; gate 8 (admit) is approve(). manual_review policy forces ALL candidates to
+      // review regardless of route.
+      const classification = Governance.classify(candidate)
+      const contradictsHighTrust = this.detectHighTrustContradiction(candidate, classification)
+      const govRoute = Governance.route({
+        classification,
+        // RejectedBuffer is consulted upstream (promote path); learning candidates carry status
+        // "rejected" when extraction already rejected them.
+        inRejectedBuffer: candidate.status === "rejected",
+        contradictsHighTrust,
+        // Learning candidates never self-promote into a pack or to global scope; those are explicit
+        // human actions (gate 6/7) handled in the review/promote path, so false here.
+        promotesIntoPack: false,
+        promotesToGlobal: false,
+      })
+
+      const forceReview = policy === "manual_review"
+      const autoAdmit = !forceReview && govRoute.kind === "auto_admit" && Governance.meetsConfidenceFloor(candidate, classification)
+
+      if (govRoute.kind === "drop") {
+        skipped.push(candidate.candidate_id)
+        continue
+      }
+
+      if (autoAdmit || candidate.status === "staged") {
+        // Stage into the durable store (gate 3/4 dedup+merge happen here).
         const doc = this.store.stageCandidate(candidateToInput(candidate, this.projectID, input.trigger))
-        if (safeAutoApprove) {
-          this.store.approve(doc.id)
+        if (autoAdmit) {
+          this.store.approve(doc.id) // gate 8: admit (status -> active, retrievable)
           autoMerged.push(candidate.candidate_id)
         } else {
-          inbox.push(
-            this.enqueueInbox(candidate, input.projectID, policy === "manual_review" ? "manual review policy" : "candidate requires review"),
-          )
+          // Routed to human review: keep the doc as a pending candidate (unretrievable) AND enqueue
+          // an inbox item tagged with the specific review reason so the UI can group it.
+          const reason = forceReview ? "manual review policy" : govRoute.kind === "review" ? govRoute.reason : "candidate requires review"
+          inbox.push(this.enqueueInbox(candidate, input.projectID, reason))
         }
       } else {
         skipped.push(candidate.candidate_id)
@@ -132,6 +157,22 @@ export class LearningWorker {
       .filter((file) => file.endsWith(".json"))
       .map((file) => JSON.parse(readFileSync(path.join(dir, file), "utf8")) as MemoryInboxItem)
       .sort((a, b) => a.id.localeCompare(b.id))
+  }
+
+  // U6 gate 5: a candidate contradicts existing knowledge when the store already holds a similar doc
+  // of the same type/domain that is HIGH-TRUST (curated / pack / global / strong evidence). We reuse
+  // the store's similarity search (the same one that drives near-dup merge) to find the neighbor; a
+  // high-trust neighbor routes to human review, a low-trust one lets the store's merge/supersede win.
+  private detectHighTrustContradiction(candidate: LearningCandidate, classification: Governance.Classification): boolean {
+    const type: DocType = candidate.type === "anti_pattern" ? "failure_dossier" : candidate.type
+    const neighbor = this.store.documentStore.findSimilarKnowledge({
+      type,
+      scope: `durable:project:${this.projectID}`,
+      domain: null,
+      description: candidate.summary,
+    })
+    void classification
+    return neighbor ? Governance.isHighTrust(neighbor) : false
   }
 
   private enqueueInbox(candidate: LearningCandidate, projectID: string, reason: string): string {
@@ -160,12 +201,10 @@ const readProjectID = (paths: ProjectPaths): string => {
 
 const inboxDir = (paths: ProjectPaths): string => path.join(paths.docsDir, "memory-inbox")
 
-const isSafeProjectCandidate = (candidate: LearningCandidate): boolean =>
-  candidate.status === "staged" && candidate.type === "memory" && candidate.confidence >= 0.6 && !looksSensitive(candidate.summary)
-
 // Map a learning candidate to a durable knowledge doc input (docs/34 §8). anti_pattern becomes a
 // failure_dossier (negative knowledge — never a positive injection, DAP-12). All learned knowledge
-// is project-shared and tagged with the run trigger; sensitivity is derived from the secret gate.
+// is project-shared and tagged with the run trigger; sensitivity uses the single governance detector
+// (U6 gate 1) so the write-side tag and the routing decision can never diverge.
 const candidateToInput = (candidate: LearningCandidate, projectID: string, trigger: LearningTrigger): KnowledgeDocInput => {
   const type: DocType = candidate.type === "anti_pattern" ? "failure_dossier" : candidate.type
   const strength: EvidenceStrength = evidenceFromConfidence(candidate.confidence)
@@ -177,32 +216,13 @@ const candidateToInput = (candidate: LearningCandidate, projectID: string, trigg
     tags: [candidate.type, "learned", trigger],
     scope: "project-shared",
     projectId: projectID,
-    sensitivity: looksSensitive(candidate.summary) ? "secret_adjacent" : "source_code",
+    sensitivity: Governance.looksSensitive(candidate.summary) ? "secret_adjacent" : "source_code",
     risk: "low",
     confidence: { evidence_strength: strength, support_count: candidate.evidence_refs.length || 1 },
     provenance: { source: "runner", run_ref: candidate.source_run_id, evidence_refs: candidate.evidence_refs },
     idSlug: candidate.candidate_id,
   }
 }
-
-// looksSensitive is the SOLE barrier preventing a learning candidate from auto-merging into
-// shared project memory, so it must catch both (a) keyword indicators AND (b) literal credential
-// VALUES that carry no keyword (AWS/GitHub/Slack tokens, bearer/JWT, PEM blocks, connection
-// strings with embedded passwords, long high-entropy secrets). Keyword-only matching let a real
-// secret slip through if the surrounding text never said "token"/"password".
-const SENSITIVE_KEYWORD = /secret|token|password|passwd|api[_ -]?key|private[_ -]?key|credential|bearer|authorization/i
-const SENSITIVE_VALUE_PATTERNS: readonly RegExp[] = [
-  /AKIA[0-9A-Z]{16}/, // AWS access key id
-  /\bgh[pousr]_[A-Za-z0-9]{20,}\b/, // GitHub token
-  /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/, // Slack token
-  /\bsk-[A-Za-z0-9]{20,}\b/, // OpenAI-style key
-  /eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/, // JWT
-  /-----BEGIN (?:RSA |EC |OPENSSH |PGP )?PRIVATE KEY-----/, // PEM private key
-  /[a-z][a-z0-9+.-]*:\/\/[^/\s:@]+:[^/\s:@]+@/i, // scheme://user:pass@host
-]
-
-const looksSensitive = (value: string): boolean =>
-  SENSITIVE_KEYWORD.test(value) || SENSITIVE_VALUE_PATTERNS.some((re) => re.test(value))
 
 export class SkillCurator {
   constructor(private readonly paths: ProjectPaths) {

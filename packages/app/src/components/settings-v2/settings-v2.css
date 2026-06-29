@@ -173,6 +173,36 @@
   width: 100%;
 }
 
+.settings-v2-choice-control {
+  display: flex;
+  width: min(360px, 100%);
+  min-width: 0;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+}
+
+.settings-v2-choice-description {
+  width: 100%;
+  min-height: 14px;
+  color: var(--v2-text-text-muted);
+  font-size: 11px;
+  font-weight: 440;
+  line-height: 1.35;
+  text-align: right;
+}
+
+@media (max-width: 639px) {
+  .settings-v2-choice-control {
+    width: 100%;
+    align-items: stretch;
+  }
+
+  .settings-v2-choice-description {
+    text-align: left;
+  }
+}
+
 [data-component="dialog-v2"][data-variant="settings"] [data-component="select-v2-root"] {
   width: fit-content;
   max-width: 100%;

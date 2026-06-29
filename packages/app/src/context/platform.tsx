@@ -27,6 +27,21 @@ export type FatalRendererErrorLog = {
   os?: DesktopOS
 }
 
+// U7: isolated browser bridge (navigation-only). onState delivers address-bar metadata only.
+export type BrowserRect = { x: number; y: number; width: number; height: number }
+export type BrowserViewState = { url: string; title: string; canGoBack: boolean; canGoForward: boolean; loading: boolean }
+export type BrowserPlatform = {
+  show(rect: BrowserRect): Promise<void> | void
+  hide(): Promise<void> | void
+  setBounds(rect: BrowserRect): Promise<void> | void
+  navigate(url: string): Promise<void> | void
+  back(): Promise<void> | void
+  forward(): Promise<void> | void
+  reload(): Promise<void> | void
+  openExternal(): Promise<void> | void
+  onState(cb: (state: BrowserViewState) => void): () => void
+}
+
 type PlatformBase = {
   /** App version */
   version?: string
@@ -75,6 +90,10 @@ type PlatformBase = {
 
   /** Manage WSL sidecar servers (Electron on Windows only) */
   wslServers?: WslServersPlatform
+
+  /** U7: isolated in-app browser (Electron desktop only). Navigation-only — never exposes page
+   * content to the app/agent. The WebContentsView is drawn by the main process over the rect. */
+  browser?: BrowserPlatform
 
   /** Get the preferred display backend (desktop only) */
   getDisplayBackend?(): Promise<DisplayBackend | null> | DisplayBackend | null

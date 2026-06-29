@@ -18,6 +18,10 @@ export type DocType =
   | "design" | "requirements" | "bugfix" | "tasks" | "worklog"
   | "candidate" | "eval" | "diagnosis" | "decision" | "context_snapshot"
   | "instruction_resolution" | "conflict" | "failure_dossier" | "run_context" | "run_state"
+  // U1 PlanController (S1 §P0): the structural plan (goal/steps/active_step) for a session. Its
+  // version chain IS the plan change history surfaced by U2 — not a knowledge type, so no confidence
+  // is required. Persisted under scope "run:<sessionId>".
+  | "plan"
 
 export type DocStatus = "draft" | "candidate" | "active" | "superseded" | "rejected" | "quarantined"
 export type LinkRel =

@@ -7,6 +7,13 @@
     "module": "nodenext",
     "declaration": true,
     "moduleResolution": "nodenext",
+    // The package exports map serves source `.ts` directly (no build step in the
+    // workspace), and custom tools import it at runtime under the Electron/Node
+    // sidecar, which — unlike Bun — will not rewrite `.js` specifiers to `.ts`.
+    // So source uses `.ts` specifiers; these two flags let tsc accept them and
+    // rewrite to `.js` in the emitted dist for the published package.
+    "allowImportingTsExtensions": true,
+    "rewriteRelativeImportExtensions": true,
     "lib": ["es2022", "dom", "dom.iterable"]
   },
   "include": ["src"]

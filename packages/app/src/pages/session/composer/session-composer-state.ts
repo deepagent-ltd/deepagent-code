@@ -47,17 +47,50 @@ export function createSessionComposerState(options?: { closeMs?: number | (() =>
     return !!permissionRequest() || !!questionRequest()
   })
 
+  // U2: when a persistent plan exists for this session, the dock renders the PLAN's steps (mapped to
+  // the Todo shape the dock already knows) instead of the transient per-turn todos. The plan is
+  // durable — it survives the session going idle, unlike todos (see clear() guard below).
+  const plan = createMemo(() => {
+    const id = params.id
+    if (!id) return undefined
+    return serverSync.data.session_plan[id]
+  })
+
+  const planAsTodos = createMemo((): Todo[] => {
+    const p = plan()
+    if (!p) return []
+    const map: Record<string, Todo["status"]> = {
+      pending: "pending",
+      active: "in_progress",
+      done: "completed",
+      cancelled: "cancelled",
+    }
+    return p.steps.map((s, i) => ({
+      id: s.step_id || `step_${i}`,
+      content: s.title,
+      status: map[s.status] ?? "pending",
+      priority: "medium",
+    })) as unknown as Todo[]
+  })
+
   const todos = createMemo((): Todo[] => {
     const id = params.id
     if (!id) return []
+    const planTodos = planAsTodos()
+    if (planTodos.length > 0) return planTodos
     return serverSync.data.session_todo[id] ?? []
   })
+
+  // True when this session is driven by a persistent plan — clear() must NOT wipe it on idle.
+  const hasPlan = createMemo(() => (plan()?.steps.length ?? 0) > 0)
 
   const done = createMemo(
     () => todos().length > 0 && todos().every((todo) => todo.status === "completed" || todo.status === "cancelled"),
   )
 
-  const live = createMemo(() => sync.data.session_working(params.id ?? "") || blocked())
+  // U2: a session with a persistent plan stays "live" for dock purposes even when idle, so the plan
+  // panel remains visible (the FSM treats not-live + todos as "clear", which we don't want for plans).
+  const live = createMemo(() => sync.data.session_working(params.id ?? "") || blocked() || hasPlan())
 
   const [store, setStore] = createStore({
     responding: undefined as string | undefined,
@@ -108,9 +141,12 @@ export function createSessionComposerState(options?: { closeMs?: number | (() =>
   }
 
   // Keep stale turn todos from reopening if the model never clears them.
+  // U2 guard: a persistent plan must NOT be wiped on idle — only the transient per-turn todo cache
+  // is cleared. The plan lives under session_plan and is left untouched here.
   const clear = () => {
     const id = params.id
     if (!id) return
+    if (hasPlan()) return
     serverSync.todo.set(id, [])
     sync.set("todo", id, [])
   }

@@ -17,6 +17,17 @@ describe("RuntimeFlags", () => {
     }),
   )
 
+  it.effect("U5: background subagents default ON (stable local capability) and can be disabled with =false", () =>
+    Effect.gen(function* () {
+      const on = yield* readFlags.pipe(Effect.provide(fromConfig({})))
+      expect(on.experimentalBackgroundSubagents).toBe(true)
+      const off = yield* readFlags.pipe(
+        Effect.provide(fromConfig({ DEEPAGENT_CODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS: "false" })),
+      )
+      expect(off.experimentalBackgroundSubagents).toBe(false)
+    }),
+  )
+
   it.effect("defaultLayer parses plugin flags from the active ConfigProvider", () =>
     Effect.gen(function* () {
       const flags = yield* readFlags.pipe(

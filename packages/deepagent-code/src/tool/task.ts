@@ -10,10 +10,11 @@ import { Agent } from "../agent/agent"
 import { deriveSubagentSessionPermission } from "../agent/subagent-permissions"
 import type { SessionPrompt } from "../session/prompt"
 import { Config } from "@/config/config"
-import { Effect, Exit, Schema, Scope } from "effect"
+import { Effect, Exit, Option, Schema, Scope } from "effect"
 import { EffectBridge } from "@/effect/bridge"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Database } from "@deepagent-code/core/database/database"
+import { Worktree } from "@/worktree"
 
 export interface TaskPromptOps {
   cancel(sessionID: SessionID): Effect.Effect<void>
@@ -58,6 +59,10 @@ export const Parameters = Schema.Struct({
   background: Schema.optional(Schema.Boolean).annotate({
     description:
       "Run the agent in the background. You will be notified when it completes. DO NOT sleep, poll, or proactively check on its progress",
+  }),
+  isolation: Schema.optional(Schema.Literal("worktree")).annotate({
+    description:
+      "Set to \"worktree\" to run this subagent in its own isolated git worktree so it cannot collide with other parallel subagents. Its changes stay isolated until you merge them back. Omit for subagents that should operate directly in the current working directory.",
   }),
 })
 
@@ -125,12 +130,26 @@ export const TaskTool = Tool.define(
       const parentAgent = parent.agent
         ? yield* agent.get(parent.agent).pipe(Effect.catchCause(() => Effect.succeed(undefined)))
         : undefined
+
+      // U5: per-subagent worktree isolation. When isolation:"worktree" and this is a fresh subagent
+      // (not a resume), allocate a dedicated worktree so parallel subagents can't collide on the same
+      // files. The Worktree service is resolved OPTIONALLY (serviceOption) so the task tool does not
+      // add it to the registry's requirement set — when it's absent (e.g. minimal test layers) or
+      // creation fails (not a git project) we fall back to the shared directory rather than failing.
+      const isolate = params.isolation === "worktree" && !session
+      const worktreeOpt = isolate ? yield* Effect.serviceOption(Worktree.Service) : Option.none<Worktree.Interface>()
+      const worktreeInfo =
+        isolate && Option.isSome(worktreeOpt)
+          ? yield* worktreeOpt.value.create({ name: `agent-${params.subagent_type}` }).pipe(Effect.catchCause(() => Effect.succeed(undefined)))
+          : undefined
+
       const nextSession =
         session ??
         (yield* sessions.create({
           parentID: ctx.sessionID,
           title: params.description + ` (@${next.name} subagent)`,
           agent: next.name,
+          ...(worktreeInfo ? { directory: worktreeInfo.directory } : {}),
           permission: [
             ...deriveSubagentSessionPermission({
               parentSessionPermission: parent.permission ?? [],
@@ -173,6 +192,20 @@ export const TaskTool = Tool.define(
 
       const runTask = Effect.fn("TaskTool.runTask")(function* () {
         const parts = yield* ops.resolvePromptParts(params.prompt)
+        // U5: when isolated in a worktree, tell the subagent it inherited the parent's context but
+        // operates in a separate checkout — paths translate, and it must re-read files before editing.
+        const promptParts = worktreeInfo
+          ? [
+              {
+                type: "text" as const,
+                text:
+                  `You are running in an ISOLATED git worktree at ${worktreeInfo.directory} (branch ${worktreeInfo.branch ?? "detached"}). ` +
+                  `You inherited context from the parent session, but your working directory is this worktree. ` +
+                  `Re-read files before editing (do not trust remembered paths/contents), and know your changes stay isolated until merged back.`,
+              },
+              ...parts,
+            ]
+          : parts
         const result = yield* ops.prompt({
           messageID: MessageID.ascending(),
           sessionID: nextSession.id,
@@ -187,7 +220,7 @@ export const TaskTool = Tool.define(
             ...(next.permission.some((rule) => rule.permission === id) ? {} : { task: false }),
             ...Object.fromEntries((cfg.experimental?.primary_tools ?? []).map((item) => [item, false])),
           },
-          parts,
+          parts: promptParts,
         })
         return result.parts.findLast((item) => item.type === "text")?.text ?? ""
       })

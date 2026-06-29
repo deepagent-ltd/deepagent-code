@@ -17,7 +17,6 @@ import { useLanguage } from "@/context/language"
 import { usePlatform } from "@/context/platform"
 import { normalizeServerUrl, ServerConnection, useServer } from "@/context/server"
 import { type ServerHealth, useCheckServerHealth } from "@/utils/server-health"
-import { useSettings } from "@/context/settings"
 import { useTabs } from "@/context/tabs"
 
 const DEFAULT_USERNAME = "deepagent-code"
@@ -336,11 +335,8 @@ export function useServerManagementController(options: { onSelect?: () => void; 
     return [current, ...list.filter((x) => x !== current)]
   })
 
-  const settings = useSettings()
-  const current = createMemo<ServerConnection.Any | undefined>(() =>
-    settings.general.newLayoutDesigns()
-      ? undefined
-      : (items().find((x) => ServerConnection.key(x) === server.key) ?? items()[0]),
+  const current = createMemo<ServerConnection.Any | undefined>(
+    () => items().find((x) => ServerConnection.key(x) === server.key) ?? items()[0],
   )
 
   const sortedItems = createMemo(() => {
@@ -554,7 +550,6 @@ export function useServerManagementController(options: { onSelect?: () => void; 
 
 export function ServerConnectionList(props: { controller: ReturnType<typeof useServerManagementController> }) {
   const language = useLanguage()
-  const settings = useSettings()
 
   return (
     <div class="flex flex-1 min-h-0 flex-col gap-4">
@@ -569,7 +564,7 @@ export function ServerConnectionList(props: { controller: ReturnType<typeof useS
         items={props.controller.sortedItems}
         key={(x) => x.http.url}
         onSelect={(x) => {
-          if (x && !settings.general.newLayoutDesigns()) void props.controller.select(x)
+          if (x) void props.controller.select(x)
         }}
         divider={true}
       >
