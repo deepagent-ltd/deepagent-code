@@ -341,6 +341,7 @@ const buildDeepAgentPromptContext = Effect.fn("LLMRequestPrep.buildDeepAgentProm
     workspacePath: envCtx.cwd,
   }
 
+  const sessionExistedBefore = AgentGateway.DeepAgentSessionState.get(input.sessionID) !== undefined
   AgentGateway.DeepAgentOrchestrator.initSession(orchestratorInput)
 
   if (validationCommands.length > 0) {
@@ -356,6 +357,11 @@ const buildDeepAgentPromptContext = Effect.fn("LLMRequestPrep.buildDeepAgentProm
     if (state) {
       AgentGateway.DeepAgentSessionState.advanceToNextRound(input.sessionID, "continue")
     }
+  } else if (sessionExistedBefore) {
+    // U1: a fresh user message on an already-running session (not a model-driven round continue) is
+    // the "user appended a new instruction" signal — the existing plan may no longer match intent,
+    // so flip the latch from this runtime fact rather than waiting for the model to notice.
+    AgentGateway.DeepAgentSessionState.markPlanStale(input.sessionID, "user_appended")
   }
 
   const runtimeInstructions = [...input.system, ...(input.user.system ? [input.user.system] : [])]

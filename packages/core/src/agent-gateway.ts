@@ -357,6 +357,7 @@ const isManagedDeepAgentRuntimeWith = (config: CurrentConfig) =>
 import { buildSystemPrompt, type PromptContext } from "./deepagent/prompt-policy"
 import * as DeepAgentOrchestrator from "./deepagent/orchestrator"
 import * as DeepAgentSessionState from "./deepagent/session-state"
+import * as DeepAgentPlanController from "./deepagent/plan-controller"
 import * as DeepAgentDiagnosis from "./deepagent/diagnosis"
 import * as DeepAgentValidation from "./deepagent/validation"
 import * as DeepAgentLearning from "./deepagent/learning"
@@ -378,7 +379,7 @@ import * as DeepAgentHooks from "./deepagent/hooks"
 import * as DeepAgentKnowledgeGate from "./deepagent/knowledge-gate"
 import type { RunSummary } from "./deepagent/run-graph"
 
-export { DeepAgentOrchestrator, DeepAgentSessionState, DeepAgentDiagnosis, DeepAgentValidation, DeepAgentLearning, DeepAgentPromotion, DeepAgentDocumentStore, DeepAgentRunGraph, DeepAgentWorkspace, DeepAgentBackgroundLearning, DeepAgentPromptPipeline, DeepAgentRoundReport, DeepAgentMode, DeepAgentBudget, DeepAgentKnowledgeRetriever, DeepAgentHooks, DeepAgentKnowledgeGate, DeepAgentKnowledgeSource, DeepAgentDurableKnowledgeStore, DeepAgentDomainPackRegistry }
+export { DeepAgentOrchestrator, DeepAgentSessionState, DeepAgentPlanController, DeepAgentDiagnosis, DeepAgentValidation, DeepAgentLearning, DeepAgentPromotion, DeepAgentDocumentStore, DeepAgentRunGraph, DeepAgentWorkspace, DeepAgentBackgroundLearning, DeepAgentPromptPipeline, DeepAgentRoundReport, DeepAgentMode, DeepAgentBudget, DeepAgentKnowledgeRetriever, DeepAgentHooks, DeepAgentKnowledgeGate, DeepAgentKnowledgeSource, DeepAgentDurableKnowledgeStore, DeepAgentDomainPackRegistry }
 export type { PromptContext } from "./deepagent/prompt-policy"
 export type { EnvironmentContext, McpServerRef, PreviousResults, ToolContext, ToolRef } from "./deepagent/prompt-policy"
 export type { OrchestratorInput, PostTurnDecision } from "./deepagent/orchestrator"

@@ -11,7 +11,7 @@ import type {
   SnapshotFileDiff,
   Todo,
 } from "@deepagent-code/sdk/v2/client"
-import type { State, VcsCache } from "./types"
+import type { State, VcsCache, SessionPlan } from "./types"
 import { trimSessions } from "./session-trim"
 import { dropSessionCaches } from "./session-cache"
 import { diffs as list, message as clean } from "@/utils/diffs"
@@ -99,6 +99,7 @@ export function applyDirectoryEvent(input: {
   loadLsp: () => void
   vcsCache?: VcsCache
   setSessionTodo?: (sessionID: string, todos: Todo[] | undefined) => void
+  setSessionPlan?: (sessionID: string, plan: SessionPlan | undefined) => void
   retainedLimit?: number
 }) {
   const event = input.event
@@ -177,6 +178,29 @@ export function applyDirectoryEvent(input: {
       const props = event.properties as { sessionID: string; todos: Todo[] }
       input.setStore("todo", props.sessionID, reconcile(props.todos, { key: "id" }))
       input.setSessionTodo?.(props.sessionID, props.todos)
+      break
+    }
+    case "plan.updated": {
+      // U2: the live plan (goal + steps + progress) from the `plan` tool. Stored under a distinct
+      // session_plan key so it persists when the session goes idle (unlike the todo cache, which the
+      // composer clears on idle).
+      const props = event.properties as {
+        sessionID: string
+        plan_id: string
+        goal: string
+        active_step_id: string | null
+        steps: SessionPlan["steps"]
+        done: number
+        total: number
+      }
+      input.setSessionPlan?.(props.sessionID, {
+        plan_id: props.plan_id,
+        goal: props.goal,
+        active_step_id: props.active_step_id,
+        steps: props.steps,
+        done: props.done,
+        total: props.total,
+      })
       break
     }
     case "session.status": {

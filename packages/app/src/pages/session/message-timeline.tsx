@@ -215,7 +215,12 @@ function TimelineDiffSummaryRow(props: { diffs: SummaryDiff[] }) {
                   <StickyAccordionHeader>
                     <Accordion.Trigger>
                       <div data-slot="session-turn-diff-trigger">
-                        <span data-slot="session-turn-diff-path">
+                        <span
+                          data-slot="session-turn-diff-path"
+                          title={diff.file}
+                          onPointerDown={(event) => event.stopPropagation()}
+                          onClick={(event) => event.stopPropagation()}
+                        >
                           <Show when={diff.file.includes("/")}>
                             <span data-slot="session-turn-diff-directory">{`\u202A${getDirectory(diff.file)}\u202C`}</span>
                           </Show>
