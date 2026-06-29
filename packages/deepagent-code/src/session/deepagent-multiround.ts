@@ -146,6 +146,9 @@ export const maybeRunRounds = <T>(ops: MultiRoundOps<T>): Effect.Effect<T> =>
       if (prevFingerprint !== undefined && fingerprint === prevFingerprint) {
         stagnantRounds++
         if (stagnantRounds >= noProgressLimit) {
+          // U1: no progress is a runtime signal that the current plan isn't working — mark the plan
+          // stale so finalization is gated and the next turn must replan.
+          AgentGateway.DeepAgentSessionState.markPlanStale(ops.sessionID, "no_progress")
           if (best) yield* ops.restore(best)
           break
         }
@@ -193,8 +196,6 @@ export const maybeRunRounds = <T>(ops: MultiRoundOps<T>): Effect.Effect<T> =>
       // that skipped its configured typecheck/test could still emit "done". When the gate blocks,
       // we force needs_human so a human (or ultra supervisor) sees that validation must run first.
       const requiredValidationsRun = ops.validationCommands.length === 0 || lastResults.length > 0
-      const stopDecision = StopHook.evaluate({ name: "stop", payload: { requiredValidationsRun } })
-      const baseStatus = RoundReport.deriveStatus(report)
       // docs/34 §9 S9 (DAP-13): an ultra pack-set change (snapshot id differs from the run baseline)
       // means the active domain risk/scope shifted — never auto-advance, escalate to human.
       const packChanged =
@@ -202,6 +203,23 @@ export const maybeRunRounds = <T>(ops: MultiRoundOps<T>): Effect.Effect<T> =>
         ops.baselinePackSnapshotId !== undefined &&
         ops.packSnapshotId !== undefined &&
         ops.packSnapshotId !== ops.baselinePackSnapshotId
+      // U1: a pack change is also a plan-staleness signal (scope/risk shifted under the plan).
+      if (packChanged) AgentGateway.DeepAgentSessionState.markPlanStale(ops.sessionID, "pack_changed")
+      // U1: finalization is blocked while the plan latch is stale (any of the five runtime signals),
+      // UNLESS we've already exhausted the replan budget — then the escape hatch routes to
+      // needs_human rather than looping forever demanding a plan update.
+      const latch = AgentGateway.DeepAgentSessionState.planLatch(ops.sessionID)
+      const planStale = latch?.latch === "stale" && !AgentGateway.DeepAgentPlanController.shouldEscapeToHuman(latch)
+      // U9: high+ runs must produce a completion report (a plan whose steps are all resolved) before
+      // finalizing. general/direct have no hard gate. We treat "report present" as: a plan exists and
+      // nothing is outstanding (buildCompletionReport().complete). Escape hatch still applies via the
+      // stale check above so a weak model is never deadlocked.
+      const hardGate = AgentGateway.DeepAgentPlanController.hardGateEnabled(ops.agentMode)
+      const plan = AgentGateway.DeepAgentSessionState.getPlan(ops.sessionID)
+      const planExists = plan != null
+      const hasCompletionReport = planExists && AgentGateway.DeepAgentPlanController.buildCompletionReport(plan).complete
+      const stopDecision = StopHook.evaluate({ name: "stop", payload: { requiredValidationsRun, planStale, hardGate, planExists, hasCompletionReport } })
+      const baseStatus = RoundReport.deriveStatus(report)
       const status = stopDecision.decision === "block" || packChanged ? "needs_human" : baseStatus
       const suggestion: NextRoundSuggestion = {
         status,

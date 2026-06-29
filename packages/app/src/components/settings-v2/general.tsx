@@ -197,8 +197,6 @@ export const SettingsGeneralV2: Component = () => {
   })
   const deepAgentMode = createMemo(() => deepAgentModeFromConfig(serverSync.data.config))
   const deepAgentPromptMode = createMemo(() => deepAgentPromptModeFromConfig(serverSync.data.config))
-  // #6: the scenario mode is presented as two description cards (direct / wish) instead of a
-  // dropdown. Each card carries a short i18n description of the mode.
   const scenarioModeCards = createMemo<{ value: DeepAgentPromptMode; label: string; description: string }[]>(() => [
     {
       value: "direct",
@@ -211,6 +209,9 @@ export const SettingsGeneralV2: Component = () => {
       description: language.t("settings.general.deepagent.prompt.wish.description"),
     },
   ])
+  const scenarioModeDescription = createMemo(
+    () => scenarioModeCards().find((card) => card.value === deepAgentPromptMode())?.description ?? "",
+  )
   // #3: `ultra` requires the wish scenario; it cannot run under `direct`. Gate against the
   // config-level scenario mode (this selector is a session/config-level setting, not per-turn).
   // When the scenario is `direct`, drop `ultra` from the selectable options (unless it is somehow
@@ -231,17 +232,13 @@ export const SettingsGeneralV2: Component = () => {
   })
   const deepAgentWishModel = createMemo(() => deepAgentWishModelFromConfig(serverSync.data.config) ?? "")
   const wishModelOptions = createMemo(() =>
-    models
-      .list()
-      .map((model) => ({
-        value: `${model.provider.id}/${model.id}`,
-        label: model.name,
-        description: model.provider.name,
-      })),
+    models.list().map((model) => ({
+      value: `${model.provider.id}/${model.id}`,
+      label: model.name,
+      description: model.provider.name,
+    })),
   )
 
-  // Self-learning approval policy, presented as two description cards (manual / auto). manual =
-  // learned knowledge waits for review; auto = it becomes retrievable immediately.
   const deepAgentSelfLearning = createMemo(() => deepAgentSelfLearningFromConfig(serverSync.data.config))
   const selfLearningCards = createMemo<{ value: DeepAgentSelfLearning; label: string; description: string }[]>(() => [
     {
@@ -255,6 +252,9 @@ export const SettingsGeneralV2: Component = () => {
       description: language.t("settings.general.deepagent.selfLearning.auto.description"),
     },
   ])
+  const selfLearningDescription = createMemo(
+    () => selfLearningCards().find((card) => card.value === deepAgentSelfLearning())?.description ?? "",
+  )
 
   const onDisplayBackendChange = (checked: boolean) => {
     const update = platform.setDisplayBackend?.(checked ? "wayland" : "auto")
@@ -379,34 +379,22 @@ export const SettingsGeneralV2: Component = () => {
           title={language.t("settings.general.deepagent.prompt.title")}
           description={language.t("settings.general.deepagent.prompt.description")}
         >
-          <div
-            data-action="settings-deepagent-prompt-mode"
-            role="radiogroup"
-            aria-label={language.t("settings.general.deepagent.prompt.title")}
-            class="flex w-full flex-col gap-2 sm:w-[320px]"
-          >
-            <For each={scenarioModeCards()}>
-              {(card) => {
-                const active = createMemo(() => deepAgentPromptMode() === card.value)
-                return (
-                  <button
-                    data-action={`settings-deepagent-prompt-mode-${card.value}`}
-                    data-active={active() ? "true" : "false"}
-                    type="button"
-                    role="radio"
-                    aria-checked={active()}
-                    class="flex flex-col gap-1 rounded-lg border border-v2-border-border-muted bg-v2-background-bg-layer-01 px-3 py-2.5 text-left transition-colors hover:border-v2-border-border-base data-[active=true]:border-v2-border-border-strong data-[active=true]:bg-v2-background-bg-layer-02"
-                    onClick={() => {
-                      if (active()) return
-                      void updateDeepAgentOptions(serverSync, { promptMode: card.value })
-                    }}
-                  >
-                    <span class="text-13-medium text-v2-text-text-base">{card.label}</span>
-                    <span class="text-12-regular text-v2-text-text-faint">{card.description}</span>
-                  </button>
-                )
+          <div data-action="settings-deepagent-prompt-mode" class="settings-v2-choice-control">
+            <SelectV2
+              appearance="inline"
+              options={scenarioModeCards()}
+              placement="bottom-end"
+              gutter={6}
+              current={scenarioModeCards().find((option) => option.value === deepAgentPromptMode())}
+              value={(option) => option.value}
+              label={(option) => option.label}
+              onSelect={(option) => {
+                if (!option) return
+                if (option.value === deepAgentPromptMode()) return
+                void updateDeepAgentOptions(serverSync, { promptMode: option.value })
               }}
-            </For>
+            />
+            <div class="settings-v2-choice-description">{scenarioModeDescription()}</div>
           </div>
         </SettingsRowV2>
 
@@ -437,34 +425,22 @@ export const SettingsGeneralV2: Component = () => {
           title={language.t("settings.general.deepagent.selfLearning.title")}
           description={language.t("settings.general.deepagent.selfLearning.description")}
         >
-          <div
-            data-action="settings-deepagent-self-learning"
-            role="radiogroup"
-            aria-label={language.t("settings.general.deepagent.selfLearning.title")}
-            class="flex w-full flex-col gap-2 sm:w-[320px]"
-          >
-            <For each={selfLearningCards()}>
-              {(card) => {
-                const active = createMemo(() => deepAgentSelfLearning() === card.value)
-                return (
-                  <button
-                    data-action={`settings-deepagent-self-learning-${card.value}`}
-                    data-active={active() ? "true" : "false"}
-                    type="button"
-                    role="radio"
-                    aria-checked={active()}
-                    class="flex flex-col gap-1 rounded-lg border border-v2-border-border-muted bg-v2-background-bg-layer-01 px-3 py-2.5 text-left transition-colors hover:border-v2-border-border-base data-[active=true]:border-v2-border-border-strong data-[active=true]:bg-v2-background-bg-layer-02"
-                    onClick={() => {
-                      if (active()) return
-                      void updateDeepAgentOptions(serverSync, { selfLearning: card.value })
-                    }}
-                  >
-                    <span class="text-13-medium text-v2-text-text-base">{card.label}</span>
-                    <span class="text-12-regular text-v2-text-text-faint">{card.description}</span>
-                  </button>
-                )
+          <div data-action="settings-deepagent-self-learning" class="settings-v2-choice-control">
+            <SelectV2
+              appearance="inline"
+              options={selfLearningCards()}
+              placement="bottom-end"
+              gutter={6}
+              current={selfLearningCards().find((option) => option.value === deepAgentSelfLearning())}
+              value={(option) => option.value}
+              label={(option) => option.label}
+              onSelect={(option) => {
+                if (!option) return
+                if (option.value === deepAgentSelfLearning()) return
+                void updateDeepAgentOptions(serverSync, { selfLearning: option.value })
               }}
-            </For>
+            />
+            <div class="settings-v2-choice-description">{selfLearningDescription()}</div>
           </div>
         </SettingsRowV2>
 
@@ -550,98 +526,6 @@ export const SettingsGeneralV2: Component = () => {
             <Switch
               checked={settings.general.showSessionProgressBar()}
               onChange={(checked) => settings.general.setShowSessionProgressBar(checked)}
-            />
-          </div>
-        </SettingsRowV2>
-
-        <SettingsRowV2
-          title={language.t("settings.general.row.newLayoutDesigns.title")}
-          description={language.t("settings.general.row.newLayoutDesigns.description")}
-        >
-          <div data-action="settings-new-layout-designs">
-            <Switch
-              checked={settings.general.newLayoutDesigns()}
-              onChange={(checked) => settings.general.setNewLayoutDesigns(checked)}
-            />
-          </div>
-        </SettingsRowV2>
-      </SettingsListV2>
-    </div>
-  )
-
-  const AdvancedSection = () => (
-    <div class="settings-v2-section">
-      <h3 class="settings-v2-section-title">{language.t("settings.general.section.advanced")}</h3>
-
-      <SettingsListV2>
-        <SettingsRowV2
-          title={language.t("settings.general.row.showFileTree.title")}
-          description={language.t("settings.general.row.showFileTree.description")}
-        >
-          <div data-action="settings-show-file-tree">
-            <Switch
-              checked={settings.general.showFileTree()}
-              onChange={(checked) => settings.general.setShowFileTree(checked)}
-            />
-          </div>
-        </SettingsRowV2>
-
-        <SettingsRowV2
-          title={language.t("settings.general.row.showNavigation.title")}
-          description={language.t("settings.general.row.showNavigation.description")}
-        >
-          <div data-action="settings-show-navigation">
-            <Switch
-              checked={settings.general.showNavigation()}
-              onChange={(checked) => settings.general.setShowNavigation(checked)}
-            />
-          </div>
-        </SettingsRowV2>
-
-        <SettingsRowV2
-          title={language.t("settings.general.row.showSearch.title")}
-          description={language.t("settings.general.row.showSearch.description")}
-        >
-          <div data-action="settings-show-search">
-            <Switch
-              checked={settings.general.showSearch()}
-              onChange={(checked) => settings.general.setShowSearch(checked)}
-            />
-          </div>
-        </SettingsRowV2>
-
-        <SettingsRowV2
-          title={language.t("settings.general.row.showTerminal.title")}
-          description={language.t("settings.general.row.showTerminal.description")}
-        >
-          <div data-action="settings-show-terminal">
-            <Switch
-              checked={settings.general.showTerminal()}
-              onChange={(checked) => settings.general.setShowTerminal(checked)}
-            />
-          </div>
-        </SettingsRowV2>
-
-        <SettingsRowV2
-          title={language.t("settings.general.row.showStatus.title")}
-          description={language.t("settings.general.row.showStatus.description")}
-        >
-          <div data-action="settings-show-status">
-            <Switch
-              checked={settings.general.showStatus()}
-              onChange={(checked) => settings.general.setShowStatus(checked)}
-            />
-          </div>
-        </SettingsRowV2>
-
-        <SettingsRowV2
-          title={language.t("settings.general.row.showCustomAgents.title")}
-          description={language.t("settings.general.row.showCustomAgents.description")}
-        >
-          <div data-action="settings-show-custom-agents">
-            <Switch
-              checked={settings.general.showCustomAgents()}
-              onChange={(checked) => settings.general.setShowCustomAgents(checked)}
             />
           </div>
         </SettingsRowV2>
@@ -973,10 +857,6 @@ export const SettingsGeneralV2: Component = () => {
         <UpdatesSection />
 
         <DisplaySection />
-
-        <Show when={desktop()}>
-          <AdvancedSection />
-        </Show>
       </div>
     </>
   )

@@ -1,4 +1,5 @@
 import { PlanExitTool } from "./plan"
+import { PlanTool } from "./plan-write"
 import { Session } from "@/session/session"
 import { QuestionTool } from "./question"
 import { ShellTool } from "./shell"
@@ -122,6 +123,7 @@ export const layer: Layer.Layer<
     const todo = yield* TodoWriteTool
     const lsptool = yield* LspTool
     const plan = yield* PlanExitTool
+    const planwrite = yield* PlanTool
     const webfetch = yield* WebFetchTool
     const websearch = yield* WebSearchTool
     const shell = yield* ShellTool
@@ -204,7 +206,17 @@ export const layer: Layer.Layer<
           const namespace = path.basename(match, path.extname(match))
           // `match` is an absolute filesystem path from `Glob.scanSync(..., { absolute: true })`.
           // Import it as `file://` so Node on Windows accepts the dynamic import.
-          const mod = yield* Effect.promise(() => import(pathToFileURL(match).href))
+          // A broken tool file (bad import, syntax error, unresolved dependency) must never take
+          // down the whole prompt: catch the failure, log it, and skip just that file. Under the
+          // desktop sidecar (Electron/Node) a `.js`-specifier import that only resolves under Bun
+          // would otherwise surface as a Die defect inside prompt_async -> silent no-reply.
+          const mod = yield* Effect.promise(() =>
+            import(pathToFileURL(match).href).catch((error: unknown) => {
+              log.error("failed to load custom tool; skipping", { path: match, error })
+              return undefined
+            }),
+          )
+          if (!mod) continue
           for (const [id, def] of Object.entries(mod)) {
             if (!isPluginTool(def)) continue
             custom.push(fromPlugin(id === "default" ? namespace : `${namespace}_${id}`, def))
@@ -238,6 +250,7 @@ export const layer: Layer.Layer<
           question: Tool.init(question),
           lsp: Tool.init(lsptool),
           plan: Tool.init(plan),
+          planwrite: Tool.init(planwrite),
         })
 
         return {
@@ -257,6 +270,7 @@ export const layer: Layer.Layer<
             tool.search,
             tool.skill,
             tool.patch,
+            tool.planwrite,
             ...(flags.experimentalLspTool ? [tool.lsp] : []),
             ...(flags.experimentalPlanMode && flags.client === "cli" ? [tool.plan] : []),
           ],

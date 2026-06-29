@@ -1,5 +1,6 @@
 import path from "node:path"
 import * as nodeFs from "node:fs"
+import * as Log from "@deepagent-code/core/util/log"
 import { Config } from "@/config/config"
 import { configureGateway, reviewRunsDir } from "@/deepagent/config"
 import { buildProfile } from "@/deepagent/profile-detector"
@@ -10,6 +11,8 @@ import { AgentGateway } from "@deepagent-code/core/agent-gateway"
 import { InstanceHttpApi } from "../api"
 import { DeepAgentPromotionError } from "../groups/deepagent"
 import { WorkspaceRouteContext } from "../middleware/workspace-routing"
+
+const dbgLog = Log.create({ service: "deepagent.packs.debug" })
 
 export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagent", (handlers) =>
   Effect.gen(function* () {
@@ -251,11 +254,20 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
     })
 
     const packsAll = Effect.fn("DeepAgentHttpApi.packsAll")(function* () {
+      dbgLog.info("packsAll: handler entered")
       const memoryDir = yield* workspaceMemoryDir()
       return yield* Effect.try({
         try: () => {
           const pinned = new Set(readPinned(memoryDir))
           const manifests = AgentGateway.DeepAgentDomainPackRegistry.discover()
+          const scanDbg = AgentGateway.DeepAgentDomainPackRegistry.dirsToScanDebug()
+          dbgLog.info("packsAll: discover", {
+            count: manifests.length,
+            dirs: scanDbg.dirs.join(" | "),
+            builtin: String(scanDbg.builtin),
+            metaUrl: scanDbg.metaUrl,
+            sample: manifests.slice(0, 2).map((m) => m.id).join(","),
+          })
           const packs = manifests
             .map((m) => ({
               id: m.id,
@@ -268,9 +280,13 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
               pinned: pinned.has(m.id),
             }))
             .sort((a, b) => a.id.localeCompare(b.id))
+          dbgLog.info("packsAll: returning", { packs: packs.length })
           return { packs }
         },
-        catch: (error) => new DeepAgentPromotionError({ message: error instanceof Error ? error.message : String(error) }),
+        catch: (error) => {
+          dbgLog.error("packsAll: failed", { error: error instanceof Error ? error.message : String(error) })
+          return new DeepAgentPromotionError({ message: error instanceof Error ? error.message : String(error) })
+        },
       })
     })
 
