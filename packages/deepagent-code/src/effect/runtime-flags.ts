@@ -2,6 +2,9 @@ import { Config, ConfigProvider, Context, Effect, Layer, Option } from "effect"
 import { ConfigService } from "@/effect/config-service"
 
 const bool = (name: string) => Config.boolean(name).pipe(Config.withDefault(false))
+// A capability that ships ON by default but can be explicitly disabled with `=false` (U5: background
+// subagents are promoted from experimental to a stable local capability in V3.3).
+const stableOn = (name: string) => Config.boolean(name).pipe(Config.withDefault(true))
 const positiveInteger = (name: string) =>
   Config.number(name).pipe(
     Config.map((value) => (Number.isInteger(value) && value > 0 ? value : undefined)),
@@ -40,7 +43,10 @@ export class Service extends ConfigService.Service<Service>()("@deepagent-code/R
   enableExperimentalModels: bool("DEEPAGENT_CODE_ENABLE_EXPERIMENTAL_MODELS"),
   enableQuestionTool: bool("DEEPAGENT_CODE_ENABLE_QUESTION_TOOL"),
   experimentalReferences: enabledByExperimental("DEEPAGENT_CODE_EXPERIMENTAL_REFERENCES"),
-  experimentalBackgroundSubagents: enabledByExperimental("DEEPAGENT_CODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS"),
+  // U5 (V3.3): promoted from experimental to a stable LOCAL capability — background subagents are on
+  // by default. NOTE: this is local, non-durable (process restart loses live jobs); cross-restart
+  // recovery + remote/cloud agents are deferred to V3.4 (S1 §10). Disable with =false.
+  experimentalBackgroundSubagents: stableOn("DEEPAGENT_CODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS"),
   experimentalLspTy: bool("DEEPAGENT_CODE_EXPERIMENTAL_LSP_TY"),
   experimentalLspTool: enabledByExperimental("DEEPAGENT_CODE_EXPERIMENTAL_LSP_TOOL"),
   experimentalOxfmt: enabledByExperimental("DEEPAGENT_CODE_EXPERIMENTAL_OXFMT"),

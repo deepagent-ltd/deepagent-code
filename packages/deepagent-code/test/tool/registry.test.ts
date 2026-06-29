@@ -99,6 +99,11 @@ const brokenPluginLayer = Layer.succeed(
 )
 
 const it = testEffect(Layer.mergeAll(registryLayer(), node, Agent.defaultLayer))
+// U5: a registry with background subagents explicitly disabled, to assert the task schema hides the
+// background param in that mode (the default is now ON).
+const itNoBackground = testEffect(
+  Layer.mergeAll(registryLayer({ flags: { experimentalBackgroundSubagents: false } }), node, Agent.defaultLayer),
+)
 const withBrokenPlugin = testEffect(
   Layer.mergeAll(registryLayer({ plugin: brokenPluginLayer }), node, Agent.defaultLayer),
 )
@@ -117,7 +122,7 @@ describe("tool.registry", () => {
     }),
   )
 
-  it.instance("hides task background parameter unless experimental background subagents are enabled", () =>
+  it.instance("exposes the task background parameter by default (U5: stable local capability)", () =>
     Effect.gen(function* () {
       const registry = yield* ToolRegistry.Service
       const agent = yield* Agent.Service
@@ -129,9 +134,30 @@ describe("tool.registry", () => {
         agent: build,
       })).find((tool) => tool.id === "task")
 
-      expect(task?.jsonSchema).toBeDefined()
-      expect((task?.jsonSchema?.properties as Record<string, unknown> | undefined)?.background).toBeUndefined()
+      // background subagents are on by default now; the param is part of the live schema (jsonSchema
+      // override is undefined so the full Parameters schema — including background — is used).
+      expect(task).toBeDefined()
+      expect(task?.jsonSchema).toBeUndefined()
     }),
+  )
+
+  itNoBackground.instance(
+    "hides task background parameter when background subagents are explicitly disabled",
+    () =>
+      Effect.gen(function* () {
+        const registry = yield* ToolRegistry.Service
+        const agent = yield* Agent.Service
+        const build = yield* agent.get("build")
+        if (!build) throw new Error("build agent not found")
+        const task = (yield* registry.tools({
+          providerID: ProviderV2.ID.make("deepagent-code"),
+          modelID: ModelV2.ID.make("test"),
+          agent: build,
+        })).find((tool) => tool.id === "task")
+
+        expect(task?.jsonSchema).toBeDefined()
+        expect((task?.jsonSchema?.properties as Record<string, unknown> | undefined)?.background).toBeUndefined()
+      }),
   )
 
   it.instance("loads tools from .deepagent-code/tool (singular)", () =>
@@ -185,6 +211,35 @@ describe("tool.registry", () => {
       const ids = yield* registry.ids()
       expect(ids).toContain("mixed")
       expect(ids).not.toContain("mixed_helper")
+    }),
+  )
+
+  // Regression: a single broken custom-tool file (unresolvable import, syntax error)
+  // must NOT crash registry initialization / the prompt. Before, the dynamic import
+  // rejection became a Die defect inside prompt_async -> silent no-reply (notably in the
+  // Electron/Node sidecar, where a `.js` specifier that only resolves under Bun fails).
+  // The bad file is logged and skipped; valid sibling tools still load.
+  it.instance("skips a broken custom tool file and still loads valid ones", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const tool = path.join(test.directory, ".deepagent-code", "tool")
+      yield* Effect.promise(() => fs.mkdir(tool, { recursive: true }))
+      yield* Effect.promise(() =>
+        Bun.write(path.join(tool, "broken.ts"), 'import { nope } from "@this/does-not-exist"\nexport default nope\n'),
+      )
+      yield* Effect.promise(() =>
+        Bun.write(
+          path.join(tool, "ok.ts"),
+          ["export default {", "  description: 'ok tool',", "  args: {},", "  execute: async () => 'ok',", "}", ""].join(
+            "\n",
+          ),
+        ),
+      )
+
+      const registry = yield* ToolRegistry.Service
+      const ids = yield* registry.ids()
+      expect(ids).toContain("ok")
+      expect(ids).not.toContain("broken")
     }),
   )
 

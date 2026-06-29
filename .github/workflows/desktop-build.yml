@@ -21,18 +21,33 @@ on:
       platforms:
         description: "Which platforms to build"
         required: false
-        default: "mac+linux"
+        default: "all"
         type: choice
         options:
-          - mac+linux
+          - all
           - mac
           - linux
-          - all
+          - windows
 
 permissions:
   contents: read
+  actions: write
 
 jobs:
+  cleanup:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Delete previous desktop artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          gh api "repos/$REPOSITORY/actions/artifacts" --paginate \
+            --jq '.artifacts[] | select(.name | startswith("deepagent-code-desktop-")) | .id' \
+            | while read -r artifact_id; do
+                gh api -X DELETE "repos/$REPOSITORY/actions/artifacts/$artifact_id"
+              done
+
   # Build the matrix from the `platforms` input. Job-level `if` cannot read the matrix
   # context, so the selection happens here and the build job consumes the JSON.
   setup:
@@ -43,25 +58,28 @@ jobs:
       - id: gen
         shell: bash
         env:
-          PLATFORMS: ${{ github.event.inputs.platforms || 'mac+linux' }}
+          PLATFORMS: ${{ github.event.inputs.platforms || 'all' }}
         run: |
           # macOS arm64 only — Apple Silicon covers current Macs. The Intel (macos-13)
           # runner is queue-starved and the x64 cross-compile is unreliable, so it is dropped.
-          mac='{"host":"macos-14","target":"mac-arm64","platform_flag":"--mac --arm64","group":"mac"}'
-          linux='{"host":"ubuntu-24.04","target":"linux-x64","platform_flag":"--linux --x64","group":"linux"},{"host":"ubuntu-24.04-arm","target":"linux-arm64","platform_flag":"--linux --arm64","group":"linux"}'
+          mac='{"host":"macos-14","target":"mac-arm64","platform_flag":"--mac dmg --arm64","group":"mac"}'
+          linux='{"host":"ubuntu-24.04","target":"linux-x64","platform_flag":"--linux deb rpm --x64","group":"linux"}'
           # Windows arm64 builds natively on the GA windows-11-arm runner (no cross-compile);
           # both native deps ship win32-arm64 prebuilds (@lydell/node-pty, @parcel/watcher).
-          win='{"host":"windows-2025","target":"win-x64","platform_flag":"--win --x64","group":"win"},{"host":"windows-11-arm","target":"win-arm64","platform_flag":"--win --arm64","group":"win"}'
+          win='{"host":"windows-2025","target":"win-x64","platform_flag":"--win nsis --x64","group":"win"},{"host":"windows-11-arm","target":"win-arm64","platform_flag":"--win nsis --arm64","group":"win"}'
           case "$PLATFORMS" in
             mac)       items="$mac" ;;
             linux)     items="$linux" ;;
+            windows)   items="$win" ;;
             all)       items="$mac,$linux,$win" ;;
-            *)         items="$mac,$linux" ;;  # mac+linux (default)
+            *)         items="$mac,$linux,$win" ;;
           esac
           echo "matrix={\"include\":[$items]}" >> "$GITHUB_OUTPUT"
 
   build:
-    needs: setup
+    needs:
+      - cleanup
+      - setup
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.setup.outputs.matrix) }}
@@ -83,7 +101,7 @@ jobs:
         with:
           node-version: "24"
 
-      # rpm tooling for the Linux rpm target (deb/AppImage need no extra tools).
+      # rpm tooling for the Linux rpm target (deb needs no extra tools).
       - name: Install rpm (linux)
         if: matrix.group == 'linux'
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends rpm
@@ -132,10 +150,10 @@ jobs:
         with:
           name: deepagent-code-desktop-${{ matrix.target }}
           if-no-files-found: error
+          compression-level: 9
+          retention-days: 1
           path: |
             packages/desktop/dist/*.dmg
-            packages/desktop/dist/*.zip
-            packages/desktop/dist/*.AppImage
             packages/desktop/dist/*.deb
             packages/desktop/dist/*.rpm
             packages/desktop/dist/*.exe

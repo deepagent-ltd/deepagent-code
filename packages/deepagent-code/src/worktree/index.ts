@@ -57,6 +57,13 @@ export const RemoveInput = Schema.Struct({
 }).annotate({ identifier: "WorktreeRemoveInput" })
 export type RemoveInput = Schema.Schema.Type<typeof RemoveInput>
 
+// U3: fail-closed safe-remove input — force overrides the change gate.
+export const SafeRemoveInput = Schema.Struct({
+  directory: Schema.String,
+  force: Schema.optional(Schema.Boolean),
+}).annotate({ identifier: "WorktreeSafeRemoveInput" })
+export type SafeRemoveInput = Schema.Schema.Type<typeof SafeRemoveInput>
+
 export const ResetInput = Schema.Struct({
   directory: Schema.String,
 }).annotate({ identifier: "WorktreeResetInput" })
@@ -96,6 +103,57 @@ export class ListFailedError extends Schema.TaggedErrorClass<ListFailedError>()(
   message: Schema.String,
 }) {}
 
+// U3: worktree change-count for the fail-closed delete gate, the diff view, branch summary, and
+// merge-back. A null count means "indeterminate" (git failed / no baseline) — the caller MUST treat
+// that as "has changes, refuse to delete" (borrowed from claude-code countWorktreeChanges).
+export const ChangeCount = Schema.Struct({
+  // uncommitted working-tree changes (git status --porcelain count); null if indeterminate
+  uncommitted: Schema.NullOr(Schema.Number),
+  // commits on this worktree's branch not on the base (rev-list base..HEAD); null if indeterminate
+  ahead: Schema.NullOr(Schema.Number),
+  // true only when BOTH counts are known to be zero — the only safe-to-delete state
+  clean: Schema.Boolean,
+}).annotate({ identifier: "WorktreeChangeCount" })
+export type ChangeCount = Schema.Schema.Type<typeof ChangeCount>
+
+export const DiffEntry = Schema.Struct({
+  file: Schema.String,
+  status: Schema.String, // added | modified | deleted
+  additions: Schema.Number,
+  deletions: Schema.Number,
+}).annotate({ identifier: "WorktreeDiffEntry" })
+export type DiffEntry = Schema.Schema.Type<typeof DiffEntry>
+
+export const DiffResult = Schema.Struct({
+  entries: Schema.mutable(Schema.Array(DiffEntry)),
+  patch: Schema.String,
+  truncated: Schema.Boolean,
+}).annotate({ identifier: "WorktreeDiffResult" })
+export type DiffResult = Schema.Schema.Type<typeof DiffResult>
+
+export const BranchSummary = Schema.Struct({
+  base: Schema.String,
+  additions: Schema.Number,
+  deletions: Schema.Number,
+  files: Schema.Number,
+}).annotate({ identifier: "WorktreeBranchSummary" })
+export type BranchSummary = Schema.Schema.Type<typeof BranchSummary>
+
+export const MergeResult = Schema.Struct({
+  merged: Schema.Boolean,
+  conflicted: Schema.mutable(Schema.Array(Schema.String)),
+  message: Schema.String,
+}).annotate({ identifier: "WorktreeMergeResult" })
+export type MergeResult = Schema.Schema.Type<typeof MergeResult>
+
+export class MergeFailedError extends Schema.TaggedErrorClass<MergeFailedError>()("WorktreeMergeFailedError", {
+  message: Schema.String,
+}) {}
+
+export class UnsafeRemoveError extends Schema.TaggedErrorClass<UnsafeRemoveError>()("WorktreeUnsafeRemoveError", {
+  message: Schema.String,
+}) {}
+
 export type Error =
   | NotGitError
   | NameGenerationFailedError
@@ -104,6 +162,8 @@ export type Error =
   | RemoveFailedError
   | ResetFailedError
   | ListFailedError
+  | MergeFailedError
+  | UnsafeRemoveError
 
 function slugify(input: string) {
   return input
@@ -140,6 +200,16 @@ export interface Interface {
   readonly list: () => Effect.Effect<(Omit<Info, "branch"> & { branch?: string })[], Error>
   readonly remove: (input: RemoveInput) => Effect.Effect<boolean, Error>
   readonly reset: (input: ResetInput) => Effect.Effect<boolean, Error>
+  // U3 (S1 §P0): change-count for the fail-closed delete gate.
+  readonly countChanges: (input: RemoveInput) => Effect.Effect<ChangeCount, Error>
+  // U3: safe delete — refuses unless countChanges reports clean, OR force is explicitly set.
+  readonly safeRemove: (input: RemoveInput & { force?: boolean }) => Effect.Effect<boolean, Error>
+  // U3: tracked + untracked diff for the worktree (reuses Git.Service).
+  readonly diff: (input: RemoveInput) => Effect.Effect<DiffResult, Error>
+  // U3: branch summary (merge-base + numstat against the default branch).
+  readonly branchSummary: (input: RemoveInput) => Effect.Effect<BranchSummary, Error>
+  // U3: merge the worktree branch back to the default branch (preflight + no auto-commit).
+  readonly mergeBack: (input: RemoveInput) => Effect.Effect<MergeResult, Error>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@deepagent-code/Worktree") {}
@@ -627,7 +697,148 @@ export const layer: Layer.Layer<
       return true
     })
 
-    return Service.of({ makeWorktreeInfo, createFromInfo, create, list, remove, reset })
+    // U3: read-only git for informational reads inside a worktree. Adds codex's hooksPath override
+    // so merely rendering a diff / counting changes can never execute a malicious repo's hooks. The
+    // base Git.Service already disables fsmonitor + optional locks; mutating ops keep normal hooks.
+    const safeGit = (args: string[], cwd: string) => git(["-c", "core.hooksPath=/dev/null", ...args], { cwd })
+
+    // U3: locate a worktree entry by directory, the shared lookup the new ops need.
+    const resolveEntry = Effect.fnUntraced(function* (directory: string) {
+      const ctx = yield* InstanceState.context
+      const listResult = yield* git(["worktree", "list", "--porcelain"], { cwd: ctx.worktree })
+      if (listResult.code !== 0) return undefined
+      const canon = yield* canonical(directory)
+      const entry = yield* locateWorktree(parseWorktreeList(listResult.text), canon)
+      return entry?.path ? { path: entry.path, branch: entry.branch?.replace(/^refs\/heads\//, "") } : undefined
+    })
+
+    // U3 (claude-code countWorktreeChanges, fail-closed): count uncommitted changes + commits ahead
+    // of the base. ANY indeterminate result (git error / missing base) yields null counts and
+    // clean=false, so the delete gate treats "unknown" as "unsafe".
+    const countChanges = Effect.fn("Worktree.countChanges")(function* (input: RemoveInput) {
+      const ctx = yield* InstanceState.context
+      if (ctx.project.vcs !== "git") return yield* new NotGitError({ message: "Worktrees are only supported for git projects" })
+      const entry = yield* resolveEntry(input.directory)
+      if (!entry) return { uncommitted: null, ahead: null, clean: false } satisfies ChangeCount
+
+      const status = yield* safeGit(["status", "--porcelain"], entry.path)
+      const uncommitted = status.code === 0 ? status.text.split("\n").filter((l) => l.trim()).length : null
+
+      // ahead count needs a base ref; merge-base against the default branch, then rev-list base..HEAD
+      let ahead: number | null = null
+      const base = yield* gitSvc.defaultBranch(entry.path).pipe(Effect.catch(() => Effect.succeed(undefined)))
+      if (base) {
+        const mb = yield* gitSvc.mergeBase(entry.path, base.ref).pipe(Effect.catch(() => Effect.succeed(undefined)))
+        if (mb) {
+          const rev = yield* safeGit(["rev-list", "--count", `${mb}..HEAD`], entry.path)
+          if (rev.code === 0) {
+            const n = Number(rev.text.trim())
+            ahead = Number.isFinite(n) ? n : null
+          }
+        }
+      }
+      const clean = uncommitted === 0 && ahead === 0
+      return { uncommitted, ahead, clean } satisfies ChangeCount
+    })
+
+    // U3: delete only when clean, unless force. Refuses (UnsafeRemoveError) on any uncertainty.
+    const safeRemove = Effect.fn("Worktree.safeRemove")(function* (input: RemoveInput & { force?: boolean }) {
+      if (!input.force) {
+        const count = yield* countChanges({ directory: input.directory })
+        if (!count.clean) {
+          const detail =
+            count.uncommitted === null || count.ahead === null
+              ? "could not determine worktree state (treated as unsafe)"
+              : `${count.uncommitted} uncommitted change(s), ${count.ahead} unmerged commit(s)`
+          return yield* new UnsafeRemoveError({
+            message: `Refusing to remove worktree: ${detail}. Merge or discard first, or pass force to delete anyway.`,
+          })
+        }
+      }
+      return yield* remove({ directory: input.directory })
+    })
+
+    // U3: tracked + untracked diff for the worktree, reusing Git.Service (status for the change list,
+    // patchAll for the unified diff against HEAD). No parallel git plumbing.
+    const diff = Effect.fn("Worktree.diff")(function* (input: RemoveInput) {
+      const ctx = yield* InstanceState.context
+      if (ctx.project.vcs !== "git") return yield* new NotGitError({ message: "Worktrees are only supported for git projects" })
+      const entry = yield* resolveEntry(input.directory)
+      if (!entry) return yield* new ListFailedError({ message: "Worktree not found" })
+
+      const stats = yield* gitSvc.stats(entry.path, "HEAD").pipe(Effect.catch(() => Effect.succeed([] as const)))
+      const status = yield* gitSvc.status(entry.path).pipe(Effect.catch(() => Effect.succeed([] as const)))
+      const statByFile = new Map(stats.map((s) => [s.file, s]))
+      const entries: DiffEntry[] = status.map((item) => {
+        const s = statByFile.get(item.file)
+        return { file: item.file, status: item.status, additions: s?.additions ?? 0, deletions: s?.deletions ?? 0 }
+      })
+      const patch = yield* gitSvc.patchAll(entry.path, "HEAD").pipe(Effect.catch(() => Effect.succeed({ text: "", truncated: false })))
+      return { entries, patch: patch.text, truncated: patch.truncated } satisfies DiffResult
+    })
+
+    // U3 (codex branch_summary): merge-base against the default branch + numstat sum of committed
+    // branch work. Ignores the dirty tree on purpose — it summarizes the branch, not the worktree.
+    const branchSummary = Effect.fn("Worktree.branchSummary")(function* (input: RemoveInput) {
+      const ctx = yield* InstanceState.context
+      if (ctx.project.vcs !== "git") return yield* new NotGitError({ message: "Worktrees are only supported for git projects" })
+      const entry = yield* resolveEntry(input.directory)
+      if (!entry) return yield* new ListFailedError({ message: "Worktree not found" })
+
+      const base = yield* gitSvc.defaultBranch(entry.path).pipe(Effect.catch(() => Effect.succeed(undefined)))
+      if (!base) return { base: "", additions: 0, deletions: 0, files: 0 } satisfies BranchSummary
+      const mb = yield* gitSvc.mergeBase(entry.path, base.ref).pipe(Effect.catch(() => Effect.succeed(undefined)))
+      if (!mb) return { base: base.name, additions: 0, deletions: 0, files: 0 } satisfies BranchSummary
+
+      const numstat = yield* safeGit(["diff", "--numstat", `${mb}..HEAD`], entry.path)
+      let additions = 0
+      let deletions = 0
+      let files = 0
+      if (numstat.code === 0) {
+        for (const line of numstat.text.split("\n")) {
+          const m = line.trim().match(/^(\d+|-)\t(\d+|-)\t/)
+          if (!m) continue
+          files++
+          if (m[1] !== "-") additions += Number(m[1])
+          if (m[2] !== "-") deletions += Number(m[2])
+        }
+      }
+      return { base: base.name, additions, deletions, files } satisfies BranchSummary
+    })
+
+    // U3: merge the worktree branch back into the default branch. Uses --no-commit --no-ff so the
+    // merge is staged for the user to confirm; on conflict it aborts and reports the conflicted
+    // files. Merging is an outward-facing write — callers gate it behind explicit user confirmation.
+    const mergeBack = Effect.fn("Worktree.mergeBack")(function* (input: RemoveInput) {
+      const ctx = yield* InstanceState.context
+      if (ctx.project.vcs !== "git") return yield* new NotGitError({ message: "Worktrees are only supported for git projects" })
+      const entry = yield* resolveEntry(input.directory)
+      if (!entry?.branch) return yield* new MergeFailedError({ message: "Worktree has no branch to merge" })
+
+      const base = yield* gitSvc.defaultBranch(ctx.worktree).pipe(Effect.catch(() => Effect.succeed(undefined)))
+      if (!base) return yield* new MergeFailedError({ message: "Default branch not found" })
+
+      const merge = yield* git(["merge", "--no-commit", "--no-ff", entry.branch], { cwd: ctx.worktree })
+      if (merge.code !== 0) {
+        const conflicts = yield* safeGit(["diff", "--name-only", "--diff-filter=U"], ctx.worktree)
+        const files = conflicts.code === 0 ? conflicts.text.split("\n").map((l) => l.trim()).filter(Boolean) : []
+        yield* git(["merge", "--abort"], { cwd: ctx.worktree }).pipe(Effect.ignore)
+        return {
+          merged: false,
+          conflicted: files,
+          message: files.length
+            ? `Merge has conflicts in ${files.length} file(s); merge aborted.`
+            : merge.stderr || merge.text || "Merge failed.",
+        } satisfies MergeResult
+      }
+      return {
+        merged: true,
+        conflicted: [],
+        message: `Merged ${entry.branch} into ${base.name} (staged, not committed).`,
+      } satisfies MergeResult
+    })
+
+    return Service.of({ makeWorktreeInfo, createFromInfo, create, list, remove, reset, countChanges, safeRemove, diff, branchSummary, mergeBack })
   }),
 )
 

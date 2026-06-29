@@ -49,6 +49,9 @@ const layer = (flags: Partial<RuntimeFlags.Info> = {}) =>
 
 const it = testEffect(layer())
 const background = testEffect(layer({ experimentalBackgroundSubagents: true }))
+// U5: background subagents are ON by default now; this variant explicitly disables them to assert
+// the rejection path still works when a user opts out.
+const noBackground = testEffect(layer({ experimentalBackgroundSubagents: false }))
 
 function defer<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void
@@ -452,7 +455,7 @@ describe("tool.task", () => {
     },
   )
 
-  it.instance("rejects background execution when the experiment is disabled", () =>
+  noBackground.instance("rejects background execution when the experiment is disabled", () =>
     Effect.gen(function* () {
       const { chat, assistant } = yield* seed()
       const tool = yield* TaskTool

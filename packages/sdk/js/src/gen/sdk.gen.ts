@@ -38,6 +38,8 @@ import type {
   DeepagentKnowledgeShipGateResponses,
   DeepagentPacksActiveErrors,
   DeepagentPacksActiveResponses,
+  DeepagentPacksAllErrors,
+  DeepagentPacksAllResponses,
   DeepagentPacksPinErrors,
   DeepagentPacksPinResponses,
   DeepagentPacksUnpinErrors,
@@ -346,17 +348,28 @@ import type {
   VcsGetResponses,
   VcsStatusErrors,
   VcsStatusResponses,
+  WorktreeChangesErrors,
+  WorktreeChangesResponses,
   WorktreeCreateErrors,
   WorktreeCreateInput,
   WorktreeCreateResponses,
+  WorktreeDiffErrors,
+  WorktreeDiffResponses,
   WorktreeListErrors,
   WorktreeListResponses,
+  WorktreeMergeErrors,
+  WorktreeMergeResponses,
   WorktreeRemoveErrors,
   WorktreeRemoveInput,
   WorktreeRemoveResponses,
   WorktreeResetErrors,
   WorktreeResetInput,
   WorktreeResetResponses,
+  WorktreeSafeRemoveErrors,
+  WorktreeSafeRemoveInput,
+  WorktreeSafeRemoveResponses,
+  WorktreeSummaryErrors,
+  WorktreeSummaryResponses,
 } from "./types.gen.js"
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean> = Options2<
@@ -1853,6 +1866,31 @@ export class Deepagent extends HeyApiClient {
     })
   }
 
+  public packsAll<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<DeepagentPacksAllResponses, DeepagentPacksAllErrors, ThrowOnError>({
+      url: "/deepagent/packs/all",
+      ...options,
+      ...params,
+    })
+  }
+
   public packsPin<ThrowOnError extends boolean = false>(
     parameters?: {
       directory?: string
@@ -2131,6 +2169,193 @@ export class Worktree extends HeyApiClient {
         ...params.headers,
       },
     })
+  }
+
+  /**
+   * Count worktree changes
+   *
+   * Count uncommitted changes and commits ahead of base (fail-closed: null on uncertainty).
+   */
+  public changes<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      worktreeRemoveInput?: WorktreeRemoveInput
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { key: "worktreeRemoveInput", map: "body" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<WorktreeChangesResponses, WorktreeChangesErrors, ThrowOnError>({
+      url: "/experimental/worktree/changes",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Worktree diff
+   *
+   * Tracked + untracked changes for a worktree, with a unified patch.
+   */
+  public diff<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      worktreeRemoveInput?: WorktreeRemoveInput
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { key: "worktreeRemoveInput", map: "body" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<WorktreeDiffResponses, WorktreeDiffErrors, ThrowOnError>({
+      url: "/experimental/worktree/diff",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Worktree branch summary
+   *
+   * Committed additions/deletions on the worktree branch vs the default branch.
+   */
+  public summary<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      worktreeRemoveInput?: WorktreeRemoveInput
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { key: "worktreeRemoveInput", map: "body" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<WorktreeSummaryResponses, WorktreeSummaryErrors, ThrowOnError>({
+      url: "/experimental/worktree/summary",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Merge worktree back
+   *
+   * Merge the worktree branch into the default branch (staged, requires confirmation).
+   */
+  public merge<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      worktreeRemoveInput?: WorktreeRemoveInput
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { key: "worktreeRemoveInput", map: "body" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<WorktreeMergeResponses, WorktreeMergeErrors, ThrowOnError>({
+      url: "/experimental/worktree/merge",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Safe-remove worktree
+   *
+   * Remove a worktree only when it has no uncommitted/unmerged work, unless force is set.
+   */
+  public safeRemove<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      worktreeSafeRemoveInput?: WorktreeSafeRemoveInput
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { key: "worktreeSafeRemoveInput", map: "body" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).delete<WorktreeSafeRemoveResponses, WorktreeSafeRemoveErrors, ThrowOnError>(
+      {
+        url: "/experimental/worktree/safe-remove",
+        ...options,
+        ...params,
+        headers: {
+          "Content-Type": "application/json",
+          ...options?.headers,
+          ...params.headers,
+        },
+      },
+    )
   }
 }
 

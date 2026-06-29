@@ -539,6 +539,5 @@ The plugin manager is exposed as a command with title `Plugins` and value `plugi
 ## Current in-repo examples
 
 - Local smoke plugin: `.deepagent-code/plugins/tui-smoke.tsx`
-- Local vim plugin: `.deepagent-code/plugins/tui-vim.tsx`
 - Local smoke config: `.deepagent-code/tui.json`
 - Local smoke theme: `.deepagent-code/plugins/smoke-theme.json`
