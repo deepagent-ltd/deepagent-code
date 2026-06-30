@@ -19,6 +19,24 @@ let pullConfig = {
   workspaceDelayMsByIdentifier: {},
 }
 
+// L1 (S1-v3.4): canned responses for the extended LSP methods, configurable per test.
+// Defaults are empty so the wrapper-shape and graceful-degradation tests are deterministic.
+// Tests inject config via the FAKE_LSP_CONFIG env var (JSON: { responses, capabilities }).
+let methodResponses = {}
+// Capabilities advertised in the initialize handshake; tests can opt features in/out
+// to exercise the capability probe.
+let advertisedCapabilities = { textDocumentSync: { change: 2 } }
+
+try {
+  if (process.env.FAKE_LSP_CONFIG) {
+    const cfg = JSON.parse(process.env.FAKE_LSP_CONFIG)
+    if (cfg.responses) methodResponses = cfg.responses
+    if (cfg.capabilities) advertisedCapabilities = cfg.capabilities
+  }
+} catch {
+  // ignore malformed config; fall back to defaults
+}
+
 function encode(message) {
   const json = JSON.stringify(message)
   const header = `Content-Length: ${Buffer.byteLength(json, "utf8")}\r\n\r\n`
@@ -114,12 +132,16 @@ function handle(raw) {
   if (data.method === "initialize") {
     initializeParams = data.params
     sendResponse(data.id, {
-      capabilities: {
-        textDocumentSync: {
-          change: 2,
-        },
-      },
+      capabilities: advertisedCapabilities,
     })
+    return
+  }
+
+  // L1 (S1-v3.4): test control to set canned method responses + advertised capabilities.
+  if (data.method === "test/configure-methods") {
+    methodResponses = data.params?.responses ?? {}
+    if (data.params?.capabilities) advertisedCapabilities = data.params.capabilities
+    sendResponse(data.id, null)
     return
   }
 
@@ -226,6 +248,12 @@ function handle(raw) {
 
   if (data.method === "workspace/diagnostic") {
     diagnosticRequestCount += 1
+    // L4 (S1-v3.4): allow env-seeded canned items so the workspaceDiagnostics() Service path
+    // is testable deterministically without the pull-config control message.
+    if (Object.prototype.hasOwnProperty.call(methodResponses, "workspace/diagnostic")) {
+      delayed(data.id, methodResponses["workspace/diagnostic"], 0)
+      return
+    }
     delayed(
       data.id,
       {
@@ -237,7 +265,11 @@ function handle(raw) {
   }
 
   if (typeof data.id !== "undefined") {
-    sendResponse(data.id, null)
+    // L1: return a canned response for the method if one was configured, else null.
+    const canned = Object.prototype.hasOwnProperty.call(methodResponses, data.method)
+      ? methodResponses[data.method]
+      : null
+    sendResponse(data.id, canned)
   }
 }
 

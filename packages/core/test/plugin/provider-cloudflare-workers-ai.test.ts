@@ -210,7 +210,9 @@ describe("CloudflareWorkersAIPlugin", () => {
         const headers = yield* Effect.promise(() => Promise.resolve(cloudflareHeaders(result.sdk)))
         expect(headers.authorization).toBe("Bearer env-key")
         expect(headers.custom).toBe("header")
-        expect(headers["user-agent"]).toMatch(/^deepagent-code\/.* cloudflare-workers-ai \(.+\) ai-sdk\/openai-compatible\//)
+        expect(headers["user-agent"]).toMatch(
+          /^deepagent-code\/.* cloudflare-workers-ai \(.+\) ai-sdk\/openai-compatible\//,
+        )
       }),
     ),
   )

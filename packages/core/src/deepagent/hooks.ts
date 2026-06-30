@@ -4,7 +4,12 @@
 export * as DeepAgentHooks from "./hooks"
 
 export type HookEventName =
-  | "before_tool_use" | "after_tool_use" | "before_patch_apply" | "after_patch_apply" | "before_validation" | "stop"
+  | "before_tool_use"
+  | "after_tool_use"
+  | "before_patch_apply"
+  | "after_patch_apply"
+  | "before_validation"
+  | "stop"
 
 export type HookEvent = { readonly name: HookEventName; readonly payload: Readonly<Record<string, unknown>> }
 export type HookDecision = { readonly decision: "allow" | "block" | "warn" | "continue"; readonly blockReason?: string }
@@ -44,7 +49,11 @@ export const stopHookGate = (): HookHandler => (e) => {
   // finalizing. If the run never created a plan (planExists=false), the hard report requirement does
   // not apply — we don't retroactively demand a report from a run that worked without one.
   if (e.payload["hardGate"] === true && e.payload["planExists"] === true && e.payload["hasCompletionReport"] !== true)
-    return { decision: "block", blockReason: "high-strength runs require a completion report before finalizing; resolve or cancel outstanding plan steps first" }
+    return {
+      decision: "block",
+      blockReason:
+        "high-strength runs require a completion report before finalizing; resolve or cancel outstanding plan steps first",
+    }
   return e.payload["requiredValidationsRun"] === true
     ? { decision: "allow" }
     : { decision: "block", blockReason: "required validations were not run; run them before finalizing" }
@@ -65,12 +74,17 @@ export const planGate = (): HookHandler => (e) => {
   // U1 soft layer: stale plan.
   if (e.payload["planStale"] === true) {
     const reason = "the plan is stale (reality changed); update the plan before further edits"
-    return e.payload["lightweight"] === true ? { decision: "warn", blockReason: reason } : { decision: "block", blockReason: reason }
+    return e.payload["lightweight"] === true
+      ? { decision: "warn", blockReason: reason }
+      : { decision: "block", blockReason: reason }
   }
   // U9 hard layer: per-step binding (high+ only; lightweight never reaches here with hardGate set).
   if (e.payload["hardGate"] === true && e.payload["hasActiveStep"] !== true) {
-    const reason = "no active plan step is bound to this edit; mark the step you are working on active via the plan tool"
-    return e.payload["hardGateMissBlocks"] === true ? { decision: "block", blockReason: reason } : { decision: "warn", blockReason: reason }
+    const reason =
+      "no active plan step is bound to this edit; mark the step you are working on active via the plan tool"
+    return e.payload["hardGateMissBlocks"] === true
+      ? { decision: "block", blockReason: reason }
+      : { decision: "warn", blockReason: reason }
   }
   return { decision: "allow" }
 }
@@ -79,11 +93,15 @@ export const planGate = (): HookHandler => (e) => {
 // P2-2 (RESERVED, not yet wired): this is a real but independent safety feature. It is exported
 // for future wiring into the before_patch_apply event; there is intentionally no production
 // caller yet. Do not treat it as an active gate until it is registered.
-export const patchSizeGuard = (maxLines: number): HookHandler => (e) => {
-  if (e.name !== "before_patch_apply") return { decision: "continue" }
-  const lines = Number(e.payload["diffLines"] ?? 0)
-  return lines > maxLines ? { decision: "block", blockReason: `diff too large (${lines} > ${maxLines})` } : { decision: "allow" }
-}
+export const patchSizeGuard =
+  (maxLines: number): HookHandler =>
+  (e) => {
+    if (e.name !== "before_patch_apply") return { decision: "continue" }
+    const lines = Number(e.payload["diffLines"] ?? 0)
+    return lines > maxLines
+      ? { decision: "block", blockReason: `diff too large (${lines} > ${maxLines})` }
+      : { decision: "allow" }
+  }
 
 // P2-2: providerToolGuard was DELETED here — the gateway's ProviderExecutedToolPolicy
 // (deny-by-default + allowlist) is the single authoritative provider-executed-tool gate. A second

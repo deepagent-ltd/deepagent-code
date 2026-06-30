@@ -1,4 +1,13 @@
-import type { Config, McpLocalConfig, McpRemoteConfig, OpencodeClient, Path, Project, ProviderAuthResponse, Todo } from "@deepagent-code/sdk/v2/client"
+import type {
+  Config,
+  McpLocalConfig,
+  McpRemoteConfig,
+  OpencodeClient,
+  Path,
+  Project,
+  ProviderAuthResponse,
+  Todo,
+} from "@deepagent-code/sdk/v2/client"
 import { showToast } from "@/utils/toast"
 import { getFilename } from "@deepagent-code/core/util/path"
 import { batch, getOwner, onCleanup, onMount, untrack } from "solid-js"
@@ -561,6 +570,37 @@ export function createServerSyncContextInner(_serverSDK?: ServerSDK) {
     await queryClient.refetchQueries(queryOptionsApi.mcp(key))
   }
 
+  // M1 (S1-v3.4): list the preset MCP catalog (metadata only; nothing is connected).
+  const listMcpCatalog = async (directory: string) => {
+    const sdk = sdkFor(directoryKey(directory))
+    return (await sdk.mcp.catalog()).data ?? []
+  }
+
+  // M1 (S1-v3.4): enable a preset catalog entry. The backend instantiates + connects it in-memory and
+  // returns the concrete name+config; we PERSIST that to cfg.mcp (so it survives restart, like manual
+  // add) and refetch config + mcp status so the new server appears in the list.
+  const enableMcpCatalogEntry = async (
+    directory: string,
+    input: { id: string; params: Record<string, string | string[]>; credentialRefs: Record<string, string> },
+  ) => {
+    const key = directoryKey(directory)
+    const sdk = sdkFor(key)
+    const res = await sdk.mcp.catalogEnable(input)
+    const enabled = res.data
+    if (enabled?.name && enabled.config) {
+      // Persist the instantiated config to the global config so it is durable across restarts.
+      await updateConfigMutation.mutateAsync({
+        ...globalStore.config,
+        mcp: {
+          ...(globalStore.config.mcp ?? {}),
+          [enabled.name]: enabled.config,
+        },
+      })
+    }
+    await queryClient.refetchQueries(queryOptionsApi.globalConfig())
+    await queryClient.refetchQueries(queryOptionsApi.mcp(key))
+  }
+
   return {
     data: globalStore,
     set,
@@ -610,6 +650,8 @@ export function createServerSyncContextInner(_serverSDK?: ServerSDK) {
       },
       update: updateMcpConfig,
       remove: removeMcpConfig,
+      catalog: listMcpCatalog,
+      catalogEnable: enableMcpCatalogEntry,
     },
   }
 }

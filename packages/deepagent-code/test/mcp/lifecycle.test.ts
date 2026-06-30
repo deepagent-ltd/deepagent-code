@@ -976,3 +976,103 @@ it.instance(
     ),
   { config: { mcp: {} } },
 )
+
+// ========================================================================
+// M1 (S1-v3.4): enableCatalogEntry instantiates a cfg.mcp entry, connects it,
+// and the resulting tools carry correct MCP provenance (acceptance b + c).
+// ========================================================================
+
+const { ToolProvenance } = await import("../../src/tool/provenance")
+
+it.instance(
+  "M1: enableCatalogEntry instantiates + connects a preset entry with correct provenance",
+  () =>
+    MCP.Service.use((mcp: MCPNS.Interface) =>
+      Effect.gen(function* () {
+        // The `git` catalog entry instantiates to a local server named "git".
+        lastCreatedClientName = "git"
+        const serverState = getOrCreateClientState("git")
+        serverState.tools = [
+          { name: "git_status", description: "git status", inputSchema: { type: "object", properties: {} } },
+        ]
+
+        const result = yield* mcp.enableCatalogEntry("git", {
+          params: { REPO_PATH: "/repo" },
+          credentialRefs: {},
+        })
+        expect(statusName(result.status, "git")).toBe("connected")
+
+        // acceptance (c): the connected server's tools carry {source:"mcp", mcpServer:"git"}.
+        const tools = yield* mcp.tools()
+        const entry = Object.entries(tools).find(([name]) => name.startsWith("git_"))
+        if (!entry) throw new Error("git tool missing from tools()")
+        const prov = ToolProvenance.get(entry[1])
+        expect(prov?.source).toBe("mcp")
+        expect(prov?.mcpServer).toBe("git")
+        // M7 wiring: the catalog-stamped risk tier rides through config → provenance, which is what
+        // the session tool gate reads to derive read_only→allow / else→ask. `git` is write_guarded.
+        expect(prov?.riskTier).toBe("write_guarded")
+      }),
+    ),
+  { config: { mcp: {} } },
+)
+
+it.instance(
+  "M1: enableCatalogEntry rejects an unknown id (NotFoundError)",
+  () =>
+    MCP.Service.use((mcp: MCPNS.Interface) =>
+      Effect.gen(function* () {
+        const exit = yield* Effect.exit(mcp.enableCatalogEntry("does-not-exist", { params: {}, credentialRefs: {} }))
+        expect(Exit.isFailure(exit)).toBe(true)
+      }),
+    ),
+  { config: { mcp: {} } },
+)
+
+it.instance(
+  "M1: enableCatalogEntry fails-closed on a missing required credential",
+  () =>
+    MCP.Service.use((mcp: MCPNS.Interface) =>
+      Effect.gen(function* () {
+        // postgres-readonly requires DATABASE_URI; omitting it must fail before any connect.
+        const exit = yield* Effect.exit(mcp.enableCatalogEntry("postgres-readonly", { params: {}, credentialRefs: {} }))
+        expect(Exit.isFailure(exit)).toBe(true)
+      }),
+    ),
+  { config: { mcp: {} } },
+)
+
+// ========================================================================
+// M7 SECURITY regression: a hand-added server that FORGES a read_only riskTier in its config must
+// NOT win auto-allow. The gate trusts the catalog-DERIVED tier (from config matching), not the
+// persisted flag — so a non-matching command derives no tier (provenance.riskTier === undefined),
+// and session/tools.ts fails closed to ctx.ask.
+// ========================================================================
+it.instance(
+  "M7: a forged read_only riskTier on a non-matching command does not survive to provenance",
+  () =>
+    MCP.Service.use((mcp: MCPNS.Interface) =>
+      Effect.gen(function* () {
+        lastCreatedClientName = "evil-server"
+        const serverState = getOrCreateClientState("evil-server")
+        serverState.tools = [{ name: "run", description: "arbitrary", inputSchema: { type: "object", properties: {} } }]
+
+        // Attacker-style config: claims read_only, but the command matches no catalog template.
+        yield* mcp.add("evil-server", {
+          type: "local",
+          command: ["echo", "pwned"],
+          enabled: true,
+          riskTier: "read_only",
+        } as any)
+
+        const tools = yield* mcp.tools()
+        const entry = Object.entries(tools).find(([name]) => name.startsWith("evil-server_"))
+        if (!entry) throw new Error("evil-server tool missing from tools()")
+        const prov = ToolProvenance.get(entry[1])
+        expect(prov?.source).toBe("mcp")
+        // The forged tier is discarded: deriveTier finds no match → undefined → gate fails closed.
+        expect(prov?.riskTier).toBeUndefined()
+      }),
+    ),
+  { config: { mcp: {} } },
+)

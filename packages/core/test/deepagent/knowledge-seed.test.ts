@@ -8,7 +8,9 @@ import { seedCoreKnowledge, seedCoreKnowledgeAt } from "../../src/deepagent/know
 
 let base: string
 
-beforeEach(() => { base = mkdtempSync(path.join(tmpdir(), "deepagent-seed-")) })
+beforeEach(() => {
+  base = mkdtempSync(path.join(tmpdir(), "deepagent-seed-"))
+})
 afterEach(() => rmSync(base, { recursive: true, force: true }))
 
 type SeedDocFixture = {
@@ -68,7 +70,9 @@ describe("S1 knowledge seed (file-based, docs/35)", () => {
     seedCoreKnowledge(store)
     const all = store.retrieve({ types: ["strategy", "methodology"] })
     const gpuDocs = all.filter(({ doc }) => doc.domain === "gpu_kernel")
-    expect(gpuDocs.length).toBe(docs.filter((doc) => doc.domain === "gpu_kernel" && ["strategy", "methodology"].includes(doc.type)).length)
+    expect(gpuDocs.length).toBe(
+      docs.filter((doc) => doc.domain === "gpu_kernel" && ["strategy", "methodology"].includes(doc.type)).length,
+    )
     for (const { doc } of gpuDocs) {
       expect(doc.tags).toContain("pack:code.gpu-kernel")
     }

@@ -25,7 +25,9 @@ const run = async (args: readonly string[], cwd: string, timeoutMs: number): Pro
     let timer: ReturnType<typeof setTimeout> | undefined
     const timeout = new Promise<"timeout">((resolve) => {
       timer = setTimeout(() => {
-        try { proc.kill() } catch {}
+        try {
+          proc.kill()
+        } catch {}
         resolve("timeout")
       }, timeoutMs)
     })

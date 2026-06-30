@@ -609,7 +609,10 @@ describe("Config", () => {
             Promise.all([
               fs.writeFile(path.join(tmp.path, "config.json"), JSON.stringify({ $schema: "base" })),
               fs.writeFile(path.join(tmp.path, "deepagent-code.json"), "{ invalid"),
-              fs.writeFile(path.join(tmp.path, "deepagent-code.jsonc"), JSON.stringify({ providers: { invalid: true } })),
+              fs.writeFile(
+                path.join(tmp.path, "deepagent-code.jsonc"),
+                JSON.stringify({ providers: { invalid: true } }),
+              ),
             ]),
           )
           return yield* Effect.gen(function* () {
@@ -679,7 +682,10 @@ describe("Config", () => {
               fs.writeFile(path.join(root, "deepagent-code.json"), JSON.stringify({ $schema: "root" })),
               fs.writeFile(path.join(parent, "deepagent-code.jsonc"), JSON.stringify({ $schema: "parent" })),
               fs.writeFile(path.join(directory, "config.json"), JSON.stringify({ $schema: "directory" })),
-              fs.writeFile(path.join(root, ".deepagent-code", "deepagent-code.json"), JSON.stringify({ $schema: "root-dot" })),
+              fs.writeFile(
+                path.join(root, ".deepagent-code", "deepagent-code.json"),
+                JSON.stringify({ $schema: "root-dot" }),
+              ),
               fs.writeFile(
                 path.join(directory, ".deepagent-code", "deepagent-code.jsonc"),
                 JSON.stringify({ $schema: "directory-dot" }),

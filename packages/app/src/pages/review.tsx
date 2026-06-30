@@ -127,7 +127,11 @@ export default function ReviewRoute() {
       await refetch()
     },
     onError: (error) => {
-      showToast({ variant: "error", title: "晋升失败", description: error instanceof Error ? error.message : String(error) })
+      showToast({
+        variant: "error",
+        title: "晋升失败",
+        description: error instanceof Error ? error.message : String(error),
+      })
     },
   }))
 
@@ -145,7 +149,11 @@ export default function ReviewRoute() {
       await refetch()
     },
     onError: (error) => {
-      showToast({ variant: "error", title: "拒绝失败", description: error instanceof Error ? error.message : String(error) })
+      showToast({
+        variant: "error",
+        title: "拒绝失败",
+        description: error instanceof Error ? error.message : String(error),
+      })
     },
   }))
 
@@ -153,10 +161,17 @@ export default function ReviewRoute() {
     <div class="flex h-full min-h-0">
       <aside class="w-64 shrink-0 overflow-y-auto border-r border-border-weak p-3">
         <div class="mb-2 text-12-medium text-text-weak">DeepAgent Runs</div>
-        <Show when={(reviews() ?? []).length > 0} fallback={<div class="text-12-regular text-text-weak">没有可复盘的 run</div>}>
+        <Show
+          when={(reviews() ?? []).length > 0}
+          fallback={<div class="text-12-regular text-text-weak">没有可复盘的 run</div>}
+        >
           <For each={reviews()}>
             {(r) => (
-              <button class="block w-full truncate rounded px-2 py-1 text-left text-12-regular hover:bg-surface-weak" classList={{ "bg-surface-weak": selected() === r.runId }} onClick={() => setSelected(r.runId)}>
+              <button
+                class="block w-full truncate rounded px-2 py-1 text-left text-12-regular hover:bg-surface-weak"
+                classList={{ "bg-surface-weak": selected() === r.runId }}
+                onClick={() => setSelected(r.runId)}
+              >
                 {r.runId}
               </button>
             )}
@@ -171,7 +186,9 @@ export default function ReviewRoute() {
               <header class="flex items-center gap-3">
                 <span class={`size-2 rounded-full ${statusTone(r().status)}`} />
                 <h1 class="text-16-medium text-text-strong">{r().runId}</h1>
-                <span class="text-12-regular text-text-weak">mode={r().agentMode ?? "-"} · status={r().status ?? "-"}</span>
+                <span class="text-12-regular text-text-weak">
+                  mode={r().agentMode ?? "-"} · status={r().status ?? "-"}
+                </span>
               </header>
 
               <Show when={r().nextAction}>
@@ -183,7 +200,9 @@ export default function ReviewRoute() {
                 <For each={r().candidates} fallback={<div class="text-12-regular text-text-weak">无候选记录</div>}>
                   {(c) => (
                     <div class="rounded border border-border-weak p-2 text-12-regular">
-                      <div class="font-mono text-text-strong">round {c.round} · {c.ref} · {c.status}</div>
+                      <div class="font-mono text-text-strong">
+                        round {c.round} · {c.ref} · {c.status}
+                      </div>
                       <Show when={c.parent}>
                         <div class="text-text-weak">parent: {c.parent}</div>
                       </Show>
@@ -225,9 +244,13 @@ export default function ReviewRoute() {
                   {(candidate) => (
                     <div class="flex items-start justify-between gap-3 rounded border border-border-weak p-2 text-12-regular">
                       <div class="min-w-0">
-                        <div class="font-mono text-text-strong">{candidate.type} · {candidate.candidateId}</div>
+                        <div class="font-mono text-text-strong">
+                          {candidate.type} · {candidate.candidateId}
+                        </div>
                         <div class="text-text-weak">{candidate.summary}</div>
-                        <div class="text-text-weak">evidence={candidate.evidenceRefs.join(", ")} · confidence={candidate.confidence.toFixed(2)}</div>
+                        <div class="text-text-weak">
+                          evidence={candidate.evidenceRefs.join(", ")} · confidence={candidate.confidence.toFixed(2)}
+                        </div>
                       </div>
                       <div class="flex shrink-0 gap-2">
                         <Button
@@ -250,12 +273,15 @@ export default function ReviewRoute() {
                           size="small"
                           disabled={rejectMutation.isPending || candidate.status !== "staged"}
                           onClick={() =>
-                            rejectMutation.mutate({ candidate, reason: rejectReason() }, {
-                              onSuccess: async () => {
-                                showToast({ variant: "success", title: "已拒绝", description: candidate.candidateId })
-                                await refetch()
+                            rejectMutation.mutate(
+                              { candidate, reason: rejectReason() },
+                              {
+                                onSuccess: async () => {
+                                  showToast({ variant: "success", title: "已拒绝", description: candidate.candidateId })
+                                  await refetch()
+                                },
                               },
-                            })
+                            )
                           }
                         >
                           拒绝

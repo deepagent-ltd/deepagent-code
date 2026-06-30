@@ -62,10 +62,7 @@ export const LogsCommand = effectCmd({
 
     const output = path.resolve(args.out ?? `deepagent-code-logs-${stamp()}.zip`)
     yield* Effect.promise(() =>
-      writeZip(output, [
-        { name: "manifest.json", data: Buffer.from(JSON.stringify(manifest, null, 2)) },
-        ...collected,
-      ]),
+      writeZip(output, [{ name: "manifest.json", data: Buffer.from(JSON.stringify(manifest, null, 2)) }, ...collected]),
     )
     console.log(output)
   }),

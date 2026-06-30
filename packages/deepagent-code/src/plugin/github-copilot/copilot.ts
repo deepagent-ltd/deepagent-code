@@ -373,11 +373,14 @@ export async function CopilotAuthPlugin(input: PluginInput): Promise<Hooks> {
       }
 
       const parts = await sdk.session
-        .message({
-          sessionID: incoming.message.sessionID,
-          messageID: incoming.message.id,
-          directory: input.directory,
-        }, { throwOnError: true })
+        .message(
+          {
+            sessionID: incoming.message.sessionID,
+            messageID: incoming.message.id,
+            directory: input.directory,
+          },
+          { throwOnError: true },
+        )
         .catch(() => undefined)
 
       if (
@@ -394,10 +397,13 @@ export async function CopilotAuthPlugin(input: PluginInput): Promise<Hooks> {
       }
 
       const session = await sdk.session
-        .get({
-          sessionID: incoming.sessionID,
-          directory: input.directory,
-        }, { throwOnError: true })
+        .get(
+          {
+            sessionID: incoming.sessionID,
+            directory: input.directory,
+          },
+          { throwOnError: true },
+        )
         .catch(() => undefined)
       if (!session?.data?.parentID) return
       // mark subagent sessions as agent initiated matching standard that other copilot tools have

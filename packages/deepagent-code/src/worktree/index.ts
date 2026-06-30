@@ -717,7 +717,8 @@ export const layer: Layer.Layer<
     // clean=false, so the delete gate treats "unknown" as "unsafe".
     const countChanges = Effect.fn("Worktree.countChanges")(function* (input: RemoveInput) {
       const ctx = yield* InstanceState.context
-      if (ctx.project.vcs !== "git") return yield* new NotGitError({ message: "Worktrees are only supported for git projects" })
+      if (ctx.project.vcs !== "git")
+        return yield* new NotGitError({ message: "Worktrees are only supported for git projects" })
       const entry = yield* resolveEntry(input.directory)
       if (!entry) return { uncommitted: null, ahead: null, clean: false } satisfies ChangeCount
 
@@ -762,7 +763,8 @@ export const layer: Layer.Layer<
     // patchAll for the unified diff against HEAD). No parallel git plumbing.
     const diff = Effect.fn("Worktree.diff")(function* (input: RemoveInput) {
       const ctx = yield* InstanceState.context
-      if (ctx.project.vcs !== "git") return yield* new NotGitError({ message: "Worktrees are only supported for git projects" })
+      if (ctx.project.vcs !== "git")
+        return yield* new NotGitError({ message: "Worktrees are only supported for git projects" })
       const entry = yield* resolveEntry(input.directory)
       if (!entry) return yield* new ListFailedError({ message: "Worktree not found" })
 
@@ -773,7 +775,9 @@ export const layer: Layer.Layer<
         const s = statByFile.get(item.file)
         return { file: item.file, status: item.status, additions: s?.additions ?? 0, deletions: s?.deletions ?? 0 }
       })
-      const patch = yield* gitSvc.patchAll(entry.path, "HEAD").pipe(Effect.catch(() => Effect.succeed({ text: "", truncated: false })))
+      const patch = yield* gitSvc
+        .patchAll(entry.path, "HEAD")
+        .pipe(Effect.catch(() => Effect.succeed({ text: "", truncated: false })))
       return { entries, patch: patch.text, truncated: patch.truncated } satisfies DiffResult
     })
 
@@ -781,7 +785,8 @@ export const layer: Layer.Layer<
     // branch work. Ignores the dirty tree on purpose — it summarizes the branch, not the worktree.
     const branchSummary = Effect.fn("Worktree.branchSummary")(function* (input: RemoveInput) {
       const ctx = yield* InstanceState.context
-      if (ctx.project.vcs !== "git") return yield* new NotGitError({ message: "Worktrees are only supported for git projects" })
+      if (ctx.project.vcs !== "git")
+        return yield* new NotGitError({ message: "Worktrees are only supported for git projects" })
       const entry = yield* resolveEntry(input.directory)
       if (!entry) return yield* new ListFailedError({ message: "Worktree not found" })
 
@@ -811,7 +816,8 @@ export const layer: Layer.Layer<
     // files. Merging is an outward-facing write — callers gate it behind explicit user confirmation.
     const mergeBack = Effect.fn("Worktree.mergeBack")(function* (input: RemoveInput) {
       const ctx = yield* InstanceState.context
-      if (ctx.project.vcs !== "git") return yield* new NotGitError({ message: "Worktrees are only supported for git projects" })
+      if (ctx.project.vcs !== "git")
+        return yield* new NotGitError({ message: "Worktrees are only supported for git projects" })
       const entry = yield* resolveEntry(input.directory)
       if (!entry?.branch) return yield* new MergeFailedError({ message: "Worktree has no branch to merge" })
 
@@ -821,7 +827,13 @@ export const layer: Layer.Layer<
       const merge = yield* git(["merge", "--no-commit", "--no-ff", entry.branch], { cwd: ctx.worktree })
       if (merge.code !== 0) {
         const conflicts = yield* safeGit(["diff", "--name-only", "--diff-filter=U"], ctx.worktree)
-        const files = conflicts.code === 0 ? conflicts.text.split("\n").map((l) => l.trim()).filter(Boolean) : []
+        const files =
+          conflicts.code === 0
+            ? conflicts.text
+                .split("\n")
+                .map((l) => l.trim())
+                .filter(Boolean)
+            : []
         yield* git(["merge", "--abort"], { cwd: ctx.worktree }).pipe(Effect.ignore)
         return {
           merged: false,
@@ -838,7 +850,19 @@ export const layer: Layer.Layer<
       } satisfies MergeResult
     })
 
-    return Service.of({ makeWorktreeInfo, createFromInfo, create, list, remove, reset, countChanges, safeRemove, diff, branchSummary, mergeBack })
+    return Service.of({
+      makeWorktreeInfo,
+      createFromInfo,
+      create,
+      list,
+      remove,
+      reset,
+      countChanges,
+      safeRemove,
+      diff,
+      branchSummary,
+      mergeBack,
+    })
   }),
 )
 

@@ -184,7 +184,12 @@ for (const item of targets) {
       windows: {},
     },
     files: embeddedFileMap ? { "deepagent-code-web-ui.gen.ts": embeddedFileMap } : {},
-    entrypoints: ["./src/index.ts", parserWorker, workerPath, ...(embeddedFileMap ? ["deepagent-code-web-ui.gen.ts"] : [])],
+    entrypoints: [
+      "./src/index.ts",
+      parserWorker,
+      workerPath,
+      ...(embeddedFileMap ? ["deepagent-code-web-ui.gen.ts"] : []),
+    ],
     define: {
       DEEPAGENT_CODE_VERSION: `'${Script.version}'`,
       DEEPAGENT_CODE_MODELS_DEV: generated.modelsData,

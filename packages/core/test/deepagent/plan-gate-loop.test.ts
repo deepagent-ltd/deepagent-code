@@ -35,14 +35,21 @@ describe("U1 soft-gate loop (chokepoint contract)", () => {
   test("high mode: stale plan blocks edit, allows read/plan, plan tool unblocks", () => {
     SessionState.getOrCreate("gate-s1", "high")
     // a failing validation flips the latch from runtime truth
-    SessionState.recordValidation("gate-s1", [{ command: "tsc", passed: false, output: "e", duration_ms: 1 }], "e")
+    SessionState.recordValidation(
+      "gate-s1",
+      [{ command: "tsc", passed: false, exit_code: 1, output: "e", duration_ms: 1 }],
+      "e",
+    )
 
     expect(decideAt("gate-s1", "edit", "high").decision).toBe("block")
     expect(decideAt("gate-s1", "read", "high").decision).toBe("allow")
     expect(decideAt("gate-s1", "todowrite", "high").decision).toBe("allow")
 
     // model calls the plan tool -> setPlan clears the latch
-    SessionState.setPlan("gate-s1", PlanController.buildPlanFromInput("gate-s1", { goal: "g", steps: [{ title: "fix", status: "active" }] }))
+    SessionState.setPlan(
+      "gate-s1",
+      PlanController.buildPlanFromInput("gate-s1", { goal: "g", steps: [{ title: "fix", status: "active" }] }),
+    )
     expect(decideAt("gate-s1", "edit", "high").decision).toBe("allow")
   })
 
@@ -57,7 +64,10 @@ describe("U1 soft-gate loop (chokepoint contract)", () => {
     // exhaust the replan budget: each setPlan bumps replan_count
     for (let i = 0; i <= PlanController.DEFAULT_REPLAN_LIMIT; i++) {
       SessionState.markPlanStale("gate-s3", "no_progress")
-      SessionState.setPlan("gate-s3", PlanController.buildPlanFromInput("gate-s3", { goal: "g", steps: [{ title: "t", status: "active" }] }))
+      SessionState.setPlan(
+        "gate-s3",
+        PlanController.buildPlanFromInput("gate-s3", { goal: "g", steps: [{ title: "t", status: "active" }] }),
+      )
     }
     // now mark stale once more; replan_count already exceeds the limit
     SessionState.markPlanStale("gate-s3", "no_progress")

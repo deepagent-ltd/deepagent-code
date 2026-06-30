@@ -38,41 +38,70 @@ export const buildRunGraph = (store: DocumentStore, s: RunSummary): RunGraphRefs
   const prov = (source: "runner" | "model") => ({ source, run_ref: scope })
 
   const runState = store.upsert({
-    type: "run_state", scope, description: `run state ${s.runId}`,
-    body: JSON.stringify({ agent_mode: s.agentMode, status: s.status, round: s.round, next_action_policy: s.nextActionPolicy }, null, 2),
-    provenance: prov("runner"), createdRound: s.round,
+    type: "run_state",
+    scope,
+    description: `run state ${s.runId}`,
+    body: JSON.stringify(
+      { agent_mode: s.agentMode, status: s.status, round: s.round, next_action_policy: s.nextActionPolicy },
+      null,
+      2,
+    ),
+    provenance: prov("runner"),
+    createdRound: s.round,
     extensions: { agent_mode: s.agentMode, status: s.status, next_action_policy: s.nextActionPolicy, round: s.round },
   })
 
   const runContext = store.upsert({
-    type: "run_context", scope, description: `run context ${s.runId}`,
-    body: s.runContextMarkdown, provenance: prov("runner"), createdRound: s.round,
+    type: "run_context",
+    scope,
+    description: `run context ${s.runId}`,
+    body: s.runContextMarkdown,
+    provenance: prov("runner"),
+    createdRound: s.round,
   })
 
   let designId: string | null = null
-  if (s.design) designId = store.upsert({
-    type: "design", scope, description: `design ${s.runId}`, body: s.design.summary,
-    provenance: prov("model"), createdRound: s.round,
-  }).id
+  if (s.design)
+    designId = store.upsert({
+      type: "design",
+      scope,
+      description: `design ${s.runId}`,
+      body: s.design.summary,
+      provenance: prov("model"),
+      createdRound: s.round,
+    }).id
 
   const candidate = store.upsert({
-    type: "candidate", scope, description: `candidate ${s.runId}`, body: s.candidate.summary,
-    provenance: prov("model"), createdRound: s.round,
+    type: "candidate",
+    scope,
+    description: `candidate ${s.runId}`,
+    body: s.candidate.summary,
+    provenance: prov("model"),
+    createdRound: s.round,
     links: designId ? [{ rel: "derived_from", to: designId }] : [],
     extensions: { candidate_status: s.candidate.status },
   })
 
   let diagnosisId: string | null = null
-  if (s.diagnosis) diagnosisId = store.upsert({
-    type: "diagnosis", scope, description: `diagnosis ${s.runId}: ${s.diagnosis.rootCause ?? "n/a"}`,
-    body: s.diagnosis.summary, provenance: prov("runner"), createdRound: s.round,
-    links: [{ rel: "produces_evidence", to: candidate.id }],
-    extensions: { root_cause: s.diagnosis.rootCause, next_action: s.diagnosis.nextAction },
-  }).id
+  if (s.diagnosis)
+    diagnosisId = store.upsert({
+      type: "diagnosis",
+      scope,
+      description: `diagnosis ${s.runId}: ${s.diagnosis.rootCause ?? "n/a"}`,
+      body: s.diagnosis.summary,
+      provenance: prov("runner"),
+      createdRound: s.round,
+      links: [{ rel: "produces_evidence", to: candidate.id }],
+      extensions: { root_cause: s.diagnosis.rootCause, next_action: s.diagnosis.nextAction },
+    }).id
 
   store.upsert({
-    type: "decision", scope, description: `decision ${s.runId}`,
-    body: `${s.decision.verdict}: ${s.decision.reason}`, provenance: prov("runner"), createdRound: s.round,
+    type: "decision",
+    scope,
+    description: `decision ${s.runId}`,
+    body: `${s.decision.verdict}: ${s.decision.reason}`,
+    provenance: prov("runner"),
+    createdRound: s.round,
     links: [
       { rel: "refines", to: candidate.id },
       ...(diagnosisId ? [{ rel: "triggered_by" as const, to: diagnosisId }] : []),

@@ -116,7 +116,8 @@ export class LearningWorker {
       })
 
       const forceReview = policy === "manual_review"
-      const autoAdmit = !forceReview && govRoute.kind === "auto_admit" && Governance.meetsConfidenceFloor(candidate, classification)
+      const autoAdmit =
+        !forceReview && govRoute.kind === "auto_admit" && Governance.meetsConfidenceFloor(candidate, classification)
 
       if (govRoute.kind === "drop") {
         skipped.push(candidate.candidate_id)
@@ -132,7 +133,11 @@ export class LearningWorker {
         } else {
           // Routed to human review: keep the doc as a pending candidate (unretrievable) AND enqueue
           // an inbox item tagged with the specific review reason so the UI can group it.
-          const reason = forceReview ? "manual review policy" : govRoute.kind === "review" ? govRoute.reason : "candidate requires review"
+          const reason = forceReview
+            ? "manual review policy"
+            : govRoute.kind === "review"
+              ? govRoute.reason
+              : "candidate requires review"
           inbox.push(this.enqueueInbox(candidate, input.projectID, reason))
         }
       } else {
@@ -163,7 +168,10 @@ export class LearningWorker {
   // of the same type/domain that is HIGH-TRUST (curated / pack / global / strong evidence). We reuse
   // the store's similarity search (the same one that drives near-dup merge) to find the neighbor; a
   // high-trust neighbor routes to human review, a low-trust one lets the store's merge/supersede win.
-  private detectHighTrustContradiction(candidate: LearningCandidate, classification: Governance.Classification): boolean {
+  private detectHighTrustContradiction(
+    candidate: LearningCandidate,
+    classification: Governance.Classification,
+  ): boolean {
     const type: DocType = candidate.type === "anti_pattern" ? "failure_dossier" : candidate.type
     const neighbor = this.store.documentStore.findSimilarKnowledge({
       type,
@@ -193,7 +201,9 @@ export class LearningWorker {
 
 const readProjectID = (paths: ProjectPaths): string => {
   try {
-    return (JSON.parse(readFileSync(paths.projectJson, "utf8")) as { project_id?: string }).project_id ?? "unknown-project"
+    return (
+      (JSON.parse(readFileSync(paths.projectJson, "utf8")) as { project_id?: string }).project_id ?? "unknown-project"
+    )
   } catch {
     return "unknown-project"
   }
@@ -205,7 +215,11 @@ const inboxDir = (paths: ProjectPaths): string => path.join(paths.docsDir, "memo
 // failure_dossier (negative knowledge — never a positive injection, DAP-12). All learned knowledge
 // is project-shared and tagged with the run trigger; sensitivity uses the single governance detector
 // (U6 gate 1) so the write-side tag and the routing decision can never diverge.
-const candidateToInput = (candidate: LearningCandidate, projectID: string, trigger: LearningTrigger): KnowledgeDocInput => {
+const candidateToInput = (
+  candidate: LearningCandidate,
+  projectID: string,
+  trigger: LearningTrigger,
+): KnowledgeDocInput => {
   const type: DocType = candidate.type === "anti_pattern" ? "failure_dossier" : candidate.type
   const strength: EvidenceStrength = evidenceFromConfidence(candidate.confidence)
   return {
@@ -230,7 +244,13 @@ export class SkillCurator {
     mkdirSync(this.archiveDir, { recursive: true })
   }
 
-  merge(input: { readonly id: string; readonly title: string; readonly body: string; readonly sourceCandidateIDs: readonly string[]; readonly supersedes?: readonly string[] }): SkillRecord {
+  merge(input: {
+    readonly id: string
+    readonly title: string
+    readonly body: string
+    readonly sourceCandidateIDs: readonly string[]
+    readonly supersedes?: readonly string[]
+  }): SkillRecord {
     const record: SkillRecord = {
       schema_version: SKILL_RECORD_SCHEMA_VERSION,
       id: input.id,
@@ -260,7 +280,12 @@ export class SkillCurator {
   restore(id: string): SkillRecord | null {
     const archived = this.getArchived(id)
     if (!archived) return null
-    const restored: SkillRecord = { ...archived, status: "active", restored_from: id, updated_at: new Date().toISOString() }
+    const restored: SkillRecord = {
+      ...archived,
+      status: "active",
+      restored_from: id,
+      updated_at: new Date().toISOString(),
+    }
     writeJson(path.join(this.activeDir, `${safeFileID(id)}.json`), restored)
     this.rewriteManifest()
     return restored
@@ -290,8 +315,12 @@ export class SkillCurator {
     })
   }
 
-  private get activeDir(): string { return path.join(this.paths.publicDir, "skills", "active") }
-  private get archiveDir(): string { return path.join(this.paths.publicDir, "skills", "archive") }
+  private get activeDir(): string {
+    return path.join(this.paths.publicDir, "skills", "active")
+  }
+  private get archiveDir(): string {
+    return path.join(this.paths.publicDir, "skills", "archive")
+  }
 }
 
 const listRecords = (dir: string): SkillRecord[] => {

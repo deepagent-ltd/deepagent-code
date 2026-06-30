@@ -43,17 +43,13 @@ export const SettingsProvidersV2: Component = () => {
   }
 
   const connected = createMemo(() => {
-    return providers
-      .connected()
-      .filter((p) => p.id !== DEEPAGENT_PROVIDER_ID)
+    return providers.connected().filter((p) => p.id !== DEEPAGENT_PROVIDER_ID)
   })
 
   const configErrors = createMemo(() => providers.errors())
 
   const errorKindLabel = (kind: string) =>
-    kind === "json"
-      ? language.t("settings.providers.error.json")
-      : language.t("settings.providers.error.schema")
+    kind === "json" ? language.t("settings.providers.error.json") : language.t("settings.providers.error.schema")
 
   const popular = createMemo(() => {
     const connectedIDs = new Set(connected().map((p) => p.id))

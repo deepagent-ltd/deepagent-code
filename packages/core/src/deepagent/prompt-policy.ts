@@ -48,6 +48,9 @@ export type ToolRef = {
   readonly name: string
   readonly source: "builtin" | "mcp" | "custom"
   readonly description?: string
+  // M2 (S1-v3.4): explicit MCP server name from tool provenance, used for reliable
+  // server grouping instead of splitting the tool name. Undefined for non-MCP tools.
+  readonly mcpServer?: string
 }
 
 export type McpServerRef = {
@@ -256,7 +259,9 @@ const previousResultsSection = (prev: PreviousResults): string => {
   }
   if (prev.validationOutput) {
     const truncated =
-      prev.validationOutput.length > 2000 ? prev.validationOutput.slice(0, 2000) + "\n...(truncated)" : prev.validationOutput
+      prev.validationOutput.length > 2000
+        ? prev.validationOutput.slice(0, 2000) + "\n...(truncated)"
+        : prev.validationOutput
     lines.push("")
     lines.push("Validation output:")
     lines.push("```")

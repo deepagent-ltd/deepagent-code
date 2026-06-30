@@ -36,7 +36,11 @@ const selectedRefs = (userRequest: string) => {
   return [...(result?.strategyRefs ?? []), ...(result?.methodologyRefs ?? [])]
 }
 
-const expectDomainSelection = (userRequest: string, expected: readonly string[], excluded: readonly string[] = ["gpu"]) => {
+const expectDomainSelection = (
+  userRequest: string,
+  expected: readonly string[],
+  excluded: readonly string[] = ["gpu"],
+) => {
   const refs = selectedRefs(userRequest)
   for (const token of expected) expect(refs.some((ref) => ref.includes(token))).toBe(true)
   for (const token of excluded) expect(refs.some((ref) => ref.includes(token))).toBe(false)
@@ -51,7 +55,9 @@ describe("domain pack retrieval isolation", () => {
 
   test("web UI prompts select frontend/web refs and exclude gpu-only refs", () => {
     withSeededKnowledge(() => {
-      expectDomainSelection("fix CSS responsive text overlap and browser console errors in the web UI", ["frontend-web"])
+      expectDomainSelection("fix CSS responsive text overlap and browser console errors in the web UI", [
+        "frontend-web",
+      ])
     })
   })
 
@@ -63,7 +69,10 @@ describe("domain pack retrieval isolation", () => {
 
   test("database prompts select database/sql refs and exclude gpu-only refs", () => {
     withSeededKnowledge(() => {
-      expectDomainSelection("add database migration with unique constraint backfill transaction rollback and explain plan", ["database"])
+      expectDomainSelection(
+        "add database migration with unique constraint backfill transaction rollback and explain plan",
+        ["database"],
+      )
     })
   })
 
@@ -81,13 +90,18 @@ describe("domain pack retrieval isolation", () => {
 
   test("production prompts select risk/production refs and exclude gpu-only refs", () => {
     withSeededKnowledge(() => {
-      expectDomainSelection("prepare production deployment rollback plan for irreversible migration and traffic shift", ["production"])
+      expectDomainSelection(
+        "prepare production deployment rollback plan for irreversible migration and traffic shift",
+        ["production"],
+      )
     })
   })
 
   test("TypeScript and JavaScript prompts select language/runtime refs instead of gpu-only refs", () => {
     withSeededKnowledge(() => {
-      expectDomainSelection("fix TypeScript typecheck module resolution generic inference and exported types", ["typescript"])
+      expectDomainSelection("fix TypeScript typecheck module resolution generic inference and exported types", [
+        "typescript",
+      ])
       expectDomainSelection("fix JavaScript ESM CJS package scripts Node browser runtime issue", ["javascript"])
     })
   })

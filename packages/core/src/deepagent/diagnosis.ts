@@ -46,21 +46,29 @@ const primaryCategory = (patterns: ErrorPattern[]): string | null =>
 const sortByDominance = (patterns: ErrorPattern[]): ErrorPattern[] =>
   [...patterns].sort((a, b) => b.count - a.count || a.category.localeCompare(b.category))
 
-type ErrorPattern = {
+export type ErrorPattern = {
   readonly category: "type_error" | "test_failure" | "lint_error" | "build_error" | "runtime_error" | "unknown"
   readonly count: number
   readonly sample: string
 }
 
-const analyzeErrors = (failed: readonly ValidationResult[], errorOutput: string | null): ErrorPattern[] => {
+export const analyzeErrors = (failed: readonly ValidationResult[], errorOutput: string | null): ErrorPattern[] => {
   const patterns: ErrorPattern[] = []
   const combined = [...failed.map((v) => v.output), errorOutput ?? ""].join("\n")
 
   if (/type\s*error|ts\(\d+\)|cannot find name|not assignable/i.test(combined)) {
-    patterns.push({ category: "type_error", count: (combined.match(/error TS\d+/g) ?? []).length || 1, sample: extractSample(combined, /error TS\d+.*/i) })
+    patterns.push({
+      category: "type_error",
+      count: (combined.match(/error TS\d+/g) ?? []).length || 1,
+      sample: extractSample(combined, /error TS\d+.*/i),
+    })
   }
   if (/FAIL|✗|✘|failed|AssertionError/i.test(combined) && /test|spec|describe|it\(/i.test(combined)) {
-    patterns.push({ category: "test_failure", count: (combined.match(/FAIL|✗|✘/g) ?? []).length || 1, sample: extractSample(combined, /FAIL.*/i) })
+    patterns.push({
+      category: "test_failure",
+      count: (combined.match(/FAIL|✗|✘/g) ?? []).length || 1,
+      sample: extractSample(combined, /FAIL.*/i),
+    })
   }
   if (/eslint|prettier|lint/i.test(combined)) {
     patterns.push({ category: "lint_error", count: 1, sample: extractSample(combined, /\d+ error/i) })
@@ -69,7 +77,11 @@ const analyzeErrors = (failed: readonly ValidationResult[], errorOutput: string 
     patterns.push({ category: "build_error", count: 1, sample: extractSample(combined, /error.*/i) })
   }
   if (/ReferenceError|TypeError|SyntaxError|RangeError/i.test(combined)) {
-    patterns.push({ category: "runtime_error", count: 1, sample: extractSample(combined, /(Reference|Type|Syntax|Range)Error.*/i) })
+    patterns.push({
+      category: "runtime_error",
+      count: 1,
+      sample: extractSample(combined, /(Reference|Type|Syntax|Range)Error.*/i),
+    })
   }
   if (patterns.length === 0 && failed.length > 0) {
     patterns.push({ category: "unknown", count: failed.length, sample: failed[0]?.output.slice(0, 200) ?? "" })

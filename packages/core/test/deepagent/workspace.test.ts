@@ -26,7 +26,9 @@ describe("V3.1 DeepAgent Code workspace", () => {
     expect(existsSync(paths.questDir)).toBe(true)
     expect(existsSync(paths.indexesDir)).toBe(true)
     expect(existsSync(paths.sessionsDir)).toBe(true)
-    expect(JSON.parse(readFileSync(path.join(paths.indexesDir, "manifest.json"), "utf8")).schema_version).toBe("deepagent-code.project_index_manifest.v1")
+    expect(JSON.parse(readFileSync(path.join(paths.indexesDir, "manifest.json"), "utf8")).schema_version).toBe(
+      "deepagent-code.project_index_manifest.v1",
+    )
 
     const manifest = JSON.parse(readFileSync(paths.projectJson, "utf8"))
     expect(manifest.schema_version).toBe(PROJECT_SCHEMA_VERSION)

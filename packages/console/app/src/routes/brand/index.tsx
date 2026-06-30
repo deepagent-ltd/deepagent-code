@@ -253,7 +253,9 @@ export default function Brand() {
               <div>
                 <img src={previewWordmarkSimpleLight} alt={alt} />
                 <div data-component="actions">
-                  <button onClick={() => downloadFile(wordmarkSimpleLightPng, "deepagent-code-wordmark-simple-light.png")}>
+                  <button
+                    onClick={() => downloadFile(wordmarkSimpleLightPng, "deepagent-code-wordmark-simple-light.png")}
+                  >
                     PNG
                     <svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
                       <path
@@ -264,7 +266,9 @@ export default function Brand() {
                       />
                     </svg>
                   </button>
-                  <button onClick={() => downloadFile(wordmarkSimpleLightSvg, "deepagent-code-wordmark-simple-light.svg")}>
+                  <button
+                    onClick={() => downloadFile(wordmarkSimpleLightSvg, "deepagent-code-wordmark-simple-light.svg")}
+                  >
                     SVG
                     <svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
                       <path
@@ -280,7 +284,9 @@ export default function Brand() {
               <div>
                 <img src={previewWordmarkSimpleDark} alt={alt} />
                 <div data-component="actions">
-                  <button onClick={() => downloadFile(wordmarkSimpleDarkPng, "deepagent-code-wordmark-simple-dark.png")}>
+                  <button
+                    onClick={() => downloadFile(wordmarkSimpleDarkPng, "deepagent-code-wordmark-simple-dark.png")}
+                  >
                     PNG
                     <svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
                       <path
@@ -291,7 +297,9 @@ export default function Brand() {
                       />
                     </svg>
                   </button>
-                  <button onClick={() => downloadFile(wordmarkSimpleDarkSvg, "deepagent-code-wordmark-simple-dark.svg")}>
+                  <button
+                    onClick={() => downloadFile(wordmarkSimpleDarkSvg, "deepagent-code-wordmark-simple-dark.svg")}
+                  >
                     SVG
                     <svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
                       <path

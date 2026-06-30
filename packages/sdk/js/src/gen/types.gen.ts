@@ -85,9 +85,9 @@ export type Event =
   | EventSessionIdle
   | EventSessionCompacted
   | EventPlanUpdated
-  | EventVcsBranchUpdated
   | EventWorktreeReady
   | EventWorktreeFailed
+  | EventVcsBranchUpdated
   | EventWorkspaceReady
   | EventWorkspaceFailed
   | EventWorkspaceStatus
@@ -1592,13 +1592,6 @@ export type GlobalEvent = {
       }
     | {
         id: string
-        type: "vcs.branch.updated"
-        properties: {
-          branch?: string
-        }
-      }
-    | {
-        id: string
         type: "worktree.ready"
         properties: {
           name: string
@@ -1610,6 +1603,13 @@ export type GlobalEvent = {
         type: "worktree.failed"
         properties: {
           message: string
+        }
+      }
+    | {
+        id: string
+        type: "vcs.branch.updated"
+        properties: {
+          branch?: string
         }
       }
     | {
@@ -1900,6 +1900,10 @@ export type McpLocalConfig = {
   }
   enabled?: boolean
   timeout?: number
+  /**
+   * Display-only risk tier persisted by the preset catalog. NOT trusted for permission decisions — the gate re-derives the tier by matching the live config against the catalog. Absent/non-matching servers fail closed to ask.
+   */
+  riskTier?: "read_only" | "write_guarded" | "external_fetch"
 }
 
 export type McpOAuthConfig = {
@@ -1928,6 +1932,10 @@ export type McpRemoteConfig = {
    */
   oauth?: McpOAuthConfig | false
   timeout?: number
+  /**
+   * Display-only risk tier persisted by the preset catalog. NOT trusted for permission decisions — the gate re-derives the tier by matching the live config against the catalog. Absent/non-matching servers fail closed to ask.
+   */
+  riskTier?: "read_only" | "write_guarded" | "external_fetch"
 }
 
 /**
@@ -2537,14 +2545,18 @@ export type McpStatus =
   | McpStatusNeedsAuth
   | McpStatusNeedsClientRegistration
 
-export type McpUnsupportedOAuthError = {
-  error: string
-}
-
 export type McpServerNotFoundError = {
   _tag: "McpServerNotFoundError"
   name: string
   message: string
+}
+
+export type McpCatalogInstantiateError = {
+  error: string
+}
+
+export type McpUnsupportedOAuthError = {
+  error: string
 }
 
 export type Project = {
@@ -5303,14 +5315,6 @@ export type EventPlanUpdated = {
   }
 }
 
-export type EventVcsBranchUpdated = {
-  id: string
-  type: "vcs.branch.updated"
-  properties: {
-    branch?: string
-  }
-}
-
 export type EventWorktreeReady = {
   id: string
   type: "worktree.ready"
@@ -5325,6 +5329,14 @@ export type EventWorktreeFailed = {
   type: "worktree.failed"
   properties: {
     message: string
+  }
+}
+
+export type EventVcsBranchUpdated = {
+  id: string
+  type: "vcs.branch.updated"
+  properties: {
+    branch?: string
   }
 }
 
@@ -7349,6 +7361,104 @@ export type McpAddResponses = {
 }
 
 export type McpAddResponse = McpAddResponses[keyof McpAddResponses]
+
+export type McpCatalogData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/mcp/catalog"
+}
+
+export type McpCatalogErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type McpCatalogError = McpCatalogErrors[keyof McpCatalogErrors]
+
+export type McpCatalogResponses = {
+  /**
+   * Preset MCP catalog (metadata only; nothing is connected)
+   */
+  200: Array<{
+    id: string
+    title: string
+    description: string
+    direction: "git_platform" | "files_search" | "db_readonly" | "browser_fetch"
+    source: "opensource" | "adapted" | "self"
+    repo?: string
+    upstreamPin?: string
+    transport: "local" | "remote"
+    credentials: Array<{
+      key: string
+      description: string
+      required: boolean
+      secret: boolean
+    }>
+    params: Array<{
+      key: string
+      description: string
+      required: boolean
+      multi?: boolean
+    }>
+    riskTier: "read_only" | "write_guarded" | "external_fetch"
+    defaultReadOnly: boolean
+    defaultEnabled: boolean
+  }>
+}
+
+export type McpCatalogResponse = McpCatalogResponses[keyof McpCatalogResponses]
+
+export type McpCatalogEnableData = {
+  body?: {
+    id: string
+    params: {
+      [key: string]: string | Array<string>
+    }
+    credentialRefs: {
+      [key: string]: string
+    }
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/mcp/catalog/enable"
+}
+
+export type McpCatalogEnableErrors = {
+  /**
+   * McpCatalogInstantiateError | InvalidRequestError
+   */
+  400: McpCatalogInstantiateError | InvalidRequestError
+  /**
+   * McpServerNotFoundError
+   */
+  404: McpServerNotFoundError
+}
+
+export type McpCatalogEnableError = McpCatalogEnableErrors[keyof McpCatalogEnableErrors]
+
+export type McpCatalogEnableResponses = {
+  /**
+   * Catalog entry enabled and connected
+   */
+  200: {
+    status: {
+      [key: string]: McpStatus
+    }
+    name: string
+    config: McpLocalConfig | McpRemoteConfig
+  }
+}
+
+export type McpCatalogEnableResponse = McpCatalogEnableResponses[keyof McpCatalogEnableResponses]
 
 export type McpAuthRemoveData = {
   body?: never

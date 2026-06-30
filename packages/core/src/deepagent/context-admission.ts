@@ -25,9 +25,9 @@ export type AdmissionResult = {
 
 // Gate parameters. Conservative defaults so knowledge injection stays within model context budget.
 export type GateParams = {
-  readonly max_index_refs?: number       // hard limit on total refs admitted to context
-  readonly max_estimated_tokens?: number  // rough token ceiling (1 token ≈ 4 chars of summary text)
-  readonly allowed_strengths?: readonly ("high" | "xhigh" | "max" | "ultra")[]  // filter by agent strength
+  readonly max_index_refs?: number // hard limit on total refs admitted to context
+  readonly max_estimated_tokens?: number // rough token ceiling (1 token ≈ 4 chars of summary text)
+  readonly allowed_strengths?: readonly ("high" | "xhigh" | "max" | "ultra")[] // filter by agent strength
 }
 
 const DEFAULT_GATE: Required<GateParams> = {
@@ -106,10 +106,7 @@ export const loadOnDemand = (
 
 // Format the admitted pack index as a compact prompt section. Emitted only for max/ultra modes.
 // The model can call load_skill(<ref_id>) to get the full body of any admitted skill ref.
-export const formatPackIndexSection = (
-  result: AdmissionResult,
-  activeDomains: readonly string[],
-): string => {
+export const formatPackIndexSection = (result: AdmissionResult, activeDomains: readonly string[]): string => {
   if (result.admitted.length === 0) return ""
   const lines: string[] = [
     `Active domain packs: ${activeDomains.join(", ")}`,
