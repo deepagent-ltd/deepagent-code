@@ -440,7 +440,9 @@ export const dict = {
 
   "toast.update.title": "有可用更新",
   "toast.update.description": "DeepAgent Code 有新版本 ({{version}}) 可安裝。",
+  "toast.update.description.deb": "DeepAgent Code 有新版本 ({{version}}) 可下載 Linux .deb 安裝包。",
   "toast.update.action.installRestart": "安裝並重新啟動",
+  "toast.update.action.downloadDeb": "下載 .deb",
   "toast.update.action.notYet": "稍後",
 
   "error.page.title": "出了點問題",
