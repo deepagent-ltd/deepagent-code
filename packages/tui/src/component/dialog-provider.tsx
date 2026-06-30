@@ -25,7 +25,7 @@ const PROVIDER_PRIORITY: Record<string, number> = {
   google: 5,
 }
 
-const CUSTOM_PROVIDER_OPTION_VALUE = "__opencode_custom_provider__"
+const CUSTOM_PROVIDER_OPTION_VALUE = "__deepagent_code_custom_provider__"
 const CUSTOM_PROVIDER_ID = /^[a-z0-9][a-z0-9-_]*$/
 
 type ProviderOptionBase = {

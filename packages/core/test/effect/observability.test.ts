@@ -2,14 +2,14 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { resource } from "@deepagent-code/core/effect/observability"
 
 const otelResourceAttributes = process.env.OTEL_RESOURCE_ATTRIBUTES
-const opencodeClient = process.env.DEEPAGENT_CODE_CLIENT
+const deepagentCodeClient = process.env.DEEPAGENT_CODE_CLIENT
 
 afterEach(() => {
   if (otelResourceAttributes === undefined) delete process.env.OTEL_RESOURCE_ATTRIBUTES
   else process.env.OTEL_RESOURCE_ATTRIBUTES = otelResourceAttributes
 
-  if (opencodeClient === undefined) delete process.env.DEEPAGENT_CODE_CLIENT
-  else process.env.DEEPAGENT_CODE_CLIENT = opencodeClient
+  if (deepagentCodeClient === undefined) delete process.env.DEEPAGENT_CODE_CLIENT
+  else process.env.DEEPAGENT_CODE_CLIENT = deepagentCodeClient
 })
 
 describe("resource", () => {

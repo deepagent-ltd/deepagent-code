@@ -1,6 +1,6 @@
 import type {
   Config,
-  OpencodeClient,
+  DeepAgentCodeClient,
   Path,
   PermissionRequest,
   Project,
@@ -87,13 +87,13 @@ function showErrors(input: {
   })
 }
 
-export const loadGlobalConfigQuery = (scope: ServerScope, sdk: OpencodeClient) =>
+export const loadGlobalConfigQuery = (scope: ServerScope, sdk: DeepAgentCodeClient) =>
   queryOptions({
     queryKey: [scope, "config"],
     queryFn: () => retry(() => sdk.global.config.get().then((x) => x.data!)),
   })
 
-export const loadProjectsQuery = (scope: ServerScope, sdk: OpencodeClient) =>
+export const loadProjectsQuery = (scope: ServerScope, sdk: DeepAgentCodeClient) =>
   queryOptions({
     queryKey: [scope, "project"],
     queryFn: () =>
@@ -109,7 +109,7 @@ export const loadProjectsQuery = (scope: ServerScope, sdk: OpencodeClient) =>
   })
 
 export async function bootstrapGlobal(input: {
-  serverSDK: OpencodeClient
+  serverSDK: DeepAgentCodeClient
   scope: ServerScope
   requestFailedTitle: string
   translate: (key: string, vars?: Record<string, string | number>) => string
@@ -167,7 +167,7 @@ function warmSessions(input: {
   ids: string[]
   store: Store<State>
   setStore: SetStoreFunction<State>
-  sdk: OpencodeClient
+  sdk: DeepAgentCodeClient
 }) {
   const known = new Set(input.store.session.map((item) => item.id))
   const ids = [...new Set(input.ids)].filter((id) => !!id && !known.has(id))
@@ -183,19 +183,19 @@ function warmSessions(input: {
   ).then(() => undefined)
 }
 
-export const loadProvidersQuery = (scope: ServerScope, directory: string | null, sdk: OpencodeClient) =>
+export const loadProvidersQuery = (scope: ServerScope, directory: string | null, sdk: DeepAgentCodeClient) =>
   queryOptions({
     queryKey: [scope, directory, "providers"],
     queryFn: () => retry(() => sdk.provider.list().then((x) => normalizeProviderList(x.data!))),
   })
 
-export const loadAgentsQuery = (scope: ServerScope, directory: string | null, sdk: OpencodeClient) =>
+export const loadAgentsQuery = (scope: ServerScope, directory: string | null, sdk: DeepAgentCodeClient) =>
   queryOptions({
     queryKey: [scope, directory, "agents"],
     queryFn: () => retry(() => sdk.app.agents().then((x) => normalizeAgentList(x.data))),
   })
 
-export const loadPathQuery = (scope: ServerScope, directory: string | null, sdk: OpencodeClient) =>
+export const loadPathQuery = (scope: ServerScope, directory: string | null, sdk: DeepAgentCodeClient) =>
   queryOptions<Path>({
     queryKey: [scope, directory, "path"],
     queryFn: () => retry(() => sdk.path.get().then((x) => x.data!)),
@@ -205,7 +205,7 @@ export async function bootstrapDirectory(input: {
   directory: string
   scope: ServerScope
   mcp: boolean
-  sdk: OpencodeClient
+  sdk: DeepAgentCodeClient
   store: Store<State>
   setStore: SetStoreFunction<State>
   vcsCache: VcsCache

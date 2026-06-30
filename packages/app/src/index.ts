@@ -10,7 +10,7 @@ export {
   type WslInstalledDistro,
   type WslJob,
   type WslOnlineDistro,
-  type WslOpencodeCheck,
+  type WslDeepagentCodeCheck,
   type WslRuntimeCheck,
   type WslServerConfig,
   type WslServerItem,
