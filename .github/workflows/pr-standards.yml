@@ -17,6 +17,10 @@ jobs:
           script: |
             const pr = context.payload.pull_request;
             const login = pr.user.login;
+            if (pr.base.ref !== 'dev') {
+              console.log(`Skipping PR standards for base branch ${pr.base.ref}`);
+              return;
+            }
 
             // Skip PRs older than Feb 18, 2026 at 6PM EST (Feb 19, 2026 00:00 UTC)
             const cutoff = new Date('2026-02-19T00:00:00Z');
@@ -164,6 +168,10 @@ jobs:
           script: |
             const pr = context.payload.pull_request;
             const login = pr.user.login;
+            if (pr.base.ref !== 'dev') {
+              console.log(`Skipping PR compliance for base branch ${pr.base.ref}`);
+              return;
+            }
 
             // Skip PRs older than Feb 18, 2026 at 6PM EST (Feb 19, 2026 00:00 UTC)
             const cutoff = new Date('2026-02-19T00:00:00Z');
