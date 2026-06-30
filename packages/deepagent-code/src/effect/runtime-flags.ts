@@ -49,12 +49,24 @@ export class Service extends ConfigService.Service<Service>()("@deepagent-code/R
   experimentalBackgroundSubagents: stableOn("DEEPAGENT_CODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS"),
   experimentalLspTy: bool("DEEPAGENT_CODE_EXPERIMENTAL_LSP_TY"),
   experimentalLspTool: enabledByExperimental("DEEPAGENT_CODE_EXPERIMENTAL_LSP_TOOL"),
+  // L6 (V3.4): code_intel (symbol-driven AI IDE entry) ships ON by default and is promoted out of
+  // the experimental gate — `=false` disables. grep is never disabled; no-server files fall back.
+  codeIntelTool: stableOn("DEEPAGENT_CODE_CODE_INTEL_TOOL"),
+  // M7 (S1-v3.4): when a connected MCP server's tier derives to `read_only` (catalog-matched), its
+  // tools auto-allow without a per-call prompt. ON by default (the V3.4 design). Set `=false` to
+  // restore the pre-M7 behavior where EVERY MCP tool call goes through `ctx.ask` — a defense-in-depth
+  // escape hatch for users who want the human checkpoint on read-only servers too.
+  mcpReadOnlyAutoAllow: stableOn("DEEPAGENT_CODE_MCP_READONLY_AUTO_ALLOW"),
   experimentalOxfmt: enabledByExperimental("DEEPAGENT_CODE_EXPERIMENTAL_OXFMT"),
   experimentalPlanMode: enabledByExperimental("DEEPAGENT_CODE_EXPERIMENTAL_PLAN_MODE"),
   experimentalEventSystem: enabledByExperimental("DEEPAGENT_CODE_EXPERIMENTAL_EVENT_SYSTEM"),
   experimentalWorkspaces: enabledByExperimental("DEEPAGENT_CODE_EXPERIMENTAL_WORKSPACES"),
   experimentalIconDiscovery: enabledByExperimental("DEEPAGENT_CODE_EXPERIMENTAL_ICON_DISCOVERY"),
   outputTokenMax: positiveInteger("DEEPAGENT_CODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX"),
+  // T3 (S1-v3.4): how many narrowing attempts a 🟡 stall is given before it escalates to 🔴.
+  // Default 1 (one focused retry, then hand off). `positiveInteger` → undefined when unset/invalid,
+  // so the loop applies its own default of 1.
+  microbatchNarrowLimit: positiveInteger("DEEPAGENT_CODE_MICROBATCH_NARROW_LIMIT"),
   bashDefaultTimeoutMs: positiveInteger("DEEPAGENT_CODE_EXPERIMENTAL_BASH_DEFAULT_TIMEOUT_MS"),
   experimentalNativeLlm: bool("DEEPAGENT_CODE_EXPERIMENTAL_NATIVE_LLM"),
   experimentalWebSockets: bool("DEEPAGENT_CODE_EXPERIMENTAL_WEBSOCKETS"),

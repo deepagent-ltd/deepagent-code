@@ -4,7 +4,16 @@ import type { ValidationResult } from "../deepagent/validation-exec"
 import type { GitGroundTruth } from "../deepagent/git-groundtruth"
 
 const RoundReport = AgentGateway.DeepAgentRoundReport
+const FailureTriage = AgentGateway.DeepAgentFailureTriage
 type RoundReportModule = typeof AgentGateway.DeepAgentRoundReport
+
+// T3 (S1-v3.4): the microbatch round_control.action vocabulary actually emitted on injected turns.
+// Only advance-trigger actions are written (each injects a user turn): "continue" (legacy macro-round
+// seed), "revise" (🟢), "narrow" (🟡). The terminal outcomes (🔴 not-auto-fixable, exhausted narrowing)
+// inject NO turn — they break the loop and surface via the macro-round suggestion `status:"needs_human"`
+// (see `redReason` below), NOT via round_control. So there is intentionally no "stop"/"escalate" action
+// here: a round_control.action only ever exists on a message that advanced the loop.
+export type MicroRoundAction = "continue" | "revise" | "narrow"
 type RoundReportType = ReturnType<RoundReportModule["buildRoundReport"]>
 type ModelDeclarations = Parameters<RoundReportModule["buildRoundReport"]>[0]["declarations"]
 type NextRoundSuggestion = {
@@ -38,7 +47,8 @@ const validationSignature = (results: readonly ValidationResult[]): string =>
     .sort()
     .join(",")
 
-export const multiRoundEnabled = (): boolean => process.env["DEEPAGENT_MULTIROUND"] !== "0" && process.env["DEEPAGENT_MULTIROUND"] !== "false"
+export const multiRoundEnabled = (): boolean =>
+  process.env["DEEPAGENT_MULTIROUND"] !== "0" && process.env["DEEPAGENT_MULTIROUND"] !== "false"
 
 export type MultiRoundOps<T> = {
   readonly sessionID: string
@@ -53,8 +63,12 @@ export type MultiRoundOps<T> = {
   readonly runValidation: (commands: readonly string[]) => Effect.Effect<ValidationResult[]>
   readonly track: () => Effect.Effect<string | undefined>
   readonly restore: (checkpoint: string) => Effect.Effect<void>
-  readonly reviseTurn: (diagnosisText: string) => Effect.Effect<T>
-  // V3.1 no-progress gate: K consecutive micro-rounds with no material improvement (same
+  // T3 (S1-v3.4): the revise turn carries the triage action so the user message it injects can be
+  // tagged with round_control.action ("revise" green / "narrow" yellow) for frontend folding.
+  // Back-compat: action is optional and the producer defaults to existing "continue" behavior.
+  readonly reviseTurn: (diagnosisText: string, action?: MicroRoundAction) => Effect.Effect<T>
+  // T3: how many narrowing attempts a yellow stall gets before escalating to red (default 1).
+  readonly narrowLimit?: number // V3.1 no-progress gate: K consecutive micro-rounds with no material improvement (same
   // validation signature AND same diff fingerprint) stop the loop — the primary defense against
   // token-wasting thrash. ultra's brakes are stricter (smaller K) because it has no human in the
   // loop. Absent => use noProgressLimit's default. A diff fingerprint source is optional; without
@@ -94,9 +108,8 @@ export type MultiRoundOps<T> = {
 
 // P2-4: resolve a claimed-change-surface that may be a static array or a lazy thunk (read after
 // revise turns accumulate their edits).
-const resolveClaimedChangeSurface = (
-  value: readonly string[] | (() => readonly string[]) | undefined,
-): string[] => (typeof value === "function" ? [...value()] : value ? [...value] : [])
+const resolveClaimedChangeSurface = (value: readonly string[] | (() => readonly string[]) | undefined): string[] =>
+  typeof value === "function" ? [...value()] : value ? [...value] : []
 
 export const maybeRunRounds = <T>(ops: MultiRoundOps<T>): Effect.Effect<T> =>
   Effect.gen(function* () {
@@ -108,14 +121,26 @@ export const maybeRunRounds = <T>(ops: MultiRoundOps<T>): Effect.Effect<T> =>
     let best = yield* ops.track()
     let result = ops.first
     let lastResults: ValidationResult[] = []
+    // T3: when the loop exits via a 🔴 triage (or exhausted narrowing), the reason is surfaced as the
+    // needs_human body so a human knows "this is not something I could auto-fix".
+    let redReason: string | null = null
 
     // No-progress gate: stop after K consecutive rounds with no material improvement. ultra (no
     // human fallback) gets a stricter K. A "fingerprint" combines the validation signature with an
     // optional diff fingerprint; identical fingerprints across rounds means the revise turn changed
     // nothing meaningful, so we stop instead of burning tokens on a thrash loop.
     const noProgressLimit = ops.noProgressLimit ?? (ops.agentMode === "ultra" ? 2 : 3)
+    const narrowLimit = ops.narrowLimit ?? 1
     let prevFingerprint: string | undefined
     let stagnantRounds = 0
+    // T3: triage state carried across rounds.
+    let previousCategory: string | null = null
+    let prevFailedCount: number | undefined
+    let narrowAttempts = 0
+    // T3 (C1 fix): the PREVIOUS round's diff fingerprint, to compute a per-round delta. The cumulative
+    // `git diff --stat HEAD` is non-empty from round 1 on (the tree always carries earlier edits), so
+    // "did the model change something THIS round" must be `diffFp !== prevDiffFp`, not `diffFp != ""`.
+    let prevDiffFp: string | undefined
 
     for (let round = 1; ops.maxRounds === null || round <= ops.maxRounds; round++) {
       const { should, commands } = Orchestrator.shouldRunValidation(ops.sessionID)
@@ -143,7 +168,8 @@ export const maybeRunRounds = <T>(ops: MultiRoundOps<T>): Effect.Effect<T> =>
       // the loop is thrashing — stop and surface the latest results to the macro-round.
       const diffFp = ops.diffFingerprint ? yield* ops.diffFingerprint() : ""
       const fingerprint = `${validationSignature(results)}|${diffFp}`
-      if (prevFingerprint !== undefined && fingerprint === prevFingerprint) {
+      const fingerprintUnchanged = prevFingerprint !== undefined && fingerprint === prevFingerprint
+      if (fingerprintUnchanged) {
         stagnantRounds++
         if (stagnantRounds >= noProgressLimit) {
           // U1: no progress is a runtime signal that the current plan isn't working — mark the plan
@@ -157,10 +183,68 @@ export const maybeRunRounds = <T>(ops: MultiRoundOps<T>): Effect.Effect<T> =>
       }
       prevFingerprint = fingerprint
 
+      // T3 (S1-v3.4): triage this failing round (fixability × progress) BEFORE spending a revise.
+      const failedResults = results.filter((r) => !r.passed)
+      // C1 fix: per-round delta. `diffFp` is the CUMULATIVE working-tree diff, so "changed this round"
+      // is whether it differs from the previous round's cumulative diff — not whether it is non-empty
+      // (which is true from round 1 on because the tree always carries prior edits). With no diff source
+      // we cannot measure it, so default true (non-punitive: absence of a signal never forces stall/red).
+      const changedThisRound = ops.diffFingerprint ? diffFp !== (prevDiffFp ?? "") : true
+      const triage = FailureTriage.classifyFailure({
+        failed: failedResults,
+        changedThisRound,
+        round,
+        previousCategory,
+        prevFailedCount,
+        stagnant: fingerprintUnchanged,
+        // The failed results already carry their raw command output; do NOT pass the human summary
+        // here — it embeds command names like "npm test" and the word "failed", which would pollute
+        // analyzeErrors into mis-reading an unknown failure as a test_failure.
+        errorOutput: null,
+      })
+      prevDiffFp = diffFp
+      // Carry category/count for next round's flip/regression detection.
+      previousCategory = triage.category
+      prevFailedCount = failedResults.length
+
+      // 🔴 not_auto_fixable: this is not something microbatch can fix (env/deps/network/unknown).
+      // Exit immediately WITHOUT burning further rounds, and mark the plan stale so the macro-round
+      // surfaces needs_human with the reason. This is a CORRECT exit, the opposite of thrash-revising.
+      if (triage.tier === "not_auto_fixable") {
+        AgentGateway.DeepAgentSessionState.markPlanStale(ops.sessionID, "no_progress")
+        if (best) yield* ops.restore(best)
+        redReason = triage.reason
+        break
+      }
+
+      // 🟡 needs_narrowing: give a bounded number of focused narrowing retries, then escalate. ALL
+      // yellow substates (stall/regression/oscillation/half_progress) count toward the same budget —
+      // otherwise a model that keeps producing fresh-but-failing edits (oscillation/regression never
+      // trips the fingerprint-unchanged no-progress gate, and high/max have maxRounds=null) could
+      // narrow forever. half_progress (failures strictly dropping) is exempt: real progress should not
+      // be cut off by the narrow budget.
+      if (triage.tier === "needs_narrowing" && triage.substate !== "half_progress") {
+        narrowAttempts++
+        if (narrowAttempts > narrowLimit) {
+          AgentGateway.DeepAgentSessionState.markPlanStale(ops.sessionID, "no_progress")
+          if (best) yield* ops.restore(best)
+          redReason = `narrowing budget exhausted past ${narrowLimit} attempt(s): ${triage.reason}`
+          break
+        }
+      } else {
+        narrowAttempts = 0
+      }
+
       // continue / escalate -> rollback the failed attempt to best, then revise in a new turn.
       if (best) yield* ops.restore(best)
       lastResults = results
-      result = yield* ops.reviseTurn(Validation.summarizeResults(results))
+      // 🟡 → "narrow" (carry the triage reason as a narrowing constraint); 🟢 → "revise".
+      const action: MicroRoundAction = triage.tier === "needs_narrowing" ? "narrow" : "revise"
+      const turnText =
+        triage.tier === "needs_narrowing"
+          ? `${Validation.summarizeResults(results)}\n\nNarrowing guidance (${triage.substate}): ${triage.reason}. Focus on the specific failing file/symbol; do not widen the change surface.`
+          : Validation.summarizeResults(results)
+      result = yield* ops.reviseTurn(turnText, action)
     }
 
     // V3.1 A3 macro-round: after the micro-round loop settles, build the structured round report
@@ -183,7 +267,9 @@ export const maybeRunRounds = <T>(ops: MultiRoundOps<T>): Effect.Effect<T> =>
             claimed_doc_updates: [],
             claimed_validation_passed: true,
           }
-      const git = ops.gitGroundTruth ? yield* ops.gitGroundTruth() : { changed_files: [], diff_stat: null }
+      const git = ops.gitGroundTruth
+        ? yield* ops.gitGroundTruth()
+        : { changed_files: [], diff_stat: null, repo_root: null }
       const report = RoundReport.buildRoundReport({
         runId: ops.sessionID,
         sessionID: ops.sessionID,
@@ -217,17 +303,25 @@ export const maybeRunRounds = <T>(ops: MultiRoundOps<T>): Effect.Effect<T> =>
       const hardGate = AgentGateway.DeepAgentPlanController.hardGateEnabled(ops.agentMode)
       const plan = AgentGateway.DeepAgentSessionState.getPlan(ops.sessionID)
       const planExists = plan != null
-      const hasCompletionReport = planExists && AgentGateway.DeepAgentPlanController.buildCompletionReport(plan).complete
-      const stopDecision = StopHook.evaluate({ name: "stop", payload: { requiredValidationsRun, planStale, hardGate, planExists, hasCompletionReport } })
+      const hasCompletionReport =
+        planExists && AgentGateway.DeepAgentPlanController.buildCompletionReport(plan).complete
+      const stopDecision = StopHook.evaluate({
+        name: "stop",
+        payload: { requiredValidationsRun, planStale, hardGate, planExists, hasCompletionReport },
+      })
       const baseStatus = RoundReport.deriveStatus(report)
-      const status = stopDecision.decision === "block" || packChanged ? "needs_human" : baseStatus
+      // T3: a 🔴 triage exit (or exhausted narrowing) forces needs_human with the triage reason, so the
+      // operator sees "not auto-fixable: <reason>" rather than a generic continue/done.
+      const status = redReason != null || stopDecision.decision === "block" || packChanged ? "needs_human" : baseStatus
       const suggestion: NextRoundSuggestion = {
         status,
-        body: packChanged
-          ? `Domain pack set changed mid-run (${ops.baselinePackSnapshotId} -> ${ops.packSnapshotId}); risk/scope may have shifted, human review required before continuing.`
-          : stopDecision.decision === "block"
-            ? `${stopDecision.blockReason}. Configured validations: ${ops.validationCommands.join(", ")}.`
-            : RoundReport.summarizeForSuggestion(report),
+        body: redReason
+          ? `Not auto-fixable: ${redReason}. Configured validations: ${ops.validationCommands.join(", ")}.`
+          : packChanged
+            ? `Domain pack set changed mid-run (${ops.baselinePackSnapshotId} -> ${ops.packSnapshotId}); risk/scope may have shifted, human review required before continuing.`
+            : stopDecision.decision === "block"
+              ? `${stopDecision.blockReason}. Configured validations: ${ops.validationCommands.join(", ")}.`
+              : RoundReport.summarizeForSuggestion(report),
       }
       yield* ops.onMacroRound(suggestion, report)
     }

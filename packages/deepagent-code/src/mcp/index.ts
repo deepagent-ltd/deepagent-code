@@ -24,6 +24,8 @@ import { McpOAuthProvider, OAUTH_CALLBACK_PATH } from "./oauth-provider"
 import { McpOAuthCallback } from "./oauth-callback"
 import { McpAuth } from "./auth"
 import { EventV2Bridge } from "@/event-v2-bridge"
+import { ToolProvenance } from "@/tool/provenance"
+import { McpCatalog } from "./catalog"
 import { EventV2 } from "@deepagent-code/core/event"
 import { TuiEvent } from "@/server/tui-event"
 import open from "open"
@@ -268,6 +270,17 @@ export interface Interface {
   readonly supportsOAuth: (mcpName: string) => Effect.Effect<boolean, NotFoundError>
   readonly hasStoredTokens: (mcpName: string) => Effect.Effect<boolean>
   readonly getAuthStatus: (mcpName: string) => Effect.Effect<AuthStatus>
+  // M1 (S1-v3.4): preset catalog. `catalog()` lists vetted entries (metadata only — nothing is
+  // connected). `enableCatalogEntry()` instantiates an entry + the user's filled params/credential
+  // references into a normal cfg.mcp entry and connects it, exactly as a hand-written server would.
+  readonly catalog: () => Effect.Effect<readonly McpCatalog.McpCatalogEntry[]>
+  readonly enableCatalogEntry: (
+    id: string,
+    filled: McpCatalog.FilledEntry,
+  ) => Effect.Effect<
+    { status: Record<string, Status> | Status; name: string; config: ConfigMCPV1.Info },
+    NotFoundError | McpCatalog.CatalogInstantiateError
+  >
 }
 
 export class Service extends Context.Service<Service, Interface>()("@deepagent-code/MCP") {}
@@ -656,6 +669,36 @@ export const layer = Layer.effect(
       return { status: s.status }
     })
 
+    // M1 (S1-v3.4): the preset catalog is static metadata — listing it connects nothing.
+    const catalog = Effect.fn("MCP.catalog")(function* () {
+      return McpCatalog.list()
+    })
+
+    // M1 (S1-v3.4): enabling a catalog entry instantiates it into a cfg.mcp entry (with the user's
+    // filled params + secure-storage credential references) and connects it via the same `add` path
+    // a hand-written server uses. Provenance is correct (M2) because the connected server's tools go
+    // through `tools()`, which stamps {source:"mcp", mcpServer}. Unknown id → NotFoundError; missing
+    // required param/credential or unresolved placeholder → CatalogInstantiateError (fail-closed).
+    const enableCatalogEntry = Effect.fn("MCP.enableCatalogEntry")(function* (
+      id: string,
+      filled: McpCatalog.FilledEntry,
+    ) {
+      const entry = McpCatalog.find(id)
+      if (!entry) return yield* Effect.fail(new NotFoundError({ name: id }))
+      const instantiated = yield* Effect.try({
+        try: () => McpCatalog.instantiate(entry, filled),
+        catch: (error) =>
+          error instanceof McpCatalog.CatalogInstantiateError
+            ? error
+            : new McpCatalog.CatalogInstantiateError(String(error)),
+      })
+      const result = yield* add(instantiated.name, instantiated.config)
+      // Return the instantiated config so the caller (frontend sync) can PERSIST it to cfg.mcp the
+      // same way a manual add does — `add` only connects + stores in-memory, like the manual backend
+      // path; durable persistence lives in the config layer above.
+      return { ...result, name: instantiated.name, config: instantiated.config }
+    })
+
     const connect = Effect.fn("MCP.connect")(function* (name: string) {
       const mcp = yield* requireMcpConfig(name)
       yield* createAndStore(name, { ...mcp, enabled: true })
@@ -695,8 +738,30 @@ export const layer = Layer.effect(
             }
 
             const timeout = entry?.timeout ?? defaultTimeout
+            // M7 (S1-v3.4) SECURITY: derive the risk tier by STRUCTURALLY MATCHING the live config
+            // against the catalog templates — NOT by reading the persisted `riskTier` flag, which is
+            // attacker-writable (add endpoint forwards client config verbatim; project-local config is
+            // auto-merged + not gitignored). A forged `riskTier:"read_only"` on a non-matching command
+            // derives to `undefined` here → the session gate fails closed to `ask`. Only a config whose
+            // command genuinely matches the vetted read-only template earns auto-allow.
+            const derivedTier = entry && isMcpConfigured(entry) ? McpCatalog.deriveTier(entry) : undefined
             for (const mcpTool of listed) {
-              result[sanitize(clientName) + "_" + sanitize(mcpTool.name)] = convertMcpTool(mcpTool, client, timeout)
+              const converted = convertMcpTool(mcpTool, client, timeout)
+              // M2 (S1-v3.4): carry explicit provenance on the converted AI SDK tool
+              // instead of letting downstream guess from the `_`-joined name. The tool
+              // is a `convertMcpTool` AI SDK `Tool` (not a `Tool.Def`), so provenance
+              // rides as an extra runtime property — the AI SDK ignores it, but
+              // session/tools.ts forwards the same object reference to request.ts.
+              ToolProvenance.set(converted, {
+                source: "mcp",
+                mcpServer: clientName,
+                mcpToolName: mcpTool.name,
+                // M7 (S1-v3.4): tier is the catalog-DERIVED tier (see above), so the session tool gate
+                // derives read_only→allow / else→ask from a source the model/config cannot forge. A
+                // non-matching (hand-added or tampered) server derives undefined → gate fails closed.
+                ...(derivedTier ? { riskTier: derivedTier } : {}),
+              })
+              result[sanitize(clientName) + "_" + sanitize(mcpTool.name)] = converted
             }
           }),
         { concurrency: "unbounded" },
@@ -966,6 +1031,8 @@ export const layer = Layer.effect(
       prompts,
       resources,
       add,
+      catalog,
+      enableCatalogEntry,
       connect,
       disconnect,
       getPrompt,

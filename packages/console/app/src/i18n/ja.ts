@@ -152,7 +152,8 @@ export const dict = {
   "home.faq.a2.before": "最も簡単な始め方は",
   "home.faq.a2.link": "イントロを読む",
   "home.faq.q3": "DeepAgent Codeには追加のAIサブスクリプションが必要ですか？",
-  "home.faq.a3.p1": "必ずしも必要ではありません。DeepAgent Codeには、アカウント不要で使える無料モデルが含まれています。",
+  "home.faq.a3.p1":
+    "必ずしも必要ではありません。DeepAgent Codeには、アカウント不要で使える無料モデルが含まれています。",
   "home.faq.a3.p2.beforeZen": "これらに加えて、",
   "home.faq.a3.p2.afterZen": " アカウントを作成することで、人気のコーディングモデルを利用できます。",
   "home.faq.a3.p3":
@@ -208,7 +209,8 @@ export const dict = {
   "zen.faq.a4.p1.afterPricing": "し、マークアップはありません。つまり、モデル提供元の請求額をそのまま支払います。",
   "zen.faq.a4.p2.beforeAccount": "総コストは利用量に依存し、月次の支出上限を",
   "zen.faq.a4.p2.accountLink": "アカウント",
-  "zen.faq.a4.p3": "コストを賄うために、DeepAgent Codeは$20の残高チャージあたり$1.23の小さな決済手数料のみを追加します。",
+  "zen.faq.a4.p3":
+    "コストを賄うために、DeepAgent Codeは$20の残高チャージあたり$1.23の小さな決済手数料のみを追加します。",
   "zen.faq.q5": "データとプライバシーは？",
   "zen.faq.a5.beforeExceptions":
     "Zenのモデルはすべて米国でホストされています。プロバイダーはゼロ保持ポリシーを守り、データをモデル学習に使用しません（",

@@ -56,7 +56,9 @@ export declare namespace GeoStatRepo {
   }
 }
 
-export class GeoStatRepo extends Context.Service<GeoStatRepo, GeoStatRepo.Service>()("@deepagent-code/stats/GeoStatRepo") {
+export class GeoStatRepo extends Context.Service<GeoStatRepo, GeoStatRepo.Service>()(
+  "@deepagent-code/stats/GeoStatRepo",
+) {
   static readonly layer: Layer.Layer<GeoStatRepo, never, DrizzleClient> = Layer.effect(
     GeoStatRepo,
     Effect.gen(function* () {

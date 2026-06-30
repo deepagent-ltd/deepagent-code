@@ -14,10 +14,26 @@ import path from "node:path"
 //  INV-7 provenance required; sealed scope never listed.
 
 export type DocType =
-  | "knowledge" | "strategy" | "methodology" | "skill" | "memory"
-  | "design" | "requirements" | "bugfix" | "tasks" | "worklog"
-  | "candidate" | "eval" | "diagnosis" | "decision" | "context_snapshot"
-  | "instruction_resolution" | "conflict" | "failure_dossier" | "run_context" | "run_state"
+  | "knowledge"
+  | "strategy"
+  | "methodology"
+  | "skill"
+  | "memory"
+  | "design"
+  | "requirements"
+  | "bugfix"
+  | "tasks"
+  | "worklog"
+  | "candidate"
+  | "eval"
+  | "diagnosis"
+  | "decision"
+  | "context_snapshot"
+  | "instruction_resolution"
+  | "conflict"
+  | "failure_dossier"
+  | "run_context"
+  | "run_state"
   // U1 PlanController (S1 §P0): the structural plan (goal/steps/active_step) for a session. Its
   // version chain IS the plan change history surfaced by U2 — not a knowledge type, so no confidence
   // is required. Persisted under scope "run:<sessionId>".
@@ -25,11 +41,26 @@ export type DocType =
 
 export type DocStatus = "draft" | "candidate" | "active" | "superseded" | "rejected" | "quarantined"
 export type LinkRel =
-  | "supports" | "blocks" | "conflicts_with" | "requires" | "requires_skill"
-  | "validated_by" | "derived_from" | "produces_evidence" | "supersedes" | "refines" | "depends_on" | "triggered_by"
+  | "supports"
+  | "blocks"
+  | "conflicts_with"
+  | "requires"
+  | "requires_skill"
+  | "validated_by"
+  | "derived_from"
+  | "produces_evidence"
+  | "supersedes"
+  | "refines"
+  | "depends_on"
+  | "triggered_by"
 export type EvidenceStrength = "strong" | "medium" | "weak" | "none"
 
-export const KNOWLEDGE_TYPES: ReadonlySet<DocType> = new Set<DocType>(["knowledge", "strategy", "methodology", "memory"])
+export const KNOWLEDGE_TYPES: ReadonlySet<DocType> = new Set<DocType>([
+  "knowledge",
+  "strategy",
+  "methodology",
+  "memory",
+])
 
 export type DocLink = { readonly rel: LinkRel; readonly to: string; readonly note?: string }
 export type Provenance = {
@@ -37,7 +68,11 @@ export type Provenance = {
   readonly run_ref?: string | null
   readonly evidence_refs?: readonly string[]
 }
-export type Confidence = { readonly evidence_strength: EvidenceStrength; readonly support_count: number; readonly last_validated_round?: number | null }
+export type Confidence = {
+  readonly evidence_strength: EvidenceStrength
+  readonly support_count: number
+  readonly last_validated_round?: number | null
+}
 
 export type Doc = {
   readonly id: string
@@ -89,8 +124,15 @@ export type IntegrityViolation = { readonly invariant: string; readonly docId: s
 export type IntegrityReport = { readonly ok: boolean; readonly violations: readonly IntegrityViolation[] }
 
 const toRef = (d: Doc): DocRef => ({
-  id: d.id, version: d.version, type: d.type, scope: d.scope, status: d.status,
-  domain: d.domain, tags: d.tags, description: d.description, evidenceStrength: d.confidence?.evidence_strength,
+  id: d.id,
+  version: d.version,
+  type: d.type,
+  scope: d.scope,
+  status: d.status,
+  domain: d.domain,
+  tags: d.tags,
+  description: d.description,
+  evidenceStrength: d.confidence?.evidence_strength,
 })
 
 const canonical = (value: unknown): string => {
@@ -113,11 +155,31 @@ const computeHash = (doc: Doc): string => {
 
 // fingerprint of semantic content (excludes version/hash/status/superseded_by) for the no-op rule
 const fingerprint = (d: Doc): string =>
-  canonical({ type: d.type, scope: d.scope, domain: d.domain, tags: d.tags, description: d.description,
-    links: d.links, confidence: d.confidence ?? null, provenance: d.provenance, extensions: d.extensions ?? null, body: d.body })
+  canonical({
+    type: d.type,
+    scope: d.scope,
+    domain: d.domain,
+    tags: d.tags,
+    description: d.description,
+    links: d.links,
+    confidence: d.confidence ?? null,
+    provenance: d.provenance,
+    extensions: d.extensions ?? null,
+    body: d.body,
+  })
 
 const slugify = (text: string, max = 48): string =>
-  (text.toLowerCase().replace(/[^a-z0-9\s_-]/g, "").trim().replace(/[\s_]+/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "") || "doc").slice(0, max).replace(/-$/g, "")
+  (
+    text
+      .toLowerCase()
+      .replace(/[^a-z0-9\s_-]/g, "")
+      .trim()
+      .replace(/[\s_]+/g, "-")
+      .replace(/-+/g, "-")
+      .replace(/^-|-$/g, "") || "doc"
+  )
+    .slice(0, max)
+    .replace(/-$/g, "")
 
 // Token-set similarity for near-duplicate knowledge detection (no embedding model needed). Splits
 // on non-alphanumeric (covers latin words and CJK runs), lowercases, drops 1-char noise, and scores
@@ -187,7 +249,15 @@ export class DocumentStore {
     if (!cur) throw new Error(`update: unknown doc ${id}`)
     // Preserve the current status: an update (e.g. adding a link via link()) must not silently
     // demote an `active` doc back to `draft`.
-    let next: Doc = { ...cur, body, links: links ?? cur.links, version: cur.version + 1, status: cur.status, superseded_by: null, hash: "" }
+    let next: Doc = {
+      ...cur,
+      body,
+      links: links ?? cur.links,
+      version: cur.version + 1,
+      status: cur.status,
+      superseded_by: null,
+      hash: "",
+    }
     if (fingerprint(next) === fingerprint(cur)) return cur // INV-4 no-op
     this.assertLinkTargets(next.links)
     next = { ...next, hash: computeHash(next) }
@@ -199,7 +269,10 @@ export class DocumentStore {
   // Find an existing non-rejected knowledge doc that near-duplicates `input` (same type + scope +
   // domain, description token-similarity >= threshold). Used by the self-learning write path to
   // merge "same point, different wording" candidates instead of creating duplicate rows.
-  findSimilarKnowledge(input: { type: DocType; scope: string; domain: string | null; description: string }, threshold = KNOWLEDGE_SIMILARITY_THRESHOLD): Doc | null {
+  findSimilarKnowledge(
+    input: { type: DocType; scope: string; domain: string | null; description: string },
+    threshold = KNOWLEDGE_SIMILARITY_THRESHOLD,
+  ): Doc | null {
     let best: { doc: Doc; score: number } | null = null
     for (const ref of this.list({ type: input.type, scope: input.scope })) {
       const doc = this.get(ref.id)
@@ -290,7 +363,10 @@ export class DocumentStore {
           if (!rels.includes(l.rel) || seen.has(l.to)) continue
           seen.add(l.to)
           const td = this.get(l.to)
-          if (td) { result.push(toRef(td)); next.push(l.to) }
+          if (td) {
+            result.push(toRef(td))
+            next.push(l.to)
+          }
         }
       }
       frontier = next
@@ -309,9 +385,13 @@ export class DocumentStore {
     for (const [id, versions] of this.docs) {
       const max = Math.max(...versions.keys())
       for (const [v, doc] of versions) {
-        if (computeHash({ ...doc, hash: "" }) !== doc.hash) violations.push({ invariant: "INV-2", docId: `${id}@v${v}`, detail: "hash mismatch" })
-        if (!doc.provenance?.source) violations.push({ invariant: "INV-7", docId: `${id}@v${v}`, detail: "missing provenance.source" })
-        for (const l of doc.links) if (!this.docs.has(l.to)) violations.push({ invariant: "INV-3", docId: id, detail: `dangling link -> ${l.to}` })
+        if (computeHash({ ...doc, hash: "" }) !== doc.hash)
+          violations.push({ invariant: "INV-2", docId: `${id}@v${v}`, detail: "hash mismatch" })
+        if (!doc.provenance?.source)
+          violations.push({ invariant: "INV-7", docId: `${id}@v${v}`, detail: "missing provenance.source" })
+        for (const l of doc.links)
+          if (!this.docs.has(l.to))
+            violations.push({ invariant: "INV-3", docId: id, detail: `dangling link -> ${l.to}` })
         if (v < max && (doc.status !== "superseded" || !doc.superseded_by))
           violations.push({ invariant: "INV-4", docId: `${id}@v${v}`, detail: "old version not superseded" })
       }
@@ -354,11 +434,22 @@ export class DocumentStore {
   }
   private docFromInput(id: string, version: number, input: CreateDocInput): Doc {
     return {
-      id, type: input.type, scope: input.scope, status: "draft", version, superseded_by: null,
-      hash: "", created_round: input.createdRound ?? null, domain: input.domain ?? null,
-      tags: input.tags ?? [], description: input.description, provenance: input.provenance,
-      links: input.links ?? [], ...(input.confidence ? { confidence: input.confidence } : {}),
-      ...(input.extensions ? { extensions: input.extensions } : {}), body: input.body,
+      id,
+      type: input.type,
+      scope: input.scope,
+      status: "draft",
+      version,
+      superseded_by: null,
+      hash: "",
+      created_round: input.createdRound ?? null,
+      domain: input.domain ?? null,
+      tags: input.tags ?? [],
+      description: input.description,
+      provenance: input.provenance,
+      links: input.links ?? [],
+      ...(input.confidence ? { confidence: input.confidence } : {}),
+      ...(input.extensions ? { extensions: input.extensions } : {}),
+      body: input.body,
     }
   }
   private findLogical(input: CreateDocInput): Doc | null {
@@ -374,10 +465,14 @@ export class DocumentStore {
     const slug = slugify(idSlug ?? description)
     const base = domain ? `doc:${type}:${domain}:${slug}` : `doc:${type}:${slug}`
     if (!this.docs.has(base)) return base
-    for (let i = 2; ; i++) { const c = `${base}-${i}`; if (!this.docs.has(c)) return c }
+    for (let i = 2; ; i++) {
+      const c = `${base}-${i}`
+      if (!this.docs.has(c)) return c
+    }
   }
   private assertKnowledgeConfidence(doc: Doc): void {
-    if (KNOWLEDGE_TYPES.has(doc.type) && !doc.confidence) throw new Error(`knowledge-class doc ${doc.id} requires confidence (docs/30 §3)`)
+    if (KNOWLEDGE_TYPES.has(doc.type) && !doc.confidence)
+      throw new Error(`knowledge-class doc ${doc.id} requires confidence (docs/30 §3)`)
   }
   private assertLinkTargets(links: readonly DocLink[]): void {
     for (const l of links) if (!this.docs.has(l.to)) throw new Error(`link target does not exist: ${l.to} (INV-3)`)

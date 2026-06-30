@@ -570,6 +570,12 @@ export async function create(input: {
     get connection() {
       return connection
     },
+    // L1 (S1-v3.4): expose the server capabilities captured at initialize so the
+    // upper layers (L2/L3) can probe whether a given LSP feature is supported and
+    // gracefully skip it instead of firing an unsupported request.
+    getServerCapabilities(): ServerCapabilities | undefined {
+      return initialized.capabilities
+    },
     notify: {
       async open(request: { path: string }) {
         request.path = Filesystem.normalizePath(

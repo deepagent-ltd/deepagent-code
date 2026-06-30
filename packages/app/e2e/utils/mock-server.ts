@@ -21,7 +21,7 @@ export interface MockServerConfig {
   events?: () => unknown[]
 }
 
-export async function mockDeepAgent CodeServer(page: Page, config: MockServerConfig) {
+export async function mockDeepAgentCodeServer(page: Page, config: MockServerConfig) {
   const staticRoutes: Record<string, unknown> = {
     "/provider": config.provider,
     "/path": {

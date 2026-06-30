@@ -53,7 +53,12 @@ function statusWithFetch(
   fetch: typeof globalThis.fetch | undefined,
 ): RuntimeStatus {
   const providerID = input.model.providerID
-  if (providerID !== "openai" && providerID !== "anthropic" && providerID !== "deepagent" && !providerID.startsWith("deepagent-code"))
+  if (
+    providerID !== "openai" &&
+    providerID !== "anthropic" &&
+    providerID !== "deepagent" &&
+    !providerID.startsWith("deepagent-code")
+  )
     return { type: "unsupported", reason: "provider is not openai, deepagent-code, anthropic, or deepagent" }
   const npm = input.model.api.npm
   if (npm !== "@ai-sdk/openai" && npm !== "@ai-sdk/openai-compatible" && npm !== "@ai-sdk/anthropic")

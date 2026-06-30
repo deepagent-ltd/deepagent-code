@@ -2,11 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { LLM, LLMClient, Provider } from "@deepagent-code/llm"
 import { Route, Protocol } from "@deepagent-code/llm/route"
 import { Provider as ProviderSubpath } from "@deepagent-code/llm/provider"
-import {
-  Anthropic,
-  OpenAI,
-  OpenAICompatible,
-} from "@deepagent-code/llm/providers"
+import { Anthropic, OpenAI, OpenAICompatible } from "@deepagent-code/llm/providers"
 import {
   CloudflareAIGateway,
   CloudflareWorkersAI,

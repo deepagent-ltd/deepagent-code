@@ -26,4 +26,13 @@ export function report(file: string, issues: LSPClient.Diagnostic[]) {
   return `<diagnostics file="${file}">\n${limited.map(pretty).join("\n")}${suffix}\n</diagnostics>`
 }
 
+// L4 (S1-v3.4): true when any diagnostic across the map is error-severity. Used to derive the
+// plan-stale latch signal (high+ only) after edit/write.
+export function hasErrors(diagnostics: Record<string, LSPClient.Diagnostic[]>): boolean {
+  for (const issues of Object.values(diagnostics)) {
+    if (issues.some((item) => item.severity === 1)) return true
+  }
+  return false
+}
+
 export * as Diagnostic from "./diagnostic"

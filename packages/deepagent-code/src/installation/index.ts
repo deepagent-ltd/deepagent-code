@@ -210,7 +210,9 @@ export const layer: Layer.Layer<Service, never, HttpClient.HttpClient | AppProce
         for (const check of checks) {
           const output = yield* check.command()
           const installedName =
-            check.name === "brew" || check.name === "choco" || check.name === "scoop" ? "deepagent-code" : "deepagent-code"
+            check.name === "brew" || check.name === "choco" || check.name === "scoop"
+              ? "deepagent-code"
+              : "deepagent-code"
           if (output.includes(installedName)) {
             return check.name
           }

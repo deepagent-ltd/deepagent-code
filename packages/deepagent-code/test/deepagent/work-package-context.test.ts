@@ -21,7 +21,9 @@ describe("DeepAgent work package context", () => {
       expect(workPackage.document_refs.map((ref: { ref_id: string }) => ref.ref_id)).toEqual(
         expect.arrayContaining(["doc:design", "doc:handoff", "doc:test", "doc:history"]),
       )
-      expect(workPackage.required_outputs).toEqual(expect.arrayContaining(["DESIGN.md", "HANDOFF.md", "TEST.md", "HISTORY.md"]))
+      expect(workPackage.required_outputs).toEqual(
+        expect.arrayContaining(["DESIGN.md", "HANDOFF.md", "TEST.md", "HISTORY.md"]),
+      )
       expect(workPackage.agent_mode).toBe("high")
       // docs/39 §3.1: high has durable retrieval enabled, but strategies/methodologies stay off.
       expect(workPackage.knowledge_enabled).toBe(true)

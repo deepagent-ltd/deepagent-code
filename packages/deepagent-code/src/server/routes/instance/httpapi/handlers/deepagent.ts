@@ -75,7 +75,9 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
           })
           const verdict = AgentGateway.DeepAgentPromotion.validate(ctx.payload.candidate, buffer, replay)
           if (!verdict.pass) {
-            throw new Error(`promotion validation gate failed: ${verdict.reason ?? "candidate did not pass server-side validation"}`)
+            throw new Error(
+              `promotion validation gate failed: ${verdict.reason ?? "candidate did not pass server-side validation"}`,
+            )
           }
           const record = AgentGateway.DeepAgentPromotion.promote(
             ctx.payload.candidate,
@@ -84,11 +86,15 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
             ctx.payload.approval,
             now,
           )
-          AgentGateway.DeepAgentPromotion.persistPromoted(record, AgentGateway.DeepAgentKnowledgeSource.userGlobalStoreFor())
+          AgentGateway.DeepAgentPromotion.persistPromoted(
+            record,
+            AgentGateway.DeepAgentKnowledgeSource.userGlobalStoreFor(),
+          )
           AgentGateway.DeepAgentKnowledgeRetriever.invalidateCache()
           return record
         },
-        catch: (error) => new DeepAgentPromotionError({ message: error instanceof Error ? error.message : String(error) }),
+        catch: (error) =>
+          new DeepAgentPromotionError({ message: error instanceof Error ? error.message : String(error) }),
       })
       return { promoted }
     })
@@ -104,11 +110,16 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
           const buffer = new AgentGateway.DeepAgentPromotion.RejectedBuffer(memoryDir)
           const fingerprint = AgentGateway.DeepAgentPromotion.fingerprint(ctx.payload.candidate)
           AgentGateway.DeepAgentPromotion.reject(ctx.payload.candidate, buffer, ctx.payload.reason)
-          AgentGateway.DeepAgentKnowledgeSource.setApprovalForWorkspace(dir, ctx.payload.candidate.candidate_id, "rejected")
+          AgentGateway.DeepAgentKnowledgeSource.setApprovalForWorkspace(
+            dir,
+            ctx.payload.candidate.candidate_id,
+            "rejected",
+          )
           AgentGateway.DeepAgentKnowledgeRetriever.invalidateCache()
           return { candidateId: ctx.payload.candidate.candidate_id, fingerprint, reason: ctx.payload.reason }
         },
-        catch: (error) => new DeepAgentPromotionError({ message: error instanceof Error ? error.message : String(error) }),
+        catch: (error) =>
+          new DeepAgentPromotionError({ message: error instanceof Error ? error.message : String(error) }),
       })
       return { rejected }
     })
@@ -121,7 +132,8 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
           // entry. Sorted by id for a stable list (the UI filters/groups by approval_status).
           const REVIEW_TYPES = ["knowledge", "strategy", "methodology", "memory", "skill", "failure_dossier"] as const
           type ReviewType = (typeof REVIEW_TYPES)[number]
-          const asReviewType = (t: string): ReviewType => (REVIEW_TYPES.includes(t as ReviewType) ? (t as ReviewType) : "knowledge")
+          const asReviewType = (t: string): ReviewType =>
+            REVIEW_TYPES.includes(t as ReviewType) ? (t as ReviewType) : "knowledge"
           const items = [...AgentGateway.DeepAgentKnowledgeSource.listAllForWorkspace(dir)]
             .map((e) => ({
               id: e.id,
@@ -134,7 +146,8 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
             .sort((a, b) => a.id.localeCompare(b.id))
           return { items }
         },
-        catch: (error) => new DeepAgentPromotionError({ message: error instanceof Error ? error.message : String(error) }),
+        catch: (error) =>
+          new DeepAgentPromotionError({ message: error instanceof Error ? error.message : String(error) }),
       })
     })
 
@@ -142,11 +155,13 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
       const dir = yield* workspaceDir()
       return yield* Effect.try({
         try: () => {
-          for (const id of ctx.payload.ids) AgentGateway.DeepAgentKnowledgeSource.setApprovalForWorkspace(dir, id, "approved")
+          for (const id of ctx.payload.ids)
+            AgentGateway.DeepAgentKnowledgeSource.setApprovalForWorkspace(dir, id, "approved")
           AgentGateway.DeepAgentKnowledgeRetriever.invalidateCache()
           return { updated: ctx.payload.ids }
         },
-        catch: (error) => new DeepAgentPromotionError({ message: error instanceof Error ? error.message : String(error) }),
+        catch: (error) =>
+          new DeepAgentPromotionError({ message: error instanceof Error ? error.message : String(error) }),
       })
     })
 
@@ -154,11 +169,13 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
       const dir = yield* workspaceDir()
       return yield* Effect.try({
         try: () => {
-          for (const id of ctx.payload.ids) AgentGateway.DeepAgentKnowledgeSource.setApprovalForWorkspace(dir, id, "rejected")
+          for (const id of ctx.payload.ids)
+            AgentGateway.DeepAgentKnowledgeSource.setApprovalForWorkspace(dir, id, "rejected")
           AgentGateway.DeepAgentKnowledgeRetriever.invalidateCache()
           return { updated: ctx.payload.ids }
         },
-        catch: (error) => new DeepAgentPromotionError({ message: error instanceof Error ? error.message : String(error) }),
+        catch: (error) =>
+          new DeepAgentPromotionError({ message: error instanceof Error ? error.message : String(error) }),
       })
     })
 
@@ -205,7 +222,8 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
             per_group: decision.perGroup,
           }
         },
-        catch: (error) => new DeepAgentPromotionError({ message: error instanceof Error ? error.message : String(error) }),
+        catch: (error) =>
+          new DeepAgentPromotionError({ message: error instanceof Error ? error.message : String(error) }),
       })
     })
 
@@ -240,16 +258,30 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
             userRequest: "",
             userOverrides: [...pinned],
           })
-          const { snapshot, resolution } = AgentGateway.DeepAgentDomainPackRegistry.activateForProfile(profile, 0.5, manifests)
+          const { snapshot, resolution } = AgentGateway.DeepAgentDomainPackRegistry.activateForProfile(
+            profile,
+            0.5,
+            manifests,
+          )
           const byId = new Map(manifests.map((m) => [m.id, m]))
           const packs = resolution.activePackIds.flatMap((id) => {
             const m = byId.get(id)
             if (!m) return []
-            return [{ id: m.id, name: m.name, version: m.version, risk: m.risk, domains: m.domains, pinned: pinned.has(m.id) }]
+            return [
+              {
+                id: m.id,
+                name: m.name,
+                version: m.version,
+                risk: m.risk,
+                domains: m.domains,
+                pinned: pinned.has(m.id),
+              },
+            ]
           })
           return { packs, snapshotId: snapshot.id }
         },
-        catch: (error) => new DeepAgentPromotionError({ message: error instanceof Error ? error.message : String(error) }),
+        catch: (error) =>
+          new DeepAgentPromotionError({ message: error instanceof Error ? error.message : String(error) }),
       })
     })
 
@@ -266,7 +298,10 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
             dirs: scanDbg.dirs.join(" | "),
             builtin: String(scanDbg.builtin),
             metaUrl: scanDbg.metaUrl,
-            sample: manifests.slice(0, 2).map((m) => m.id).join(","),
+            sample: manifests
+              .slice(0, 2)
+              .map((m) => m.id)
+              .join(","),
           })
           const packs = manifests
             .map((m) => ({
@@ -297,7 +332,8 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
           writePinned(memoryDir, [...readPinned(memoryDir), ctx.payload.packId])
           return { ok: true, packId: ctx.payload.packId }
         },
-        catch: (error) => new DeepAgentPromotionError({ message: error instanceof Error ? error.message : String(error) }),
+        catch: (error) =>
+          new DeepAgentPromotionError({ message: error instanceof Error ? error.message : String(error) }),
       })
     })
 
@@ -305,10 +341,14 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
       const memoryDir = yield* workspaceMemoryDir()
       return yield* Effect.try({
         try: () => {
-          writePinned(memoryDir, readPinned(memoryDir).filter((id) => id !== ctx.payload.packId))
+          writePinned(
+            memoryDir,
+            readPinned(memoryDir).filter((id) => id !== ctx.payload.packId),
+          )
           return { ok: true, packId: ctx.payload.packId }
         },
-        catch: (error) => new DeepAgentPromotionError({ message: error instanceof Error ? error.message : String(error) }),
+        catch: (error) =>
+          new DeepAgentPromotionError({ message: error instanceof Error ? error.message : String(error) }),
       })
     })
 

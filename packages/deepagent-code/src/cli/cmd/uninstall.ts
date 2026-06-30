@@ -192,9 +192,12 @@ async function executeUninstall(method: Installation.Method, targets: RemovalTar
     const cmd = cmds[method]
     if (cmd) {
       spinner.start(`Running ${cmd.join(" ")}...`)
-      const result = await Process.run(method === "choco" ? ["choco", "uninstall", "deepagent-code", "-y", "-r"] : cmd, {
-        nothrow: true,
-      })
+      const result = await Process.run(
+        method === "choco" ? ["choco", "uninstall", "deepagent-code", "-y", "-r"] : cmd,
+        {
+          nothrow: true,
+        },
+      )
       if (result.code !== 0) {
         spinner.stop(`Package manager uninstall failed: exit code ${result.code}`, 1)
         const text = `${result.stdout.toString("utf8")}\n${result.stderr.toString("utf8")}`

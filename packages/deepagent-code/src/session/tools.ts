@@ -3,13 +3,16 @@ import { SessionV1 } from "@deepagent-code/core/v1/session"
 import { Provider } from "@/provider/provider"
 import { ProviderTransform } from "@/provider/transform"
 import { MCP } from "@/mcp"
+import { McpAdapter } from "@/mcp/adapter"
 import { Permission } from "@/permission"
 import { Tool } from "@/tool/tool"
+import { ToolProvenance } from "@/tool/provenance"
 import { ToolJsonSchema } from "@/tool/json-schema"
 import { ToolRegistry } from "@/tool/registry"
 import { Truncate } from "@/tool/truncate"
 
 import { Plugin } from "@/plugin"
+import { RuntimeFlags } from "@/effect/runtime-flags"
 import type { TaskPromptOps } from "@/tool/task"
 import { type Tool as AITool, tool, jsonSchema, type ToolExecutionOptions, asSchema } from "ai"
 import { Effect } from "effect"
@@ -34,6 +37,38 @@ const PlanHook = new AgentGateway.DeepAgentHooks.HookPolicy().on(
   AgentGateway.DeepAgentHooks.planGate(),
 )
 
+// M7 (S1-v3.4): pull SQL-bearing string args out of an MCP DB tool call so the read-only guard can
+// vet them. This is a HEURISTIC keyed to known Postgres-MCP tool shapes, NOT a general interceptor:
+// it scans a known set of arg key names (servers name the query arg `sql`/`query`/`statement`/… )
+// and recurses one level into nested objects/arrays (some servers wrap args as `{params:{sql:…}}`).
+// The real first-layer enforcement is the server's own `--access-mode=restricted`; this is
+// defense-in-depth. A server that names its SQL arg something exotic would slip past — acceptable
+// because the server is still read-only-constrained, and anything not provably read-only that DOES
+// reach the guard is rejected (fail-closed). Non-string / absent → nothing to guard.
+const SQL_ARG_KEYS = new Set(["sql", "query", "statement", "queries", "sql_query", "command", "text"])
+const SQL_SCAN_MAX_DEPTH = 3
+function extractSqlArgs(args: Record<string, unknown>): string[] {
+  const out: string[] = []
+  const visit = (value: unknown, keyMatches: boolean, depth: number): void => {
+    if (depth > SQL_SCAN_MAX_DEPTH) return
+    if (typeof value === "string") {
+      if (keyMatches && value.trim().length > 0) out.push(value)
+      return
+    }
+    if (Array.isArray(value)) {
+      for (const e of value) visit(e, keyMatches, depth + 1)
+      return
+    }
+    if (value && typeof value === "object") {
+      for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+        visit(v, keyMatches || SQL_ARG_KEYS.has(k), depth + 1)
+      }
+    }
+  }
+  visit(args, false, 0)
+  return out
+}
+
 export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
   agent: Agent.Info
   model: Provider.Model
@@ -51,6 +86,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
   const registry = yield* ToolRegistry.Service
   const mcp = yield* MCP.Service
   const truncate = yield* Truncate.Service
+  const flags = yield* RuntimeFlags.Service
 
   const context = (args: Record<string, unknown>, options: ToolExecutionOptions): Tool.Context => ({
     sessionID: input.session.id,
@@ -91,7 +127,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
     agent: input.agent,
   })) {
     const schema = ProviderTransform.schema(input.model, ToolJsonSchema.fromTool(item))
-    tools[item.id] = tool({
+    const aiToolDef: AITool = tool({
       description: item.description,
       inputSchema: jsonSchema(schema),
       execute(args, options) {
@@ -157,11 +193,28 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
         )
       },
     })
+    // M2 (S1-v3.4): carry the registry's explicit provenance onto the freshly
+    // built AI SDK tool so request.ts reads it instead of guessing from the name.
+    if (item.provenance) ToolProvenance.set(aiToolDef, item.provenance)
+    tools[item.id] = aiToolDef
   }
 
   for (const [key, item] of Object.entries(yield* mcp.tools())) {
     const execute = item.execute
     if (!execute) continue
+
+    // M7 (S1-v3.4): derive the per-call permission action from the server's risk tier (carried via
+    // provenance, which mcp/index.ts now sets from a catalog-MATCH of the live config, not a forgeable
+    // persisted flag). read_only → auto-allow; every other tier, AND any tier-less / non-matching
+    // server, fails closed to `ask`. The `mcpReadOnlyAutoAllow` flag (default ON) can be set =false to
+    // force EVERY MCP tool through ctx.ask — restoring the pre-M7 always-ask behavior as an escape hatch.
+    const provenance = ToolProvenance.get(item)
+    const tier = McpAdapter.resolveToolRisk(provenance?.riskTier)
+    const gateAction =
+      tier === "read_only" && !flags.mcpReadOnlyAutoAllow ? "ask" : McpAdapter.defaultPermissionForTier(tier)
+    // A read_only DB server still gets a second, fail-closed lexical SQL guard on its query args:
+    // even auto-allowed, a statement that is not provably read-only is rejected before execution.
+    const isReadOnlyDb = provenance?.riskTier === "read_only"
 
     const schema = yield* Effect.promise(() => Promise.resolve(asSchema(item.inputSchema).jsonSchema))
     const transformed = ProviderTransform.schema(input.model, schema)
@@ -170,13 +223,32 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
       run.promise(
         Effect.gen(function* () {
           const ctx = context(args, opts)
+          // M7 read-only SQL guard: for a read_only server, reject any SQL-bearing arg that is not
+          // provably read-only (defense-in-depth atop the server's own --access-mode=restricted).
+          if (isReadOnlyDb) {
+            for (const sqlArg of extractSqlArgs(args)) {
+              const verdict = McpAdapter.assertReadOnlySql(sqlArg)
+              if (!verdict.allowed) {
+                return {
+                  title: "",
+                  metadata: { error: true, riskTier: "read_only", reason: verdict.reason },
+                  output: `Rejected by read-only DB guard: ${verdict.reason}`,
+                  attachments: [],
+                  content: [{ type: "text" as const, text: `Rejected by read-only DB guard: ${verdict.reason}` }],
+                }
+              }
+            }
+          }
           yield* plugin.trigger(
             "tool.execute.before",
             { tool: key, sessionID: ctx.sessionID, callID: opts.toolCallId },
             { args },
           )
           const result: Awaited<ReturnType<NonNullable<typeof execute>>> = yield* Effect.gen(function* () {
-            yield* ctx.ask({ permission: key, metadata: {}, patterns: ["*"], always: ["*"] })
+            // read_only tier → auto-allow (no prompt); all other tiers + tier-less → ask (fail-closed).
+            if (gateAction !== "allow") {
+              yield* ctx.ask({ permission: key, metadata: {}, patterns: ["*"], always: ["*"] })
+            }
             return yield* Effect.promise(() => execute(args, opts))
           }).pipe(
             Effect.withSpan("Tool.execute", {

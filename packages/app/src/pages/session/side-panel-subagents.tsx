@@ -54,7 +54,9 @@ export const SidePanelSubagents: Component<{ sessionID?: string; onClose: () => 
                 <div class="flex flex-col gap-0.5 min-w-0">
                   <span class="truncate text-12-regular text-text">{child.title || child.id}</span>
                   <span class="text-11-regular text-text-weaker">
-                    {language.t(statusOf(child.id) === "running" ? "session.subagents.running" : "session.subagents.idle")}
+                    {language.t(
+                      statusOf(child.id) === "running" ? "session.subagents.running" : "session.subagents.idle",
+                    )}
                   </span>
                 </div>
                 <Show when={statusOf(child.id) === "running"}>

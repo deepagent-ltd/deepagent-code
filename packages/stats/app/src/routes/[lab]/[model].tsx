@@ -245,8 +245,8 @@ function ModelHero(props: { data: StatsModelData | null; catalog: ModelCatalogEn
           >
             {(data) => (
               <p>
-                Ranked #{data().rank} across recent DeepAgent Code token usage with {formatPercent(data().tokenShare)} of
-                observed volume.
+                Ranked #{data().rank} across recent DeepAgent Code token usage with {formatPercent(data().tokenShare)}{" "}
+                of observed volume.
               </p>
             )}
           </Show>
@@ -313,7 +313,9 @@ function ModelOverview(props: { data: StatsModelData | null }) {
       <SectionTitle title="Overview" description="Recent tokens, sessions, and market position." />
       <Show
         when={props.data}
-        fallback={<ModelEmptyState title="No usage summary" description="This model has no DeepAgent Code usage rows yet." />}
+        fallback={
+          <ModelEmptyState title="No usage summary" description="This model has no DeepAgent Code usage rows yet." />
+        }
       >
         {(data) => (
           <div data-component="model-metric-grid">
