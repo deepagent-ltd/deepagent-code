@@ -571,7 +571,9 @@ export const dict = {
 
   "toast.update.title": "Update available",
   "toast.update.description": "A new version of DeepAgent Code ({{version}}) is now available to install.",
+  "toast.update.description.deb": "A new version of DeepAgent Code ({{version}}) is available as a Linux .deb package.",
   "toast.update.action.installRestart": "Install and restart",
+  "toast.update.action.downloadDeb": "Download .deb",
   "toast.update.action.notYet": "Not yet",
 
   "error.page.title": "Something went wrong",

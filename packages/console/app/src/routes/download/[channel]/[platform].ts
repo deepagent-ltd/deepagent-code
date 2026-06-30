@@ -6,8 +6,6 @@ const prodAssetNames: Record<string, string> = {
   "darwin-x64-dmg": "deepagent-code-desktop-mac-x64.dmg",
   "windows-x64-nsis": "deepagent-code-desktop-win-x64.exe",
   "linux-x64-deb": "deepagent-code-desktop-linux-amd64.deb",
-  "linux-x64-appimage": "deepagent-code-desktop-linux-x86_64.AppImage",
-  "linux-x64-rpm": "deepagent-code-desktop-linux-x86_64.rpm",
 } satisfies Record<DownloadPlatform, string>
 
 const betaAssetNames: Record<string, string> = {
@@ -15,8 +13,6 @@ const betaAssetNames: Record<string, string> = {
   "darwin-x64-dmg": "deepagent-code-desktop-mac-x64.dmg",
   "windows-x64-nsis": "deepagent-code-desktop-win-x64.exe",
   "linux-x64-deb": "deepagent-code-desktop-linux-amd64.deb",
-  "linux-x64-appimage": "deepagent-code-desktop-linux-x86_64.AppImage",
-  "linux-x64-rpm": "deepagent-code-desktop-linux-x86_64.rpm",
 } satisfies Record<DownloadPlatform, string>
 
 // Doing this on the server lets us preserve the original name for platforms we don't care to rename for
