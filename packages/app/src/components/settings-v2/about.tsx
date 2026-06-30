@@ -6,31 +6,33 @@ import { SettingsListV2 } from "./parts/list"
 import { SettingsRowV2 } from "./parts/row"
 import "./settings-v2.css"
 
-// Full MIT license text (retains the original opencode copyright as required by the
-// MIT License, alongside the DeepAgent Code copyright). Surfaced in the About tab so
-// the attribution travels with the distributed app, not just the repository.
-const MIT_LICENSE = `MIT License
+// DeepAgent Code is licensed under AGPL-3.0-or-later.
+// Surfaced here so the license and upstream attribution travel with the
+// distributed app (AGPL §13 / §4 obligation).
+const LICENSE_NOTICE = `DeepAgent Code — AGPL-3.0-or-later
 
-Copyright (c) 2025 opencode
-Copyright (c) 2026 DeepAgent Code
+Copyright (c) 2026 DeepAgent Code contributors
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as published
+by the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+Affero General Public License for more details.
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.`
+Source code is available at:
+  https://github.com/lessweb/deepagent-code
+
+──────────────────────────────────────────────────────────
+Upstream Attribution
+──────────────────────────────────────────────────────────
+DeepAgent Code is derived from opencode (https://github.com/sst/opencode).
+The upstream opencode project is licensed under the MIT License.
+Copyright (c) 2025 Anomaly Innovations Inc.
+See the NOTICE file in the source repository for the full MIT license text.`
 
 export const SettingsAboutV2: Component = () => {
   const language = useLanguage()
@@ -59,14 +61,14 @@ export const SettingsAboutV2: Component = () => {
               title={language.t("settings.about.attribution.title")}
               description={language.t("settings.about.attribution.description")}
             >
-              <Link href="https://github.com/sst/opencode">opencode</Link>
+              <Link href="https://github.com/lessweb/deepagent-code">deepagent-code</Link>
             </SettingsRowV2>
           </SettingsListV2>
         </div>
 
         <div class="settings-v2-section">
           <h3 class="settings-v2-section-title">{language.t("settings.about.license.title")}</h3>
-          <pre class="settings-v2-about-license">{MIT_LICENSE}</pre>
+          <pre class="settings-v2-about-license">{LICENSE_NOTICE}</pre>
         </div>
       </div>
     </>

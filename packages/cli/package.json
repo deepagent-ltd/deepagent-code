@@ -3,8 +3,9 @@
   "name": "@deepagent-code/cli",
   "version": "1.0.0-beta",
   "type": "module",
-  "license": "MIT",
+  "license": "AGPL-3.0-or-later",
   "bin": {
+    "dacode": "./bin/lildax.cjs",
     "lildax": "./bin/lildax.cjs"
   },
   "files": [
