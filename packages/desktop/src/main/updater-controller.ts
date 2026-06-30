@@ -2,10 +2,12 @@ import type { UpdaterState } from "@deepagent-code/app/updater"
 
 export type { UpdaterState } from "@deepagent-code/app/updater"
 
-export type UpdaterReadyRecord = { version: string }
+export type UpdaterReadyRecord = { version: string; manualUrl?: string }
 
 export type UpdaterBackend = {
-  checkForUpdates(): Promise<{ isUpdateAvailable?: boolean; updateInfo?: { version?: string } } | null | undefined>
+  checkForUpdates(): Promise<
+    { isUpdateAvailable?: boolean; updateInfo?: { version?: string; manualUrl?: string } } | null | undefined
+  >
   downloadUpdate(): Promise<unknown>
   quitAndInstall(): void
 }
@@ -48,11 +50,19 @@ export function createUpdaterController(input: {
         await input.persistence.clear()
         return transition({ status: "up-to-date" })
       }
+      const ready = {
+        version,
+        ...(result.updateInfo?.manualUrl ? { manualUrl: result.updateInfo.manualUrl } : {}),
+      }
+      if (ready.manualUrl) {
+        await input.persistence.set(ready)
+        return transition({ status: "ready", ...ready })
+      }
 
       transition({ status: "downloading", version })
       await input.backend.downloadUpdate()
-      await input.persistence.set({ version })
-      return transition({ status: "ready", version })
+      await input.persistence.set(ready)
+      return transition({ status: "ready", ...ready })
     })()
       .catch((error) =>
         transition({ status: "error", message: error instanceof Error ? error.message : String(error) }),
@@ -79,7 +89,13 @@ export function createUpdaterController(input: {
     async install() {
       if (state.status !== "ready") throw new Error("Update is not ready to install")
       const version = state.version
-      transition({ status: "installing", version })
+      const manualUrl = state.manualUrl
+      transition({ status: "installing", version, ...(manualUrl ? { manualUrl } : {}) })
+      if (manualUrl) {
+        input.backend.quitAndInstall()
+        transition({ status: "ready", version, manualUrl })
+        return
+      }
       await input
         .stop()
         .then(() => {
