@@ -626,8 +626,10 @@ export const dict = {
   "workspace.black.subscription.resetsIn": "Setzt zurück in",
   "workspace.black.subscription.useBalance": "Nutze dein verfügbares Guthaben, nachdem die Limits erreicht sind",
   "workspace.black.waitlist.title": "Warteliste",
-  "workspace.black.waitlist.joined": "Du bist auf der Warteliste für den ${{plan}} pro Monat DeepAgent Code Black Plan.",
-  "workspace.black.waitlist.ready": "Wir sind bereit, dich in den ${{plan}} pro Monat DeepAgent Code Black Plan aufzunehmen.",
+  "workspace.black.waitlist.joined":
+    "Du bist auf der Warteliste für den ${{plan}} pro Monat DeepAgent Code Black Plan.",
+  "workspace.black.waitlist.ready":
+    "Wir sind bereit, dich in den ${{plan}} pro Monat DeepAgent Code Black Plan aufzunehmen.",
   "workspace.black.waitlist.leave": "Warteliste verlassen",
   "workspace.black.waitlist.leaving": "Verlasse...",
   "workspace.black.waitlist.left": "Verlassen",

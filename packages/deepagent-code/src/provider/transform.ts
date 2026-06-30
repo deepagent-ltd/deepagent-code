@@ -1014,9 +1014,7 @@ export function options(input: {
 }): Record<string, any> {
   const result: Record<string, any> = {}
   const upstreamProviderID =
-    input.model.providerID === "deepagent"
-      ? deepagentUpstreamProviderID(input.model)
-      : input.model.providerID
+    input.model.providerID === "deepagent" ? deepagentUpstreamProviderID(input.model) : input.model.providerID
 
   if (
     input.model.api.npm === "@ai-sdk/google-vertex/anthropic" ||
@@ -1143,7 +1141,6 @@ export function options(input: {
     ) {
       result["textVerbosity"] = "low"
     }
-
   }
 
   if (input.model.providerID === "venice") {

@@ -25,7 +25,11 @@ const task: TaskContext = {
 }
 const tools: ToolContext = { availableTools: [], mcpServers: [], totalToolCount: 0 }
 
-const item = (ref_id: string, relevance: number, evidence_strength: EvidenceStrength) => ({ ref_id, relevance, evidence_strength })
+const item = (ref_id: string, relevance: number, evidence_strength: EvidenceStrength) => ({
+  ref_id,
+  relevance,
+  evidence_strength,
+})
 
 beforeAll(() => {
   // isolate disk knowledge so retrieve() has a clean store, then seed the core in-code knowledge

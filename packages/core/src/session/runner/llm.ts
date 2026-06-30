@@ -220,7 +220,9 @@ export const layer = Layer.effect(
       const requestSystem =
         deepagentSystem.length > 0
           ? deepagentSystem
-          : [agent.info?.system, system.baseline].filter((part): part is string => part !== undefined && part.length > 0)
+          : [agent.info?.system, system.baseline].filter(
+              (part): part is string => part !== undefined && part.length > 0,
+            )
       const request = LLM.request({
         model,
         providerOptions: { openai: { promptCacheKey } },

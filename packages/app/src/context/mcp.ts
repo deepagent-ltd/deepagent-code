@@ -1,4 +1,5 @@
 import { useMutation } from "@tanstack/solid-query"
+import { useQuery } from "@tanstack/solid-query"
 import { useLanguage } from "@/context/language"
 import { useSync } from "@/context/sync"
 import { showToast } from "@/utils/toast"
@@ -48,6 +49,26 @@ export function useMcpRemove() {
 
   return useMutation(() => ({
     mutationFn: sync.mcp.remove,
+    onError: handleMcpError(language.t("common.requestFailed")),
+  }))
+}
+
+// M1 (S1-v3.4): list the preset MCP catalog (metadata only; nothing connects until enabled).
+export function useMcpCatalog() {
+  const sync = useSync()
+  return useQuery(() => ({
+    queryKey: ["mcp-catalog", sync.directory],
+    queryFn: () => sync.mcp.catalog(),
+    staleTime: 5 * 60 * 1000, // catalog is static; refetch is cheap but rarely needed
+  }))
+}
+
+// M1 (S1-v3.4): enable a preset catalog entry (filled params + secure-storage credential references).
+export function useMcpCatalogEnable() {
+  const sync = useSync()
+  const language = useLanguage()
+  return useMutation(() => ({
+    mutationFn: (input: Parameters<typeof sync.mcp.catalogEnable>[0]) => sync.mcp.catalogEnable(input),
     onError: handleMcpError(language.t("common.requestFailed")),
   }))
 }

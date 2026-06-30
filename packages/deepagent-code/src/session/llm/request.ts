@@ -16,6 +16,7 @@ import os from "node:os"
 import { writeFile, mkdir } from "node:fs/promises"
 import path from "node:path"
 import { DeepAgentWorkspace } from "@/deepagent/workspace-context"
+import { ToolProvenance } from "@/tool/provenance"
 
 type PromptContext = AgentGateway.PromptContext
 type EnvironmentContext = AgentGateway.EnvironmentContext
@@ -231,7 +232,8 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
 
 const prepareMetadata = (input: PrepareInput, tools: Record<string, Tool>): Record<string, unknown> => {
   const agentMode = deepAgentAgentModeOverride(input.user.metadata)
-  const deepagent = isRecord(input.user.metadata) && isRecord(input.user.metadata.deepagent) ? input.user.metadata.deepagent : {}
+  const deepagent =
+    isRecord(input.user.metadata) && isRecord(input.user.metadata.deepagent) ? input.user.metadata.deepagent : {}
   const promptPipeline = isRecord(deepagent.prompt_pipeline) ? deepagent.prompt_pipeline : undefined
   const userRequest = extractLatestUserContent(input.messages)
   return {
@@ -247,12 +249,15 @@ const prepareMetadata = (input: PrepareInput, tools: Record<string, Tool>): Reco
       ...(agentMode ? { agent_mode_override: agentMode } : {}),
       ...(promptPipeline ? { prompt_pipeline: promptPipeline } : {}),
       ...(userRequest ? { user_request: userRequest } : {}),
-      tool_capabilities: Object.keys(tools)
-        .filter((name) => name !== "invalid")
-        .toSorted((a, b) => a.localeCompare(b))
-        .map((name) => ({
+      tool_capabilities: Object.entries(tools)
+        .filter(([name]) => name !== "invalid")
+        .toSorted(([a], [b]) => a.localeCompare(b))
+        .map(([name, t]) => ({
           name,
-          source: name.includes(":") ? "mcp_or_namespaced_tool" : "generic_agent_tool_registry",
+          // M2 (S1-v3.4): read explicit provenance instead of `name.includes(":")`.
+          // Map back to the token the gateway's 5 hard-matches expect — do NOT
+          // change the token itself (see request.ts/agent-gateway.ts).
+          source: ToolProvenance.get(t)?.source === "mcp" ? "mcp_or_namespaced_tool" : "generic_agent_tool_registry",
           execution_owner: "generic_agent_tool_registry_or_mcp",
         })),
     },
@@ -289,24 +294,28 @@ const buildDeepAgentPromptContext = Effect.fn("LLMRequestPrep.buildDeepAgentProm
   input: PrepareInput,
   mode: AgentGateway.AgentMode,
 ) {
-  const toolRefs: ToolRef[] = Object.keys(input.tools)
-    .filter((name) => name !== "invalid")
-    .map((name) => ({
+  const toolRefs: ToolRef[] = Object.entries(input.tools)
+    .filter(([name]) => name !== "invalid")
+    .map(([name, t]) => ({
       name,
-      source: name.includes(":") ? ("mcp" as const) : ("builtin" as const),
+      // M2 (S1-v3.4): read explicit provenance; preserve this exit's own token vocabulary.
+      source: ToolProvenance.get(t)?.source === "mcp" ? ("mcp" as const) : ("builtin" as const),
+      mcpServer: ToolProvenance.get(t)?.mcpServer,
     }))
 
   const mcpServers: McpServerRef[] = []
   const mcpNames = new Set<string>()
   for (const ref of toolRefs) {
-    if (ref.source === "mcp") {
-      const sep = ref.name.includes(":") ? ":" : "_"
-      const serverName = ref.name.split(sep)[0] ?? ref.name
-      if (!mcpNames.has(serverName)) {
-        mcpNames.add(serverName)
-        mcpServers.push({ name: serverName, toolCount: toolRefs.filter((t) => t.source === "mcp" && t.name.split(sep)[0] === serverName).length })
-      }
-    }
+    if (ref.source !== "mcp") continue
+    // M2: server grouping comes from explicit provenance.mcpServer, not a name split.
+    // Fall back to the tool name only if provenance somehow lacks a server.
+    const serverName = ref.mcpServer ?? ref.name
+    if (mcpNames.has(serverName)) continue
+    mcpNames.add(serverName)
+    mcpServers.push({
+      name: serverName,
+      toolCount: toolRefs.filter((t) => t.source === "mcp" && (t.mcpServer ?? t.name) === serverName).length,
+    })
   }
 
   const ctx = yield* InstanceState.context.pipe(Effect.exit)
@@ -368,7 +377,10 @@ const buildDeepAgentPromptContext = Effect.fn("LLMRequestPrep.buildDeepAgentProm
     .map((item) => item.trim())
     .filter((item) => Boolean(item) && !/^You are deepagent-code/i.test(item) && !/interactive CLI tool/i.test(item))
   const context = AgentGateway.DeepAgentOrchestrator.buildPromptContext(orchestratorInput)
-  return { ...context, userInstructions: runtimeInstructions.length ? runtimeInstructions.join("\n\n") : null } as PromptContext
+  return {
+    ...context,
+    userInstructions: runtimeInstructions.length ? runtimeInstructions.join("\n\n") : null,
+  } as PromptContext
 })
 
 function extractLatestUserContent(messages: ModelMessage[]): string | null {
@@ -390,10 +402,16 @@ const deepAgentAgentModeOverride = (metadata: unknown): AgentGateway.AgentMode |
   return deepagent.agent_mode_override === "general" ? "general" : undefined
 }
 
+// T3 (S1-v3.4): round_control.action carries the microbatch triage action that was written onto an
+// INJECTED turn. Only advance-trigger actions are ever emitted ({continue, revise, narrow}), each of
+// which corresponds to a real turn, so all of them advance the round. Terminal outcomes (red /
+// exhausted narrowing) inject no turn and surface via the macro-round needs_human suggestion instead,
+// so they never reach here. The set guard also defends against any stray/unknown action value.
+const ADVANCE_ACTIONS = new Set(["continue", "revise", "narrow"])
 const deepAgentRoundControl = (metadata: unknown): "continue" | undefined => {
   const deepagent = isRecord(metadata) && isRecord(metadata.deepagent) ? metadata.deepagent : {}
   const control = isRecord(deepagent.round_control) ? deepagent.round_control : {}
-  return control.action === "continue" ? "continue" : undefined
+  return typeof control.action === "string" && ADVANCE_ACTIONS.has(control.action) ? "continue" : undefined
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -409,17 +427,27 @@ function extractValidationResults(messages: ModelMessage[]): AgentGateway.Valida
       if (!("toolName" in part)) continue
       const toolName = (part as { toolName: string }).toolName
       if (!toolName.includes("shell") && !toolName.includes("bash") && !toolName.includes("exec")) continue
-      const output = "output" in part && part.output && typeof part.output === "object" && "type" in part.output && part.output.type === "text"
-        ? (part.output as { type: "text"; value: string }).value
-        : ""
+      const output =
+        "output" in part &&
+        part.output &&
+        typeof part.output === "object" &&
+        "type" in part.output &&
+        part.output.type === "text"
+          ? (part.output as { type: "text"; value: string }).value
+          : ""
       if (!output) continue
       const hasValidationSignal =
-        /exit\s*code\s*[:=]\s*\d+/i.test(output) ||
-        /\b(PASS|FAIL|passed|failed|error|Error)\b/.test(output)
+        /exit\s*code\s*[:=]\s*\d+/i.test(output) || /\b(PASS|FAIL|passed|failed|error|Error)\b/.test(output)
       if (!hasValidationSignal) continue
-      const passed = /exit\s*code\s*[:=]\s*0\b/.test(output) ||
-        (/\bPASS(ED)?\b/i.test(output) && !/\bFAIL(ED)?\b/i.test(output))
-      results.push({ command: toolName, passed, output: output.slice(0, 2000), duration_ms: 0 })
+      // T1 (S1-v3.4): recover the exit code from the tool output when present (e.g. "exit code: 127").
+      // When an explicit code is present it is AUTHORITATIVE: derive `passed` from it so the
+      // `passed === (exit_code === 0)` invariant (round-state.ts) holds even for outputs like
+      // "Tests passed. exit code: 1". Only when no code is present do we fall back to the PASS/FAIL text.
+      const exitMatch = output.match(/exit\s*code\s*[:=]\s*(\d+)/i)
+      const textPassed = /\bPASS(ED)?\b/i.test(output) && !/\bFAIL(ED)?\b/i.test(output)
+      const exit_code = exitMatch ? Number(exitMatch[1]) : textPassed ? 0 : 1
+      const passed = exit_code === 0
+      results.push({ command: toolName, passed, exit_code, output: output.slice(0, 2000), duration_ms: 0 })
     }
   }
   return results

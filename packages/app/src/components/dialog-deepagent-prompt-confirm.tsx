@@ -26,11 +26,17 @@ export function DialogDeepAgentPromptConfirm(props: {
     <Dialog title={language.t("dialog.provider.deepagent.promptConfirm.title")} transition>
       <div class="flex w-[520px] max-w-[calc(100vw-32px)] flex-col gap-4 px-6 pb-6">
         <div class="flex flex-col gap-2">
-          <div class="text-14-medium text-text-strong">{language.t("dialog.provider.deepagent.promptConfirm.mode")}</div>
-          <div class="text-13-regular text-text-base">{language.t(`settings.general.deepagent.prompt.${props.draft.mode}`)}</div>
+          <div class="text-14-medium text-text-strong">
+            {language.t("dialog.provider.deepagent.promptConfirm.mode")}
+          </div>
+          <div class="text-13-regular text-text-base">
+            {language.t(`settings.general.deepagent.prompt.${props.draft.mode}`)}
+          </div>
         </div>
         <div class="flex flex-col gap-2">
-          <div class="text-14-medium text-text-strong">{language.t("dialog.provider.deepagent.promptConfirm.preview")}</div>
+          <div class="text-14-medium text-text-strong">
+            {language.t("dialog.provider.deepagent.promptConfirm.preview")}
+          </div>
           <div class="max-h-40 overflow-y-auto whitespace-pre-wrap rounded-md border border-border-weak-base px-3 py-2 text-13-regular text-text-base">
             {props.preview}
           </div>
@@ -49,7 +55,9 @@ export function DialogDeepAgentPromptConfirm(props: {
           <Button variant="secondary" onClick={props.onCancel}>
             {language.t("common.cancel")}
           </Button>
-          <Button disabled={!valid()} onClick={() => props.onConfirm(editedGoal().trim())}>{language.t("common.continue")}</Button>
+          <Button disabled={!valid()} onClick={() => props.onConfirm(editedGoal().trim())}>
+            {language.t("common.continue")}
+          </Button>
         </div>
       </div>
     </Dialog>

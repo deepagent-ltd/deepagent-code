@@ -14,24 +14,37 @@ describe("DeepAgent checkpoint resume", () => {
       const checkpointPath = path.join(firstRun, "run_checkpoint_manifest.json")
       const checkpointHash = sha256Text(await readFile(checkpointPath, "utf8"))
 
-      AgentGateway.configure({ enabled: true, runsDir: dir, resumeFrom: { checkpointPath, expectedCheckpointHash: checkpointHash } })
+      AgentGateway.configure({
+        enabled: true,
+        runsDir: dir,
+        resumeFrom: { checkpointPath, expectedCheckpointHash: checkpointHash },
+      })
       await Effect.runPromise(
-        AgentGateway.manageStream(deepagentRunInput, Stream.make(LLMEvent.finish({ reason: "stop" }))).pipe(Stream.runCollect),
+        AgentGateway.manageStream(deepagentRunInput, Stream.make(LLMEvent.finish({ reason: "stop" }))).pipe(
+          Stream.runCollect,
+        ),
       )
 
       const runs = await import("node:fs/promises").then((fs) => fs.readdir(dir))
       expect(runs).toHaveLength(2)
       const secondRun = path.join(dir, runs.find((name) => path.join(dir, name) !== firstRun)!)
-      expect(await import("node:fs/promises").then((fs) => fs.readdir(secondRun))).toContain("human_intervention_record.json")
+      expect(await import("node:fs/promises").then((fs) => fs.readdir(secondRun))).toContain(
+        "human_intervention_record.json",
+      )
 
       AgentGateway.configure({
         enabled: true,
         runsDir: dir,
-        resumeFrom: { checkpointPath, expectedCheckpointHash: "sha256:0000000000000000000000000000000000000000000000000000000000000000" },
+        resumeFrom: {
+          checkpointPath,
+          expectedCheckpointHash: "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        },
       })
       await expect(
         Effect.runPromise(
-          AgentGateway.manageStream(deepagentRunInput, Stream.make(LLMEvent.finish({ reason: "stop" }))).pipe(Stream.runCollect),
+          AgentGateway.manageStream(deepagentRunInput, Stream.make(LLMEvent.finish({ reason: "stop" }))).pipe(
+            Stream.runCollect,
+          ),
         ),
       ).rejects.toThrow("checkpoint hash mismatch")
     } finally {
@@ -39,4 +52,3 @@ describe("DeepAgent checkpoint resume", () => {
     }
   })
 })
-

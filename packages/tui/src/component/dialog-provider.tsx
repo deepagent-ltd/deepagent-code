@@ -371,8 +371,8 @@ function ApiMethod(props: ApiMethodProps) {
           "deepagent-code": (
             <box gap={1}>
               <text fg={theme.textMuted}>
-                DeepAgent Code Zen gives you access to all the best coding models at the cheapest prices with a single API
-                key.
+                DeepAgent Code Zen gives you access to all the best coding models at the cheapest prices with a single
+                API key.
               </text>
               <text fg={theme.text}>
                 Go to <span style={{ fg: theme.primary }}>https://deepagent-code.ai/zen</span> to get a key
@@ -382,11 +382,12 @@ function ApiMethod(props: ApiMethodProps) {
           "deepagent-code-go": (
             <box gap={1}>
               <text fg={theme.textMuted}>
-                DeepAgent Code Go is a $10 per month subscription that provides reliable access to popular open coding models
-                with generous usage limits.
+                DeepAgent Code Go is a $10 per month subscription that provides reliable access to popular open coding
+                models with generous usage limits.
               </text>
               <text fg={theme.text}>
-                Go to <span style={{ fg: theme.primary }}>https://deepagent-code.ai/go</span> and enable DeepAgent Code Go
+                Go to <span style={{ fg: theme.primary }}>https://deepagent-code.ai/go</span> and enable DeepAgent Code
+                Go
               </text>
             </box>
           ),

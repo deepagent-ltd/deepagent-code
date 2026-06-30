@@ -42,9 +42,7 @@ export const extract = (input: {
   }
 
   if (input.finalStatus === "completed" && input.totalRounds > 1) {
-    const successfulDiagnoses = input.roundState.diagnoses.filter(
-      (d) => d.root_cause && d.next_action === "revise",
-    )
+    const successfulDiagnoses = input.roundState.diagnoses.filter((d) => d.root_cause && d.next_action === "revise")
     for (const diag of successfulDiagnoses) {
       candidates.push({
         candidate_id: `strategy:${input.runId}:diagnosis-led-fix:r${diag.round}`,
@@ -119,6 +117,9 @@ export const formatManifest = (extraction: LearningExtraction, runId: string): R
   rejection_reasons: extraction.rejection_reasons,
   policy_checks: [
     { check_id: "no_hidden_lineage", status: "pass" },
-    { check_id: "review_required_before_active_promotion", status: extraction.promotion_decision === "needs_review" ? "needs_review" : "pass" },
+    {
+      check_id: "review_required_before_active_promotion",
+      status: extraction.promotion_decision === "needs_review" ? "needs_review" : "pass",
+    },
   ],
 })

@@ -55,9 +55,7 @@ export const DialogSelectModelUnpaid: Component<{ model?: ModelState }> = (props
               class="w-full"
               placement="right-start"
               gutter={12}
-              value={
-                <ModelTooltip model={item} latest={item.latest} free />
-              }
+              value={<ModelTooltip model={item} latest={item.latest} free />}
             >
               {node}
             </Tooltip>

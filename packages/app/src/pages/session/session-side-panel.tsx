@@ -65,7 +65,8 @@ export function SessionSidePanel(props: {
   const browserOpen = createMemo(() => isDesktop() && view().rightPanel.mode() === "browser")
   const worktreeOpen = createMemo(() => isDesktop() && view().rightPanel.mode() === "worktree")
   const open = createMemo(
-    () => menuOpen() || reviewOpen() || fileOpen() || statusOpen() || subagentsOpen() || browserOpen() || worktreeOpen(),
+    () =>
+      menuOpen() || reviewOpen() || fileOpen() || statusOpen() || subagentsOpen() || browserOpen() || worktreeOpen(),
   )
   const panelWidth = createMemo(() => (open() ? `${layout.rightPanel.width()}px` : "0px"))
 

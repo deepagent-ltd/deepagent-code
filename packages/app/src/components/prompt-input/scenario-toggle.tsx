@@ -39,12 +39,10 @@ export function ScenarioToggle() {
   onCleanup(subscribeScenarioOverride(() => setVersion((value) => value + 1)))
 
   // Effective scenario = directory override if set, else the configured default.
-  const scenario = createMemo<"direct" | "wish">(
-    () => {
-      version()
-      return getScenarioOverride(dirKey()) ?? deepAgentPromptModeFromConfig(serverSync.data.config)
-    },
-  )
+  const scenario = createMemo<"direct" | "wish">(() => {
+    version()
+    return getScenarioOverride(dirKey()) ?? deepAgentPromptModeFromConfig(serverSync.data.config)
+  })
 
   const select = (mode: "direct" | "wish") => setScenarioOverride(dirKey(), mode)
 

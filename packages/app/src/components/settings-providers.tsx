@@ -49,9 +49,7 @@ const SettingsProvidersContent: Component = () => {
   }
 
   const connected = createMemo(() => {
-    return providers
-      .connected()
-      .filter((p) => p.id !== DEEPAGENT_PROVIDER_ID)
+    return providers.connected().filter((p) => p.id !== DEEPAGENT_PROVIDER_ID)
   })
 
   const popular = createMemo(() => {

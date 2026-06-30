@@ -56,6 +56,7 @@ import {
   createSessionTabs,
   createSizing,
   focusTerminalById,
+  resolveActiveTurnId,
   shouldFocusTerminalOnKeyDown,
 } from "@/pages/session/helpers"
 import { MessageTimeline } from "@/pages/session/message-timeline"
@@ -409,6 +410,7 @@ export default function Page() {
 
   const [store, setStore] = createStore({
     messageId: undefined as string | undefined,
+    scrollActiveId: undefined as string | undefined,
     mobileTab: "session" as "session" | "changes",
     changes: "git" as ChangeMode,
     newSessionWorktree: "main",
@@ -528,12 +530,28 @@ export default function Page() {
     return "main"
   })
 
+  // Declared before activeTurnId: createMemo runs eagerly during setup and reads these,
+  // so they must be initialized first or the read hits the temporal dead zone.
+  let scrollMark = 0
+  let messageMark = 0
+
   const setActiveMessage = (message: UserMessage | undefined) => {
     messageMark = scrollMark
     setStore("messageId", message?.id)
   }
 
   const anchor = (id: string) => `message-${id}`
+
+  // Single highlight source for the turn rail: an explicitly pinned turn
+  // (click / hash jump) wins; otherwise follow the scroll position. Mirrors the
+  // `current` resolution in navigateMessageByOffset — no second active state.
+  const activeTurnId = createMemo(() =>
+    resolveActiveTurnId({
+      pinnedId: store.messageId,
+      pinnedFresh: messageMark === scrollMark,
+      scrollId: store.scrollActiveId,
+    }),
+  )
 
   const cursor = () => {
     const root = scroller
@@ -630,8 +648,6 @@ export default function Page() {
   let scroller: HTMLDivElement | undefined
   let content: HTMLDivElement | undefined
   let revealMessage = (_id: string) => {}
-  let scrollMark = 0
-  let messageMark = 0
 
   const scrollGestureWindowMs = 250
 
@@ -733,6 +749,7 @@ export default function Page() {
       sessionKey,
       () => {
         setStore("messageId", undefined)
+        setStore("scrollActiveId", undefined)
         setStore("changes", "git")
         setUi("pendingMessage", undefined)
       },
@@ -1267,6 +1284,12 @@ export default function Page() {
     const overflow = max > 1
     const bottom = !overflow || distance <= 2
     const jump = overflow && distance > jumpThreshold(el)
+
+    // Derive the turn currently in view so the turn rail can highlight it while
+    // free-scrolling. Read-only mirror of the scroll position — when the user
+    // explicitly pins a turn (store.messageId), the rail prefers that instead.
+    const scrolled = cursor()
+    if (store.scrollActiveId !== scrolled) setStore("scrollActiveId", scrolled)
 
     if (ui.scroll.overflow === overflow && ui.scroll.bottom === bottom && ui.scroll.jump === jump) return
     setUi("scroll", { overflow, bottom, jump })
@@ -1852,6 +1875,9 @@ export default function Page() {
                     historyShift={historyLoader.shift()}
                     userMessages={historyLoader.userMessages()}
                     anchor={anchor}
+                    activeMessageID={activeTurnId}
+                    scrollToMessage={scrollToMessage}
+                    setActiveMessage={setActiveMessage}
                     setRevealMessage={(fn) => {
                       revealMessage = fn
                     }}
