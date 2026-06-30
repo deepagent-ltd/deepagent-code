@@ -1,5 +1,5 @@
 {
-  description = "OpenCode development flake";
+  description = "DeepAgent Code development flake";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
@@ -39,11 +39,11 @@
             };
           in
           rec {
-            opencode = final.callPackage ./nix/opencode.nix {
+            deepagent-code = final.callPackage ./nix/deepagent-code.nix {
               inherit node_modules;
             };
-            opencode-desktop = final.callPackage ./nix/desktop.nix {
-              inherit opencode;
+            deepagent-code-desktop = final.callPackage ./nix/desktop.nix {
+              inherit deepagent-code;
             };
           };
       };
@@ -56,12 +56,12 @@
           };
         in
         rec {
-          default = opencode;
-          opencode = pkgs.callPackage ./nix/opencode.nix {
+          default = deepagent-code;
+          deepagent-code = pkgs.callPackage ./nix/deepagent-code.nix {
             inherit node_modules;
           };
-          opencode-desktop = pkgs.callPackage ./nix/desktop.nix {
-            inherit opencode;
+          deepagent-code-desktop = pkgs.callPackage ./nix/desktop.nix {
+            inherit deepagent-code;
           };
           # Updater derivation with fakeHash - build fails and reveals correct hash
           node_modules_updater = node_modules.override {
