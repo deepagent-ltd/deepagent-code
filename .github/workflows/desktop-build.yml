@@ -1,19 +1,22 @@
 name: desktop-build
 
 # Internal-beta packaging: builds the desktop app for download as workflow artifacts.
-# Does NOT publish, version-bump, or create releases. Manual trigger only.
+# Does NOT publish, version-bump, or create releases.
 #
 # macOS signing/notarization is opt-in: if the APPLE_* / CSC_* secrets are present it
 # signs, otherwise it builds an UNSIGNED package (testers right-click → Open to launch).
 # Windows/Linux packages are unsigned here.
 
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
     inputs:
       channel:
         description: "Build channel"
         required: false
-        default: "beta"
+        default: "prod"
         type: choice
         options:
           - beta
@@ -32,6 +35,10 @@ on:
 permissions:
   contents: read
   actions: write
+
+concurrency:
+  group: desktop-build-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   cleanup:
@@ -60,13 +67,12 @@ jobs:
         env:
           PLATFORMS: ${{ github.event.inputs.platforms || 'all' }}
         run: |
-          # macOS arm64 only — Apple Silicon covers current Macs. The Intel (macos-13)
+          # Keep one artifact per OS to stay under the repo's tight artifact quota.
+          # macOS arm64 only - Apple Silicon covers current Macs. The Intel (macos-13)
           # runner is queue-starved and the x64 cross-compile is unreliable, so it is dropped.
-          mac='{"host":"macos-14","target":"mac-arm64","platform_flag":"--mac dmg --arm64","group":"mac"}'
-          linux='{"host":"ubuntu-24.04","target":"linux-x64","platform_flag":"--linux deb rpm --x64","group":"linux"}'
-          # Windows arm64 builds natively on the GA windows-11-arm runner (no cross-compile);
-          # both native deps ship win32-arm64 prebuilds (@lydell/node-pty, @parcel/watcher).
-          win='{"host":"windows-2025","target":"win-x64","platform_flag":"--win nsis --x64","group":"win"},{"host":"windows-11-arm","target":"win-arm64","platform_flag":"--win nsis --arm64","group":"win"}'
+          mac='{"host":"macos-14","target":"darwin-arm64","platform_flag":"--mac dmg --arm64","group":"mac"}'
+          linux='{"host":"ubuntu-24.04","target":"linux-amd64","platform_flag":"--linux deb --x64","group":"linux"}'
+          win='{"host":"windows-2025","target":"win-x64","platform_flag":"--win nsis --x64","group":"win"}'
           case "$PLATFORMS" in
             mac)       items="$mac" ;;
             linux)     items="$linux" ;;
@@ -101,11 +107,6 @@ jobs:
         with:
           node-version: "24"
 
-      # rpm tooling for the Linux rpm target (deb needs no extra tools).
-      - name: Install rpm (linux)
-        if: matrix.group == 'linux'
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends rpm
-
       # Import the Developer ID cert only when the secret is configured; otherwise the
       # build proceeds unsigned (DEEPAGENT_CODE_ALLOW_UNSIGNED below).
       - name: Import Apple signing certificate
@@ -118,20 +119,20 @@ jobs:
       - name: Prebuild
         working-directory: packages/desktop
         env:
-          DEEPAGENT_CODE_CHANNEL: ${{ github.event.inputs.channel || 'beta' }}
+          DEEPAGENT_CODE_CHANNEL: ${{ github.event_name == 'push' && 'prod' || (github.event.inputs.channel || 'prod') }}
         run: bun run prebuild
 
       - name: Build renderer
         working-directory: packages/desktop
         env:
-          DEEPAGENT_CODE_CHANNEL: ${{ github.event.inputs.channel || 'beta' }}
+          DEEPAGENT_CODE_CHANNEL: ${{ github.event_name == 'push' && 'prod' || (github.event.inputs.channel || 'prod') }}
         run: bun run build
 
       - name: Package
         working-directory: packages/desktop
         timeout-minutes: 60
         env:
-          DEEPAGENT_CODE_CHANNEL: ${{ github.event.inputs.channel || 'beta' }}
+          DEEPAGENT_CODE_CHANNEL: ${{ github.event_name == 'push' && 'prod' || (github.event.inputs.channel || 'prod') }}
           # Sign + notarize on macOS only when BOTH the signing cert and the Apple ID
           # notarization secrets are present; otherwise build unsigned instead of failing.
           DEEPAGENT_CODE_ALLOW_UNSIGNED: ${{ (matrix.group == 'mac' && env.HAS_APPLE_CERT == 'true' && env.HAS_APPLE_NOTARY == 'true') && '0' || '1' }}
@@ -155,5 +156,4 @@ jobs:
           path: |
             packages/desktop/dist/*.dmg
             packages/desktop/dist/*.deb
-            packages/desktop/dist/*.rpm
             packages/desktop/dist/*.exe
