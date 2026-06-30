@@ -164,11 +164,7 @@ const macxTarGz = "deepagent-code-desktop-mac-x64.app.tar.gz"
 const macaTarGz = "deepagent-code-desktop-mac-arm64.app.tar.gz"
 
 const linxDeb = pick(linx?.files ?? [], [".deb"])
-const linxRpm = pick(linx?.files ?? [], [".rpm"])
-const linxAppImage = pick(linx?.files ?? [], [".appimage"])
 const linaDeb = pick(lina?.files ?? [], [".deb"])
-const linaRpm = pick(lina?.files ?? [], [".rpm"])
-const linaAppImage = pick(lina?.files ?? [], [".appimage"])
 
 await add(out, "windows-x86_64-nsis", winxexe)
 await add(out, "windows-aarch64-nsis", winaexe)
@@ -176,11 +172,7 @@ await add(out, "darwin-x86_64-app", macxTarGz)
 await add(out, "darwin-aarch64-app", macaTarGz)
 
 await add(out, "linux-x86_64-deb", linxDeb)
-await add(out, "linux-x86_64-rpm", linxRpm)
-await add(out, "linux-x86_64-appimage", linxAppImage)
 await add(out, "linux-aarch64-deb", linaDeb)
-await add(out, "linux-aarch64-rpm", linaRpm)
-await add(out, "linux-aarch64-appimage", linaAppImage)
 
 alias(out, "windows-x86_64", "windows-x86_64-nsis")
 alias(out, "windows-aarch64", "windows-aarch64-nsis")

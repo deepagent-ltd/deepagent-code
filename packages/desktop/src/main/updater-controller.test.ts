@@ -76,6 +76,53 @@ describe("updater controller", () => {
     expect(app.calls).toEqual(["check", "download"])
   })
 
+  test("publishes manual download updates without downloading an installer", async () => {
+    const calls: string[] = []
+    let ready: UpdaterReadyRecord | undefined
+    const controller = createUpdaterController({
+      enabled: true,
+      currentVersion: "1.0.0",
+      backend: {
+        async checkForUpdates() {
+          calls.push("check")
+          return {
+            isUpdateAvailable: true,
+            updateInfo: { version: "2.0.0", manualUrl: "https://example.com/deepagent-code.deb" },
+          }
+        },
+        async downloadUpdate() {
+          calls.push("download")
+        },
+        quitAndInstall() {
+          calls.push("open")
+        },
+      },
+      persistence: {
+        get: () => ready,
+        set: (value) => {
+          ready = value
+        },
+        clear: () => {
+          ready = undefined
+        },
+      },
+      stop: async () => {
+        calls.push("stop")
+      },
+    })
+
+    await controller.start()
+    await controller.install()
+
+    expect(calls).toEqual(["check", "open"])
+    expect(ready).toEqual({ version: "2.0.0", manualUrl: "https://example.com/deepagent-code.deb" })
+    expect(controller.getState()).toEqual({
+      status: "ready",
+      version: "2.0.0",
+      manualUrl: "https://example.com/deepagent-code.deb",
+    })
+  })
+
   test("returns to ready when quitAndInstall returns without exiting", async () => {
     const app = setup()
     await app.controller.start()
