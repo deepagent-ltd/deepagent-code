@@ -16,7 +16,11 @@ import { DurableKnowledgeStore } from "./durable-knowledge-store"
 export type CandidateOrigin = "run_local" | "external_trace" | "sealed"
 
 export type GateVerdict = { readonly pass: boolean; readonly reason?: string; readonly evidence: readonly string[] }
-export type ReplayRunner = (candidate: LearningCandidate) => { pass: boolean; metricDelta: number; evidenceRef?: string }
+export type ReplayRunner = (candidate: LearningCandidate) => {
+  pass: boolean
+  metricDelta: number
+  evidenceRef?: string
+}
 export type HumanApproval = { readonly approver: string; readonly approved: boolean; readonly note?: string }
 
 export type PromotedRecord = {
@@ -41,8 +45,13 @@ export class RejectedBuffer {
     this.file = path.join(dir, "rejected_buffer.json")
     this.map = existsSync(this.file) ? new Map(Object.entries(JSON.parse(readFileSync(this.file, "utf8")))) : new Map()
   }
-  has(fp: string): boolean { return this.map.has(fp) }
-  add(fp: string, reason: string): void { this.map.set(fp, reason); writeFileAtomic(this.file, JSON.stringify(Object.fromEntries(this.map), null, 2)) }
+  has(fp: string): boolean {
+    return this.map.has(fp)
+  }
+  add(fp: string, reason: string): void {
+    this.map.set(fp, reason)
+    writeFileAtomic(this.file, JSON.stringify(Object.fromEntries(this.map), null, 2))
+  }
 }
 
 // Validation gate: dedupe vs RejectedBuffer, then replay/regression must pass without regressing.
@@ -50,8 +59,10 @@ export const validate = (candidate: LearningCandidate, rejected: RejectedBuffer,
   const fp = fingerprint(candidate)
   if (rejected.has(fp)) return { pass: false, reason: "previously rejected (RejectedBuffer)", evidence: [] }
   const r = replay(candidate)
-  if (!r.pass) return { pass: false, reason: "replay/regression failed", evidence: r.evidenceRef ? [r.evidenceRef] : [] }
-  if (r.metricDelta < 0) return { pass: false, reason: "metric regressed", evidence: r.evidenceRef ? [r.evidenceRef] : [] }
+  if (!r.pass)
+    return { pass: false, reason: "replay/regression failed", evidence: r.evidenceRef ? [r.evidenceRef] : [] }
+  if (r.metricDelta < 0)
+    return { pass: false, reason: "metric regressed", evidence: r.evidenceRef ? [r.evidenceRef] : [] }
   return { pass: true, evidence: r.evidenceRef ? [r.evidenceRef] : [] }
 }
 
@@ -66,7 +77,8 @@ export const promote = (
   if (!verdict.pass) throw new Error("cannot promote a candidate that failed the validation gate")
   if (!approval.approved) throw new Error("R2: promotion requires human approval")
   const evidence_strength = verdict.evidence.length >= 1 ? "medium" : "weak"
-  const newId = `durable:${candidate.type}:` + createHash("sha256").update(candidate.candidate_id).digest("hex").slice(0, 12)
+  const newId =
+    `durable:${candidate.type}:` + createHash("sha256").update(candidate.candidate_id).digest("hex").slice(0, 12)
   return {
     id: newId, // R4: new durable identity
     source_candidate_id: candidate.candidate_id,

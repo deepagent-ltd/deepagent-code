@@ -57,7 +57,10 @@ export const runDeepAgentStream = async (
   dir: string,
   events: Stream.Stream<LLMEventType, never, never> = Stream.make(
     LLMEvent.textDelta({ id: "text-0", text: "ok" }),
-    LLMEvent.finish({ reason: "stop", usage: { inputTokens: 11, outputTokens: 7, reasoningTokens: 2, totalTokens: 20 } }),
+    LLMEvent.finish({
+      reason: "stop",
+      usage: { inputTokens: 11, outputTokens: 7, reasoningTokens: 2, totalTokens: 20 },
+    }),
   ),
   mode: "high" | "max" = "high",
   input = deepagentRunInput,

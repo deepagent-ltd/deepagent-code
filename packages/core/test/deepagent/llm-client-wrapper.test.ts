@@ -70,7 +70,14 @@ const fakeRoute = Route.make({
 })
 
 const echoLayer = dynamicResponse(({ text, respond }) =>
-  Effect.succeed(respond(JSON.stringify([{ type: "text", text: `echo:${text}` }, { type: "finish", reason: "stop" }]))),
+  Effect.succeed(
+    respond(
+      JSON.stringify([
+        { type: "text", text: `echo:${text}` },
+        { type: "finish", reason: "stop" },
+      ]),
+    ),
+  ),
 )
 
 const it = testEffect(echoLayer)

@@ -28,7 +28,12 @@ export const SidePanelBrowser: Component<{ onClose: () => void }> = (props) => {
   const reportBounds = () => {
     if (!container || !browser) return
     const r = container.getBoundingClientRect()
-    void browser.setBounds({ x: Math.round(r.x), y: Math.round(r.y), width: Math.round(r.width), height: Math.round(r.height) })
+    void browser.setBounds({
+      x: Math.round(r.x),
+      y: Math.round(r.y),
+      width: Math.round(r.width),
+      height: Math.round(r.height),
+    })
   }
 
   onMount(() => {
@@ -44,7 +49,12 @@ export const SidePanelBrowser: Component<{ onClose: () => void }> = (props) => {
     // show over the container rect
     if (container) {
       const r = container.getBoundingClientRect()
-      void browser.show({ x: Math.round(r.x), y: Math.round(r.y), width: Math.round(r.width), height: Math.round(r.height) })
+      void browser.show({
+        x: Math.round(r.x),
+        y: Math.round(r.y),
+        width: Math.round(r.width),
+        height: Math.round(r.height),
+      })
     }
     onCleanup(() => {
       off()

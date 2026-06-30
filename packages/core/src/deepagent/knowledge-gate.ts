@@ -24,8 +24,11 @@ export const evaluateSnapshot = (
 ): ShipDecision => {
   if (heldOutTasks.length === 0) {
     return {
-      snapshotId, ship: false, reason: "no held-out tasks: cannot prove non-regression",
-      offenders: [], perGroup: { gen: 0, high: 0, max: 0 },
+      snapshotId,
+      ship: false,
+      reason: "no held-out tasks: cannot prove non-regression",
+      offenders: [],
+      perGroup: { gen: 0, high: 0, max: 0 },
     }
   }
   const report = Ablation.run(heldOutTasks, snapshotId, runner, options.repeats ?? 1)

@@ -9,6 +9,29 @@ import { afterAll } from "bun:test"
 // Set XDG env vars FIRST, before any src/ imports
 const dir = path.join(os.tmpdir(), "deepagent-code-test-data-" + process.pid)
 await fs.mkdir(dir, { recursive: true })
+
+// Best-effort sweep of orphaned test tmpdirs from interrupted prior runs. The fixture
+// disposes its `deepagent-code-test-<rand>` instance dirs on scope close, but a hard
+// interrupt (Ctrl-C, CI/agent timeout) leaves them — each holds a git repo, and hundreds
+// of them measurably slow filesystem/search-heavy tests (grep/glob). Only remove entries
+// older than a grace window so we never touch a sibling run that is currently executing.
+{
+  const STALE_MS = 60 * 60 * 1000 // 1h: comfortably older than any live run
+  const tmp = os.tmpdir()
+  const now = Date.now()
+  const entries = await fs.readdir(tmp, { withFileTypes: true }).catch(() => [])
+  await Promise.all(
+    entries
+      .filter((e) => e.isDirectory() && /^deepagent-code-test-/.test(e.name) && e.name !== path.basename(dir))
+      .map(async (e) => {
+        const p = path.join(tmp, e.name)
+        const stat = await fs.stat(p).catch(() => null)
+        if (!stat || now - stat.mtimeMs < STALE_MS) return
+        await fs.rm(p, { recursive: true, force: true }).catch(() => undefined)
+      }),
+  )
+}
+
 afterAll(async () => {
   const { AppRuntime } = await import("../src/effect/app-runtime")
   await AppRuntime.dispose()

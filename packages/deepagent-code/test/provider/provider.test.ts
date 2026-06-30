@@ -88,7 +88,9 @@ const deepagentAuthProviderFixture = pathToFileURL(
 ).href
 
 const it = testEffect(Layer.mergeAll(Provider.defaultLayer, Env.defaultLayer, Plugin.defaultLayer))
-const itWithAuth = testEffect(Layer.mergeAll(Provider.defaultLayer, Env.defaultLayer, Plugin.defaultLayer, Auth.defaultLayer))
+const itWithAuth = testEffect(
+  Layer.mergeAll(Provider.defaultLayer, Env.defaultLayer, Plugin.defaultLayer, Auth.defaultLayer),
+)
 const experimentalModels = testEffect(providerLayer({ enableExperimentalModels: true }))
 
 const alphaProviderConfig = {
@@ -1629,54 +1631,60 @@ it.instance(
   },
 )
 
-it.instance("Google Vertex: uses REP endpoint for Claude continental multi-regions", () =>
-  Effect.gen(function* () {
-    yield* set("GOOGLE_CLOUD_PROJECT", "test-project")
-    yield* set("VERTEX_LOCATION", "eu")
-    const provider = yield* Provider.Service
-    const model = yield* provider.getModel(
-      ProviderV2.ID.make("google-vertex"),
-      ModelV2.ID.make("claude-sonnet-4-6@default"),
-    )
-    const language = yield* provider.getLanguage(model)
-    expect(languageBaseURL(language)).toBe(
-      "https://eu-aiplatform.googleapis.com/v1/projects/test-project/locations/eu/publishers/anthropic/models",
-    )
-  }),
+it.instance(
+  "Google Vertex: uses REP endpoint for Claude continental multi-regions",
+  () =>
+    Effect.gen(function* () {
+      yield* set("GOOGLE_CLOUD_PROJECT", "test-project")
+      yield* set("VERTEX_LOCATION", "eu")
+      const provider = yield* Provider.Service
+      const model = yield* provider.getModel(
+        ProviderV2.ID.make("google-vertex"),
+        ModelV2.ID.make("claude-sonnet-4-6@default"),
+      )
+      const language = yield* provider.getLanguage(model)
+      expect(languageBaseURL(language)).toBe(
+        "https://eu-aiplatform.googleapis.com/v1/projects/test-project/locations/eu/publishers/anthropic/models",
+      )
+    }),
   { config: { enabled_providers: ["google-vertex"] } },
 )
 
-it.instance("Google Vertex Anthropic: uses REP endpoint for continental multi-regions", () =>
-  Effect.gen(function* () {
-    yield* set("GOOGLE_CLOUD_PROJECT", "test-project")
-    yield* set("VERTEX_LOCATION", "us")
-    const provider = yield* Provider.Service
-    const model = yield* provider.getModel(
-      ProviderV2.ID.make("google-vertex-anthropic"),
-      ModelV2.ID.make("claude-sonnet-4-6@default"),
-    )
-    const language = yield* provider.getLanguage(model)
-    expect(languageBaseURL(language)).toBe(
-      "https://aiplatform.us.rep.googleapis.com/v1/projects/test-project/locations/us/publishers/anthropic/models",
-    )
-  }),
+it.instance(
+  "Google Vertex Anthropic: uses REP endpoint for continental multi-regions",
+  () =>
+    Effect.gen(function* () {
+      yield* set("GOOGLE_CLOUD_PROJECT", "test-project")
+      yield* set("VERTEX_LOCATION", "us")
+      const provider = yield* Provider.Service
+      const model = yield* provider.getModel(
+        ProviderV2.ID.make("google-vertex-anthropic"),
+        ModelV2.ID.make("claude-sonnet-4-6@default"),
+      )
+      const language = yield* provider.getLanguage(model)
+      expect(languageBaseURL(language)).toBe(
+        "https://aiplatform.us.rep.googleapis.com/v1/projects/test-project/locations/us/publishers/anthropic/models",
+      )
+    }),
   { config: { enabled_providers: ["google-vertex-anthropic"] } },
 )
 
-it.instance("Google Vertex: keeps regional Claude endpoints unchanged", () =>
-  Effect.gen(function* () {
-    yield* set("GOOGLE_CLOUD_PROJECT", "test-project")
-    yield* set("VERTEX_LOCATION", "europe-west1")
-    const provider = yield* Provider.Service
-    const model = yield* provider.getModel(
-      ProviderV2.ID.make("google-vertex"),
-      ModelV2.ID.make("claude-sonnet-4-6@default"),
-    )
-    const language = yield* provider.getLanguage(model)
-    expect(languageBaseURL(language)).toBe(
-      "https://europe-west1-aiplatform.googleapis.com/v1/projects/test-project/locations/europe-west1/publishers/anthropic/models",
-    )
-  }),
+it.instance(
+  "Google Vertex: keeps regional Claude endpoints unchanged",
+  () =>
+    Effect.gen(function* () {
+      yield* set("GOOGLE_CLOUD_PROJECT", "test-project")
+      yield* set("VERTEX_LOCATION", "europe-west1")
+      const provider = yield* Provider.Service
+      const model = yield* provider.getModel(
+        ProviderV2.ID.make("google-vertex"),
+        ModelV2.ID.make("claude-sonnet-4-6@default"),
+      )
+      const language = yield* provider.getLanguage(model)
+      expect(languageBaseURL(language)).toBe(
+        "https://europe-west1-aiplatform.googleapis.com/v1/projects/test-project/locations/europe-west1/publishers/anthropic/models",
+      )
+    }),
   { config: { enabled_providers: ["google-vertex"] } },
 )
 
@@ -1705,7 +1713,9 @@ it.instance(
   }),
   {
     config: {
-      provider: { "cloudflare-ai-gateway": { options: { metadata: { invoked_by: "test", project: "deepagent-code" } } } },
+      provider: {
+        "cloudflare-ai-gateway": { options: { metadata: { invoked_by: "test", project: "deepagent-code" } } },
+      },
     },
   },
 )
@@ -1846,7 +1856,9 @@ it.effect("deepagent-code loader keeps paid models when auth exists", () =>
     const original = yield* Effect.promise(() => Filesystem.readText(authPath).catch(() => undefined))
 
     yield* Effect.acquireRelease(
-      Effect.promise(() => Filesystem.write(authPath, JSON.stringify({ "deepagent-code": { type: "api", key: "test-key" } }))),
+      Effect.promise(() =>
+        Filesystem.write(authPath, JSON.stringify({ "deepagent-code": { type: "api", key: "test-key" } })),
+      ),
       () =>
         Effect.promise(async () => {
           if (original !== undefined) await Filesystem.write(authPath, original)

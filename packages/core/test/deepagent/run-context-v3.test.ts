@@ -36,14 +36,24 @@ describe("V3 RUN_CONTEXT working-memory doc", () => {
   })
 
   test("failure status yields a diagnose-then-rollback handoff hint", () => {
-    const md = buildRunContext({ ...base, status: "runtime_failed", rootCause: "compile_error", nextAction: "review_required_before_resume" })
+    const md = buildRunContext({
+      ...base,
+      status: "runtime_failed",
+      rootCause: "compile_error",
+      nextAction: "review_required_before_resume",
+    })
     expect(md).toContain("status: runtime_failed")
     expect(md).toContain("compile_error")
     expect(md).toContain("回滚")
   })
 
   test("max mode shows knowledge enabled", () => {
-    const md = buildRunContext({ ...base, mode: "max", knowledgeEnabled: true, activationMode: "first_fast_design_bounded_knowledge" })
+    const md = buildRunContext({
+      ...base,
+      mode: "max",
+      knowledgeEnabled: true,
+      activationMode: "first_fast_design_bounded_knowledge",
+    })
     expect(md).toContain("knowledge: enabled (max)")
   })
 

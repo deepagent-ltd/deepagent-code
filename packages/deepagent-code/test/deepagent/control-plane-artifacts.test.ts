@@ -73,14 +73,44 @@ describe("DeepAgent control-plane artifacts", () => {
       const checkpoint = await readJson(runDir, "run_checkpoint_manifest.json")
       const runStateRef = checkpoint.run_context_refs.find((ref: { kind: string }) => ref.kind === "run_state")
       expect(runStateRef.sha256).toBe(sha256Text(await readFile(path.join(runDir, "DEEPAGENT_RUN_STATE.json"), "utf8")))
-      expect(checkpoint.run_context_refs.find((ref: { kind: string }) => ref.kind === "deterministic_result")).toBeTruthy()
+      expect(
+        checkpoint.run_context_refs.find((ref: { kind: string }) => ref.kind === "deterministic_result"),
+      ).toBeTruthy()
       for (const kind of ["design", "handoff", "test", "history_private"]) {
         expect(checkpoint.run_context_refs.find((ref: { kind: string }) => ref.kind === kind)).toBeTruthy()
       }
       const bootMessageRef = checkpoint.run_context_refs.find((ref: { kind: string }) => ref.kind === "boot_message")
-      expect(bootMessageRef.sha256).toBe(sha256Text(await readFile(path.join(runDir, "DEEPAGENT_BOOT_MESSAGE.md"), "utf8")))
+      expect(bootMessageRef.sha256).toBe(
+        sha256Text(await readFile(path.join(runDir, "DEEPAGENT_BOOT_MESSAGE.md"), "utf8")),
+      )
     } finally {
       await cleanupRunsDir(dir)
     }
+  })
+
+  // L5 (S1-v3.4): the MODEL_WORK_PACKAGE manifest carries a code_intel evidence artifact ref
+  // tagged with the new `evidence_kind` dimension (orthogonal to artifact_type). The type guard
+  // accepts the V3.4 value plus the V3.5-reserved values.
+  test("model work package registers a code_intel evidence artifact with evidence_kind", async () => {
+    const dir = await tempRunsDir()
+    try {
+      const runDir = await runDeepAgentStream(dir)
+      const wp = await readJson(runDir, "MODEL_WORK_PACKAGE.json")
+      const refs = wp.artifact_refs as { ref_id: string; artifact_type: string; evidence_kind?: string }[]
+      const codeIntel = refs.find((r) => r.ref_id === "artifact:code_intel_result")
+      expect(codeIntel).toBeDefined()
+      expect(codeIntel?.artifact_type).toBe("code_intel_result")
+      expect(codeIntel?.evidence_kind).toBe("lsp_query")
+    } finally {
+      await cleanupRunsDir(dir)
+    }
+  })
+
+  test("isEvidenceKind accepts lsp_query and the V3.5-reserved values", () => {
+    expect(AgentGateway.isEvidenceKind("lsp_query")).toBe(true)
+    expect(AgentGateway.isEvidenceKind("debug_session")).toBe(true)
+    expect(AgentGateway.isEvidenceKind("profile")).toBe(true)
+    expect(AgentGateway.isEvidenceKind("bogus")).toBe(false)
+    expect(AgentGateway.EVIDENCE_KINDS).toEqual(["lsp_query", "debug_session", "profile"])
   })
 })

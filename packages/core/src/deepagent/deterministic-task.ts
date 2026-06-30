@@ -43,16 +43,20 @@ export type DeterministicResult = {
   readonly created_at: string
 }
 
-const QUERY_RE = /\b(query|count|list|show|read|inspect|status|diff|log|config|select|explain|grep|rg|find)\b|查一下|查询|统计|列出|显示|读取|看一下|多少个|有哪些|当前状态|日志里|配置里|数据库里/i
-const VALIDATION_RE = /\b(test result|validation|typecheck|lint|build|tests? pass|tests? fail|exit code|失败在哪里|测试是否|是否通过)\b/i
-const STATE_RE = /\b(env|environment|config|setting|port|model|provider|workspace|current state|当前配置|当前模型|端口|环境变量)\b/i
-const MUTATION_RE = /\b(fix|implement|edit|modify|write|delete|deploy|migrate|insert|update|alter|drop|restart|apply|remove)\b|修复|实现|修改|写入|删除|部署|迁移|更新|重启/i
+const QUERY_RE =
+  /\b(query|count|list|show|read|inspect|status|diff|log|config|select|explain|grep|rg|find)\b|查一下|查询|统计|列出|显示|读取|看一下|多少个|有哪些|当前状态|日志里|配置里|数据库里/i
+const VALIDATION_RE =
+  /\b(test result|validation|typecheck|lint|build|tests? pass|tests? fail|exit code|失败在哪里|测试是否|是否通过)\b/i
+const STATE_RE =
+  /\b(env|environment|config|setting|port|model|provider|workspace|current state|当前配置|当前模型|端口|环境变量)\b/i
+const MUTATION_RE =
+  /\b(fix|implement|edit|modify|write|delete|deploy|migrate|insert|update|alter|drop|restart|apply|remove)\b|修复|实现|修改|写入|删除|部署|迁移|更新|重启/i
 const GENERATION_RE = /\b(write|draft|create|generate|explain|summarize|document|生成|写一|解释|总结|文档)\b/i
 const READONLY_SQL_RE = /^\s*(select|show|describe|desc|explain|pragma)\b/i
-const SQL_MUTATION_RE = /\b(insert|update|delete|alter|drop|create|replace|truncate|merge|grant|revoke|call|execute|vacuum|analyze)\b/i
+const SQL_MUTATION_RE =
+  /\b(insert|update|delete|alter|drop|create|replace|truncate|merge|grant|revoke|call|execute|vacuum|analyze)\b/i
 
-const textFor = (input: DeterministicTaskInput): string =>
-  [input.raw, ...(input.repoSignals ?? [])].join("\n")
+const textFor = (input: DeterministicTaskInput): string => [input.raw, ...(input.repoSignals ?? [])].join("\n")
 
 export const hasMutationIntent = (input: DeterministicTaskInput | string): boolean =>
   MUTATION_RE.test(typeof input === "string" ? input : textFor(input))

@@ -29,7 +29,13 @@ export type FatalRendererErrorLog = {
 
 // U7: isolated browser bridge (navigation-only). onState delivers address-bar metadata only.
 export type BrowserRect = { x: number; y: number; width: number; height: number }
-export type BrowserViewState = { url: string; title: string; canGoBack: boolean; canGoForward: boolean; loading: boolean }
+export type BrowserViewState = {
+  url: string
+  title: string
+  canGoBack: boolean
+  canGoForward: boolean
+  loading: boolean
+}
 export type BrowserPlatform = {
   show(rect: BrowserRect): Promise<void> | void
   hide(): Promise<void> | void

@@ -319,25 +319,40 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       yield* requireSession(ctx.params.sessionID)
       const rawInput = promptText(ctx.payload.parts)
       if (!rawInput.trim()) return yield* new HttpApiError.BadRequest({})
-      return yield* promptSvc.refineWishDraft({
-        sessionID: ctx.params.sessionID,
-        rawInput,
-        outputLanguage: ctx.payload.output_language ?? "english",
-      }).pipe(
-        // Fail soft: refinement is an enhancement, not a gate. If the model can't produce a
-        // usable refined prompt (parse failure, weak model, etc.), degrade to the direct path
-        // with the user's raw input instead of blocking the turn. The client treats a "general"
-        // route as direct_override, so the user's message still goes through.
-        Effect.orElseSucceed(() => ({
-          route: "general" as const,
-          prompt_draft_id: "",
-          context_plan_id: "",
-          state: "general_ready",
-          mode: "wish" as const,
-          goal: rawInput,
-          preview: rawInput,
-        })),
-      )
+      return yield* promptSvc
+        .refineWishDraft({
+          sessionID: ctx.params.sessionID,
+          rawInput,
+          outputLanguage: ctx.payload.output_language ?? "english",
+        })
+        .pipe(
+          // Fail soft: refinement is an enhancement, not a gate. If the model can't produce a
+          // usable refined prompt (parse failure, weak model, etc.), degrade to the direct path
+          // with the user's raw input instead of blocking the turn. The client treats a "general"
+          // route as direct_override, so the user's message still goes through.
+          //
+          // We log the cause first: a wish→direct degradation is exactly the "the plan/confirm
+          // popup didn't appear" symptom, and it is otherwise invisible (refineWishDraft already
+          // fails soft internally for chat). The log makes the degrade reason diagnosable —
+          // model schema failure vs. an aborted prepare (e.g. the renderer reloaded mid-call).
+          Effect.catch((error: unknown) =>
+            Effect.logWarning("wish prompt prepare degraded to direct").pipe(
+              Effect.annotateLogs({
+                sessionID: ctx.params.sessionID,
+                reason: error instanceof Error ? error.message : String(error),
+              }),
+              Effect.as({
+                route: "general" as const,
+                prompt_draft_id: "",
+                context_plan_id: "",
+                state: "general_ready",
+                mode: "wish" as const,
+                goal: rawInput,
+                preview: rawInput,
+              }),
+            ),
+          ),
+        )
     })
 
     const promptSuggestion = Effect.fn("SessionHttpApi.promptSuggestion")(function* (ctx: {

@@ -23,9 +23,7 @@ describe("DeepAgent learning writeback gate", () => {
       expect(await readJson(runDir, "LEARNING_WRITEBACK_MANIFEST.json")).toMatchObject({
         promotion_decision: "staged",
         target_scope: "run_local",
-        strategy_candidates: [
-          { status: "staged", source_ref: "MODEL_WORK_PACKAGE.json" },
-        ],
+        strategy_candidates: [{ status: "staged", source_ref: "MODEL_WORK_PACKAGE.json" }],
         policy_checks: [
           { check_id: "no_hidden_lineage", status: "pass" },
           { check_id: "review_required_before_active_promotion", status: "needs_review" },

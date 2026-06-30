@@ -24,15 +24,39 @@ describe("V3 hooks", () => {
 describe("V3 reviewer projection", () => {
   let root: string
   let store: DocumentStore
-  beforeEach(() => { root = mkdtempSync(path.join(tmpdir(), "deepagent-rev-")); store = new DocumentStore(root) })
+  beforeEach(() => {
+    root = mkdtempSync(path.join(tmpdir(), "deepagent-rev-"))
+    store = new DocumentStore(root)
+  })
   afterEach(() => rmSync(root, { recursive: true, force: true }))
 
   test("explainCandidate answers why accepted via graph links", () => {
     const prov = { source: "model" as const, run_ref: "run:t1" }
     const design = store.create({ type: "design", scope: "run:t1", body: "d", description: "design", provenance: prov })
-    const cand = store.create({ type: "candidate", scope: "run:t1", body: "c", description: "cand", provenance: prov, links: [{ rel: "derived_from", to: design.id }] })
-    store.create({ type: "eval", scope: "run:t1", body: "10/10", description: "eval", provenance: prov, links: [{ rel: "validated_by", to: cand.id }] })
-    store.create({ type: "decision", scope: "run:t1", body: "accept: metric improved 12%, no regressions", description: "decision", provenance: prov, links: [{ rel: "refines", to: cand.id }] })
+    const cand = store.create({
+      type: "candidate",
+      scope: "run:t1",
+      body: "c",
+      description: "cand",
+      provenance: prov,
+      links: [{ rel: "derived_from", to: design.id }],
+    })
+    store.create({
+      type: "eval",
+      scope: "run:t1",
+      body: "10/10",
+      description: "eval",
+      provenance: prov,
+      links: [{ rel: "validated_by", to: cand.id }],
+    })
+    store.create({
+      type: "decision",
+      scope: "run:t1",
+      body: "accept: metric improved 12%, no regressions",
+      description: "decision",
+      provenance: prov,
+      links: [{ rel: "refines", to: cand.id }],
+    })
 
     const ex = explainCandidate(store, cand.id)
     expect(ex.decision?.verdict).toBe("accept")

@@ -6,3 +6,4 @@
 - Use this tool when you need to find files containing specific patterns
 - If you need to identify/count the number of matches within files, use the Bash tool with `rg` (ripgrep) directly. Do NOT use `grep`.
 - When you are doing an open-ended search that may require multiple rounds of globbing and grepping, use the Task tool instead
+- For locating a CODE SYMBOL (function, class, method, interface, variable, type), prefer code_intel — it is semantically precise (compiler-grade, follows definitions/references/call chains across files) and does not need coordinates. grep is best for text/regex, config strings, comments, or file types with no language server.

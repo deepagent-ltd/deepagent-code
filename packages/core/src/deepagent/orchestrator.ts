@@ -27,9 +27,16 @@ export type PostTurnDecision = {
 export const initSession = (input: OrchestratorInput): SessionState.SessionRunState => {
   const state = SessionState.getOrCreate(input.sessionId, input.mode)
   let changed = false
-  if (input.userRequest && state.userRequest !== input.userRequest) { state.userRequest = input.userRequest; changed = true }
-  if (input.workspacePath && state.workspacePath !== input.workspacePath) { state.workspacePath = input.workspacePath; changed = true }
-  if (changed) SessionState.update(input.sessionId, { userRequest: state.userRequest, workspacePath: state.workspacePath })
+  if (input.userRequest && state.userRequest !== input.userRequest) {
+    state.userRequest = input.userRequest
+    changed = true
+  }
+  if (input.workspacePath && state.workspacePath !== input.workspacePath) {
+    state.workspacePath = input.workspacePath
+    changed = true
+  }
+  if (changed)
+    SessionState.update(input.sessionId, { userRequest: state.userRequest, workspacePath: state.workspacePath })
   return state
 }
 
@@ -49,7 +56,8 @@ export const buildPromptContext = (input: OrchestratorInput): PromptContext => {
     mode: state.mode,
     round: roundState.round,
     stage: roundState.stage,
-    previousValidationPassed: state.lastValidationResults.length > 0 && Validation.allPassed(state.lastValidationResults),
+    previousValidationPassed:
+      state.lastValidationResults.length > 0 && Validation.allPassed(state.lastValidationResults),
     previousDiagnosisAvailable: roundState.diagnoses.length > 0,
     userRequestedDeeper: false,
     budgetExhausted: Budget.shouldPause(budgetCheck),
@@ -61,7 +69,9 @@ export const buildPromptContext = (input: OrchestratorInput): PromptContext => {
     const failedCount = roundState.candidates.filter((c) => c.status === "failed").length
     // V3: feed diagnosis-blocked refs into retrieval so they are surfaced as do_not_use
     // and never re-injected (docs/30 §4 conflict/do_not_use; diagnosis -> retrieval link).
-    const blockedRefs = roundState.diagnoses.flatMap((d) => d.evidence_refs ?? []).filter((r) => r.startsWith("strategy:") || r.startsWith("methodology:") || r.startsWith("memory:"))
+    const blockedRefs = roundState.diagnoses
+      .flatMap((d) => d.evidence_refs ?? [])
+      .filter((r) => r.startsWith("strategy:") || r.startsWith("methodology:") || r.startsWith("memory:"))
     // V3 (P2-10): derive a real problem profile so domain packs can activate (docs/31 §2).
     // Signals come from the user request; a detected backend (e.g. cuda/rocm) raises the gpu
     // pack's detect score. domain is left null so the retrieval domain filter does not exclude
@@ -155,7 +165,11 @@ export const onValidationComplete = (sessionId: string, results: ValidationResul
     validations: results,
   })
 
-  return { action: "diagnose", reason: `Validation failed: ${output}`, diagnosisInput: buildDiagnosisInput(sessionId, results) }
+  return {
+    action: "diagnose",
+    reason: `Validation failed: ${output}`,
+    diagnosisInput: buildDiagnosisInput(sessionId, results),
+  }
 }
 
 export const onDiagnosisComplete = (sessionId: string, result: Diagnosis.DiagnosisResult): PostTurnDecision => {

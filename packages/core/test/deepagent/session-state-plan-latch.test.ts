@@ -20,7 +20,11 @@ describe("session-state plan latch", () => {
 
   test("a failing validation flips the latch to stale (runtime-derived, no model input)", () => {
     SessionState.getOrCreate("latch-s2", "high")
-    SessionState.recordValidation("latch-s2", [{ command: "tsc", passed: false, output: "err", duration_ms: 1 }], "err")
+    SessionState.recordValidation(
+      "latch-s2",
+      [{ command: "tsc", passed: false, exit_code: 1, output: "err", duration_ms: 1 }],
+      "err",
+    )
     const latch = SessionState.planLatch("latch-s2")
     expect(latch?.latch).toBe("stale")
     expect(latch?.stale_reason).toBe("validation_failed")
@@ -28,7 +32,11 @@ describe("session-state plan latch", () => {
 
   test("a passing validation does NOT flip the latch", () => {
     SessionState.getOrCreate("latch-s3", "high")
-    SessionState.recordValidation("latch-s3", [{ command: "tsc", passed: true, output: "ok", duration_ms: 1 }], "ok")
+    SessionState.recordValidation(
+      "latch-s3",
+      [{ command: "tsc", passed: true, exit_code: 0, output: "ok", duration_ms: 1 }],
+      "ok",
+    )
     expect(SessionState.planLatch("latch-s3")?.latch).toBe("fresh")
   })
 

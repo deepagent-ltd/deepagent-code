@@ -13,6 +13,8 @@ import { FSUtil } from "@deepagent-code/core/fs-util"
 import { InstanceState } from "@/effect/instance-state"
 import { trimDiff } from "./edit"
 import { assertExternalDirectoryEffect } from "./external-directory"
+import { latchPlanOnDiagnosticsError } from "./diagnostics-latch"
+import { crossFileCallerDiagnostics } from "./cross-file-diagnostics"
 import * as Bom from "@/util/bom"
 
 const MAX_PROJECT_DIAGNOSTICS_FILES = 5
@@ -88,6 +90,10 @@ export const WriteTool = Tool.define(
             projectDiagnosticsCount++
             output += `\n\nLSP errors detected in other files:\n${block}`
           }
+          // L4: high+ only — error diagnostics derive a plan-stale latch (no-op in lightweight).
+          yield* latchPlanOnDiagnosticsError(ctx.sessionID, diagnostics)
+          // L4 §1: high+ only — surface diagnostics in referencing files a change may break.
+          output += yield* crossFileCallerDiagnostics(lsp, filepath, instance.worktree)
 
           return {
             title: path.relative(instance.worktree, filepath),

@@ -141,11 +141,15 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
           body={
             <Switch>
               <Match when={props.request.always.length === 1 && props.request.always[0] === "*"}>
-                <TextBody title={"This will allow " + props.request.permission + " until DeepAgent Code is restarted."} />
+                <TextBody
+                  title={"This will allow " + props.request.permission + " until DeepAgent Code is restarted."}
+                />
               </Match>
               <Match when={true}>
                 <box paddingLeft={1} gap={1}>
-                  <text fg={theme.textMuted}>This will allow the following patterns until DeepAgent Code is restarted</text>
+                  <text fg={theme.textMuted}>
+                    This will allow the following patterns until DeepAgent Code is restarted
+                  </text>
                   <box>
                     <For each={props.request.always}>
                       {(pattern) => (

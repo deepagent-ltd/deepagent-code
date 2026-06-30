@@ -20,7 +20,8 @@ import { ModelV2 } from "@deepagent-code/core/model"
 import { EventV2 } from "@deepagent-code/core/event"
 
 const log = Log.create({ service: "share-next" })
-const disabled = process.env["DEEPAGENT_CODE_DISABLE_SHARE"] === "true" || process.env["DEEPAGENT_CODE_DISABLE_SHARE"] === "1"
+const disabled =
+  process.env["DEEPAGENT_CODE_DISABLE_SHARE"] === "true" || process.env["DEEPAGENT_CODE_DISABLE_SHARE"] === "1"
 
 export type Api = {
   create: string

@@ -28,7 +28,9 @@ describe("DeepAgent Code config", () => {
     const previous = process.env.DEEPAGENT_CODE_HOME
     try {
       process.env.DEEPAGENT_CODE_HOME = home
-      expect(gatewayConfig({ provider: { deepagent: { options: { runsDir: "/explicit/runs" } } } }).runsDir).toBe("/explicit/runs")
+      expect(gatewayConfig({ provider: { deepagent: { options: { runsDir: "/explicit/runs" } } } }).runsDir).toBe(
+        "/explicit/runs",
+      )
     } finally {
       if (previous === undefined) delete process.env.DEEPAGENT_CODE_HOME
       else process.env.DEEPAGENT_CODE_HOME = previous

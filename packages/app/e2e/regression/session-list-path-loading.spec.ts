@@ -1,10 +1,10 @@
 import { test } from "@playwright/test"
 import { fixture, pageMessages } from "../smoke/session-timeline.fixture"
-import { mockDeepAgent CodeServer } from "../utils/mock-server"
+import { mockDeepAgentCodeServer } from "../utils/mock-server"
 import { expectAppVisible } from "../utils/waits"
 
 test("shows loaded sessions before the directory path request resolves", async ({ page }) => {
-  await mockDeepAgent CodeServer(page, {
+  await mockDeepAgentCodeServer(page, {
     sessions: fixture.sessions,
     provider: fixture.provider,
     directory: fixture.directory,

@@ -69,10 +69,14 @@ export class ConfigService extends Context.Service<ConfigService, Config>()("@de
 export const defaultConfigLayer = Layer.sync(ConfigService, () =>
   ConfigService.of({
     provider:
-      process.env.DEEPAGENT_CODE_WEBSEARCH_PROVIDER === "exa" || process.env.DEEPAGENT_CODE_WEBSEARCH_PROVIDER === "parallel"
+      process.env.DEEPAGENT_CODE_WEBSEARCH_PROVIDER === "exa" ||
+      process.env.DEEPAGENT_CODE_WEBSEARCH_PROVIDER === "parallel"
         ? process.env.DEEPAGENT_CODE_WEBSEARCH_PROVIDER
         : undefined,
-    enableExa: truthy("DEEPAGENT_CODE_EXPERIMENTAL") || truthy("DEEPAGENT_CODE_ENABLE_EXA") || truthy("DEEPAGENT_CODE_EXPERIMENTAL_EXA"),
+    enableExa:
+      truthy("DEEPAGENT_CODE_EXPERIMENTAL") ||
+      truthy("DEEPAGENT_CODE_ENABLE_EXA") ||
+      truthy("DEEPAGENT_CODE_EXPERIMENTAL_EXA"),
     enableParallel: truthy("DEEPAGENT_CODE_ENABLE_PARALLEL") || truthy("DEEPAGENT_CODE_EXPERIMENTAL_PARALLEL"),
     exaApiKey: process.env.EXA_API_KEY,
     parallelApiKey: process.env.PARALLEL_API_KEY,
