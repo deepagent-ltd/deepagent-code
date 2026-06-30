@@ -19,6 +19,12 @@ describe("updaterAction", () => {
       label: "toast.update.action.installRestart",
       run: "install",
     })
+    expect(
+      updaterAction({ status: "ready", version: "2.0.0", manualUrl: "https://example.com/deepagent-code.deb" }),
+    ).toEqual({
+      label: "toast.update.action.downloadDeb",
+      run: "install",
+    })
     expect(updaterAction({ status: "installing", version: "2.0.0" })).toEqual({
       label: "settings.updates.action.installing",
     })

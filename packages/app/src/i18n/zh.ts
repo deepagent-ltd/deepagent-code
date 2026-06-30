@@ -507,7 +507,9 @@ export const dict = {
   "toast.session.listFailed.title": "无法加载 {{project}} 的会话",
   "toast.update.title": "有可用更新",
   "toast.update.description": "DeepAgent Code 有新版本 ({{version}}) 可安装。",
+  "toast.update.description.deb": "DeepAgent Code 有新版本 ({{version}}) 可下载 Linux .deb 安装包。",
   "toast.update.action.installRestart": "安装并重启",
+  "toast.update.action.downloadDeb": "下载 .deb",
   "toast.update.action.notYet": "稍后",
 
   "error.page.title": "出了点问题",
