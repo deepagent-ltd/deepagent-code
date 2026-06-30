@@ -98,10 +98,10 @@ export const PrCommand = effectCmd({
     UI.println("Starting deepagentCode...")
     UI.println()
 
-    const opencodeArgs = sessionId ? ["-s", sessionId] : []
+    const deepagentCodeArgs = sessionId ? ["-s", sessionId] : []
     const code = yield* Effect.promise(
       () =>
-        Process.spawn(["deepagent-code", ...opencodeArgs], {
+        Process.spawn(["deepagent-code", ...deepagentCodeArgs], {
           stdin: "inherit",
           stdout: "inherit",
           stderr: "inherit",

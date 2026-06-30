@@ -26,7 +26,7 @@ describe("DeepAgent global runtime scope", () => {
     expect(providerSource).toContain('providerID === "deepagent"')
     expect(providerSource).toContain("dropping unsupported deepagent upstream model")
 
-    // Parity with upstream opencode: third-party providers are NOT gated. The per-request throws that
+    // Parity with upstream deepagent-code: third-party providers are NOT gated. The per-request throws that
     // previously rejected non-whitelisted upstreams/packages have been removed from both files.
     expect(providerSource).not.toContain("Unsupported DeepAgent upstream provider")
     expect(transformSource).not.toContain("Unsupported DeepAgent upstream provider")

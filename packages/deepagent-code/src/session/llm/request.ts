@@ -76,7 +76,7 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
   const isOpenaiOauth = input.provider.id === "openai" && input.auth?.type === "oauth"
   // V3.1 global runtime: the DeepAgent system prompt is strength-driven (high/max), not
   // provider-scoped. It applies to every upstream provider; `general` keeps the inherited
-  // (opencode) baseline prompt untouched.
+  // (deepagent-code) baseline prompt untouched.
   const agentMode = deepAgentAgentModeOverride(input.user.metadata) ?? AgentGateway.snapshot().agentMode
   const isDeepAgentActive = AgentGateway.snapshot().mode === "enabled" && agentMode !== "general"
   let system: string[]
@@ -199,7 +199,7 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
 
   const metadata = prepareMetadata(input, tools)
 
-  const opencodeProjectID = input.model.providerID.startsWith("deepagent-code")
+  const deepagentCodeProjectID = input.model.providerID.startsWith("deepagent-code")
     ? (yield* InstanceState.context).project.id
     : undefined
 
@@ -213,7 +213,7 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
     headers: {
       ...(input.model.providerID.startsWith("deepagent-code")
         ? {
-            ...(opencodeProjectID ? { "x-deepagent-code-project": opencodeProjectID } : {}),
+            ...(deepagentCodeProjectID ? { "x-deepagent-code-project": deepagentCodeProjectID } : {}),
             "x-deepagent-code-session": input.sessionID,
             "x-deepagent-code-request": input.user.id,
             "x-deepagent-code-client": input.flags.client,
