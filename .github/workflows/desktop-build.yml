@@ -70,7 +70,7 @@ jobs:
           # Keep one artifact per OS to stay under the repo's tight artifact quota.
           # macOS arm64 only - Apple Silicon covers current Macs. The Intel (macos-13)
           # runner is queue-starved and the x64 cross-compile is unreliable, so it is dropped.
-          mac='{"host":"macos-14","target":"darwin-arm64","platform_flag":"--mac dmg --arm64","group":"mac"}'
+          mac='{"host":"macos-14","target":"darwin-arm64","platform_flag":"--mac dmg zip --arm64","group":"mac"}'
           linux='{"host":"ubuntu-24.04","target":"linux-amd64","platform_flag":"--linux deb --x64","group":"linux"}'
           win='{"host":"windows-2025","target":"win-x64","platform_flag":"--win nsis --x64","group":"win"}'
           case "$PLATFORMS" in
@@ -154,7 +154,10 @@ jobs:
           compression-level: 9
           retention-days: 1
           path: |
+            packages/desktop/dist/latest*.yml
+            packages/desktop/dist/*.blockmap
             packages/desktop/dist/*.dmg
+            packages/desktop/dist/*.zip
             packages/desktop/dist/*.deb
             packages/desktop/dist/*.exe
 
@@ -181,11 +184,17 @@ jobs:
           version=$(node -p 'require("./packages/desktop/package.json").version.replace(/-.*/, "")')
           tag="app-v${version}-main.${GITHUB_RUN_NUMBER}"
 
-          mapfile -t assets < <(find release-assets -type f \( -name '*.dmg' -o -name '*.deb' -o -name '*.exe' \) | sort)
+          mapfile -t assets < <(find release-assets -type f \( -name 'latest*.yml' -o -name '*.blockmap' -o -name '*.dmg' -o -name '*.zip' -o -name '*.deb' -o -name '*.exe' \) | sort)
           if [ "${#assets[@]}" -eq 0 ]; then
             echo "No desktop release assets found"
             exit 1
           fi
+          for required in latest.yml latest-mac.yml; do
+            if ! find release-assets -type f -name "$required" | grep -q .; then
+              echo "Missing updater metadata: $required"
+              exit 1
+            fi
+          done
 
           gh release list --repo "$REPOSITORY" --limit 100 --json tagName \
             --jq '.[] | select(.tagName | test("^app-v[0-9]+\\.[0-9]+\\.[0-9]+-main\\.")) | .tagName' \

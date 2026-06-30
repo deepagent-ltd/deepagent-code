@@ -12,8 +12,7 @@ import { List } from "@deepagent-code/ui/list"
 import { Tooltip } from "@deepagent-code/ui/tooltip"
 import { ModelTooltip } from "./model-tooltip"
 import { useLanguage } from "@/context/language"
-
-const isFree = (cost: { input: number } | undefined) => cost?.input === 0
+import { showFreeModelTag } from "./model-tags"
 
 type ModelState = ReturnType<typeof useLocal>["model"]
 
@@ -57,7 +56,7 @@ const ModelList: Component<{
           class="w-full"
           placement="right-start"
           gutter={12}
-          value={<ModelTooltip model={item} latest={item.latest} free={isFree(item.cost)} />}
+          value={<ModelTooltip model={item} latest={item.latest} free={showFreeModelTag(item)} />}
         >
           {node}
         </Tooltip>
@@ -72,7 +71,7 @@ const ModelList: Component<{
       {(i) => (
         <div class="w-full flex items-center gap-x-2 text-13-regular">
           <span class="truncate">{i.name}</span>
-          <Show when={isFree(i.cost)}>
+          <Show when={showFreeModelTag(i)}>
             <Tag>{language.t("model.tag.free")}</Tag>
           </Show>
           <Show when={i.latest}>
