@@ -1,7 +1,7 @@
 {
   "name": "@deepagent-code/web",
   "type": "module",
-  "license": "MIT",
+  "license": "AGPL-3.0-or-later",
   "version": "1.0.0-beta",
   "scripts": {
     "dev": "astro dev",
