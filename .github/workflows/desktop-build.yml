@@ -1,7 +1,7 @@
 name: desktop-build
 
-# Internal-beta packaging: builds the desktop app for download as workflow artifacts.
-# Does NOT publish, version-bump, or create releases.
+# Desktop packaging: builds installable packages and publishes the latest main
+# build as an auto-managed GitHub Release.
 #
 # macOS signing/notarization is opt-in: if the APPLE_* / CSC_* secrets are present it
 # signs, otherwise it builds an UNSIGNED package (testers right-click → Open to launch).
@@ -33,7 +33,7 @@ on:
           - windows
 
 permissions:
-  contents: read
+  contents: write
   actions: write
 
 concurrency:
@@ -157,3 +157,46 @@ jobs:
             packages/desktop/dist/*.dmg
             packages/desktop/dist/*.deb
             packages/desktop/dist/*.exe
+
+  release:
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: deepagent-code-desktop-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Publish latest desktop release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          version=$(node -p 'require("./packages/desktop/package.json").version.replace(/-.*/, "")')
+          tag="app-v${version}-main.${GITHUB_RUN_NUMBER}"
+
+          mapfile -t assets < <(find release-assets -type f \( -name '*.dmg' -o -name '*.deb' -o -name '*.exe' \) | sort)
+          if [ "${#assets[@]}" -eq 0 ]; then
+            echo "No desktop release assets found"
+            exit 1
+          fi
+
+          gh release list --repo "$REPOSITORY" --limit 100 --json tagName \
+            --jq '.[] | select(.tagName | test("^app-v[0-9]+\\.[0-9]+\\.[0-9]+-main\\.")) | .tagName' \
+            | while read -r old_tag; do
+                if [ -n "$old_tag" ]; then
+                  gh release delete "$old_tag" --repo "$REPOSITORY" --cleanup-tag -y
+                fi
+              done
+
+          gh release create "$tag" "${assets[@]}" \
+            --repo "$REPOSITORY" \
+            --latest \
+            --title "DeepAgent Code Desktop ${version} (${GITHUB_SHA::7})" \
+            --notes "Automated desktop build from main at ${GITHUB_SHA}."
