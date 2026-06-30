@@ -80,7 +80,9 @@ function toConfigError(error: unknown, fallbackSource: string): ConfigError | un
     const message =
       error.data.message ??
       (issues && issues.length
-        ? issues.map((issue) => (issue.path.length ? `${issue.path.join(".")}: ${issue.message}` : issue.message)).join("; ")
+        ? issues
+            .map((issue) => (issue.path.length ? `${issue.path.join(".")}: ${issue.message}` : issue.message))
+            .join("; ")
         : "Invalid configuration")
     return {
       source: error.data.path || fallbackSource,
@@ -523,7 +525,9 @@ export const layer = Layer.effect(
         }
 
         if (!Flag.DEEPAGENT_CODE_DISABLE_PROJECT_CONFIG) {
-          for (const file of yield* ConfigPaths.files("deepagent-code", ctx.directory, ctx.worktree).pipe(Effect.orDie)) {
+          for (const file of yield* ConfigPaths.files("deepagent-code", ctx.directory, ctx.worktree).pipe(
+            Effect.orDie,
+          )) {
             yield* merge(file, yield* loadFile(file, authEnv), "local")
           }
         }

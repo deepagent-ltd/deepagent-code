@@ -35,7 +35,10 @@ describe("V3.1 Prompt Pipeline", () => {
   test("wish mode keeps raw input out of TaskThread until confirmation", () => {
     const store = storeFor()
     const refiner = new PromptRefiner(store)
-    const { draft, contextPlan } = refiner.refine({ rawInput: "请实现 V3.1 prompt pipeline，并运行测试", selectedSkills: ["skill:test"] })
+    const { draft, contextPlan } = refiner.refine({
+      rawInput: "请实现 V3.1 prompt pipeline，并运行测试",
+      selectedSkills: ["skill:test"],
+    })
 
     expect(draft.schema_version).toBe("deepagent-code.prompt_draft.v1")
     expect(contextPlan.schema_version).toBe("deepagent-code.context_plan.v1")
@@ -45,7 +48,11 @@ describe("V3.1 Prompt Pipeline", () => {
 
     store.confirm(draft.id, "Implement V3.1 prompt pipeline and run focused tests")
     const submitted = store.submitConfirmed(draft.id)
-    expect(submitted).toMatchObject({ prompt_draft_id: draft.id, context_plan_id: contextPlan.id, task_prompt: "Implement V3.1 prompt pipeline and run focused tests" })
+    expect(submitted).toMatchObject({
+      prompt_draft_id: draft.id,
+      context_plan_id: contextPlan.id,
+      task_prompt: "Implement V3.1 prompt pipeline and run focused tests",
+    })
     expect(submitted.memory_snapshot_id).toBe(contextPlan.memory_snapshot_id)
     expect(submitted.skill_snapshot_id).toBe(contextPlan.skill_snapshot_id)
   })
@@ -56,7 +63,14 @@ describe("V3.1 Prompt Pipeline", () => {
       rawInput: "修复登录测试，不要改动 public API",
       selectedSkills: ["skill:focused-test"],
       projectMemory: [
-        { id: "memory:login", project_id: "projA", title: "Login", summary: "Use focused auth tests", provenance: "projA:memory:login", decision: "match_only" },
+        {
+          id: "memory:login",
+          project_id: "projA",
+          title: "Login",
+          summary: "Use focused auth tests",
+          provenance: "projA:memory:login",
+          decision: "match_only",
+        },
       ],
     })
 
@@ -69,8 +83,14 @@ describe("V3.1 Prompt Pipeline", () => {
   })
 
   test("later turns can include handoff refs in the draft sources", () => {
-    const { draft } = new PromptRefiner(storeFor()).refine({ rawInput: "继续上一轮未完成的测试修复", turn: 2, handoffRefs: ["handoff:latest"] })
-    expect(draft.source_blocks.some((block) => block.source_label === "handoff" && block.ref === "handoff:latest")).toBe(true)
+    const { draft } = new PromptRefiner(storeFor()).refine({
+      rawInput: "继续上一轮未完成的测试修复",
+      turn: 2,
+      handoffRefs: ["handoff:latest"],
+    })
+    expect(
+      draft.source_blocks.some((block) => block.source_label === "handoff" && block.ref === "handoff:latest"),
+    ).toBe(true)
   })
 
   test("direct override submits only this turn and still locks snapshots", () => {
@@ -78,17 +98,26 @@ describe("V3.1 Prompt Pipeline", () => {
     expect(result.prompt_draft_id).toContain("prompt_draft:sess1")
     expect(result.memory_snapshot_id).toContain("memsnap:")
     expect(result.skill_snapshot_id).toContain("skillsnap:")
-    const confirmedFile = path.join(home.ensureSession("projA", "sess1").confirmedDir, result.prompt_draft_id.replace(/:/g, "__") + ".json")
+    const confirmedFile = path.join(
+      home.ensureSession("projA", "sess1").confirmedDir,
+      result.prompt_draft_id.replace(/:/g, "__") + ".json",
+    )
     expect(existsSync(confirmedFile)).toBe(true)
   })
 
   test("partial draft marks incomplete context when refine exceeds timeout", () => {
-    const { contextPlan } = new PromptRefiner(storeFor()).refine({ rawInput: "调研并实现", timeoutMs: 1, startedAt: Date.now() - 10 })
+    const { contextPlan } = new PromptRefiner(storeFor()).refine({
+      rawInput: "调研并实现",
+      timeoutMs: 1,
+      startedAt: Date.now() - 10,
+    })
     expect(contextPlan.incomplete_context).toBe(true)
   })
 
   test("memory context fencing scrubs internal recall blocks", () => {
-    expect(scrubMemoryContext("hello <memory-context>secret host</memory-context> world")).toBe("hello [memory context hidden] world")
+    expect(scrubMemoryContext("hello <memory-context>secret host</memory-context> world")).toBe(
+      "hello [memory context hidden] world",
+    )
     expect(scrubMemoryContext("a <!-- memory-context secret --> b")).toBe("a [memory context hidden] b")
   })
 
@@ -149,8 +178,28 @@ describe("V3.1 Prompt Pipeline", () => {
   })
 
   test("isWishRefinementOutput rejects malformed model output", () => {
-    expect(isWishRefinementOutput({ route: "code", refined_prompt: "x", goal: "y", task_type: "implementation", constraints: [], acceptance: [], assumptions: [] })).toBe(true)
-    expect(isWishRefinementOutput({ route: "general", refined_prompt: "x", goal: "y", task_type: "unknown", constraints: [], acceptance: [], assumptions: [] })).toBe(true)
+    expect(
+      isWishRefinementOutput({
+        route: "code",
+        refined_prompt: "x",
+        goal: "y",
+        task_type: "implementation",
+        constraints: [],
+        acceptance: [],
+        assumptions: [],
+      }),
+    ).toBe(true)
+    expect(
+      isWishRefinementOutput({
+        route: "general",
+        refined_prompt: "x",
+        goal: "y",
+        task_type: "unknown",
+        constraints: [],
+        acceptance: [],
+        assumptions: [],
+      }),
+    ).toBe(true)
     expect(isWishRefinementOutput({ refined_prompt: "x" })).toBe(false)
     expect(isWishRefinementOutput(null)).toBe(false)
   })

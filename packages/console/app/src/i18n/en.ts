@@ -113,7 +113,8 @@ export const dict = {
   "home.install.ariaLabel": "Install options",
 
   "home.what.title": "What is DeepAgent Code?",
-  "home.what.body": "DeepAgent Code is an open source agent that helps you write code in your terminal, IDE, or desktop.",
+  "home.what.body":
+    "DeepAgent Code is an open source agent that helps you write code in your terminal, IDE, or desktop.",
   "home.what.lsp.title": "LSP enabled",
   "home.what.lsp.body": "Automatically loads the right LSPs for the LLM",
   "home.what.multiSession.title": "Multi-session",
@@ -207,7 +208,8 @@ export const dict = {
   "zen.faq.a4.p1.afterPricing": "with zero markups, so you pay exactly what the model provider charges.",
   "zen.faq.a4.p2.beforeAccount": "Your total cost depends on usage, and you can set monthly spend limits in your",
   "zen.faq.a4.p2.accountLink": "account",
-  "zen.faq.a4.p3": "To cover costs, DeepAgent Code adds only a small payment processing fee of $1.23 per $20 balance top-up.",
+  "zen.faq.a4.p3":
+    "To cover costs, DeepAgent Code adds only a small payment processing fee of $1.23 per $20 balance top-up.",
   "zen.faq.q5": "What about data and privacy?",
   "zen.faq.a5.beforeExceptions":
     "All Zen models are hosted in the US. Providers follow a zero-retention policy and do not use your data for model training, with the",
@@ -298,7 +300,8 @@ export const dict = {
   "go.problem.item4":
     "Includes GLM-5.1, GLM-5, Kimi K2.5, Kimi K2.6, MiMo-V2.5-Pro, MiMo-V2.5, Qwen3.7 Max, Qwen3.7 Plus, Qwen3.6 Plus, MiniMax M2.5, MiniMax M2.7, MiniMax M3, DeepSeek V4 Pro, and DeepSeek V4 Flash",
   "go.how.title": "How Go works",
-  "go.how.body": "Go starts at $5 for your first month, then $10/month. You can use it with DeepAgent Code or any agent.",
+  "go.how.body":
+    "Go starts at $5 for your first month, then $10/month. You can use it with DeepAgent Code or any agent.",
   "go.how.step1.title": "Create an account",
   "go.how.step1.beforeLink": "follow the",
   "go.how.step1.link": "setup instructions",

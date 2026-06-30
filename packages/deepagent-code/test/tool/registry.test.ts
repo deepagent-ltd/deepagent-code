@@ -107,6 +107,10 @@ const itNoBackground = testEffect(
 const withBrokenPlugin = testEffect(
   Layer.mergeAll(registryLayer({ plugin: brokenPluginLayer }), node, Agent.defaultLayer),
 )
+// L6: a registry with code_intel explicitly disabled, to assert grep survives and code_intel is gone.
+const itNoCodeIntel = testEffect(
+  Layer.mergeAll(registryLayer({ flags: { codeIntelTool: false } }), node, Agent.defaultLayer),
+)
 
 afterEach(async () => {
   await disposeAllInstances()
@@ -141,23 +145,21 @@ describe("tool.registry", () => {
     }),
   )
 
-  itNoBackground.instance(
-    "hides task background parameter when background subagents are explicitly disabled",
-    () =>
-      Effect.gen(function* () {
-        const registry = yield* ToolRegistry.Service
-        const agent = yield* Agent.Service
-        const build = yield* agent.get("build")
-        if (!build) throw new Error("build agent not found")
-        const task = (yield* registry.tools({
-          providerID: ProviderV2.ID.make("deepagent-code"),
-          modelID: ModelV2.ID.make("test"),
-          agent: build,
-        })).find((tool) => tool.id === "task")
+  itNoBackground.instance("hides task background parameter when background subagents are explicitly disabled", () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      const agent = yield* Agent.Service
+      const build = yield* agent.get("build")
+      if (!build) throw new Error("build agent not found")
+      const task = (yield* registry.tools({
+        providerID: ProviderV2.ID.make("deepagent-code"),
+        modelID: ModelV2.ID.make("test"),
+        agent: build,
+      })).find((tool) => tool.id === "task")
 
-        expect(task?.jsonSchema).toBeDefined()
-        expect((task?.jsonSchema?.properties as Record<string, unknown> | undefined)?.background).toBeUndefined()
-      }),
+      expect(task?.jsonSchema).toBeDefined()
+      expect((task?.jsonSchema?.properties as Record<string, unknown> | undefined)?.background).toBeUndefined()
+    }),
   )
 
   it.instance("loads tools from .deepagent-code/tool (singular)", () =>
@@ -230,9 +232,14 @@ describe("tool.registry", () => {
       yield* Effect.promise(() =>
         Bun.write(
           path.join(tool, "ok.ts"),
-          ["export default {", "  description: 'ok tool',", "  args: {},", "  execute: async () => 'ok',", "}", ""].join(
-            "\n",
-          ),
+          [
+            "export default {",
+            "  description: 'ok tool',",
+            "  args: {},",
+            "  execute: async () => 'ok',",
+            "}",
+            "",
+          ].join("\n"),
         ),
       )
 
@@ -513,6 +520,75 @@ describe("tool.registry", () => {
         },
         required: ["text"],
       })
+    }),
+  )
+
+  // M2 (S1-v3.4) acceptance (e): the `tools()` projection must carry provenance
+  // through. It previously returned only {id,description,parameters,jsonSchema,execute,
+  // formatValidationError}, dropping provenance and forcing request.ts to guess.
+  it.instance("tools() projection carries builtin provenance through", () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      const agents = yield* Agent.Service
+      const projected = yield* registry.tools({
+        providerID: ProviderV2.ID.make("deepagent-code"),
+        modelID: ModelV2.ID.make("test"),
+        agent: yield* agents.defaultInfo(),
+      })
+      const read = projected.find((t) => t.id === "read")
+      if (!read) throw new Error("read tool missing from projection")
+      expect(read.provenance).toEqual({ source: "builtin" })
+    }),
+  )
+
+  it.instance("tools() projection marks custom tools as custom provenance", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const tool = path.join(test.directory, ".deepagent-code", "tool")
+      yield* Effect.promise(() => fs.mkdir(tool, { recursive: true }))
+      yield* Effect.promise(() =>
+        Bun.write(
+          path.join(tool, "customprov.ts"),
+          [
+            "export default {",
+            "  description: 'custom prov tool',",
+            "  args: {},",
+            "  execute: async () => 'ok',",
+            "}",
+            "",
+          ].join("\n"),
+        ),
+      )
+      const registry = yield* ToolRegistry.Service
+      const agents = yield* Agent.Service
+      const projected = yield* registry.tools({
+        providerID: ProviderV2.ID.make("deepagent-code"),
+        modelID: ModelV2.ID.make("test"),
+        agent: yield* agents.defaultInfo(),
+      })
+      const custom = projected.find((t) => t.id === "customprov")
+      if (!custom) throw new Error("custom tool missing from projection")
+      expect(custom.provenance).toEqual({ source: "custom" })
+    }),
+  )
+
+  // L6 (S1-v3.4): code_intel is promoted out of the experimental gate and is visible by default;
+  // grep is never disabled. `codeIntelTool=false` removes code_intel but leaves grep intact.
+  it.instance("L6: code_intel is visible by default and grep is always present", () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      const ids = yield* registry.ids()
+      expect(ids).toContain("code_intel")
+      expect(ids).toContain("grep")
+    }),
+  )
+
+  itNoCodeIntel.instance("L6: codeIntelTool=false hides code_intel but keeps grep", () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      const ids = yield* registry.ids()
+      expect(ids).not.toContain("code_intel")
+      expect(ids).toContain("grep")
     }),
   )
 

@@ -62,7 +62,7 @@ export const Parameters = Schema.Struct({
   }),
   isolation: Schema.optional(Schema.Literal("worktree")).annotate({
     description:
-      "Set to \"worktree\" to run this subagent in its own isolated git worktree so it cannot collide with other parallel subagents. Its changes stay isolated until you merge them back. Omit for subagents that should operate directly in the current working directory.",
+      'Set to "worktree" to run this subagent in its own isolated git worktree so it cannot collide with other parallel subagents. Its changes stay isolated until you merge them back. Omit for subagents that should operate directly in the current working directory.',
   }),
 })
 
@@ -140,7 +140,9 @@ export const TaskTool = Tool.define(
       const worktreeOpt = isolate ? yield* Effect.serviceOption(Worktree.Service) : Option.none<Worktree.Interface>()
       const worktreeInfo =
         isolate && Option.isSome(worktreeOpt)
-          ? yield* worktreeOpt.value.create({ name: `agent-${params.subagent_type}` }).pipe(Effect.catchCause(() => Effect.succeed(undefined)))
+          ? yield* worktreeOpt.value
+              .create({ name: `agent-${params.subagent_type}` })
+              .pipe(Effect.catchCause(() => Effect.succeed(undefined)))
           : undefined
 
       const nextSession =

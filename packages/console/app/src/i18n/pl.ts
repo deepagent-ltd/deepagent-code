@@ -189,7 +189,8 @@ export const dict = {
     "Zen daje dostęp do wyselekcjonowanego zestawu modeli AI, które DeepAgent Code przetestował i sprawdził (benchmark) specjalnie dla agentów kodujących. Nie musisz martwić się o niespójną wydajność i jakość u różnych dostawców, używaj sprawdzonych modeli, które działają.",
   "home.zenCta.link": "Dowiedz się więcej o Zen",
 
-  "zen.title": "DeepAgent Code Zen | Wyselekcjonowany zestaw niezawodnych, zoptymalizowanych modeli dla agentów kodujących",
+  "zen.title":
+    "DeepAgent Code Zen | Wyselekcjonowany zestaw niezawodnych, zoptymalizowanych modeli dla agentów kodujących",
   "zen.hero.title": "Niezawodne, zoptymalizowane modele dla agentów kodujących",
   "zen.hero.body":
     "Zen daje dostęp do wyselekcjonowanego zestawu modeli AI, które DeepAgent Code przetestował i sprawdził (benchmark) specjalnie dla agentów kodujących. Nie musisz martwić się o niespójną wydajność i jakość, używaj sprawdzonych modeli, które działają.",
@@ -378,7 +379,8 @@ export const dict = {
     "Bezpłatna promocja {{model}} dobiegła końca. Możesz dalej korzystać z modelu, subskrybując DeepAgent Code Go - {{link}}",
 
   "black.meta.title": "DeepAgent Code Black | Dostęp do najlepszych na świecie modeli kodujących",
-  "black.meta.description": "Uzyskaj dostęp do Claude, GPT, Gemini i innych dzięki planom subskrypcji DeepAgent Code Black.",
+  "black.meta.description":
+    "Uzyskaj dostęp do Claude, GPT, Gemini i innych dzięki planom subskrypcji DeepAgent Code Black.",
   "black.hero.title": "Dostęp do najlepszych na świecie modeli kodujących",
   "black.hero.subtitle": "W tym Claude, GPT, Gemini i inne",
   "black.title": "DeepAgent Code Black | Cennik",
@@ -625,8 +627,10 @@ export const dict = {
   "workspace.black.subscription.resetsIn": "Resetuje się za",
   "workspace.black.subscription.useBalance": "Użyj dostępnego salda po osiągnięciu limitów użycia",
   "workspace.black.waitlist.title": "Lista oczekujących",
-  "workspace.black.waitlist.joined": "Jesteś na liście oczekujących na plan DeepAgent Code Black za ${{plan}} miesięcznie.",
-  "workspace.black.waitlist.ready": "Jesteśmy gotowi zapisać Cię do planu DeepAgent Code Black za ${{plan}} miesięcznie.",
+  "workspace.black.waitlist.joined":
+    "Jesteś na liście oczekujących na plan DeepAgent Code Black za ${{plan}} miesięcznie.",
+  "workspace.black.waitlist.ready":
+    "Jesteśmy gotowi zapisać Cię do planu DeepAgent Code Black za ${{plan}} miesięcznie.",
   "workspace.black.waitlist.leave": "Opuść listę oczekujących",
   "workspace.black.waitlist.leaving": "Opuszczanie...",
   "workspace.black.waitlist.left": "Opuszczono",

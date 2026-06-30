@@ -380,7 +380,8 @@ export const dict = {
     "La promotion gratuite de {{model}} est terminée. Vous pouvez continuer à utiliser le modèle en vous abonnant à DeepAgent Code Go - {{link}}",
 
   "black.meta.title": "DeepAgent Code Black | Accédez aux meilleurs modèles de code au monde",
-  "black.meta.description": "Accédez à Claude, GPT, Gemini et plus avec les forfaits d'abonnement DeepAgent Code Black.",
+  "black.meta.description":
+    "Accédez à Claude, GPT, Gemini et plus avec les forfaits d'abonnement DeepAgent Code Black.",
   "black.hero.title": "Accédez aux meilleurs modèles de code au monde",
   "black.hero.subtitle": "Y compris Claude, GPT, Gemini et plus",
   "black.title": "DeepAgent Code Black | Tarification",

@@ -71,7 +71,11 @@ describe("V3.1 LearningWorker and SkillCurator", () => {
     expect(result.inbox_ids).toEqual(["inbox:memory:run2:first-pass-success"])
     const inbox = worker.listInbox()
     expect(inbox).toHaveLength(1)
-    expect(inbox[0]).toMatchObject({ schema_version: "deepagent-code.memory_inbox_item.v1", status: "pending", reason: "manual review policy" })
+    expect(inbox[0]).toMatchObject({
+      schema_version: "deepagent-code.memory_inbox_item.v1",
+      status: "pending",
+      reason: "manual review policy",
+    })
     // docs/34 §8: under manual policy the candidate is a CANDIDATE durable doc (not retrievable
     // until approved), and nothing is active yet.
     expect(store.listByStatus("active")).toHaveLength(0)
@@ -83,8 +87,22 @@ describe("V3.1 LearningWorker and SkillCurator", () => {
   test("strategy and anti-pattern candidates require review instead of auto-merge", () => {
     const { worker } = workerFor()
     const roundState = createInitialRoundState("max")
-    roundState.diagnoses.push({ round: 1, root_cause: "missing validation", evidence_refs: ["run:run3"], next_action: "revise" })
-    const strategy = worker.run({ projectID: "projA", sessionID: "sess1", runID: "run3", mode: "max", roundState, totalRounds: 2, finalStatus: "completed", trigger: "project_switch" })
+    roundState.diagnoses.push({
+      round: 1,
+      root_cause: "missing validation",
+      evidence_refs: ["run:run3"],
+      next_action: "revise",
+    })
+    const strategy = worker.run({
+      projectID: "projA",
+      sessionID: "sess1",
+      runID: "run3",
+      mode: "max",
+      roundState,
+      totalRounds: 2,
+      finalStatus: "completed",
+      trigger: "project_switch",
+    })
     expect(strategy.auto_merged_ids).toEqual([])
     expect(strategy.inbox_ids[0]).toContain("strategy:run3:diagnosis-led-fix")
 
@@ -93,7 +111,16 @@ describe("V3.1 LearningWorker and SkillCurator", () => {
       { round: 1, root_cause: "missing validation", evidence_refs: ["run:run4:r1"], next_action: "revise" },
       { round: 2, root_cause: "missing validation", evidence_refs: ["run:run4:r2"], next_action: "block" },
     )
-    const failed = worker.run({ projectID: "projA", sessionID: "sess1", runID: "run4", mode: "max", roundState: failedState, totalRounds: 2, finalStatus: "failed", trigger: "idle" })
+    const failed = worker.run({
+      projectID: "projA",
+      sessionID: "sess1",
+      runID: "run4",
+      mode: "max",
+      roundState: failedState,
+      totalRounds: 2,
+      finalStatus: "failed",
+      trigger: "idle",
+    })
     expect(failed.auto_merged_ids).toEqual([])
     expect(failed.inbox_ids[0]).toContain("anti_pattern:run4:repeated-failure")
   })
@@ -101,11 +128,22 @@ describe("V3.1 LearningWorker and SkillCurator", () => {
   test("SkillCurator merges, archives, restores, and rewrites manifest", () => {
     const paths = home.ensureProject("projA")
     const curator = new SkillCurator(paths)
-    const first = curator.merge({ id: "skill:test", title: "Run tests", body: "bun test", sourceCandidateIDs: ["memory:run1:first-pass-success"] })
+    const first = curator.merge({
+      id: "skill:test",
+      title: "Run tests",
+      body: "bun test",
+      sourceCandidateIDs: ["memory:run1:first-pass-success"],
+    })
     expect(first.schema_version).toBe("deepagent-code.skill_record.v1")
     expect(curator.list().map((skill) => skill.id)).toEqual(["skill:test"])
 
-    curator.merge({ id: "skill:test-v2", title: "Run focused tests", body: "bun test test/deepagent", sourceCandidateIDs: ["strategy:run3"], supersedes: ["skill:test"] })
+    curator.merge({
+      id: "skill:test-v2",
+      title: "Run focused tests",
+      body: "bun test test/deepagent",
+      sourceCandidateIDs: ["strategy:run3"],
+      supersedes: ["skill:test"],
+    })
     expect(curator.list().map((skill) => skill.id)).toEqual(["skill:test-v2"])
 
     const restored = curator.restore("skill:test")

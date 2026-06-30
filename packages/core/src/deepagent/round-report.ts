@@ -115,8 +115,8 @@ export const reconcile = (
     }
   }
 
-  const deterministicGaps = (groundTruth.deterministic_results ?? []).filter((result) =>
-    result.verified_state === "unverified" || result.verified_state === "blocked"
+  const deterministicGaps = (groundTruth.deterministic_results ?? []).filter(
+    (result) => result.verified_state === "unverified" || result.verified_state === "blocked",
   )
   if (declarations.completion_claim === "complete" && deterministicGaps.length > 0) {
     mismatches.push({

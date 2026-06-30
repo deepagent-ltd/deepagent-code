@@ -32,7 +32,10 @@ describe("ZenmuxPlugin", () => {
         })
       })
       const result = yield* catalog.provider.get(ProviderV2.ID.make("zenmux"))
-      expect(result.request.headers).toEqual({ "HTTP-Referer": "https://deepagent-code.ai/", "X-Title": "deepagent-code" })
+      expect(result.request.headers).toEqual({
+        "HTTP-Referer": "https://deepagent-code.ai/",
+        "X-Title": "deepagent-code",
+      })
       expect(Object.keys(result.request.headers).sort()).toEqual(["HTTP-Referer", "X-Title"])
     }),
   )

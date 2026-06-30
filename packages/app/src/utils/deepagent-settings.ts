@@ -10,8 +10,7 @@ type ServerSync = ReturnType<typeof useServerSync>
 const isDeepAgentMode = (value: unknown): value is DeepAgentMode =>
   value === "general" || value === "high" || value === "xhigh" || value === "max" || value === "ultra"
 
-const isDeepAgentPromptMode = (value: unknown): value is DeepAgentPromptMode =>
-  value === "direct" || value === "wish"
+const isDeepAgentPromptMode = (value: unknown): value is DeepAgentPromptMode => value === "direct" || value === "wish"
 
 const isDeepAgentSelfLearning = (value: unknown): value is DeepAgentSelfLearning =>
   value === "manual" || value === "auto"
@@ -21,7 +20,9 @@ export const deepAgentModeFromConfig = (config: ServerSync["data"]["config"] | u
   return isDeepAgentMode(value) ? value : "high"
 }
 
-export const deepAgentPromptModeFromConfig = (config: ServerSync["data"]["config"] | undefined): DeepAgentPromptMode => {
+export const deepAgentPromptModeFromConfig = (
+  config: ServerSync["data"]["config"] | undefined,
+): DeepAgentPromptMode => {
   const value = config?.provider?.deepagent?.options?.promptMode
   return isDeepAgentPromptMode(value) ? value : "wish"
 }

@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test"
-import { mockDeepAgent CodeServer } from "../utils/mock-server"
+import { mockDeepAgentCodeServer } from "../utils/mock-server"
 import { expectAppVisible, expectSessionTitle } from "../utils/waits"
 
 const directory = "C:/DeepAgent Code/ContextResizeRegression"
@@ -209,7 +209,7 @@ function contextTool(partID: string, messageID: string, tool: string, input: Rec
 }
 
 async function mockServer(page: Page) {
-  await mockDeepAgent CodeServer(page, {
+  await mockDeepAgentCodeServer(page, {
     directory,
     project: project(),
     provider: provider(),

@@ -713,7 +713,12 @@ const scenarios: Scenario[] = [
   http.protected
     .post("/deepagent/knowledge/promote", "deepagent.knowledge.promote")
     .mutating()
-    .seeded(() => Effect.sync(() => { configureDeepAgentExercise(); return deepagentCandidate("promote") }))
+    .seeded(() =>
+      Effect.sync(() => {
+        configureDeepAgentExercise()
+        return deepagentCandidate("promote")
+      }),
+    )
     .at((ctx) => ({
       path: "/deepagent/knowledge/promote",
       headers: ctx.headers(),
@@ -727,12 +732,20 @@ const scenarios: Scenario[] = [
     .json(200, (body) => {
       object(body)
       object(body.promoted)
-      check(body.promoted.source_candidate_id === "strategy_candidate:httpapi:promote", "promote should preserve source candidate id")
+      check(
+        body.promoted.source_candidate_id === "strategy_candidate:httpapi:promote",
+        "promote should preserve source candidate id",
+      )
     }),
   http.protected
     .post("/deepagent/knowledge/reject", "deepagent.knowledge.reject")
     .mutating()
-    .seeded(() => Effect.sync(() => { configureDeepAgentExercise(); return deepagentCandidate("reject") }))
+    .seeded(() =>
+      Effect.sync(() => {
+        configureDeepAgentExercise()
+        return deepagentCandidate("reject")
+      }),
+    )
     .at((ctx) => ({
       path: "/deepagent/knowledge/reject",
       headers: ctx.headers(),

@@ -45,7 +45,9 @@ const detectLanguages = (cwd: string): string[] => {
       if (deps["typescript"] || deps["@types/node"] || existsSync(path.join(cwd, "tsconfig.json"))) {
         langs.push("typescript")
       }
-    } catch { langs.push("typescript") } // assume TS on parse failure
+    } catch {
+      langs.push("typescript")
+    } // assume TS on parse failure
   }
   if (existsSync(path.join(cwd, "pyproject.toml")) || existsSync(path.join(cwd, "setup.py"))) langs.push("python")
   if (existsSync(path.join(cwd, "go.mod"))) langs.push("go")
@@ -71,14 +73,16 @@ const detectFrameworks = (cwd: string): string[] => {
     if (deps["drizzle-orm"] || deps["prisma"] || deps["typeorm"]) fw.push("orm")
     if (deps["bun"]) fw.push("bun")
     if (deps["effect"]) fw.push("effect")
-  } catch { /* skip */ }
+  } catch {
+    /* skip */
+  }
   return [...new Set(fw)]
 }
 
 // Derive code_domains from languages, frameworks, and user request.
 const deriveCodeDomains = (langs: string[], frameworks: string[], request: string): string[] => {
   const d: string[] = ["code"]
-  if (frameworks.some((f) => ["react","solidjs","vue","svelte"].includes(f))) d.push("frontend")
+  if (frameworks.some((f) => ["react", "solidjs", "vue", "svelte"].includes(f))) d.push("frontend")
   if (frameworks.some((f) => f === "backend-framework")) d.push("backend")
   if (langs.includes("cuda") || langs.includes("cpp") || /\b(kernel|gemm|cuda|gpu|sgemm|rocm)\b/i.test(request)) {
     d.push("gpu_kernel")
@@ -130,7 +134,9 @@ const collectRepoSignals = (cwd: string, userRequest: string): string[] => {
   try {
     const readmePath = ["README.md", "README.txt", "readme.md"].map((f) => path.join(cwd, f)).find(existsSync)
     if (readmePath) signals.push(readFileSync(readmePath, "utf8").slice(0, 500))
-  } catch { /* skip */ }
+  } catch {
+    /* skip */
+  }
   return signals
 }
 
@@ -153,7 +159,7 @@ export const buildProfile = (signals: WorkspaceSignals): ExtendedProblemProfile 
     platforms: [],
     languages: langs,
     frameworks,
-    data_classes: riskMarkers.filter((r) => ["pii","phi"].includes(r)),
+    data_classes: riskMarkers.filter((r) => ["pii", "phi"].includes(r)),
     risk_markers: riskMarkers,
     repo_signals: repoSignals.slice(0, 3),
     round_signals: signals.roundSignals ?? [],

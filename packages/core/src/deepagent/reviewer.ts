@@ -7,7 +7,11 @@ import type { DocumentStore, DocRef } from "./document-store"
 export type CandidateExplanation = {
   readonly candidate: DocRef
   readonly parents: readonly DocRef[]
-  readonly decision: { readonly ref: string; readonly verdict: "accept" | "rollback" | "other"; readonly reason: string } | null
+  readonly decision: {
+    readonly ref: string
+    readonly verdict: "accept" | "rollback" | "other"
+    readonly reason: string
+  } | null
   readonly evals: readonly DocRef[]
   readonly diagnoses: readonly DocRef[]
 }
@@ -18,7 +22,18 @@ export const explainCandidate = (store: DocumentStore, candidateId: string): Can
 
   const refOf = (id: string): DocRef | null => {
     const d = store.get(id)
-    return d ? { id: d.id, version: d.version, type: d.type, scope: d.scope, status: d.status, domain: d.domain, tags: d.tags, description: d.description } : null
+    return d
+      ? {
+          id: d.id,
+          version: d.version,
+          type: d.type,
+          scope: d.scope,
+          status: d.status,
+          domain: d.domain,
+          tags: d.tags,
+          description: d.description,
+        }
+      : null
   }
 
   const parents = cand.links

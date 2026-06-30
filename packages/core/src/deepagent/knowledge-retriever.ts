@@ -165,7 +165,9 @@ const loadDiskKnowledge = (workspacePath: string | undefined, activation: Knowle
       summary: doc.description,
       evidence_strength: doc.confidence?.evidence_strength ?? "none",
     }))
-  } catch { return [] }
+  } catch {
+    return []
+  }
 }
 
 // review_4 M4: skill docs — durable, seeded from domain-packs documents/skills/, high+ (by design).
@@ -186,10 +188,15 @@ const loadDiskSkills = (workspacePath: string | undefined, activation: Knowledge
       summary: doc.description,
       evidence_strength: doc.confidence?.evidence_strength ?? "none",
     }))
-  } catch { return [] }
+  } catch {
+    return []
+  }
 }
 
-export type GapEntry = { readonly ref_id: string; readonly excluded_by: "relevance" | "evidence" | "topk" | "global_cap" }
+export type GapEntry = {
+  readonly ref_id: string
+  readonly excluded_by: "relevance" | "evidence" | "topk" | "global_cap"
+}
 export type DoNotUseEntry = { readonly ref_id: string; readonly reason: string }
 
 type Gated<T> = {
@@ -309,16 +316,25 @@ export const gateRefs = <T extends { ref_id: string; relevance: number; evidence
       // Pick a victim from an OVER-REPRESENTED pack first (a pack holding >1 selected ref), so every
       // primary pack keeps at least one slot; fall back to the lowest-relevance non-priority ref.
       const packCount = new Map<string, number>()
-      for (const i of selected) { const p = priorityPackOf(i); if (p) packCount.set(p, (packCount.get(p) ?? 0) + 1) }
+      for (const i of selected) {
+        const p = priorityPackOf(i)
+        if (p) packCount.set(p, (packCount.get(p) ?? 0) + 1)
+      }
       let victimIdx = -1
       for (let j = selected.length - 1; j >= 0; j--) {
         const vp = priorityPackOf(selected[j])
-        if (vp && (packCount.get(vp) ?? 0) > 1) { victimIdx = j; break }
+        if (vp && (packCount.get(vp) ?? 0) > 1) {
+          victimIdx = j
+          break
+        }
       }
       if (victimIdx < 0) {
         for (let j = selected.length - 1; j >= 0; j--) {
           const vp = priorityPackOf(selected[j])
-          if (!vp || !priorityPackIds.has(vp)) { victimIdx = j; break }
+          if (!vp || !priorityPackIds.has(vp)) {
+            victimIdx = j
+            break
+          }
         }
       }
       if (victimIdx >= 0) {
@@ -360,7 +376,12 @@ const selectedRefCap = (input: RetrievalInput, activation: KnowledgeActivation):
 type ScoredId = { readonly ref_id: string; readonly relevance: number; readonly packId: string | null }
 const FALLBACK_QUOTA = 2
 
-const selectWithQuota = (refs: readonly ScoredId[], cap: number, activation: KnowledgeActivation, rescuePool: readonly ScoredId[] = refs): ReadonlySet<string> => {
+const selectWithQuota = (
+  refs: readonly ScoredId[],
+  cap: number,
+  activation: KnowledgeActivation,
+  rescuePool: readonly ScoredId[] = refs,
+): ReadonlySet<string> => {
   const fallbackSet = new Set<string>(CORE_FALLBACK_PACKS)
   const sorted = [...refs].sort((a, b) => b.relevance - a.relevance || a.ref_id.localeCompare(b.ref_id))
   const rescueSorted = [...rescuePool].sort((a, b) => b.relevance - a.relevance || a.ref_id.localeCompare(b.ref_id))
@@ -371,8 +392,9 @@ const selectWithQuota = (refs: readonly ScoredId[], cap: number, activation: Kno
   //    full passing pool so every primary keeps >=1 representative regardless of per-type contention.
   for (const pid of activation.primaryPackIds) {
     if (chosen.size >= cap) break
-    const best = sorted.find((r) => r.packId === pid && !chosen.has(r.ref_id))
-      ?? rescueSorted.find((r) => r.packId === pid && !chosen.has(r.ref_id))
+    const best =
+      sorted.find((r) => r.packId === pid && !chosen.has(r.ref_id)) ??
+      rescueSorted.find((r) => r.packId === pid && !chosen.has(r.ref_id))
     if (best) chosen.add(best.ref_id)
   }
   // 2. Reserve one for each active risk/business pack (policy refs must survive).
@@ -410,14 +432,38 @@ export const retrieve = (input: RetrievalInput): KnowledgeSynthesis | null => {
   // likely to mislead on wrong task context. Empty pools are handled gracefully by all downstream gates.
   const canUseStrategies = strategyMethodologyEnabled(input.mode)
   const strategyPool = canUseStrategies ? [...contextualStrategies(input, activation)] : []
-  const strategyGate = gateRefs(strategyPool, "strategy", threshold, blocked, undefined, (s) => s.pack_id, primaryPackSet)
+  const strategyGate = gateRefs(
+    strategyPool,
+    "strategy",
+    threshold,
+    blocked,
+    undefined,
+    (s) => s.pack_id,
+    primaryPackSet,
+  )
   const methodologyPool = canUseStrategies ? [...selectMethodologies(input, activation)] : []
-  const methodologyGate = gateRefs(methodologyPool, "methodology", threshold, blocked, undefined, (m) => m.pack_id, primaryPackSet)
+  const methodologyGate = gateRefs(
+    methodologyPool,
+    "methodology",
+    threshold,
+    blocked,
+    undefined,
+    (m) => m.pack_id,
+    primaryPackSet,
+  )
   // review_4 M1/M4: knowledge + skill are now retrieved through the same gate (relevance → evidence →
   // per-type top-k → primary-pack guarantee) so the 682 knowledge/skill docs are no longer dead.
   // docs/39 §3.1: domain knowledge from xhigh onwards; skills from high onwards.
   const knowledgePool = domainKnowledgeEnabled(input.mode) ? loadDiskKnowledge(input.workspacePath, activation) : []
-  const knowledgeGate = gateRefs(knowledgePool, "knowledge", threshold, blocked, undefined, (k) => k.pack_id, primaryPackSet)
+  const knowledgeGate = gateRefs(
+    knowledgePool,
+    "knowledge",
+    threshold,
+    blocked,
+    undefined,
+    (k) => k.pack_id,
+    primaryPackSet,
+  )
   const skillPool = loadDiskSkills(input.workspacePath, activation)
   const skillGate = gateRefs(skillPool, "skill", threshold, blocked, undefined, (s) => s.pack_id, primaryPackSet)
   // Read the memory pool once: selectMemory hits disk, and calling it twice risks the store
@@ -437,7 +483,9 @@ export const retrieve = (input: RetrievalInput): KnowledgeSynthesis | null => {
     ...knowledgePool.map(knowledgeProjection),
     ...skillPool.map(skillProjection),
     ...memoryPool.map(memoryProjection),
-  ].sort((a, b) => b.relevance - a.relevance || a.ref_id.localeCompare(b.ref_id)).slice(0, CANDIDATE_REF_CAP)
+  ]
+    .sort((a, b) => b.relevance - a.relevance || a.ref_id.localeCompare(b.ref_id))
+    .slice(0, CANDIDATE_REF_CAP)
   const selectedByType = [
     ...selectedStrategies.map(strategyProjection),
     ...selectedMethodologies.map(methodologyProjection),
@@ -453,8 +501,9 @@ export const retrieve = (input: RetrievalInput): KnowledgeSynthesis | null => {
   // primary pack (the top-k preemption failure in docs/review_38 §二 B4). Memory has no pack_id, so
   // it competes in the relevance-fill stage only. Overflow → gap_analysis(excluded_by:"global_cap").
   const cap = selectedRefCap(input, activation)
-  const toScored = <T extends { ref_id: string; relevance: number; pack_id?: string | null }>(arr: readonly T[]): ScoredId[] =>
-    arr.map((r) => ({ ref_id: r.ref_id, relevance: r.relevance, packId: r.pack_id ?? null }))
+  const toScored = <T extends { ref_id: string; relevance: number; pack_id?: string | null }>(
+    arr: readonly T[],
+  ): ScoredId[] => arr.map((r) => ({ ref_id: r.ref_id, relevance: r.relevance, packId: r.pack_id ?? null }))
   const scoredIds: ScoredId[] = [
     ...selectedStrategies.map((s) => ({ ref_id: s.ref_id, relevance: s.relevance, packId: s.pack_id })),
     ...selectedMethodologies.map((m) => ({ ref_id: m.ref_id, relevance: m.relevance, packId: m.pack_id })),
@@ -465,17 +514,23 @@ export const retrieve = (input: RetrievalInput): KnowledgeSynthesis | null => {
   // review_4: rescue pool = ALL evidence-passing refs (not just per-type top-k survivors), so a
   // primary starved by per-type contention can still be pulled in by the primary-pack quota.
   const rescuePool: ScoredId[] = [
-    ...toScored(strategyPool), ...toScored(methodologyPool),
-    ...toScored(knowledgePool), ...toScored(skillPool),
+    ...toScored(strategyPool),
+    ...toScored(methodologyPool),
+    ...toScored(knowledgePool),
+    ...toScored(skillPool),
   ].filter((r) => r.relevance >= threshold)
   const cappedRefIds = selectWithQuota(scoredIds, cap, activation, [...scoredIds, ...rescuePool])
   // Build projection lookup for any rescued ref not already in selectedByType.
   const rescuedProjections: KnowledgeRefProjection[] = []
   const inSelectedByType = new Set(selectedByType.map((r) => r.ref_id))
-  for (const s of strategyPool) if (cappedRefIds.has(s.ref_id) && !inSelectedByType.has(s.ref_id)) rescuedProjections.push(strategyProjection(s))
-  for (const m of methodologyPool) if (cappedRefIds.has(m.ref_id) && !inSelectedByType.has(m.ref_id)) rescuedProjections.push(methodologyProjection(m))
-  for (const k of knowledgePool) if (cappedRefIds.has(k.ref_id) && !inSelectedByType.has(k.ref_id)) rescuedProjections.push(knowledgeProjection(k))
-  for (const sk of skillPool) if (cappedRefIds.has(sk.ref_id) && !inSelectedByType.has(sk.ref_id)) rescuedProjections.push(skillProjection(sk))
+  for (const s of strategyPool)
+    if (cappedRefIds.has(s.ref_id) && !inSelectedByType.has(s.ref_id)) rescuedProjections.push(strategyProjection(s))
+  for (const m of methodologyPool)
+    if (cappedRefIds.has(m.ref_id) && !inSelectedByType.has(m.ref_id)) rescuedProjections.push(methodologyProjection(m))
+  for (const k of knowledgePool)
+    if (cappedRefIds.has(k.ref_id) && !inSelectedByType.has(k.ref_id)) rescuedProjections.push(knowledgeProjection(k))
+  for (const sk of skillPool)
+    if (cappedRefIds.has(sk.ref_id) && !inSelectedByType.has(sk.ref_id)) rescuedProjections.push(skillProjection(sk))
   const selectedRefs = [...selectedByType.filter((r) => cappedRefIds.has(r.ref_id)), ...rescuedProjections]
   const globalCapExcluded = selectedByType.filter((r) => !cappedRefIds.has(r.ref_id))
 
@@ -483,10 +538,19 @@ export const retrieve = (input: RetrievalInput): KnowledgeSynthesis | null => {
   // the per-type ref lists, and selectedRefs are all consistent (the work package mirrors these).
   // review_4: union the per-type top-k survivors with any rescued primary refs from the full pool.
   const rescuedIds = new Set(rescuedProjections.map((r) => r.ref_id))
-  const keptStrategies = [...selectedStrategies, ...strategyPool.filter((s) => rescuedIds.has(s.ref_id))].filter((s) => cappedRefIds.has(s.ref_id))
-  const keptMethodologies = [...selectedMethodologies, ...methodologyPool.filter((m) => rescuedIds.has(m.ref_id))].filter((m) => cappedRefIds.has(m.ref_id))
-  const keptKnowledge = [...selectedKnowledge, ...knowledgePool.filter((k) => rescuedIds.has(k.ref_id))].filter((k) => cappedRefIds.has(k.ref_id))
-  const keptSkills = [...selectedSkills, ...skillPool.filter((s) => rescuedIds.has(s.ref_id))].filter((s) => cappedRefIds.has(s.ref_id))
+  const keptStrategies = [...selectedStrategies, ...strategyPool.filter((s) => rescuedIds.has(s.ref_id))].filter((s) =>
+    cappedRefIds.has(s.ref_id),
+  )
+  const keptMethodologies = [
+    ...selectedMethodologies,
+    ...methodologyPool.filter((m) => rescuedIds.has(m.ref_id)),
+  ].filter((m) => cappedRefIds.has(m.ref_id))
+  const keptKnowledge = [...selectedKnowledge, ...knowledgePool.filter((k) => rescuedIds.has(k.ref_id))].filter((k) =>
+    cappedRefIds.has(k.ref_id),
+  )
+  const keptSkills = [...selectedSkills, ...skillPool.filter((s) => rescuedIds.has(s.ref_id))].filter((s) =>
+    cappedRefIds.has(s.ref_id),
+  )
   const keptMemory = selectedMemory.filter((m) => cappedRefIds.has(m.ref_id))
 
   const gapAnalysis = [
@@ -497,7 +561,13 @@ export const retrieve = (input: RetrievalInput): KnowledgeSynthesis | null => {
     ...memoryGate.gaps,
     ...globalCapExcluded.map((r) => ({ ref_id: r.ref_id, excluded_by: "global_cap" as const })),
   ]
-  const doNotUse = [...strategyGate.doNotUse, ...methodologyGate.doNotUse, ...knowledgeGate.doNotUse, ...skillGate.doNotUse, ...memoryGate.doNotUse]
+  const doNotUse = [
+    ...strategyGate.doNotUse,
+    ...methodologyGate.doNotUse,
+    ...knowledgeGate.doNotUse,
+    ...skillGate.doNotUse,
+    ...memoryGate.doNotUse,
+  ]
   const evidenceByRef: Record<string, EvidenceStrength> = {}
   for (const s of keptStrategies) evidenceByRef[s.ref_id] = s.evidence_strength
   for (const m of keptMethodologies) evidenceByRef[m.ref_id] = m.evidence_strength
@@ -578,26 +648,35 @@ type KnowledgeActivation = {
 // and audit tasks even when no specific detector fires. Kept small to avoid diluting primary packs.
 const CORE_FALLBACK_PACKS = ["code.core", "code.testing", "code.debugging", "code.review"] as const
 
-const taskText = (input: RetrievalInput): string => [
-  input.task.userRequest ?? "",
-  input.task.taskType,
-  input.task.domain,
-  ...input.task.goals,
-  ...input.task.successCriteria,
-  ...input.task.riskBoundaries,
-  ...input.task.validationCommands,
-].join(" ")
+const taskText = (input: RetrievalInput): string =>
+  [
+    input.task.userRequest ?? "",
+    input.task.taskType,
+    input.task.domain,
+    ...input.task.goals,
+    ...input.task.successCriteria,
+    ...input.task.riskBoundaries,
+    ...input.task.validationCommands,
+  ].join(" ")
 
-const retrievalText = (input: RetrievalInput): string => [
-  input.task.userRequest ?? "",
-  ...input.task.goals,
-  ...input.task.successCriteria,
-  ...input.task.riskBoundaries,
-  ...input.task.validationCommands,
-].join(" ")
+const retrievalText = (input: RetrievalInput): string =>
+  [
+    input.task.userRequest ?? "",
+    ...input.task.goals,
+    ...input.task.successCriteria,
+    ...input.task.riskBoundaries,
+    ...input.task.validationCommands,
+  ].join(" ")
 
-const keywordsForTask = (input: RetrievalInput): readonly string[] =>
-  [...new Set(retrievalText(input).toLowerCase().split(/[^a-z0-9_.#+-]+/).filter((w) => w.length > 2).slice(0, 30))]
+const keywordsForTask = (input: RetrievalInput): readonly string[] => [
+  ...new Set(
+    retrievalText(input)
+      .toLowerCase()
+      .split(/[^a-z0-9_.#+-]+/)
+      .filter((w) => w.length > 2)
+      .slice(0, 30),
+  ),
+]
 
 const detectTaskKind = (input: RetrievalInput): ExtendedProblemProfile["task_kind"] => {
   const text = taskText(input).toLowerCase()
@@ -616,96 +695,232 @@ const profileFromInput = (input: RetrievalInput): ExtendedProblemProfile => {
   const codeDomains = [input.task.domain, ...(input.profile?.domain ? [input.profile.domain] : [])]
   const languages = [input.profile?.language].filter((v): v is string => Boolean(v))
   const frameworks = [input.profile?.framework].filter((v): v is string => Boolean(v))
-  const addIf = (condition: boolean, values: readonly string[]) => condition ? values : []
+  const addIf = (condition: boolean, values: readonly string[]) => (condition ? values : [])
   return {
     scenario_mode: "direct",
     agent_strength: input.mode,
     task_kind: detectTaskKind(input),
-    code_domains: [...new Set([
-      ...codeDomains,
-      ...addIf(/\b(gpu|cuda|rocm|sgemm|kernel)\b/.test(text), ["gpu_kernel", "cuda"]),
-      ...addIf(/\b(frontend|web ui|browser|css|dom|viewport|responsive|a11y|accessibility|canvas|image)\b/.test(text), ["frontend", "web", "browser", "css", "accessibility"]),
-      ...addIf(/\b(vue|nuxt|pinia|composition api|template binding)\b/.test(text), ["frontend", "vue"]),
-      ...addIf(/\b(rest|graphql|rpc|endpoint|openapi|route|request|response|controller|middleware)\b/.test(text), ["backend", "api", "rest", "graphql"]),
-      ...addIf(/\b(database|sql|migration|transaction|constraint|index|backfill|rollback|deadlock|explain)\b/.test(text), ["database", "sql", "migration", "transaction"]),
-      ...addIf(/\b(review|severity|finding|blocking|residual risk)\b/.test(text), ["review"]),
-      ...addIf(/\b(test|fixture|flake|coverage|runner)\b/.test(text), ["testing"]),
-      ...addIf(/\b(debug|repro|trace|log|root cause)\b/.test(text), ["debugging"]),
-      ...addIf(/\b(typescript|typecheck|tsc|generic|module resolution)\b/.test(text), ["typescript"]),
-      ...addIf(/\b(javascript|esm|cjs|node|npm|pnpm|yarn|bun)\b/.test(text), ["javascript"]),
-      // B2 (docs/review_38): populate the code_domains enum values detectors check but
-      // profileFromInput previously never set, so those structural branches were dead in production.
-      ...addIf(/\b(software architecture|architectural boundary|adr|bounded context|service boundary)\b/.test(text), ["architecture"]),
-      ...addIf(/\b(observability|logging|metrics|tracing|otel|correlation id)\b/.test(text), ["observability"]),
-      ...addIf(/\b(benchmark|baseline|regression threshold|perf test)\b/.test(text), ["benchmarking"]),
-      ...addIf(/\b(latency|throughput|profiling|hot path|allocation)\b/.test(text), ["performance"]),
-      ...addIf(/\b(web vitals|lighthouse|bundle size|hydration cost|layout shift)\b/.test(text), ["frontend_performance"]),
-      ...addIf(/\b(mcp|model context protocol|tool server|tool schema)\b/.test(text), ["mcp"]),
-      ...addIf(/\b(read-only query|count rows|list files|inspect state|status check)\b/.test(text), ["query", "deterministic"]),
-      // review_4 M3: 21 packs whose detector code_domains were never populated by profileFromInput,
-      // so they could only activate via repo_signals regex. Add their core domain enum values.
-      ...addIf(/\b(embedded|firmware|rtos|freertos|microcontroller|mcu|bare.?metal|isr)\b/.test(text), ["embedded", "firmware", "rtos"]),
-      ...addIf(/\b(kernel module|syscall|device driver|page table|scheduler|ioctl|virtual memory)\b/.test(text), ["kernel", "syscall", "driver"]),
-      ...addIf(/\b(distributed|consensus|raft|paxos|replication|quorum|split.?brain|leader election)\b/.test(text), ["distributed", "consensus", "replication"]),
-      ...addIf(/\b(blockchain|smart contract|solidity|evm|reentrancy|web3|on.?chain)\b/.test(text), ["blockchain", "smart_contract"]),
-      ...addIf(/\b(concurrency|race condition|data race|deadlock|mutex|lock ordering|atomic)\b/.test(text), ["concurrency", "races", "locks"]),
-      ...addIf(/\b(tcp|http client|connection timeout|retry policy|backpressure|connection pool|keep.?alive)\b/.test(text), ["networking", "tcp", "http"]),
-      ...addIf(/\b(lexer|parser|abstract syntax tree|intermediate representation|code generation|compiler pass|type checker|llvm)\b/.test(text), ["compiler", "parser", "codegen"]),
-      ...addIf(/\b(shader|glsl|hlsl|wgsl|rendering pipeline|rasteriz|opengl|vulkan|webgpu|framebuffer)\b/.test(text), ["graphics", "rendering", "shader"]),
-      ...addIf(/\b(verilog|systemverilog|vhdl|always_ff|always_comb|testbench|rtl|fpga|synthesi[sz]|clock domain)\b/.test(text), ["hdl", "verilog", "rtl"]),
-      ...addIf(/\b(cache line|branch predict|simd|avx|sse|neon|memory barrier|false sharing|numa|cache miss)\b/.test(text), ["cpu_arch", "microarchitecture", "simd"]),
-      ...addIf(/\b(assembly|x86-64|arm64|aarch64|calling convention|stack frame|inline asm|disassembl|godbolt)\b/.test(text), ["assembly", "asm"]),
-      ...addIf(/\b(etl|elt|data pipeline|kafka|spark|airflow|dagster|data warehouse|data lineage)\b/.test(text), ["data_engineering", "etl", "pipeline"]),
-      ...addIf(/\b(training loop|overfitting|train.?test split|data leakage|loss function|gradient|epoch|hyperparameter|pytorch|tensorflow)\b/.test(text), ["ml", "training", "inference"]),
-      ...addIf(/\b(model serving|inference server|dynamic batching|triton|vllm|model versioning|inference latency|tensorrt)\b/.test(text), ["model_serving", "inference_serving"]),
-      ...addIf(/\b(data quality|data validation|freshness check|data contract|great expectations|data drift|completeness)\b/.test(text), ["data_quality", "freshness"]),
-      ...addIf(/\b(elasticsearch|opensearch|inverted index|bm25|relevance ranking|full.?text search|analyzer|query dsl|faceting)\b/.test(text), ["search", "elasticsearch", "ranking"]),
-      ...addIf(/\b(serverless|aws lambda|cloud function|faas|cold start|api gateway|lambda function|step function)\b/.test(text), ["serverless", "lambda", "faas"]),
-      ...addIf(/\b(websocket|server.?sent event|sse|pub.?sub|live update|realtime|subscription channel)\b/.test(text), ["realtime", "websocket", "sse"]),
-      ...addIf(/\b(event bus|message queue|outbox|consumer|dead.?letter|event sourcing|idempotent consumer)\b/.test(text), ["event_driven", "events", "messaging"]),
-      ...addIf(/\b(robotics|ros2?|control loop|sensor fusion|actuator|coordinate frame|pid controller)\b/.test(text), ["robotics", "ros", "control"]),
-      ...addIf(/\b(command.?line|cli tool|argument parsing|exit code|stdin|stdout|subcommand|flag parsing|argv|getopt)\b/.test(text), ["cli", "command_line"]),
-      ...addIf(/\b(game loop|game engine|fixed timestep|entity component|collision detection|sprite|game physics|unity|unreal|godot)\b/.test(text), ["game", "game_loop"]),
-      ...addIf(/\b(encryption|aes|aead|hashing|sha-256|bcrypt|key management|cryptograph|nonce|constant.?time|digital signature|kdf)\b/.test(text), ["cryptography", "encryption", "hashing"]),
-      ...addIf(/\b(wasm|webassembly|wasm-bindgen|wasi|emscripten|wasm-pack|linear memory)\b/.test(text), ["wasm", "webassembly"]),
-    ].filter(Boolean))],
-    business_domains: [...new Set([
-      ...addIf(/\b(payment|ledger|invoice|trade|financial|money|billing|reconciliation)\b/.test(text), ["finance"]),
-      ...addIf(/\b(patient|clinical|healthcare|phi|hipaa|medical|ehr|diagnosis)\b/.test(text), ["healthcare"]),
-    ])],
-    platforms: [...new Set([
-      ...addIf(/\b(web|browser|frontend|viewport|dom|css)\b/.test(text), ["web"]),
-      ...addIf(/\b(node|npm|pnpm|yarn|bun)\b/.test(text), ["node"]),
-      ...addIf(/\b(docker|dockerfile|container image|multi-stage)\b/.test(text), ["docker"]),
-      ...addIf(/\b(aws|gcp|azure|cloud|terraform|iam)\b/.test(text), ["cloud"]),
-      ...addIf(/\b(local dev|dev server|localhost|watch mode)\b/.test(text), ["local"]),
-    ])],
-    languages: [...new Set([
-      ...languages,
-      ...addIf(/\b(typescript|typecheck|tsc)\b/.test(text), ["typescript"]),
-      ...addIf(/\b(javascript|esm|cjs|node)\b/.test(text), ["javascript"]),
-      ...addIf(/\b(kotlin|gradle)\b/.test(text), ["kotlin"]),
-      ...addIf(/\b(c#|csharp|dotnet|\.net)\b/.test(text), ["csharp"]),
-      ...addIf(/\b(cuda|sgemm|kernel)\b/.test(text), ["cpp", "cuda"]),
-    ])],
-    frameworks: [...new Set([
-      ...frameworks,
-      ...addIf(/\b(vue|nuxt|pinia)\b/.test(text), ["vue"]),
-    ])],
-    data_classes: [...new Set([
-      ...addIf(/\b(pii|personal data|email|phone|address|user data)\b/.test(text), ["pii", "personal_data"]),
-      ...addIf(/\b(phi|patient|clinical|medical record)\b/.test(text), ["phi"]),
-      ...addIf(/\b(pci|card number|payment card|cardholder)\b/.test(text), ["pci"]),
-      ...addIf(/\b(secret|credential|api key|token|password)\b/.test(text), ["secret_adjacent"]),
-    ])],
-    risk_markers: [...new Set([
-      ...addIf(/\b(security|authz|authorization|injection|secret|trust boundary|xss|csrf)\b/.test(text), ["security"]),
-      ...addIf(/\b(privacy|pii|phi|pci|redact|retention|consent|data minimization|export|delete)\b/.test(text), ["privacy"]),
-      ...addIf(/\b(production|deploy|deployment|traffic|incident|external state|canary|slo)\b/.test(text), ["production"]),
-      // B2: supply-chain / dependency-provenance markers (risk.supply-chain detector reads these).
-      ...addIf(/\b(supply chain|dependency provenance|lockfile|postinstall|typosquat|package install)\b/.test(text), ["supply_chain"]),
-      ...addIf(/\b(license|spdx|gpl|attribution|redistribution)\b/.test(text), ["license"]),
-    ])],
+    code_domains: [
+      ...new Set(
+        [
+          ...codeDomains,
+          ...addIf(/\b(gpu|cuda|rocm|sgemm|kernel)\b/.test(text), ["gpu_kernel", "cuda"]),
+          ...addIf(
+            /\b(frontend|web ui|browser|css|dom|viewport|responsive|a11y|accessibility|canvas|image)\b/.test(text),
+            ["frontend", "web", "browser", "css", "accessibility"],
+          ),
+          ...addIf(/\b(vue|nuxt|pinia|composition api|template binding)\b/.test(text), ["frontend", "vue"]),
+          ...addIf(/\b(rest|graphql|rpc|endpoint|openapi|route|request|response|controller|middleware)\b/.test(text), [
+            "backend",
+            "api",
+            "rest",
+            "graphql",
+          ]),
+          ...addIf(
+            /\b(database|sql|migration|transaction|constraint|index|backfill|rollback|deadlock|explain)\b/.test(text),
+            ["database", "sql", "migration", "transaction"],
+          ),
+          ...addIf(/\b(review|severity|finding|blocking|residual risk)\b/.test(text), ["review"]),
+          ...addIf(/\b(test|fixture|flake|coverage|runner)\b/.test(text), ["testing"]),
+          ...addIf(/\b(debug|repro|trace|log|root cause)\b/.test(text), ["debugging"]),
+          ...addIf(/\b(typescript|typecheck|tsc|generic|module resolution)\b/.test(text), ["typescript"]),
+          ...addIf(/\b(javascript|esm|cjs|node|npm|pnpm|yarn|bun)\b/.test(text), ["javascript"]),
+          // B2 (docs/review_38): populate the code_domains enum values detectors check but
+          // profileFromInput previously never set, so those structural branches were dead in production.
+          ...addIf(
+            /\b(software architecture|architectural boundary|adr|bounded context|service boundary)\b/.test(text),
+            ["architecture"],
+          ),
+          ...addIf(/\b(observability|logging|metrics|tracing|otel|correlation id)\b/.test(text), ["observability"]),
+          ...addIf(/\b(benchmark|baseline|regression threshold|perf test)\b/.test(text), ["benchmarking"]),
+          ...addIf(/\b(latency|throughput|profiling|hot path|allocation)\b/.test(text), ["performance"]),
+          ...addIf(/\b(web vitals|lighthouse|bundle size|hydration cost|layout shift)\b/.test(text), [
+            "frontend_performance",
+          ]),
+          ...addIf(/\b(mcp|model context protocol|tool server|tool schema)\b/.test(text), ["mcp"]),
+          ...addIf(/\b(read-only query|count rows|list files|inspect state|status check)\b/.test(text), [
+            "query",
+            "deterministic",
+          ]),
+          // review_4 M3: 21 packs whose detector code_domains were never populated by profileFromInput,
+          // so they could only activate via repo_signals regex. Add their core domain enum values.
+          ...addIf(/\b(embedded|firmware|rtos|freertos|microcontroller|mcu|bare.?metal|isr)\b/.test(text), [
+            "embedded",
+            "firmware",
+            "rtos",
+          ]),
+          ...addIf(/\b(kernel module|syscall|device driver|page table|scheduler|ioctl|virtual memory)\b/.test(text), [
+            "kernel",
+            "syscall",
+            "driver",
+          ]),
+          ...addIf(
+            /\b(distributed|consensus|raft|paxos|replication|quorum|split.?brain|leader election)\b/.test(text),
+            ["distributed", "consensus", "replication"],
+          ),
+          ...addIf(/\b(blockchain|smart contract|solidity|evm|reentrancy|web3|on.?chain)\b/.test(text), [
+            "blockchain",
+            "smart_contract",
+          ]),
+          ...addIf(/\b(concurrency|race condition|data race|deadlock|mutex|lock ordering|atomic)\b/.test(text), [
+            "concurrency",
+            "races",
+            "locks",
+          ]),
+          ...addIf(
+            /\b(tcp|http client|connection timeout|retry policy|backpressure|connection pool|keep.?alive)\b/.test(text),
+            ["networking", "tcp", "http"],
+          ),
+          ...addIf(
+            /\b(lexer|parser|abstract syntax tree|intermediate representation|code generation|compiler pass|type checker|llvm)\b/.test(
+              text,
+            ),
+            ["compiler", "parser", "codegen"],
+          ),
+          ...addIf(
+            /\b(shader|glsl|hlsl|wgsl|rendering pipeline|rasteriz|opengl|vulkan|webgpu|framebuffer)\b/.test(text),
+            ["graphics", "rendering", "shader"],
+          ),
+          ...addIf(
+            /\b(verilog|systemverilog|vhdl|always_ff|always_comb|testbench|rtl|fpga|synthesi[sz]|clock domain)\b/.test(
+              text,
+            ),
+            ["hdl", "verilog", "rtl"],
+          ),
+          ...addIf(
+            /\b(cache line|branch predict|simd|avx|sse|neon|memory barrier|false sharing|numa|cache miss)\b/.test(text),
+            ["cpu_arch", "microarchitecture", "simd"],
+          ),
+          ...addIf(
+            /\b(assembly|x86-64|arm64|aarch64|calling convention|stack frame|inline asm|disassembl|godbolt)\b/.test(
+              text,
+            ),
+            ["assembly", "asm"],
+          ),
+          ...addIf(/\b(etl|elt|data pipeline|kafka|spark|airflow|dagster|data warehouse|data lineage)\b/.test(text), [
+            "data_engineering",
+            "etl",
+            "pipeline",
+          ]),
+          ...addIf(
+            /\b(training loop|overfitting|train.?test split|data leakage|loss function|gradient|epoch|hyperparameter|pytorch|tensorflow)\b/.test(
+              text,
+            ),
+            ["ml", "training", "inference"],
+          ),
+          ...addIf(
+            /\b(model serving|inference server|dynamic batching|triton|vllm|model versioning|inference latency|tensorrt)\b/.test(
+              text,
+            ),
+            ["model_serving", "inference_serving"],
+          ),
+          ...addIf(
+            /\b(data quality|data validation|freshness check|data contract|great expectations|data drift|completeness)\b/.test(
+              text,
+            ),
+            ["data_quality", "freshness"],
+          ),
+          ...addIf(
+            /\b(elasticsearch|opensearch|inverted index|bm25|relevance ranking|full.?text search|analyzer|query dsl|faceting)\b/.test(
+              text,
+            ),
+            ["search", "elasticsearch", "ranking"],
+          ),
+          ...addIf(
+            /\b(serverless|aws lambda|cloud function|faas|cold start|api gateway|lambda function|step function)\b/.test(
+              text,
+            ),
+            ["serverless", "lambda", "faas"],
+          ),
+          ...addIf(
+            /\b(websocket|server.?sent event|sse|pub.?sub|live update|realtime|subscription channel)\b/.test(text),
+            ["realtime", "websocket", "sse"],
+          ),
+          ...addIf(
+            /\b(event bus|message queue|outbox|consumer|dead.?letter|event sourcing|idempotent consumer)\b/.test(text),
+            ["event_driven", "events", "messaging"],
+          ),
+          ...addIf(
+            /\b(robotics|ros2?|control loop|sensor fusion|actuator|coordinate frame|pid controller)\b/.test(text),
+            ["robotics", "ros", "control"],
+          ),
+          ...addIf(
+            /\b(command.?line|cli tool|argument parsing|exit code|stdin|stdout|subcommand|flag parsing|argv|getopt)\b/.test(
+              text,
+            ),
+            ["cli", "command_line"],
+          ),
+          ...addIf(
+            /\b(game loop|game engine|fixed timestep|entity component|collision detection|sprite|game physics|unity|unreal|godot)\b/.test(
+              text,
+            ),
+            ["game", "game_loop"],
+          ),
+          ...addIf(
+            /\b(encryption|aes|aead|hashing|sha-256|bcrypt|key management|cryptograph|nonce|constant.?time|digital signature|kdf)\b/.test(
+              text,
+            ),
+            ["cryptography", "encryption", "hashing"],
+          ),
+          ...addIf(/\b(wasm|webassembly|wasm-bindgen|wasi|emscripten|wasm-pack|linear memory)\b/.test(text), [
+            "wasm",
+            "webassembly",
+          ]),
+        ].filter(Boolean),
+      ),
+    ],
+    business_domains: [
+      ...new Set([
+        ...addIf(/\b(payment|ledger|invoice|trade|financial|money|billing|reconciliation)\b/.test(text), ["finance"]),
+        ...addIf(/\b(patient|clinical|healthcare|phi|hipaa|medical|ehr|diagnosis)\b/.test(text), ["healthcare"]),
+      ]),
+    ],
+    platforms: [
+      ...new Set([
+        ...addIf(/\b(web|browser|frontend|viewport|dom|css)\b/.test(text), ["web"]),
+        ...addIf(/\b(node|npm|pnpm|yarn|bun)\b/.test(text), ["node"]),
+        ...addIf(/\b(docker|dockerfile|container image|multi-stage)\b/.test(text), ["docker"]),
+        ...addIf(/\b(aws|gcp|azure|cloud|terraform|iam)\b/.test(text), ["cloud"]),
+        ...addIf(/\b(local dev|dev server|localhost|watch mode)\b/.test(text), ["local"]),
+      ]),
+    ],
+    languages: [
+      ...new Set([
+        ...languages,
+        ...addIf(/\b(typescript|typecheck|tsc)\b/.test(text), ["typescript"]),
+        ...addIf(/\b(javascript|esm|cjs|node)\b/.test(text), ["javascript"]),
+        ...addIf(/\b(kotlin|gradle)\b/.test(text), ["kotlin"]),
+        ...addIf(/\b(c#|csharp|dotnet|\.net)\b/.test(text), ["csharp"]),
+        ...addIf(/\b(cuda|sgemm|kernel)\b/.test(text), ["cpp", "cuda"]),
+      ]),
+    ],
+    frameworks: [...new Set([...frameworks, ...addIf(/\b(vue|nuxt|pinia)\b/.test(text), ["vue"])])],
+    data_classes: [
+      ...new Set([
+        ...addIf(/\b(pii|personal data|email|phone|address|user data)\b/.test(text), ["pii", "personal_data"]),
+        ...addIf(/\b(phi|patient|clinical|medical record)\b/.test(text), ["phi"]),
+        ...addIf(/\b(pci|card number|payment card|cardholder)\b/.test(text), ["pci"]),
+        ...addIf(/\b(secret|credential|api key|token|password)\b/.test(text), ["secret_adjacent"]),
+      ]),
+    ],
+    risk_markers: [
+      ...new Set([
+        ...addIf(/\b(security|authz|authorization|injection|secret|trust boundary|xss|csrf)\b/.test(text), [
+          "security",
+        ]),
+        ...addIf(/\b(privacy|pii|phi|pci|redact|retention|consent|data minimization|export|delete)\b/.test(text), [
+          "privacy",
+        ]),
+        ...addIf(/\b(production|deploy|deployment|traffic|incident|external state|canary|slo)\b/.test(text), [
+          "production",
+        ]),
+        // B2: supply-chain / dependency-provenance markers (risk.supply-chain detector reads these).
+        ...addIf(/\b(supply chain|dependency provenance|lockfile|postinstall|typosquat|package install)\b/.test(text), [
+          "supply_chain",
+        ]),
+        ...addIf(/\b(license|spdx|gpl|attribution|redistribution)\b/.test(text), ["license"]),
+      ]),
+    ],
     repo_signals: [taskText(input), ...(input.profile?.signals ?? [])],
     round_signals: [...new Set(input.previousFailures > 0 ? ["previous_round_failure"] : [])],
     user_overrides: input.domainOptions?.override ? [input.domainOptions.override] : [],
@@ -716,7 +931,9 @@ const activateKnowledgePacks = (input: RetrievalInput): KnowledgeActivation => {
   const profile = profileFromInput(input)
   const threshold = input.domainOptions?.threshold ?? 0.5
   const manifests = Registry.discover()
-  const selected = Registry.score(profile, manifests).filter((s) => s.score >= threshold).map((s) => s.packId)
+  const selected = Registry.score(profile, manifests)
+    .filter((s) => s.score >= threshold)
+    .map((s) => s.packId)
   for (const override of profile.user_overrides) {
     if (!selected.includes(override)) selected.push(override)
   }
@@ -725,13 +942,18 @@ const activateKnowledgePacks = (input: RetrievalInput): KnowledgeActivation => {
   const activeManifests = manifests.filter((m) => active.has(m.id))
   return {
     activePackIds: [...active].sort(),
-    primaryPackIds: selected.filter((id) => !CORE_FALLBACK_PACKS.includes(id as typeof CORE_FALLBACK_PACKS[number])).sort(),
+    primaryPackIds: selected
+      .filter((id) => !CORE_FALLBACK_PACKS.includes(id as (typeof CORE_FALLBACK_PACKS)[number]))
+      .sort(),
     activeDomains: [...new Set(activeManifests.flatMap((m) => m.domains))].sort(),
     keywords: keywordsForTask(input),
   }
 }
 
-const packIdOf = (doc: { readonly extensions?: Readonly<Record<string, unknown>>; readonly tags?: readonly string[] }): string | null => {
+const packIdOf = (doc: {
+  readonly extensions?: Readonly<Record<string, unknown>>
+  readonly tags?: readonly string[]
+}): string | null => {
   if (typeof doc.extensions?.pack_id === "string") return doc.extensions.pack_id
   return doc.tags?.find((tag) => tag.startsWith("pack:"))?.slice("pack:".length) ?? null
 }
@@ -746,7 +968,7 @@ const rankDoc = (score: number, packId: string | null, activation: KnowledgeActi
   // §二 B4) called for, now load-bearing because many specific sub-packs exist.
   if (!activation.activePackIds.includes(packId)) return 0
   if (activation.primaryPackIds.includes(packId)) return score
-  if (CORE_FALLBACK_PACKS.includes(packId as typeof CORE_FALLBACK_PACKS[number])) return score * 0.72
+  if (CORE_FALLBACK_PACKS.includes(packId as (typeof CORE_FALLBACK_PACKS)[number])) return score * 0.72
   return score * 0.68
 }
 
@@ -788,7 +1010,10 @@ const contextualStrategies = (input: RetrievalInput, activation: KnowledgeActiva
 const selectMemory = (input: RetrievalInput): MemoryRef[] => {
   const keywords: string[] = []
   if (input.task.userRequest) {
-    const words = input.task.userRequest.toLowerCase().split(/\s+/).filter((w) => w.length > 3)
+    const words = input.task.userRequest
+      .toLowerCase()
+      .split(/\s+/)
+      .filter((w) => w.length > 3)
     keywords.push(...words.slice(0, 10))
   }
 

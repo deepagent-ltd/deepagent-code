@@ -55,15 +55,11 @@ export default function AgentSystem() {
             <h1 class="text-20-medium text-text-strong">DeepAgent Runtime</h1>
             <div class="mt-2 flex flex-wrap items-center gap-2 text-12-regular text-text-base">
               <span class="rounded-md border border-border-weak-base px-2 py-1">Mode: {agent().mode}</span>
-              <span class="rounded-md border border-border-weak-base px-2 py-1">
-                Agent mode: {agent().agentMode}
-              </span>
+              <span class="rounded-md border border-border-weak-base px-2 py-1">Agent mode: {agent().agentMode}</span>
               <span class="rounded-md border border-border-weak-base px-2 py-1">
                 Knowledge: {agent().knowledgeEnabled ? "enabled" : "disabled"}
               </span>
-              <span class="rounded-md border border-border-weak-base px-2 py-1">
-                Runtime: {agent().implementation}
-              </span>
+              <span class="rounded-md border border-border-weak-base px-2 py-1">Runtime: {agent().implementation}</span>
               <span class="rounded-md border border-border-weak-base px-2 py-1">
                 Provider tools: {agent().providerExecutedToolPolicy}
               </span>
@@ -76,7 +72,9 @@ export default function AgentSystem() {
             </div>
             <div class="rounded-md border border-border-weak-base px-3 py-2">
               <div class="text-text-weak">Knowledge</div>
-              <div class="mt-1 text-14-medium text-text-strong">{agent().knowledgeEnabled ? "enabled" : "disabled"}</div>
+              <div class="mt-1 text-14-medium text-text-strong">
+                {agent().knowledgeEnabled ? "enabled" : "disabled"}
+              </div>
             </div>
           </div>
         </section>

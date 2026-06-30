@@ -3,6 +3,11 @@ import type { ActivationStage, AgentMode, RoundDecision, RunPhase } from "./mode
 export type ValidationResult = {
   readonly command: string
   readonly passed: boolean
+  // T1 (S1-v3.4): the raw process exit code, carried through for failure triage.
+  // 127 = command not found, 126 = not executable, 124 = timeout, 137 = OOM/SIGKILL, etc.
+  // These are the green/red dividing signals classifyFailure() needs; `passed` is still
+  // exactly `exit_code === 0`, so existing assertions are unaffected.
+  readonly exit_code: number
   readonly output: string
   readonly duration_ms: number
 }
@@ -86,7 +91,8 @@ const stageForDecision = (decision: RoundDecision, current: ActivationStage): Ac
 export const addCandidate = (state: RoundState, candidate: CandidateRef): RoundState => {
   const candidates = [...state.candidates, candidate]
   const best =
-    candidate.status === "validated" && (state.best_candidate === null || (candidate.metric ?? 0) > (state.best_candidate.metric ?? 0))
+    candidate.status === "validated" &&
+    (state.best_candidate === null || (candidate.metric ?? 0) > (state.best_candidate.metric ?? 0))
       ? candidate
       : state.best_candidate
   return { ...state, candidates, best_candidate: best, updated_at: new Date().toISOString() }
@@ -102,9 +108,13 @@ export const addDiagnosis = (state: RoundState, diagnosis: DiagnosisRef): RoundS
 export const updateTokenUsage = (state: RoundState, input: number, output: number): RoundState => {
   const totalInput = state.total_input_tokens + input
   const totalOutput = state.total_output_tokens + output
-  const budgetRemaining =
-    state.budget_remaining_tokens !== null ? state.budget_remaining_tokens - input - output : null
-  return { ...state, total_input_tokens: totalInput, total_output_tokens: totalOutput, budget_remaining_tokens: budgetRemaining }
+  const budgetRemaining = state.budget_remaining_tokens !== null ? state.budget_remaining_tokens - input - output : null
+  return {
+    ...state,
+    total_input_tokens: totalInput,
+    total_output_tokens: totalOutput,
+    budget_remaining_tokens: budgetRemaining,
+  }
 }
 
 export const isBudgetExhausted = (state: RoundState): boolean =>

@@ -67,7 +67,10 @@ const buildRunReviewFromGraph = (runDir: string): RunReview | null => {
     const scope = `run:${runId}`
     const doc = (id: string) => store.get(id)
     const byType = (type: AgentGateway.DeepAgentDocumentStore.DocType) =>
-      store.list({ scope, type }).map((ref) => doc(ref.id)).filter((d): d is NonNullable<ReturnType<typeof doc>> => Boolean(d))
+      store
+        .list({ scope, type })
+        .map((ref) => doc(ref.id))
+        .filter((d): d is NonNullable<ReturnType<typeof doc>> => Boolean(d))
 
     const runState = byType("run_state")[0]
     const runContext = byType("run_context")[0]

@@ -70,6 +70,7 @@ import { messageAgentColor } from "@/utils/agent"
 import { sessionTitle } from "@/utils/session-title"
 import { makeTimer } from "@solid-primitives/timer"
 import { MessageComment, SummaryDiff, Timeline, TimelineRow, TimelineRowMap } from "./message-timeline.data"
+import { TurnRail } from "./turn-rail"
 
 const emptyMessages: MessageType[] = []
 const emptyParts: PartType[] = []
@@ -287,6 +288,9 @@ export function MessageTimeline(props: {
   userMessages: UserMessage[]
   anchor: (id: string) => string
   setRevealMessage?: (fn: (id: string) => void) => void
+  activeMessageID: () => string | undefined
+  scrollToMessage: (message: UserMessage, behavior?: ScrollBehavior) => void
+  setActiveMessage: (message: UserMessage | undefined) => void
 }) {
   let touchGesture: number | undefined
 
@@ -1262,6 +1266,14 @@ export function MessageTimeline(props: {
 
   return (
     <div class="relative w-full h-full min-w-0">
+      <TurnRail
+        userMessages={() => props.userMessages}
+        parts={getMsgParts}
+        activeMessageID={props.activeMessageID}
+        headerOffset={() => (showHeader() ? 48 : 0)}
+        scrollToMessage={props.scrollToMessage}
+        setActiveMessage={props.setActiveMessage}
+      />
       <div
         class="absolute left-1/2 -translate-x-1/2 bottom-6 z-[60] pointer-events-none transition-all duration-200 ease-out"
         classList={{
@@ -1294,7 +1306,7 @@ export function MessageTimeline(props: {
         onPointerDown={handleListPointerDown}
         onScroll={handleListScroll}
         onClick={props.onAutoScrollInteraction}
-        class="relative min-w-0 w-full h-full"
+        class="relative min-w-0 w-full h-full md:px-9"
         style={{
           "--sticky-accordion-top": showHeader() ? "48px" : "0px",
         }}

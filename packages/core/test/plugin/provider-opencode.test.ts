@@ -34,7 +34,9 @@ describe("OpencodePlugin", () => {
           })
         })
         expect((yield* catalog.provider.get(ProviderV2.ID.make("deepagent-code"))).request.body.apiKey).toBe("public")
-        expect((yield* catalog.model.get(ProviderV2.ID.make("deepagent-code"), ModelV2.ID.make("paid"))).enabled).toBe(false)
+        expect((yield* catalog.model.get(ProviderV2.ID.make("deepagent-code"), ModelV2.ID.make("paid"))).enabled).toBe(
+          false,
+        )
       }),
     ),
   )
@@ -55,7 +57,9 @@ describe("OpencodePlugin", () => {
           })
         })
         expect((yield* catalog.provider.get(ProviderV2.ID.make("deepagent-code"))).request.body.apiKey).toBe("public")
-        expect((yield* catalog.model.get(ProviderV2.ID.make("deepagent-code"), ModelV2.ID.make("free"))).enabled).toBe(true)
+        expect((yield* catalog.model.get(ProviderV2.ID.make("deepagent-code"), ModelV2.ID.make("free"))).enabled).toBe(
+          true,
+        )
       }),
     ),
   )
@@ -76,7 +80,9 @@ describe("OpencodePlugin", () => {
           })
         })
         expect((yield* catalog.provider.get(ProviderV2.ID.make("deepagent-code"))).request.body.apiKey).toBe("public")
-        expect((yield* catalog.model.get(ProviderV2.ID.make("deepagent-code"), ModelV2.ID.make("output-only"))).enabled).toBe(true)
+        expect(
+          (yield* catalog.model.get(ProviderV2.ID.make("deepagent-code"), ModelV2.ID.make("output-only"))).enabled,
+        ).toBe(true)
       }),
     ),
   )
@@ -97,7 +103,9 @@ describe("OpencodePlugin", () => {
           })
         })
         expect((yield* catalog.provider.get(ProviderV2.ID.make("deepagent-code"))).request.body.apiKey).toBeUndefined()
-        expect((yield* catalog.model.get(ProviderV2.ID.make("deepagent-code"), ModelV2.ID.make("paid"))).enabled).toBe(true)
+        expect((yield* catalog.model.get(ProviderV2.ID.make("deepagent-code"), ModelV2.ID.make("paid"))).enabled).toBe(
+          true,
+        )
       }),
     ),
   )
@@ -120,7 +128,9 @@ describe("OpencodePlugin", () => {
           })
         })
         expect((yield* catalog.provider.get(ProviderV2.ID.make("deepagent-code"))).request.body.apiKey).toBeUndefined()
-        expect((yield* catalog.model.get(ProviderV2.ID.make("deepagent-code"), ModelV2.ID.make("paid"))).enabled).toBe(true)
+        expect((yield* catalog.model.get(ProviderV2.ID.make("deepagent-code"), ModelV2.ID.make("paid"))).enabled).toBe(
+          true,
+        )
       }),
     ),
   )
@@ -147,8 +157,12 @@ describe("OpencodePlugin", () => {
             draft.cost = [...paid.cost]
           })
         })
-        expect((yield* catalog.provider.get(ProviderV2.ID.make("deepagent-code"))).request.body.apiKey).toBe("configured")
-        expect((yield* catalog.model.get(ProviderV2.ID.make("deepagent-code"), ModelV2.ID.make("paid"))).enabled).toBe(true)
+        expect((yield* catalog.provider.get(ProviderV2.ID.make("deepagent-code"))).request.body.apiKey).toBe(
+          "configured",
+        )
+        expect((yield* catalog.model.get(ProviderV2.ID.make("deepagent-code"), ModelV2.ID.make("paid"))).enabled).toBe(
+          true,
+        )
       }),
     ),
   )
@@ -171,7 +185,9 @@ describe("OpencodePlugin", () => {
           })
         })
         expect((yield* catalog.provider.get(ProviderV2.ID.make("deepagent-code"))).request.body.apiKey).toBeUndefined()
-        expect((yield* catalog.model.get(ProviderV2.ID.make("deepagent-code"), ModelV2.ID.make("paid"))).enabled).toBe(true)
+        expect((yield* catalog.model.get(ProviderV2.ID.make("deepagent-code"), ModelV2.ID.make("paid"))).enabled).toBe(
+          true,
+        )
       }),
     ),
   )

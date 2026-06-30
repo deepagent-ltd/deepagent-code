@@ -47,7 +47,12 @@ describe("auto-reviewer classifyReview (docs/39 §5)", () => {
   })
 
   test("global_fact auto-approve only when config opts in", () => {
-    const doc: ReviewableDoc = { ...base, scope: "user-global", memory_kind: "global_fact", evidence_strength: "strong" }
+    const doc: ReviewableDoc = {
+      ...base,
+      scope: "user-global",
+      memory_kind: "global_fact",
+      evidence_strength: "strong",
+    }
     expect(classifyReview(doc).path).toBe("blank_thread")
     expect(classifyReview(doc, { ...DEFAULT_CONFIG, global_fact_auto_approve: true }).path).toBe("auto_approve")
   })
