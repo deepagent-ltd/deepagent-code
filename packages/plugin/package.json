@@ -3,7 +3,7 @@
   "name": "@deepagent-code/plugin",
   "version": "1.0.0-beta",
   "type": "module",
-  "license": "MIT",
+  "license": "AGPL-3.0-or-later",
   "scripts": {
     "typecheck": "tsgo --noEmit",
     "build": "tsc"

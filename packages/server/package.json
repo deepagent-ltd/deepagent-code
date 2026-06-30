@@ -4,7 +4,7 @@
   "version": "1.0.0-beta",
   "private": true,
   "type": "module",
-  "license": "MIT",
+  "license": "AGPL-3.0-or-later",
   "exports": {
     "./*": "./src/*.ts"
   },

@@ -3,7 +3,7 @@
   "version": "1.0.0-beta",
   "name": "@deepagent-code/effect-drizzle-sqlite",
   "type": "module",
-  "license": "MIT",
+  "license": "AGPL-3.0-or-later",
   "private": true,
   "scripts": {
     "test": "bun test --timeout 30000",

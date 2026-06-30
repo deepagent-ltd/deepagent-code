@@ -2,3 +2,29 @@
   width: 16px;
   aspect-ratio: 4/5;
 }
+
+[data-component="logo-mark"],
+[data-component="logo-splash"] {
+  --logo-left-stroke: #0284c7;
+  --logo-gradient-start: #38bdf8;
+  --logo-gradient-mid: #2563eb;
+  --logo-gradient-end: #1e40af;
+}
+
+:root[data-color-scheme="dark"] [data-component="logo-mark"],
+:root[data-color-scheme="dark"] [data-component="logo-splash"] {
+  --logo-left-stroke: #38bdf8;
+  --logo-gradient-start: #bae6fd;
+  --logo-gradient-mid: #60a5fa;
+  --logo-gradient-end: #2563eb;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-color-scheme]) [data-component="logo-mark"],
+  :root:not([data-color-scheme]) [data-component="logo-splash"] {
+    --logo-left-stroke: #38bdf8;
+    --logo-gradient-start: #bae6fd;
+    --logo-gradient-mid: #60a5fa;
+    --logo-gradient-end: #2563eb;
+  }
+}

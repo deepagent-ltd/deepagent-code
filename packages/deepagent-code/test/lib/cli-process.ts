@@ -28,8 +28,8 @@ import { TestLLMServer } from "./llm-server"
 import { testProviderConfig } from "./test-provider"
 import { it } from "./effect"
 
-const opencodeRoot = path.resolve(import.meta.dir, "../../")
-const cliEntry = path.join(opencodeRoot, "src/index.ts")
+const deepagentCodeRoot = path.resolve(import.meta.dir, "../../")
+const cliEntry = path.join(deepagentCodeRoot, "src/index.ts")
 
 export const testModelID = "test/test-model"
 

@@ -1,37 +1,150 @@
-### DeepAgent Code 是什么
+<p align="center">
+  <picture>
+    <source srcset="assets/logo-dark.svg" media="(prefers-color-scheme: dark)">
+    <source srcset="assets/logo-light.svg" media="(prefers-color-scheme: light)">
+    <img src="assets/logo-light.svg" alt="DeepAgent Code logo" width="520">
+  </picture>
+</p>
 
-DeepAgent Code 是一个以文档系统为中心的 AI Coding Agent。它保留 opencode 的 runtime、tool、MCP、session 和 provider 基础能力，在此之上加入 DeepAgent 控制面，用于文档记忆、上下文装配、检索闸门、学习生命周期和领域适配包。
+<p align="center"><strong>带持久记忆和控制面的 AI 编程代理</strong></p>
 
-核心设计很明确：文档系统是 agent 的持久本体。知识、策略、方法论、技能、记忆、诊断、决策、工作日志和上下文快照都是 typed document。上下文系统是带宽管理器，在每个 provider turn 只选择最小且最有用的文档切片进入上下文，并把新的证据写回文档图。
+<p align="center">
+  <a href="README.md">English</a> |
+  <a href="README.zh.md">简体中文</a>
+</p>
 
-DeepAgent Code 不是重写 opencode。opencode 原有默认 loop 保留为 `general` 强度，DeepAgent 在这个 loop 之上增加更强的模式，而不是替换底层 runtime。
+---
 
-### DeepAgent 增强能力
+DeepAgent Code 是一个基于持久文档记忆的 AI 编程代理。它保留 [opencode](https://github.com/sst/opencode) 的运行时基础，并增加了控制面用于**持久知识**、**跨会话记忆**、**上下文组装**、**学习生命周期**和**运行时智能**。
 
-- **Document System**：统一的 typed-document 图，承载 run state 和 durable knowledge，支持版本、来源、语义链接、快照、晋升门和可审阅证据。
-- **Context System**：在安全 provider-turn 边界进行确定性上下文准入，包含 baseline system context、context epoch、context snapshot、有界工具输出和渐进披露。
-- **工作强度模式**：`general`、`high`、`xhigh`、`max`、`ultra` 是严格递增的能力梯度，高强度只增加能力，不静默改变低强度合同。
-- **场景模式**：`direct` 保留用户原始 prompt 直接执行；`wish` 会先生成并确认任务 prompt，再进入更强的自动化流程。
-- **检索与防误导闸门**：durable knowledge 永远是 advisory，会经过 top-k、相关度、证据强度、冲突处理、snapshot lock 和回归门约束。
-- **领域适配包**：领域包是 DocumentStore 视图加 detector、index、skill、validation、diagnosis 和 policy profile，不拥有独立 agent loop。
-- **学习生命周期**：完成的工作可以沉淀候选记忆、技能、事实、失败档案、策略和方法论；能否晋升由证据、敏感度、审批状态和审阅策略决定。
+## 核心差异
 
-### 工作强度
+**持久文档系统** — 知识、决策、诊断和学习成果以类型化文档存储在可搜索的图中。代理跨会话建立理解，而不是每次从零开始。
 
-| 强度 | 合同 |
-| --- | --- |
-| `general` | 继承 opencode 能力，只带最轻量 DeepAgent 控制面 |
-| `high` | 增加 DeepAgent 上下文控制、自动 micro-rounds、skills、validation、diagnostic 和项目上下文记忆 |
-| `xhigh` | 增加 domain knowledge 和跨项目事实记忆 |
-| `max` | 在检索闸门保护下增加 strategies 和 methodologies |
-| `ultra` | 增加自动化 workspace 和宏轮自动执行；面向已确认的 `wish` 任务，并带更严格的进展、预算和人工升级门 |
+**项目记忆共享** — 同一项目内的多次对话共享知识、编码模式、常见陷阱和构建命令。一个会话学到的内容对下一个会话可用。
 
-### 模式与领域包
+**AI IDE 微服务** — 通过符号名和意图查询代码（而非文件:行坐标）。一次调用获得定义、引用、调用链、类型层级和诊断。基于 LSP 构建，支持 38 种语言服务器。
 
-DeepAgent Code 把用户场景和 agent 强度分开：
+**预置 MCP 目录** — 精选的 MCP 服务器，涵盖 Git 平台、文件搜索、只读数据库和浏览器自动化。风险层级在运行时从目录结构派生，而非从用户配置。
 
-- `direct` 保留原始 prompt 并立即执行。
-- `wish` 先优化并确认任务 prompt，再运行确认后的 work package。
-- `general`、`high`、`xhigh`、`max`、`ultra` 控制 DeepAgent 机制参与到什么程度。
+**领域包** — 针对特定领域的专业知识包（GPU 内核、React、后端 API、安全、测试）。每个包包含类型化文档（策略、方法论、知识、技能）+ 验证/诊断适配器。包可组合：为任务激活多个领域。
 
-领域包可以由 ProblemProfile 自动激活，也可以显式选择。领域包暴露 refs、摘要、skills、validation adapter、diagnosis signals 和 policy profile；最终哪些内容能进入模型上下文，由 context gate 和 retrieval gate 决定。
+**学习生命周期** — 完成工作后，代理可生成候选记忆、事实、策略和方法论。证据门和审批门控制哪些内容被持久化。
+
+**工作强度阶梯** — `general`、`high`、`xhigh`、`max`、`ultra` 逐级扩展能力而不破坏契约。更高强度在基础行为之上增加控制面能力（多代理编排、对抗性验证）。
+
+**场景模式** — `direct` 立即执行；`wish` 先细化意图，展示草稿计划，等待确认后再自动化。
+
+## 安装
+
+```bash
+npm install -g deepagent-code
+```
+
+然后运行：
+
+```bash
+deepagent-code
+# 或使用别名：
+deepagent
+```
+
+## 快速示例
+
+启动代理并给它一个任务：
+
+```bash
+deepagent-code "为 /api/users 端点添加速率限制"
+```
+
+代理会：
+
+1. 使用 LSP 找到端点定义并理解其结构
+2. 检查项目记忆中现有的中间件模式
+3. 遵循项目约定实现速率限制
+4. 运行测试并捕获诊断
+5. 生成候选记忆："此项目使用 express-rate-limit 中间件"
+
+在下次会话中，当你要求在其他地方添加速率限制时，代理已经知道模式了。
+
+## 核心概念
+
+**文档图** — 所有持久状态存在于类型化文档中：`knowledge`、`strategy`、`methodology`、`skill`、`memory`、`design`、`worklog`、`diagnosis`、`eval`。文档相互链接（支持/阻塞/冲突/验证），形成图。
+
+**作用域层** — `session-private`（当前对话）、`project-shared`（此项目的所有会话）、`user-global`（跨项目偏好）、`public-system`（内置技能）、`sealed`（仅审计，永不进入上下文）。
+
+**领域包** — 每个包（如 `code.frontend.react`、`code.gpu-kernel`、`risk.security`）是类型化文档 + 适配器的组合。文档包括策略（方向）、方法论（多步工作流）、知识（事实）、技能（可执行能力）和失败档案。包根据问题特征自动激活或显式选择。核心保持领域中立。
+
+**上下文准入** — 检索命中经过准入门。敏感信息（SSH 主机、令牌、内部路径）被建议但不会自动展开到提示中。
+
+**证据门控学习** — 学习成果需要证据（测试通过、诊断清除、验证确认）。候选进入队列；根据策略自动合并或人工审查。
+
+**符号驱动导航** — 代码智能工具接受符号名（如 "AgentGateway.open"），而非坐标。代理通过 LSP workspace/document symbols 内部解析名称到位置。
+
+## 架构
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  控制面（DeepAgent 增强）                                     │
+│  • 文档图（持久记忆）                                         │
+│  • 上下文组装与准入门                                         │
+│  • 学习工作器（后台，非阻塞）                                  │
+│  • 证据与审批门                                              │
+│  • 工作强度编排                                              │
+│  • 领域包系统（可组合知识）                                   │
+└─────────────────────────────────────────────────────────────┘
+                             │
+┌─────────────────────────────────────────────────────────────┐
+│  运行时基础（来自 opencode）                                  │
+│  • 代理循环与工具执行                                         │
+│  • 会话与提供者管理                                           │
+│  • MCP 客户端运行时                                          │
+│  • 权限系统                                                  │
+└─────────────────────────────────────────────────────────────┘
+                             │
+┌─────────────────────────────────────────────────────────────┐
+│  智能层                                                      │
+│  • LSP 微服务（38 种语言服务器）                              │
+│  • 预置 MCP 服务器（git/files/db/browser）                   │
+│  • 领域适配器（验证与诊断）                                   │
+│  • 诊断与验证循环                                            │
+└─────────────────────────────────────────────────────────────┘
+```
+
+DeepAgent 的控制面在提供者轮次边界操作：每次模型调用前选择上下文，之后将证据写回文档图。它不替代 opencode 的运行时——而是在其上分层。
+
+## 文档
+
+- [架构与设计](design/README.md) — 控制面、代码智能、MCP 安全模型
+- [安全策略](SECURITY.md) — 漏洞报告、已知限制
+- [隐私策略](PRIVACY.md) — 数据处理和存储
+- [贡献指南](CONTRIBUTING.md) — 开发设置和指南
+- [变更日志](CHANGELOG.md) — 发布历史
+
+## 许可证与归属
+
+DeepAgent Code 使用 **AGPL-3.0-or-later** 许可证。如果你修改并作为网络服务运行，必须向用户提供源代码。
+
+本项目派生自 [opencode](https://github.com/sst/opencode)（MIT 许可证）。详见 [NOTICE](NOTICE) 了解上游许可证和归属。这不表示 opencode 或其贡献者为本项目背书。
+
+## 项目状态
+
+**V3.4.1** 是首个公开预发布加固里程碑。包含：
+
+- LSP 到 AI IDE 转型（符号驱动的代码智能）
+- 带安全模型的预置 MCP 目录
+- 许可证和归属清理
+- 密钥扫描基线
+- 设计文档整合
+
+**V3.5**（计划中）将增加：
+
+- DAP 集成（调试适配器协议用于运行时智能）
+- PAP（性能分析协议用于性能剖析：NVIDIA NCU/nsys、AMD rocprof、Intel VTune、CPU perf）
+- MCP 服务器的操作系统支持的凭据存储
+
+---
+
+<p align="center">
+  <sub>由 DeepAgent 构建</sub>
+</p>
