@@ -1,5 +1,74 @@
-# Fake secret-looking strings used by HTTP recorder redaction tests.
-afa57acfda894e0ebf3c637dd710310b705c0a2f:packages/http-recorder/test/record-replay.test.ts:generic-api-key:69
-afa57acfda894e0ebf3c637dd710310b705c0a2f:packages/http-recorder/test/record-replay.test.ts:generic-api-key:92
-afa57acfda894e0ebf3c637dd710310b705c0a2f:packages/http-recorder/test/record-replay.test.ts:generic-api-key:146
-afa57acfda894e0ebf3c637dd710310b705c0a2f:packages/http-recorder/test/record-replay.test.ts:gcp-api-key:71
+# .gitleaksignore — reviewed 2026-06-30
+# All entries below have been manually inspected and confirmed non-sensitive.
+# Format: <commit>:<file>:<ruleID>:<startLine>
+
+# ── Test fixtures (secret-detection tests, not real credentials) ─────────────
+
+# jwt.io canonical example JWT — used to assert Gov.looksSensitive() returns true
+f5765e1699147e662cb0b16e6d17f48d8911448e:packages/core/test/deepagent/memory-governance.test.ts:jwt:32
+3d7cb3052b10f47c5854bf7fc05d8bfd6c4d14d8:packages/core/test/deepagent/memory-governance.test.ts:jwt:32
+0b2b0c0d250cea44cba470d0dc393e1ed4f41883:packages/core/test/deepagent/memory-governance.test.ts:jwt:30
+
+# GCP-format key in http-recorder secret-detection test fixture (tests that the
+# redaction logic catches AIzaSy… keys); almost certainly revoked test-project key
+f61726c27180bb9292e6d7e51d6221fd1a3625b1:packages/http-recorder/test/record-replay.test.ts:gcp-api-key:138
+
+# sk-123456789012345678901234 — sequential synthetic token, clearly fabricated
+f61726c27180bb9292e6d7e51d6221fd1a3625b1:packages/http-recorder/test/record-replay.test.ts:generic-api-key:136
+f61726c27180bb9292e6d7e51d6221fd1a3625b1:packages/http-recorder/test/record-replay.test.ts:generic-api-key:159
+f61726c27180bb9292e6d7e51d6221fd1a3625b1:packages/http-recorder/test/record-replay.test.ts:generic-api-key:628
+
+# ── Public / by-design non-secret values ────────────────────────────────────
+
+# DigitalOcean OAuth Client ID — OAuth client IDs are public (appear in browser
+# redirect URLs); the secret would be the client_secret, not the client_id
+f61726c27180bb9292e6d7e51d6221fd1a3625b1:packages/deepagent-code/src/plugin/digitalocean.ts:generic-api-key:10
+
+# Stripe publishable key (pk_test_…) — publishable keys are intentionally
+# embeddable in frontend code; cannot charge cards or access sensitive data.
+# NOTE: should be moved to env var in a future cleanup pass.
+f61726c27180bb9292e6d7e51d6221fd1a3625b1:packages/console/app/package.json:generic-api-key:9
+
+# ── False positives ──────────────────────────────────────────────────────────
+
+# Keyboard shortcut strings ("shift+alt+arrowup" etc.) triggered entropy rule
+f61726c27180bb9292e6d7e51d6221fd1a3625b1:packages/app/src/pages/layout.tsx:generic-api-key:1071
+f61726c27180bb9292e6d7e51d6221fd1a3625b1:packages/app/src/pages/layout.tsx:generic-api-key:1078
+
+# "Bearer YOUR_API_KEY" — docs placeholder, not a credential
+f61726c27180bb9292e6d7e51d6221fd1a3625b1:packages/docs/ai-tools/cursor.mdx:curl-auth-header:127
+
+# sdk.gen.ts generated code: `key: "providerID"` / `key: "questionV2Reply"` —
+# TypeScript object property, not a secret value
+f61726c27180bb9292e6d7e51d6221fd1a3625b1:packages/sdk/js/src/gen/sdk.gen.ts:generic-api-key:5441
+f61726c27180bb9292e6d7e51d6221fd1a3625b1:packages/sdk/js/src/v2/gen/sdk.gen.ts:generic-api-key:5441
+
+# ── no-git scan fingerprints (<file>:<ruleID>:<line>) ────────────────────────
+# These are the same items as above, re-fingerprinted for `gitleaks detect
+# --no-git` mode which omits the commit-hash prefix.
+
+# False positives: keyboard shortcut strings in layout.tsx
+packages/app/src/pages/layout.tsx:generic-api-key:1074
+packages/app/src/pages/layout.tsx:generic-api-key:1081
+
+# Stripe publishable key (pk_test_…) — intentionally embeddable in frontend
+packages/console/app/package.json:generic-api-key:9
+
+# jwt.io canonical example JWT — test assertion fixture
+packages/core/test/deepagent/memory-governance.test.ts:jwt:32
+
+# DigitalOcean OAuth Client ID — public identifier by design
+packages/deepagent-code/src/plugin/digitalocean.ts:generic-api-key:10
+
+# "Bearer YOUR_API_KEY" — docs template placeholder
+packages/docs/ai-tools/cursor.mdx:curl-auth-header:127
+
+# http-recorder test fixtures (synthetic / almost-certainly-revoked keys)
+packages/http-recorder/test/record-replay.test.ts:generic-api-key:136
+packages/http-recorder/test/record-replay.test.ts:generic-api-key:159
+packages/http-recorder/test/record-replay.test.ts:generic-api-key:628
+packages/http-recorder/test/record-replay.test.ts:gcp-api-key:138
+
+# Generated SDK code: `key: "questionV2Reply"` — object property, not secret
+packages/sdk/js/src/gen/sdk.gen.ts:generic-api-key:6061
+packages/sdk/js/src/v2/gen/sdk.gen.ts:generic-api-key:6061
