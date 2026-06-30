@@ -67,6 +67,7 @@ import { Titlebar, type TitlebarUpdate } from "@/components/titlebar"
 import { useDirectoryPicker } from "@/components/directory-picker"
 import { ServerConnection, useServer } from "@/context/server"
 import { useLanguage, type Locale } from "@/context/language"
+import type { UpdaterState } from "@/updater"
 import { pathKey } from "@/utils/path-key"
 import {
   displayName,
@@ -167,14 +168,14 @@ export default function Layout(props: ParentProps) {
     peeked: false,
   })
 
-  const updateVersion = () => {
+  const readyUpdate = () => {
     const state = platform.updater?.state()
     if (state?.status !== "ready") return
-    return state.version
+    return state
   }
   const installUpdate = () => void platform.updater?.install()
   const titlebarUpdate: TitlebarUpdate = {
-    version: updateVersion,
+    version: () => readyUpdate()?.version,
     installing: () => platform.updater?.state().status === "installing",
     install: installUpdate,
   }
@@ -2378,8 +2379,8 @@ export default function Layout(props: ParentProps) {
     <div class="relative bg-background-base flex-1 min-h-0 min-w-0 flex flex-col select-none [&_input]:select-text [&_textarea]:select-text [&_[contenteditable]]:select-text">
       {autoselecting() ?? ""}
       <Titlebar update={titlebarUpdate} />
-      <Show when={updateVersion() !== undefined}>
-        <UpdateAvailableToast version={updateVersion() ?? ""} install={installUpdate} language={language} />
+      <Show when={readyUpdate()}>
+        {(update) => <UpdateAvailableToast update={update()} install={installUpdate} language={language} />}
       </Show>
       <div class="flex-1 min-h-0 min-w-0 flex">
         <div class="flex-1 min-h-0 relative">
@@ -2530,21 +2531,24 @@ export default function Layout(props: ParentProps) {
 }
 
 function UpdateAvailableToast(props: {
-  version: string
+  update: Extract<UpdaterState, { status: "ready" }>
   install: () => void
   language: ReturnType<typeof useLanguage>
 }) {
   let toastId: number | undefined
 
   onMount(() => {
+    const manual = Boolean(props.update.manualUrl)
     toastId = showToast({
       persistent: true,
       icon: "download",
       title: props.language.t("toast.update.title"),
-      description: props.language.t("toast.update.description", { version: props.version }),
+      description: props.language.t(manual ? "toast.update.description.deb" : "toast.update.description", {
+        version: props.update.version,
+      }),
       actions: [
         {
-          label: props.language.t("toast.update.action.installRestart"),
+          label: props.language.t(manual ? "toast.update.action.downloadDeb" : "toast.update.action.installRestart"),
           onClick: props.install,
         },
         {

@@ -1148,6 +1148,13 @@ function cost(c: ModelsDev.Model["cost"]): Model["cost"] {
   return result
 }
 
+function inferredReasoning(providerID: string, apiID: string, modelID = apiID) {
+  const provider = providerID.toLowerCase()
+  const model = `${apiID} ${modelID}`.toLowerCase()
+  if (!["zai", "zhipuai"].some((id) => provider.includes(id))) return false
+  return ["glm-5.2", "glm-5-2", "glm-5p2"].some((id) => model.includes(id))
+}
+
 function fromModelsDevModel(provider: ModelsDev.Provider, model: ModelsDev.Model): Model {
   const base: Model = {
     id: ModelV2.ID.make(model.id),
@@ -1170,7 +1177,7 @@ function fromModelsDevModel(provider: ModelsDev.Provider, model: ModelsDev.Model
     },
     capabilities: {
       temperature: model.temperature ?? false,
-      reasoning: model.reasoning ?? false,
+      reasoning: model.reasoning || inferredReasoning(provider.id, model.id),
       attachment: model.attachment ?? false,
       toolcall: model.tool_call ?? true,
       input: {
@@ -1397,7 +1404,8 @@ export const layer = Layer.effect(
               providerID: ProviderV2.ID.make(providerID),
               capabilities: {
                 temperature: model.temperature ?? existingModel?.capabilities.temperature ?? false,
-                reasoning: model.reasoning ?? existingModel?.capabilities.reasoning ?? false,
+                reasoning:
+                  model.reasoning ?? (existingModel?.capabilities.reasoning || inferredReasoning(providerID, apiID, modelID)),
                 attachment: model.attachment ?? existingModel?.capabilities.attachment ?? false,
                 toolcall: model.tool_call ?? existingModel?.capabilities.toolcall ?? true,
                 input: {

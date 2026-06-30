@@ -1376,6 +1376,33 @@ test("models.dev normalization fills required response fields", () => {
   expect(model.release_date).toBe("")
 })
 
+test("models.dev normalization infers reasoning for zhipuai glm-5.2", () => {
+  const provider = {
+    id: "zhipuai",
+    name: "Zhipu AI",
+    env: [],
+    api: "https://open.bigmodel.cn/api/paas/v4",
+    npm: "@ai-sdk/openai-compatible",
+    models: {
+      "glm-5.2": {
+        id: "glm-5.2",
+        name: "GLM-5.2",
+        family: "glm",
+        reasoning: false,
+        cost: { input: 0, output: 0 },
+        limit: { context: 128_000, output: 8192 },
+      },
+    },
+  } as unknown as ModelsDev.Provider
+
+  const model = Provider.fromModelsDevProvider(provider).models["glm-5.2"]
+  expect(model.capabilities.reasoning).toBe(true)
+  expect(model.variants).toEqual({
+    high: { reasoningEffort: "high" },
+    max: { reasoningEffort: "max" },
+  })
+})
+
 it.instance("model variants are generated for reasoning models", () =>
   Effect.gen(function* () {
     yield* set("ANTHROPIC_API_KEY", "test-api-key")
