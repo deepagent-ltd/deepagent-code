@@ -96,7 +96,7 @@ const getBase = (): Configuration => ({
   linux: {
     icon: `resources/icons`,
     category: "Development",
-    target: ["AppImage", "deb", "rpm"],
+    target: ["deb"],
   },
 })
 
@@ -118,7 +118,7 @@ function getConfig() {
         appId: "ai.deepagent-code.desktop.beta",
         productName: "DeepAgent Code Beta",
         protocols: { name: "DeepAgent Code Beta", schemes: ["deepagent-code"] },
-        publish: { provider: "github", owner: "anomalyco", repo: "deepagent-code-beta", channel: "latest" },
+        publish: { provider: "github", owner: "deepagent-ltd", repo: "deepagent-code", channel: "latest" },
         rpm: { packageName: "deepagent-code-beta" },
       }
     }
@@ -128,7 +128,7 @@ function getConfig() {
         appId: "ai.deepagent-code.desktop",
         productName: "DeepAgent Code",
         protocols: { name: "DeepAgent Code", schemes: ["deepagent-code"] },
-        publish: { provider: "github", owner: "anomalyco", repo: "deepagent-code", channel: "latest" },
+        publish: { provider: "github", owner: "deepagent-ltd", repo: "deepagent-code", channel: "latest" },
         rpm: { packageName: "deepagent-code" },
       }
     }
