@@ -171,9 +171,9 @@ describe("encodeFilePath", () => {
       const result = encodeFilePath(windowsPath)
       const fileUrl = `file://${result}`
 
-      // The bug was creating: file://D%3A%5Cdev%5Cprojects%5Copencode/README.bs.md
+      // The bug was creating: file://D%3A%5Cdev%5Cprojects%5Cdeepagent-code/README.bs.md
       expect(result).not.toContain("%5C") // Should not have encoded backslashes
-      expect(result).not.toBe("D%3A%5Cdev%5Cprojects%5Copencode/README.bs.md")
+      expect(result).not.toBe("D%3A%5Cdev%5Cprojects%5Cdeepagent-code/README.bs.md")
 
       // Should be valid
       expect(() => new URL(fileUrl)).not.toThrow()

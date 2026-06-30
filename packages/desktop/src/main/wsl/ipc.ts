@@ -50,10 +50,10 @@ export function registerWslIpcHandlers(controller: WslServersController) {
     controller.probeDistro(requireWslIpcString("distro", name)),
   )
   ipcMain.handle("wsl-servers-probe-deepagent-code", (_event: IpcMainInvokeEvent, name: string) =>
-    controller.probeOpencode(requireWslIpcString("distro", name)),
+    controller.probeDeepagentCode(requireWslIpcString("distro", name)),
   )
   ipcMain.handle("wsl-servers-install-deepagent-code", (_event: IpcMainInvokeEvent, name: string) =>
-    controller.installOpencode(requireWslIpcString("distro", name)),
+    controller.installDeepagentCode(requireWslIpcString("distro", name)),
   )
   ipcMain.handle("wsl-servers-open-terminal", (_event: IpcMainInvokeEvent, name: string) =>
     controller.openTerminal(requireWslIpcString("distro", name)),
@@ -82,7 +82,7 @@ function registerUnavailableWslIpcHandlers() {
     installed: [],
     online: [],
     distroProbes: {},
-    opencodeChecks: {},
+    deepagentCodeChecks: {},
     pendingRestart: false,
     servers: [],
     job: null,

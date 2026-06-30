@@ -25,6 +25,6 @@ signing.env
 *.sw?
 out/
 
-resources/opencode-cli*
+resources/deepagent-code-cli*
 resources/icons
 resources/*.metainfo.xml
