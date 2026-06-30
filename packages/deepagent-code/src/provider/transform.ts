@@ -475,6 +475,12 @@ export function temperature(model: Provider.Model) {
   return undefined
 }
 
+function glm52(model: Provider.Model) {
+  const id = model.id.toLowerCase()
+  const apiID = model.api.id.toLowerCase()
+  return ["glm-5.2", "glm-5-2", "glm-5p2"].some((name) => id.includes(name) || apiID.includes(name))
+}
+
 export function topP(model: Provider.Model) {
   const id = model.id.toLowerCase()
   if (id.includes("qwen")) return 1
@@ -644,13 +650,34 @@ export function variants(model: Provider.Model): Record<string, Record<string, a
   const id = model.id.toLowerCase()
   const adaptiveOpus = anthropicOpus47OrLater(model.api.id)
   const adaptiveEfforts = anthropicAdaptiveEfforts(model.api.id)
+  if (glm52(model)) {
+    if (model.api.npm === "@openrouter/ai-sdk-provider") {
+      return {
+        high: { reasoning: { effort: "high" } },
+        xhigh: { reasoning: { effort: "xhigh" } },
+      }
+    }
+    if (model.api.npm === "@ai-sdk/openai-compatible") {
+      return {
+        high: { reasoningEffort: "high" },
+        max: { reasoningEffort: "max" },
+      }
+    }
+    if (model.api.npm === "@ai-sdk/anthropic") {
+      return {
+        high: { effort: "high" },
+        max: { effort: "max" },
+      }
+    }
+    return {}
+  }
   if (
     id.includes("deepseek-chat") ||
     id.includes("deepseek-reasoner") ||
     id.includes("deepseek-r1") ||
     id.includes("deepseek-v3") ||
     id.includes("minimax") ||
-    id.includes("glm") ||
+    (id.includes("glm") && !glm52(model)) ||
     id.includes("kimi") ||
     id.includes("k2p") ||
     id.includes("qwen") ||

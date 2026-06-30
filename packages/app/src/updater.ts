@@ -5,9 +5,9 @@ export type UpdaterState =
   | { status: "idle" }
   | { status: "checking" }
   | { status: "downloading"; version: string; percent?: number }
-  | { status: "ready"; version: string }
+  | { status: "ready"; version: string; manualUrl?: string }
   | { status: "up-to-date" }
-  | { status: "installing"; version: string }
+  | { status: "installing"; version: string; manualUrl?: string }
   | { status: "error"; message: string }
 
 export type UpdaterPlatform = {
