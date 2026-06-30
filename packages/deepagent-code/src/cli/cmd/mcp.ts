@@ -406,7 +406,10 @@ async function resolveConfigPath(baseDir: string, global = false) {
   const candidates = [path.join(baseDir, "deepagent-code.json"), path.join(baseDir, "deepagent-code.jsonc")]
 
   if (!global) {
-    candidates.push(path.join(baseDir, ".deepagent-code", "deepagent-code.json"), path.join(baseDir, ".deepagent-code", "deepagent-code.jsonc"))
+    candidates.push(
+      path.join(baseDir, ".deepagent-code", "deepagent-code.json"),
+      path.join(baseDir, ".deepagent-code", "deepagent-code.jsonc"),
+    )
   }
 
   for (const candidate of candidates) {

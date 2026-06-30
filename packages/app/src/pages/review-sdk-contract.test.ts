@@ -1,10 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import {
-  promoteLearningCandidate,
-  promotionCandidate,
-  rejectLearningCandidate,
-  type LearningCandidate,
-} from "./review"
+import { promoteLearningCandidate, promotionCandidate, rejectLearningCandidate, type LearningCandidate } from "./review"
 
 const directory = "/repo/deepagent"
 const candidate: LearningCandidate = {

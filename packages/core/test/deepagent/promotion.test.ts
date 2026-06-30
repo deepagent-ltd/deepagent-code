@@ -15,11 +15,20 @@ const NOW = "2026-06-13T00:00:00.000Z"
 
 const cand = (over: Partial<LearningCandidate> = {}): LearningCandidate => ({
   candidate_id: "strategy:run1:diagnosis-led-fix:r2",
-  type: "strategy", status: "staged", source_run_id: "run1", source_round: 2,
-  summary: "diagnosis identified bank conflict; padding fixed it", evidence_refs: ["run:run1"], confidence: 0.7, ...over,
+  type: "strategy",
+  status: "staged",
+  source_run_id: "run1",
+  source_round: 2,
+  summary: "diagnosis identified bank conflict; padding fixed it",
+  evidence_refs: ["run:run1"],
+  confidence: 0.7,
+  ...over,
 })
 
-beforeEach(() => { dir = mkdtempSync(path.join(tmpdir(), "deepagent-promo-")); rejected = new RejectedBuffer(dir) })
+beforeEach(() => {
+  dir = mkdtempSync(path.join(tmpdir(), "deepagent-promo-"))
+  rejected = new RejectedBuffer(dir)
+})
 afterEach(() => rmSync(dir, { recursive: true, force: true }))
 
 describe("V3 promotion gate", () => {
@@ -46,7 +55,9 @@ describe("V3 promotion gate", () => {
 
   test("R1: sealed candidate never promotes", () => {
     const c = cand()
-    expect(() => promote(c, "sealed", { pass: true, evidence: ["e"] }, { approver: "x", approved: true }, NOW)).toThrow(/R1/)
+    expect(() => promote(c, "sealed", { pass: true, evidence: ["e"] }, { approver: "x", approved: true }, NOW)).toThrow(
+      /R1/,
+    )
   })
 
   test("external_trace promotes only through the gate + approval", () => {
@@ -63,7 +74,10 @@ describe("V3 promotion gate", () => {
   test("persistPromoted writes durable knowledge the retriever can load (self-learning loop)", () => {
     knowledgeSource.configure(dir)
     const store = openUserGlobalStore(dir)
-    const c = cand({ candidate_id: "strategy:run1:padding-fix", summary: "pad shared memory tile to avoid bank conflict" })
+    const c = cand({
+      candidate_id: "strategy:run1:padding-fix",
+      summary: "pad shared memory tile to avoid bank conflict",
+    })
     const v = validate(c, rejected, () => ({ pass: true, metricDelta: 0.2, evidenceRef: "eval:1" }))
     const rec = promote(c, "run_local", v, { approver: "lead", approved: true }, NOW)
     const docId = persistPromoted(rec, store)
@@ -76,8 +90,13 @@ describe("V3 promotion gate", () => {
     // the retriever (max mode) now sees it in its candidate pool (selected or gap)
     const tools: ToolContext = { availableTools: [], mcpServers: [], totalToolCount: 0 }
     const task: TaskContext = {
-      userRequest: "fix bank conflict in shared memory tile", taskType: "code_modification", domain: "code",
-      goals: [], successCriteria: [], riskBoundaries: [], validationCommands: [],
+      userRequest: "fix bank conflict in shared memory tile",
+      taskType: "code_modification",
+      domain: "code",
+      goals: [],
+      successCriteria: [],
+      riskBoundaries: [],
+      validationCommands: [],
     }
     const r = retrieve({ mode: "max", task, tools, round: 1, previousFailures: 2 })
     const seen = [...(r!.strategyRefs ?? []), ...(r!.gapAnalysis ?? []).map((g) => g.ref_id)]

@@ -38,7 +38,9 @@ describe("DeepAgent provider-executed tool gate", () => {
       ).rejects.toThrow("provider-executed tool")
 
       const runs = await readdir(dir)
-      const binding = JSON.parse(await readFile(path.join(dir, runs[0]!, "deepagent_generic_agent_binding.json"), "utf8"))
+      const binding = JSON.parse(
+        await readFile(path.join(dir, runs[0]!, "deepagent_generic_agent_binding.json"), "utf8"),
+      )
       expect(binding.provider_executed_tool_observations[0]).toMatchObject({
         provider_executed: true,
         tool_type: "local_shell",
@@ -131,7 +133,9 @@ describe("DeepAgent provider-executed tool gate", () => {
       )
 
       const runs = await readdir(dir)
-      const binding = JSON.parse(await readFile(path.join(dir, runs[0]!, "deepagent_generic_agent_binding.json"), "utf8"))
+      const binding = JSON.parse(
+        await readFile(path.join(dir, runs[0]!, "deepagent_generic_agent_binding.json"), "utf8"),
+      )
       expect(binding.provider_executed_tool_observations[0]).toMatchObject({
         provider_executed: true,
         tool_type: "web_search",

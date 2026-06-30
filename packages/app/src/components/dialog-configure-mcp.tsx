@@ -45,9 +45,7 @@ export const DialogConfigureMcp: Component<{ name: string }> = (props) => {
   const [enabled, setEnabled] = createSignal(initial?.enabled !== false)
   const [command, setCommand] = createSignal(initial?.type === "local" ? initial.command.join(" ") : "")
   const [url, setUrl] = createSignal(initial?.type === "remote" ? initial.url : "")
-  const [environment, setEnvironment] = createSignal(
-    initial?.type === "local" ? formatMap(initial.environment) : "{}",
-  )
+  const [environment, setEnvironment] = createSignal(initial?.type === "local" ? formatMap(initial.environment) : "{}")
   const [headers, setHeaders] = createSignal(initial?.type === "remote" ? formatMap(initial.headers) : "{}")
   const [timeout, setTimeoutValue] = createSignal(initial?.timeout?.toString() ?? "")
   const [oauthDisabled, setOauthDisabled] = createSignal(initial?.type === "remote" && initial.oauth === false)

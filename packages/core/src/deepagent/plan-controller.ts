@@ -20,6 +20,7 @@ export type StaleReason =
   | "validation_failed" // recordValidation saw a failing command
   | "no_progress" // the no-progress fingerprint repeated (deepagent-multiround)
   | "pack_changed" // the domain-pack snapshot id changed mid-run
+  | "diagnostics_error" // L4 (S1-v3.4): post-edit LSP diagnostics surfaced an error (high+ only)
 
 export type PlanLatch = "fresh" | "stale"
 export type PlanStepStatus = "pending" | "active" | "done" | "cancelled"
@@ -73,7 +74,9 @@ export const markStale = (state: PlanLatchState, reason: StaleReason): PlanLatch
 // Clear the latch after the plan was updated. Bumps replan_count so the escape hatch can fire if the
 // model thrashes (keeps producing a plan that immediately goes stale again).
 export const clearStale = (state: PlanLatchState): PlanLatchState =>
-  state.latch === "fresh" ? state : { ...state, latch: "fresh", stale_reason: null, replan_count: state.replan_count + 1 }
+  state.latch === "fresh"
+    ? state
+    : { ...state, latch: "fresh", stale_reason: null, replan_count: state.replan_count + 1 }
 
 // Escape hatch (mirrors the existing no-progress -> needs_human pattern): after too many replans we
 // STOP forcing the model to update the plan and hand off to a human, instead of looping forever on a
@@ -105,7 +108,12 @@ export const isMutatingTool = (toolName: string): boolean => {
 
 // Build a fresh structural plan doc (the model fills goal/steps via the plan tool; this is the
 // scaffold). idSlug omitted — DocumentStore assigns the stable id.
-export const createPlanDoc = (sessionId: string, goal: string, steps: readonly PlanStep[] = [], assumptions: readonly string[] = []): PlanDoc => ({
+export const createPlanDoc = (
+  sessionId: string,
+  goal: string,
+  steps: readonly PlanStep[] = [],
+  assumptions: readonly string[] = [],
+): PlanDoc => ({
   plan_id: `plan_${randomUUID()}`,
   session_id: sessionId,
   goal,
@@ -135,7 +143,8 @@ export type PlanInput = {
 }
 
 const STEP_STATUSES: ReadonlySet<PlanStepStatus> = new Set(["pending", "active", "done", "cancelled"])
-const normStatus = (s: string | undefined): PlanStepStatus => (s && STEP_STATUSES.has(s as PlanStepStatus) ? (s as PlanStepStatus) : "pending")
+const normStatus = (s: string | undefined): PlanStepStatus =>
+  s && STEP_STATUSES.has(s as PlanStepStatus) ? (s as PlanStepStatus) : "pending"
 
 // Build a PlanDoc from the tool's loose input. Preserves an existing plan_id/created_at when the
 // model is UPDATING (re-writing) the plan rather than creating it, so the run-state plan keeps a
@@ -214,5 +223,13 @@ export const buildCompletionReport = (plan: PlanDoc): CompletionReport => {
   const cancelled = plan.steps.filter((s) => s.status === "cancelled").map((s) => s.title)
   const outstanding = plan.steps.filter((s) => s.status === "pending" || s.status === "active").map((s) => s.title)
   const evidence = plan.steps.flatMap((s) => s.evidence ?? [])
-  return { plan_id: plan.plan_id, goal: plan.goal, done, cancelled, outstanding, evidence, complete: outstanding.length === 0 }
+  return {
+    plan_id: plan.plan_id,
+    goal: plan.goal,
+    done,
+    cancelled,
+    outstanding,
+    evidence,
+    complete: outstanding.length === 0,
+  }
 }

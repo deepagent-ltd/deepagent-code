@@ -52,6 +52,29 @@ export interface ExecuteResult<M extends Metadata = Metadata> {
   attachments?: Omit<SessionV1.FilePart, "id" | "sessionID" | "messageID">[]
 }
 
+/**
+ * Explicit origin of a tool. Carried from the registration source so that
+ * downstream consumers (request.ts capability metadata, audit, MCP server
+ * grouping) never have to guess provenance from the tool name string.
+ *
+ * M2 (S1-v3.4): the old code reverse-engineered the source via
+ * `name.includes(":")`, which contradicted the actual `_`-separated MCP naming
+ * and misclassified real MCP tools as builtin. This explicit field is the
+ * single source of truth; the two downstream token vocabularies
+ * (`mcp_or_namespaced_tool`/`generic_agent_tool_registry` and `mcp`/`builtin`)
+ * each map back from `source` without changing the tokens themselves.
+ */
+export type Provenance = {
+  source: "builtin" | "custom" | "mcp"
+  mcpServer?: string
+  mcpToolName?: string
+  // M7 (S1-v3.4): risk tier the live permission gate uses (session/tools.ts): read_only→auto-allow,
+  // write_guarded/external_fetch→ask. SECURITY: mcp/index.ts sets this from a catalog MATCH of the
+  // live config (`McpCatalog.deriveTier`), NOT from the persisted (attacker-writable) `riskTier`.
+  // Absent → fail-closed to ask (hand-added / non-matching servers).
+  riskTier?: "read_only" | "write_guarded" | "external_fetch"
+}
+
 export interface Def<
   Parameters extends Schema.Decoder<unknown> = Schema.Decoder<unknown>,
   M extends Metadata = Metadata,
@@ -60,6 +83,7 @@ export interface Def<
   description: string
   parameters: Parameters
   jsonSchema?: JSONSchema7
+  provenance?: Provenance
   execute(args: Schema.Schema.Type<Parameters>, ctx: Context): Effect.Effect<ExecuteResult<M>>
   formatValidationError?(error: unknown): string
 }

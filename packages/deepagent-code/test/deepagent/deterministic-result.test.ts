@@ -38,7 +38,8 @@ describe("DeepAgent deterministic result artifact", () => {
       expect(result.mismatches).toEqual([
         {
           field: "deterministic_result",
-          detail: "model output appears to claim success for a deterministic task, but no tool or runner evidence was observed",
+          detail:
+            "model output appears to claim success for a deterministic task, but no tool or runner evidence was observed",
         },
       ])
       expect(await readJson(runDir, "SCHEMA_VALIDATION_REPORT.json")).toMatchObject({ status: "pass" })
@@ -72,7 +73,9 @@ describe("DeepAgent deterministic result artifact", () => {
       expect(result.result.result_ref).toBe("HISTORY.md#event-2")
 
       const workPackage = await readJson(runDir, "MODEL_WORK_PACKAGE.json")
-      expect(workPackage.artifact_refs.map((ref: { ref_id: string }) => ref.ref_id)).toContain("artifact:deterministic_result")
+      expect(workPackage.artifact_refs.map((ref: { ref_id: string }) => ref.ref_id)).toContain(
+        "artifact:deterministic_result",
+      )
       expect(workPackage.deterministic_result).toMatchObject({
         ref: "DETERMINISTIC_RESULT.json",
         enabled: true,

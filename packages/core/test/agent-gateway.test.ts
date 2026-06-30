@@ -175,7 +175,7 @@ describe("AgentGateway", () => {
         selected_strategy_refs: [],
         knowledge_retrieval: { enabled: false, mode: "disabled" },
       })
-      expect(await readFile(path.join(runDir, "HISTORY.md"), "utf8")).toContain("\"event_type\": \"finish\"")
+      expect(await readFile(path.join(runDir, "HISTORY.md"), "utf8")).toContain('"event_type": "finish"')
       expect(await readJson(runDir, "token_usage_ledger.json")).toMatchObject({
         schema_version: "token_usage_ledger.v1",
         model_provider: "deepagent",
@@ -215,8 +215,16 @@ describe("AgentGateway", () => {
         execution_owner: "generic_agent_tool_registry_or_mcp",
         capability_summary: { total: 2, enabled: 2 },
         capabilities: [
-          { name: "bash", source: "generic_agent_tool_registry", execution_owner: "generic_agent_tool_registry_or_mcp" },
-          { name: "github:list_issues", source: "mcp_or_namespaced_tool", execution_owner: "generic_agent_tool_registry_or_mcp" },
+          {
+            name: "bash",
+            source: "generic_agent_tool_registry",
+            execution_owner: "generic_agent_tool_registry_or_mcp",
+          },
+          {
+            name: "github:list_issues",
+            source: "mcp_or_namespaced_tool",
+            execution_owner: "generic_agent_tool_registry_or_mcp",
+          },
         ],
       })
     } finally {
@@ -275,9 +283,7 @@ describe("AgentGateway", () => {
             ...deepagentRunInput,
             metadata: {
               deepagent: {
-                tool_capabilities: [
-                  { name: "github:list_issues", source: "mcp_or_namespaced_tool" },
-                ],
+                tool_capabilities: [{ name: "github:list_issues", source: "mcp_or_namespaced_tool" }],
               },
             },
           },
@@ -313,7 +319,9 @@ describe("AgentGateway", () => {
       )
 
       const runDir = await readOnlyRunDir(dir)
-      expect(await readFile(path.join(runDir, "DEEPAGENT_BOOT_MESSAGE.md"), "utf8")).toContain("bounded knowledge retrieval")
+      expect(await readFile(path.join(runDir, "DEEPAGENT_BOOT_MESSAGE.md"), "utf8")).toContain(
+        "bounded knowledge retrieval",
+      )
       expect(await readJson(runDir, "DEEPAGENT_RUN_STATE.json")).toMatchObject({
         agent_mode: "max",
         activation_mode: "first_fast_design_bounded_knowledge",
@@ -359,7 +367,9 @@ describe("AgentGateway", () => {
       const knowledge = await readJson(runDir, "KNOWLEDGE_RETRIEVAL_RESULT.json")
       const workPackage = await readJson(runDir, "MODEL_WORK_PACKAGE.json")
       const refIDs = knowledge.selected_refs.map((ref: { ref_id: string }) => ref.ref_id)
-      expect(knowledge.candidate_refs.map((ref: { ref_id: string }) => ref.ref_id)).toContain("strategy:mcp-tool-coordination")
+      expect(knowledge.candidate_refs.map((ref: { ref_id: string }) => ref.ref_id)).toContain(
+        "strategy:mcp-tool-coordination",
+      )
       expect(refIDs).toContain("strategy:mcp-tool-coordination")
       expect(knowledge).toMatchObject({
         retriever: "packages/core/src/deepagent/knowledge-retriever.ts",
@@ -372,9 +382,13 @@ describe("AgentGateway", () => {
         },
       })
       expect(knowledge.candidate_refs.length).toBeGreaterThanOrEqual(knowledge.selected_refs.length)
-      expect(knowledge.rejected_refs).toEqual(expect.arrayContaining([{ reason: expect.any(String), ref_id: expect.any(String) }]))
+      expect(knowledge.rejected_refs).toEqual(
+        expect.arrayContaining([{ reason: expect.any(String), ref_id: expect.any(String) }]),
+      )
       expect(workPackage.knowledge_retrieval.selected_refs).toEqual(refIDs)
-      expect(workPackage.knowledge_retrieval.selected_ref_details.map((ref: { ref_id: string }) => ref.ref_id)).toEqual(refIDs)
+      expect(workPackage.knowledge_retrieval.selected_ref_details.map((ref: { ref_id: string }) => ref.ref_id)).toEqual(
+        refIDs,
+      )
       expect(workPackage.selected_strategy_refs).toContain("strategy:mcp-tool-coordination")
       expect(knowledge.synthesis).toContain("MCP tools extend capabilities")
     } finally {

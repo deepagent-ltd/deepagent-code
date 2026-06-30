@@ -152,10 +152,12 @@ export const dict = {
   "home.faq.a2.before": "가장 쉬운 시작 방법은",
   "home.faq.a2.link": "소개",
   "home.faq.q3": "DeepAgent Code를 사용하려면 별도의 AI 구독이 필요한가요?",
-  "home.faq.a3.p1": "꼭 그렇지는 않습니다. DeepAgent Code에는 계정 없이도 사용할 수 있는 무료 모델 세트가 포함되어 있습니다.",
+  "home.faq.a3.p1":
+    "꼭 그렇지는 않습니다. DeepAgent Code에는 계정 없이도 사용할 수 있는 무료 모델 세트가 포함되어 있습니다.",
   "home.faq.a3.p2.beforeZen": "이 외에도,",
   "home.faq.a3.p2.afterZen": " 계정을 생성하여 인기 있는 코딩 모델들을 사용할 수 있습니다.",
-  "home.faq.a3.p3": "Zen 사용을 권장하지만, DeepAgent Code는 OpenAI, Anthropic, xAI 등 모든 인기 제공자와도 작동합니다.",
+  "home.faq.a3.p3":
+    "Zen 사용을 권장하지만, DeepAgent Code는 OpenAI, Anthropic, xAI 등 모든 인기 제공자와도 작동합니다.",
   "home.faq.a3.p4.beforeLocal": "또한",
   "home.faq.a3.p4.localLink": "로컬 모델",
   "home.faq.q4": "기존 AI 구독을 DeepAgent Code에서 사용할 수 있나요?",
@@ -299,7 +301,8 @@ export const dict = {
   "go.problem.item4":
     "GLM-5.1, GLM-5, Kimi K2.5, Kimi K2.6, MiMo-V2.5-Pro, MiMo-V2.5, Qwen3.7 Max, Qwen3.7 Plus, Qwen3.6 Plus, MiniMax M2.5, MiniMax M2.7, MiniMax M3, DeepSeek V4 Pro, DeepSeek V4 Flash 포함",
   "go.how.title": "Go 작동 방식",
-  "go.how.body": "Go는 첫 달 $5, 이후 $10/월로 시작합니다. DeepAgent Code 또는 어떤 에이전트와도 함께 사용할 수 있습니다.",
+  "go.how.body":
+    "Go는 첫 달 $5, 이후 $10/월로 시작합니다. DeepAgent Code 또는 어떤 에이전트와도 함께 사용할 수 있습니다.",
   "go.how.step1.title": "계정 생성",
   "go.how.step1.beforeLink": "",
   "go.how.step1.link": "설정 지침을 따르세요",
@@ -715,7 +718,8 @@ export const dict = {
     "꼭 그렇지는 않지만, 아마도 필요할 것입니다. DeepAgent Code를 유료 제공자에 연결하려면 AI 구독이 필요할 수 있습니다. 하지만",
   "download.faq.a3.localLink": "로컬 모델",
   "download.faq.a3.afterLocal.beforeZen": "은 무료로 사용할 수 있습니다. 우리는",
-  "download.faq.a3.afterZen": " 사용을 권장하지만, DeepAgent Code는 OpenAI, Anthropic, xAI 등 모든 인기 제공자와 작동합니다.",
+  "download.faq.a3.afterZen":
+    " 사용을 권장하지만, DeepAgent Code는 OpenAI, Anthropic, xAI 등 모든 인기 제공자와 작동합니다.",
 
   "download.faq.a5.p1": "DeepAgent Code는 100% 무료로 사용할 수 있습니다.",
   "download.faq.a5.p2.beforeZen":

@@ -247,7 +247,9 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
                 >
                   <TuiStartupProvider
                     value={{
-                      initialRoute: process.env.DEEPAGENT_CODE_ROUTE ? JSON.parse(process.env.DEEPAGENT_CODE_ROUTE) : undefined,
+                      initialRoute: process.env.DEEPAGENT_CODE_ROUTE
+                        ? JSON.parse(process.env.DEEPAGENT_CODE_ROUTE)
+                        : undefined,
                       skipInitialLoading: Boolean(process.env.DEEPAGENT_CODE_FAST_BOOT),
                     }}
                   >

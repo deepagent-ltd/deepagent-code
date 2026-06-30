@@ -27,15 +27,14 @@ export const runValidationCommands = async (
       let timer: ReturnType<typeof setTimeout> | undefined
       const timeout = new Promise<"timeout">((resolve) => {
         timer = setTimeout(() => {
-          try { proc.kill() } catch {}
+          try {
+            proc.kill()
+          } catch {}
           resolve("timeout")
         }, timeoutMs)
       })
       const completed = (async () => {
-        const [stdout, stderr] = await Promise.all([
-          new Response(proc.stdout).text(),
-          new Response(proc.stderr).text(),
-        ])
+        const [stdout, stderr] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()])
         const exitCode = await proc.exited
         return { stdout, stderr, exitCode } as const
       })()
@@ -54,10 +53,14 @@ export const runValidationCommands = async (
         continue
       }
       const output = `${outcome.stdout}\n${outcome.stderr}`.trim()
-      results.push(AgentGateway.DeepAgentValidation.parseValidationOutput(command, outcome.exitCode, output, Date.now() - started))
+      results.push(
+        AgentGateway.DeepAgentValidation.parseValidationOutput(command, outcome.exitCode, output, Date.now() - started),
+      )
     } catch (err) {
       // a command that cannot even launch counts as a failed validation (non-zero "exit")
-      results.push(AgentGateway.DeepAgentValidation.parseValidationOutput(command, 127, String(err), Date.now() - started))
+      results.push(
+        AgentGateway.DeepAgentValidation.parseValidationOutput(command, 127, String(err), Date.now() - started),
+      )
     }
   }
   return results

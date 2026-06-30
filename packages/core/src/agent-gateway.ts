@@ -2,7 +2,14 @@ import { mkdir, readFile, writeFile } from "node:fs/promises"
 import { createHash, randomUUID } from "node:crypto"
 import path from "node:path"
 import { Cause, Effect, Layer, Stream } from "effect"
-import { InvalidRequestReason, LLMError, LLMEvent, LLMRequest, registerClientMiddleware, type LLMEvent as LLMEventType } from "@deepagent-code/llm"
+import {
+  InvalidRequestReason,
+  LLMError,
+  LLMEvent,
+  LLMRequest,
+  registerClientMiddleware,
+  type LLMEvent as LLMEventType,
+} from "@deepagent-code/llm"
 import { buildRunContext } from "./deepagent/run-context"
 import { DocumentStore } from "./deepagent/document-store"
 import { buildRunGraph } from "./deepagent/run-graph"
@@ -27,6 +34,18 @@ export type Mode = "unavailable" | "off" | "enabled" | "blocked" | "degraded"
 export type Implementation = "visible_skeleton" | "gateway_passthrough" | "gateway_enforced"
 export type ProviderExecutedToolPolicy = "deny_by_default" | "allowlist_required"
 export type CallKind = "session_turn" | "auxiliary_ai_call"
+
+// L5 (S1-v3.4): evidence-kind dimension for control-plane artifacts. Orthogonal to
+// `artifact_type` (which describes the schema shape). `evidence_kind` describes the
+// SOURCE category of evidence so LSP queries, and (V3.5) debug/profile runs, can be
+// queried as one class in the document graph. V3.4 only emits "lsp_query"; the
+// "debug_session"/"profile" values are reserved for V3.5 (L7 接口预留, see docs/S1-v3.4 L5).
+export type EvidenceKind = "lsp_query" | "debug_session" | "profile"
+
+export const EVIDENCE_KINDS: readonly EvidenceKind[] = ["lsp_query", "debug_session", "profile"]
+
+export const isEvidenceKind = (value: unknown): value is EvidenceKind =>
+  typeof value === "string" && (EVIDENCE_KINDS as readonly string[]).includes(value)
 
 export type Config = {
   readonly enabled?: boolean
@@ -256,7 +275,11 @@ export const configure = (config: Config = {}) => {
   // into the user-global DocumentStore on every configure() call. seedCoreKnowledge is idempotent
   // (skips docs that already exist), so re-calling on restart is safe. After seeding, the retriever
   // reads these from DocumentStore and the in-code constants are no longer in the retrieval path.
-  try { DeepAgentKnowledgeSeed.seedCoreKnowledgeAt(baseDir) } catch { /* non-fatal: stale seed, retry next call */ }
+  try {
+    DeepAgentKnowledgeSeed.seedCoreKnowledgeAt(baseDir)
+  } catch {
+    /* non-fatal: stale seed, retry next call */
+  }
   // docs/34 §3: domain pack registry. Built-in packs (packages/domain-packs, bundled with the app)
   // are ALWAYS discovered automatically. A user/org pack dir can be layered on top via config.packDir
   // or DEEPAGENT_PACK_DIR (its packs override built-ins by id). Passing undefined = built-ins only.
@@ -359,6 +382,7 @@ import * as DeepAgentOrchestrator from "./deepagent/orchestrator"
 import * as DeepAgentSessionState from "./deepagent/session-state"
 import * as DeepAgentPlanController from "./deepagent/plan-controller"
 import * as DeepAgentDiagnosis from "./deepagent/diagnosis"
+import * as DeepAgentFailureTriage from "./deepagent/failure-triage"
 import * as DeepAgentValidation from "./deepagent/validation"
 import * as DeepAgentLearning from "./deepagent/learning"
 import * as DeepAgentKnowledgeSource from "./deepagent/knowledge-source"
@@ -379,7 +403,30 @@ import * as DeepAgentHooks from "./deepagent/hooks"
 import * as DeepAgentKnowledgeGate from "./deepagent/knowledge-gate"
 import type { RunSummary } from "./deepagent/run-graph"
 
-export { DeepAgentOrchestrator, DeepAgentSessionState, DeepAgentPlanController, DeepAgentDiagnosis, DeepAgentValidation, DeepAgentLearning, DeepAgentPromotion, DeepAgentDocumentStore, DeepAgentRunGraph, DeepAgentWorkspace, DeepAgentBackgroundLearning, DeepAgentPromptPipeline, DeepAgentRoundReport, DeepAgentMode, DeepAgentBudget, DeepAgentKnowledgeRetriever, DeepAgentHooks, DeepAgentKnowledgeGate, DeepAgentKnowledgeSource, DeepAgentDurableKnowledgeStore, DeepAgentDomainPackRegistry }
+export {
+  DeepAgentOrchestrator,
+  DeepAgentSessionState,
+  DeepAgentPlanController,
+  DeepAgentDiagnosis,
+  DeepAgentFailureTriage,
+  DeepAgentValidation,
+  DeepAgentLearning,
+  DeepAgentPromotion,
+  DeepAgentDocumentStore,
+  DeepAgentRunGraph,
+  DeepAgentWorkspace,
+  DeepAgentBackgroundLearning,
+  DeepAgentPromptPipeline,
+  DeepAgentRoundReport,
+  DeepAgentMode,
+  DeepAgentBudget,
+  DeepAgentKnowledgeRetriever,
+  DeepAgentHooks,
+  DeepAgentKnowledgeGate,
+  DeepAgentKnowledgeSource,
+  DeepAgentDurableKnowledgeStore,
+  DeepAgentDomainPackRegistry,
+}
 export type { PromptContext } from "./deepagent/prompt-policy"
 export type { EnvironmentContext, McpServerRef, PreviousResults, ToolContext, ToolRef } from "./deepagent/prompt-policy"
 export type { OrchestratorInput, PostTurnDecision } from "./deepagent/orchestrator"
@@ -391,12 +438,9 @@ export type { ValidationResult } from "./deepagent/round-state"
 // inherited opencode baseline prompt is used unchanged. providerID is accepted for caller
 // signature stability but no longer gates injection.
 export const systemPrompt = (_providerID: string, context?: PromptContext) =>
-  isActiveDeepAgentRuntime()
-    ? [context ? buildSystemPrompt(context) : bootMessage(current.agentMode)]
-    : []
+  isActiveDeepAgentRuntime() ? [context ? buildSystemPrompt(context) : bootMessage(current.agentMode)] : []
 
-export const preflight = (input: RunInput): Effect.Effect<void, LLMError> =>
-  preflightWith(input, current)
+export const preflight = (input: RunInput): Effect.Effect<void, LLMError> => preflightWith(input, current)
 
 const preflightWith = (input: RunInput, config: CurrentConfig): Effect.Effect<void, LLMError> =>
   Effect.gen(function* () {
@@ -487,7 +531,9 @@ const deepAgentBudgetMessage = (status: DeepAgentBudget.BudgetCheck) => {
   if (status.status === "exhausted" && status.tokensRemaining === 0) {
     return "DeepAgent token budget exhausted for this session. Use the normal context compaction path or start a new task."
   }
-  return status.message ? `DeepAgent budget stopped this session: ${status.message}` : "DeepAgent budget stopped this session."
+  return status.message
+    ? `DeepAgent budget stopped this session: ${status.message}`
+    : "DeepAgent budget stopped this session."
 }
 
 const effectiveAgentMode = (metadata: Record<string, unknown> | undefined): AgentMode | undefined => {
@@ -578,7 +624,9 @@ const close = async (run: RunRecord, state: Exclude<RunCloseState, "opened" | "s
   const sessionId = run.input.sessionID
   if (!sessionId) return
   if (state === "completed") {
-    const hasPendingToolCalls = run.latestEvents.some((e) => e.event_type === "tool-call" && !run.latestEvents.some((r) => r.event_type === "tool-result"))
+    const hasPendingToolCalls = run.latestEvents.some(
+      (e) => e.event_type === "tool-call" && !run.latestEvents.some((r) => r.event_type === "tool-result"),
+    )
     if (!hasPendingToolCalls) {
       // V3.2 P0-1: learning writeback is the SINGLE LearningWorker path (runBackgroundLearning).
       // onSessionComplete now only does session bookkeeping (no persist) — the old duplicate
@@ -644,7 +692,17 @@ const runBackgroundLearning = (run: RunRecord, finalStatus: "completed" | "faile
       const durable = DeepAgentKnowledgeSource.projectStoreFor(workspacePath)
       return {
         worker: new DeepAgentBackgroundLearning.LearningWorker(project, projectID, durable),
-        input: { projectID, sessionID: sessionId, runID, mode, roundState, totalRounds, finalStatus, trigger: "session_finalization", policy },
+        input: {
+          projectID,
+          sessionID: sessionId,
+          runID,
+          mode,
+          roundState,
+          totalRounds,
+          finalStatus,
+          trigger: "session_finalization",
+          policy,
+        },
       }
     },
   })
@@ -682,7 +740,11 @@ const blockProviderExecutedTool = (run: RunRecord, event: LLMEventType) =>
 const observe = (run: RunRecord, event: LLMEventType) => {
   if (LLMEvent.is.finish(event)) run.terminalEventSeen = true
   run.eventCount += 1
-  run.historyEvents.push({ event_type: event.type, created_at: new Date().toISOString(), payload: historyPayload(event) })
+  run.historyEvents.push({
+    event_type: event.type,
+    created_at: new Date().toISOString(),
+    payload: historyPayload(event),
+  })
   if ("usage" in event && event.usage) {
     const sessionId = run.input.sessionID
     if (sessionId) {
@@ -1215,12 +1277,11 @@ const deterministicResultArtifact = (run: RunRecord) => {
     final_answer_state: deterministicFinalAnswerState(enabled, verifiedState),
     completion_gate: {
       auto_complete_allowed: !enabled || verifiedState === "verified",
-      reason:
-        !enabled
-          ? "deterministic controls inactive"
-          : verifiedState === "verified"
-            ? "deterministic evidence observed"
-            : "deterministic task remains unverified; this is not a runtime failure",
+      reason: !enabled
+        ? "deterministic controls inactive"
+        : verifiedState === "verified"
+          ? "deterministic evidence observed"
+          : "deterministic task remains unverified; this is not a runtime failure",
     },
     token_policy: {
       extra_model_calls: 0,
@@ -1232,185 +1293,282 @@ const deterministicResultArtifact = (run: RunRecord) => {
 
 const modelWorkPackage = (run: RunRecord) => {
   const selectedRefs = knowledgeRefsForRun(run)
-  const selectedStrategyRefs = selectedRefs
-    .filter((ref) => ref.ref_id.startsWith("strategy:"))
-    .map((ref) => ref.ref_id)
-  const selectedMemoryRefs = selectedRefs
-    .filter((ref) => ref.ref_id.startsWith("memory:"))
-    .map((ref) => ref.ref_id)
+  const selectedStrategyRefs = selectedRefs.filter((ref) => ref.ref_id.startsWith("strategy:")).map((ref) => ref.ref_id)
+  const selectedMemoryRefs = selectedRefs.filter((ref) => ref.ref_id.startsWith("memory:")).map((ref) => ref.ref_id)
   const selectedMethodologyRefs = selectedRefs
     .filter((ref) => ref.ref_id.startsWith("methodology:"))
     .map((ref) => ref.ref_id)
   return {
-  schema_version: "model_work_package.v1",
-  work_package_id: run.workPackageID,
-  task_id: run.taskID,
-  round: 1,
-  run_workspace_ref: `run_workspace:${run.runID}`,
-  activation_ref: `activation:${run.runID}:r1`,
-  activation_policy_ref: "ACTIVATION_POLICY.json",
-  model_policy_ref: run.policyID,
-  mcp_capability_index_ref: "MCP_CAPABILITY_INDEX.json",
-  knowledge_retrieval_ref: "KNOWLEDGE_RETRIEVAL_RESULT.json",
-  prompt_profile: "standard_code_agent",
-  agent_mode: run.agentMode,
-  activation_mode: activationMode(run.agentMode),
-  knowledge_enabled: knowledgeEnabled(run.agentMode),
-  prompt_policy_hash: promptPolicyHash(run),
-  knowledge_policy_hash: knowledgePolicyHash(run.agentMode),
-  goal: "Execute a DeepAgent-managed upstream provider turn without replacing provider execution.",
-  task_summary: `DeepAgent global runtime call for ${run.input.feature}; app-wide control-plane artifacts are required.`,
-  document_refs: [
-    {
-      ref_id: "doc:run_context",
-      path: "RUN_CONTEXT.md",
-      purpose: "mandatory per-run global runtime context summary",
-      read_policy: "must_read_before_edit",
-    },
-    { ref_id: "doc:design", path: "DESIGN.md", purpose: "mandatory code-task design note", read_policy: "must_read_before_edit" },
-    { ref_id: "doc:handoff", path: "HANDOFF.md", purpose: "mandatory continuation handoff", read_policy: "must_read_before_resume" },
-    { ref_id: "doc:test", path: "TEST.md", purpose: "mandatory validation record", read_policy: "must_read_before_final" },
-    { ref_id: "doc:history", path: "HISTORY.md", purpose: "private full run history", read_policy: "private_lookup_only" },
-  ],
-  artifact_refs: [
-    { ref_id: "artifact:task_spec", path: "TASK_SPEC.json", artifact_type: "task_contract", visibility: "tool_only" },
-    { ref_id: "artifact:run_state", path: "DEEPAGENT_RUN_STATE.json", artifact_type: "run_state", visibility: "model_visible" },
-    { ref_id: "artifact:boot_message", path: "DEEPAGENT_BOOT_MESSAGE.md", artifact_type: "agent_identity", visibility: "model_visible" },
-    {
-      ref_id: "artifact:candidate_lineage",
-      path: "CANDIDATE_LINEAGE.json",
-      artifact_type: "candidate_lineage",
-      visibility: "model_visible",
-    },
-    {
-      ref_id: "artifact:output_contract",
-      path: "OUTPUT_CONTRACT.json",
-      artifact_type: "output_contract",
-      visibility: "model_visible",
-    },
-    { ref_id: "artifact:checkpoint", path: "run_checkpoint_manifest.json", artifact_type: "checkpoint", visibility: "internal_ledger" },
-    { ref_id: "artifact:tool_audit", path: "TOOL_AUDIT.json", artifact_type: "tool_audit", visibility: "internal_ledger" },
-    { ref_id: "artifact:mcp_capability_index", path: "MCP_CAPABILITY_INDEX.json", artifact_type: "capability_index", visibility: "tool_only" },
-    { ref_id: "artifact:activation_policy", path: "ACTIVATION_POLICY.json", artifact_type: "activation_policy", visibility: "model_visible" },
-    { ref_id: "artifact:knowledge_retrieval", path: "KNOWLEDGE_RETRIEVAL_RESULT.json", artifact_type: "knowledge_result", visibility: "model_visible" },
-    { ref_id: "artifact:deterministic_result", path: "DETERMINISTIC_RESULT.json", artifact_type: "deterministic_result", visibility: "model_visible" },
-    { ref_id: "artifact:design", path: "DESIGN.md", artifact_type: "design_doc", visibility: "model_visible" },
-    { ref_id: "artifact:handoff", path: "HANDOFF.md", artifact_type: "handoff_doc", visibility: "model_visible" },
-    { ref_id: "artifact:test", path: "TEST.md", artifact_type: "test_doc", visibility: "model_visible" },
-    { ref_id: "artifact:history", path: "HISTORY.md", artifact_type: "private_history", visibility: "private_run_only" },
-  ],
-  allowed_reads: [
-    "RUN_CONTEXT.md",
-    "DEEPAGENT_RUN_STATE.json",
-    "DEEPAGENT_BOOT_MESSAGE.md",
-    "CANDIDATE_LINEAGE.json",
-    "OUTPUT_CONTRACT.json",
-    "MODEL_ROUTER_AUDIT.json",
-    "ACTIVATION_POLICY.json",
-    "MCP_CAPABILITY_INDEX.json",
-    "KNOWLEDGE_RETRIEVAL_RESULT.json",
-    "DETERMINISTIC_RESULT.json",
-    "DESIGN.md",
-    "HANDOFF.md",
-    "TEST.md",
-  ],
-  inline_context_policy: "minimal_summary",
-  max_inline_chars: 6000,
-  max_prompt_chars: 12000,
-  max_candidate_inline_chars: 8000,
-  bounded_redesign_enabled: true,
-  prompt_budget_justification: "Global runtime runs inline only summary/control-plane refs; raw reasoning and hidden feedback remain excluded.",
-  prompt_budget_audit: {
-    max_prompt_chars: 12000,
+    schema_version: "model_work_package.v1",
+    work_package_id: run.workPackageID,
+    task_id: run.taskID,
+    round: 1,
+    run_workspace_ref: `run_workspace:${run.runID}`,
+    activation_ref: `activation:${run.runID}:r1`,
+    activation_policy_ref: "ACTIVATION_POLICY.json",
+    model_policy_ref: run.policyID,
+    mcp_capability_index_ref: "MCP_CAPABILITY_INDEX.json",
+    knowledge_retrieval_ref: "KNOWLEDGE_RETRIEVAL_RESULT.json",
+    prompt_profile: "standard_code_agent",
+    agent_mode: run.agentMode,
+    activation_mode: activationMode(run.agentMode),
+    knowledge_enabled: knowledgeEnabled(run.agentMode),
+    prompt_policy_hash: promptPolicyHash(run),
+    knowledge_policy_hash: knowledgePolicyHash(run.agentMode),
+    goal: "Execute a DeepAgent-managed upstream provider turn without replacing provider execution.",
+    task_summary: `DeepAgent global runtime call for ${run.input.feature}; app-wide control-plane artifacts are required.`,
+    document_refs: [
+      {
+        ref_id: "doc:run_context",
+        path: "RUN_CONTEXT.md",
+        purpose: "mandatory per-run global runtime context summary",
+        read_policy: "must_read_before_edit",
+      },
+      {
+        ref_id: "doc:design",
+        path: "DESIGN.md",
+        purpose: "mandatory code-task design note",
+        read_policy: "must_read_before_edit",
+      },
+      {
+        ref_id: "doc:handoff",
+        path: "HANDOFF.md",
+        purpose: "mandatory continuation handoff",
+        read_policy: "must_read_before_resume",
+      },
+      {
+        ref_id: "doc:test",
+        path: "TEST.md",
+        purpose: "mandatory validation record",
+        read_policy: "must_read_before_final",
+      },
+      {
+        ref_id: "doc:history",
+        path: "HISTORY.md",
+        purpose: "private full run history",
+        read_policy: "private_lookup_only",
+      },
+    ],
+    artifact_refs: [
+      { ref_id: "artifact:task_spec", path: "TASK_SPEC.json", artifact_type: "task_contract", visibility: "tool_only" },
+      {
+        ref_id: "artifact:run_state",
+        path: "DEEPAGENT_RUN_STATE.json",
+        artifact_type: "run_state",
+        visibility: "model_visible",
+      },
+      {
+        ref_id: "artifact:boot_message",
+        path: "DEEPAGENT_BOOT_MESSAGE.md",
+        artifact_type: "agent_identity",
+        visibility: "model_visible",
+      },
+      {
+        ref_id: "artifact:candidate_lineage",
+        path: "CANDIDATE_LINEAGE.json",
+        artifact_type: "candidate_lineage",
+        visibility: "model_visible",
+      },
+      {
+        ref_id: "artifact:output_contract",
+        path: "OUTPUT_CONTRACT.json",
+        artifact_type: "output_contract",
+        visibility: "model_visible",
+      },
+      {
+        ref_id: "artifact:checkpoint",
+        path: "run_checkpoint_manifest.json",
+        artifact_type: "checkpoint",
+        visibility: "internal_ledger",
+      },
+      {
+        ref_id: "artifact:tool_audit",
+        path: "TOOL_AUDIT.json",
+        artifact_type: "tool_audit",
+        visibility: "internal_ledger",
+      },
+      {
+        ref_id: "artifact:mcp_capability_index",
+        path: "MCP_CAPABILITY_INDEX.json",
+        artifact_type: "capability_index",
+        visibility: "tool_only",
+      },
+      {
+        ref_id: "artifact:activation_policy",
+        path: "ACTIVATION_POLICY.json",
+        artifact_type: "activation_policy",
+        visibility: "model_visible",
+      },
+      {
+        ref_id: "artifact:knowledge_retrieval",
+        path: "KNOWLEDGE_RETRIEVAL_RESULT.json",
+        artifact_type: "knowledge_result",
+        visibility: "model_visible",
+      },
+      {
+        ref_id: "artifact:deterministic_result",
+        path: "DETERMINISTIC_RESULT.json",
+        artifact_type: "deterministic_result",
+        visibility: "model_visible",
+      },
+      { ref_id: "artifact:design", path: "DESIGN.md", artifact_type: "design_doc", visibility: "model_visible" },
+      { ref_id: "artifact:handoff", path: "HANDOFF.md", artifact_type: "handoff_doc", visibility: "model_visible" },
+      { ref_id: "artifact:test", path: "TEST.md", artifact_type: "test_doc", visibility: "model_visible" },
+      {
+        ref_id: "artifact:history",
+        path: "HISTORY.md",
+        artifact_type: "private_history",
+        visibility: "private_run_only",
+      },
+      // L5 (S1-v3.4): code_intel evidence artifact. `evidence_kind` is the new orthogonal
+      // dimension; V3.5 reuses it with "debug_session"/"profile" without a schema change.
+      {
+        ref_id: "artifact:code_intel_result",
+        path: "CODE_INTEL_RESULT.json",
+        artifact_type: "code_intel_result",
+        visibility: "tool_only" as const,
+        evidence_kind: "lsp_query" as EvidenceKind,
+      },
+    ],
+    allowed_reads: [
+      "RUN_CONTEXT.md",
+      "DEEPAGENT_RUN_STATE.json",
+      "DEEPAGENT_BOOT_MESSAGE.md",
+      "CANDIDATE_LINEAGE.json",
+      "OUTPUT_CONTRACT.json",
+      "MODEL_ROUTER_AUDIT.json",
+      "ACTIVATION_POLICY.json",
+      "MCP_CAPABILITY_INDEX.json",
+      "KNOWLEDGE_RETRIEVAL_RESULT.json",
+      "DETERMINISTIC_RESULT.json",
+      "DESIGN.md",
+      "HANDOFF.md",
+      "TEST.md",
+    ],
+    inline_context_policy: "minimal_summary",
     max_inline_chars: 6000,
+    max_prompt_chars: 12000,
     max_candidate_inline_chars: 8000,
-    section_audits: [{ title: "DeepAgent global runtime task", raw_chars: 96, stored_chars: 96, truncated: false }],
-    truncated: false,
-    required_outputs_preserved: true,
-    render_policy: "reserve_required_outputs_then_truncate_optional_sections",
-  },
-  selected_memory_refs: selectedMemoryRefs,
-  selected_strategy_refs: selectedStrategyRefs,
-  required_skill_refs: [],
-  selected_methodology_refs: selectedMethodologyRefs,
-  // docs/34 §9 S4/DAP-7: record the active domain pack set + locked snapshot so the run is
-  // reproducible. activePackSnapshot is derived from the run's problem profile via the registry.
-  active_pack_set: activePackSnapshot(run).packs.map((p) => p.id),
-  pack_snapshot_id: activePackSnapshot(run).id,
-  knowledge_retrieval: {
-    enabled: knowledgeEnabled(run.agentMode),
-    mode: knowledgeEnabled(run.agentMode) ? "bounded_retrieval_refs_only" : "disabled",
-    selected_refs: selectedRefs.map((ref) => ref.ref_id),
-    selected_ref_details: selectedRefs,
-    do_not_use_refs: retrieveKnowledge(run)?.doNotUse ?? [],
-    hidden_evaluator_feedback_allowed: false,
-    full_skill_body_allowed: false,
-  },
-  deterministic_result: {
-    ref: "DETERMINISTIC_RESULT.json",
-    enabled: deterministicResultArtifact(run).enabled,
-    task_kind: deterministicResultArtifact(run).task_kind,
-    verified_state: deterministicResultArtifact(run).verified_state,
-    read_only: deterministicResultArtifact(run).tool_policy.read_only,
-    mismatches: deterministicResultArtifact(run).mismatches,
-  },
-  available_skill_index: [],
-  mcp_capability_summary: {
-    ref: "MCP_CAPABILITY_INDEX.json",
-    execution_owner: "generic_agent_tool_registry_or_mcp",
-    deepagent_executes_mcp_directly: false,
-  },
-  constraints: [
-    "preserve generic agent tool registry and MCP execution",
-    "keep configured upstream provider execution explicit and auditable",
-    "do not include hidden evaluator feedback",
-    ...(deterministicResultArtifact(run).tool_policy.read_only
-      ? ["when deterministic query controls are active, prefer read-only evidence and treat mutation as denied until separately approved"]
-      : []),
-  ],
-  materialization_plan_ref: null,
-  anti_patterns: ["silent_provider_fallback", "hosted_tool_execution_without_allowlist", "hidden_feedback_prompt_injection"],
-  required_outputs: ["DESIGN.md", "HANDOFF.md", "TEST.md", "HISTORY.md", "deepagent_generic_agent_binding.json", "run_checkpoint_manifest.json", "run_monitor_snapshot.json"],
-  evidence_refs: [
-    "doc:run_context",
-    "doc:design",
-    "doc:test",
-    "artifact:run_state",
-    "artifact:candidate_lineage",
-    "artifact:output_contract",
-    "artifact:deterministic_result",
-  ],
-  prompt_sections: [
-    {
-      title: "Runtime scope",
-      content: "DeepAgent manages every upstream provider call and does not replace generic tool/MCP/session runtime.",
+    bounded_redesign_enabled: true,
+    prompt_budget_justification:
+      "Global runtime runs inline only summary/control-plane refs; raw reasoning and hidden feedback remain excluded.",
+    prompt_budget_audit: {
+      max_prompt_chars: 12000,
+      max_inline_chars: 6000,
+      max_candidate_inline_chars: 8000,
+      section_audits: [{ title: "DeepAgent global runtime task", raw_chars: 96, stored_chars: 96, truncated: false }],
+      truncated: false,
+      required_outputs_preserved: true,
+      render_policy: "reserve_required_outputs_then_truncate_optional_sections",
     },
-    {
-      title: "DeepAgent identity",
-      content: bootMessage(run.agentMode),
+    selected_memory_refs: selectedMemoryRefs,
+    selected_strategy_refs: selectedStrategyRefs,
+    required_skill_refs: [],
+    selected_methodology_refs: selectedMethodologyRefs,
+    // docs/34 §9 S4/DAP-7: record the active domain pack set + locked snapshot so the run is
+    // reproducible. activePackSnapshot is derived from the run's problem profile via the registry.
+    active_pack_set: activePackSnapshot(run).packs.map((p) => p.id),
+    pack_snapshot_id: activePackSnapshot(run).id,
+    knowledge_retrieval: {
+      enabled: knowledgeEnabled(run.agentMode),
+      mode: knowledgeEnabled(run.agentMode) ? "bounded_retrieval_refs_only" : "disabled",
+      selected_refs: selectedRefs.map((ref) => ref.ref_id),
+      selected_ref_details: selectedRefs,
+      do_not_use_refs: retrieveKnowledge(run)?.doNotUse ?? [],
+      hidden_evaluator_feedback_allowed: false,
+      full_skill_body_allowed: false,
     },
-    ...(knowledgeEnabled(run.agentMode)
-      ? [
-          {
-            title: "Knowledge mode",
-            content: "Use bounded retrieval synthesis and refs only; do not inline full strategy, memory, skill body, logs, or hidden evaluator data.",
-          },
-        ]
-      : []),
-    ...(deterministicResultArtifact(run).enabled
-      ? [
-          {
-            title: "Deterministic task status",
-            content: "Use DETERMINISTIC_RESULT.json for verified/unverified state; unverified is not a runtime failure but blocks automatic high-confidence completion.",
-          },
-        ]
-      : []),
-  ],
-  active_subsystems: ["run_binding", "checkpoint", "monitor", "ledger", "tool_audit", "model_router", "learning_gate", "deterministic_result"],
-  skipped_subsystems: [
-    "hidden_feedback_prompting",
-    ...(knowledgeEnabled(run.agentMode) ? [] : ["knowledge_retrieval"]),
-  ],
+    deterministic_result: {
+      ref: "DETERMINISTIC_RESULT.json",
+      enabled: deterministicResultArtifact(run).enabled,
+      task_kind: deterministicResultArtifact(run).task_kind,
+      verified_state: deterministicResultArtifact(run).verified_state,
+      read_only: deterministicResultArtifact(run).tool_policy.read_only,
+      mismatches: deterministicResultArtifact(run).mismatches,
+    },
+    available_skill_index: [],
+    mcp_capability_summary: {
+      ref: "MCP_CAPABILITY_INDEX.json",
+      execution_owner: "generic_agent_tool_registry_or_mcp",
+      deepagent_executes_mcp_directly: false,
+    },
+    constraints: [
+      "preserve generic agent tool registry and MCP execution",
+      "keep configured upstream provider execution explicit and auditable",
+      "do not include hidden evaluator feedback",
+      ...(deterministicResultArtifact(run).tool_policy.read_only
+        ? [
+            "when deterministic query controls are active, prefer read-only evidence and treat mutation as denied until separately approved",
+          ]
+        : []),
+    ],
+    materialization_plan_ref: null,
+    anti_patterns: [
+      "silent_provider_fallback",
+      "hosted_tool_execution_without_allowlist",
+      "hidden_feedback_prompt_injection",
+    ],
+    required_outputs: [
+      "DESIGN.md",
+      "HANDOFF.md",
+      "TEST.md",
+      "HISTORY.md",
+      "deepagent_generic_agent_binding.json",
+      "run_checkpoint_manifest.json",
+      "run_monitor_snapshot.json",
+    ],
+    evidence_refs: [
+      "doc:run_context",
+      "doc:design",
+      "doc:test",
+      "artifact:run_state",
+      "artifact:candidate_lineage",
+      "artifact:output_contract",
+      "artifact:deterministic_result",
+    ],
+    prompt_sections: [
+      {
+        title: "Runtime scope",
+        content:
+          "DeepAgent manages every upstream provider call and does not replace generic tool/MCP/session runtime.",
+      },
+      {
+        title: "DeepAgent identity",
+        content: bootMessage(run.agentMode),
+      },
+      ...(knowledgeEnabled(run.agentMode)
+        ? [
+            {
+              title: "Knowledge mode",
+              content:
+                "Use bounded retrieval synthesis and refs only; do not inline full strategy, memory, skill body, logs, or hidden evaluator data.",
+            },
+          ]
+        : []),
+      ...(deterministicResultArtifact(run).enabled
+        ? [
+            {
+              title: "Deterministic task status",
+              content:
+                "Use DETERMINISTIC_RESULT.json for verified/unverified state; unverified is not a runtime failure but blocks automatic high-confidence completion.",
+            },
+          ]
+        : []),
+    ],
+    active_subsystems: [
+      "run_binding",
+      "checkpoint",
+      "monitor",
+      "ledger",
+      "tool_audit",
+      "model_router",
+      "learning_gate",
+      "deterministic_result",
+    ],
+    skipped_subsystems: [
+      "hidden_feedback_prompting",
+      ...(knowledgeEnabled(run.agentMode) ? [] : ["knowledge_retrieval"]),
+    ],
   }
 }
 
@@ -1418,12 +1576,12 @@ const runContextStatus = (state: string): import("./deepagent/run-context").RunC
   state === "completed"
     ? "completed"
     : state === "failed"
-    ? "runtime_failed"
-    : state === "blocked"
-    ? "blocked"
-    : state === "cancelled"
-    ? "cancelled"
-    : "in_progress"
+      ? "runtime_failed"
+      : state === "blocked"
+        ? "blocked"
+        : state === "cancelled"
+          ? "cancelled"
+          : "in_progress"
 
 const runContextNextAction = (state: string): string =>
   state === "blocked" || state === "failed" || state === "cancelled"
@@ -1434,21 +1592,21 @@ const runContextRootCause = (state: string): string | null =>
   state === "blocked" ? "provider_executed_tool_blocked" : state === "cancelled" ? "user_or_runtime_interrupt" : null
 
 const runContextInput = (run: RunRecord, state: string) => ({
-    runId: run.runID,
-    mode: run.agentMode,
-    status: runContextStatus(state),
-    round: 1,
-    modelId: run.input.modelID,
-    feature: run.input.feature,
-    routerProvider: run.routerDecision.selected_provider_id,
-    routerModel: run.routerDecision.selected_model_id,
-    activationMode: activationMode(run.agentMode),
-    knowledgeEnabled: knowledgeEnabled(run.agentMode),
-    bestCandidateRef: "generic_agent_passthrough",
-    nextAction: runContextNextAction(state),
-    rootCause: runContextRootCause(state),
-    bootMessage: bootMessage(run.agentMode),
-  })
+  runId: run.runID,
+  mode: run.agentMode,
+  status: runContextStatus(state),
+  round: 1,
+  modelId: run.input.modelID,
+  feature: run.input.feature,
+  routerProvider: run.routerDecision.selected_provider_id,
+  routerModel: run.routerDecision.selected_model_id,
+  activationMode: activationMode(run.agentMode),
+  knowledgeEnabled: knowledgeEnabled(run.agentMode),
+  bestCandidateRef: "generic_agent_passthrough",
+  nextAction: runContextNextAction(state),
+  rootCause: runContextRootCause(state),
+  bootMessage: bootMessage(run.agentMode),
+})
 
 const runSummaryFor = (run: RunRecord, state: RunCloseState): RunSummary => {
   const failed = state === "failed" || state === "blocked" || state === "cancelled"
@@ -1493,18 +1651,26 @@ const candidateLineage = (run: RunRecord, state: RunCloseState, summary = runSum
       candidate_ref: "generic_agent_passthrough",
       parent_candidate_ref: null,
       source_policy: "initial_candidate",
-      status: summary.status === "runtime_failed" || summary.status === "blocked" ? "runtime_failed" : summary.status === "cancelled" ? "cancelled" : summary.candidate.status,
+      status:
+        summary.status === "runtime_failed" || summary.status === "blocked"
+          ? "runtime_failed"
+          : summary.status === "cancelled"
+            ? "cancelled"
+            : summary.candidate.status,
       primary_metric: null,
       min_metric: null,
       correctness: { status: "not_applicable", passed: null, total: null },
       decision_ref: "graph/decision",
-      failure_dossier_ref: state === "failed" || state === "blocked" || state === "cancelled" ? (run.failureDossierRef ?? "FAILURE_DOSSIER.md") : null,
+      failure_dossier_ref:
+        state === "failed" || state === "blocked" || state === "cancelled"
+          ? (run.failureDossierRef ?? "FAILURE_DOSSIER.md")
+          : null,
       notes:
         summary.status === "cancelled"
           ? ["Provider control-plane run was cancelled and preserved for resume review."]
           : summary.status === "runtime_failed" || summary.status === "blocked"
-          ? ["Provider control-plane failure preserved for diagnosis and rollback."]
-          : ["DeepAgent control plane preserved the generic agent passthrough candidate."],
+            ? ["Provider control-plane failure preserved for diagnosis and rollback."]
+            : ["DeepAgent control plane preserved the generic agent passthrough candidate."],
     },
   ],
 })
@@ -1531,13 +1697,27 @@ const diagnosisResult = (run: RunRecord, state: RunCloseState) => ({
   run_id: run.runID,
   round_id: run.roundID,
   status: state === "failed" || state === "blocked" || state === "cancelled" ? "required" : "not_required",
-  trigger: state === "blocked" ? "policy_block" : state === "failed" ? "runtime_failure" : state === "cancelled" ? "cancelled" : "none",
+  trigger:
+    state === "blocked"
+      ? "policy_block"
+      : state === "failed"
+        ? "runtime_failure"
+        : state === "cancelled"
+          ? "cancelled"
+          : "none",
   deterministic_result_ref: "DETERMINISTIC_RESULT.json",
   deterministic_status: deterministicResultArtifact(run).verified_state,
   deterministic_mismatches: deterministicResultArtifact(run).mismatches,
-  root_cause: state === "blocked" ? "provider_executed_tool_blocked" : state === "cancelled" ? "user_or_runtime_interrupt" : null,
-  evidence_refs: state === "failed" || state === "blocked" || state === "cancelled" ? [run.failureDossierRef ?? "FAILURE_DOSSIER.md"] : [],
-  next_action: state === "blocked" || state === "failed" || state === "cancelled" ? "review_required_before_resume" : "continue_or_complete",
+  root_cause:
+    state === "blocked" ? "provider_executed_tool_blocked" : state === "cancelled" ? "user_or_runtime_interrupt" : null,
+  evidence_refs:
+    state === "failed" || state === "blocked" || state === "cancelled"
+      ? [run.failureDossierRef ?? "FAILURE_DOSSIER.md"]
+      : [],
+  next_action:
+    state === "blocked" || state === "failed" || state === "cancelled"
+      ? "review_required_before_resume"
+      : "continue_or_complete",
   rollback_policy: {
     enabled: true,
     rollback_owner: "generic_agent_file_session_runtime",
@@ -1550,7 +1730,14 @@ const resourceUsage = (run: RunRecord) => ({
   record_id: run.resourceID,
   run_id: run.runID,
   sampled_at: new Date().toISOString(),
-  gpu: { backend: "none", device_id: null, utilization_pct: 0, memory_used_mb: 0, power_watts: null, temperature_c: null },
+  gpu: {
+    backend: "none",
+    device_id: null,
+    utilization_pct: 0,
+    memory_used_mb: 0,
+    power_watts: null,
+    temperature_c: null,
+  },
   cpu: { utilization_pct: 0 },
   memory: { rss_mb: 0, cgroup_limit_mb: 0, oom_events: 0 },
   disk: { workspace_mb: 0, artifact_mb: 0 },
@@ -1597,7 +1784,11 @@ const learningWriteback = (run: RunRecord) => ({
   memory_candidates: learningCandidates(run, "memory"),
   skill_candidates: [],
   strategy_candidates: [
-    { candidate_id: `strategy_candidate:${run.runID}:mode_contract`, status: "staged", source_ref: "MODEL_WORK_PACKAGE.json" },
+    {
+      candidate_id: `strategy_candidate:${run.runID}:mode_contract`,
+      status: "staged",
+      source_ref: "MODEL_WORK_PACKAGE.json",
+    },
     ...learningCandidates(run, "strategy"),
   ],
   methodology_candidates: learningCandidates(run, "methodology"),
@@ -1691,11 +1882,7 @@ const releaseBundle = (run: RunRecord) => ({
   },
 })
 
-const checkpoint = (
-  run: RunRecord,
-  state: RunCloseState,
-  refs: Record<string, string>,
-) => ({
+const checkpoint = (run: RunRecord, state: RunCloseState, refs: Record<string, string>) => ({
   schema_version: "run_checkpoint_manifest.v1",
   checkpoint_id: run.checkpointID,
   run_id: run.runID,
@@ -1758,18 +1945,38 @@ const checkpoint = (
     { kind: "test", ref: "TEST.md", sha256: refs["TEST.md"] ?? null },
     { kind: "history_private", ref: "HISTORY.md", sha256: refs["HISTORY.md"] ?? null },
     { kind: "activation_policy", ref: "ACTIVATION_POLICY.json", sha256: refs["ACTIVATION_POLICY.json"] ?? null },
-    { kind: "mcp_capability_index", ref: "MCP_CAPABILITY_INDEX.json", sha256: refs["MCP_CAPABILITY_INDEX.json"] ?? null },
-    { kind: "knowledge_retrieval", ref: "KNOWLEDGE_RETRIEVAL_RESULT.json", sha256: refs["KNOWLEDGE_RETRIEVAL_RESULT.json"] ?? null },
-    { kind: "deterministic_result", ref: "DETERMINISTIC_RESULT.json", sha256: refs["DETERMINISTIC_RESULT.json"] ?? null },
-    { kind: "schema_validation", ref: "SCHEMA_VALIDATION_REPORT.json", sha256: refs["SCHEMA_VALIDATION_REPORT.json"] ?? null },
+    {
+      kind: "mcp_capability_index",
+      ref: "MCP_CAPABILITY_INDEX.json",
+      sha256: refs["MCP_CAPABILITY_INDEX.json"] ?? null,
+    },
+    {
+      kind: "knowledge_retrieval",
+      ref: "KNOWLEDGE_RETRIEVAL_RESULT.json",
+      sha256: refs["KNOWLEDGE_RETRIEVAL_RESULT.json"] ?? null,
+    },
+    {
+      kind: "deterministic_result",
+      ref: "DETERMINISTIC_RESULT.json",
+      sha256: refs["DETERMINISTIC_RESULT.json"] ?? null,
+    },
+    {
+      kind: "schema_validation",
+      ref: "SCHEMA_VALIDATION_REPORT.json",
+      sha256: refs["SCHEMA_VALIDATION_REPORT.json"] ?? null,
+    },
     { kind: "candidate_lineage", ref: "CANDIDATE_LINEAGE.json", sha256: refs["CANDIDATE_LINEAGE.json"] ?? null },
     { kind: "output_contract", ref: "OUTPUT_CONTRACT.json", sha256: refs["OUTPUT_CONTRACT.json"] ?? null },
-    ...(run.failureDossierRef ? [{ kind: "failure_dossier", ref: "FAILURE_DOSSIER.md", sha256: refs["FAILURE_DOSSIER.md"] ?? null }] : []),
+    ...(run.failureDossierRef
+      ? [{ kind: "failure_dossier", ref: "FAILURE_DOSSIER.md", sha256: refs["FAILURE_DOSSIER.md"] ?? null }]
+      : []),
   ],
   artifact_hashes: Object.entries(refs).map(([ref, hash]) => ({ ref, sha256: hash })),
   token_ledger_refs: [`token_usage_ledger:${run.runID}:${run.requestID}`],
   resource_usage_refs: [`resource_usage_record:${run.resourceID}`],
-  human_intervention_refs: run.humanInterventions.map((intervention) => `human_intervention_record:${intervention.intervention_id}`),
+  human_intervention_refs: run.humanInterventions.map(
+    (intervention) => `human_intervention_record:${intervention.intervention_id}`,
+  ),
   resume_policy: {
     decision: state === "failed" || state === "blocked" || state === "cancelled" ? "review_required" : "resume_allowed",
     reason:
@@ -1795,11 +2002,7 @@ const humanInterventionRecord = (run: RunRecord) => {
   }
 }
 
-const monitor = (
-  run: RunRecord,
-  state: RunCloseState,
-  refs: Record<string, string>,
-) => ({
+const monitor = (run: RunRecord, state: RunCloseState, refs: Record<string, string>) => ({
   schema_version: "run_monitor_snapshot.v1",
   snapshot_id: `run_monitor_snapshot:${run.runID}`,
   run_id: run.runID,
@@ -1817,11 +2020,27 @@ const monitor = (
     { kind: "problem_profile", ref: "PROBLEM_PROFILE.json", sha256: refs["PROBLEM_PROFILE.json"] ?? null },
     { kind: "model_work_package", ref: "MODEL_WORK_PACKAGE.json", sha256: refs["MODEL_WORK_PACKAGE.json"] ?? null },
     { kind: "activation_policy", ref: "ACTIVATION_POLICY.json", sha256: refs["ACTIVATION_POLICY.json"] ?? null },
-    { kind: "mcp_capability_index", ref: "MCP_CAPABILITY_INDEX.json", sha256: refs["MCP_CAPABILITY_INDEX.json"] ?? null },
-    { kind: "knowledge_retrieval", ref: "KNOWLEDGE_RETRIEVAL_RESULT.json", sha256: refs["KNOWLEDGE_RETRIEVAL_RESULT.json"] ?? null },
-    { kind: "deterministic_result", ref: "DETERMINISTIC_RESULT.json", sha256: refs["DETERMINISTIC_RESULT.json"] ?? null },
+    {
+      kind: "mcp_capability_index",
+      ref: "MCP_CAPABILITY_INDEX.json",
+      sha256: refs["MCP_CAPABILITY_INDEX.json"] ?? null,
+    },
+    {
+      kind: "knowledge_retrieval",
+      ref: "KNOWLEDGE_RETRIEVAL_RESULT.json",
+      sha256: refs["KNOWLEDGE_RETRIEVAL_RESULT.json"] ?? null,
+    },
+    {
+      kind: "deterministic_result",
+      ref: "DETERMINISTIC_RESULT.json",
+      sha256: refs["DETERMINISTIC_RESULT.json"] ?? null,
+    },
     { kind: "diagnosis_result", ref: "DIAGNOSIS_RESULT.json", sha256: refs["DIAGNOSIS_RESULT.json"] ?? null },
-    { kind: "schema_validation", ref: "SCHEMA_VALIDATION_REPORT.json", sha256: refs["SCHEMA_VALIDATION_REPORT.json"] ?? null },
+    {
+      kind: "schema_validation",
+      ref: "SCHEMA_VALIDATION_REPORT.json",
+      sha256: refs["SCHEMA_VALIDATION_REPORT.json"] ?? null,
+    },
     { kind: "run_state", ref: "DEEPAGENT_RUN_STATE.json", sha256: refs["DEEPAGENT_RUN_STATE.json"] ?? null },
     { kind: "run_context", ref: "RUN_CONTEXT.md", sha256: refs["RUN_CONTEXT.md"] ?? null },
     { kind: "design", ref: "DESIGN.md", sha256: refs["DESIGN.md"] ?? null },
@@ -1830,10 +2049,18 @@ const monitor = (
     { kind: "history_private", ref: "HISTORY.md", sha256: refs["HISTORY.md"] ?? null },
     { kind: "candidate_lineage", ref: "CANDIDATE_LINEAGE.json", sha256: refs["CANDIDATE_LINEAGE.json"] ?? null },
     { kind: "output_contract", ref: "OUTPUT_CONTRACT.json", sha256: refs["OUTPUT_CONTRACT.json"] ?? null },
-    { kind: "binding", ref: "deepagent_generic_agent_binding.json", sha256: refs["deepagent_generic_agent_binding.json"] ?? null },
+    {
+      kind: "binding",
+      ref: "deepagent_generic_agent_binding.json",
+      sha256: refs["deepagent_generic_agent_binding.json"] ?? null,
+    },
     { kind: "tool_audit", ref: "TOOL_AUDIT.json", sha256: refs["TOOL_AUDIT.json"] ?? null },
     { kind: "router_audit", ref: "MODEL_ROUTER_AUDIT.json", sha256: refs["MODEL_ROUTER_AUDIT.json"] ?? null },
-    { kind: "learning_writeback", ref: "LEARNING_WRITEBACK_MANIFEST.json", sha256: refs["LEARNING_WRITEBACK_MANIFEST.json"] ?? null },
+    {
+      kind: "learning_writeback",
+      ref: "LEARNING_WRITEBACK_MANIFEST.json",
+      sha256: refs["LEARNING_WRITEBACK_MANIFEST.json"] ?? null,
+    },
     { kind: "release_gate", ref: "RELEASE_GATE_AUDIT.json", sha256: refs["RELEASE_GATE_AUDIT.json"] ?? null },
   ],
   checkpoint_refs: [
@@ -1873,39 +2100,101 @@ const failureDossierText = (run: RunRecord, failure: unknown) =>
   ].join("\n")
 
 const ARTIFACT_SCHEMAS: Record<string, { schema_version: string; required_keys: string[] }> = {
-  "TASK_SPEC.json": { schema_version: "task_spec.v1", required_keys: ["task_id", "task_type", "goals", "success_criteria", "allowed_actions", "budgets"] },
+  "TASK_SPEC.json": {
+    schema_version: "task_spec.v1",
+    required_keys: ["task_id", "task_type", "goals", "success_criteria", "allowed_actions", "budgets"],
+  },
   "PROBLEM_PROFILE.json": { schema_version: "problem_profile.v1", required_keys: ["task_type", "domain", "signals"] },
-  "MODEL_RUNTIME_POLICY.json": { schema_version: "model_runtime_policy.v1", required_keys: ["policy_id", "model_id", "agent_mode", "hard_rules"] },
-  "ACTIVATION_POLICY.json": { schema_version: "deepagent_activation_policy.v1", required_keys: ["activation_id", "run_id", "agent_mode", "knowledge_enabled"] },
-  "MCP_CAPABILITY_INDEX.json": { schema_version: "deepagent_mcp_capability_index.v1", required_keys: ["run_id", "capabilities", "capability_summary", "policy"] },
-  "KNOWLEDGE_RETRIEVAL_RESULT.json": { schema_version: "deepagent_knowledge_retrieval_result.v1", required_keys: ["run_id", "enabled", "retrieval_mode", "selected_refs"] },
-  "DETERMINISTIC_RESULT.json": { schema_version: "deepagent_deterministic_result.v1", required_keys: ["run_id", "enabled", "task_kind", "verified_state", "tool_policy"] },
-  "MODEL_WORK_PACKAGE.json": { schema_version: "model_work_package.v1", required_keys: ["work_package_id", "task_id", "agent_mode", "goal", "artifact_refs"] },
-  "DIAGNOSIS_RESULT.json": { schema_version: "deepagent_diagnosis_result.v1", required_keys: ["run_id", "status", "trigger", "next_action"] },
+  "MODEL_RUNTIME_POLICY.json": {
+    schema_version: "model_runtime_policy.v1",
+    required_keys: ["policy_id", "model_id", "agent_mode", "hard_rules"],
+  },
+  "ACTIVATION_POLICY.json": {
+    schema_version: "deepagent_activation_policy.v1",
+    required_keys: ["activation_id", "run_id", "agent_mode", "knowledge_enabled"],
+  },
+  "MCP_CAPABILITY_INDEX.json": {
+    schema_version: "deepagent_mcp_capability_index.v1",
+    required_keys: ["run_id", "capabilities", "capability_summary", "policy"],
+  },
+  "KNOWLEDGE_RETRIEVAL_RESULT.json": {
+    schema_version: "deepagent_knowledge_retrieval_result.v1",
+    required_keys: ["run_id", "enabled", "retrieval_mode", "selected_refs"],
+  },
+  "DETERMINISTIC_RESULT.json": {
+    schema_version: "deepagent_deterministic_result.v1",
+    required_keys: ["run_id", "enabled", "task_kind", "verified_state", "tool_policy"],
+  },
+  "MODEL_WORK_PACKAGE.json": {
+    schema_version: "model_work_package.v1",
+    required_keys: ["work_package_id", "task_id", "agent_mode", "goal", "artifact_refs"],
+  },
+  "DIAGNOSIS_RESULT.json": {
+    schema_version: "deepagent_diagnosis_result.v1",
+    required_keys: ["run_id", "status", "trigger", "next_action"],
+  },
   // NOTE: the round report (deepagent-code.round_report.v1) is a session-layer macro-round artifact
   // persisted by PromptDraftStore.saveRoundReport, NOT a gateway run artifact — the gateway never
   // produces it, so it is intentionally absent from this run-artifact registry.
-  "DEEPAGENT_RUN_STATE.json": { schema_version: "deepagent_global_run_state.v1", required_keys: ["run_id", "provider_id", "agent_mode", "state"] },
-  "CANDIDATE_LINEAGE.json": { schema_version: "candidate_lineage.v1", required_keys: ["run_id", "task_id", "group", "nodes"] },
-  "OUTPUT_CONTRACT.json": { schema_version: "output_contract.v1", required_keys: ["contract_id", "accepted_formats", "reject_if"] },
-  "deepagent_generic_agent_binding.json": { schema_version: "deepagent_generic_agent_binding.v1", required_keys: ["binding_id", "agent_run_id", "agent_mode"] },
-  "token_usage_ledger.json": { schema_version: "token_usage_ledger.v1", required_keys: ["ledger_id", "run_id", "request_id"] },
-  "resource_usage_record.json": { schema_version: "resource_usage_record.v1", required_keys: ["record_id", "run_id", "gpu", "cpu", "memory"] },
-  "TOOL_AUDIT.json": { schema_version: "deepagent_tool_audit.v1", required_keys: ["run_id", "execution_boundary", "events"] },
-  "MODEL_ROUTER_AUDIT.json": { schema_version: "deepagent_model_router_audit.v1", required_keys: ["run_id", "decisions"] },
-  "LEARNING_WRITEBACK_MANIFEST.json": { schema_version: "learning_writeback_manifest.v1", required_keys: ["writeback_id", "source_run_id", "promotion_decision"] },
-  "RELEASE_GATE_AUDIT.json": { schema_version: "deepagent_release_gate_audit.v1", required_keys: ["run_id", "kill_switch_enabled", "schema_validation_required"] },
-  "release_bundle_manifest.json": { schema_version: "deepagent_release_bundle_manifest.v1", required_keys: ["run_id", "agent_mode", "policy_hash"] },
+  "DEEPAGENT_RUN_STATE.json": {
+    schema_version: "deepagent_global_run_state.v1",
+    required_keys: ["run_id", "provider_id", "agent_mode", "state"],
+  },
+  "CANDIDATE_LINEAGE.json": {
+    schema_version: "candidate_lineage.v1",
+    required_keys: ["run_id", "task_id", "group", "nodes"],
+  },
+  "OUTPUT_CONTRACT.json": {
+    schema_version: "output_contract.v1",
+    required_keys: ["contract_id", "accepted_formats", "reject_if"],
+  },
+  "deepagent_generic_agent_binding.json": {
+    schema_version: "deepagent_generic_agent_binding.v1",
+    required_keys: ["binding_id", "agent_run_id", "agent_mode"],
+  },
+  "token_usage_ledger.json": {
+    schema_version: "token_usage_ledger.v1",
+    required_keys: ["ledger_id", "run_id", "request_id"],
+  },
+  "resource_usage_record.json": {
+    schema_version: "resource_usage_record.v1",
+    required_keys: ["record_id", "run_id", "gpu", "cpu", "memory"],
+  },
+  "TOOL_AUDIT.json": {
+    schema_version: "deepagent_tool_audit.v1",
+    required_keys: ["run_id", "execution_boundary", "events"],
+  },
+  "MODEL_ROUTER_AUDIT.json": {
+    schema_version: "deepagent_model_router_audit.v1",
+    required_keys: ["run_id", "decisions"],
+  },
+  "LEARNING_WRITEBACK_MANIFEST.json": {
+    schema_version: "learning_writeback_manifest.v1",
+    required_keys: ["writeback_id", "source_run_id", "promotion_decision"],
+  },
+  "RELEASE_GATE_AUDIT.json": {
+    schema_version: "deepagent_release_gate_audit.v1",
+    required_keys: ["run_id", "kill_switch_enabled", "schema_validation_required"],
+  },
+  "release_bundle_manifest.json": {
+    schema_version: "deepagent_release_bundle_manifest.v1",
+    required_keys: ["run_id", "agent_mode", "policy_hash"],
+  },
 }
 
 const validateArtifact = (name: string, value: unknown): { status: SchemaValidationStatus; errors: string[] } => {
   if (value === undefined) return { status: "fail", errors: ["artifact missing"] }
-  if (name.endsWith(".md")) return { status: typeof value === "string" && value.length > 0 ? "pass" : "fail", errors: typeof value === "string" && value.length > 0 ? [] : ["empty markdown content"] }
+  if (name.endsWith(".md"))
+    return {
+      status: typeof value === "string" && value.length > 0 ? "pass" : "fail",
+      errors: typeof value === "string" && value.length > 0 ? [] : ["empty markdown content"],
+    }
   if (!isRecord(value)) return { status: "fail", errors: ["artifact is not an object"] }
   const schema = ARTIFACT_SCHEMAS[name]
   if (!schema) return { status: "pass", errors: [] }
   const errors: string[] = []
-  if (value.schema_version !== schema.schema_version) errors.push(`schema_version mismatch: expected ${schema.schema_version}, got ${String(value.schema_version)}`)
+  if (value.schema_version !== schema.schema_version)
+    errors.push(`schema_version mismatch: expected ${schema.schema_version}, got ${String(value.schema_version)}`)
   for (const key of schema.required_keys) {
     if (!(key in value)) errors.push(`missing required key: ${key}`)
   }
@@ -1979,7 +2268,9 @@ const validateArtifactGraph = (artifacts: Record<string, unknown>, required: rea
     const value = artifacts[name]
     if (!isRecord(value)) return [`${name} is not an object`]
     const artifactRunID = stringValue(value.run_id) ?? stringValue(value.source_run_id)
-    return artifactRunID === runID ? [] : [`${name} run_id mismatch: expected ${runID}, got ${artifactRunID ?? "missing"}`]
+    return artifactRunID === runID
+      ? []
+      : [`${name} run_id mismatch: expected ${runID}, got ${artifactRunID ?? "missing"}`]
   })
   checks.push({
     artifact: "artifact_graph:run_id_consistency",
@@ -1990,15 +2281,21 @@ const validateArtifactGraph = (artifacts: Record<string, unknown>, required: rea
 
   const knowledge = artifacts["KNOWLEDGE_RETRIEVAL_RESULT.json"]
   const workPackage = artifacts["MODEL_WORK_PACKAGE.json"]
-  const knowledgeRefs = isRecord(knowledge) && Array.isArray(knowledge.selected_refs)
-    ? knowledge.selected_refs.flatMap((ref) => (isRecord(ref) && typeof ref.ref_id === "string" ? [ref.ref_id] : []))
-    : []
-  const workPackageRefs = isRecord(workPackage) && isRecord(workPackage.knowledge_retrieval) && Array.isArray(workPackage.knowledge_retrieval.selected_refs)
-    ? workPackage.knowledge_retrieval.selected_refs.filter((ref): ref is string => typeof ref === "string")
-    : []
+  const knowledgeRefs =
+    isRecord(knowledge) && Array.isArray(knowledge.selected_refs)
+      ? knowledge.selected_refs.flatMap((ref) => (isRecord(ref) && typeof ref.ref_id === "string" ? [ref.ref_id] : []))
+      : []
+  const workPackageRefs =
+    isRecord(workPackage) &&
+    isRecord(workPackage.knowledge_retrieval) &&
+    Array.isArray(workPackage.knowledge_retrieval.selected_refs)
+      ? workPackage.knowledge_retrieval.selected_refs.filter((ref): ref is string => typeof ref === "string")
+      : []
   const refErrors = arraysEqual(knowledgeRefs, workPackageRefs)
     ? []
-    : [`knowledge selected_refs differ from work package refs: ${knowledgeRefs.join(",")} != ${workPackageRefs.join(",")}`]
+    : [
+        `knowledge selected_refs differ from work package refs: ${knowledgeRefs.join(",")} != ${workPackageRefs.join(",")}`,
+      ]
   checks.push({
     artifact: "artifact_graph:knowledge_ref_consistency",
     status: refErrors.length === 0 ? "pass" : "fail",
@@ -2007,19 +2304,23 @@ const validateArtifactGraph = (artifacts: Record<string, unknown>, required: rea
   })
 
   const checkpoint = artifacts["run_checkpoint_manifest.json"]
-  const checkpointHashes = isRecord(checkpoint) && Array.isArray(checkpoint.artifact_hashes)
-    ? new Set(
-        checkpoint.artifact_hashes.flatMap((item) =>
-          isRecord(item) && typeof item.ref === "string" && typeof item.sha256 === "string" ? [item.ref] : [],
-        ),
-      )
-    : new Set<string>()
-  const missingHashes = required.filter((name) => name !== "run_checkpoint_manifest.json" && !checkpointHashes.has(name))
+  const checkpointHashes =
+    isRecord(checkpoint) && Array.isArray(checkpoint.artifact_hashes)
+      ? new Set(
+          checkpoint.artifact_hashes.flatMap((item) =>
+            isRecord(item) && typeof item.ref === "string" && typeof item.sha256 === "string" ? [item.ref] : [],
+          ),
+        )
+      : new Set<string>()
+  const missingHashes = required.filter(
+    (name) => name !== "run_checkpoint_manifest.json" && !checkpointHashes.has(name),
+  )
   checks.push({
     artifact: "artifact_graph:checkpoint_hash_coverage",
     status: missingHashes.length === 0 ? "pass" : "fail",
     schema_ref: "deepagent.cross_artifact.checkpoint_hashes.v1",
-    errors: missingHashes.length > 0 ? missingHashes.map((name) => `missing checkpoint artifact hash: ${name}`) : undefined,
+    errors:
+      missingHashes.length > 0 ? missingHashes.map((name) => `missing checkpoint artifact hash: ${name}`) : undefined,
   })
   return checks
 }
@@ -2083,8 +2384,7 @@ const stringValue = (value: unknown) => (typeof value === "string" && value.leng
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value)
 
-const isCause = (value: unknown): value is Cause.Cause<unknown> =>
-  isRecord(value) && Array.isArray(value.reasons)
+const isCause = (value: unknown): value is Cause.Cause<unknown> => isRecord(value) && Array.isArray(value.reasons)
 
 const toolCapabilities = (run: RunRecord) => {
   const deepagent = run.input.metadata && isRecord(run.input.metadata.deepagent) ? run.input.metadata.deepagent : {}
@@ -2129,11 +2429,7 @@ const deterministicVerifiedState = (
 }
 
 const deterministicResultKindFor = (kind: ReturnType<typeof classifyDeterministicTask>) =>
-  kind === "validation_status"
-    ? "validation"
-    : kind === "state_inspection"
-      ? "environment"
-      : "query"
+  kind === "validation_status" ? "validation" : kind === "state_inspection" ? "environment" : "query"
 
 const deterministicResultSummary = (
   run: RunRecord,
@@ -2156,7 +2452,8 @@ const deterministicMismatches = (run: RunRecord, enabled: boolean, verifiedState
       ? [
           {
             field: "deterministic_result",
-            detail: "model output appears to claim success for a deterministic task, but no tool or runner evidence was observed",
+            detail:
+              "model output appears to claim success for a deterministic task, but no tool or runner evidence was observed",
           },
         ]
       : []),
@@ -2194,7 +2491,9 @@ function parseAllowlist(value: string | undefined) {
 }
 
 function parseAgentMode(value: string | undefined): AgentMode {
-  return value === "general" || value === "high" || value === "xhigh" || value === "max" || value === "ultra" ? value : "high"
+  return value === "general" || value === "high" || value === "xhigh" || value === "max" || value === "ultra"
+    ? value
+    : "high"
 }
 
 const retrieveKnowledge = (run: RunRecord) => {
@@ -2309,12 +2608,12 @@ const bootMessage = (mode: AgentMode) =>
   mode === "ultra"
     ? `${DEEPAGENT_BOOT_MESSAGE}\n当前模式: ultra。具备 max 的全部能力（bounded knowledge retrieval，仅 refs/摘要），并由监督线程自动推进宏轮直至收敛；遇到范围变化、反复无进展或预算阈值时升级给人。`
     : mode === "max"
-    ? `${DEEPAGENT_BOOT_MESSAGE}\n当前模式: max。启用完整 bounded knowledge retrieval（strategies/methodologies/knowledge/skills/memory），仅使用摘要和 refs，不注入完整知识库正文。`
-    : mode === "xhigh"
-    ? `${DEEPAGENT_BOOT_MESSAGE}\n当前模式: xhigh。启用领域知识 + skills + 跨项目事实记忆的 bounded retrieval；strategies/methodologies 不开放，避免在错误任务上下文中误导模型。`
-    : mode === "high"
-    ? `${DEEPAGENT_BOOT_MESSAGE}\n当前模式: high。启用 skills + 项目上下文记忆 / 事实记忆的 bounded retrieval；领域知识和策略不开放，首轮采用 first_fast_design。`
-    : ""
+      ? `${DEEPAGENT_BOOT_MESSAGE}\n当前模式: max。启用完整 bounded knowledge retrieval（strategies/methodologies/knowledge/skills/memory），仅使用摘要和 refs，不注入完整知识库正文。`
+      : mode === "xhigh"
+        ? `${DEEPAGENT_BOOT_MESSAGE}\n当前模式: xhigh。启用领域知识 + skills + 跨项目事实记忆的 bounded retrieval；strategies/methodologies 不开放，避免在错误任务上下文中误导模型。`
+        : mode === "high"
+          ? `${DEEPAGENT_BOOT_MESSAGE}\n当前模式: high。启用 skills + 项目上下文记忆 / 事实记忆的 bounded retrieval；领域知识和策略不开放，首轮采用 first_fast_design。`
+          : ""
 
 const promptPolicy = (mode: AgentMode) => ({
   mode_id: mode,
@@ -2380,12 +2679,7 @@ const artifactText = (name: string, value: unknown) =>
   typeof value === "string" && name.endsWith(".md") ? value : `${JSON.stringify(value, null, 2)}\n`
 
 const hashRefs = (artifacts: Record<string, unknown>) =>
-  Object.fromEntries(
-    Object.entries(artifacts).map(([name, value]) => [
-      name,
-      sha256Text(artifactText(name, value)),
-    ]),
-  )
+  Object.fromEntries(Object.entries(artifacts).map(([name, value]) => [name, sha256Text(artifactText(name, value))]))
 
 const verifyCheckpoint = async (resume: ResumeConfig) => {
   try {
@@ -2397,10 +2691,14 @@ const verifyCheckpoint = async (resume: ResumeConfig) => {
 }
 
 const routerDecision = (input: RunInput, config: CurrentConfig): RouterDecision => {
-  const router = input.metadata && isRecord(input.metadata.deepagent) && isRecord(input.metadata.deepagent.router)
-    ? input.metadata.deepagent.router
-    : {}
-  const preference = router.user_preference === "soft" || router.user_preference === "hard" ? router.user_preference : config.modelRouter.userPreference
+  const router =
+    input.metadata && isRecord(input.metadata.deepagent) && isRecord(input.metadata.deepagent.router)
+      ? input.metadata.deepagent.router
+      : {}
+  const preference =
+    router.user_preference === "soft" || router.user_preference === "hard"
+      ? router.user_preference
+      : config.modelRouter.userPreference
   if (preference === "hard") {
     const selectedProviderID = stringValue(router.selected_provider_id) ?? config.modelRouter.upstreamProviderID
     const selectedModelID = stringValue(router.selected_model_id) ?? config.modelRouter.upstreamModelID

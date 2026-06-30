@@ -28,7 +28,12 @@ const makeOps = (over: Partial<MultiRoundOps<number>> = {}): MultiRoundOps<numbe
 describe("S9 ultra pack-change gate (DAP-13)", () => {
   test("no pack fields — gate is absent, loop runs without pack-change message", async () => {
     let body: string | undefined
-    const ops = makeOps({ onMacroRound: (s) => Effect.sync(() => { body = s.body }) })
+    const ops = makeOps({
+      onMacroRound: (s) =>
+        Effect.sync(() => {
+          body = s.body
+        }),
+    })
     await Effect.runPromise(maybeRunRounds(ops))
     expect(body ?? "").not.toContain("pack set changed")
   })
@@ -38,7 +43,10 @@ describe("S9 ultra pack-change gate (DAP-13)", () => {
     const ops = makeOps({
       baselinePackSnapshotId: "pack_snapshot:abc123",
       packSnapshotId: "pack_snapshot:abc123",
-      onMacroRound: (s) => Effect.sync(() => { body = s.body }),
+      onMacroRound: (s) =>
+        Effect.sync(() => {
+          body = s.body
+        }),
     })
     await Effect.runPromise(maybeRunRounds(ops))
     // Same snapshots: pack-change gate must not be the reason for any status escalation.
@@ -50,8 +58,11 @@ describe("S9 ultra pack-change gate (DAP-13)", () => {
     const ops = makeOps({
       agentMode: "ultra",
       baselinePackSnapshotId: "pack_snapshot:abc",
-      packSnapshotId: "pack_snapshot:xyz",   // changed — risk/scope shifted
-      onMacroRound: (s) => Effect.sync(() => { suggestion = s }),
+      packSnapshotId: "pack_snapshot:xyz", // changed — risk/scope shifted
+      onMacroRound: (s) =>
+        Effect.sync(() => {
+          suggestion = s
+        }),
     })
     await Effect.runPromise(maybeRunRounds(ops))
     expect(suggestion?.status).toBe("needs_human")
@@ -66,7 +77,10 @@ describe("S9 ultra pack-change gate (DAP-13)", () => {
       agentMode: "high",
       baselinePackSnapshotId: "pack_snapshot:abc",
       packSnapshotId: "pack_snapshot:xyz",
-      onMacroRound: (s) => Effect.sync(() => { body = s.body }),
+      onMacroRound: (s) =>
+        Effect.sync(() => {
+          body = s.body
+        }),
     })
     await Effect.runPromise(maybeRunRounds(ops))
     // The pack-change gate is ultra-only; high must not inject its message.

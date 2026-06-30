@@ -145,7 +145,8 @@ export const dict = {
   "home.privacy.link": "隐私",
 
   "home.faq.q1": "什么是 DeepAgent Code？",
-  "home.faq.a1": "DeepAgent Code 是一个开源代理，帮助您使用任意 AI 模型编写和运行代码。它提供终端界面、桌面应用及 IDE 扩展。",
+  "home.faq.a1":
+    "DeepAgent Code 是一个开源代理，帮助您使用任意 AI 模型编写和运行代码。它提供终端界面、桌面应用及 IDE 扩展。",
   "home.faq.q2": "如何使用 DeepAgent Code？",
   "home.faq.a2.before": "最简单的入门方式是阅读",
   "home.faq.a2.link": "介绍",
@@ -631,7 +632,8 @@ export const dict = {
   "workspace.lite.subscription.selectProvider":
     "在你的 deepagent-code 配置中选择「DeepAgent Code Go」作为提供商，即可使用 Go 模型。",
   "workspace.lite.black.message": "您当前已订阅 DeepAgent Code Black 或在候补名单中。如需切换到 Go，请先取消订阅。",
-  "workspace.lite.other.message": "此工作区中的另一位成员已经订阅了 DeepAgent Code Go。每个工作区只有一名成员可以订阅。",
+  "workspace.lite.other.message":
+    "此工作区中的另一位成员已经订阅了 DeepAgent Code Go。每个工作区只有一名成员可以订阅。",
   "workspace.lite.promo.description":
     "DeepAgent Code Go 起价为 {{price}}，之后 $10/月，并提供对流行开放编码模型的可靠访问，同时享有充裕的使用限额。",
   "workspace.lite.promo.price": "首月 $5",

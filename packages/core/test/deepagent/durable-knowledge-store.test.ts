@@ -77,7 +77,9 @@ describe("S0 DurableKnowledgeStore", () => {
   })
 
   test("project-shared visible only to its project; user-global visible everywhere", () => {
-    const shared = store.stageCandidate(mem({ scope: "project-shared", projectId: "project_aaa", description: "A-only" }))
+    const shared = store.stageCandidate(
+      mem({ scope: "project-shared", projectId: "project_aaa", description: "A-only" }),
+    )
     const global = store.stageCandidate(mem({ scope: "user-global", description: "everyone" }))
     store.approve(shared.id)
     store.approve(global.id)
@@ -156,7 +158,9 @@ describe("S0 durable store root resolution (docs/34 §7.2)", () => {
 
     const pidA = projectIdForWorkspace("/work/projectA")
     expect(a.retrieve({ types: ["memory"], projectId: pidA, limit: 5 }).map((h) => h.doc.id)).toContain(da.id)
-    expect(b.retrieve({ types: ["memory"], projectId: projectIdForWorkspace("/work/projectB"), limit: 5 })).toHaveLength(0)
+    expect(
+      b.retrieve({ types: ["memory"], projectId: projectIdForWorkspace("/work/projectB"), limit: 5 }),
+    ).toHaveLength(0)
     expect(g.retrieve({ types: ["memory"], limit: 5 }).map((h) => h.doc.id)).toContain(dg.id)
   })
 
@@ -166,8 +170,18 @@ describe("S0 durable store root resolution (docs/34 §7.2)", () => {
   })
 
   test("stageCandidate dedups exact duplicates and reinforces instead of creating rows", () => {
-    const first = store.stageCandidate(mem({ description: "use redis for the rate limiter", confidence: { evidence_strength: "weak", support_count: 1 } }))
-    const again = store.stageCandidate(mem({ description: "use redis for the rate limiter", confidence: { evidence_strength: "medium", support_count: 1 } }))
+    const first = store.stageCandidate(
+      mem({
+        description: "use redis for the rate limiter",
+        confidence: { evidence_strength: "weak", support_count: 1 },
+      }),
+    )
+    const again = store.stageCandidate(
+      mem({
+        description: "use redis for the rate limiter",
+        confidence: { evidence_strength: "medium", support_count: 1 },
+      }),
+    )
     // Same logical knowledge -> same doc id, support_count bumped, evidence raised to the stronger.
     expect(again.id).toBe(first.id)
     expect(store.documentStore.list({ type: "memory" })).toHaveLength(1)

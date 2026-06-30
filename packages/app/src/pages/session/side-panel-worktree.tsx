@@ -21,9 +21,18 @@ export const SidePanelWorktree: Component<{ onClose: () => void }> = (props) => 
 
   const [data, { refetch }] = createResource(directory, async (dir) => {
     const [changes, diff, summary] = await Promise.all([
-      sdk.client.worktree.changes({ directory: dir, worktreeRemoveInput: { directory: dir } }).then((x) => x.data).catch(() => undefined),
-      sdk.client.worktree.diff({ directory: dir, worktreeRemoveInput: { directory: dir } }).then((x) => x.data).catch(() => undefined),
-      sdk.client.worktree.summary({ directory: dir, worktreeRemoveInput: { directory: dir } }).then((x) => x.data).catch(() => undefined),
+      sdk.client.worktree
+        .changes({ directory: dir, worktreeRemoveInput: { directory: dir } })
+        .then((x) => x.data)
+        .catch(() => undefined),
+      sdk.client.worktree
+        .diff({ directory: dir, worktreeRemoveInput: { directory: dir } })
+        .then((x) => x.data)
+        .catch(() => undefined),
+      sdk.client.worktree
+        .summary({ directory: dir, worktreeRemoveInput: { directory: dir } })
+        .then((x) => x.data)
+        .catch(() => undefined),
     ])
     return { changes, diff, summary }
   })
@@ -55,7 +64,10 @@ export const SidePanelWorktree: Component<{ onClose: () => void }> = (props) => 
     if (!window.confirm(prompt)) return
     setBusy(true)
     try {
-      await sdk.client.worktree.safeRemove({ directory: directory(), worktreeSafeRemoveInput: { directory: directory(), force } })
+      await sdk.client.worktree.safeRemove({
+        directory: directory(),
+        worktreeSafeRemoveInput: { directory: directory(), force },
+      })
       showToast({ variant: "success", title: language.t("worktree.remove.done"), description: "" })
       props.onClose()
     } catch (err) {
@@ -116,7 +128,8 @@ export const SidePanelWorktree: Component<{ onClose: () => void }> = (props) => 
                       {e.file}
                     </span>
                     <span class="shrink-0 text-text-weaker">
-                      <span class="text-text-success">+{e.additions}</span> <span class="text-text-error">-{e.deletions}</span>
+                      <span class="text-text-success">+{e.additions}</span>{" "}
+                      <span class="text-text-error">-{e.deletions}</span>
                     </span>
                   </div>
                 )}

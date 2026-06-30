@@ -26,6 +26,7 @@ import { Provider } from "@/provider/provider"
 import { WebSearchTool } from "./websearch"
 import * as Log from "@deepagent-code/core/util/log"
 import { LspTool } from "./lsp"
+import { CodeIntelTool } from "./code_intel"
 import * as Truncate from "./truncate"
 import { ApplyPatchTool } from "./apply_patch"
 import { Glob } from "@deepagent-code/core/util/glob"
@@ -133,6 +134,7 @@ export const layer: Layer.Layer<
     const greptool = yield* GrepTool
     const patchtool = yield* ApplyPatchTool
     const skilltool = yield* SkillTool
+    const codeintel = yield* CodeIntelTool
     const agent = yield* Agent.Service
 
     const state = yield* InstanceState.make<State>(
@@ -157,6 +159,7 @@ export const layer: Layer.Layer<
             parameters,
             jsonSchema,
             description: def.description,
+            provenance: { source: "custom" as const },
             execute: (args, toolCtx) =>
               Effect.gen(function* () {
                 // Bridge the host's Effect-based `ask` into a Promise-returning
@@ -249,6 +252,7 @@ export const layer: Layer.Layer<
           patch: Tool.init(patchtool),
           question: Tool.init(question),
           lsp: Tool.init(lsptool),
+          code_intel: Tool.init(codeintel),
           plan: Tool.init(plan),
           planwrite: Tool.init(planwrite),
         })
@@ -272,6 +276,7 @@ export const layer: Layer.Layer<
             tool.patch,
             tool.planwrite,
             ...(flags.experimentalLspTool ? [tool.lsp] : []),
+            ...(flags.codeIntelTool ? [tool.code_intel] : []),
             ...(flags.experimentalPlanMode && flags.client === "cli" ? [tool.plan] : []),
           ],
           task: tool.task,
@@ -339,6 +344,12 @@ export const layer: Layer.Layer<
               .join("\n"),
             parameters: output.parameters,
             jsonSchema,
+            // M2 (S1-v3.4): the projection previously dropped provenance, forcing
+            // request.ts to guess the source from the tool name. Pass it through —
+            // this is the single source of truth. Builtin tools carry no explicit
+            // provenance, so default to `builtin`; custom plugin tools already set
+            // `custom` in fromPlugin. MCP tools are merged downstream, not here.
+            provenance: tool.provenance ?? { source: "builtin" as const },
             execute: tool.execute,
             formatValidationError: tool.formatValidationError,
           }

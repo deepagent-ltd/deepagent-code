@@ -1640,12 +1640,7 @@ export const layer = Layer.effect(
       return value
     }
 
-    async function resolveSDK(
-      model: Model,
-      s: State,
-      envs: Record<string, string | undefined>,
-      modelAuth?: Auth.Info,
-    ) {
+    async function resolveSDK(model: Model, s: State, envs: Record<string, string | undefined>, modelAuth?: Auth.Info) {
       try {
         using _ = log.time("getSDK", {
           providerID: model.providerID,

@@ -846,7 +846,8 @@ describe("SessionRunnerLLM", () => {
         }),
       )
       currentModel = Model.make({ id: "deepagent/default", provider: "deepagent", route: OpenAIChat.route })
-      systemBaseline = "You are deepagent-code, an interactive CLI tool that helps users with software engineering tasks."
+      systemBaseline =
+        "You are deepagent-code, an interactive CLI tool that helps users with software engineering tasks."
       const session = yield* SessionV2.Service
       yield* session.prompt({ sessionID, prompt: new Prompt({ text: "First" }), resume: false })
 

@@ -16,6 +16,8 @@ import { Format } from "../format"
 import { InstanceState } from "@/effect/instance-state"
 import { Snapshot } from "@/snapshot"
 import { assertExternalDirectoryEffect } from "./external-directory"
+import { latchPlanOnDiagnosticsError } from "./diagnostics-latch"
+import { crossFileCallerDiagnostics } from "./cross-file-diagnostics"
 import { FSUtil } from "@deepagent-code/core/fs-util"
 import * as Bom from "@/util/bom"
 
@@ -199,6 +201,10 @@ export const EditTool = Tool.define(
           const normalizedFilePath = FSUtil.normalizePath(filePath)
           const block = LSP.Diagnostic.report(filePath, diagnostics[normalizedFilePath] ?? [])
           if (block) output += `\n\nLSP errors detected in this file, please fix:\n${block}`
+          // L4: high+ only — error diagnostics derive a plan-stale latch (no-op in lightweight).
+          yield* latchPlanOnDiagnosticsError(ctx.sessionID, diagnostics)
+          // L4 §1: high+ only — surface diagnostics in referencing files a signature change may break.
+          output += yield* crossFileCallerDiagnostics(lsp, filePath, instance.worktree)
 
           return {
             metadata: {

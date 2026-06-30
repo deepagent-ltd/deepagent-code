@@ -20,7 +20,13 @@ const storedSessions: Record<string, Array<{ id: string; title?: string }>> = {}
 const promoted: Array<{ directory: string; sessionID: string }> = []
 const sentShell: string[] = []
 const syncedDirectories: string[] = []
-const preparedDrafts: Array<{ directory: string; sessionID: string; mode: string; outputLanguage?: string; text?: string }> = []
+const preparedDrafts: Array<{
+  directory: string
+  sessionID: string
+  mode: string
+  outputLanguage?: string
+  text?: string
+}> = []
 const sentPromptAsync: Array<{ directory: string; metadata?: unknown; text?: string }> = []
 const promptPrepareEvents: string[] = []
 
@@ -63,7 +69,10 @@ const clientFor = (directory: string) => {
       abort: async () => ({ data: undefined }),
     },
     client: {
-      request: async (payload: { path?: { sessionID?: string }; body?: { mode?: string; output_language?: string; parts?: Array<{ type: string; text?: string }> } }) => {
+      request: async (payload: {
+        path?: { sessionID?: string }
+        body?: { mode?: string; output_language?: string; parts?: Array<{ type: string; text?: string }> }
+      }) => {
         const text = payload.body?.parts?.find((part) => part.type === "text")?.text
         preparedDrafts.push({
           directory,
@@ -436,7 +445,9 @@ describe("prompt submit worktree selection", () => {
     await flushAsyncSubmit()
 
     expect(promptPrepareEvents).toEqual(["start", "end"])
-    expect(preparedDrafts).toEqual([{ directory: "/repo/main", sessionID: "session-1", mode: "wish", outputLanguage: "english", text: "ls" }])
+    expect(preparedDrafts).toEqual([
+      { directory: "/repo/main", sessionID: "session-1", mode: "wish", outputLanguage: "english", text: "ls" },
+    ])
     expect(sentPromptAsync[0]?.text).toBe("Edited prepared goal")
     expect(sentPromptAsync[0]?.metadata).toEqual({
       deepagent: {
@@ -475,7 +486,9 @@ describe("prompt submit worktree selection", () => {
     await submit.handleSubmit({ preventDefault: () => undefined } as unknown as Event)
     await flushAsyncSubmit()
 
-    expect(preparedDrafts).toEqual([{ directory: "/repo/main", sessionID: "session-1", mode: "wish", outputLanguage: "chinese", text: "ls" }])
+    expect(preparedDrafts).toEqual([
+      { directory: "/repo/main", sessionID: "session-1", mode: "wish", outputLanguage: "chinese", text: "ls" },
+    ])
   })
 
   test("routes non-code wish prompts through general without confirmation", async () => {
@@ -511,7 +524,9 @@ describe("prompt submit worktree selection", () => {
     await flushAsyncSubmit()
 
     expect(confirms).toEqual([])
-    expect(preparedDrafts).toEqual([{ directory: "/repo/main", sessionID: "session-1", mode: "wish", outputLanguage: "english", text: "hello" }])
+    expect(preparedDrafts).toEqual([
+      { directory: "/repo/main", sessionID: "session-1", mode: "wish", outputLanguage: "english", text: "hello" },
+    ])
     expect(sentPromptAsync[0]?.text).toBe("hello")
     expect(sentPromptAsync[0]?.metadata).toEqual({
       deepagent: {
@@ -552,7 +567,13 @@ describe("prompt submit worktree selection", () => {
     await flushAsyncSubmit()
 
     expect(preparedDrafts).toEqual([
-      { directory: "/repo/main", sessionID: "session-1", mode: "wish", outputLanguage: "english", text: "prepare fails" },
+      {
+        directory: "/repo/main",
+        sessionID: "session-1",
+        mode: "wish",
+        outputLanguage: "english",
+        text: "prepare fails",
+      },
     ])
     expect(sentPromptAsync).toEqual([])
     promptValue[0] = { type: "text", content: "ls", start: 0, end: 2 }

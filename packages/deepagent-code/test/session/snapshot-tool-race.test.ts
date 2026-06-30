@@ -87,6 +87,8 @@ const mcp = Layer.succeed(
     supportsOAuth: () => Effect.succeed(false),
     hasStoredTokens: () => Effect.succeed(false),
     getAuthStatus: () => Effect.succeed("not_authenticated" as const),
+    catalog: () => Effect.succeed([]),
+    enableCatalogEntry: () => Effect.succeed({ status: {}, name: "x", config: { type: "local", command: [] } }),
   }),
 )
 
@@ -107,6 +109,23 @@ const lsp = Layer.succeed(
     prepareCallHierarchy: () => Effect.succeed([]),
     incomingCalls: () => Effect.succeed([]),
     outgoingCalls: () => Effect.succeed([]),
+    typeDefinition: () => Effect.succeed([]),
+    declaration: () => Effect.succeed([]),
+    prepareTypeHierarchy: () => Effect.succeed([]),
+    supertypes: () => Effect.succeed([]),
+    subtypes: () => Effect.succeed([]),
+    inlayHint: () => Effect.succeed([]),
+    codeAction: () => Effect.succeed([]),
+    executeCommand: () => Effect.succeed(null),
+    prepareRename: () => Effect.succeed(null),
+    rename: () => Effect.succeed(null),
+    documentHighlight: () => Effect.succeed([]),
+    foldingRange: () => Effect.succeed([]),
+    selectionRange: () => Effect.succeed([]),
+    completion: () => Effect.succeed(null),
+    signatureHelp: () => Effect.succeed(null),
+    serverCapabilities: () => Effect.succeed(undefined),
+    workspaceDiagnostics: () => Effect.succeed({}),
   }),
 )
 

@@ -49,7 +49,9 @@ const PlanStep = Schema.Struct({
 export const Parameters = Schema.Struct({
   goal: Schema.String.annotate({ description: "One sentence: what 'done' means for this task" }),
   steps: Schema.mutable(Schema.Array(PlanStep)).annotate({ description: "Ordered plan steps" }),
-  assumptions: Schema.optional(Schema.mutable(Schema.Array(Schema.String))).annotate({ description: "Facts the plan relies on" }),
+  assumptions: Schema.optional(Schema.mutable(Schema.Array(Schema.String))).annotate({
+    description: "Facts the plan relies on",
+  }),
   active_step_id: Schema.optional(Schema.String).annotate({ description: "The step currently being worked on" }),
 })
 

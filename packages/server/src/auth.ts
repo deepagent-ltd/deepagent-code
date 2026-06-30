@@ -29,7 +29,9 @@ export class Config extends Context.Service<Config, Info>()("@deepagent-code/Ser
         return Config.of(
           yield* EffectConfig.all({
             password: EffectConfig.string("DEEPAGENT_CODE_SERVER_PASSWORD").pipe(EffectConfig.option),
-            username: EffectConfig.string("DEEPAGENT_CODE_SERVER_USERNAME").pipe(EffectConfig.withDefault("deepagent-code")),
+            username: EffectConfig.string("DEEPAGENT_CODE_SERVER_USERNAME").pipe(
+              EffectConfig.withDefault("deepagent-code"),
+            ),
           }),
         )
       }),

@@ -114,7 +114,8 @@ export const dict = {
   "home.install.ariaLabel": "Opzioni di installazione",
 
   "home.what.title": "Che cos'è DeepAgent Code?",
-  "home.what.body": "DeepAgent Code è un agente open source che ti aiuta a scrivere codice nel terminale, IDE o desktop.",
+  "home.what.body":
+    "DeepAgent Code è un agente open source che ti aiuta a scrivere codice nel terminale, IDE o desktop.",
   "home.what.lsp.title": "LSP abilitato",
   "home.what.lsp.body": "Carica automaticamente gli LSP giusti per il LLM",
   "home.what.multiSession.title": "Multi-session",
@@ -235,7 +236,8 @@ export const dict = {
   "zen.problem.item2": "Collaborare con i provider per garantire che vengano consegnati correttamente",
   "zen.problem.item3": "Benchmark di tutte le combinazioni modello-provider che raccomandiamo",
   "zen.how.title": "Come funziona Zen",
-  "zen.how.body": "Anche se ti consigliamo di utilizzare Zen con DeepAgent Code, puoi utilizzare Zen con qualsiasi agente.",
+  "zen.how.body":
+    "Anche se ti consigliamo di utilizzare Zen con DeepAgent Code, puoi utilizzare Zen con qualsiasi agente.",
   "zen.how.step1.title": "Iscriviti e aggiungi un saldo di $20",
   "zen.how.step1.beforeLink": "segui le",
   "zen.how.step1.link": "istruzioni di configurazione",
@@ -724,14 +726,16 @@ export const dict = {
     "Non necessariamente, ma probabilmente. Avrai bisogno di un abbonamento IA se vuoi collegare DeepAgent Code a un provider a pagamento, sebbene tu possa lavorare con",
   "download.faq.a3.localLink": "modelli locali",
   "download.faq.a3.afterLocal.beforeZen": "gratuitamente. Mentre incoraggiamo gli utenti a usare",
-  "download.faq.a3.afterZen": ", DeepAgent Code funziona con tutti i provider popolari come OpenAI, Anthropic, xAI ecc.",
+  "download.faq.a3.afterZen":
+    ", DeepAgent Code funziona con tutti i provider popolari come OpenAI, Anthropic, xAI ecc.",
 
   "download.faq.a5.p1": "DeepAgent Code è gratuito al 100%.",
   "download.faq.a5.p2.beforeZen":
     "Eventuali costi aggiuntivi proverranno dal tuo abbonamento a un provider di modelli. Mentre DeepAgent Code funziona con qualsiasi provider di modelli, raccomandiamo di usare",
   "download.faq.a5.p2.afterZen": ".",
 
-  "download.faq.a6.p1": "I tuoi dati e informazioni sono archiviati solo quando crei link condivisibili in DeepAgent Code.",
+  "download.faq.a6.p1":
+    "I tuoi dati e informazioni sono archiviati solo quando crei link condivisibili in DeepAgent Code.",
   "download.faq.a6.p2.beforeShare": "Scopri di più sulle",
   "download.faq.a6.shareLink": "pagine condivise",
 

@@ -306,7 +306,8 @@ export const dict = {
   "go.problem.item4":
     "Incluye GLM-5.1, GLM-5, Kimi K2.5, Kimi K2.6, MiMo-V2.5-Pro, MiMo-V2.5, Qwen3.7 Max, Qwen3.7 Plus, Qwen3.6 Plus, MiniMax M2.5, MiniMax M2.7, MiniMax M3, DeepSeek V4 Pro y DeepSeek V4 Flash",
   "go.how.title": "Cómo funciona Go",
-  "go.how.body": "Go comienza en $5 el primer mes, luego 10 $/mes. Puedes usarlo con DeepAgent Code o cualquier agente.",
+  "go.how.body":
+    "Go comienza en $5 el primer mes, luego 10 $/mes. Puedes usarlo con DeepAgent Code o cualquier agente.",
   "go.how.step1.title": "Crear una cuenta",
   "go.how.step1.beforeLink": "sigue las",
   "go.how.step1.link": "instrucciones de configuración",
@@ -380,7 +381,8 @@ export const dict = {
     "La promoción gratuita de {{model}} ha finalizado. Puedes seguir usando el modelo suscribiéndote a DeepAgent Code Go - {{link}}",
 
   "black.meta.title": "DeepAgent Code Black | Accede a los mejores modelos de codificación del mundo",
-  "black.meta.description": "Obtén acceso a Claude, GPT, Gemini y más con los planes de suscripción de DeepAgent Code Black.",
+  "black.meta.description":
+    "Obtén acceso a Claude, GPT, Gemini y más con los planes de suscripción de DeepAgent Code Black.",
   "black.hero.title": "Accede a los mejores modelos de codificación del mundo",
   "black.hero.subtitle": "Incluyendo Claude, GPT, Gemini y más",
   "black.title": "DeepAgent Code Black | Precios",
@@ -627,8 +629,10 @@ export const dict = {
   "workspace.black.subscription.resetsIn": "Se reinicia en",
   "workspace.black.subscription.useBalance": "Usa tu saldo disponible después de alcanzar los límites de uso",
   "workspace.black.waitlist.title": "Lista de Espera",
-  "workspace.black.waitlist.joined": "Estás en la lista de espera para el plan DeepAgent Code Black de ${{plan}} al mes.",
-  "workspace.black.waitlist.ready": "Estamos listos para inscribirte en el plan DeepAgent Code Black de ${{plan}} al mes.",
+  "workspace.black.waitlist.joined":
+    "Estás en la lista de espera para el plan DeepAgent Code Black de ${{plan}} al mes.",
+  "workspace.black.waitlist.ready":
+    "Estamos listos para inscribirte en el plan DeepAgent Code Black de ${{plan}} al mes.",
   "workspace.black.waitlist.leave": "Abandonar Lista de Espera",
   "workspace.black.waitlist.leaving": "Abandonando...",
   "workspace.black.waitlist.left": "Abandonada",
@@ -734,7 +738,8 @@ export const dict = {
     "Cualquier costo adicional vendrá de tu suscripción a un proveedor de modelos. Aunque DeepAgent Code funciona con cualquier proveedor de modelos, recomendamos usar",
   "download.faq.a5.p2.afterZen": ".",
 
-  "download.faq.a6.p1": "Tus datos e información solo se almacenan cuando creas enlaces compartibles en DeepAgent Code.",
+  "download.faq.a6.p1":
+    "Tus datos e información solo se almacenan cuando creas enlaces compartibles en DeepAgent Code.",
   "download.faq.a6.p2.beforeShare": "Más información sobre",
   "download.faq.a6.shareLink": "páginas compartidas",
 

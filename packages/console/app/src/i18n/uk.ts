@@ -377,7 +377,8 @@ export const dict = {
     "Безкоштовна акція для {{model}} закінчилася. Ви можете продовжити використання, підписавшись на DeepAgent Code Go — {{link}}",
 
   "black.meta.title": "DeepAgent Code Black | Доступ до найкращих моделей кодування",
-  "black.meta.description": "Отримайте доступ до Claude, GPT, Gemini та інших із планами підписки DeepAgent Code Black.",
+  "black.meta.description":
+    "Отримайте доступ до Claude, GPT, Gemini та інших із планами підписки DeepAgent Code Black.",
   "black.hero.title": "Доступ до найкращих моделей кодування",
   "black.hero.subtitle": "Включаючи Claude, GPT, Gemini та інші",
   "black.title": "DeepAgent Code Black | Ціни",
@@ -650,11 +651,13 @@ export const dict = {
   "workspace.lite.subscription.monthlyUsage": "Місячне використання",
   "workspace.lite.subscription.resetsIn": "Скидається через",
   "workspace.lite.subscription.useBalance": "Використовуйте доступний баланс після досягнення лімітів",
-  "workspace.lite.subscription.selectProvider": 'Виберіть "DeepAgent Code Go" як провайдера в конфігурації deepagentCode.',
+  "workspace.lite.subscription.selectProvider":
+    'Виберіть "DeepAgent Code Go" як провайдера в конфігурації deepagentCode.',
   "workspace.lite.black.message":
     "Ви вже підписані на DeepAgent Code Black або в списку очікування. Спочатку скасуйте підписку, якщо хочете перейти на Go.",
   "workspace.lite.other.message": "Інший учасник цього робочого простору вже підписаний на DeepAgent Code Go.",
-  "workspace.lite.promo.description": "DeepAgent Code Go починається від {{price}}, потім $10/місяць, із щедрими лімітами.",
+  "workspace.lite.promo.description":
+    "DeepAgent Code Go починається від {{price}}, потім $10/місяць, із щедрими лімітами.",
   "workspace.lite.promo.price": "$5 за перший місяць",
   "workspace.lite.promo.modelsTitle": "Що включено",
   "workspace.lite.promo.footer": "План призначений для міжнародних користувачів. Ціни можуть змінюватися.",

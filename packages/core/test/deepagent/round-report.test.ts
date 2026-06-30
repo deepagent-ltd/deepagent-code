@@ -9,8 +9,8 @@ import {
   type RunnerGroundTruth,
 } from "../../src/deepagent/round-report"
 
-const pass = (command: string) => ({ command, passed: true, output: "ok", duration_ms: 1 })
-const fail = (command: string) => ({ command, passed: false, output: "boom", duration_ms: 1 })
+const pass = (command: string) => ({ command, passed: true, exit_code: 0, output: "ok", duration_ms: 1 })
+const fail = (command: string) => ({ command, passed: false, exit_code: 1, output: "boom", duration_ms: 1 })
 
 const declarations = (over: Partial<ModelDeclarations> = {}): ModelDeclarations => ({
   completion_claim: "complete",
@@ -61,7 +61,8 @@ describe("V3.1 round report (A4 reconciliation)", () => {
     expect(mismatches).toEqual([
       {
         field: "deterministic_result",
-        detail: "model claimed completion but deterministic result refs are not verified: DETERMINISTIC_RESULT.json:unverified",
+        detail:
+          "model claimed completion but deterministic result refs are not verified: DETERMINISTIC_RESULT.json:unverified",
       },
     ])
   })

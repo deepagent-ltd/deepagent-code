@@ -1289,7 +1289,7 @@
                     "additionalProperties": false
                   }
                 },
-                "required": ["candidate", "origin", "verdict", "approval"],
+                "required": ["candidate", "origin", "approval"],
                 "additionalProperties": false
               }
             }
@@ -1482,6 +1482,938 @@
           {
             "lang": "js",
             "source": "import { createDeepAgentCodeClient } from \"@deepagent-code/sdk\n\nconst client = createDeepAgentCodeClient()\nawait client.deepagent.knowledge.reject({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/deepagent/knowledge/pending": {
+      "get": {
+        "tags": ["deepagent"],
+        "operationId": "deepagent.knowledge.pending",
+        "parameters": [
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Pending and rejected durable knowledge awaiting review",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "type": {
+                            "type": "string",
+                            "enum": ["knowledge", "strategy", "methodology", "memory", "skill", "failure_dossier"]
+                          },
+                          "summary": {
+                            "type": "string"
+                          },
+                          "evidence_strength": {
+                            "type": "string",
+                            "enum": ["strong", "medium", "weak", "none"]
+                          },
+                          "evidence_refs": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "approval_status": {
+                            "type": "string",
+                            "enum": ["pending", "approved", "rejected"]
+                          }
+                        },
+                        "required": ["id", "type", "summary", "evidence_strength", "evidence_refs", "approval_status"],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": ["items"],
+                  "additionalProperties": false,
+                  "description": "Pending and rejected durable knowledge awaiting review"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "DeepAgentPromotionError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/DeepAgentPromotionError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "description": "List durable knowledge that is pending approval or rejected, for the self-learning Review UI.",
+        "summary": "List DeepAgent knowledge awaiting review",
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createDeepAgentCodeClient } from \"@deepagent-code/sdk\n\nconst client = createDeepAgentCodeClient()\nawait client.deepagent.knowledge.pending({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/deepagent/knowledge/approve": {
+      "post": {
+        "tags": ["deepagent"],
+        "operationId": "deepagent.knowledge.approve",
+        "parameters": [
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Ids that were marked approved (accessible)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "updated": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "required": ["updated"],
+                  "additionalProperties": false,
+                  "description": "Ids that were marked approved (accessible)"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "DeepAgentPromotionError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/DeepAgentPromotionError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "description": "Flag durable knowledge entries as approved (retrievable). Reversible; does not move files.",
+        "summary": "Approve DeepAgent knowledge by id",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "required": ["ids"],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createDeepAgentCodeClient } from \"@deepagent-code/sdk\n\nconst client = createDeepAgentCodeClient()\nawait client.deepagent.knowledge.approve({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/deepagent/knowledge/reject-ids": {
+      "post": {
+        "tags": ["deepagent"],
+        "operationId": "deepagent.knowledge.rejectIds",
+        "parameters": [
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Ids that were marked rejected (inaccessible)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "updated": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "required": ["updated"],
+                  "additionalProperties": false,
+                  "description": "Ids that were marked rejected (inaccessible)"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "DeepAgentPromotionError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/DeepAgentPromotionError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "description": "Flag durable knowledge entries as rejected (not retrievable). Reversible; does not move files.",
+        "summary": "Reject DeepAgent knowledge by id",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "required": ["ids"],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createDeepAgentCodeClient } from \"@deepagent-code/sdk\n\nconst client = createDeepAgentCodeClient()\nawait client.deepagent.knowledge.rejectIds({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/deepagent/knowledge/ship-gate": {
+      "post": {
+        "tags": ["deepagent"],
+        "operationId": "deepagent.knowledge.shipGate",
+        "parameters": [
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Ablation ship-gate verdict; offending refs demoted on failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ship": {
+                      "type": "boolean"
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "offenders": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "demoted": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "not_in_store": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "per_group": {
+                      "type": "object",
+                      "properties": {
+                        "gen": {
+                          "anyOf": [
+                            {
+                              "type": "number"
+                            },
+                            {
+                              "type": "string",
+                              "enum": ["NaN"]
+                            },
+                            {
+                              "type": "string",
+                              "enum": ["Infinity"]
+                            },
+                            {
+                              "type": "string",
+                              "enum": ["-Infinity"]
+                            },
+                            {
+                              "type": "string",
+                              "enum": ["Infinity", "-Infinity", "NaN"]
+                            }
+                          ]
+                        },
+                        "high": {
+                          "anyOf": [
+                            {
+                              "type": "number"
+                            },
+                            {
+                              "type": "string",
+                              "enum": ["NaN"]
+                            },
+                            {
+                              "type": "string",
+                              "enum": ["Infinity"]
+                            },
+                            {
+                              "type": "string",
+                              "enum": ["-Infinity"]
+                            },
+                            {
+                              "type": "string",
+                              "enum": ["Infinity", "-Infinity", "NaN"]
+                            }
+                          ]
+                        },
+                        "max": {
+                          "anyOf": [
+                            {
+                              "type": "number"
+                            },
+                            {
+                              "type": "string",
+                              "enum": ["NaN"]
+                            },
+                            {
+                              "type": "string",
+                              "enum": ["Infinity"]
+                            },
+                            {
+                              "type": "string",
+                              "enum": ["-Infinity"]
+                            },
+                            {
+                              "type": "string",
+                              "enum": ["Infinity", "-Infinity", "NaN"]
+                            }
+                          ]
+                        }
+                      },
+                      "required": ["gen", "high", "max"],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": ["ship", "reason", "offenders", "demoted", "not_in_store", "per_group"],
+                  "additionalProperties": false,
+                  "description": "Ablation ship-gate verdict; offending refs demoted on failure"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "DeepAgentPromotionError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/DeepAgentPromotionError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "description": "CI/eval posts measured per-group/per-task metrics; if MAX regresses vs HIGH the candidate refs are demoted (rejected) so misleading knowledge cannot ship (docs/30 §7).",
+        "summary": "Run the ablation regression ship gate",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "tasks": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "metrics": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "group": {
+                          "type": "string",
+                          "enum": ["general", "high", "max"]
+                        },
+                        "task": {
+                          "type": "string"
+                        },
+                        "metric": {
+                          "anyOf": [
+                            {
+                              "type": "number"
+                            },
+                            {
+                              "type": "string",
+                              "enum": ["NaN"]
+                            },
+                            {
+                              "type": "string",
+                              "enum": ["Infinity"]
+                            },
+                            {
+                              "type": "string",
+                              "enum": ["-Infinity"]
+                            },
+                            {
+                              "type": "string",
+                              "enum": ["Infinity", "-Infinity", "NaN"]
+                            }
+                          ]
+                        }
+                      },
+                      "required": ["group", "task", "metric"],
+                      "additionalProperties": false
+                    }
+                  },
+                  "candidateRefs": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "tolerance": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "string",
+                        "enum": ["NaN"]
+                      },
+                      {
+                        "type": "string",
+                        "enum": ["Infinity"]
+                      },
+                      {
+                        "type": "string",
+                        "enum": ["-Infinity"]
+                      },
+                      {
+                        "type": "string",
+                        "enum": ["Infinity", "-Infinity", "NaN"]
+                      }
+                    ]
+                  },
+                  "repeats": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "string",
+                        "enum": ["NaN"]
+                      },
+                      {
+                        "type": "string",
+                        "enum": ["Infinity"]
+                      },
+                      {
+                        "type": "string",
+                        "enum": ["-Infinity"]
+                      },
+                      {
+                        "type": "string",
+                        "enum": ["Infinity", "-Infinity", "NaN"]
+                      }
+                    ]
+                  }
+                },
+                "required": ["tasks", "metrics", "candidateRefs"],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createDeepAgentCodeClient } from \"@deepagent-code/sdk\n\nconst client = createDeepAgentCodeClient()\nawait client.deepagent.knowledge.shipGate({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/deepagent/packs/active": {
+      "get": {
+        "tags": ["deepagent"],
+        "operationId": "deepagent.packsActive",
+        "parameters": [
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Active domain pack set for this workspace",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "packs": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "version": {
+                            "type": "string"
+                          },
+                          "risk": {
+                            "type": "string",
+                            "enum": ["low", "medium", "high", "regulated"]
+                          },
+                          "domains": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "pinned": {
+                            "type": "boolean"
+                          }
+                        },
+                        "required": ["id", "name", "version", "risk", "domains", "pinned"],
+                        "additionalProperties": false
+                      }
+                    },
+                    "snapshotId": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["packs", "snapshotId"],
+                  "additionalProperties": false,
+                  "description": "Active domain pack set for this workspace"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "DeepAgentPromotionError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/DeepAgentPromotionError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createDeepAgentCodeClient } from \"@deepagent-code/sdk\n\nconst client = createDeepAgentCodeClient()\nawait client.deepagent.packsActive({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/deepagent/packs/all": {
+      "get": {
+        "tags": ["deepagent"],
+        "operationId": "deepagent.packsAll",
+        "parameters": [
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Full installed domain pack catalog (built-in + external)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "packs": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "description": {
+                            "type": "string"
+                          },
+                          "version": {
+                            "type": "string"
+                          },
+                          "risk": {
+                            "type": "string",
+                            "enum": ["low", "medium", "high", "regulated"]
+                          },
+                          "domains": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "builtin": {
+                            "type": "boolean"
+                          },
+                          "pinned": {
+                            "type": "boolean"
+                          }
+                        },
+                        "required": ["id", "name", "version", "risk", "domains", "builtin", "pinned"],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": ["packs"],
+                  "additionalProperties": false,
+                  "description": "Full installed domain pack catalog (built-in + external)"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "DeepAgentPromotionError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/DeepAgentPromotionError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createDeepAgentCodeClient } from \"@deepagent-code/sdk\n\nconst client = createDeepAgentCodeClient()\nawait client.deepagent.packsAll({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/deepagent/packs/pin": {
+      "post": {
+        "tags": ["deepagent"],
+        "operationId": "deepagent.packsPin",
+        "parameters": [
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Pin a domain pack for this workspace",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "packId": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["ok", "packId"],
+                  "additionalProperties": false,
+                  "description": "Pin a domain pack for this workspace"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "DeepAgentPromotionError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/DeepAgentPromotionError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "packId": {
+                    "type": "string"
+                  }
+                },
+                "required": ["packId"],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createDeepAgentCodeClient } from \"@deepagent-code/sdk\n\nconst client = createDeepAgentCodeClient()\nawait client.deepagent.packsPin({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/deepagent/packs/unpin": {
+      "post": {
+        "tags": ["deepagent"],
+        "operationId": "deepagent.packsUnpin",
+        "parameters": [
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Unpin a domain pack for this workspace",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "packId": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["ok", "packId"],
+                  "additionalProperties": false,
+                  "description": "Unpin a domain pack for this workspace"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "DeepAgentPromotionError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/DeepAgentPromotionError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "packId": {
+                    "type": "string"
+                  }
+                },
+                "required": ["packId"],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createDeepAgentCodeClient } from \"@deepagent-code/sdk\n\nconst client = createDeepAgentCodeClient()\nawait client.deepagent.packsUnpin({\n  ...\n})"
           }
         ]
       }
@@ -2118,6 +3050,357 @@
           {
             "lang": "js",
             "source": "import { createDeepAgentCodeClient } from \"@deepagent-code/sdk\n\nconst client = createDeepAgentCodeClient()\nawait client.worktree.reset({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/experimental/worktree/changes": {
+      "post": {
+        "tags": ["experimental"],
+        "operationId": "worktree.changes",
+        "parameters": [
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Worktree change count",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorktreeChangeCount"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "WorktreeError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/WorktreeError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "description": "Count uncommitted changes and commits ahead of base (fail-closed: null on uncertainty).",
+        "summary": "Count worktree changes",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorktreeRemoveInput"
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createDeepAgentCodeClient } from \"@deepagent-code/sdk\n\nconst client = createDeepAgentCodeClient()\nawait client.worktree.changes({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/experimental/worktree/diff": {
+      "post": {
+        "tags": ["experimental"],
+        "operationId": "worktree.diff",
+        "parameters": [
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Worktree diff",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorktreeDiffResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "WorktreeError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/WorktreeError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "description": "Tracked + untracked changes for a worktree, with a unified patch.",
+        "summary": "Worktree diff",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorktreeRemoveInput"
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createDeepAgentCodeClient } from \"@deepagent-code/sdk\n\nconst client = createDeepAgentCodeClient()\nawait client.worktree.diff({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/experimental/worktree/summary": {
+      "post": {
+        "tags": ["experimental"],
+        "operationId": "worktree.summary",
+        "parameters": [
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Worktree branch summary",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorktreeBranchSummary"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "WorktreeError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/WorktreeError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "description": "Committed additions/deletions on the worktree branch vs the default branch.",
+        "summary": "Worktree branch summary",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorktreeRemoveInput"
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createDeepAgentCodeClient } from \"@deepagent-code/sdk\n\nconst client = createDeepAgentCodeClient()\nawait client.worktree.summary({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/experimental/worktree/merge": {
+      "post": {
+        "tags": ["experimental"],
+        "operationId": "worktree.merge",
+        "parameters": [
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Worktree merge result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorktreeMergeResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "WorktreeError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/WorktreeError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "description": "Merge the worktree branch into the default branch (staged, requires confirmation).",
+        "summary": "Merge worktree back",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorktreeRemoveInput"
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createDeepAgentCodeClient } from \"@deepagent-code/sdk\n\nconst client = createDeepAgentCodeClient()\nawait client.worktree.merge({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/experimental/worktree/safe-remove": {
+      "delete": {
+        "tags": ["experimental"],
+        "operationId": "worktree.safeRemove",
+        "parameters": [
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Worktree removed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "boolean",
+                  "description": "Worktree removed"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "WorktreeError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/WorktreeError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "description": "Remove a worktree only when it has no uncommitted/unmerged work, unless force is set.",
+        "summary": "Safe-remove worktree",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorktreeSafeRemoveInput"
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createDeepAgentCodeClient } from \"@deepagent-code/sdk\n\nconst client = createDeepAgentCodeClient()\nawait client.worktree.safeRemove({\n  ...\n})"
           }
         ]
       }
@@ -3730,6 +5013,294 @@
           {
             "lang": "js",
             "source": "import { createDeepAgentCodeClient } from \"@deepagent-code/sdk\n\nconst client = createDeepAgentCodeClient()\nawait client.mcp.add({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/mcp/catalog": {
+      "get": {
+        "tags": ["mcp"],
+        "operationId": "mcp.catalog",
+        "parameters": [
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Preset MCP catalog (metadata only; nothing is connected)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "title": {
+                        "type": "string"
+                      },
+                      "description": {
+                        "type": "string"
+                      },
+                      "direction": {
+                        "type": "string",
+                        "enum": ["git_platform", "files_search", "db_readonly", "browser_fetch"]
+                      },
+                      "source": {
+                        "type": "string",
+                        "enum": ["opensource", "adapted", "self"]
+                      },
+                      "repo": {
+                        "type": "string"
+                      },
+                      "upstreamPin": {
+                        "type": "string"
+                      },
+                      "transport": {
+                        "type": "string",
+                        "enum": ["local", "remote"]
+                      },
+                      "credentials": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "key": {
+                              "type": "string"
+                            },
+                            "description": {
+                              "type": "string"
+                            },
+                            "required": {
+                              "type": "boolean"
+                            },
+                            "secret": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": ["key", "description", "required", "secret"],
+                          "additionalProperties": false
+                        }
+                      },
+                      "params": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "key": {
+                              "type": "string"
+                            },
+                            "description": {
+                              "type": "string"
+                            },
+                            "required": {
+                              "type": "boolean"
+                            },
+                            "multi": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": ["key", "description", "required"],
+                          "additionalProperties": false
+                        }
+                      },
+                      "riskTier": {
+                        "type": "string",
+                        "enum": ["read_only", "write_guarded", "external_fetch"]
+                      },
+                      "defaultReadOnly": {
+                        "type": "boolean"
+                      },
+                      "defaultEnabled": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "title",
+                      "description",
+                      "direction",
+                      "source",
+                      "transport",
+                      "credentials",
+                      "params",
+                      "riskTier",
+                      "defaultReadOnly",
+                      "defaultEnabled"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "description": "Preset MCP catalog (metadata only; nothing is connected)"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BadRequestError"
+                }
+              }
+            }
+          }
+        },
+        "description": "List the vetted preset MCP servers. Metadata only — no server is connected until explicitly enabled.",
+        "summary": "List preset MCP catalog",
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createDeepAgentCodeClient } from \"@deepagent-code/sdk\n\nconst client = createDeepAgentCodeClient()\nawait client.mcp.catalog({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/mcp/catalog/enable": {
+      "post": {
+        "tags": ["mcp"],
+        "operationId": "mcp.catalogEnable",
+        "parameters": [
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Catalog entry enabled and connected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "$ref": "#/components/schemas/MCPStatus"
+                      }
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "config": {
+                      "anyOf": [
+                        {
+                          "$ref": "#/components/schemas/McpLocalConfig"
+                        },
+                        {
+                          "$ref": "#/components/schemas/McpRemoteConfig"
+                        }
+                      ]
+                    }
+                  },
+                  "required": ["status", "name", "config"],
+                  "additionalProperties": false,
+                  "description": "Catalog entry enabled and connected"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "McpCatalogInstantiateError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/McpCatalogInstantiateError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "McpServerNotFoundError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/McpServerNotFoundError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Instantiate a preset catalog entry (with filled params + secure-storage credential references) into a cfg.mcp entry and connect it.",
+        "summary": "Enable a preset MCP catalog entry",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "params": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      ]
+                    }
+                  },
+                  "credentialRefs": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "required": ["id", "params", "credentialRefs"],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createDeepAgentCodeClient } from \"@deepagent-code/sdk\n\nconst client = createDeepAgentCodeClient()\nawait client.mcp.catalogEnable({\n  ...\n})"
           }
         ]
       }
@@ -5802,6 +7373,12 @@
                       "type": "array",
                       "items": {
                         "type": "string"
+                      }
+                    },
+                    "errors": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ProviderConfigError"
                       }
                     }
                   },
@@ -8138,7 +9715,11 @@
                     },
                     "mode": {
                       "type": "string",
-                      "enum": ["wish", "design"]
+                      "enum": ["wish"]
+                    },
+                    "route": {
+                      "type": "string",
+                      "enum": ["code", "general"]
                     },
                     "goal": {
                       "type": "string"
@@ -8147,7 +9728,7 @@
                       "type": "string"
                     }
                   },
-                  "required": ["prompt_draft_id", "context_plan_id", "state", "mode", "goal", "preview"],
+                  "required": ["prompt_draft_id", "context_plan_id", "state", "mode", "route", "goal", "preview"],
                   "additionalProperties": false,
                   "description": "Prepared prompt draft"
                 }
@@ -8162,6 +9743,9 @@
                   "anyOf": [
                     {
                       "$ref": "#/components/schemas/effect_HttpApiError_BadRequest"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
                     },
                     {
                       "$ref": "#/components/schemas/InvalidRequestError"
@@ -8182,7 +9766,7 @@
             }
           }
         },
-        "description": "Create a DeepAgent wish/design prompt draft for user confirmation before task submission.",
+        "description": "Create a DeepAgent wish prompt draft for user confirmation before task submission.",
         "summary": "Prepare prompt draft",
         "requestBody": {
           "content": {
@@ -8192,7 +9776,11 @@
                 "properties": {
                   "mode": {
                     "type": "string",
-                    "enum": ["wish", "design"]
+                    "enum": ["wish"]
+                  },
+                  "output_language": {
+                    "type": "string",
+                    "enum": ["chinese", "english"]
                   },
                   "parts": {
                     "type": "array",
@@ -8224,6 +9812,90 @@
           {
             "lang": "js",
             "source": "import { createDeepAgentCodeClient } from \"@deepagent-code/sdk\n\nconst client = createDeepAgentCodeClient()\nawait client.session.prompt_prepare({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/session/{sessionID}/prompt_suggestion": {
+      "get": {
+        "tags": ["session"],
+        "operationId": "session.prompt_suggestion",
+        "parameters": [
+          {
+            "name": "sessionID",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "pattern": "^ses"
+            },
+            "required": true
+          },
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Latest next-round suggestion",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string"
+                    },
+                    "body": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["status", "body"],
+                  "additionalProperties": false,
+                  "description": "Latest next-round suggestion"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BadRequestError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NotFoundError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotFoundError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Read the latest DeepAgent macro-round suggestion ({status, body}) persisted for human approval (high/max).",
+        "summary": "Get latest next-round suggestion",
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createDeepAgentCodeClient } from \"@deepagent-code/sdk\n\nconst client = createDeepAgentCodeClient()\nawait client.session.prompt_suggestion({\n  ...\n})"
           }
         ]
       }
@@ -13352,13 +15024,16 @@
             "$ref": "#/components/schemas/EventSessionCompacted"
           },
           {
-            "$ref": "#/components/schemas/EventVcsBranchUpdated"
+            "$ref": "#/components/schemas/EventPlanUpdated"
           },
           {
             "$ref": "#/components/schemas/EventWorktreeReady"
           },
           {
             "$ref": "#/components/schemas/EventWorktreeFailed"
+          },
+          {
+            "$ref": "#/components/schemas/EventVcsBranchUpdated"
           },
           {
             "$ref": "#/components/schemas/EventWorkspaceReady"
@@ -18142,15 +19817,97 @@
                   },
                   "type": {
                     "type": "string",
-                    "enum": ["vcs.branch.updated"]
+                    "enum": ["plan.updated"]
                   },
                   "properties": {
                     "type": "object",
                     "properties": {
-                      "branch": {
+                      "sessionID": {
+                        "type": "string",
+                        "pattern": "^ses"
+                      },
+                      "plan_id": {
                         "type": "string"
+                      },
+                      "goal": {
+                        "type": "string"
+                      },
+                      "active_step_id": {
+                        "type": "string"
+                      },
+                      "steps": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "step_id": {
+                              "type": "string"
+                            },
+                            "title": {
+                              "type": "string"
+                            },
+                            "status": {
+                              "type": "string"
+                            },
+                            "acceptance": {
+                              "type": "string"
+                            },
+                            "assigned_agent": {
+                              "type": "string"
+                            }
+                          },
+                          "required": ["step_id", "title", "status"],
+                          "additionalProperties": false
+                        }
+                      },
+                      "done": {
+                        "anyOf": [
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "string",
+                            "enum": ["NaN"]
+                          },
+                          {
+                            "type": "string",
+                            "enum": ["Infinity"]
+                          },
+                          {
+                            "type": "string",
+                            "enum": ["-Infinity"]
+                          },
+                          {
+                            "type": "string",
+                            "enum": ["Infinity", "-Infinity", "NaN"]
+                          }
+                        ]
+                      },
+                      "total": {
+                        "anyOf": [
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "string",
+                            "enum": ["NaN"]
+                          },
+                          {
+                            "type": "string",
+                            "enum": ["Infinity"]
+                          },
+                          {
+                            "type": "string",
+                            "enum": ["-Infinity"]
+                          },
+                          {
+                            "type": "string",
+                            "enum": ["Infinity", "-Infinity", "NaN"]
+                          }
+                        ]
                       }
                     },
+                    "required": ["sessionID", "plan_id", "goal", "active_step_id", "steps", "done", "total"],
                     "additionalProperties": false
                   }
                 },
@@ -18204,6 +19961,30 @@
                       }
                     },
                     "required": ["message"],
+                    "additionalProperties": false
+                  }
+                },
+                "required": ["id", "type", "properties"],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "pattern": "^evt_"
+                  },
+                  "type": {
+                    "type": "string",
+                    "enum": ["vcs.branch.updated"]
+                  },
+                  "properties": {
+                    "type": "object",
+                    "properties": {
+                      "branch": {
+                        "type": "string"
+                      }
+                    },
                     "additionalProperties": false
                   }
                 },
@@ -18563,6 +20344,9 @@
               "todowrite": {
                 "$ref": "#/components/schemas/PermissionActionConfig"
               },
+              "plan": {
+                "$ref": "#/components/schemas/PermissionActionConfig"
+              },
               "question": {
                 "$ref": "#/components/schemas/PermissionActionConfig"
               },
@@ -18776,7 +20560,7 @@
                       "properties": {
                         "field": {
                           "type": "string",
-                          "enum": ["reasoning_content", "reasoning_details"]
+                          "enum": ["reasoning", "reasoning_content", "reasoning_details"]
                         }
                       },
                       "required": ["field"],
@@ -18933,6 +20717,11 @@
           "timeout": {
             "type": "integer",
             "exclusiveMinimum": 0
+          },
+          "riskTier": {
+            "type": "string",
+            "enum": ["read_only", "write_guarded", "external_fetch"],
+            "description": "Display-only risk tier persisted by the preset catalog. NOT trusted for permission decisions — the gate re-derives the tier by matching the live config against the catalog. Absent/non-matching servers fail closed to ask."
           }
         },
         "required": ["type", "command"],
@@ -18997,6 +20786,11 @@
           "timeout": {
             "type": "integer",
             "exclusiveMinimum": 0
+          },
+          "riskTier": {
+            "type": "string",
+            "enum": ["read_only", "write_guarded", "external_fetch"],
+            "description": "Display-only risk tier persisted by the preset catalog. NOT trusted for permission decisions — the gate re-derives the tier by matching the live config against the catalog. Absent/non-matching servers fail closed to ask."
           }
         },
         "required": ["type", "url"],
@@ -19554,7 +21348,7 @@
                     "properties": {
                       "field": {
                         "type": "string",
-                        "enum": ["reasoning_content", "reasoning_details"]
+                        "enum": ["reasoning", "reasoning_content", "reasoning_details"]
                       }
                     },
                     "required": ["field"],
@@ -19829,7 +21623,9 @@
               "WorktreeStartCommandFailedError",
               "WorktreeRemoveFailedError",
               "WorktreeResetFailedError",
-              "WorktreeListFailedError"
+              "WorktreeListFailedError",
+              "WorktreeMergeFailedError",
+              "WorktreeUnsafeRemoveError"
             ]
           },
           "data": {
@@ -19890,6 +21686,251 @@
         "properties": {
           "directory": {
             "type": "string"
+          }
+        },
+        "required": ["directory"],
+        "additionalProperties": false
+      },
+      "WorktreeChangeCount": {
+        "type": "object",
+        "properties": {
+          "uncommitted": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string",
+                "enum": ["NaN"]
+              },
+              {
+                "type": "string",
+                "enum": ["Infinity"]
+              },
+              {
+                "type": "string",
+                "enum": ["-Infinity"]
+              },
+              {
+                "type": "string",
+                "enum": ["Infinity", "-Infinity", "NaN"]
+              }
+            ]
+          },
+          "ahead": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string",
+                "enum": ["NaN"]
+              },
+              {
+                "type": "string",
+                "enum": ["Infinity"]
+              },
+              {
+                "type": "string",
+                "enum": ["-Infinity"]
+              },
+              {
+                "type": "string",
+                "enum": ["Infinity", "-Infinity", "NaN"]
+              }
+            ]
+          },
+          "clean": {
+            "type": "boolean"
+          }
+        },
+        "required": ["uncommitted", "ahead", "clean"],
+        "additionalProperties": false
+      },
+      "WorktreeDiffEntry": {
+        "type": "object",
+        "properties": {
+          "file": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "additions": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string",
+                "enum": ["NaN"]
+              },
+              {
+                "type": "string",
+                "enum": ["Infinity"]
+              },
+              {
+                "type": "string",
+                "enum": ["-Infinity"]
+              },
+              {
+                "type": "string",
+                "enum": ["Infinity", "-Infinity", "NaN"]
+              }
+            ]
+          },
+          "deletions": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string",
+                "enum": ["NaN"]
+              },
+              {
+                "type": "string",
+                "enum": ["Infinity"]
+              },
+              {
+                "type": "string",
+                "enum": ["-Infinity"]
+              },
+              {
+                "type": "string",
+                "enum": ["Infinity", "-Infinity", "NaN"]
+              }
+            ]
+          }
+        },
+        "required": ["file", "status", "additions", "deletions"],
+        "additionalProperties": false
+      },
+      "WorktreeDiffResult": {
+        "type": "object",
+        "properties": {
+          "entries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorktreeDiffEntry"
+            }
+          },
+          "patch": {
+            "type": "string"
+          },
+          "truncated": {
+            "type": "boolean"
+          }
+        },
+        "required": ["entries", "patch", "truncated"],
+        "additionalProperties": false
+      },
+      "WorktreeBranchSummary": {
+        "type": "object",
+        "properties": {
+          "base": {
+            "type": "string"
+          },
+          "additions": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string",
+                "enum": ["NaN"]
+              },
+              {
+                "type": "string",
+                "enum": ["Infinity"]
+              },
+              {
+                "type": "string",
+                "enum": ["-Infinity"]
+              },
+              {
+                "type": "string",
+                "enum": ["Infinity", "-Infinity", "NaN"]
+              }
+            ]
+          },
+          "deletions": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string",
+                "enum": ["NaN"]
+              },
+              {
+                "type": "string",
+                "enum": ["Infinity"]
+              },
+              {
+                "type": "string",
+                "enum": ["-Infinity"]
+              },
+              {
+                "type": "string",
+                "enum": ["Infinity", "-Infinity", "NaN"]
+              }
+            ]
+          },
+          "files": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string",
+                "enum": ["NaN"]
+              },
+              {
+                "type": "string",
+                "enum": ["Infinity"]
+              },
+              {
+                "type": "string",
+                "enum": ["-Infinity"]
+              },
+              {
+                "type": "string",
+                "enum": ["Infinity", "-Infinity", "NaN"]
+              }
+            ]
+          }
+        },
+        "required": ["base", "additions", "deletions", "files"],
+        "additionalProperties": false
+      },
+      "WorktreeMergeResult": {
+        "type": "object",
+        "properties": {
+          "merged": {
+            "type": "boolean"
+          },
+          "conflicted": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": ["merged", "conflicted", "message"],
+        "additionalProperties": false
+      },
+      "WorktreeSafeRemoveInput": {
+        "type": "object",
+        "properties": {
+          "directory": {
+            "type": "string"
+          },
+          "force": {
+            "type": "boolean"
           }
         },
         "required": ["directory"],
@@ -20308,7 +22349,7 @@
               },
               "agentMode": {
                 "type": "string",
-                "enum": ["general", "high", "max"]
+                "enum": ["general", "high", "xhigh", "max", "ultra"]
               },
               "implementation": {
                 "type": "string",
@@ -20703,16 +22744,6 @@
           }
         ]
       },
-      "McpUnsupportedOAuthError": {
-        "type": "object",
-        "properties": {
-          "error": {
-            "type": "string"
-          }
-        },
-        "required": ["error"],
-        "additionalProperties": false
-      },
       "McpServerNotFoundError": {
         "type": "object",
         "properties": {
@@ -20728,6 +22759,26 @@
           }
         },
         "required": ["_tag", "name", "message"],
+        "additionalProperties": false
+      },
+      "McpCatalogInstantiateError": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": ["error"],
+        "additionalProperties": false
+      },
+      "McpUnsupportedOAuthError": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": ["error"],
         "additionalProperties": false
       },
       "Project": {
@@ -20975,6 +23026,23 @@
           }
         },
         "required": ["_tag", "requestID", "message"],
+        "additionalProperties": false
+      },
+      "ProviderConfigError": {
+        "type": "object",
+        "properties": {
+          "source": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": ["json", "schema"]
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": ["source", "kind", "message"],
         "additionalProperties": false
       },
       "ProviderAuthMethod": {
@@ -29594,7 +31662,7 @@
         "required": ["id", "type", "properties"],
         "additionalProperties": false
       },
-      "EventVcsBranchUpdated": {
+      "EventPlanUpdated": {
         "type": "object",
         "properties": {
           "id": {
@@ -29603,15 +31671,89 @@
           },
           "type": {
             "type": "string",
-            "enum": ["vcs.branch.updated"]
+            "enum": ["plan.updated"]
           },
           "properties": {
             "type": "object",
             "properties": {
-              "branch": {
+              "sessionID": {
+                "type": "string",
+                "pattern": "^ses"
+              },
+              "plan_id": {
                 "type": "string"
+              },
+              "goal": {
+                "type": "string"
+              },
+              "active_step_id": {
+                "type": "string"
+              },
+              "steps": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "step_id": {
+                      "type": "string"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string"
+                    },
+                    "acceptance": {
+                      "type": "string"
+                    },
+                    "assigned_agent": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["step_id", "title", "status"],
+                  "additionalProperties": false
+                }
+              },
+              "done": {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "string",
+                    "enum": ["NaN"]
+                  },
+                  {
+                    "type": "string",
+                    "enum": ["Infinity"]
+                  },
+                  {
+                    "type": "string",
+                    "enum": ["-Infinity"]
+                  }
+                ]
+              },
+              "total": {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "string",
+                    "enum": ["NaN"]
+                  },
+                  {
+                    "type": "string",
+                    "enum": ["Infinity"]
+                  },
+                  {
+                    "type": "string",
+                    "enum": ["-Infinity"]
+                  }
+                ]
               }
             },
+            "required": ["sessionID", "plan_id", "goal", "active_step_id", "steps", "done", "total"],
             "additionalProperties": false
           }
         },
@@ -29665,6 +31807,30 @@
               }
             },
             "required": ["message"],
+            "additionalProperties": false
+          }
+        },
+        "required": ["id", "type", "properties"],
+        "additionalProperties": false
+      },
+      "EventVcsBranchUpdated": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^evt_"
+          },
+          "type": {
+            "type": "string",
+            "enum": ["vcs.branch.updated"]
+          },
+          "properties": {
+            "type": "object",
+            "properties": {
+              "branch": {
+                "type": "string"
+              }
+            },
             "additionalProperties": false
           }
         },
