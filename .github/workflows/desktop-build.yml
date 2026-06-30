@@ -198,5 +198,6 @@ jobs:
           gh release create "$tag" "${assets[@]}" \
             --repo "$REPOSITORY" \
             --latest \
+            --target "$GITHUB_SHA" \
             --title "DeepAgent Code Desktop ${version} (${GITHUB_SHA::7})" \
             --notes "Automated desktop build from main at ${GITHUB_SHA}."
