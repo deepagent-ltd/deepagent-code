@@ -9,8 +9,11 @@ import { DecodeError, ResizerUnavailableError, SizeError } from "../image"
 const JPEG_QUALITIES = [80, 85, 70, 55, 40]
 
 export const make = Effect.gen(function* () {
-  ;(globalThis as typeof globalThis & { __DEEPAGENT_CODE_PHOTON_WASM_PATH?: string }).__DEEPAGENT_CODE_PHOTON_WASM_PATH =
-    path.isAbsolute(photonWasm) ? photonWasm : fileURLToPath(new URL(photonWasm, import.meta.url))
+  ;(
+    globalThis as typeof globalThis & { __DEEPAGENT_CODE_PHOTON_WASM_PATH?: string }
+  ).__DEEPAGENT_CODE_PHOTON_WASM_PATH = path.isAbsolute(photonWasm)
+    ? photonWasm
+    : fileURLToPath(new URL(photonWasm, import.meta.url))
   const loadPhoton = yield* Effect.cached(
     Effect.tryPromise({
       try: () => import("@silvia-odwyer/photon-node"),

@@ -77,7 +77,11 @@ describe("V3.2 agent-strength ladder (docs/39)", () => {
     })
 
     expect(SessionState.getOrCreate(sessionID, "max").budget).toMatchObject({ maxRounds: null, maxTotalTokens: null })
-    expect(SessionState.budgetStatus(sessionID)).toMatchObject({ status: "ok", roundsRemaining: null, tokensRemaining: null })
+    expect(SessionState.budgetStatus(sessionID)).toMatchObject({
+      status: "ok",
+      roundsRemaining: null,
+      tokensRemaining: null,
+    })
     SessionState.cleanup(sessionID)
   })
 })

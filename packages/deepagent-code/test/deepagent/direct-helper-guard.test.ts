@@ -7,7 +7,7 @@ describe("DeepAgent direct helper guard", () => {
 
     expect(source).toContain("AgentGateway.runAuxiliary")
     expect(source).toContain("configureGateway(cfg)")
-    expect(source).toContain('providerID: model.providerID')
+    expect(source).toContain("providerID: model.providerID")
     expect(source).toContain('feature: "agent_generate"')
     expect(source).not.toContain("ONE" + "AGENT")
   })

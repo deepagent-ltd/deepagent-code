@@ -14,7 +14,8 @@ describe("V3 knowledge-snapshot ship gate", () => {
   })
 
   test("blocks and names offenders when MAX regresses", () => {
-    const runner: AblationRunner = (g, t) => (g === "max" && t === "t2" ? 0.5 : { general: 0.6, high: 0.7, max: 0.78 }[g])
+    const runner: AblationRunner = (g, t) =>
+      g === "max" && t === "t2" ? 0.5 : { general: 0.6, high: 0.7, max: 0.78 }[g]
     const d = evaluateSnapshot("snap:bad", TASKS, runner)
     expect(d.ship).toBe(false)
     expect(d.offenders).toEqual(["t2"])

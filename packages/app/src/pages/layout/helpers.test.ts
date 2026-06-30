@@ -77,7 +77,9 @@ describe("layout deep links", () => {
   })
 
   test("parses new-session deep links with optional prompt", () => {
-    expect(parseNewSessionDeepLink("deepagent-code://new-session?directory=/tmp/demo")).toEqual({ directory: "/tmp/demo" })
+    expect(parseNewSessionDeepLink("deepagent-code://new-session?directory=/tmp/demo")).toEqual({
+      directory: "/tmp/demo",
+    })
     expect(parseNewSessionDeepLink("deepagent-code://new-session?directory=/tmp/demo&prompt=hello%20world")).toEqual({
       directory: "/tmp/demo",
       prompt: "hello world",

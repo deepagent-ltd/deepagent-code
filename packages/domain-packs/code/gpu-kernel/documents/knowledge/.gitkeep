@@ -1,0 +1,4 @@
+# This pack intentionally ships zero knowledge-type seed docs (see quality/l3-report.json counts.knowledge = 0).
+# The directory is part of the required pack layout (domain-pack-quality.test.ts requiredPaths), but git
+# cannot track an empty directory, so this placeholder keeps documents/knowledge/ present on a fresh clone.
+# Remove it if real knowledge:<pack> seed docs are added here.

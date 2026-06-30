@@ -87,10 +87,14 @@ const tagFlags = tags.flatMap((t) => ["-t", t])
 if (!Script.preview) {
   await $`docker buildx build --platform ${platforms} ${tagFlags} --push .`
   // Calculate SHA values
-  const arm64Sha = await $`sha256sum ./dist/deepagent-code-linux-arm64.tar.gz | cut -d' ' -f1`.text().then((x) => x.trim())
+  const arm64Sha = await $`sha256sum ./dist/deepagent-code-linux-arm64.tar.gz | cut -d' ' -f1`
+    .text()
+    .then((x) => x.trim())
   const x64Sha = await $`sha256sum ./dist/deepagent-code-linux-x64.tar.gz | cut -d' ' -f1`.text().then((x) => x.trim())
   const macX64Sha = await $`sha256sum ./dist/deepagent-code-darwin-x64.zip | cut -d' ' -f1`.text().then((x) => x.trim())
-  const macArm64Sha = await $`sha256sum ./dist/deepagent-code-darwin-arm64.zip | cut -d' ' -f1`.text().then((x) => x.trim())
+  const macArm64Sha = await $`sha256sum ./dist/deepagent-code-darwin-arm64.zip | cut -d' ' -f1`
+    .text()
+    .then((x) => x.trim())
 
   const [pkgver, _subver = ""] = Script.version.split(/(-.*)/, 2)
 

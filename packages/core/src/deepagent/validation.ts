@@ -75,9 +75,15 @@ export const buildValidationPlan = (config: ValidationConfig): ValidationPlan =>
   failFast: true,
 })
 
-export const parseValidationOutput = (command: string, exitCode: number, output: string, duration_ms: number): ValidationResult => ({
+export const parseValidationOutput = (
+  command: string,
+  exitCode: number,
+  output: string,
+  duration_ms: number,
+): ValidationResult => ({
   command,
   passed: exitCode === 0,
+  exit_code: exitCode,
   output: output.slice(-4000),
   duration_ms,
 })

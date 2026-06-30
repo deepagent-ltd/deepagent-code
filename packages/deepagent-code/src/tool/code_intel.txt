@@ -1,0 +1,28 @@
+Semantic code intelligence for navigating and understanding code by SYMBOL NAME (not line/character coordinates). Backed by Language Server Protocol servers — this gives compiler-grade understanding, not text matching.
+
+PREFER THIS over grep when you are looking for a code symbol (function, class, method, interface, variable, type). Give the symbol name directly; you do NOT need to grep for coordinates first.
+
+Provide either:
+- symbol: the symbol name, e.g. "AgentGateway" or "resolveTools" (preferred), optionally narrowed with `file` and/or `kind`; or
+- position: an explicit { file, line, character } when you already know the coordinate (fallback / disambiguation).
+
+Intents:
+- definition: where the symbol is defined
+- references: every place the symbol is used (grouped by file, with code snippets)
+- implementations: implementations of an interface / abstract method
+- type: the symbol's type definition
+- hover: documentation / signature / inferred type summary
+- calls_in: callers of a function/method (who calls it)
+- calls_out: callees (what it calls)
+- supertypes: parent classes / implemented interfaces (inheritance chain UP)
+- subtypes: subclasses / implementers (inheritance chain DOWN — "who implements this interface")
+- type_hints: compiler-inferred implicit types in a region (inlay hints)
+- rename_preview: preview a safe rename as a WorkspaceEdit (READ-ONLY — does not write; apply via edit/apply_patch)
+- quick_fix: available code actions / quick fixes (preview only)
+- outline: the symbol tree of a file
+- diagnostics: current diagnostics for a file or symbol
+- overview: one call returns definition + type + references + callers + callees + (for classes/interfaces) inheritance + doc summary
+
+Disambiguation: when a symbol name matches multiple symbols, this returns a candidate list (name + file:line + kind) instead of guessing. Re-issue with `file` and/or `kind` to narrow.
+
+Fallback: if the file type has no LSP server, this returns a hint to use grep/read — it never crashes. grep remains available for non-symbol text (config strings, comments, cross-language search).

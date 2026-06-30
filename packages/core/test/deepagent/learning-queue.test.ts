@@ -11,7 +11,14 @@ const jobThatRecords = (log: string[], label: string, opts?: { throwOnBuild?: bo
       worker: {
         run: () => {
           log.push(label)
-          return { trigger: "session_finalization", enqueue_ms: 0, candidate_count: 0, auto_merged_ids: [], inbox_ids: [], skipped_ids: [] }
+          return {
+            trigger: "session_finalization",
+            enqueue_ms: 0,
+            candidate_count: 0,
+            auto_merged_ids: [],
+            inbox_ids: [],
+            skipped_ids: [],
+          }
         },
       } as any,
       input: {} as any,

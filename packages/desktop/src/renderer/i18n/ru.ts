@@ -15,7 +15,8 @@ export const dict = {
   "desktop.updater.downloadFailed.title": "Обновление не удалось",
   "desktop.updater.downloadFailed.message": "Не удалось скачать обновление",
   "desktop.updater.downloaded.title": "Обновление загружено",
-  "desktop.updater.downloaded.prompt": "Версия DeepAgent Code {{version}} загружена. Хотите установить и перезапустить?",
+  "desktop.updater.downloaded.prompt":
+    "Версия DeepAgent Code {{version}} загружена. Хотите установить и перезапустить?",
   "desktop.updater.installFailed.title": "Обновление не удалось",
   "desktop.updater.installFailed.message": "Не удалось установить обновление",
 

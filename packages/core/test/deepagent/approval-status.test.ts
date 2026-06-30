@@ -81,8 +81,12 @@ describe("docs/34 §7.3 approval (DocStatus) gating", () => {
 
   test("listByStatus surfaces candidate and rejected for the Review UI", () => {
     const store = openUserGlobalStore(base)
-    const p = store.stageCandidate(stratInput({ idSlug: "pending-one", description: "pad shared memory to remove bank conflicts" }))
-    const r = store.stageCandidate(stratInput({ idSlug: "rejected-one", description: "prefetch tiles into registers before the loop" }))
+    const p = store.stageCandidate(
+      stratInput({ idSlug: "pending-one", description: "pad shared memory to remove bank conflicts" }),
+    )
+    const r = store.stageCandidate(
+      stratInput({ idSlug: "rejected-one", description: "prefetch tiles into registers before the loop" }),
+    )
     store.reject(r.id)
     expect(store.listByStatus("candidate").map((e) => e.id)).toContain(p.id)
     expect(store.listByStatus("rejected").map((e) => e.id)).toContain(r.id)

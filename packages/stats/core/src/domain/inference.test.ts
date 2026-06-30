@@ -61,9 +61,9 @@ describe("inference stat normalization", () => {
   })
 
   test("provider aggregates never keep deepagent-code as the provider", () => {
-    expect(toProviderAggregate({ ...aggregate("big-pickle", "deepagent-code"), provider_model: "gpt-5" })).toMatchObject([
-      { provider: "openai" },
-    ])
+    expect(
+      toProviderAggregate({ ...aggregate("big-pickle", "deepagent-code"), provider_model: "gpt-5" }),
+    ).toMatchObject([{ provider: "openai" }])
     expect(toProviderAggregate(aggregate("big-pickle", "deepagent-code"))).toMatchObject([{ provider: "unknown" }])
   })
 

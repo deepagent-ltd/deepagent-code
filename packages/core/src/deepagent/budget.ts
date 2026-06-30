@@ -36,11 +36,25 @@ export const check = (state: RoundState, config: BudgetConfig): BudgetCheck => {
   const roundsRemaining = config.maxRounds !== null ? config.maxRounds - state.round : null
 
   if (roundsRemaining !== null && roundsRemaining < 0) {
-    return { status: "exceeded", tokensUsed, tokensRemaining, roundsUsed: state.round, roundsRemaining: 0, message: "Max rounds exceeded." }
+    return {
+      status: "exceeded",
+      tokensUsed,
+      tokensRemaining,
+      roundsUsed: state.round,
+      roundsRemaining: 0,
+      message: "Max rounds exceeded.",
+    }
   }
 
   if (tokensRemaining !== null && tokensRemaining <= 0) {
-    return { status: "exhausted", tokensUsed, tokensRemaining: 0, roundsUsed: state.round, roundsRemaining, message: "Token budget exhausted." }
+    return {
+      status: "exhausted",
+      tokensUsed,
+      tokensRemaining: 0,
+      roundsUsed: state.round,
+      roundsRemaining,
+      message: "Token budget exhausted.",
+    }
   }
 
   if (tokensRemaining !== null && config.maxTotalTokens !== null) {

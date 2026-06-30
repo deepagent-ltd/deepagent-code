@@ -1,4 +1,14 @@
-import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  readlinkSync,
+  renameSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs"
 import { randomUUID } from "node:crypto"
 import path from "node:path"
 import { resolveDataPath } from "../global-path"
@@ -187,7 +197,11 @@ export class DeepAgentCodeHome {
       run_id: runID,
       created_at: new Date().toISOString(),
     } satisfies RunManifest)
-    writeJsonIfMissing(paths.runState, { schema_version: "deepagent-code.run_state.v1", run_id: runID, phase: "created" })
+    writeJsonIfMissing(paths.runState, {
+      schema_version: "deepagent-code.run_state.v1",
+      run_id: runID,
+      phase: "created",
+    })
     return paths
   }
 
@@ -222,7 +236,11 @@ export class DeepAgentCodeHome {
     try {
       symlinkSync("../../public", publicPath, "dir")
     } catch {
-      writeFileSync(`${publicPath}.link.json`, JSON.stringify({ target: "../../public", readonly: true }, null, 2), "utf8")
+      writeFileSync(
+        `${publicPath}.link.json`,
+        JSON.stringify({ target: "../../public", readonly: true }, null, 2),
+        "utf8",
+      )
     }
   }
 
@@ -235,7 +253,8 @@ export class DeepAgentCodeHome {
       paths.questDir,
       paths.indexesDir,
       paths.sessionsDir,
-    ]) mkdirSync(dir, { recursive: true })
+    ])
+      mkdirSync(dir, { recursive: true })
     writeJsonIfMissing(paths.projectJson, {
       schema_version: PROJECT_SCHEMA_VERSION,
       project_id: projectID,
@@ -248,21 +267,32 @@ export class DeepAgentCodeHome {
       rebuildable: true,
       indexes: ["project-memory", "project-rules", "project-knowledge", "handoff", "quest"],
     })
-    if (!existsSync(paths.publicLink) && !existsSync(`${paths.publicLink}.link.json`)) this.createPublicPointer(paths.publicLink)
+    if (!existsSync(paths.publicLink) && !existsSync(`${paths.publicLink}.link.json`))
+      this.createPublicPointer(paths.publicLink)
     ensureFile(path.join(paths.root, ".initialized"), new Date().toISOString() + "\n")
   }
 
   private validateProject(paths: ProjectPaths, projectID: string): void {
     const manifest = JSON.parse(readFileSync(paths.projectJson, "utf8")) as ProjectManifest
     if (manifest.schema_version !== PROJECT_SCHEMA_VERSION) throw new Error(`invalid project schema for ${projectID}`)
-    if (manifest.project_id !== projectID) throw new Error(`project id mismatch: ${manifest.project_id} !== ${projectID}`)
-    for (const dir of [paths.projectMemoryDir, paths.projectRulesDir, paths.projectKnowledgeDir, paths.handoffDir, paths.questDir, paths.indexesDir, paths.sessionsDir]) {
+    if (manifest.project_id !== projectID)
+      throw new Error(`project id mismatch: ${manifest.project_id} !== ${projectID}`)
+    for (const dir of [
+      paths.projectMemoryDir,
+      paths.projectRulesDir,
+      paths.projectKnowledgeDir,
+      paths.handoffDir,
+      paths.questDir,
+      paths.indexesDir,
+      paths.sessionsDir,
+    ]) {
       mkdirSync(dir, { recursive: true })
     }
     if (existsSync(paths.publicLink)) {
       const stat = lstatSync(paths.publicLink)
       if (!stat.isSymbolicLink()) throw new Error(`ProjectStore.InvalidPublicLink: ${paths.publicLink}`)
-      if (readlinkSync(paths.publicLink) !== "../../public") throw new Error(`ProjectStore.InvalidPublicLink: ${paths.publicLink}`)
+      if (readlinkSync(paths.publicLink) !== "../../public")
+        throw new Error(`ProjectStore.InvalidPublicLink: ${paths.publicLink}`)
     } else if (!existsSync(`${paths.publicLink}.link.json`)) {
       this.createPublicPointer(paths.publicLink)
     }

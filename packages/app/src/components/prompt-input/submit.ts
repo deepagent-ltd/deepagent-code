@@ -29,7 +29,6 @@ type PendingPrompt = {
 
 const pending = new Map<string, PendingPrompt>()
 
-
 export type FollowupDraft = {
   sessionID: string
   sessionDirectory: string
@@ -767,34 +766,36 @@ export function createPromptSubmit(input: PromptSubmitInput) {
       onPromptPrepareEnd: input.onPromptPrepareEnd,
       promptOutputLanguage: promptOutputLanguage(language.locale()),
       confirmPromptDraft: input.confirmPromptDraft,
-    }).then((sent) => {
-      pending.delete(pendingKey(session.id))
-      if (sent) {
-        if (preparesPromptDraft) {
-          clearContext()
-          clearInput()
-        }
-        return
-      }
-      if (sessionDirectory === projectDirectory) {
-        sync.set("session_status", session.id, { type: "idle" })
-      }
-      removeOptimisticMessage()
-      if (!preparesPromptDraft) restoreCommentItems(commentItems)
-      restoreInput()
-    }).catch((err) => {
-      pending.delete(pendingKey(session.id))
-      if (sessionDirectory === projectDirectory) {
-        sync.set("session_status", session.id, { type: "idle" })
-      }
-      showToast({
-        title: language.t("prompt.toast.promptSendFailed.title"),
-        description: errorMessage(err),
-      })
-      removeOptimisticMessage()
-      if (!preparesPromptDraft) restoreCommentItems(commentItems)
-      restoreInput()
     })
+      .then((sent) => {
+        pending.delete(pendingKey(session.id))
+        if (sent) {
+          if (preparesPromptDraft) {
+            clearContext()
+            clearInput()
+          }
+          return
+        }
+        if (sessionDirectory === projectDirectory) {
+          sync.set("session_status", session.id, { type: "idle" })
+        }
+        removeOptimisticMessage()
+        if (!preparesPromptDraft) restoreCommentItems(commentItems)
+        restoreInput()
+      })
+      .catch((err) => {
+        pending.delete(pendingKey(session.id))
+        if (sessionDirectory === projectDirectory) {
+          sync.set("session_status", session.id, { type: "idle" })
+        }
+        showToast({
+          title: language.t("prompt.toast.promptSendFailed.title"),
+          description: errorMessage(err),
+        })
+        removeOptimisticMessage()
+        if (!preparesPromptDraft) restoreCommentItems(commentItems)
+        restoreInput()
+      })
   }
 
   return {

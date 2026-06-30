@@ -108,7 +108,10 @@ const AgentCreateCommand = effectCmd({
           if (prompts.isCancel(scopeResult)) throw new UI.CancelledError()
           scope = scopeResult
         }
-        targetPath = path.join(scope === "global" ? Global.Path.config : path.join(ctx.worktree, ".deepagent-code"), "agents")
+        targetPath = path.join(
+          scope === "global" ? Global.Path.config : path.join(ctx.worktree, ".deepagent-code"),
+          "agents",
+        )
       }
 
       // Get description

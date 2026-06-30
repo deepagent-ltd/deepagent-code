@@ -50,7 +50,7 @@ const AUTO_APPROVABLE_KINDS = new Set([
   "project_fact",
   "skill",
   "failure_dossier",
-  "memory",     // DocumentStore type alias
+  "memory", // DocumentStore type alias
 ])
 
 const STRONG_EVIDENCE = new Set(["strong", "medium"])

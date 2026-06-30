@@ -14,6 +14,55 @@ export const AddPayload = Schema.Struct({
 })
 
 export const StatusMap = Schema.Record(Schema.String, MCP.Status)
+
+// M1 (S1-v3.4): preset catalog exposure. The catalog is metadata only; these schemas mirror
+// the McpCatalogEntry shape (credentials by key-name, never values) for the one-click UI.
+export const CatalogCredentialSpec = Schema.Struct({
+  key: Schema.String,
+  description: Schema.String,
+  required: Schema.Boolean,
+  secret: Schema.Boolean,
+})
+export const CatalogParamSpec = Schema.Struct({
+  key: Schema.String,
+  description: Schema.String,
+  required: Schema.Boolean,
+  multi: Schema.optional(Schema.Boolean),
+})
+export const CatalogEntry = Schema.Struct({
+  id: Schema.String,
+  title: Schema.String,
+  description: Schema.String,
+  direction: Schema.Literals(["git_platform", "files_search", "db_readonly", "browser_fetch"]),
+  source: Schema.Literals(["opensource", "adapted", "self"]),
+  repo: Schema.optional(Schema.String),
+  upstreamPin: Schema.optional(Schema.String),
+  transport: Schema.Literals(["local", "remote"]),
+  credentials: Schema.Array(CatalogCredentialSpec),
+  params: Schema.Array(CatalogParamSpec),
+  riskTier: Schema.Literals(["read_only", "write_guarded", "external_fetch"]),
+  defaultReadOnly: Schema.Boolean,
+  defaultEnabled: Schema.Boolean,
+})
+export const CatalogList = Schema.Array(CatalogEntry)
+// credentialRefs map a credential key → a secure-storage REFERENCE the caller already resolved
+// (never a raw secret in the request body where avoidable; values are not persisted to the config repo).
+export const CatalogEnablePayload = Schema.Struct({
+  id: Schema.String,
+  params: Schema.Record(Schema.String, Schema.Union([Schema.String, Schema.Array(Schema.String)])),
+  credentialRefs: Schema.Record(Schema.String, Schema.String),
+})
+// Result carries the instantiated name+config so the caller can persist it to cfg.mcp (durable),
+// matching the manual-add flow; the backend only connected it in-memory.
+export const CatalogEnableResult = Schema.Struct({
+  status: StatusMap,
+  name: Schema.String,
+  config: ConfigMCPV1.Info,
+})
+export class CatalogInstantiateApiError extends Schema.ErrorClass<CatalogInstantiateApiError>(
+  "McpCatalogInstantiateError",
+)({ error: Schema.String }, { httpApiStatus: 400 }) {}
+
 export const AuthStartResponse = Schema.Struct({
   authorizationUrl: Schema.String,
   oauthState: Schema.String,
@@ -31,6 +80,8 @@ export class UnsupportedOAuthError extends Schema.ErrorClass<UnsupportedOAuthErr
 
 export const McpPaths = {
   status: "/mcp",
+  catalog: "/mcp/catalog",
+  catalogEnable: "/mcp/catalog/enable",
   auth: "/mcp/:name/auth",
   authCallback: "/mcp/:name/auth/callback",
   authAuthenticate: "/mcp/:name/auth/authenticate",
@@ -62,6 +113,30 @@ export const McpApi = HttpApi.make("mcp")
             identifier: "mcp.add",
             summary: "Add MCP server",
             description: "Dynamically add a new Model Context Protocol (MCP) server to the system.",
+          }),
+        ),
+        HttpApiEndpoint.get("catalog", McpPaths.catalog, {
+          query: WorkspaceRoutingQuery,
+          success: described(CatalogList, "Preset MCP catalog (metadata only; nothing is connected)"),
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "mcp.catalog",
+            summary: "List preset MCP catalog",
+            description:
+              "List the vetted preset MCP servers. Metadata only — no server is connected until explicitly enabled.",
+          }),
+        ),
+        HttpApiEndpoint.post("catalogEnable", McpPaths.catalogEnable, {
+          query: WorkspaceRoutingQuery,
+          payload: CatalogEnablePayload,
+          success: described(CatalogEnableResult, "Catalog entry enabled and connected"),
+          error: [McpServerNotFoundError, CatalogInstantiateApiError],
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "mcp.catalogEnable",
+            summary: "Enable a preset MCP catalog entry",
+            description:
+              "Instantiate a preset catalog entry (with filled params + secure-storage credential references) into a cfg.mcp entry and connect it.",
           }),
         ),
         HttpApiEndpoint.post("authStart", McpPaths.auth, {

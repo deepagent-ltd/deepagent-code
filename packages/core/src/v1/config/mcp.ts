@@ -3,6 +3,19 @@ export * as ConfigMCPV1 from "./mcp"
 import { Schema } from "effect"
 import { PositiveInt } from "../../schema"
 
+// M7 (S1-v3.4): risk tier persisted on a connected MCP server. ⚠️ This field is DISPLAY metadata
+// only and is NOT the gate's trust source: it is attacker-writable (the `add` endpoint forwards
+// client config; project-local config is auto-merged + not gitignored). The live permission gate
+// IGNORES this field and re-derives the tier at runtime by structurally matching the server config
+// against the preset catalog templates (deepagent-code `McpCatalog.deriveTier`). A hand-added or
+// tampered server that does not match a catalog template derives no tier → the gate fails closed to
+// `ask`. read_only (catalog-matched) → auto-allow; write_guarded / external_fetch → ask per call.
+export const RiskTier = Schema.Literals(["read_only", "write_guarded", "external_fetch"]).annotate({
+  description:
+    "Display-only risk tier persisted by the preset catalog. NOT trusted for permission decisions — the gate re-derives the tier by matching the live config against the catalog. Absent/non-matching servers fail closed to ask.",
+})
+export type RiskTier = Schema.Schema.Type<typeof RiskTier>
+
 export const Local = Schema.Struct({
   type: Schema.Literal("local").annotate({ description: "Type of MCP server connection" }),
   command: Schema.mutable(Schema.Array(Schema.String)).annotate({
@@ -17,6 +30,7 @@ export const Local = Schema.Struct({
   timeout: Schema.optional(PositiveInt).annotate({
     description: "Timeout in ms for MCP server requests. Defaults to 5000 (5 seconds) if not specified.",
   }),
+  riskTier: Schema.optional(RiskTier),
 }).annotate({ identifier: "McpLocalConfig" })
 export type Local = Schema.Schema.Type<typeof Local>
 
@@ -53,6 +67,7 @@ export const Remote = Schema.Struct({
   timeout: Schema.optional(PositiveInt).annotate({
     description: "Timeout in ms for MCP server requests. Defaults to 5000 (5 seconds) if not specified.",
   }),
+  riskTier: Schema.optional(RiskTier),
 }).annotate({ identifier: "McpRemoteConfig" })
 export type Remote = Schema.Schema.Type<typeof Remote>
 

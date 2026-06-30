@@ -35,7 +35,9 @@ describe("deepagentCode acp initialize/auth subprocess", () => {
 
         expect(initialized.authMethods?.[0]?.id).toBe("deepagent-code-login")
         expect(initialized.authMethods?.[0]?._meta?.["terminal-auth"]).toBeDefined()
-        expect(yield* acp.request<AuthenticateResponse>("authenticate", { methodId: "deepagent-code-login" })).toMatchObject({
+        expect(
+          yield* acp.request<AuthenticateResponse>("authenticate", { methodId: "deepagent-code-login" }),
+        ).toMatchObject({
           result: {},
         })
 

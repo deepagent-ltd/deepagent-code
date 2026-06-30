@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { AgentGateway } from "@deepagent-code/core/agent-gateway"
 import { Effect } from "effect"
 import { LLMRequestPrep } from "../../src/session/llm/request"
+import { ToolProvenance } from "../../src/tool/provenance"
 
 const plugin = {
   trigger: (_name: string, _input: unknown, output: unknown) => Effect.succeed(output),
@@ -130,9 +131,14 @@ describe("DeepAgent request prep", () => {
   test("wish-routed general turns use the inherited prompt and bypass DeepAgent metadata", async () => {
     AgentGateway.configure({ enabled: true, agentMode: "high" })
 
-    const prepared = await prepare("deepagent", "deepseek-deepseek-v4-flash", "ses_deepagent_request_prep_wish_general", {
-      metadata: { deepagent: { agent_mode_override: "general" } },
-    })
+    const prepared = await prepare(
+      "deepagent",
+      "deepseek-deepseek-v4-flash",
+      "ses_deepagent_request_prep_wish_general",
+      {
+        metadata: { deepagent: { agent_mode_override: "general" } },
+      },
+    )
     expect(prepared.system[0]).toContain("generic agent prompt")
     expect(prepared.system[0]).not.toContain(AgentGateway.DEEPAGENT_BOOT_MESSAGE)
     expect(prepared.metadata.deepagent).toMatchObject({ agent_mode_override: "general" })
@@ -141,29 +147,81 @@ describe("DeepAgent request prep", () => {
   test("plain later user messages do not advance DeepAgent rounds", async () => {
     AgentGateway.configure({ enabled: true, agentMode: "high" })
 
-    const prepared = await prepare("deepagent", "deepseek-deepseek-v4-flash", `ses_deepagent_request_prep_no_count_round_${crypto.randomUUID()}`, {
-      messages: [
-        { role: "user", content: "first" },
-        { role: "assistant", content: "ok" },
-        { role: "user", content: "second" },
-      ],
-    })
+    const prepared = await prepare(
+      "deepagent",
+      "deepseek-deepseek-v4-flash",
+      `ses_deepagent_request_prep_no_count_round_${crypto.randomUUID()}`,
+      {
+        messages: [
+          { role: "user", content: "first" },
+          { role: "assistant", content: "ok" },
+          { role: "user", content: "second" },
+        ],
+      },
+    )
     expect(prepared.system[0]).toContain("第 1 轮")
   })
 
   test("explicit round control advances DeepAgent rounds", async () => {
     AgentGateway.configure({ enabled: true, agentMode: "high" })
 
-    const prepared = await prepare("deepagent", "deepseek-deepseek-v4-flash", `ses_deepagent_request_prep_explicit_round_${crypto.randomUUID()}`, {
-      metadata: { deepagent: { round_control: { action: "continue" } } },
-      messages: [
-        { role: "user", content: "first" },
-        { role: "assistant", content: "ok" },
-        { role: "user", content: "continue" },
-      ],
-    })
+    const prepared = await prepare(
+      "deepagent",
+      "deepseek-deepseek-v4-flash",
+      `ses_deepagent_request_prep_explicit_round_${crypto.randomUUID()}`,
+      {
+        metadata: { deepagent: { round_control: { action: "continue" } } },
+        messages: [
+          { role: "user", content: "first" },
+          { role: "assistant", content: "ok" },
+          { role: "user", content: "continue" },
+        ],
+      },
+    )
     expect(prepared.system[0]).toContain("第 2 轮")
   })
+
+  // T3 (S1-v3.4): the advance-trigger set {continue, revise, narrow} advances the round; the terminal
+  // markers {stop, escalate} inject no turn and must NOT advance (else a non-existent round is counted).
+  for (const action of ["revise", "narrow"]) {
+    test(`round control "${action}" advances DeepAgent rounds`, async () => {
+      AgentGateway.configure({ enabled: true, agentMode: "high" })
+      const prepared = await prepare(
+        "deepagent",
+        "deepseek-deepseek-v4-flash",
+        `ses_rc_adv_${action}_${crypto.randomUUID()}`,
+        {
+          metadata: { deepagent: { round_control: { action } } },
+          messages: [
+            { role: "user", content: "first" },
+            { role: "assistant", content: "ok" },
+            { role: "user", content: "next" },
+          ],
+        },
+      )
+      expect(prepared.system[0]).toContain("第 2 轮")
+    })
+  }
+
+  for (const action of ["stop", "escalate"]) {
+    test(`terminal round control "${action}" does NOT advance rounds`, async () => {
+      AgentGateway.configure({ enabled: true, agentMode: "high" })
+      const prepared = await prepare(
+        "deepagent",
+        "deepseek-deepseek-v4-flash",
+        `ses_rc_term_${action}_${crypto.randomUUID()}`,
+        {
+          metadata: { deepagent: { round_control: { action } } },
+          messages: [
+            { role: "user", content: "first" },
+            { role: "assistant", content: "ok" },
+            { role: "user", content: "next" },
+          ],
+        },
+      )
+      expect(prepared.system[0]).toContain("第 1 轮")
+    })
+  }
 
   test("does not inject DeepAgent identity when gateway is disabled", async () => {
     AgentGateway.configure({ enabled: false, agentMode: "max" })
@@ -182,6 +240,12 @@ describe("DeepAgent request prep", () => {
     AgentGateway.configure({ enabled: true, agentMode: "high" })
 
     const sessionID = "ses_deepagent_request_prep_metadata"
+    // M2 (S1-v3.4): source is now read from explicit provenance, not the tool name.
+    // A `_`-named MCP tool (default naming) must classify as mcp; a `:`-named tool
+    // WITHOUT provenance must NOT be misread as mcp anymore.
+    const bashTool = {} as any
+    const mcpTool = {} as any
+    ToolProvenance.set(mcpTool, { source: "mcp", mcpServer: "lookup", mcpToolName: "search" })
     const prepared = await Effect.runPromise(
       LLMRequestPrep.prepare({
         user: user("deepagent", "deepseek-deepseek-v4-flash", sessionID),
@@ -198,9 +262,9 @@ describe("DeepAgent request prep", () => {
         system: ["You are deepagent-code, an interactive CLI tool that helps users with software engineering tasks."],
         messages: [{ role: "user", content: "hello" }],
         tools: {
-          bash: {} as any,
+          bash: bashTool,
           invalid: {} as any,
-          "mcp:lookup": {} as any,
+          lookup_search: mcpTool,
         },
         provider: { id: "deepagent", options: {} } as any,
         auth: undefined,
@@ -227,7 +291,7 @@ describe("DeepAgent request prep", () => {
             execution_owner: "generic_agent_tool_registry_or_mcp",
           },
           {
-            name: "mcp:lookup",
+            name: "lookup_search",
             source: "mcp_or_namespaced_tool",
             execution_owner: "generic_agent_tool_registry_or_mcp",
           },

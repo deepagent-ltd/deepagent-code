@@ -24,7 +24,10 @@ const waitReady = Effect.fn("WorktreeU3.waitReady")(function* () {
   GlobalBus.on("event", on)
   yield* Effect.addFinalizer(() => Effect.sync(() => GlobalBus.off("event", on)))
   return yield* Deferred.await(ready).pipe(
-    Effect.timeoutOrElse({ duration: "10 seconds", orElse: () => Effect.fail(new Error("timed out waiting for worktree.ready")) }),
+    Effect.timeoutOrElse({
+      duration: "10 seconds",
+      orElse: () => Effect.fail(new Error("timed out waiting for worktree.ready")),
+    }),
   )
 })
 
@@ -45,10 +48,11 @@ const withWorktree = <A, E, R>(use: (dir: string) => Effect.Effect<A, E, R>) =>
       return info
     }),
     (info) => use(info.directory),
-    (info) => Effect.gen(function* () {
-      const svc = yield* Worktree.Service
-      yield* svc.remove({ directory: info.directory }).pipe(Effect.ignore)
-    }),
+    (info) =>
+      Effect.gen(function* () {
+        const svc = yield* Worktree.Service
+        yield* svc.remove({ directory: info.directory }).pipe(Effect.ignore)
+      }),
   )
 
 describe("Worktree U3", () => {

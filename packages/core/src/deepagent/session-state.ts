@@ -3,11 +3,28 @@ import { randomUUID } from "node:crypto"
 import path from "node:path"
 import { writeFileAtomic } from "./atomic-write"
 import type { AgentMode } from "./mode"
-import { createInitialRoundState, advanceRound, addCandidate, addDiagnosis, updateTokenUsage, type RoundState, type CandidateRef, type DiagnosisRef, type ValidationResult } from "./round-state"
+import {
+  createInitialRoundState,
+  advanceRound,
+  addCandidate,
+  addDiagnosis,
+  updateTokenUsage,
+  type RoundState,
+  type CandidateRef,
+  type DiagnosisRef,
+  type ValidationResult,
+} from "./round-state"
 import type { BudgetCheck, BudgetConfig } from "./budget"
 import { defaultBudget, check as budgetCheck } from "./budget"
 import type { KnowledgeSynthesis } from "./prompt-policy"
-import { initialPlanLatch, markStale, clearStale, type PlanLatchState, type StaleReason, type PlanDoc } from "./plan-controller"
+import {
+  initialPlanLatch,
+  markStale,
+  clearStale,
+  type PlanLatchState,
+  type StaleReason,
+  type PlanDoc,
+} from "./plan-controller"
 
 export type SessionRunState = {
   sessionId: string

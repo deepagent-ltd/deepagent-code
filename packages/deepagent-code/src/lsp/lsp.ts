@@ -112,6 +112,7 @@ const filterExperimentalServers = (servers: Record<string, LSPServer.Info>, flag
 }
 
 type LocInput = { file: string; line: number; character: number }
+type RangeInput = { file: string; start: { line: number; character: number }; end: { line: number; character: number } }
 
 interface State {
   clients: LSPClient.Info[]
@@ -131,10 +132,34 @@ export interface Interface {
   readonly references: (input: LocInput) => Effect.Effect<any[]>
   readonly implementation: (input: LocInput) => Effect.Effect<any[]>
   readonly documentSymbol: (uri: string) => Effect.Effect<(DocumentSymbol | Symbol)[]>
-  readonly workspaceSymbol: (query: string) => Effect.Effect<Symbol[]>
+  readonly workspaceSymbol: (query: string, options?: { limit?: number; kinds?: number[] }) => Effect.Effect<Symbol[]>
   readonly prepareCallHierarchy: (input: LocInput) => Effect.Effect<any[]>
   readonly incomingCalls: (input: LocInput) => Effect.Effect<any[]>
   readonly outgoingCalls: (input: LocInput) => Effect.Effect<any[]>
+  // L1 (S1-v3.4) high-value additions — thin wrappers over `client.connection.sendRequest`.
+  readonly typeDefinition: (input: LocInput) => Effect.Effect<any[]>
+  readonly declaration: (input: LocInput) => Effect.Effect<any[]>
+  readonly prepareTypeHierarchy: (input: LocInput) => Effect.Effect<any[]>
+  readonly supertypes: (input: LocInput) => Effect.Effect<any[]>
+  readonly subtypes: (input: LocInput) => Effect.Effect<any[]>
+  readonly inlayHint: (input: RangeInput) => Effect.Effect<any[]>
+  readonly codeAction: (input: RangeInput & { diagnostics?: any[] }) => Effect.Effect<any[]>
+  /** Execute an LSP command. If the result/applyEdit produces a WorkspaceEdit, callers must treat it as a preview (no write). */
+  readonly executeCommand: (command: string, args?: any[]) => Effect.Effect<any>
+  readonly prepareRename: (input: LocInput) => Effect.Effect<any>
+  /** Read-only: returns the WorkspaceEdit preview only; never writes files. */
+  readonly rename: (input: LocInput & { newName: string }) => Effect.Effect<any>
+  readonly documentHighlight: (input: LocInput) => Effect.Effect<any[]>
+  readonly foldingRange: (uri: string) => Effect.Effect<any[]>
+  readonly selectionRange: (input: LocInput) => Effect.Effect<any[]>
+  // L1 low agent-value — kept on the Service but NOT surfaced in the code_intel intent set.
+  readonly completion: (input: LocInput) => Effect.Effect<any>
+  readonly signatureHelp: (input: LocInput) => Effect.Effect<any>
+  /** Capability probe: returns the server capabilities for the first client serving `file`, or undefined. */
+  readonly serverCapabilities: (file: string) => Effect.Effect<Record<string, unknown> | undefined>
+  // L4 (S1-v3.4): project-level diagnostic pull. Uses workspace/diagnostic where supported,
+  // else falls back to aggregating already-known per-file diagnostics.
+  readonly workspaceDiagnostics: () => Effect.Effect<Record<string, LSPClient.Diagnostic[]>>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@deepagent-code/LSP") {}
@@ -440,11 +465,18 @@ export const layer = Layer.effect(
       return (results.flat() as (DocumentSymbol | Symbol)[]).filter(Boolean)
     })
 
-    const workspaceSymbol = Effect.fn("LSP.workspaceSymbol")(function* (query: string) {
+    const workspaceSymbol = Effect.fn("LSP.workspaceSymbol")(function* (
+      query: string,
+      options?: { limit?: number; kinds?: number[] },
+    ) {
+      // L1 (S1-v3.4): limit and kinds are now parameters (defaults unchanged) so L2/L3
+      // can widen the search per intent. Defaults preserve the original behavior.
+      const limit = options?.limit ?? 10
+      const kindFilter = options?.kinds ?? kinds
       const results = yield* runAll((client) =>
         client.connection
           .sendRequest<Symbol[]>("workspace/symbol", { query })
-          .then((result) => result.filter((x) => kinds.includes(x.kind)).slice(0, 10))
+          .then((result) => result.filter((x) => kindFilter.includes(x.kind)).slice(0, limit))
           .catch(() => [] as Symbol[]),
       )
       return results.flat()
@@ -487,6 +519,211 @@ export const layer = Layer.effect(
       return yield* callHierarchyRequest(input, "callHierarchy/outgoingCalls")
     })
 
+    // --- L1 (S1-v3.4) high-value wrappers (thin, same shape as definition/hover) ---
+
+    const textDocumentPositionRequest = (method: string) =>
+      Effect.fnUntraced(function* (input: LocInput) {
+        const results = yield* run(input.file, (client) =>
+          client.connection
+            .sendRequest(method, {
+              textDocument: { uri: pathToFileURL(input.file).href },
+              position: { line: input.line, character: input.character },
+            })
+            .catch(() => null),
+        )
+        return results.flat().filter(Boolean)
+      })
+
+    const typeDefinition = Effect.fn("LSP.typeDefinition")(textDocumentPositionRequest("textDocument/typeDefinition"))
+    const declaration = Effect.fn("LSP.declaration")(textDocumentPositionRequest("textDocument/declaration"))
+    const documentHighlight = Effect.fn("LSP.documentHighlight")(
+      textDocumentPositionRequest("textDocument/documentHighlight"),
+    )
+    const selectionRange = Effect.fn("LSP.selectionRange")(function* (input: LocInput) {
+      const results = yield* run(input.file, (client) =>
+        client.connection
+          .sendRequest("textDocument/selectionRange", {
+            textDocument: { uri: pathToFileURL(input.file).href },
+            positions: [{ line: input.line, character: input.character }],
+          })
+          .catch(() => []),
+      )
+      return results.flat().filter(Boolean)
+    })
+
+    // Type hierarchy: prepare-then-direction, mirroring callHierarchyRequest.
+    const typeHierarchyRequest = (direction: "typeHierarchy/supertypes" | "typeHierarchy/subtypes") =>
+      Effect.fnUntraced(function* (input: LocInput) {
+        const results = yield* run(input.file, async (client) => {
+          const items = await client.connection
+            .sendRequest<unknown[] | null>("textDocument/prepareTypeHierarchy", {
+              textDocument: { uri: pathToFileURL(input.file).href },
+              position: { line: input.line, character: input.character },
+            })
+            .catch(() => [] as unknown[])
+          if (!items?.length) return []
+          return client.connection.sendRequest(direction, { item: items[0] }).catch(() => [])
+        })
+        return results.flat().filter(Boolean)
+      })
+
+    const prepareTypeHierarchy = Effect.fn("LSP.prepareTypeHierarchy")(function* (input: LocInput) {
+      const results = yield* run(input.file, (client) =>
+        client.connection
+          .sendRequest("textDocument/prepareTypeHierarchy", {
+            textDocument: { uri: pathToFileURL(input.file).href },
+            position: { line: input.line, character: input.character },
+          })
+          .catch(() => []),
+      )
+      return results.flat().filter(Boolean)
+    })
+    const supertypes = Effect.fn("LSP.supertypes")(typeHierarchyRequest("typeHierarchy/supertypes"))
+    const subtypes = Effect.fn("LSP.subtypes")(typeHierarchyRequest("typeHierarchy/subtypes"))
+
+    const inlayHint = Effect.fn("LSP.inlayHint")(function* (input: RangeInput) {
+      const results = yield* run(input.file, (client) =>
+        client.connection
+          .sendRequest("textDocument/inlayHint", {
+            textDocument: { uri: pathToFileURL(input.file).href },
+            range: { start: input.start, end: input.end },
+          })
+          .catch(() => []),
+      )
+      return results.flat().filter(Boolean)
+    })
+
+    const codeAction = Effect.fn("LSP.codeAction")(function* (input: RangeInput & { diagnostics?: any[] }) {
+      const results = yield* run(input.file, (client) =>
+        client.connection
+          .sendRequest("textDocument/codeAction", {
+            textDocument: { uri: pathToFileURL(input.file).href },
+            range: { start: input.start, end: input.end },
+            context: { diagnostics: input.diagnostics ?? [] },
+          })
+          .catch(() => []),
+      )
+      return results.flat().filter(Boolean)
+    })
+
+    const executeCommand = Effect.fn("LSP.executeCommand")(function* (command: string, args?: any[]) {
+      // L1 §5 write boundary: executing a command may compute a WorkspaceEdit. The Service
+      // returns whatever the command yields; callers (code_intel) only surface query/preview
+      // commands and must treat any returned/applied edit as a preview (no write).
+      const results = yield* runAll((client) =>
+        client.connection.sendRequest("workspace/executeCommand", { command, arguments: args ?? [] }).catch(() => null),
+      )
+      return results.find((r) => r != null) ?? null
+    })
+
+    const prepareRename = Effect.fn("LSP.prepareRename")(function* (input: LocInput) {
+      const results = yield* run(input.file, (client) =>
+        client.connection
+          .sendRequest("textDocument/prepareRename", {
+            textDocument: { uri: pathToFileURL(input.file).href },
+            position: { line: input.line, character: input.character },
+          })
+          .catch(() => null),
+      )
+      return results.find((r) => r != null) ?? null
+    })
+
+    const rename = Effect.fn("LSP.rename")(function* (input: LocInput & { newName: string }) {
+      // L1 §4 safety: rename ONLY returns the WorkspaceEdit preview. It never writes files;
+      // applying the edit must go through edit/apply_patch (permission gate + diagnostic loop).
+      const results = yield* run(input.file, (client) =>
+        client.connection
+          .sendRequest("textDocument/rename", {
+            textDocument: { uri: pathToFileURL(input.file).href },
+            position: { line: input.line, character: input.character },
+            newName: input.newName,
+          })
+          .catch(() => null),
+      )
+      return results.find((r) => r != null) ?? null
+    })
+
+    const foldingRange = Effect.fn("LSP.foldingRange")(function* (uri: string) {
+      const file = fileURLToPath(uri)
+      const results = yield* run(file, (client) =>
+        client.connection.sendRequest("textDocument/foldingRange", { textDocument: { uri } }).catch(() => []),
+      )
+      return results.flat().filter(Boolean)
+    })
+
+    // L1 low agent-value: kept on the Service, intentionally NOT in the code_intel intent set.
+    const completion = Effect.fn("LSP.completion")(function* (input: LocInput) {
+      const results = yield* run(input.file, (client) =>
+        client.connection
+          .sendRequest("textDocument/completion", {
+            textDocument: { uri: pathToFileURL(input.file).href },
+            position: { line: input.line, character: input.character },
+          })
+          .catch(() => null),
+      )
+      return results.find((r) => r != null) ?? null
+    })
+    const signatureHelp = Effect.fn("LSP.signatureHelp")(function* (input: LocInput) {
+      const results = yield* run(input.file, (client) =>
+        client.connection
+          .sendRequest("textDocument/signatureHelp", {
+            textDocument: { uri: pathToFileURL(input.file).href },
+            position: { line: input.line, character: input.character },
+          })
+          .catch(() => null),
+      )
+      return results.find((r) => r != null) ?? null
+    })
+
+    const serverCapabilities = Effect.fn("LSP.serverCapabilities")(function* (file: string) {
+      const clients = yield* getClients(file)
+      for (const client of clients) {
+        const caps = client.getServerCapabilities()
+        if (caps) return caps as Record<string, unknown>
+      }
+      return undefined
+    })
+
+    // L4 (S1-v3.4): "what compiles broken across the whole repo" — workspace/diagnostic pull
+    // where the server advertises it, otherwise fall back to aggregating the per-file
+    // diagnostics we already hold (push + prior pulls). Graceful: unsupported → fallback,
+    // never throws.
+    const workspaceDiagnostics = Effect.fn("LSP.workspaceDiagnostics")(function* () {
+      const s = yield* InstanceState.get(state)
+      const results: Record<string, LSPClient.Diagnostic[]> = {}
+      const all = yield* Effect.promise(() =>
+        Promise.all(
+          s.clients.map(async (client) => {
+            const caps = client.getServerCapabilities()
+            if (!caps?.diagnosticProvider) return null
+            return client.connection
+              .sendRequest<{
+                items?: { uri?: string; items?: LSPClient.Diagnostic[] }[]
+              } | null>("workspace/diagnostic", { previousResultIds: [] })
+              .catch(() => null)
+          }),
+        ),
+      )
+      let any = false
+      for (const report of all) {
+        if (!report?.items) continue
+        any = true
+        for (const item of report.items) {
+          if (!item.uri || !Array.isArray(item.items)) continue
+          const p = item.uri.startsWith("file://") ? fileURLToPath(item.uri) : item.uri
+          const arr = results[p] ?? []
+          arr.push(...item.items)
+          results[p] = arr
+        }
+      }
+      // Fallback: no server answered workspace/diagnostic → aggregate known per-file diagnostics.
+      if (!any) {
+        const known = yield* diagnostics()
+        return known
+      }
+      return results
+    })
+
     return Service.of({
       init,
       status,
@@ -502,6 +739,23 @@ export const layer = Layer.effect(
       prepareCallHierarchy,
       incomingCalls,
       outgoingCalls,
+      typeDefinition,
+      declaration,
+      prepareTypeHierarchy,
+      supertypes,
+      subtypes,
+      inlayHint,
+      codeAction,
+      executeCommand,
+      prepareRename,
+      rename,
+      documentHighlight,
+      foldingRange,
+      selectionRange,
+      completion,
+      signatureHelp,
+      serverCapabilities,
+      workspaceDiagnostics,
     })
   }),
 )

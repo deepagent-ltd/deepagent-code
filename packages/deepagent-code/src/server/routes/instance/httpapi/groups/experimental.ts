@@ -138,7 +138,8 @@ export const ExperimentalApi = HttpApi.make("experimental")
           OpenApi.annotations({
             identifier: "experimental.console.switchOrg",
             summary: "Switch active Console org",
-            description: "Persist a new active Console account/org selection for the current local DeepAgent Code state.",
+            description:
+              "Persist a new active Console account/org selection for the current local DeepAgent Code state.",
           }),
         ),
         HttpApiEndpoint.get("tool", ExperimentalPaths.tool, {

@@ -60,7 +60,12 @@ export type ContextPlan = {
   readonly schema_version: typeof CONTEXT_PLAN_SCHEMA_VERSION
   readonly id: string
   readonly query: { readonly raw: string; readonly keywords: readonly string[]; readonly domains: readonly string[] }
-  readonly topk: { readonly project_memory: number; readonly user_memory: number; readonly skills: number; readonly handoff: number }
+  readonly topk: {
+    readonly project_memory: number
+    readonly user_memory: number
+    readonly skills: number
+    readonly handoff: number
+  }
   readonly memory_snapshot_id: string
   readonly skill_snapshot_id: string
   readonly admitted_refs: readonly string[]
@@ -177,7 +182,9 @@ export class PromptDraftStore {
   loadLatestSuggestion(): { status: string; body: string } | null {
     const files = this.suggestionFiles()
     if (files.length === 0) return null
-    const loaded = readJson<{ status: string; body: string }>(path.join(this.session.suggestionsDir, files[files.length - 1]!))
+    const loaded = readJson<{ status: string; body: string }>(
+      path.join(this.session.suggestionsDir, files[files.length - 1]!),
+    )
     return { status: loaded.status, body: loaded.body }
   }
 
@@ -185,7 +192,9 @@ export class PromptDraftStore {
   // + reconciliation) next to the suggestion that derived from it, so the dual-provenance
   // reconciliation contract is auditable after the run. Sequenced to match the suggestion order.
   saveRoundReport(report: { round: number } & Record<string, unknown>): string {
-    const seq = readdirSync(this.session.suggestionsDir).filter((f) => f.startsWith("round_report_") && f.endsWith(".json")).length + 1
+    const seq =
+      readdirSync(this.session.suggestionsDir).filter((f) => f.startsWith("round_report_") && f.endsWith(".json"))
+        .length + 1
     const id = `round_report_${String(seq).padStart(6, "0")}`
     writeJson(path.join(this.session.suggestionsDir, `${id}.json`), report)
     return id
@@ -194,7 +203,12 @@ export class PromptDraftStore {
   confirm(draftID: string, editedGoal?: string): AgentPromptDraft {
     const draft = this.getDraft(draftID)
     if (!draft) throw new Error(`unknown prompt draft: ${draftID}`)
-    const confirmed: AgentPromptDraft = { ...draft, state: "confirmed", goal: editedGoal ?? draft.goal, confirmed_at: new Date().toISOString() }
+    const confirmed: AgentPromptDraft = {
+      ...draft,
+      state: "confirmed",
+      goal: editedGoal ?? draft.goal,
+      confirmed_at: new Date().toISOString(),
+    }
     writeJson(path.join(this.session.confirmedDir, `${safeFileID(draftID)}.json`), confirmed)
     writeJson(path.join(this.session.draftsDir, `${safeFileID(draftID)}.json`), confirmed)
     return confirmed
@@ -241,7 +255,13 @@ export class PromptDraftStore {
     }
     this.saveDraft(draft, plan)
     writeJson(path.join(this.session.confirmedDir, `${safeFileID(draftID)}.json`), draft)
-    return { prompt_draft_id: draftID, context_plan_id: planID, memory_snapshot_id: plan.memory_snapshot_id, skill_snapshot_id: plan.skill_snapshot_id, task_prompt: rawInput }
+    return {
+      prompt_draft_id: draftID,
+      context_plan_id: planID,
+      memory_snapshot_id: plan.memory_snapshot_id,
+      skill_snapshot_id: plan.skill_snapshot_id,
+      task_prompt: rawInput,
+    }
   }
 
   private rawCount(): number {
@@ -260,8 +280,13 @@ export class PromptRefiner {
     const sid = this.store.sessionID
     const draftID = `prompt_draft:${sid}:${seq}`
     const planID = `context_plan:${sid}:${seq}`
-    const admittedRefs = (input.projectMemory ?? []).filter((hit) => hit.decision === "inject_summary").map((hit) => hit.id)
-    const suggestedRefs = (input.projectMemory ?? []).filter((hit) => hit.decision === "match_only").map((hit) => hit.id).concat(input.selectedSkills ?? [])
+    const admittedRefs = (input.projectMemory ?? [])
+      .filter((hit) => hit.decision === "inject_summary")
+      .map((hit) => hit.id)
+    const suggestedRefs = (input.projectMemory ?? [])
+      .filter((hit) => hit.decision === "match_only")
+      .map((hit) => hit.id)
+      .concat(input.selectedSkills ?? [])
     const deniedRefs = (input.projectMemory ?? []).filter((hit) => hit.decision === "blocked").map((hit) => hit.id)
     const incomplete = Boolean(input.timeoutMs && input.startedAt && Date.now() - input.startedAt > input.timeoutMs)
     const plan = buildContextPlan(planID, input.rawInput, admittedRefs, suggestedRefs, deniedRefs, incomplete)
@@ -275,11 +300,26 @@ export class PromptRefiner {
       task_type: classifyTask(input.rawInput),
       constraints: inferConstraints(input.rawInput),
       acceptance: inferAcceptance(input.rawInput),
-      assumptions: [{ text: "Confirm the refined task before execution.", status: "pending_confirmation", source: "system_inference" }],
+      assumptions: [
+        {
+          text: "Confirm the refined task before execution.",
+          status: "pending_confirmation",
+          source: "system_inference",
+        },
+      ],
       source_blocks: [
         { label: "User input", source_label: "user_input", ref: rawRef, admitted: true },
-        ...(input.projectMemory ?? []).map((hit): SourceBlock => ({ label: "Project memory", source_label: "project_memory", ref: hit.id, admitted: hit.decision === "inject_summary" })),
-        ...(input.handoffRefs ?? []).map((ref): SourceBlock => ({ label: "Handoff", source_label: "handoff", ref, admitted: true })),
+        ...(input.projectMemory ?? []).map(
+          (hit): SourceBlock => ({
+            label: "Project memory",
+            source_label: "project_memory",
+            ref: hit.id,
+            admitted: hit.decision === "inject_summary",
+          }),
+        ),
+        ...(input.handoffRefs ?? []).map(
+          (ref): SourceBlock => ({ label: "Handoff", source_label: "handoff", ref, admitted: true }),
+        ),
       ],
       selected_skills: input.selectedSkills ?? [],
       context_plan_id: planID,
@@ -454,12 +494,18 @@ export const classifyWishRoute = (text: string): WishRoute => {
   const lower = text.trim().toLowerCase()
   if (!lower) return "general"
   if (
-    /```|\/[\w.-]+|\\[\w.-]+|\b(src|packages?|tests?|components?|api|cli|sdk|repo|git|bun|npm|pnpm|yarn|tsc|pytest|jest|vitest|eslint|typecheck)\b/.test(lower) ||
+    /```|\/[\w.-]+|\\[\w.-]+|\b(src|packages?|tests?|components?|api|cli|sdk|repo|git|bun|npm|pnpm|yarn|tsc|pytest|jest|vitest|eslint|typecheck)\b/.test(
+      lower,
+    ) ||
     /实现|修复|修改|代码|测试|仓库|文件|组件|接口|报错|构建|提交|重构|审查|评审/.test(lower)
   ) {
     return "code"
   }
-  if (/^(hi|hello|hey|你好|您好|在吗|你是谁|who are you|what are you|介绍一下你|聊聊|谢谢|thanks)[\s!！。?？]*$/i.test(lower)) {
+  if (
+    /^(hi|hello|hey|你好|您好|在吗|你是谁|who are you|what are you|介绍一下你|聊聊|谢谢|thanks)[\s!！。?？]*$/i.test(
+      lower,
+    )
+  ) {
     return "general"
   }
   return "code"
@@ -516,8 +562,18 @@ export const draftFromWishRefinement = (
     // Inferences become explicit, reviewable assumptions (A2 visibility rule).
     assumptions:
       output.assumptions.length > 0
-        ? output.assumptions.map((text) => ({ text, status: "pending_confirmation" as const, source: "system_inference" as const }))
-        : [{ text: "Confirm the refined prompt before execution.", status: "pending_confirmation", source: "system_inference" }],
+        ? output.assumptions.map((text) => ({
+            text,
+            status: "pending_confirmation" as const,
+            source: "system_inference" as const,
+          }))
+        : [
+            {
+              text: "Confirm the refined prompt before execution.",
+              status: "pending_confirmation",
+              source: "system_inference",
+            },
+          ],
     source_blocks: [{ label: "User input", source_label: "user_input", ref: rawRef, admitted: true }],
     selected_skills: [],
     context_plan_id: planID,
@@ -548,7 +604,8 @@ export const renderDraftMarkdown = (draft: AgentPromptDraft): string => {
 }
 
 export const scrubMemoryContext = (text: string): string =>
-  text.replace(/<memory-context>[\s\S]*?<\/memory-context>/gi, "[memory context hidden]")
+  text
+    .replace(/<memory-context>[\s\S]*?<\/memory-context>/gi, "[memory context hidden]")
     .replace(/<!--\s*memory-context[\s\S]*?-->/gi, "[memory context hidden]")
 
 const buildContextPlan = (
@@ -574,6 +631,9 @@ const buildContextPlan = (
 })
 
 const summarizeGoal = (raw: string): string => raw.trim().split(/\n+/)[0]?.slice(0, 160) || "Untitled task"
-const inferConstraints = (raw: string): string[] => /不要|do not|must not/i.test(raw) ? ["Preserve explicit negative constraints from raw input"] : []
-const inferAcceptance = (raw: string): string[] => /测试|test|验证|typecheck/i.test(raw) ? ["Run the relevant validation command"] : []
-const sessionID = (session: SessionPaths): string => JSON.parse(readFileSync(session.sessionJson, "utf8")).session_id as string
+const inferConstraints = (raw: string): string[] =>
+  /不要|do not|must not/i.test(raw) ? ["Preserve explicit negative constraints from raw input"] : []
+const inferAcceptance = (raw: string): string[] =>
+  /测试|test|验证|typecheck/i.test(raw) ? ["Run the relevant validation command"] : []
+const sessionID = (session: SessionPaths): string =>
+  JSON.parse(readFileSync(session.sessionJson, "utf8")).session_id as string

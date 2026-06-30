@@ -2,7 +2,7 @@ import { expect, test, type Page } from "@playwright/test"
 import { base64Encode } from "@deepagent-code/core/util/encode"
 import { fixture, pageMessages } from "./session-timeline.fixture"
 import { trackPageErrors, expectNoSmokeErrors } from "../utils/errors"
-import { mockDeepAgent CodeServer } from "../utils/mock-server"
+import { mockDeepAgentCodeServer } from "../utils/mock-server"
 import { APP_READY_TIMEOUT, expectAppVisible, expectSessionTitle } from "../utils/waits"
 
 const forbiddenText = ["Load details", "Show earlier steps"]
@@ -32,7 +32,7 @@ test.describe("smoke: session timeline", () => {
 
   test("renders seeded timeline in order while paging through history", async ({ page }) => {
     const errors = trackPageErrors(page)
-    await mockDeepAgent CodeServer(page, {
+    await mockDeepAgentCodeServer(page, {
       sessions: fixture.sessions,
       provider: fixture.provider,
       directory: fixture.directory,
