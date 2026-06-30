@@ -30,8 +30,8 @@ interface MigrateInput {
  * skips only locations where a tui.json already exists.
  */
 export async function migrateTuiConfig(input: MigrateInput) {
-  const deepagentCodeFiles = await opencodeFiles(input)
-  for (const file of deepagentCodeFiles) {
+  const files = await deepagentCodeFiles(input)
+  for (const file of files) {
     const source = await Filesystem.readText(file).catch((error) => {
       log.warn("failed to read config for tui migration", { path: file, error })
       return undefined
@@ -134,7 +134,7 @@ async function backupAndStripLegacy(file: string, source: string) {
     })
 }
 
-async function opencodeFiles(input: { directories: string[]; cwd: string }) {
+async function deepagentCodeFiles(input: { directories: string[]; cwd: string }) {
   const files = [
     ...ConfigPaths.fileInDirectory(Global.Path.config, "deepagent-code"),
     ...(await Filesystem.findUp(["deepagent-code.json", "deepagent-code.jsonc"], input.cwd, undefined, {

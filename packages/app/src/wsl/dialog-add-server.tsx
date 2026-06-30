@@ -7,7 +7,7 @@ import { createStore } from "solid-js/store"
 import { useLanguage } from "@/context/language"
 import { usePlatform } from "@/context/platform"
 import { useWslServers } from "./context"
-import { enterWslOpencodeStep } from "./settings-model"
+import { enterWslDeepagentCodeStep } from "./settings-model"
 
 type WslServerStep = "wsl" | "distro" | "deepagent-code"
 
@@ -66,10 +66,10 @@ export function DialogAddWslServer(props: DialogWslServerProps = {}) {
     if (!distro) return null
     return (current()?.installed ?? []).find((item) => item.name === distro) ?? null
   })
-  const opencodeCheck = createMemo(() => {
+  const deepagentCodeCheck = createMemo(() => {
     const distro = selectedDistro()
     if (!distro) return null
-    return current()?.opencodeChecks[distro] ?? null
+    return current()?.deepagentCodeChecks[distro] ?? null
   })
   const wslReady = createMemo(() => !!current()?.runtime?.available && !current()?.pendingRestart)
   const distroReady = createMemo(() => {
@@ -78,8 +78,8 @@ export function DialogAddWslServer(props: DialogWslServerProps = {}) {
     if (selectedInstalled()?.version === 1) return false
     return probe.canExecute && probe.hasBash && probe.hasCurl
   })
-  const opencodeReady = createMemo(() => {
-    const check = opencodeCheck()
+  const deepagentCodeReady = createMemo(() => {
+    const check = deepagentCodeCheck()
     return !!check?.resolvedPath && !check.error
   })
   const distroWarningProbe = createMemo(() => {
@@ -113,11 +113,11 @@ export function DialogAddWslServer(props: DialogWslServerProps = {}) {
     () => installableDistros().find((item) => item.name === store.installTarget) ?? installableDistros()[0] ?? null,
   )
   const installingDistro = createMemo(() => current()?.job?.kind === "install-distro")
-  const installingOpencode = createMemo(() => {
+  const installingDeepagentCode = createMemo(() => {
     const job = current()?.job
     return job?.kind === "install-deepagent-code" && job.distro === selectedDistro()
   })
-  const allReady = createMemo(() => wslReady() && distroReady() && opencodeReady())
+  const allReady = createMemo(() => wslReady() && distroReady() && deepagentCodeReady())
   const addDisabled = createMemo(() => {
     const job = current()?.job
     if (!job) return store.adding
@@ -147,8 +147,8 @@ export function DialogAddWslServer(props: DialogWslServerProps = {}) {
       return { key: `probe-distro:${distro}`, run: () => api.probeDistro(distro) }
     }
     if (!distro || !distroReady()) return null
-    if (!state.opencodeChecks[distro]) {
-      return { key: `probe-deepagent-code:${distro}`, run: () => api.probeOpencode(distro) }
+    if (!state.deepagentCodeChecks[distro]) {
+      return { key: `probe-deepagent-code:${distro}`, run: () => api.probeDeepagentCode(distro) }
     }
     return null
   })
@@ -197,33 +197,33 @@ export function DialogAddWslServer(props: DialogWslServerProps = {}) {
     return language.t("wsl.onboarding.pickDistro")
   })
 
-  const opencodeMessage = createMemo(() => {
+  const deepagentCodeMessage = createMemo(() => {
     const state = current()
-    if (!state) return language.t("wsl.onboarding.checkingOpencode")
+    if (!state) return language.t("wsl.onboarding.checkingDeepagentCode")
     const distro = selectedDistro()
     if (state.job?.kind === "install-deepagent-code") {
       return distro
-        ? language.t("wsl.onboarding.updatingOpencodeIn", { distro })
-        : language.t("wsl.onboarding.updatingOpencode")
+        ? language.t("wsl.onboarding.updatingDeepagentCodeIn", { distro })
+        : language.t("wsl.onboarding.updatingDeepagentCode")
     }
     if (state.job?.kind === "probe-deepagent-code") {
       return distro
-        ? language.t("wsl.onboarding.checkingOpencodeIn", { distro })
-        : language.t("wsl.onboarding.checkingOpencode")
+        ? language.t("wsl.onboarding.checkingDeepagentCodeIn", { distro })
+        : language.t("wsl.onboarding.checkingDeepagentCode")
     }
-    if (opencodeCheck()?.error) return opencodeCheck()!.error
-    if (opencodeCheck()?.matchesDesktop === false) {
+    if (deepagentCodeCheck()?.error) return deepagentCodeCheck()!.error
+    if (deepagentCodeCheck()?.matchesDesktop === false) {
       return distro
-        ? language.t("wsl.onboarding.updateOpencodeIn", { distro })
-        : language.t("wsl.onboarding.updateOpencode")
+        ? language.t("wsl.onboarding.updateDeepagentCodeIn", { distro })
+        : language.t("wsl.onboarding.updateDeepagentCode")
     }
-    if (opencodeReady()) {
+    if (deepagentCodeReady()) {
       return distro
-        ? language.t("wsl.onboarding.opencodeReadyIn", { distro })
-        : language.t("wsl.onboarding.opencodeReady")
+        ? language.t("wsl.onboarding.deepagentCodeReadyIn", { distro })
+        : language.t("wsl.onboarding.deepagentCodeReady")
     }
     return distro
-      ? language.t("wsl.onboarding.installOpencodeIn", { distro })
+      ? language.t("wsl.onboarding.installDeepagentCodeIn", { distro })
       : language.t("wsl.onboarding.chooseDistroFirst")
   })
 
@@ -246,10 +246,10 @@ export function DialogAddWslServer(props: DialogWslServerProps = {}) {
     setStore("step", undefined)
   }
 
-  const openOpencodeStep = () => {
+  const openDeepagentCodeStep = () => {
     const distro = selectedDistro()
     if (!distro) return
-    void run(() => enterWslOpencodeStep(distro, api.probeOpencode, (step) => setStore("step", step)))
+    void run(() => enterWslDeepagentCodeStep(distro, api.probeDeepagentCode, (step) => setStore("step", step)))
   }
 
   const finish = async () => {
@@ -297,9 +297,9 @@ export function DialogAddWslServer(props: DialogWslServerProps = {}) {
                   : index > activeIndex
                     ? "locked"
                     : "warning"
-                : opencodeCheck()?.matchesDesktop === false
+                : deepagentCodeCheck()?.matchesDesktop === false
                   ? "warning"
-                  : opencodeReady()
+                  : deepagentCodeReady()
                     ? "done"
                     : index > activeIndex
                       ? "locked"
@@ -528,7 +528,7 @@ export function DialogAddWslServer(props: DialogWslServerProps = {}) {
                     variant="secondary"
                     size="large"
                     disabled={busy() || !selectedDistro() || !distroReady()}
-                    onClick={openOpencodeStep}
+                    onClick={openDeepagentCodeStep}
                   >
                     {language.t("wsl.onboarding.next")}
                   </Button>
@@ -546,30 +546,30 @@ export function DialogAddWslServer(props: DialogWslServerProps = {}) {
                         variant="ghost"
                         size="large"
                         disabled={busy()}
-                        onClick={() => runSelectedDistro((distro) => api.probeOpencode(distro))}
+                        onClick={() => runSelectedDistro((distro) => api.probeDeepagentCode(distro))}
                       >
                         {language.t("wsl.onboarding.refresh")}
                       </Button>
                     </Show>
-                    <Show when={!opencodeReady() || opencodeCheck()?.matchesDesktop === false}>
+                    <Show when={!deepagentCodeReady() || deepagentCodeCheck()?.matchesDesktop === false}>
                       <Button
                         variant="secondary"
                         size="large"
                         disabled={busy()}
-                        onClick={() => runSelectedDistro((distro) => api.installOpencode(distro))}
+                        onClick={() => runSelectedDistro((distro) => api.installDeepagentCode(distro))}
                       >
-                        <Show when={installingOpencode()}>
+                        <Show when={installingDeepagentCode()}>
                           <Spinner class="size-4 shrink-0" />
                         </Show>
-                        {opencodeCheck()?.resolvedPath
-                          ? language.t("wsl.onboarding.updateOpencode")
-                          : language.t("wsl.onboarding.installOpencode")}
+                        {deepagentCodeCheck()?.resolvedPath
+                          ? language.t("wsl.onboarding.updateDeepagentCode")
+                          : language.t("wsl.onboarding.installDeepagentCode")}
                       </Button>
                     </Show>
                   </div>
                 </div>
-                <div class="text-12-regular text-text-weak whitespace-pre-wrap break-words">{opencodeMessage()}</div>
-                <Show when={opencodeCheck()?.matchesDesktop === false ? opencodeCheck() : null}>
+                <div class="text-12-regular text-text-weak whitespace-pre-wrap break-words">{deepagentCodeMessage()}</div>
+                <Show when={deepagentCodeCheck()?.matchesDesktop === false ? deepagentCodeCheck() : null}>
                   {(check) => (
                     <div class="rounded-md border border-border-weak-base px-3 py-3 flex flex-col gap-1">
                       <div class="text-12-regular text-text-weak">

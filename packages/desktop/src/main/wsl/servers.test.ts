@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test"
 import { clearWslDistroState, requireWslIpcString, wslServerIdToRestart, wslTerminalArgs } from "./policy"
 import {
-  expectOpencodeVersion,
+  expectDeepagentCodeVersion,
   pendingRestartAfterWslInstall,
   pollWslHealth,
   wslServerIdsToStartOnInitialize,
@@ -9,7 +9,7 @@ import {
 import { createWslServersController, type WslServerConfig } from "./servers"
 
 let persistedServers: WslServerConfig[] = []
-let releaseOpencodeResolve: (() => void) | undefined
+let releaseDeepagentCodeResolve: (() => void) | undefined
 
 test("starts every configured WSL server on initialization", () => {
   expect(
@@ -21,8 +21,8 @@ test("starts every configured WSL server on initialization", () => {
 })
 
 test("rejects an update that did not install the desktop version", () => {
-  expect(() => expectOpencodeVersion("1.16.2", "1.16.2")).not.toThrow()
-  expect(() => expectOpencodeVersion("1.14.35", "1.16.2")).toThrow(
+  expect(() => expectDeepagentCodeVersion("1.16.2", "1.16.2")).not.toThrow()
+  expect(() => expectDeepagentCodeVersion("1.14.35", "1.16.2")).toThrow(
     "DeepAgent Code update finished but Debian still reports 1.14.35; expected 1.16.2",
   )
 })
@@ -58,7 +58,7 @@ test("clears cached distro probes when removing a WSL server", () => {
       },
       "Debian",
     ),
-  ).toEqual({ distroProbes: {}, opencodeChecks: {} })
+  ).toEqual({ distroProbes: {}, deepagentCodeChecks: {} })
 })
 
 test("opens terminals for distro names containing spaces", () => {
@@ -98,7 +98,7 @@ test("derives a required Windows restart from the post-install runtime probe", (
 
 test("ignores stale background DeepAgent Code checks after removing a WSL server", async () => {
   persistedServers = []
-  releaseOpencodeResolve = undefined
+  releaseDeepagentCodeResolve = undefined
   const controller = createWslServersController(
     "1.16.2",
     async () => ({
@@ -114,18 +114,18 @@ test("ignores stale background DeepAgent Code checks after removing a WSL server
   )
 
   await controller.addServer("Debian")
-  await waitFor(() => !!releaseOpencodeResolve)
+  await waitFor(() => !!releaseDeepagentCodeResolve)
   await controller.removeServer("wsl:Debian")
-  releaseOpencodeResolve?.()
+  releaseDeepagentCodeResolve?.()
   await new Promise((resolve) => setTimeout(resolve, 0))
 
   expect(controller.getState().servers).toEqual([])
-  expect(controller.getState().opencodeChecks).toEqual({})
+  expect(controller.getState().deepagentCodeChecks).toEqual({})
 })
 
 test("ignores stale startup DeepAgent Code checks after removing a WSL server", async () => {
   persistedServers = [{ id: "wsl:Debian", distro: "Debian" }]
-  releaseOpencodeResolve = undefined
+  releaseDeepagentCodeResolve = undefined
   const controller = createWslServersController(
     "1.16.2",
     async () => new Promise<never>(() => undefined),
@@ -133,13 +133,13 @@ test("ignores stale startup DeepAgent Code checks after removing a WSL server", 
   )
 
   await controller.initialize()
-  await waitFor(() => !!releaseOpencodeResolve)
+  await waitFor(() => !!releaseDeepagentCodeResolve)
   await controller.removeServer("wsl:Debian")
-  releaseOpencodeResolve?.()
+  releaseDeepagentCodeResolve?.()
   await new Promise((resolve) => setTimeout(resolve, 0))
 
   expect(controller.getState().servers).toEqual([])
-  expect(controller.getState().opencodeChecks).toEqual({})
+  expect(controller.getState().deepagentCodeChecks).toEqual({})
 })
 
 async function waitFor(check: () => boolean) {
@@ -157,9 +157,9 @@ function testControllerOptions() {
       persistedServers = servers
     },
     readCommandVersion: async () => "1.16.2",
-    resolveOpencode: async () => {
+    resolveDeepagentCode: async () => {
       await new Promise<void>((resolve) => {
-        releaseOpencodeResolve = resolve
+        releaseDeepagentCodeResolve = resolve
       })
       return "/home/me/.deepagent-code/bin/deepagent-code"
     },
