@@ -12,6 +12,7 @@ export function updaterAction(state: UpdaterState | undefined) {
     case "downloading":
       return { label: "settings.updates.action.downloading" as const }
     case "ready":
+      if (state.manualUrl) return { label: "toast.update.action.downloadDeb" as const, run: "install" as const }
       return { label: "toast.update.action.installRestart" as const, run: "install" as const }
     case "installing":
       return { label: "settings.updates.action.installing" as const }
