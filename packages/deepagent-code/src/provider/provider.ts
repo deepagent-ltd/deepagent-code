@@ -1562,7 +1562,7 @@ export const layer = Layer.effect(
           for (const [modelID, model] of Object.entries(provider.models)) {
             model.api.id = model.api.id ?? model.id ?? modelID
             // Registration-time boundary for the hosted "deepagent" gateway provider only. Third-party
-            // providers are unrestricted (parity with upstream opencode). We validate once here at load
+            // providers are unrestricted (parity with upstream deepagent-code). We validate once here at load
             // time instead of throwing per-request in resolveSDK/transform: the hosted gateway only
             // routes to a vetted set of upstream providers/packages, so an out-of-policy model is dropped
             // from the catalog rather than failing mid-request.

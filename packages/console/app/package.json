@@ -2,7 +2,7 @@
   "name": "@deepagent-code/console-app",
   "version": "1.0.0-beta",
   "type": "module",
-  "license": "MIT",
+  "license": "AGPL-3.0-or-later",
   "scripts": {
     "typecheck": "tsgo --noEmit",
     "dev": "vite dev --host 0.0.0.0",
