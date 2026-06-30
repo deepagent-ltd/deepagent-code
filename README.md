@@ -6,7 +6,7 @@
   </picture>
 </p>
 
-<p align="center"><strong>A document-centered AI coding agent with a durable control plane.</strong></p>
+<p align="center"><strong>AI coding agent with persistent memory and control plane</strong></p>
 
 <p align="center">
   <a href="README.md">English</a> |
@@ -15,84 +15,136 @@
 
 ---
 
-## What is DeepAgent Code?
+DeepAgent Code is an AI coding agent built on persistent document memory. It keeps [opencode](https://github.com/sst/opencode)'s runtime foundations and adds a control plane for **durable knowledge**, **cross-session memory**, **context assembly**, **learning lifecycle**, and **runtime intelligence**.
 
-DeepAgent Code is an AI coding agent built around a durable document system. It keeps the proven opencode runtime, tool, MCP, session, and provider foundations, then adds the DeepAgent control plane for document memory, context assembly, retrieval gates, learning, failure triage, domain adapters, and runtime intelligence.
+## What Makes It Different
 
-The guiding idea is simple: the document system is the agent's durable body. Knowledge, strategy, methodology, skills, memory, diagnosis, decisions, work logs, and context snapshots are represented as typed documents. The context layer selects the smallest useful slice for each model turn, then writes new evidence back into the document graph.
+**Persistent document system** — Knowledge, decisions, diagnostics, and learnings are stored as typed documents in a searchable graph. The agent builds understanding across sessions instead of starting from scratch each time.
 
-DeepAgent Code is not presented as an upstream-endorsed opencode release. It is a derived work with substantial DeepAgent changes.
+**Project memory sharing** — Multiple conversations within the same project share knowledge, coding patterns, common pitfalls, and build commands. What one session learns becomes available to the next.
 
-## Highlights
+**AI IDE microservice** — Query code by symbol name and intent (not file:line coordinates). Get definitions, references, call chains, type hierarchies, and diagnostics in one call. Built on LSP with 38 language servers.
 
-- **Document graph**: typed documents for durable knowledge, working memory, decisions, diagnostics, snapshots, skills, and methodologies.
-- **Context control**: deterministic context admission at safe provider-turn boundaries, bounded tool output, evidence-gated retrieval, and conflict-aware memories.
-- **Work strengths**: `general`, `high`, `xhigh`, `max`, and `ultra` form a capability ladder; higher strengths add control-plane abilities without silently changing lower-mode contracts.
-- **Scenario modes**: `direct` executes the user's prompt immediately; `wish` first refines and confirms intent before stronger automation.
-- **AI IDE microservice**: code intelligence via LSP-style symbol search, diagnostics, and source navigation entry points.
-- **Preset MCP catalog**: curated MCP server presets for Git platforms, file search, read-only database access, and browser/fetch workflows.
-- **Learning lifecycle**: completed work can produce candidate memories, facts, failure dossiers, strategies, and methodologies under evidence and approval gates.
+**Preset MCP catalog** — Curated MCP servers for Git platforms, file search, read-only databases, and browser automation. Risk tiers derived at runtime from catalog structure, not user config.
+
+**Domain packs** — Specialized knowledge packages for specific domains (GPU kernels, React, backend APIs, security, testing). Each pack contains typed documents (strategies, methodologies, knowledge, skills) + validation/diagnostic adapters. Packs compose: activate multiple domains for your task.
+
+**Learning lifecycle** — After completing work, the agent can generate candidate memories, facts, strategies, and methodologies. Evidence and approval gates control what gets persisted.
+
+**Work strength ladder** — `general`, `high`, `xhigh`, `max`, `ultra` scale capability without breaking contracts. Higher strengths add control-plane abilities (multi-agent orchestration, adversarial validation) on top of base behavior.
+
+**Scenario modes** — `direct` executes immediately; `wish` refines intent first, shows draft plan, waits for confirmation before automation.
 
 ## Installation
 
 ```bash
-npm i -g deepagent-code@latest
-# or
-bun add -g deepagent-code
+npm install -g deepagent-code
 ```
 
 Then run:
 
 ```bash
 deepagent-code
-# alias:
+# or use the alias:
 deepagent
 ```
 
-The package also exposes project-specific packages in this monorepo for the app, server, SDK, TUI, desktop shell, and supporting services.
+## Quick Example
 
-## Quick start
-
-```bash
-# Start the agent in the current repository
-deepagent-code
-
-# Start with a prompt
-deepagent-code "inspect this repo and explain the architecture"
-```
-
-Common local development commands:
+Start the agent and give it a task:
 
 ```bash
-bun install
-bun run typecheck
-bun run --cwd packages/deepagent-code test
-bun run dev
+deepagent-code "add rate limiting to /api/users endpoint"
 ```
 
-## Language support
+The agent will:
 
-The application UI is internationalized. The officially maintained repository README files are:
+1. Use LSP to find the endpoint definition and understand its structure
+2. Check project memory for existing middleware patterns
+3. Implement rate limiting following project conventions
+4. Run tests and capture diagnostics
+5. Generate a candidate memory: "This project uses express-rate-limit middleware"
 
-- [English](README.md)
-- [简体中文](README.zh.md)
+On your next session, when you ask to add rate limiting elsewhere, the agent already knows the pattern.
 
-Other UI translations may exist in the product, but non-English README translations are not maintained in this repository unless explicitly marked as official.
+## Core Concepts
 
-## Security and MCP credentials
+**Document graph** — All persistent state lives in typed documents: `knowledge`, `strategy`, `methodology`, `skill`, `memory`, `design`, `worklog`, `diagnosis`, `eval`. Documents link to each other (supports/blocks/conflicts/validates), forming a graph.
 
-DeepAgent Code includes a preset MCP catalog with risk tiers derived at runtime from catalog templates, not from user-writable configuration. Read-only database presets are intended to be conservative and still include SQL guardrails.
+**Scope layers** — `session-private` (current conversation), `project-shared` (all sessions in this project), `user-global` (cross-project preferences), `public-system` (built-in skills), `sealed` (audit-only, never enters context).
 
-Known limitation for V3.4.1: enabling preset MCP servers that require credentials may store those credential values in local configuration. Do not commit configuration files containing secrets. The planned V3.5 M-CRED work moves credentials behind OS-backed secret storage and runtime environment resolution.
+**Domain packs** — Each pack (e.g., `code.frontend.react`, `code.gpu-kernel`, `risk.security`) is a bundle of typed documents + adapters. Documents include strategies (directions), methodologies (multi-step workflows), knowledge (facts), skills (executable capabilities), and failure dossiers. Packs auto-activate based on problem profile or explicit selection. Core stays domain-neutral.
 
-See [SECURITY.md](SECURITY.md) for reporting instructions, security model notes, and source availability information.
+**Context admission** — Retrieval hits go through admission gates. Sensitive information (SSH hosts, tokens, internal paths) gets suggested but not auto-expanded into prompts.
 
-## Source availability and license
+**Evidence-gated learning** — Learnings require evidence (test pass, diagnostic clear, validation confirmed). Candidates enter a queue; auto-merge or manual review depends on policy.
 
-DeepAgent Code is licensed under **AGPL-3.0-or-later**. If you interact with a modified network service based on DeepAgent Code, the AGPL network-use clause gives you the right to receive the corresponding source code for that service.
+**Symbol-driven navigation** — Code intelligence tools accept symbol names (e.g., "AgentGateway.open"), not coordinates. The agent resolves names to locations internally via LSP workspace/document symbols.
 
-This repository is derived from [opencode](https://github.com/sst/opencode), which is licensed under MIT. See [NOTICE](NOTICE) for the retained upstream MIT notice and attribution. No endorsement by opencode or its contributors is implied.
+## Architecture
 
-## Project status
+```
+┌─────────────────────────────────────────────────────────────┐
+│  Control Plane (DeepAgent additions)                        │
+│  • Document graph (persistent memory)                       │
+│  • Context assembly & admission gates                       │
+│  • Learning worker (background, non-blocking)               │
+│  • Evidence & approval gates                                │
+│  • Work strength orchestration                              │
+│  • Domain pack system (composable knowledge)                │
+└─────────────────────────────────────────────────────────────┘
+                             │
+┌─────────────────────────────────────────────────────────────┐
+│  Runtime Foundations (from opencode)                        │
+│  • Agent loop & tool execution                              │
+│  • Session & provider management                            │
+│  • MCP client runtime                                       │
+│  • Permission system                                        │
+└─────────────────────────────────────────────────────────────┘
+                             │
+┌─────────────────────────────────────────────────────────────┐
+│  Intelligence Layers                                        │
+│  • LSP microservice (38 language servers)                   │
+│  • Preset MCP servers (git/files/db/browser)                │
+│  • Domain adapters (validation & diagnostics)               │
+│  • Diagnostic & validation loops                            │
+└─────────────────────────────────────────────────────────────┘
+```
 
-V3.4.1 is the first public-release hardening milestone: license and attribution cleanup, documentation consolidation, secret-scan baseline, security disclosure, and rebrand verification before the first public tag.
+DeepAgent's control plane operates at provider-turn boundaries: it selects context before each model call and writes evidence back into the document graph afterward. It does not replace opencode's runtime—it layers on top.
+
+## Documentation
+
+- [Architecture & Design](design/README.md) — Control plane, code intelligence, MCP security model
+- [Security Policy](SECURITY.md) — Vulnerability reporting, known limitations
+- [Privacy Policy](PRIVACY.md) — Data handling and storage
+- [Contributing](CONTRIBUTING.md) — Development setup and guidelines
+- [Changelog](CHANGELOG.md) — Release history
+
+## License & Attribution
+
+DeepAgent Code is licensed under **AGPL-3.0-or-later**. If you modify and run it as a network service, you must make your source code available to users.
+
+This project is derived from [opencode](https://github.com/sst/opencode) (MIT License). See [NOTICE](NOTICE) for the upstream license and attribution. No endorsement by opencode or its contributors is implied.
+
+## Project Status
+
+**V3.4.1** is the first public pre-release hardening milestone. It includes:
+
+- LSP-to-AI-IDE transformation (symbol-driven code intelligence)
+- Preset MCP catalog with security model
+- License and attribution cleanup
+- Secret scan baseline
+- Design documentation consolidation
+
+**V3.5** (planned) will add:
+
+- DAP integration (debug adapter protocol for runtime intelligence)
+- PAP (performance analysis protocol for profiling: NVIDIA NCU/nsys, AMD rocprof, Intel VTune, CPU perf)
+- OS-backed credential storage for MCP servers
+
+---
+
+<p align="center">
+  <sub>Built by DeepAgent</sub>
+</p>
