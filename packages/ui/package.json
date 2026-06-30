@@ -2,7 +2,7 @@
   "name": "@deepagent-code/ui",
   "version": "1.0.0-beta",
   "type": "module",
-  "license": "MIT",
+  "license": "AGPL-3.0-or-later",
   "exports": {
     "./package.json": "./package.json",
     "./*": "./src/components/*.tsx",

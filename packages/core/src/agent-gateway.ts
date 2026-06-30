@@ -435,7 +435,7 @@ export type { ValidationResult } from "./deepagent/round-state"
 
 // Global runtime: the DeepAgent system prompt is injected for every provider whenever the
 // runtime is active (high/max). `general` (and disabled/kill-switched) returns [] so the
-// inherited opencode baseline prompt is used unchanged. providerID is accepted for caller
+// inherited deepagent-code baseline prompt is used unchanged. providerID is accepted for caller
 // signature stability but no longer gates injection.
 export const systemPrompt = (_providerID: string, context?: PromptContext) =>
   isActiveDeepAgentRuntime() ? [context ? buildSystemPrompt(context) : bootMessage(current.agentMode)] : []
@@ -449,7 +449,7 @@ const preflightWith = (input: RunInput, config: CurrentConfig): Effect.Effect<vo
     // isManagedDeepAgentRuntimeWith is false when killSwitch is on, which would otherwise
     // short-circuit to a no-op (untracked passthrough) and never reach this failure.
     if (config.killSwitch) return yield* Effect.fail(gatewayBlocked("DeepAgent runtime kill switch is enabled"))
-    // general mode / disabled runtime is pure passthrough (protects the opencode baseline).
+    // general mode / disabled runtime is pure passthrough (protects the deepagent-code baseline).
     if (!isManagedDeepAgentRuntimeWith(config)) return
     if (!config.enabled) return yield* Effect.fail(gatewayBlocked("DeepAgent runtime is not enabled"))
     if (!config.runsDir) return yield* Effect.fail(gatewayBlocked("DEEPAGENT_RUNS_DIR is not configured"))
@@ -471,7 +471,7 @@ export const manageStream = <E>(
     return Stream.fail(gatewayBlocked("DeepAgent runtime kill switch is enabled"))
   }
   // general mode (and a disabled runtime) is pure passthrough with zero artifacts, which
-  // protects the inherited generic-agent (opencode) baseline.
+  // protects the inherited generic-agent (deepagent-code) baseline.
   const agentMode = effectiveAgentMode(input.metadata) ?? current.agentMode
   if (!isManagedDeepAgentRuntimeWith({ ...current, agentMode })) return stream
   if (input.sessionID) {
@@ -1203,7 +1203,7 @@ const mcpCapabilityIndex = (run: RunRecord) => {
     policy: {
       expose_tool_schema_refs_only: true,
       execute_mcp_directly_from_deepagent: false,
-      require_opencode_approval_flow: true,
+      require_deepagent_code_approval_flow: true,
     },
   }
 }

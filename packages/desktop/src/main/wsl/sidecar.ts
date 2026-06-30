@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto"
 import { createServer } from "node:net"
 import { app } from "electron"
 import { checkHealth } from "../server"
-import { type WslCommandLine, resolveWslOpencode, shellEscape, wslArgs } from "./runtime"
+import { type WslCommandLine, resolveWslDeepagentCode, shellEscape, wslArgs } from "./runtime"
 import { pollWslHealth } from "./startup"
 
 export type WslSidecar = {
@@ -17,7 +17,7 @@ export async function spawnWslSidecar(
   distro: string,
   opts: { onLine?: (line: WslCommandLine) => void; healthTimeoutMs?: number } = {},
 ): Promise<WslSidecar> {
-  const deepagentCode = await resolveWslOpencode(distro)
+  const deepagentCode = await resolveWslDeepagentCode(distro)
   if (!deepagentCode) throw new Error(`DeepAgent Code is not installed in ${distro}`)
 
   const port = await allocatePort()
