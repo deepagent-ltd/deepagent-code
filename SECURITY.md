@@ -1,47 +1,32 @@
-# Security
+# Security Policy
 
-## IMPORTANT
+## Reporting vulnerabilities
 
-We do not accept AI generated security reports. We receive a large number of
-these and we absolutely do not have the resources to review them all. If you
-submit one that will be an automatic ban from the project.
+Please report security issues privately before publishing details. Send a concise report with reproduction steps, affected version, impact, and any relevant logs or patches to the project maintainers through the private security channel configured for this repository.
 
-## Threat Model
+Do not include live secrets in reports. Use redacted examples or synthetic credentials.
 
-### Overview
+## Supported versions
 
-DeepAgent Code is an AI-powered coding assistant that runs locally on your machine. It provides an agent system with access to powerful tools including shell execution, file operations, and web access.
+Before the first public stable tag, the supported line is the current `main` branch and the latest published pre-release. Security fixes may be released as patch versions.
 
-### No Sandbox
+## Source availability
 
-DeepAgent Code does **not** sandbox the agent. The permission system exists as a UX feature to help users stay aware of what actions the agent is taking - it prompts for confirmation before executing commands, writing files, etc. However, it is not designed to provide security isolation.
+DeepAgent Code is licensed under AGPL-3.0-or-later. If you interact with a modified DeepAgent Code service over a network, you are entitled to the corresponding source code for that service under AGPL section 13.
 
-If you need true isolation, run DeepAgent Code inside a Docker container or VM.
+## MCP security model
 
-### Server Mode
+Preset MCP servers are opt-in. The preset catalog records intended risk tiers, but the live permission gate derives a server's tier at runtime from catalog template matching rather than trusting user-writable configuration. If a hand-written or forged server does not match a known template, it falls back to the normal approval path.
 
-Server mode is opt-in only. When enabled, set `DEEPAGENT_CODE_SERVER_PASSWORD` to require HTTP Basic Auth. Without this, the server runs unauthenticated (with a warning). It is the end user's responsibility to secure the server - any functionality it provides is not a vulnerability.
+Read-only database presets are intended to use restricted server modes and SQL guardrails. Guardrails are defense in depth, not a substitute for least-privilege database users.
 
-### Out of Scope
+## Known limitation: preset MCP credentials in V3.4.1
 
-| Category                        | Rationale                                                               |
-| ------------------------------- | ----------------------------------------------------------------------- |
-| **Server access when opted-in** | If you enable server mode, API access is expected behavior              |
-| **Sandbox escapes**             | The permission system is not a sandbox (see above)                      |
-| **LLM provider data handling**  | Data sent to your configured LLM provider is governed by their policies |
-| **MCP server behavior**         | External MCP servers you configure are outside our trust boundary       |
-| **Malicious config files**      | Users control their own config; modifying it is not an attack vector    |
+When enabling preset MCP servers that require credentials, credential values may currently be persisted in local configuration. Until V3.5 M-CRED lands:
 
----
+- Do not commit DeepAgent Code configuration files containing secrets.
+- Prefer environment-variable indirection where a server supports it.
+- Use least-privilege tokens and database users.
+- Rotate credentials if they were accidentally committed or shared.
 
-# Reporting Security Issues
-
-We appreciate your efforts to responsibly disclose your findings, and will make every effort to acknowledge your contributions.
-
-To report a security issue, please use the GitHub Security Advisory ["Report a Vulnerability"](https://github.com/lessweb/deepagent-code/security/advisories/new) tab.
-
-The team will send a response indicating the next steps in handling your report. After the initial reply to your report, the security team will keep you informed of the progress towards a fix and full announcement, and may ask for additional information or guidance.
-
-## Escalation
-
-If you do not receive an acknowledgement of your report within 6 business days, you may send an email to security@anoma.ly
+The planned V3.5 M-CRED work stores secrets in OS-backed secret storage where available (macOS Keychain, Windows Credential Manager, Linux Secret Service), passes only variable names or references through configuration, and resolves values at runtime.

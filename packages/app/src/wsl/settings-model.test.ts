@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { enterWslOpencodeStep, wslOpencodeAction, wslRuntimeRetryable } from "./settings-model"
+import { enterWslDeepagentCodeStep, wslDeepagentCodeAction, wslRuntimeRetryable } from "./settings-model"
 
 describe("WSL server settings presentation", () => {
   test("retries only settled unsuccessful runtimes", () => {
@@ -12,9 +12,9 @@ describe("WSL server settings presentation", () => {
   })
 
   test("offers install and update only when DeepAgent Code needs attention", () => {
-    expect(wslOpencodeAction(undefined)).toBeUndefined()
+    expect(wslDeepagentCodeAction(undefined)).toBeUndefined()
     expect(
-      wslOpencodeAction({
+      wslDeepagentCodeAction({
         distro: "Debian",
         resolvedPath: null,
         version: null,
@@ -24,7 +24,7 @@ describe("WSL server settings presentation", () => {
       }),
     ).toBe("Install DeepAgent Code")
     expect(
-      wslOpencodeAction({
+      wslDeepagentCodeAction({
         distro: "Debian",
         resolvedPath: "/usr/local/bin/deepagent-code",
         version: "1.2.2",
@@ -34,7 +34,7 @@ describe("WSL server settings presentation", () => {
       }),
     ).toBe("Update DeepAgent Code")
     expect(
-      wslOpencodeAction({
+      wslDeepagentCodeAction({
         distro: "Debian",
         resolvedPath: "/usr/local/bin/deepagent-code",
         version: "1.2.3",
@@ -47,7 +47,7 @@ describe("WSL server settings presentation", () => {
 
   test("probes the selected distro before entering the DeepAgent Code step", async () => {
     const calls: string[] = []
-    await enterWslOpencodeStep(
+    await enterWslDeepagentCodeStep(
       "Debian",
       async (distro) => calls.push(distro),
       (step) => calls.push(step),
