@@ -796,9 +796,9 @@ function defaultModelFromConfig(
   // First-session ACP startup must not scan historical sessions just to infer
   // a default. Configured model, deepagent-code provider, then sorted best model keep
   // the protocol response deterministic without extra session/message reads.
-  const opencodeProvider = providers[ProviderV2.ID.make("deepagent-code")]
-  const opencodeModel = opencodeProvider ? Provider.sort(Object.values(opencodeProvider.models))[0] : undefined
-  if (opencodeProvider && opencodeModel) return { providerID: opencodeProvider.id, modelID: opencodeModel.id }
+  const deepagentCodeProvider = providers[ProviderV2.ID.make("deepagent-code")]
+  const deepagentCodeModel = deepagentCodeProvider ? Provider.sort(Object.values(deepagentCodeProvider.models))[0] : undefined
+  if (deepagentCodeProvider && deepagentCodeModel) return { providerID: deepagentCodeProvider.id, modelID: deepagentCodeModel.id }
 
   const best = Provider.sort(Object.values(providers).flatMap((provider) => Object.values(provider.models)))[0]
   if (best) return { providerID: best.providerID, modelID: best.id }
