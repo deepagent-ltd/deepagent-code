@@ -117,7 +117,7 @@
     "type": "git",
     "url": "https://github.com/lessweb/deepagent-code"
   },
-  "license": "MIT",
+  "license": "AGPL-3.0-or-later",
   "prettier": {
     "semi": false,
     "printWidth": 120

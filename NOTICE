@@ -1,13 +1,16 @@
-# NOTICE
+DeepAgent Code Notices
+======================
 
-DeepAgent Code is built on [opencode](https://github.com/sst/opencode), used under
-the MIT License. DeepAgent Code extends opencode with additional functionality and is
-distributed as a derivative work in compliance with the MIT License terms below: the
-original copyright notice and permission notice are retained in full.
+DeepAgent Code is derived from opencode (https://github.com/sst/opencode).
+The upstream opencode project is licensed under the MIT License. DeepAgent Code
+is licensed under AGPL-3.0-or-later; this NOTICE preserves the upstream MIT
+copyright and permission notice required by that license.
 
-## opencode
+No endorsement by the opencode project or its contributors is implied.
 
-```
+Upstream opencode MIT notice
+---------------------------
+
 MIT License
 
 Copyright (c) 2025 opencode
@@ -29,12 +32,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-```
-
-## Third-party dependencies
-
-DeepAgent Code bundles open-source software distributed under their respective
-licenses (including MIT, Apache-2.0, ISC, and BSD variants). Each dependency retains
-its own copyright and license; the complete list is generated from the dependency
-manifests of this repository. Notable runtime components include Electron, the Effect
-ecosystem, and the AI SDK, each used under its own license terms.

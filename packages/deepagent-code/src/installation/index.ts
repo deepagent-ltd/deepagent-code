@@ -252,7 +252,7 @@ export const layer: Layer.Layer<Service, never, HttpClient.HttpClient | AppProce
         if (detectedMethod === "choco") {
           const response = yield* httpOk.execute(
             HttpClientRequest.get(
-              "https://community.chocolatey.org/api/v2/Packages?$filter=Id%20eq%20%27opencode%27%20and%20IsLatestVersion&$select=Version",
+              "https://community.chocolatey.org/api/v2/Packages?$filter=Id%20eq%20%27deepagent-code%27%20and%20IsLatestVersion&$select=Version",
             ).pipe(HttpClientRequest.setHeaders({ Accept: "application/json;odata=verbose" })),
           )
           const data = yield* HttpClientResponse.schemaBodyJson(ChocoPackage)(response)

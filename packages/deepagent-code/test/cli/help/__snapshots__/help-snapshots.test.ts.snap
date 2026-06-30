@@ -1,7 +1,7 @@
 // Bun Snapshot v1, https://bun.sh/docs/test/snapshots
 
-exports[`opencode CLI help-text snapshots every documented command emits stable help text: opencode acp --help 1`] = `
-"opencode acp
+exports[`deepagent-code CLI help-text snapshots every documented command emits stable help text: deepagent-code acp --help 1`] = `
+"deepagent-code acp
 
 start ACP (Agent Client Protocol) server
 
@@ -15,23 +15,23 @@ Options:
       --hostname     hostname to listen on                           [string] [default: "127.0.0.1"]
       --mdns         enable mDNS service discovery (defaults hostname to 0.0.0.0)
                                                                           [boolean] [default: false]
-      --mdns-domain  custom domain name for mDNS service (default: opencode.local)
-                                                                [string] [default: "opencode.local"]
+      --mdns-domain  custom domain name for mDNS service (default: deepagent-code.local)
+                                                                [string] [default: "deepagent-code.local"]
       --cors         additional domains to allow for CORS                      [array] [default: []]
       --cwd          working directory [string] [default: "<HOME>"]"
 `;
 
-exports[`opencode CLI help-text snapshots every documented command emits stable help text: opencode mcp --help 1`] = `
-"opencode mcp
+exports[`deepagent-code CLI help-text snapshots every documented command emits stable help text: deepagent-code mcp --help 1`] = `
+"deepagent-code mcp
 
 manage MCP (Model Context Protocol) servers
 
 Commands:
-  opencode mcp add [name]     add an MCP server
-  opencode mcp list           list MCP servers and their status                        [aliases: ls]
-  opencode mcp auth [name]    authenticate with an OAuth-enabled MCP server
-  opencode mcp logout [name]  remove OAuth credentials for an MCP server
-  opencode mcp debug <name>   debug OAuth connection for an MCP server
+  deepagent-code mcp add [name]     add an MCP server
+  deepagent-code mcp list           list MCP servers and their status                        [aliases: ls]
+  deepagent-code mcp auth [name]    authenticate with an OAuth-enabled MCP server
+  deepagent-code mcp logout [name]  remove OAuth credentials for an MCP server
+  deepagent-code mcp debug <name>   debug OAuth connection for an MCP server
 
 Options:
   -h, --help        show help                                                              [boolean]
@@ -41,10 +41,10 @@ Options:
       --pure        run without external plugins                                           [boolean]"
 `;
 
-exports[`opencode CLI help-text snapshots every documented command emits stable help text: opencode attach --help 1`] = `
-"opencode attach <url>
+exports[`deepagent-code CLI help-text snapshots every documented command emits stable help text: deepagent-code attach --help 1`] = `
+"deepagent-code attach <url>
 
-attach to a running opencode server
+attach to a running deepagent-code server
 
 Positionals:
   url  http://localhost:4096                                                     [string] [required]
@@ -59,14 +59,14 @@ Options:
   -c, --continue    continue the last session                                              [boolean]
   -s, --session     session id to continue                                                  [string]
       --fork        fork the session when continuing (use with --continue or --session)    [boolean]
-  -p, --password    basic auth password (defaults to OPENCODE_SERVER_PASSWORD)              [string]
-  -u, --username    basic auth username (defaults to OPENCODE_SERVER_USERNAME or 'opencode')[string]"
+  -p, --password    basic auth password (defaults to DEEPAGENT_CODE_SERVER_PASSWORD)              [string]
+  -u, --username    basic auth username (defaults to DEEPAGENT_CODE_SERVER_USERNAME or 'deepagent-code')[string]"
 `;
 
-exports[`opencode CLI help-text snapshots every documented command emits stable help text: opencode run --help 1`] = `
-"opencode run [message..]
+exports[`deepagent-code CLI help-text snapshots every documented command emits stable help text: deepagent-code run --help 1`] = `
+"deepagent-code run [message..]
 
-run opencode with a message
+run deepagent-code with a message
 
 Positionals:
   message  message to send                                                     [array] [default: []]
@@ -90,12 +90,12 @@ Options:
   -f, --file                          file(s) to attach to message                           [array]
       --title                         title for the session (uses truncated prompt if no value
                                       provided)                                             [string]
-      --attach                        attach to a running opencode server (e.g.,
+      --attach                        attach to a running deepagent-code server (e.g.,
                                       http://localhost:4096)                                [string]
-  -p, --password                      basic auth password (defaults to OPENCODE_SERVER_PASSWORD)
+  -p, --password                      basic auth password (defaults to DEEPAGENT_CODE_SERVER_PASSWORD)
                                                                                             [string]
-  -u, --username                      basic auth username (defaults to OPENCODE_SERVER_USERNAME or
-                                      'opencode')                                           [string]
+  -u, --username                      basic auth username (defaults to DEEPAGENT_CODE_SERVER_USERNAME or
+                                      'deepagent-code')                                           [string]
       --dir                           directory to run in, path on remote server if attaching
                                                                                             [string]
       --port                          port for the local server (defaults to random port if no value
@@ -115,25 +115,25 @@ Options:
                                       message to run it immediately       [boolean] [default: false]"
 `;
 
-exports[`opencode CLI help-text snapshots every documented command emits stable help text: opencode debug --help 1`] = `
-"opencode debug
+exports[`deepagent-code CLI help-text snapshots every documented command emits stable help text: deepagent-code debug --help 1`] = `
+"deepagent-code debug
 
 debugging and troubleshooting tools
 
 Commands:
-  opencode debug config        show resolved configuration
-  opencode debug lsp           LSP debugging utilities
-  opencode debug rg            ripgrep debugging utilities
-  opencode debug file          file system debugging utilities
-  opencode debug scrap         list all known projects
-  opencode debug skill         list all available skills
-  opencode debug snapshot      snapshot debugging utilities
-  opencode debug startup       print startup timing
-  opencode debug agent <name>  show agent configuration details
-  opencode debug v2            debug v2 catalog and built-in plugins
-  opencode debug info          show debug information
-  opencode debug paths         show global paths (data, config, cache, state)
-  opencode debug wait          wait indefinitely (for debugging)
+  deepagent-code debug config        show resolved configuration
+  deepagent-code debug lsp           LSP debugging utilities
+  deepagent-code debug rg            ripgrep debugging utilities
+  deepagent-code debug file          file system debugging utilities
+  deepagent-code debug scrap         list all known projects
+  deepagent-code debug skill         list all available skills
+  deepagent-code debug snapshot      snapshot debugging utilities
+  deepagent-code debug startup       print startup timing
+  deepagent-code debug agent <name>  show agent configuration details
+  deepagent-code debug v2            debug v2 catalog and built-in plugins
+  deepagent-code debug info          show debug information
+  deepagent-code debug paths         show global paths (data, config, cache, state)
+  deepagent-code debug wait          wait indefinitely (for debugging)
 
 Options:
   -h, --help        show help                                                              [boolean]
@@ -143,15 +143,15 @@ Options:
       --pure        run without external plugins                                           [boolean]"
 `;
 
-exports[`opencode CLI help-text snapshots every documented command emits stable help text: opencode providers --help 1`] = `
-"opencode providers
+exports[`deepagent-code CLI help-text snapshots every documented command emits stable help text: deepagent-code providers --help 1`] = `
+"deepagent-code providers
 
 manage AI providers and credentials
 
 Commands:
-  opencode providers list               list providers and credentials                 [aliases: ls]
-  opencode providers login [url]        log in to a provider
-  opencode providers logout [provider]  log out from a configured provider
+  deepagent-code providers list               list providers and credentials                 [aliases: ls]
+  deepagent-code providers login [url]        log in to a provider
+  deepagent-code providers logout [provider]  log out from a configured provider
 
 Options:
   -h, --help        show help                                                              [boolean]
@@ -161,14 +161,14 @@ Options:
       --pure        run without external plugins                                           [boolean]"
 `;
 
-exports[`opencode CLI help-text snapshots every documented command emits stable help text: opencode agent --help 1`] = `
-"opencode agent
+exports[`deepagent-code CLI help-text snapshots every documented command emits stable help text: deepagent-code agent --help 1`] = `
+"deepagent-code agent
 
 manage agents
 
 Commands:
-  opencode agent create  create a new agent
-  opencode agent list    list all available agents
+  deepagent-code agent create  create a new agent
+  deepagent-code agent list    list all available agents
 
 Options:
   -h, --help        show help                                                              [boolean]
@@ -178,10 +178,10 @@ Options:
       --pure        run without external plugins                                           [boolean]"
 `;
 
-exports[`opencode CLI help-text snapshots every documented command emits stable help text: opencode upgrade --help 1`] = `
-"opencode upgrade [target]
+exports[`deepagent-code CLI help-text snapshots every documented command emits stable help text: deepagent-code upgrade --help 1`] = `
+"deepagent-code upgrade [target]
 
-upgrade opencode to the latest or a specific version
+upgrade deepagent-code to the latest or a specific version
 
 Positionals:
   target  version to upgrade to, for ex '0.1.48' or 'v0.1.48'                               [string]
@@ -196,10 +196,10 @@ Options:
                           [string] [choices: "curl", "npm", "pnpm", "bun", "brew", "choco", "scoop"]"
 `;
 
-exports[`opencode CLI help-text snapshots every documented command emits stable help text: opencode uninstall --help 1`] = `
-"opencode uninstall
+exports[`deepagent-code CLI help-text snapshots every documented command emits stable help text: deepagent-code uninstall --help 1`] = `
+"deepagent-code uninstall
 
-uninstall opencode and remove all related files
+uninstall deepagent-code and remove all related files
 
 Options:
   -h, --help         show help                                                             [boolean]
@@ -213,30 +213,10 @@ Options:
   -f, --force        skip confirmation prompts                            [boolean] [default: false]"
 `;
 
-exports[`opencode CLI help-text snapshots every documented command emits stable help text: opencode serve --help 1`] = `
-"opencode serve
+exports[`deepagent-code CLI help-text snapshots every documented command emits stable help text: deepagent-code serve --help 1`] = `
+"deepagent-code serve
 
-starts a headless opencode server
-
-Options:
-  -h, --help         show help                                                             [boolean]
-  -v, --version      show version number                                                   [boolean]
-      --print-logs   print logs to stderr                                                  [boolean]
-      --log-level    log level                  [string] [choices: "DEBUG", "INFO", "WARN", "ERROR"]
-      --pure         run without external plugins                                          [boolean]
-      --port         port to listen on                                         [number] [default: 0]
-      --hostname     hostname to listen on                           [string] [default: "127.0.0.1"]
-      --mdns         enable mDNS service discovery (defaults hostname to 0.0.0.0)
-                                                                          [boolean] [default: false]
-      --mdns-domain  custom domain name for mDNS service (default: opencode.local)
-                                                                [string] [default: "opencode.local"]
-      --cors         additional domains to allow for CORS                      [array] [default: []]"
-`;
-
-exports[`opencode CLI help-text snapshots every documented command emits stable help text: opencode web --help 1`] = `
-"opencode web
-
-start opencode server and open web interface
+starts a headless deepagent-code server
 
 Options:
   -h, --help         show help                                                             [boolean]
@@ -248,13 +228,33 @@ Options:
       --hostname     hostname to listen on                           [string] [default: "127.0.0.1"]
       --mdns         enable mDNS service discovery (defaults hostname to 0.0.0.0)
                                                                           [boolean] [default: false]
-      --mdns-domain  custom domain name for mDNS service (default: opencode.local)
-                                                                [string] [default: "opencode.local"]
+      --mdns-domain  custom domain name for mDNS service (default: deepagent-code.local)
+                                                                [string] [default: "deepagent-code.local"]
       --cors         additional domains to allow for CORS                      [array] [default: []]"
 `;
 
-exports[`opencode CLI help-text snapshots every documented command emits stable help text: opencode models --help 1`] = `
-"opencode models [provider]
+exports[`deepagent-code CLI help-text snapshots every documented command emits stable help text: deepagent-code web --help 1`] = `
+"deepagent-code web
+
+start deepagent-code server and open web interface
+
+Options:
+  -h, --help         show help                                                             [boolean]
+  -v, --version      show version number                                                   [boolean]
+      --print-logs   print logs to stderr                                                  [boolean]
+      --log-level    log level                  [string] [choices: "DEBUG", "INFO", "WARN", "ERROR"]
+      --pure         run without external plugins                                          [boolean]
+      --port         port to listen on                                         [number] [default: 0]
+      --hostname     hostname to listen on                           [string] [default: "127.0.0.1"]
+      --mdns         enable mDNS service discovery (defaults hostname to 0.0.0.0)
+                                                                          [boolean] [default: false]
+      --mdns-domain  custom domain name for mDNS service (default: deepagent-code.local)
+                                                                [string] [default: "deepagent-code.local"]
+      --cors         additional domains to allow for CORS                      [array] [default: []]"
+`;
+
+exports[`deepagent-code CLI help-text snapshots every documented command emits stable help text: deepagent-code models --help 1`] = `
+"deepagent-code models [provider]
 
 list all available models
 
@@ -271,8 +271,8 @@ Options:
       --refresh     refresh the models cache from models.dev                               [boolean]"
 `;
 
-exports[`opencode CLI help-text snapshots every documented command emits stable help text: opencode stats --help 1`] = `
-"opencode stats
+exports[`deepagent-code CLI help-text snapshots every documented command emits stable help text: deepagent-code stats --help 1`] = `
+"deepagent-code stats
 
 show token usage and cost statistics
 
@@ -289,8 +289,8 @@ Options:
       --project     filter by project (default: all projects, empty string: current project)[string]"
 `;
 
-exports[`opencode CLI help-text snapshots every documented command emits stable help text: opencode export --help 1`] = `
-"opencode export [sessionID]
+exports[`deepagent-code CLI help-text snapshots every documented command emits stable help text: deepagent-code export --help 1`] = `
+"deepagent-code export [sessionID]
 
 export session data as JSON
 
@@ -306,8 +306,8 @@ Options:
       --sanitize    redact sensitive transcript and file data                              [boolean]"
 `;
 
-exports[`opencode CLI help-text snapshots every documented command emits stable help text: opencode import --help 1`] = `
-"opencode import <file>
+exports[`deepagent-code CLI help-text snapshots every documented command emits stable help text: deepagent-code import --help 1`] = `
+"deepagent-code import <file>
 
 import session data from JSON file or URL
 
@@ -322,14 +322,14 @@ Options:
       --pure        run without external plugins                                           [boolean]"
 `;
 
-exports[`opencode CLI help-text snapshots every documented command emits stable help text: opencode github --help 1`] = `
-"opencode github
+exports[`deepagent-code CLI help-text snapshots every documented command emits stable help text: deepagent-code github --help 1`] = `
+"deepagent-code github
 
 manage GitHub agent
 
 Commands:
-  opencode github install  install the GitHub agent
-  opencode github run      run the GitHub agent
+  deepagent-code github install  install the GitHub agent
+  deepagent-code github run      run the GitHub agent
 
 Options:
   -h, --help        show help                                                              [boolean]
@@ -339,10 +339,10 @@ Options:
       --pure        run without external plugins                                           [boolean]"
 `;
 
-exports[`opencode CLI help-text snapshots every documented command emits stable help text: opencode pr --help 1`] = `
-"opencode pr <number>
+exports[`deepagent-code CLI help-text snapshots every documented command emits stable help text: deepagent-code pr --help 1`] = `
+"deepagent-code pr <number>
 
-fetch and checkout a GitHub PR branch, then run opencode
+fetch and checkout a GitHub PR branch, then run deepagent-code
 
 Positionals:
   number  PR number to checkout                                                  [number] [required]
@@ -355,14 +355,14 @@ Options:
       --pure        run without external plugins                                           [boolean]"
 `;
 
-exports[`opencode CLI help-text snapshots every documented command emits stable help text: opencode session --help 1`] = `
-"opencode session
+exports[`deepagent-code CLI help-text snapshots every documented command emits stable help text: deepagent-code session --help 1`] = `
+"deepagent-code session
 
 manage sessions
 
 Commands:
-  opencode session list                list sessions
-  opencode session delete <sessionID>  delete a session
+  deepagent-code session list                list sessions
+  deepagent-code session delete <sessionID>  delete a session
 
 Options:
   -h, --help        show help                                                              [boolean]
@@ -372,8 +372,8 @@ Options:
       --pure        run without external plugins                                           [boolean]"
 `;
 
-exports[`opencode CLI help-text snapshots every documented command emits stable help text: opencode plugin --help 1`] = `
-"opencode plugin <module>
+exports[`deepagent-code CLI help-text snapshots every documented command emits stable help text: deepagent-code plugin --help 1`] = `
+"deepagent-code plugin <module>
 
 install plugin and update config
 
@@ -390,14 +390,14 @@ Options:
   -f, --force       replace existing plugin version                       [boolean] [default: false]"
 `;
 
-exports[`opencode CLI help-text snapshots every documented command emits stable help text: opencode db --help 1`] = `
-"opencode db
+exports[`deepagent-code CLI help-text snapshots every documented command emits stable help text: deepagent-code db --help 1`] = `
+"deepagent-code db
 
 database tools
 
 Commands:
-  opencode db [query]     open an interactive sqlite3 shell or run a query                 [default]
-  opencode db path        print the database path
+  deepagent-code db [query]     open an interactive sqlite3 shell or run a query                 [default]
+  deepagent-code db path        print the database path
 
 Positionals:
   query  SQL query to execute                                                               [string]
@@ -411,8 +411,8 @@ Options:
       --format      Output format                 [string] [choices: "json", "tsv"] [default: "tsv"]"
 `;
 
-exports[`opencode CLI help-text snapshots every documented command emits stable help text: opencode mcp list --help 1`] = `
-"opencode mcp list
+exports[`deepagent-code CLI help-text snapshots every documented command emits stable help text: deepagent-code mcp list --help 1`] = `
+"deepagent-code mcp list
 
 list MCP servers and their status
 
@@ -424,8 +424,8 @@ Options:
       --pure        run without external plugins                                           [boolean]"
 `;
 
-exports[`opencode CLI help-text snapshots every documented command emits stable help text: opencode mcp add --help 1`] = `
-"opencode mcp add [name]
+exports[`deepagent-code CLI help-text snapshots every documented command emits stable help text: deepagent-code mcp add --help 1`] = `
+"deepagent-code mcp add [name]
 
 add an MCP server
 
@@ -443,13 +443,13 @@ Options:
       --header      HTTP header for a remote MCP server (KEY=VALUE)                          [array]"
 `;
 
-exports[`opencode CLI help-text snapshots every documented command emits stable help text: opencode mcp auth --help 1`] = `
-"opencode mcp auth [name]
+exports[`deepagent-code CLI help-text snapshots every documented command emits stable help text: deepagent-code mcp auth --help 1`] = `
+"deepagent-code mcp auth [name]
 
 authenticate with an OAuth-enabled MCP server
 
 Commands:
-  opencode mcp auth list  list OAuth-capable MCP servers and their auth status         [aliases: ls]
+  deepagent-code mcp auth list  list OAuth-capable MCP servers and their auth status         [aliases: ls]
 
 Positionals:
   name  name of the MCP server                                                              [string]
@@ -462,8 +462,8 @@ Options:
       --pure        run without external plugins                                           [boolean]"
 `;
 
-exports[`opencode CLI help-text snapshots every documented command emits stable help text: opencode mcp logout --help 1`] = `
-"opencode mcp logout [name]
+exports[`deepagent-code CLI help-text snapshots every documented command emits stable help text: deepagent-code mcp logout --help 1`] = `
+"deepagent-code mcp logout [name]
 
 remove OAuth credentials for an MCP server
 
@@ -478,8 +478,8 @@ Options:
       --pure        run without external plugins                                           [boolean]"
 `;
 
-exports[`opencode CLI help-text snapshots every documented command emits stable help text: opencode providers list --help 1`] = `
-"opencode providers list
+exports[`deepagent-code CLI help-text snapshots every documented command emits stable help text: deepagent-code providers list --help 1`] = `
+"deepagent-code providers list
 
 list providers and credentials
 
@@ -491,13 +491,13 @@ Options:
       --pure        run without external plugins                                           [boolean]"
 `;
 
-exports[`opencode CLI help-text snapshots every documented command emits stable help text: opencode providers login --help 1`] = `
-"opencode providers login [url]
+exports[`deepagent-code CLI help-text snapshots every documented command emits stable help text: deepagent-code providers login --help 1`] = `
+"deepagent-code providers login [url]
 
 log in to a provider
 
 Positionals:
-  url  opencode auth provider                                                               [string]
+  url  deepagent-code auth provider                                                               [string]
 
 Options:
   -h, --help        show help                                                              [boolean]
@@ -509,8 +509,8 @@ Options:
   -m, --method      login method label (skips method selection)                             [string]"
 `;
 
-exports[`opencode CLI help-text snapshots every documented command emits stable help text: opencode providers logout --help 1`] = `
-"opencode providers logout [provider]
+exports[`deepagent-code CLI help-text snapshots every documented command emits stable help text: deepagent-code providers logout --help 1`] = `
+"deepagent-code providers logout [provider]
 
 log out from a configured provider
 
@@ -525,8 +525,8 @@ Options:
       --pure        run without external plugins                                           [boolean]"
 `;
 
-exports[`opencode CLI help-text snapshots every documented command emits stable help text: opencode agent create --help 1`] = `
-"opencode agent create
+exports[`deepagent-code CLI help-text snapshots every documented command emits stable help text: deepagent-code agent create --help 1`] = `
+"deepagent-code agent create
 
 create a new agent
 
@@ -545,8 +545,8 @@ Options:
   -m, --model                 model to use in the format of provider/model                  [string]"
 `;
 
-exports[`opencode CLI help-text snapshots every documented command emits stable help text: opencode agent list --help 1`] = `
-"opencode agent list
+exports[`deepagent-code CLI help-text snapshots every documented command emits stable help text: deepagent-code agent list --help 1`] = `
+"deepagent-code agent list
 
 list all available agents
 
@@ -558,8 +558,8 @@ Options:
       --pure        run without external plugins                                           [boolean]"
 `;
 
-exports[`opencode CLI help-text snapshots every documented command emits stable help text: opencode session list --help 1`] = `
-"opencode session list
+exports[`deepagent-code CLI help-text snapshots every documented command emits stable help text: deepagent-code session list --help 1`] = `
+"deepagent-code session list
 
 list sessions
 
@@ -573,8 +573,8 @@ Options:
       --format      output format             [string] [choices: "table", "json"] [default: "table"]"
 `;
 
-exports[`opencode CLI help-text snapshots every documented command emits stable help text: opencode session delete --help 1`] = `
-"opencode session delete <sessionID>
+exports[`deepagent-code CLI help-text snapshots every documented command emits stable help text: deepagent-code session delete --help 1`] = `
+"deepagent-code session delete <sessionID>
 
 delete a session
 
@@ -589,8 +589,8 @@ Options:
       --pure        run without external plugins                                           [boolean]"
 `;
 
-exports[`opencode CLI help-text snapshots every documented command emits stable help text: opencode github install --help 1`] = `
-"opencode github install
+exports[`deepagent-code CLI help-text snapshots every documented command emits stable help text: deepagent-code github install --help 1`] = `
+"deepagent-code github install
 
 install the GitHub agent
 
@@ -602,8 +602,8 @@ Options:
       --pure        run without external plugins                                           [boolean]"
 `;
 
-exports[`opencode CLI help-text snapshots every documented command emits stable help text: opencode github run --help 1`] = `
-"opencode github run
+exports[`deepagent-code CLI help-text snapshots every documented command emits stable help text: deepagent-code github run --help 1`] = `
+"deepagent-code github run
 
 run the GitHub agent
 
@@ -617,8 +617,8 @@ Options:
       --token       GitHub personal access token (github_pat_********)                      [string]"
 `;
 
-exports[`opencode CLI help-text snapshots every documented command emits stable help text: opencode db path --help 1`] = `
-"opencode db path
+exports[`deepagent-code CLI help-text snapshots every documented command emits stable help text: deepagent-code db path --help 1`] = `
+"deepagent-code db path
 
 print the database path
 
