@@ -25,6 +25,13 @@ export default defineConfig({
     host: "0.0.0.0",
     allowedHosts: true,
     port: 3000,
+    watch: {
+      // SST regenerates workspace bindings (sst-env.d.ts) and re-touches package.json /
+      // tsconfig.json across every package as a background step. The content is unchanged
+      // but the mtime bump trips Vite's watcher → a full page reload that looks like the app
+      // "restarting" on its own. None of these are app sources, so ignore them.
+      ignored: ["**/sst-env.d.ts", "**/.sst/**"],
+    },
   },
   optimizeDeps: {
     esbuildOptions: {

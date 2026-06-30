@@ -7,11 +7,20 @@ import { DocumentStore, knowledgeSimilarity, tokenizeForSimilarity } from "../..
 let root: string
 let store: DocumentStore
 
-beforeEach(() => { root = mkdtempSync(path.join(tmpdir(), "deepagent-ds-")); store = new DocumentStore(root) })
+beforeEach(() => {
+  root = mkdtempSync(path.join(tmpdir(), "deepagent-ds-"))
+  store = new DocumentStore(root)
+})
 afterEach(() => rmSync(root, { recursive: true, force: true }))
 
 const prov = { source: "model" as const, run_ref: "run:t1" }
-const design = (body = "d", desc = "auth design") => ({ type: "design" as const, scope: "run:t1", body, description: desc, provenance: prov })
+const design = (body = "d", desc = "auth design") => ({
+  type: "design" as const,
+  scope: "run:t1",
+  body,
+  description: desc,
+  provenance: prov,
+})
 
 describe("V3 DocumentStore", () => {
   test("create assigns stable id + content hash", () => {
@@ -42,7 +51,15 @@ describe("V3 DocumentStore", () => {
   })
 
   test("knowledge-class doc requires confidence", () => {
-    expect(() => store.create({ type: "strategy", scope: "durable", body: "x", description: "s", provenance: { source: "human" } })).toThrow()
+    expect(() =>
+      store.create({
+        type: "strategy",
+        scope: "durable",
+        body: "x",
+        description: "s",
+        provenance: { source: "human" },
+      }),
+    ).toThrow()
   })
 
   test("dangling link rejected", () => {
@@ -54,15 +71,30 @@ describe("V3 DocumentStore", () => {
     const a = store.create(design("a"))
     const b = store.create({ type: "candidate", scope: "run:t1", body: "b", description: "cand b", provenance: prov })
     store.link(b.id, "derived_from", a.id)
-    const before = store.list().map((r) => r.id).sort()
+    const before = store
+      .list()
+      .map((r) => r.id)
+      .sort()
     const reopened = new DocumentStore(root) // rebuilds index from files only
-    expect(reopened.list().map((r) => r.id).sort()).toEqual(before)
+    expect(
+      reopened
+        .list()
+        .map((r) => r.id)
+        .sort(),
+    ).toEqual(before)
     expect(reopened.getRefsIn(a.id).some((r) => r.from.id === b.id)).toBe(true)
     expect(reopened.verify().ok).toBe(true)
   })
 
   test("sealed scope never listed (INV-7)", () => {
-    store.create({ type: "memory", scope: "sealed", body: "leak", description: "sealed", confidence: { evidence_strength: "none", support_count: 0 }, provenance: { source: "runner" } })
+    store.create({
+      type: "memory",
+      scope: "sealed",
+      body: "leak",
+      description: "sealed",
+      confidence: { evidence_strength: "none", support_count: 0 },
+      provenance: { source: "runner" },
+    })
     expect(store.list({ type: "memory" }).length).toBe(0)
   })
 })
@@ -74,8 +106,12 @@ describe("knowledge similarity (dedup helper)", () => {
 
   test("identical text scores 1; reworded scores high; unrelated scores low", () => {
     expect(knowledgeSimilarity("use redis for the rate limiter", "use redis for the rate limiter")).toBe(1)
-    expect(knowledgeSimilarity("cache the session in redis to speed auth", "cache the session in redis to speed up auth")).toBeGreaterThanOrEqual(0.8)
-    expect(knowledgeSimilarity("use redis for the rate limiter", "validate webhook signatures before processing")).toBeLessThan(0.3)
+    expect(
+      knowledgeSimilarity("cache the session in redis to speed auth", "cache the session in redis to speed up auth"),
+    ).toBeGreaterThanOrEqual(0.8)
+    expect(
+      knowledgeSimilarity("use redis for the rate limiter", "validate webhook signatures before processing"),
+    ).toBeLessThan(0.3)
   })
 
   test("a short summary fully contained in a longer one scores high (overlap coefficient)", () => {
@@ -88,10 +124,32 @@ describe("knowledge similarity (dedup helper)", () => {
   })
 
   test("findSimilarKnowledge merges only same type+scope+domain non-rejected docs", () => {
-    const a = store.create({ type: "memory", scope: "user-global", domain: "code", body: "b", description: "use redis for the rate limiter", confidence: { evidence_strength: "weak", support_count: 1 }, provenance: { source: "runner" } })
+    const a = store.create({
+      type: "memory",
+      scope: "user-global",
+      domain: "code",
+      body: "b",
+      description: "use redis for the rate limiter",
+      confidence: { evidence_strength: "weak", support_count: 1 },
+      provenance: { source: "runner" },
+    })
     // near-duplicate, same type/scope/domain -> found
-    expect(store.findSimilarKnowledge({ type: "memory", scope: "user-global", domain: "code", description: "use redis for the rate limiter please" })?.id).toBe(a.id)
+    expect(
+      store.findSimilarKnowledge({
+        type: "memory",
+        scope: "user-global",
+        domain: "code",
+        description: "use redis for the rate limiter please",
+      })?.id,
+    ).toBe(a.id)
     // different domain -> not found
-    expect(store.findSimilarKnowledge({ type: "memory", scope: "user-global", domain: "infra", description: "use redis for the rate limiter" })).toBeNull()
+    expect(
+      store.findSimilarKnowledge({
+        type: "memory",
+        scope: "user-global",
+        domain: "infra",
+        description: "use redis for the rate limiter",
+      }),
+    ).toBeNull()
   })
 })

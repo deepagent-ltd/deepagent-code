@@ -6,7 +6,9 @@ import { AgentGateway } from "@deepagent-code/core/agent-gateway"
 import { buildRunReview, listRunIds } from "../../src/deepagent/run-review"
 
 let runsDir: string
-beforeEach(() => { runsDir = mkdtempSync(path.join(tmpdir(), "deepagent-review-")) })
+beforeEach(() => {
+  runsDir = mkdtempSync(path.join(tmpdir(), "deepagent-review-"))
+})
 afterEach(() => rmSync(runsDir, { recursive: true, force: true }))
 
 function writeRun(id: string, files: Record<string, unknown | string>) {
@@ -21,9 +23,24 @@ function writeRun(id: string, files: Record<string, unknown | string>) {
 describe("A7 reviewer projection", () => {
   test("requires the document graph instead of reconstructing review state from flat artifacts", async () => {
     const dir = writeRun("run_1", {
-      "CANDIDATE_LINEAGE.json": { nodes: [{ round: 1, candidate_ref: "cand:a", parent_candidate_ref: null, status: "runtime_failed", decision_ref: "MODEL_ROUTER_AUDIT.json", notes: ["failed"] }] },
+      "CANDIDATE_LINEAGE.json": {
+        nodes: [
+          {
+            round: 1,
+            candidate_ref: "cand:a",
+            parent_candidate_ref: null,
+            status: "runtime_failed",
+            decision_ref: "MODEL_ROUTER_AUDIT.json",
+            notes: ["failed"],
+          },
+        ],
+      },
       "DEEPAGENT_RUN_STATE.json": { agent_mode: "max", state: "failed" },
-      "DIAGNOSIS_RESULT.json": { status: "required", root_cause: "compile_error", next_action: "review_required_before_resume" },
+      "DIAGNOSIS_RESULT.json": {
+        status: "required",
+        root_cause: "compile_error",
+        next_action: "review_required_before_resume",
+      },
       "RUN_CONTEXT.md": "# Run Context\nstatus: failed",
     })
     const review = await buildRunReview(dir)

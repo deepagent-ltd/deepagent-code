@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test"
 import { base64Encode } from "@deepagent-code/core/util/encode"
-import { mockDeepAgent CodeServer } from "../utils/mock-server"
+import { mockDeepAgentCodeServer } from "../utils/mock-server"
 import { expectAppVisible } from "../utils/waits"
 
 const directory = "C:/DeepAgent Code/PromptThinkingLevelRegression"
@@ -8,7 +8,7 @@ const projectID = "proj_prompt_thinking_level_regression"
 const sessionID = "ses_prompt_thinking_level_regression"
 
 test("shows the V2 thinking level control while relevant", async ({ page }) => {
-  await mockDeepAgent CodeServer(page, {
+  await mockDeepAgentCodeServer(page, {
     directory,
     project: {
       id: projectID,

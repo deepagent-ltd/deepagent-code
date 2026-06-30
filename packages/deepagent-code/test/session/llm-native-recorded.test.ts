@@ -167,7 +167,8 @@ const RECORDED_SCENARIOS = [
     cassette: "session/native-zen-tool-loop",
     protocol: "openai-responses",
     tags: ["deepagent-code", "zen", "native", "tool-loop"],
-    canRecord: () => Boolean(process.env.DEEPAGENT_CODE_RECORD_CONSOLE_TOKEN && process.env.DEEPAGENT_CODE_RECORD_ZEN_ORG_ID),
+    canRecord: () =>
+      Boolean(process.env.DEEPAGENT_CODE_RECORD_CONSOLE_TOKEN && process.env.DEEPAGENT_CODE_RECORD_ZEN_ORG_ID),
     config: (model) =>
       providerConfig({
         providerID: ProviderV2.ID.make("deepagent-code"),

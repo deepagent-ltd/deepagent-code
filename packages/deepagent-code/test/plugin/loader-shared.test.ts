@@ -335,7 +335,10 @@ describe("plugin.loader.shared", () => {
         )
         await Bun.write(path.join(mod, "tui.js"), "export default {}\n")
 
-        await Bun.write(path.join(dir, "deepagent-code.json"), JSON.stringify({ plugin: ["acme-plugin@1.0.0"] }, null, 2))
+        await Bun.write(
+          path.join(dir, "deepagent-code.json"),
+          JSON.stringify({ plugin: ["acme-plugin@1.0.0"] }, null, 2),
+        )
 
         return {
           mod,
@@ -394,7 +397,10 @@ describe("plugin.loader.shared", () => {
           ].join("\n"),
         )
 
-        await Bun.write(path.join(dir, "deepagent-code.json"), JSON.stringify({ plugin: ["acme-plugin@1.0.0"] }, null, 2))
+        await Bun.write(
+          path.join(dir, "deepagent-code.json"),
+          JSON.stringify({ plugin: ["acme-plugin@1.0.0"] }, null, 2),
+        )
 
         return {
           mod,
@@ -448,7 +454,10 @@ describe("plugin.loader.shared", () => {
           ].join("\n"),
         )
 
-        await Bun.write(path.join(dir, "deepagent-code.json"), JSON.stringify({ plugin: ["acme-plugin@1.0.0"] }, null, 2))
+        await Bun.write(
+          path.join(dir, "deepagent-code.json"),
+          JSON.stringify({ plugin: ["acme-plugin@1.0.0"] }, null, 2),
+        )
 
         return {
           mod,
@@ -498,7 +507,10 @@ describe("plugin.loader.shared", () => {
           ].join("\n"),
         )
 
-        await Bun.write(path.join(dir, "deepagent-code.json"), JSON.stringify({ plugin: ["acme-plugin@1.0.0"] }, null, 2))
+        await Bun.write(
+          path.join(dir, "deepagent-code.json"),
+          JSON.stringify({ plugin: ["acme-plugin@1.0.0"] }, null, 2),
+        )
 
         return { mod, mark }
       },
@@ -596,7 +608,11 @@ describe("plugin.loader.shared", () => {
           path.join(dir, "deepagent-code.json"),
           JSON.stringify(
             {
-              plugin: ["deepagent-code-openai-codex-auth@1.0.0", "deepagent-code-copilot-auth@1.0.0", "regular-plugin@1.0.0"],
+              plugin: [
+                "deepagent-code-openai-codex-auth@1.0.0",
+                "deepagent-code-copilot-auth@1.0.0",
+                "regular-plugin@1.0.0",
+              ],
             },
             null,
             2,

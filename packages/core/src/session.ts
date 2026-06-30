@@ -417,7 +417,12 @@ export const layer = Layer.effect(
       const projectedConversation = yield* db
         .select({ id: SessionMessageTable.id })
         .from(SessionMessageTable)
-        .where(and(eq(SessionMessageTable.session_id, input.sessionID), inArray(SessionMessageTable.type, V2ConversationTypes)))
+        .where(
+          and(
+            eq(SessionMessageTable.session_id, input.sessionID),
+            inArray(SessionMessageTable.type, V2ConversationTypes),
+          ),
+        )
         .all()
         .pipe(Effect.orDie)
       if (projectedConversation.length > 0) return undefined
@@ -428,7 +433,12 @@ export const layer = Layer.effect(
           : yield* db
               .select()
               .from(PartTable)
-              .where(inArray(PartTable.message_id, legacyRows.map((row) => row.id)))
+              .where(
+                inArray(
+                  PartTable.message_id,
+                  legacyRows.map((row) => row.id),
+                ),
+              )
               .orderBy(PartTable.message_id, PartTable.id)
               .all()
               .pipe(Effect.orDie)
@@ -468,9 +478,7 @@ export const layer = Layer.effect(
           const compared = compareMessageTime(message, anchor)
           return order === "asc" ? compared > 0 : compared < 0
         })
-        .sort((left, right) =>
-          order === "asc" ? compareMessageTime(left, right) : compareMessageTime(right, left),
-        )
+        .sort((left, right) => (order === "asc" ? compareMessageTime(left, right) : compareMessageTime(right, left)))
       const limited = input.limit === undefined ? sorted : sorted.slice(0, input.limit)
       return direction === "previous" ? limited.toReversed() : limited
     })

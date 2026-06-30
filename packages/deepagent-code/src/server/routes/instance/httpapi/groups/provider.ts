@@ -31,7 +31,9 @@ export class ProviderAuthApiError extends Schema.ErrorClass<ProviderAuthApiError
   { httpApiStatus: 400 },
 ) {}
 
-export class ProviderModelDiscoverError extends Schema.ErrorClass<ProviderModelDiscoverError>("ProviderModelDiscoverError")(
+export class ProviderModelDiscoverError extends Schema.ErrorClass<ProviderModelDiscoverError>(
+  "ProviderModelDiscoverError",
+)(
   {
     message: Schema.String,
   },

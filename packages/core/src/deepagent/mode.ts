@@ -39,8 +39,7 @@ export const knowledgeEnabled = (mode: AgentMode) => mode !== "general"
 export const strategyMethodologyEnabled = (mode: AgentMode) => mode === "max" || mode === "ultra"
 
 // Domain knowledge docs are available from xhigh onwards (docs/39 §3.1).
-export const domainKnowledgeEnabled = (mode: AgentMode) =>
-  mode === "xhigh" || mode === "max" || mode === "ultra"
+export const domainKnowledgeEnabled = (mode: AgentMode) => mode === "xhigh" || mode === "max" || mode === "ultra"
 
 // ultra is the only autonomous strength: its supervisor thread advances macro-rounds without a
 // human. All other strengths require human approval to advance a macro-round.

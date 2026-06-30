@@ -47,7 +47,9 @@ const memInput = (summary: string, over: Partial<KnowledgeDocInput> = {}): Knowl
 // Seed an approved memory into the right durable store for the given workspace, return its doc id.
 const seedProjectMemory = (workspacePath: string, summary: string): string => {
   const store = openProjectStore(base, workspacePath)
-  const doc = store.stageCandidate(memInput(summary, { scope: "project-shared", projectId: projectIdForWorkspace(workspacePath) }))
+  const doc = store.stageCandidate(
+    memInput(summary, { scope: "project-shared", projectId: projectIdForWorkspace(workspacePath) }),
+  )
   store.approve(doc.id)
   return doc.id
 }
@@ -60,7 +62,14 @@ const seedGlobalMemory = (summary: string): string => {
 
 const memoryRefsFor = (workspacePath?: string): readonly string[] => {
   invalidateCache()
-  const r = retrieve({ mode: "max", task, tools, round: 1, previousFailures: 0, ...(workspacePath ? { workspacePath } : {}) })
+  const r = retrieve({
+    mode: "max",
+    task,
+    tools,
+    round: 1,
+    previousFailures: 0,
+    ...(workspacePath ? { workspacePath } : {}),
+  })
   return r?.memoryRefs ?? []
 }
 

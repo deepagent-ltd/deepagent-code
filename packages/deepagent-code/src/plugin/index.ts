@@ -142,12 +142,15 @@ export const layer = Layer.effect(
           baseUrl: "http://localhost:4096",
           directory: ctx.directory,
           headers: ServerAuth.headers(),
-          fetch: Object.assign((request: RequestInfo | URL, init?: RequestInit) => {
-            const next = request instanceof Request ? request : new Request(request, init)
-            return Promise.resolve(Server.Default().app.fetch(next))
-          }, {
-            preconnect: globalThis.fetch.preconnect,
-          }),
+          fetch: Object.assign(
+            (request: RequestInfo | URL, init?: RequestInit) => {
+              const next = request instanceof Request ? request : new Request(request, init)
+              return Promise.resolve(Server.Default().app.fetch(next))
+            },
+            {
+              preconnect: globalThis.fetch.preconnect,
+            },
+          ),
         })
         const cfg = yield* config.get()
         const input: PluginInput = {

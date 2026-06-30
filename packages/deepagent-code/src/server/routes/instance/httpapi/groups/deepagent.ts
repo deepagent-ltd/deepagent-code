@@ -191,7 +191,10 @@ export const DeepAgentApi = HttpApi.make("deepagent").add(
     .add(
       HttpApiEndpoint.get("reviews", `${root}/reviews`, {
         query: WorkspaceRoutingQuery,
-        success: described(DeepAgentReviewList, "Recent DeepAgent run reviews (candidate lineage, diagnosis, decision)"),
+        success: described(
+          DeepAgentReviewList,
+          "Recent DeepAgent run reviews (candidate lineage, diagnosis, decision)",
+        ),
       }).annotateMerge(
         OpenApi.annotations({
           identifier: "deepagent.reviews",
@@ -210,7 +213,8 @@ export const DeepAgentApi = HttpApi.make("deepagent").add(
         OpenApi.annotations({
           identifier: "deepagent.knowledge.promote",
           summary: "Promote reviewed DeepAgent knowledge",
-          description: "Apply the V3 promotion gate and persist a human-approved candidate as durable retrievable knowledge.",
+          description:
+            "Apply the V3 promotion gate and persist a human-approved candidate as durable retrievable knowledge.",
         }),
       ),
     )

@@ -65,7 +65,13 @@ import { SessionEvent } from "@deepagent-code/core/session/event"
 import { SessionMessage } from "@deepagent-code/core/session/message"
 import { ModelV2 } from "@deepagent-code/core/model"
 import { ProviderV2 } from "@deepagent-code/core/provider"
-import { AgentAttachment, FileAttachment, Prompt, ReferenceAttachment, Source } from "@deepagent-code/core/session/prompt"
+import {
+  AgentAttachment,
+  FileAttachment,
+  Prompt,
+  ReferenceAttachment,
+  Source,
+} from "@deepagent-code/core/session/prompt"
 import { Reference } from "@/reference/reference"
 import * as DateTime from "effect/DateTime"
 import { eq } from "drizzle-orm"
@@ -111,20 +117,21 @@ export interface Interface {
     sessionID: SessionID
     rawInput: string
     outputLanguage?: AgentGateway.DeepAgentPromptPipeline.WishRefinementOutputLanguage
-  }) => Effect.Effect<{
-    prompt_draft_id: string
-    context_plan_id: string
-    state: string
-    mode: "wish"
-    route: "code" | "general"
-    goal: string
-    preview: string
-  }, AgentGateway.DeepAgentPromptPipeline.PromptRefinerModelError>
+  }) => Effect.Effect<
+    {
+      prompt_draft_id: string
+      context_plan_id: string
+      state: string
+      mode: "wish"
+      route: "code" | "general"
+      goal: string
+      preview: string
+    },
+    AgentGateway.DeepAgentPromptPipeline.PromptRefinerModelError
+  >
   // A3 macro-round: read the latest persisted next-round suggestion ({status, body}) so the UI can
   // surface it for human approval (high/max). Returns null when no suggestion has been produced.
-  readonly latestSuggestion: (input: {
-    sessionID: SessionID
-  }) => Effect.Effect<{ status: string; body: string } | null>
+  readonly latestSuggestion: (input: { sessionID: SessionID }) => Effect.Effect<{ status: string; body: string } | null>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@deepagent-code/SessionPrompt") {}
@@ -870,10 +877,16 @@ export const layer = Layer.effect(
           input.rawInput,
         )
         if (!output) {
-          return yield* Effect.fail(new AgentGateway.DeepAgentPromptPipeline.PromptRefinerModelError("invalid wish refinement output"))
+          return yield* Effect.fail(
+            new AgentGateway.DeepAgentPromptPipeline.PromptRefinerModelError("invalid wish refinement output"),
+          )
         }
         if (fallbackRoute === "code" && output.route === "general") {
-          return yield* Effect.fail(new AgentGateway.DeepAgentPromptPipeline.PromptRefinerModelError("code wish refinement was routed as general"))
+          return yield* Effect.fail(
+            new AgentGateway.DeepAgentPromptPipeline.PromptRefinerModelError(
+              "code wish refinement was routed as general",
+            ),
+          )
         }
         if (output.route === "general") {
           return {
@@ -887,7 +900,11 @@ export const layer = Layer.effect(
           }
         }
         if (!AgentGateway.DeepAgentPromptPipeline.isUsefulWishRefinement(input.rawInput, output)) {
-          return yield* Effect.fail(new AgentGateway.DeepAgentPromptPipeline.PromptRefinerModelError("wish refinement did not improve the prompt"))
+          return yield* Effect.fail(
+            new AgentGateway.DeepAgentPromptPipeline.PromptRefinerModelError(
+              "wish refinement did not improve the prompt",
+            ),
+          )
         }
         return {
           route: "code" as const,
@@ -906,7 +923,11 @@ export const layer = Layer.effect(
                 goal: input.rawInput,
                 preview: input.rawInput,
               })
-            : Effect.fail(new AgentGateway.DeepAgentPromptPipeline.PromptRefinerModelError("wish refinement failed for code task")),
+            : Effect.fail(
+                new AgentGateway.DeepAgentPromptPipeline.PromptRefinerModelError(
+                  "wish refinement failed for code task",
+                ),
+              ),
         ),
       )
 
@@ -922,9 +943,7 @@ export const layer = Layer.effect(
       }
     })
 
-    const latestSuggestion = Effect.fn("SessionPrompt.latestSuggestion")(function* (input: {
-      sessionID: SessionID
-    }) {
+    const latestSuggestion = Effect.fn("SessionPrompt.latestSuggestion")(function* (input: { sessionID: SessionID }) {
       const ctx = yield* InstanceState.context
       return yield* Effect.sync(() => {
         const home = new AgentGateway.DeepAgentWorkspace.DeepAgentCodeHome(Global.Path.agent.data)
@@ -1535,11 +1554,14 @@ export const layer = Layer.effect(
         // required validations to run). That is correct behavior, but it silently degrades high/max/
         // ultra to a single unvalidated turn, which can read as "validated" downstream. Surface it.
         if (ws.validationCommands.length === 0) {
-          log.warn("deepagent multi-round: no validation commands inferred for workspace; validation gate is inactive this run", {
-            sessionID: input.sessionID,
-            directory: ctx.directory,
-            agentMode,
-          })
+          log.warn(
+            "deepagent multi-round: no validation commands inferred for workspace; validation gate is inactive this run",
+            {
+              sessionID: input.sessionID,
+              directory: ctx.directory,
+              agentMode,
+            },
+          )
         }
         // ultra requires the wish scenario: its supervisor advances macro-rounds by seeding the
         // next turn with the wish next-round suggestion, which only exists under wish. Under
@@ -1558,13 +1580,15 @@ export const layer = Layer.effect(
         })()
         const autonomous = AgentGateway.DeepAgentMode.isAutonomous(agentMode) && isWish
         if (AgentGateway.DeepAgentMode.isAutonomous(agentMode) && !isWish) {
-          yield* events.publish(Session.Event.Error, {
-            sessionID: input.sessionID,
-            error: new NamedError.Unknown({
-              message:
-                "DeepAgent ultra requires the wish scenario; under direct it runs a single human-approved macro pass.",
-            }).toObject(),
-          }).pipe(Effect.catch(() => Effect.void))
+          yield* events
+            .publish(Session.Event.Error, {
+              sessionID: input.sessionID,
+              error: new NamedError.Unknown({
+                message:
+                  "DeepAgent ultra requires the wish scenario; under direct it runs a single human-approved macro pass.",
+              }).toObject(),
+            })
+            .pipe(Effect.catch(() => Effect.void))
         }
         // ultra has no human in the macro loop, so cap its auto-advanced macro-rounds. high/max
         // do one macro pass and surface the continuation suggestion for human approval, but do
@@ -1586,7 +1610,8 @@ export const layer = Layer.effect(
               store.saveSuggestion(suggestion)
               // A4: persist the structured round report (dual-provenance reconciliation) alongside
               // the suggestion so the contract is auditable after the run.
-              if (report && typeof report.round === "number") store.saveRoundReport(report as { round: number } & Record<string, unknown>)
+              if (report && typeof report.round === "number")
+                store.saveRoundReport(report as { round: number } & Record<string, unknown>)
             },
             catch: (error) => error,
           }).pipe(
@@ -1607,7 +1632,8 @@ export const layer = Layer.effect(
         // cwd outside a git repo. Without this, when ctx.directory is a repo subdirectory, claimed
         // files (relative to cwd) never matched the real diff (relative to repo root) and every
         // round was falsely escalated to needs_human.
-        const changeSurfaceBase = (yield* Effect.promise(() => gitGroundTruth(ctx.directory))).repo_root ?? ctx.directory
+        const changeSurfaceBase =
+          (yield* Effect.promise(() => gitGroundTruth(ctx.directory))).repo_root ?? ctx.directory
         // The change surface the model CLAIMS it touched, derived from its actual edit/write/patch
         // tool calls on the just-finished turn. Reconciled against the real git diff so a claim of
         // a file the model never actually wrote (or a silent no-op turn) is caught objectively.
@@ -1639,25 +1665,32 @@ export const layer = Layer.effect(
             agentMode,
             enabled: true,
             maxRounds: autonomous ? ultraMaxRounds : null,
+            // T3 (S1-v3.4): yellow-stall narrowing budget before escalating to red (default 1).
+            narrowLimit: flags.microbatchNarrowLimit ?? 1,
             first: result,
             validationCommands: ws.validationCommands,
             ensureSession: () => AgentGateway.DeepAgentOrchestrator.ensureSession(input.sessionID, agentMode),
             runValidation: (cmds) => Effect.promise(() => runValidationCommands(cmds, ctx.directory)),
             track: () => snapshot.track(),
             restore: (checkpoint) => snapshot.restore(checkpoint),
-            reviseTurn: (text) =>
+            reviseTurn: (text, action) =>
               Effect.gen(function* () {
                 yield* createUserMessage({
                   sessionID: input.sessionID,
+                  // T3 (S1-v3.4): tag the injected revise turn with the triage action ("revise"/"narrow")
+                  // for frontend folding into "auto-fixing round N". Defaults to "continue" (legacy).
+                  metadata: { deepagent: { round_control: { action: action ?? "continue" } } },
                   parts: [{ type: "text", text }],
-                  metadata: { deepagent: { round_control: { action: "continue" } } },
                 })
                 const revised = yield* loop({ sessionID: input.sessionID })
                 // P2-4: fold this revise turn's edits into the macro-round's claimed change surface.
                 for (const f of claimedChangeSurface(revised)) accumulatedChangeSurface.add(f)
                 return revised
               }).pipe(Effect.catch(() => Effect.succeed(result))),
-            onMacroRound: (s, report) => persistSuggestion(s, report as unknown as Record<string, unknown>).pipe(Effect.map(() => void (suggestion = s))),
+            onMacroRound: (s, report) =>
+              persistSuggestion(s, report as unknown as Record<string, unknown>).pipe(
+                Effect.map(() => void (suggestion = s)),
+              ),
             // Runner ground truth (real git diff) + the model's claimed change surface, so the
             // round report reconciles claims against reality instead of echoing ground truth.
             gitGroundTruth: () => Effect.promise(() => gitGroundTruth(ctx.directory)),
@@ -1854,6 +1887,7 @@ export const layer = Layer.effect(
               Effect.provideService(ToolRegistry.Service, registry),
               Effect.provideService(MCP.Service, mcp),
               Effect.provideService(Truncate.Service, truncate),
+              Effect.provideService(RuntimeFlags.Service, flags),
             )
 
             if (lastUser.format?.type === "json_schema") {
@@ -2206,14 +2240,19 @@ export type CommandInput = Schema.Schema.Type<typeof CommandInput>
 
 const rawInputFromPromptParts = (parts: readonly PromptInput["parts"][number][]): string => {
   const text = parts
-    .filter((part): part is Extract<PromptInput["parts"][number], { type: "text" }> => part.type === "text" && !part.synthetic)
+    .filter(
+      (part): part is Extract<PromptInput["parts"][number], { type: "text" }> =>
+        part.type === "text" && !part.synthetic,
+    )
     .map((part) => part.text)
     .join("\n")
     .trim()
   return text || `[non-text prompt parts: ${parts.length}]`
 }
 
-const promptPipelineRequest = (metadata: unknown): {
+const promptPipelineRequest = (
+  metadata: unknown,
+): {
   mode?: "wish" | "direct_override"
   confirmedDraftID?: string
   editedGoal?: string
@@ -2223,15 +2262,22 @@ const promptPipelineRequest = (metadata: unknown): {
   const mode = raw.mode === "wish" || raw.mode === "direct_override" ? raw.mode : undefined
   return {
     mode,
-    confirmedDraftID: typeof raw.confirmedDraftID === "string" ? raw.confirmedDraftID : typeof raw.confirmed_draft_id === "string" ? raw.confirmed_draft_id : undefined,
-    editedGoal: typeof raw.editedGoal === "string" ? raw.editedGoal : typeof raw.edited_goal === "string" ? raw.edited_goal : undefined,
+    confirmedDraftID:
+      typeof raw.confirmedDraftID === "string"
+        ? raw.confirmedDraftID
+        : typeof raw.confirmed_draft_id === "string"
+          ? raw.confirmed_draft_id
+          : undefined,
+    editedGoal:
+      typeof raw.editedGoal === "string"
+        ? raw.editedGoal
+        : typeof raw.edited_goal === "string"
+          ? raw.edited_goal
+          : undefined,
   }
 }
 
-const replacePromptText = (
-  parts: readonly PromptInput["parts"][number][],
-  text: string,
-): PromptInput["parts"] => {
+const replacePromptText = (parts: readonly PromptInput["parts"][number][], text: string): PromptInput["parts"] => {
   let replaced = false
   const next = parts.map((part) => {
     if (part.type !== "text" || part.synthetic || replaced) return part
@@ -2249,7 +2295,6 @@ const projectIDForDirectory = (directory: string): string =>
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value)
-
 
 /** @internal Exported for testing */
 export function createStructuredOutputTool(input: {

@@ -158,7 +158,8 @@ describe("installation", () => {
       testLayer(
         () => jsonResponse({}), // HTTP not used for tap formula
         (cmd, args) => {
-          if (cmd === "brew" && args.includes("anomalyco/tap/deepagent-code") && args.includes("--formula")) return "deepagent-code"
+          if (cmd === "brew" && args.includes("anomalyco/tap/deepagent-code") && args.includes("--formula"))
+            return "deepagent-code"
           if (cmd === "brew" && args.includes("--json=v2")) return brewInfoJson
           return ""
         },

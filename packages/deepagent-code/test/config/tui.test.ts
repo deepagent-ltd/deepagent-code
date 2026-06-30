@@ -852,7 +852,10 @@ it.instance("silently skips malformed tui.json - load failures degrade to {}", (
       const fs = yield* FSUtil.Service
       const test = yield* TestInstance
       yield* fs.writeFileString(path.join(test.directory, "tui.json"), '{ "theme": "broken",')
-      yield* fs.writeWithDirs(path.join(test.directory, ".deepagent-code", "tui.json"), JSON.stringify({ theme: "fallback" }))
+      yield* fs.writeWithDirs(
+        path.join(test.directory, ".deepagent-code", "tui.json"),
+        JSON.stringify({ theme: "fallback" }),
+      )
 
       const config = yield* getTuiConfig(test.directory)
       expect(config.theme).toBe("fallback")
@@ -866,7 +869,10 @@ it.instance("silently skips non-ENOENT read failures (e.g. tui.json is a directo
       const fs = yield* FSUtil.Service
       const test = yield* TestInstance
       yield* fs.makeDirectory(path.join(test.directory, "tui.json"), { recursive: true })
-      yield* fs.writeWithDirs(path.join(test.directory, ".deepagent-code", "tui.json"), JSON.stringify({ theme: "fallback" }))
+      yield* fs.writeWithDirs(
+        path.join(test.directory, ".deepagent-code", "tui.json"),
+        JSON.stringify({ theme: "fallback" }),
+      )
 
       const config = yield* getTuiConfig(test.directory)
       expect(config.theme).toBe("fallback")

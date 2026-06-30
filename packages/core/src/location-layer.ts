@@ -45,94 +45,96 @@ import { SessionRunnerModel } from "./session/runner/model"
 import { SystemContextBuiltIns } from "./system-context/builtins"
 import { FetchHttpClient } from "effect/unstable/http"
 
-const deepagentEnabledFromEnv = () =>
-  process.env.DEEPAGENT_ENABLED !== "false" && process.env.DEEPAGENT_ENABLED !== "0"
+const deepagentEnabledFromEnv = () => process.env.DEEPAGENT_ENABLED !== "false" && process.env.DEEPAGENT_ENABLED !== "0"
 
-export class LocationServiceMap extends LayerMap.Service<LocationServiceMap>()("@deepagent-code/example/LocationServiceMap", {
-  lookup: (ref: Location.Ref) => {
-    const location = Location.layer(ref)
-    const systemContext = SystemContextBuiltIns.locationLayer
-    const base = Layer.mergeAll(
-      location,
-      Policy.locationLayer,
-      Config.locationLayer,
-      ProjectReference.locationLayer,
-      PluginV2.locationLayer,
-      Catalog.locationLayer,
-      CommandV2.locationLayer,
-      AgentV2.locationLayer,
-      PluginBoot.locationLayer,
-      FileSystem.locationLayer,
-      Watcher.locationLayer,
-      Pty.locationLayer,
-      SkillV2.locationLayer,
-      systemContext,
-      LocationMutation.locationLayer.pipe(Layer.orDie),
-    ).pipe(Layer.provideMerge(location))
-    const resources = ToolOutputStore.layer.pipe(Layer.provide(base))
-    const permissionsAndTools = ToolRegistry.layer.pipe(
-      Layer.provideMerge(PermissionV2.locationLayer),
-      Layer.provide(resources),
-      Layer.provide(base),
-    )
-    const services = Layer.mergeAll(base, resources, permissionsAndTools)
-    const image = Image.layer.pipe(Layer.provide(services))
-    const mutation = FileMutation.locationLayer.pipe(Layer.provide(services))
-    const searches = LocationSearch.layer.pipe(Layer.provide(Ripgrep.layer), Layer.provide(services))
-    const skillGuidance = SkillGuidance.locationLayer.pipe(Layer.provide(services))
-    const todos = SessionTodo.layer.pipe(Layer.provide(services))
-    const questions = QuestionV2.locationLayer.pipe(Layer.provide(services))
-    const builtInTools = BuiltInTools.locationLayer.pipe(
-      Layer.provide(services),
-      Layer.provide(mutation),
-      Layer.provide(searches),
-      Layer.provide(resources),
-      Layer.provide(todos),
-      Layer.provide(questions),
-      Layer.provide(image),
-    )
-    const model = SessionRunnerModel.locationLayer.pipe(Layer.provide(services))
-    const runner = SessionRunnerLLM.defaultLayer.pipe(
-      Layer.provide(services),
-      Layer.provide(model),
-      Layer.provide(skillGuidance),
-    )
-    return Layer.mergeAll(
-      services,
-      image,
-      mutation,
-      searches,
-      resources,
-      todos,
-      questions,
-      model,
-      runner,
-      builtInTools,
-    ).pipe(Layer.fresh)
+export class LocationServiceMap extends LayerMap.Service<LocationServiceMap>()(
+  "@deepagent-code/example/LocationServiceMap",
+  {
+    lookup: (ref: Location.Ref) => {
+      const location = Location.layer(ref)
+      const systemContext = SystemContextBuiltIns.locationLayer
+      const base = Layer.mergeAll(
+        location,
+        Policy.locationLayer,
+        Config.locationLayer,
+        ProjectReference.locationLayer,
+        PluginV2.locationLayer,
+        Catalog.locationLayer,
+        CommandV2.locationLayer,
+        AgentV2.locationLayer,
+        PluginBoot.locationLayer,
+        FileSystem.locationLayer,
+        Watcher.locationLayer,
+        Pty.locationLayer,
+        SkillV2.locationLayer,
+        systemContext,
+        LocationMutation.locationLayer.pipe(Layer.orDie),
+      ).pipe(Layer.provideMerge(location))
+      const resources = ToolOutputStore.layer.pipe(Layer.provide(base))
+      const permissionsAndTools = ToolRegistry.layer.pipe(
+        Layer.provideMerge(PermissionV2.locationLayer),
+        Layer.provide(resources),
+        Layer.provide(base),
+      )
+      const services = Layer.mergeAll(base, resources, permissionsAndTools)
+      const image = Image.layer.pipe(Layer.provide(services))
+      const mutation = FileMutation.locationLayer.pipe(Layer.provide(services))
+      const searches = LocationSearch.layer.pipe(Layer.provide(Ripgrep.layer), Layer.provide(services))
+      const skillGuidance = SkillGuidance.locationLayer.pipe(Layer.provide(services))
+      const todos = SessionTodo.layer.pipe(Layer.provide(services))
+      const questions = QuestionV2.locationLayer.pipe(Layer.provide(services))
+      const builtInTools = BuiltInTools.locationLayer.pipe(
+        Layer.provide(services),
+        Layer.provide(mutation),
+        Layer.provide(searches),
+        Layer.provide(resources),
+        Layer.provide(todos),
+        Layer.provide(questions),
+        Layer.provide(image),
+      )
+      const model = SessionRunnerModel.locationLayer.pipe(Layer.provide(services))
+      const runner = SessionRunnerLLM.defaultLayer.pipe(
+        Layer.provide(services),
+        Layer.provide(model),
+        Layer.provide(skillGuidance),
+      )
+      return Layer.mergeAll(
+        services,
+        image,
+        mutation,
+        searches,
+        resources,
+        todos,
+        questions,
+        model,
+        runner,
+        builtInTools,
+      ).pipe(Layer.fresh)
+    },
+    idleTimeToLive: "60 minutes",
+    dependencies: [
+      Project.defaultLayer,
+      EventV2.defaultLayer,
+      Auth.defaultLayer,
+      Npm.defaultLayer,
+      ModelsDev.defaultLayer,
+      FSUtil.defaultLayer,
+      AppProcess.defaultLayer,
+      Global.defaultLayer,
+      Database.defaultLayer,
+      SessionStore.layer.pipe(Layer.provide(Database.defaultLayer)),
+      PermissionSaved.defaultLayer,
+      RepositoryCache.defaultLayer,
+      Layer.mergeAll(
+        AgentGateway.layer({
+          enabled: deepagentEnabledFromEnv(),
+          runsDir: Global.Path.agent.runs,
+        }),
+        LLMClient.layer.pipe(Layer.provide(RequestExecutor.defaultLayer)),
+      ),
+      FetchHttpClient.layer,
+      ToolOutputStore.defaultCleanupLayer,
+      ApplicationTools.layer,
+    ],
   },
-  idleTimeToLive: "60 minutes",
-  dependencies: [
-    Project.defaultLayer,
-    EventV2.defaultLayer,
-    Auth.defaultLayer,
-    Npm.defaultLayer,
-    ModelsDev.defaultLayer,
-    FSUtil.defaultLayer,
-    AppProcess.defaultLayer,
-    Global.defaultLayer,
-    Database.defaultLayer,
-    SessionStore.layer.pipe(Layer.provide(Database.defaultLayer)),
-    PermissionSaved.defaultLayer,
-    RepositoryCache.defaultLayer,
-    Layer.mergeAll(
-      AgentGateway.layer({
-        enabled: deepagentEnabledFromEnv(),
-        runsDir: Global.Path.agent.runs,
-      }),
-      LLMClient.layer.pipe(Layer.provide(RequestExecutor.defaultLayer)),
-    ),
-    FetchHttpClient.layer,
-    ToolOutputStore.defaultCleanupLayer,
-    ApplicationTools.layer,
-  ],
-}) {}
+) {}

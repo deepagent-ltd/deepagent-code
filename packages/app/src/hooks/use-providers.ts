@@ -4,12 +4,7 @@ import { useParams } from "@solidjs/router"
 import { Iterable, pipe } from "effect"
 import { createMemo } from "solid-js"
 
-export const popularProviders = [
-  "openai",
-  "deepseek",
-  "anthropic",
-  "zhipuai",
-]
+export const popularProviders = ["openai", "deepseek", "anthropic", "zhipuai"]
 const popularProviderSet = new Set(popularProviders)
 
 export function useProviders() {

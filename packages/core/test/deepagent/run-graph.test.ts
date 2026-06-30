@@ -8,11 +8,19 @@ import { explainCandidate } from "../../src/deepagent/reviewer"
 
 let root: string
 let store: DocumentStore
-beforeEach(() => { root = mkdtempSync(path.join(tmpdir(), "deepagent-rg-")); store = new DocumentStore(root) })
+beforeEach(() => {
+  root = mkdtempSync(path.join(tmpdir(), "deepagent-rg-"))
+  store = new DocumentStore(root)
+})
 afterEach(() => rmSync(root, { recursive: true, force: true }))
 
 const summary = (over: Partial<RunSummary> = {}): RunSummary => ({
-  runId: "run_1", taskId: "task_1", agentMode: "max", status: "completed", round: 1, nextActionPolicy: "continue_or_complete",
+  runId: "run_1",
+  taskId: "task_1",
+  agentMode: "max",
+  status: "completed",
+  round: 1,
+  nextActionPolicy: "continue_or_complete",
   runContextMarkdown: "# Run Context\nstatus: completed",
   design: { summary: "short design" },
   candidate: { summary: "the candidate solution", status: "generated" },
@@ -31,11 +39,18 @@ describe("V3 run graph as working memory", () => {
   })
 
   test("failed run links diagnosis into the decision", () => {
-    const refs = buildRunGraph(store, summary({
-      status: "runtime_failed",
-      diagnosis: { summary: "compile error in module X", rootCause: "compile_error", nextAction: "review_required_before_resume" },
-      decision: { verdict: "rollback", reason: "compile failed; rolled back to baseline" },
-    }))
+    const refs = buildRunGraph(
+      store,
+      summary({
+        status: "runtime_failed",
+        diagnosis: {
+          summary: "compile error in module X",
+          rootCause: "compile_error",
+          nextAction: "review_required_before_resume",
+        },
+        decision: { verdict: "rollback", reason: "compile failed; rolled back to baseline" },
+      }),
+    )
     const ex = explainCandidate(store, refs.candidateId)
     expect(ex.decision?.verdict).toBe("rollback")
     expect(ex.diagnoses.length).toBe(1)
@@ -51,7 +66,10 @@ describe("V3 run graph as working memory", () => {
 
   test("re-materializing a run updates the same control-plane docs", () => {
     buildRunGraph(store, summary({ status: "in_progress", runContextMarkdown: "# Run Context\nstatus: in_progress" }))
-    const refs = buildRunGraph(store, summary({ status: "completed", runContextMarkdown: "# Run Context\nstatus: completed" }))
+    const refs = buildRunGraph(
+      store,
+      summary({ status: "completed", runContextMarkdown: "# Run Context\nstatus: completed" }),
+    )
     const contexts = store.list({ type: "run_context", scope: "run:run_1" })
     expect(contexts).toHaveLength(1)
     expect(store.get(refs.runContextId)?.body).toContain("status: completed")

@@ -126,6 +126,10 @@ import type {
   McpAuthRemoveResponses,
   McpAuthStartErrors,
   McpAuthStartResponses,
+  McpCatalogEnableErrors,
+  McpCatalogEnableResponses,
+  McpCatalogErrors,
+  McpCatalogResponses,
   McpConnectErrors,
   McpConnectResponses,
   McpDisconnectErrors,
@@ -3088,6 +3092,81 @@ export class Mcp extends HeyApiClient {
     )
     return (options?.client ?? this.client).post<McpAddResponses, McpAddErrors, ThrowOnError>({
       url: "/mcp",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * List preset MCP catalog
+   *
+   * List the vetted preset MCP servers. Metadata only — no server is connected until explicitly enabled.
+   */
+  public catalog<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<McpCatalogResponses, McpCatalogErrors, ThrowOnError>({
+      url: "/mcp/catalog",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Enable a preset MCP catalog entry
+   *
+   * Instantiate a preset catalog entry (with filled params + secure-storage credential references) into a cfg.mcp entry and connect it.
+   */
+  public catalogEnable<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      id?: string
+      params?: {
+        [key: string]: string | Array<string>
+      }
+      credentialRefs?: {
+        [key: string]: string
+      }
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "id" },
+            { in: "body", key: "params" },
+            { in: "body", key: "credentialRefs" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<McpCatalogEnableResponses, McpCatalogEnableErrors, ThrowOnError>({
+      url: "/mcp/catalog/enable",
       ...options,
       ...params,
       headers: {
