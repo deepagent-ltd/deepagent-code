@@ -159,7 +159,7 @@ describe("ProviderTransform.options - zai/zhipuai thinking", () => {
       headers: {},
     }) as any
 
-  for (const providerID of ["zai-coding-plan", "zai", "zhipuai-coding-plan", "zhipuai"]) {
+  for (const providerID of ["zai-coding-plan", "zhipuai-coding-plan"]) {
     test(`${providerID} should set thinking cfg`, () => {
       const result = ProviderTransform.options({
         model: createModel(providerID),
@@ -173,6 +173,38 @@ describe("ProviderTransform.options - zai/zhipuai thinking", () => {
       })
     })
   }
+
+  for (const providerID of ["zai", "zhipuai"]) {
+    test(`${providerID} should not set coding-plan thinking cfg`, () => {
+      const result = ProviderTransform.options({
+        model: createModel(providerID),
+        sessionID,
+        providerOptions: {},
+      })
+
+      expect(result.thinking).toBeUndefined()
+    })
+  }
+
+  test("zhipuai with explicit coding endpoint should set thinking cfg", () => {
+    const model = createModel("zhipuai")
+    const result = ProviderTransform.options({
+      model: {
+        ...model,
+        api: {
+          ...model.api,
+          url: "https://open.bigmodel.cn/api/coding/paas/v4",
+        },
+      },
+      sessionID,
+      providerOptions: {},
+    })
+
+    expect(result.thinking).toEqual({
+      type: "enabled",
+      clear_thinking: false,
+    })
+  })
 })
 
 describe("ProviderTransform.options - google thinkingConfig gating", () => {
@@ -2471,13 +2503,28 @@ describe("ProviderTransform.variants", () => {
     expect(result).toEqual({})
   })
 
-  test("glm-5.2 openai-compatible returns reasoning effort variants", () => {
+  test("glm-5.2 openai-compatible on generic zhipuai returns no inferred reasoning variants", () => {
     const model = createMockModel({
       id: "zhipuai/glm-5.2",
       providerID: "zhipuai",
       api: {
         id: "glm-5.2",
         url: "https://open.bigmodel.cn/api/paas/v4",
+        npm: "@ai-sdk/openai-compatible",
+      },
+      capabilities: { reasoning: true },
+    })
+    const result = ProviderTransform.variants(model)
+    expect(result).toEqual({})
+  })
+
+  test("glm-5.2 coding-plan openai-compatible returns reasoning effort variants", () => {
+    const model = createMockModel({
+      id: "zhipuai-coding-plan/glm-5.2",
+      providerID: "zhipuai-coding-plan",
+      api: {
+        id: "glm-5.2",
+        url: "https://open.bigmodel.cn/api/coding/paas/v4",
         npm: "@ai-sdk/openai-compatible",
       },
       capabilities: { reasoning: true },

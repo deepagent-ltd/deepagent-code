@@ -481,6 +481,13 @@ function glm52(model: Provider.Model) {
   return ["glm-5.2", "glm-5-2", "glm-5p2"].some((name) => id.includes(name) || apiID.includes(name))
 }
 
+function zaiCodingPlan(model: Provider.Model) {
+  return (
+    ["zai-coding-plan", "zhipuai-coding-plan"].includes(model.providerID.toLowerCase()) ||
+    model.api.url.includes("/api/coding/paas/")
+  )
+}
+
 export function topP(model: Provider.Model) {
   const id = model.id.toLowerCase()
   if (id.includes("qwen")) return 1
@@ -658,6 +665,7 @@ export function variants(model: Provider.Model): Record<string, Record<string, a
       }
     }
     if (model.api.npm === "@ai-sdk/openai-compatible") {
+      if (!zaiCodingPlan(model)) return {}
       return {
         high: { reasoningEffort: "high" },
         max: { reasoningEffort: "max" },
@@ -1079,7 +1087,7 @@ export function options(input: {
   }
 
   if (
-    ["zai", "zhipuai"].some((id) => input.model.providerID.includes(id)) &&
+    zaiCodingPlan(input.model) &&
     input.model.api.npm === "@ai-sdk/openai-compatible"
   ) {
     result["thinking"] = {
