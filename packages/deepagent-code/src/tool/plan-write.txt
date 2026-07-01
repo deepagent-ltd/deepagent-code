@@ -1,11 +1,21 @@
 Create or update your working plan for the current task. Use this BEFORE making file changes on a non-trivial task, and again whenever the situation changes (a step finished, a new requirement arrived, a test failed, or you discovered the plan was wrong).
 
+Report as you go — do not batch. After you FINISH a step, call this tool immediately: mark that step `done` and set the next one `active`. Completing several steps and updating the plan only once at the end is not allowed; the runtime tracks how many changes you make between plan updates and will remind you to report.
+
 The plan is shown to the user as a live checklist and is enforced by the runtime: when the runtime detects that reality no longer matches your plan (a new user instruction, a failed tool call, a failed validation, repeated no-progress, or a domain-pack change), it marks the plan stale and SOFT-BLOCKS further file edits until you call this tool again to update the plan. Reading, searching, and diagnosis are always allowed while stale — so inspect first, then update the plan, then continue.
 
 Call this tool with:
 - goal: one sentence describing what "done" means for this task.
-- steps: an ordered list of concrete steps. Each step has a title, a status (pending | active | done | cancelled), and optionally an acceptance criterion (how you'll know the step is done) and an assigned_agent (a subagent type to delegate the step to).
+- steps: an ordered list of concrete steps. Each step has a title, a status, and optionally an acceptance criterion (how you'll know the step is done), an assigned_agent (a subagent type to delegate the step to), and a note.
 - assumptions (optional): facts you are relying on that, if wrong, would change the plan.
 - active_step_id (optional): the step you are currently working on. If you omit it, the runtime uses the step whose status is "active".
 
-Keep the plan small and honest. Mark a step "done" only when its work is actually complete (and, for high-strength modes, when its acceptance check has passed). Mark a step "cancelled" rather than deleting it, so the user sees what changed and why.
+Step status is one of:
+- pending — not started yet.
+- active — currently being worked on (exactly the step your edits belong to).
+- done — work is actually complete (and, for high-strength modes, its acceptance check has passed). The runtime attaches the latest validation result as evidence.
+- cancelled — no longer needed. Mark cancelled rather than deleting, so the user sees what changed and why.
+- blocked — you cannot finish this step (missing access, external dependency, ambiguous requirement). REQUIRED: set `note` explaining the blocker. A blocked step does not deadlock finishing, but it routes the run to human review so the operator sees why the plan could not be fully executed.
+
+Keep the plan small and honest. Never mark a step `done` to get past a gate — if you are stuck, mark it `blocked` with a note instead.
+

@@ -35,9 +35,10 @@ export type ProjectMeta = {
 export type SessionPlanStep = {
   step_id: string
   title: string
-  status: string // pending | active | done | cancelled
+  status: string // pending | active | done | cancelled | blocked
   acceptance?: string | null
   assigned_agent?: string | null
+  note?: string | null // U10: blocker explanation when status is "blocked"
 }
 export type SessionPlan = {
   plan_id: string
