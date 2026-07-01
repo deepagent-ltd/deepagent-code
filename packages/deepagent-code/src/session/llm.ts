@@ -6,7 +6,7 @@ import { Log } from "@deepagent-code/core/util/log"
 import { Global } from "@deepagent-code/core/global"
 import { Context, Effect, Layer } from "effect"
 import * as Stream from "effect/Stream"
-import { streamText, wrapLanguageModel, type ModelMessage, type Tool } from "ai"
+import { streamText, wrapLanguageModel, type ModelMessage, type Tool, APICallError } from "ai"
 import { type LLMEvent } from "@deepagent-code/llm"
 import { AgentGateway } from "@deepagent-code/core/agent-gateway"
 import { LLMClient, RequestExecutor, WebSocketExecutor } from "@deepagent-code/llm/route"
@@ -130,6 +130,10 @@ const live: Layer.Layer<
         { concurrency: "unbounded" },
       )
       const info = input.model.providerID === "deepagent" ? (modelAuth ?? providerAuth) : providerAuth
+      // Official providers can configure a retry count via the connect dialog (SettingsStore →
+      // provider.options.maxRetries). When set it overrides the per-call default; otherwise the
+      // existing per-call retries (2 for a session turn, 0 for sub-calls) stands.
+      const providerMaxRetries = typeof item.options?.maxRetries === "number" ? item.options.maxRetries : undefined
 
       const isWorkflow = language instanceof GitLabWorkflowLanguageModel
       const prepared = yield* LLMRequestPrep.prepare({
@@ -311,8 +315,24 @@ const live: Layer.Layer<
           // Copilot returns the authoritative billed amount only in provider-specific response fields.
           includeRawChunks: input.model.providerID.includes("github-copilot"),
           onError(error) {
+            // AI SDK's APICallError carries `requestBodyValues` = the ENTIRE request body (system
+            // prompt + every message). Logging the raw error JSON.stringifies that into a single
+            // multi-hundred-KB line. Log only the salient fields (and a truncated responseBody) so a
+            // provider error — e.g. a 429 "insufficient balance" — stays a readable one-liner.
+            if (APICallError.isInstance(error)) {
+              const body = typeof error.responseBody === "string" ? error.responseBody : undefined
+              l.error("stream error", {
+                name: error.name,
+                url: error.url,
+                statusCode: error.statusCode,
+                isRetryable: error.isRetryable,
+                message: error.message,
+                responseBody: body && body.length > 1000 ? body.slice(0, 1000) + "…[truncated]" : body,
+              })
+              return
+            }
             l.error("stream error", {
-              error,
+              error: error instanceof Error ? error.message : String(error),
             })
           },
           async experimental_repairToolCall(failed) {
@@ -346,7 +366,7 @@ const live: Layer.Layer<
           maxOutputTokens: prepared.params.maxOutputTokens,
           abortSignal: input.abort,
           headers: prepared.headers,
-          maxRetries: input.retries ?? 0,
+          maxRetries: providerMaxRetries ?? input.retries ?? 0,
           messages: prepared.messages,
           model: wrapLanguageModel({
             model: language,

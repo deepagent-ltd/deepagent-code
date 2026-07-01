@@ -987,6 +987,8 @@ export const dict = {
   "settings.general.row.newLayoutDesigns.description": "Aktivér det redesignede layout, hjem, composer og sessions-UI",
   "settings.general.row.pinchZoom.title": "Knib for at zoome",
   "settings.general.row.pinchZoom.description": "Tillad trackpad-knib og Ctrl-scroll til zoom",
+  "settings.general.row.zoom.title": "Zoom level",
+  "settings.general.row.zoom.description": "Set the interface zoom level",
   "settings.updates.action.downloading": "Laster ned...",
   "settings.updates.action.installing": "Installerer...",
   "settings.providers.section.deepagentBackends": "DeepAgent-modellbackender",

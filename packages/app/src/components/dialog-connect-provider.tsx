@@ -1,5 +1,6 @@
 import type { ProviderAuthAuthorization, ProviderAuthMethod } from "@deepagent-code/sdk/v2/client"
 import { Button } from "@deepagent-code/ui/button"
+import { Collapsible } from "@deepagent-code/ui/collapsible"
 import { useDialog } from "@deepagent-code/ui/context/dialog"
 import { Dialog } from "@deepagent-code/ui/dialog"
 import { Icon } from "@deepagent-code/ui/icon"
@@ -29,6 +30,9 @@ const providerBaseURL: Record<string, string> = {
   deepseek: "https://api.deepseek.com",
   anthropic: "https://api.anthropic.com/v1",
   zhipuai: "https://open.bigmodel.cn/api/paas/v4",
+  "zhipuai-coding-plan": "https://open.bigmodel.cn/api/coding/paas/v4",
+  zai: "https://api.z.ai/api/paas/v4",
+  "zai-coding-plan": "https://api.z.ai/api/coding/paas/v4",
   xai: "https://api.x.ai/v1",
   google: "https://generativelanguage.googleapis.com/v1beta",
 }
@@ -427,6 +431,13 @@ export function DialogConnectProvider(props: { provider: string }) {
         id: model.id,
         name: model.name || model.id,
       }))
+    // Official-provider transport settings are surfaced by the config overlay under
+    // provider.<id>.options (backed by SettingsStore, not the config file). Seed the fields from there.
+    const transportOption = (key: string): string => {
+      const value = serverSync.data.config.provider?.[props.provider]?.options?.[key]
+      if (value === false) return "0"
+      return typeof value === "number" ? String(value) : ""
+    }
     const [formStore, setFormStore] = createStore({
       value: "",
       baseURL:
@@ -438,7 +449,41 @@ export function DialogConnectProvider(props: { provider: string }) {
       discovered: [] as DiscoveredProviderModel[],
       selectedModel: undefined as string | undefined,
       discovering: false,
+      headerTimeout: transportOption("headerTimeout"),
+      chunkTimeout: transportOption("chunkTimeout"),
+      timeout: transportOption("timeout"),
+      maxRetries: transportOption("maxRetries"),
+      transportError: undefined as string | undefined,
     })
+
+    // Parse a transport field: empty → undefined (use default); "0" for header/request timeout →
+    // false (disabled); otherwise a positive integer. Returns { ok, value } so callers can reject
+    // malformed input.
+    function parseTransport(raw: string, allowFalse: boolean): { ok: boolean; value: number | false | undefined } {
+      const trimmed = raw.trim()
+      if (trimmed === "") return { ok: true, value: undefined }
+      const n = Number(trimmed)
+      if (!Number.isInteger(n) || n < 0) return { ok: false, value: undefined }
+      if (n === 0) return allowFalse ? { ok: true, value: false } : { ok: false, value: undefined }
+      return { ok: true, value: n }
+    }
+
+    // Build the SettingsStore-bound options patch for an official provider (routed via the config
+    // overlay's intercept). Returns undefined when a field is malformed.
+    function transportOptions(): Record<string, number | false> | undefined | "invalid" {
+      const header = parseTransport(formStore.headerTimeout, true)
+      const chunk = parseTransport(formStore.chunkTimeout, false)
+      const request = parseTransport(formStore.timeout, true)
+      const retries = parseTransport(formStore.maxRetries, false)
+      if (!header.ok || !chunk.ok || !request.ok || !retries.ok) return "invalid"
+      const options: Record<string, number | false> = {}
+      if (header.value !== undefined) options.headerTimeout = header.value
+      if (chunk.value !== undefined && chunk.value !== false) options.chunkTimeout = chunk.value
+      if (request.value !== undefined) options.timeout = request.value
+      if (retries.value !== undefined && retries.value !== false) options.maxRetries = retries.value
+      return options
+    }
+
 
     async function handleSubmit(e: SubmitEvent) {
       e.preventDefault()
@@ -466,6 +511,12 @@ export function DialogConnectProvider(props: { provider: string }) {
       setFormStore("baseURLError", undefined)
 
       if (isBuiltinProvider(props.provider)) {
+        const transport = transportOptions()
+        if (transport === "invalid") {
+          setFormStore("transportError", language.t("provider.connect.transport.error.number"))
+          return
+        }
+        setFormStore("transportError", undefined)
         if (key) {
           await serverSDK.client.auth.set({
             providerID: props.provider,
@@ -475,8 +526,16 @@ export function DialogConnectProvider(props: { provider: string }) {
             },
           })
         }
+        // Route transport tuning through the config overlay's intercept → SettingsStore. The
+        // remaining official-provider fields are ignored by the backend loader; only options.<transport>
+        // is picked up (and stripped from the config file). Always send the key so cleared fields reset.
         const disabled = (serverSync.data.config.disabled_providers ?? []).filter((id) => id !== props.provider)
-        await serverSync.updateConfig({ disabled_providers: disabled })
+        await serverSync.updateConfig({
+          disabled_providers: disabled,
+          provider: {
+            [props.provider]: { options: transport },
+          },
+        })
         await serverSDK.client.global.dispose()
         showToast({
           variant: "success",
@@ -581,6 +640,55 @@ export function DialogConnectProvider(props: { provider: string }) {
             validationState={formStore.error ? "invalid" : undefined}
             error={formStore.error}
           />
+          <Show when={isBuiltinProvider(props.provider)}>
+            <Collapsible class="w-full">
+              <Collapsible.Trigger class="flex w-full items-center justify-between gap-2 text-13-medium text-text-base">
+                <span>{language.t("provider.connect.transport.title")}</span>
+                <Collapsible.Arrow />
+              </Collapsible.Trigger>
+              <Collapsible.Content>
+                <div class="flex flex-col gap-4 pt-4">
+                  <div class="text-12-regular text-text-weak">
+                    {language.t("provider.connect.transport.description")}
+                  </div>
+                  <TextField
+                    type="text"
+                    inputmode="numeric"
+                    label={language.t("provider.connect.transport.headerTimeout.label")}
+                    placeholder={language.t("provider.connect.transport.headerTimeout.placeholder")}
+                    value={formStore.headerTimeout}
+                    onChange={(v) => setFormStore("headerTimeout", v)}
+                  />
+                  <TextField
+                    type="text"
+                    inputmode="numeric"
+                    label={language.t("provider.connect.transport.chunkTimeout.label")}
+                    placeholder={language.t("provider.connect.transport.chunkTimeout.placeholder")}
+                    value={formStore.chunkTimeout}
+                    onChange={(v) => setFormStore("chunkTimeout", v)}
+                  />
+                  <TextField
+                    type="text"
+                    inputmode="numeric"
+                    label={language.t("provider.connect.transport.timeout.label")}
+                    placeholder={language.t("provider.connect.transport.timeout.placeholder")}
+                    value={formStore.timeout}
+                    onChange={(v) => setFormStore("timeout", v)}
+                  />
+                  <TextField
+                    type="text"
+                    inputmode="numeric"
+                    label={language.t("provider.connect.transport.maxRetries.label")}
+                    placeholder={language.t("provider.connect.transport.maxRetries.placeholder")}
+                    value={formStore.maxRetries}
+                    onChange={(v) => setFormStore("maxRetries", v)}
+                    validationState={formStore.transportError ? "invalid" : undefined}
+                    error={formStore.transportError}
+                  />
+                </div>
+              </Collapsible.Content>
+            </Collapsible>
+          </Show>
           <Button class="w-auto" type="submit" size="large" variant="primary" disabled={formStore.discovering}>
             {language.t("common.continue")}
           </Button>
