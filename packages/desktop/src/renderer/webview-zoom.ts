@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: MIT
 
 import { createSignal } from "solid-js"
+import { clampZoom, nextZoomLevel } from "@deepagent-code/app/zoom-levels"
 
 const OS_NAME = (() => {
   if (navigator.userAgent.includes("Mac")) return "macos"
@@ -23,13 +24,8 @@ let wheelPinch = undefined as
     }
   | undefined
 
-const MAX_ZOOM_LEVEL = 10
-const MIN_ZOOM_LEVEL = 0.2
 const WHEEL_PINCH_THRESHOLD = 20
-const WHEEL_PINCH_STEP = 0.2
 const WHEEL_PINCH_END_DELAY = 160
-
-const clamp = (value: number) => Math.min(Math.max(value, MIN_ZOOM_LEVEL), MAX_ZOOM_LEVEL)
 
 const applyZoom = (next: number) => {
   requestedZoom = next
@@ -46,7 +42,7 @@ const applyZoom = (next: number) => {
 }
 
 window.api.onZoomFactorChanged((factor) => {
-  requestedZoom = clamp(factor)
+  requestedZoom = clampZoom(factor)
   setWebviewZoom(requestedZoom)
 })
 
@@ -66,8 +62,9 @@ const setPinchZoomEnabled = (enabled: boolean) => {
 }
 
 const resetZoom = () => applyZoom(1)
-const zoomIn = () => applyZoom(clamp(requestedZoom + 0.2))
-const zoomOut = () => applyZoom(clamp(requestedZoom - 0.2))
+const zoomIn = () => applyZoom(nextZoomLevel(requestedZoom, "in"))
+const zoomOut = () => applyZoom(nextZoomLevel(requestedZoom, "out"))
+const setZoom = (level: number) => applyZoom(clampZoom(level))
 
 const resetWheelPinch = () => {
   clearTimeout(wheelPinch?.timeout)
@@ -101,7 +98,13 @@ const updateWheelPinch = (event: WheelEvent) => {
   }
 
   wheelPinch.active = true
-  applyZoom(clamp(wheelPinch.startZoom - (wheelPinch.totalDelta / WHEEL_PINCH_THRESHOLD) * WHEEL_PINCH_STEP))
+  const direction = wheelPinch.totalDelta > 0 ? "out" : "in"
+  const target = nextZoomLevel(requestedZoom, direction)
+  if (target !== requestedZoom) {
+    applyZoom(target)
+    wheelPinch.totalDelta = 0
+    wheelPinch.startZoom = target
+  }
 }
 
 window.addEventListener(
@@ -135,4 +138,4 @@ window.addEventListener("keydown", (event) => {
   }
 })
 
-export { webviewZoom, resetZoom, setPinchZoomEnabled, zoomIn, zoomOut }
+export { webviewZoom, resetZoom, setPinchZoomEnabled, setZoom, zoomIn, zoomOut }

@@ -52,6 +52,12 @@ export class Service extends ConfigService.Service<Service>()("@deepagent-code/R
   // L6 (V3.4): code_intel (symbol-driven AI IDE entry) ships ON by default and is promoted out of
   // the experimental gate — `=false` disables. grep is never disabled; no-server files fall back.
   codeIntelTool: stableOn("DEEPAGENT_CODE_CODE_INTEL_TOOL"),
+  // P3A (S1-v3.5): profile tool (symbol/region-driven PAP profiling entry). Ships ON by default;
+  // set =false to disable. Requires R0 privilege gate + execution approval at runtime.
+  profileTool: stableOn("DEEPAGENT_CODE_PROFILE_TOOL"),
+  // D3 (S1-v3.5): debug tool (DAP symbol-driven debugger entry). Ships ON by default;
+  // set =false to disable. Requires R0 privilege gate + execution approval at runtime.
+  debugTool: stableOn("DEEPAGENT_CODE_DEBUG_TOOL"),
   // M7 (S1-v3.4): when a connected MCP server's tier derives to `read_only` (catalog-matched), its
   // tools auto-allow without a per-call prompt. ON by default (the V3.4 design). Set `=false` to
   // restore the pre-M7 behavior where EVERY MCP tool call goes through `ctx.ask` — a defense-in-depth

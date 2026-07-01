@@ -26,6 +26,7 @@ import { McpAuth } from "./auth"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { ToolProvenance } from "@/tool/provenance"
 import { McpCatalog } from "./catalog"
+import { SecretStore } from "./secret-store"
 import { EventV2 } from "@deepagent-code/core/event"
 import { TuiEvent } from "@/server/tui-event"
 import open from "open"
@@ -293,6 +294,10 @@ export const layer = Layer.effect(
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
     const auth = yield* McpAuth.Service
     const events = yield* EventV2Bridge.Service
+    // M-CRED (S1-v3.5): connect-time secret resolver. `${VAR}` env refs and `secret://`
+    // keychain handles in env/headers are resolved HERE, just before the transport is
+    // built — the real value never returns to `cfg.mcp`, logs, or snapshots.
+    const secrets = yield* SecretStore.Service
 
     type Transport = StdioClientTransport | StreamableHTTPClientTransport | SSEClientTransport
 
@@ -351,19 +356,28 @@ export const layer = Layer.effect(
         )
       }
 
+      // M-CRED (S1-v3.5): resolve `${VAR}` / `secret://` references in headers to real values
+      // for the live request only — the persisted config keeps the reference. Missing env vars
+      // warn (by name) but don't block; unresolvable handles drop the header.
+      const resolvedHeaders = mcp.headers
+        ? yield* SecretStore.resolveRecord(mcp.headers, secrets)
+        : undefined
+      const requestInit =
+        resolvedHeaders && Object.keys(resolvedHeaders).length > 0 ? { headers: resolvedHeaders } : undefined
+
       const transports: Array<{ name: string; transport: TransportWithAuth }> = [
         {
           name: "StreamableHTTP",
           transport: new StreamableHTTPClientTransport(url, {
             authProvider,
-            requestInit: mcp.headers ? { headers: mcp.headers } : undefined,
+            requestInit,
           }),
         },
         {
           name: "SSE",
           transport: new SSEClientTransport(url, {
             authProvider,
-            requestInit: mcp.headers ? { headers: mcp.headers } : undefined,
+            requestInit,
           }),
         },
       ]
@@ -439,6 +453,10 @@ export const layer = Layer.effect(
     ) {
       const [cmd, ...args] = mcp.command
       const cwd = yield* InstanceState.directory
+      // M-CRED (S1-v3.5): resolve `${VAR}` / `secret://` references in env to real values for the
+      // spawned process only. The persisted config keeps the reference; the real value never
+      // returns to cfg.mcp/logs. Missing env var → warn (by name), don't block.
+      const resolvedEnv = yield* SecretStore.resolveRecord(mcp.environment, secrets)
       const transport = new StdioClientTransport({
         stderr: "pipe",
         command: cmd,
@@ -447,7 +465,7 @@ export const layer = Layer.effect(
         env: {
           ...process.env,
           ...(cmd === "deepagent-code" ? { BUN_BE_BUN: "1" } : {}),
-          ...mcp.environment,
+          ...resolvedEnv,
         },
       })
       transport.stderr?.on("data", (chunk: Buffer) => {
@@ -496,6 +514,43 @@ export const layer = Layer.effect(
     })
     const cfgSvc = yield* Config.Service
 
+    // M-CRED (S1-v3.5): migrate any plaintext secrets in cfg.mcp into the secret store, persist the
+    // rewritten (handle-only) config so the plaintext is erased from disk, and return the migrated
+    // config for the connect loop. Best-effort + transactional: a failed move leaves THAT plaintext
+    // intact (logged) and never drops a credential. The whole step is wrapped so a migration error
+    // can never take down MCP startup — on failure we fall back to the original config.
+    const migrateOnStartup = Effect.fnUntraced(function* (mcp: NonNullable<ConfigV1.Info["mcp"]>) {
+      // Only structurally-configured entries (type local/remote) can hold secrets; the
+      // `{enabled:false}` shorthand and untyped entries pass through migratePlaintextSecrets
+      // untouched (no `type` field → no match). Cast narrows for the migration contract.
+      const configured = mcp as Record<string, ConfigMCPV1.Info>
+      const outcome = yield* SecretStore.migratePlaintextSecrets(configured, secrets).pipe(
+        Effect.catch((e) => {
+          log.warn("MCP secret migration failed; leaving config unchanged", { error: String(e) })
+          return Effect.succeed(undefined)
+        }),
+      )
+      if (!outcome) return mcp
+      for (const f of outcome.failures) {
+        // Audit by KEY NAME / server only — never the value.
+        log.warn("MCP secret not migrated; plaintext preserved", { server: f.server, key: f.key, reason: f.error })
+      }
+      if (outcome.changed) {
+        log.info("migrated plaintext MCP secrets into the secret store", {
+          count: outcome.moved.length,
+          backend: secrets.backendId,
+        })
+        // Persist the rewritten config so the plaintext no longer lives on disk.
+        yield* cfgSvc.update({ mcp: outcome.config }).pipe(
+          Effect.catch((e) => {
+            log.warn("failed to persist migrated MCP config; plaintext may remain on disk", { error: String(e) })
+            return Effect.void
+          }),
+        )
+      }
+      return outcome.config
+    })
+
     const descendants = Effect.fnUntraced(
       function* (pid: number) {
         if (process.platform === "win32") return [] as number[]
@@ -539,7 +594,12 @@ export const layer = Layer.effect(
       Effect.fn("MCP.state")(function* () {
         const cfg = yield* cfgSvc.get()
         const bridge = yield* EffectBridge.make()
-        const config = cfg.mcp ?? {}
+        // M-CRED (S1-v3.5): one-shot startup migration of any PLAINTEXT secrets already sitting in
+        // cfg.mcp (legacy configs written before this layer). Each secret is moved into the secret
+        // store and replaced with a `secret://` handle, transactionally (put+verify before erase, so
+        // a partial failure never loses a credential). We persist the rewritten config so the
+        // plaintext is erased from disk, then connect against the migrated config below.
+        const config = yield* migrateOnStartup(cfg.mcp ?? {})
         const s: State = {
           config: {},
           status: {},
@@ -1054,6 +1114,7 @@ export type AuthStatus = "authenticated" | "expired" | "not_authenticated"
 
 export const defaultLayer = layer.pipe(
   Layer.provide(McpAuth.defaultLayer),
+  Layer.provide(SecretStore.defaultLayer),
   Layer.provide(EventV2Bridge.defaultLayer),
   Layer.provide(Config.defaultLayer),
   Layer.provide(CrossSpawnSpawner.defaultLayer),

@@ -47,6 +47,8 @@ import { SystemPrompt } from "../../src/session/system"
 import { Shell } from "../../src/shell/shell"
 import { Snapshot } from "../../src/snapshot"
 import { ToolRegistry } from "@/tool/registry"
+import { DebugService } from "@/debug/service"
+import { RuntimeBase } from "@/runtime/base"
 import { Truncate } from "@/tool/truncate"
 import * as Log from "@deepagent-code/core/util/log"
 import { CrossSpawnSpawner } from "@deepagent-code/core/cross-spawn-spawner"
@@ -190,6 +192,40 @@ const blockingProcessor = Layer.succeed(
   }),
 )
 
+// V3.5: a no-op RuntimeBase (R0) stub so the tool registry layer can be built without
+// dragging in the real Worktree→Project→Database chain. These prompt tests never invoke
+// the debug/profile tools, so gate/withIsolation/checkPrivileges are never exercised.
+const stubRuntimeBaseLayer = Layer.succeed(
+  RuntimeBase.Service,
+  RuntimeBase.Service.of({
+    gate: () => Effect.void,
+    withIsolation: (_input, body) => body(""),
+    checkPrivileges: () => Effect.succeed([]),
+  }),
+)
+
+// Fully-inert DebugService (D1) stub. The real DebugService.layer runs InstanceState.make
+// + registers a scope finalizer at registry-build time, perturbing the instance-context
+// lifecycle these prompt tests rely on. The debug tool is never invoked here.
+const debugStubDie = <A>(): Effect.Effect<A, never, never> =>
+  Effect.die("DebugService stub (not used in prompt tests)")
+const stubDebugServiceLayer = Layer.succeed(
+  DebugService.Service,
+  DebugService.Service.of({
+    start: debugStubDie,
+    setBreakpoints: debugStubDie,
+    continue: debugStubDie,
+    step: debugStubDie,
+    stackTrace: debugStubDie,
+    scopes: debugStubDie,
+    variables: debugStubDie,
+    evaluate: debugStubDie,
+    terminate: debugStubDie,
+    get: () => Effect.succeed(undefined),
+    list: () => Effect.succeed([]),
+  }),
+)
+
 function makePrompt(input?: { processor?: "blocking" }) {
   const deps = Layer.mergeAll(
     Session.defaultLayer,
@@ -223,6 +259,13 @@ function makePrompt(input?: { processor?: "blocking" }) {
     Layer.provide(Search.defaultLayer),
     Layer.provide(Format.defaultLayer),
     Layer.provide(RuntimeFlags.layer({ experimentalEventSystem: true })),
+    // V3.5: the registry layer now requires DebugService + RuntimeBase (debug/profile
+    // tools route through D1/R0). These tests never invoke those tools, so provide the
+    // real (lightweight) DebugService over a no-op RuntimeBase stub — this satisfies the
+    // layer without pulling in the heavy Worktree→Project→Database chain (a second
+    // Database instance was stalling the shared LLM/provider path).
+    Layer.provide(stubDebugServiceLayer),
+    Layer.provide(stubRuntimeBaseLayer),
     Layer.provideMerge(todo),
     Layer.provideMerge(question),
     Layer.provideMerge(deps),

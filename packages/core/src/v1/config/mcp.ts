@@ -22,7 +22,8 @@ export const Local = Schema.Struct({
     description: "Command and arguments to run the MCP server",
   }),
   environment: Schema.optional(Schema.Record(Schema.String, Schema.String)).annotate({
-    description: "Environment variables to set when running the MCP server",
+    description:
+      "Environment variables to set when running the MCP server. M-CRED (S1-v3.5): a value may be a literal, a `${VAR}` / `${VAR:-default}` env reference resolved from the process environment at connect time, or a `secret://<account>` keychain handle resolved from the OS keychain at connect time. Secret credentials are stored as references/handles — never as plaintext in this file. A missing `${VAR}` warns (by name) but does not block.",
   }),
   enabled: Schema.optional(Schema.Boolean).annotate({
     description: "Enable or disable the MCP server on startup",
@@ -59,7 +60,8 @@ export const Remote = Schema.Struct({
     description: "Enable or disable the MCP server on startup",
   }),
   headers: Schema.optional(Schema.Record(Schema.String, Schema.String)).annotate({
-    description: "Headers to send with the request",
+    description:
+      "Headers to send with the request. M-CRED (S1-v3.5): a value may be a literal, a `${VAR}` / `${VAR:-default}` env reference resolved from the process environment at connect time, or a `secret://<account>` keychain handle resolved from the OS keychain at connect time. Secret-bearing headers (e.g. Authorization) are stored as references/handles — never as plaintext in this file. A missing `${VAR}` warns (by name) but does not block.",
   }),
   oauth: Schema.optional(Schema.Union([OAuth, Schema.Literal(false)])).annotate({
     description: "OAuth authentication configuration for the MCP server. Set to false to disable OAuth auto-detection.",

@@ -34,7 +34,7 @@ export function createMenu(deps: Deps) {
 
 function nativeItem(entry: DesktopMenuEntry, deps: Deps): MenuItemConstructorOptions {
   if (entry.type === "separator") return { type: "separator" }
-  if (entry.role) return { role: nativeRole(entry.role) }
+  if (entry.role && !isZoomAction(entry.action)) return { role: nativeRole(entry.role) }
 
   const item: MenuItemConstructorOptions = {
     label: entry.label,
@@ -64,4 +64,8 @@ function nativeItem(entry: DesktopMenuEntry, deps: Deps): MenuItemConstructorOpt
 
 function nativeRole(role: DesktopMenuRole) {
   return role as NonNullable<MenuItemConstructorOptions["role"]>
+}
+
+function isZoomAction(action: string | undefined): boolean {
+  return action === "view.zoomIn" || action === "view.zoomOut" || action === "view.resetZoom"
 }

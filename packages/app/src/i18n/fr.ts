@@ -926,6 +926,8 @@ export const dict = {
     "Activer la mise en page, l’accueil, le compositeur et l’interface de session repensés",
   "settings.general.row.pinchZoom.title": "Pincer pour zoomer",
   "settings.general.row.pinchZoom.description": "Autoriser le pincement du trackpad et Ctrl-défilement pour zoomer",
+  "settings.general.row.zoom.title": "Zoom level",
+  "settings.general.row.zoom.description": "Set the interface zoom level",
   "settings.updates.action.downloading": "Téléchargement...",
   "settings.updates.action.installing": "Installation...",
   "settings.providers.section.deepagentBackends": "Backends de modèles DeepAgent",

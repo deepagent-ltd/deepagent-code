@@ -971,6 +971,8 @@ export const dict = {
   "settings.general.row.newLayoutDesigns.description": "啟用重新設計的布局、首頁、輸入器和會話介面",
   "settings.general.row.pinchZoom.title": "雙指縮放",
   "settings.general.row.pinchZoom.description": "允許觸控板雙指和 Ctrl 捲動手勢縮放",
+  "settings.general.row.zoom.title": "Zoom level",
+  "settings.general.row.zoom.description": "Set the interface zoom level",
   "settings.updates.action.downloading": "正在下載...",
   "settings.updates.action.installing": "正在安裝...",
   "settings.providers.section.deepagentBackends": "DeepAgent 模型後端",
