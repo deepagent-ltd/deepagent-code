@@ -28,12 +28,16 @@ export type ID = typeof ID.Type
 // provider (credentials from config `options.apiKey` or env). This list is the single source of
 // truth shared by the backend provider loader and the app connect UI; keep them in sync.
 // Order is display order (recommended-first) in the app.
-export const OFFICIAL_PROVIDER_IDS = ["openai", "deepseek", "anthropic", "zhipuai", "xai", "google"] as const
-export type OfficialProviderID = (typeof OFFICIAL_PROVIDER_IDS)[number]
-export const OFFICIAL_PROVIDER_ID_SET: ReadonlySet<string> = new Set(OFFICIAL_PROVIDER_IDS)
-export function isOfficialProvider(providerID: string): boolean {
-  return OFFICIAL_PROVIDER_ID_SET.has(providerID)
-}
+//
+// The constants live in the dependency-free `./provider-official` leaf so the browser/renderer can
+// import them WITHOUT pulling this module's `./schema` -> `./util/hash` -> node `crypto` chain
+// (which Vite externalizes and would crash the renderer). Re-exported here for backend callers.
+export {
+  OFFICIAL_PROVIDER_IDS,
+  OFFICIAL_PROVIDER_ID_SET,
+  isOfficialProvider,
+  type OfficialProviderID,
+} from "./provider-official"
 
 export const AISDK = Schema.Struct({
   type: Schema.Literal("aisdk"),
