@@ -22,6 +22,19 @@ export const ID = Schema.String.pipe(
 )
 export type ID = typeof ID.Type
 
+// The closed set of first-party "official" providers. These are the only ids whose credentials come
+// from the auth key store and whose identity/protocol is fixed by the catalog. Every other provider
+// id — including other models.dev catalog entries — is treated as a user-configured third-party
+// provider (credentials from config `options.apiKey` or env). This list is the single source of
+// truth shared by the backend provider loader and the app connect UI; keep them in sync.
+// Order is display order (recommended-first) in the app.
+export const OFFICIAL_PROVIDER_IDS = ["openai", "deepseek", "anthropic", "zhipuai", "xai", "google"] as const
+export type OfficialProviderID = (typeof OFFICIAL_PROVIDER_IDS)[number]
+export const OFFICIAL_PROVIDER_ID_SET: ReadonlySet<string> = new Set(OFFICIAL_PROVIDER_IDS)
+export function isOfficialProvider(providerID: string): boolean {
+  return OFFICIAL_PROVIDER_ID_SET.has(providerID)
+}
+
 export const AISDK = Schema.Struct({
   type: Schema.Literal("aisdk"),
   package: Schema.String,
