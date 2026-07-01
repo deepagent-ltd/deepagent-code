@@ -1429,6 +1429,22 @@ const modelWorkPackage = (run: RunRecord) => {
         visibility: "tool_only" as const,
         evidence_kind: "lsp_query" as EvidenceKind,
       },
+      // D4 (S1-v3.5): debug session evidence artifact (debug tool produces at terminate).
+      {
+        ref_id: "artifact:debug_session",
+        path: "DEBUG_SESSION.json",
+        artifact_type: "debug_session",
+        visibility: "tool_only" as const,
+        evidence_kind: "debug_session" as EvidenceKind,
+      },
+      // P4A (S1-v3.5): profiling evidence artifact (profile tool produces after collect→normalize).
+      {
+        ref_id: "artifact:profile_result",
+        path: "PROFILE_RESULT.json",
+        artifact_type: "profile_result",
+        visibility: "tool_only" as const,
+        evidence_kind: "profile" as EvidenceKind,
+      },
     ],
     allowed_reads: [
       "RUN_CONTEXT.md",
