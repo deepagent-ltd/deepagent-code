@@ -1376,12 +1376,36 @@ test("models.dev normalization fills required response fields", () => {
   expect(model.release_date).toBe("")
 })
 
-test("models.dev normalization infers reasoning for zhipuai glm-5.2", () => {
+test("models.dev normalization does not infer reasoning for generic zhipuai glm-5.2", () => {
   const provider = {
     id: "zhipuai",
     name: "Zhipu AI",
     env: [],
     api: "https://open.bigmodel.cn/api/paas/v4",
+    npm: "@ai-sdk/openai-compatible",
+    models: {
+      "glm-5.2": {
+        id: "glm-5.2",
+        name: "GLM-5.2",
+        family: "glm",
+        reasoning: false,
+        cost: { input: 0, output: 0 },
+        limit: { context: 128_000, output: 8192 },
+      },
+    },
+  } as unknown as ModelsDev.Provider
+
+  const model = Provider.fromModelsDevProvider(provider).models["glm-5.2"]
+  expect(model.capabilities.reasoning).toBe(false)
+  expect(model.variants).toEqual({})
+})
+
+test("models.dev normalization infers reasoning for zhipuai coding-plan glm-5.2", () => {
+  const provider = {
+    id: "zhipuai-coding-plan",
+    name: "Zhipu AI Coding Plan",
+    env: [],
+    api: "https://open.bigmodel.cn/api/coding/paas/v4",
     npm: "@ai-sdk/openai-compatible",
     models: {
       "glm-5.2": {
@@ -1671,7 +1695,7 @@ it.instance(
       )
       const language = yield* provider.getLanguage(model)
       expect(languageBaseURL(language)).toBe(
-        "https://eu-aiplatform.googleapis.com/v1/projects/test-project/locations/eu/publishers/anthropic/models",
+        "https://aiplatform.eu.rep.googleapis.com/v1/projects/test-project/locations/eu/publishers/anthropic/models",
       )
     }),
   { config: { enabled_providers: ["google-vertex"] } },
