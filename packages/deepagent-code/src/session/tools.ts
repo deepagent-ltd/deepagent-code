@@ -171,6 +171,12 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
               return { title: "Plan update required", output: reason, metadata: {} }
             }
             const result = yield* item.execute(args, ctx)
+            // U10: count a successful mutating tool call toward the progress-nudge budget. Only
+            // mutating tools (edit/write/patch/shell) count; the counter resets when the model next
+            // changes a plan step's status. No-op when there is no plan.
+            if (AgentGateway.DeepAgentPlanController.isMutatingTool(item.id)) {
+              AgentGateway.DeepAgentSessionState.recordMutation(ctx.sessionID)
+            }
             const output = {
               ...result,
               attachments: result.attachments?.map((attachment) => ({
