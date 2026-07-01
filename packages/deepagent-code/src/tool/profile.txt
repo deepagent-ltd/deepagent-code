@@ -1,0 +1,42 @@
+Profile a running program and surface performance hotspots — symbol-level CPU functions or GPU kernels — with vendor-neutral metrics (PAP vocabulary).
+
+WHEN TO USE profile vs code_intel:
+- code_intel: STATIC analysis — symbol definitions, references, call graphs, diagnostics. No execution. Use when you need to understand code structure or find where a function is defined.
+- profile: RUNTIME measurement — which functions/kernels consume the most CPU/GPU time. Requires executing the program. Use when you need to find performance bottlenecks or measure hotspot self-time.
+
+ADAPTER AUTO-SELECTION (override with the adapter param):
+- CUDA_VISIBLE_DEVICES set in env → ncu (NVIDIA Nsight Compute, GPU kernel-level metrics)
+- ROCM_HOME or HIP_VISIBLE_DEVICES set → rocprof (AMD ROCprofiler-SDK)
+- VTUNE_PROFILING_DIR set or vtune found on PATH → vtune (Intel VTune, CPU µarch analysis)
+- otherwise → perf (Linux perf sampling — available anywhere perf is installed)
+
+Available adapter ids: ncu, nsys, rocprof, vtune, perf
+
+VENDOR-NEUTRAL METRICS (PAP vocabulary):
+All profiler output is mapped to a shared vocabulary so metrics are comparable across hardware:
+- GPU kernel level: compute_throughput_pct, memory_throughput_pct, occupancy_pct, duration_ns
+- CPU level: self_pct, cpi (cycles/instruction), ipc (instructions/cycle), cache_miss_rate, branch_misprediction_pct
+Metrics the profiler cannot produce on the current hardware are reported as null + reason — never fabricated.
+
+FOCUS PARAMETER:
+Provide focus:<symbol or kernel name> to highlight a specific function or GPU kernel in the output.
+- The symbol is resolved via LSP (same as code_intel) to back-fill a file:line coordinate.
+- The matching hotspot is starred (*) in the top-hotspots table.
+- Useful when you already know which function is slow and want to see its metrics clearly.
+
+OUTPUT FORMAT:
+  profile: perf cpu_sampling on `python train.py`
+  focus: train_step (src/model.py:42)
+  top hotspots:
+  * train_step           src/model.py:42                self: 38.0%  cpi: 2.1
+    matmul               torch/...                      self: 22.0%  cpi: 1.8
+  summary: ipc=0.48  cache_miss_rate=0.12
+  evidence: PROFILE_RESULT.json written to <dir> (full report + roofline; evidence_kind:"profile")
+
+Returns up to 10 hotspots by self_pct. The full result — normalized profile, roofline classification, and (when compare_to is given) a before/after diff — is written to a PROFILE_RESULT.json evidence artifact whose path is reported in the output and in the tool result metadata (`artifactPath`). The bulky native report (ncu-rep / nsys-rep / rocpd / perf.data) stays on disk as a `raw_report_ref`, never inlined into context.
+
+BEFORE/AFTER DIFF:
+Pass compare_to:<path to a previous PROFILE_RESULT.json> to get a structured diff (which hotspots improved/worsened). Diffs across different domains (e.g. gpu_kernel vs cpu_sampling) are reported as not_comparable rather than fabricated.
+
+APPROVAL:
+Profiling executes the target program. Execution approval is requested once per session; in-session sub-operations (e.g. repeated profiles of the same target) reuse the grant without re-prompting. Adapters requiring hardware privileges (GPU perf counters, perf_event_paranoid, ROCm access) will report a clear error if the environment does not satisfy the requirement — the tool never silently degrades or attempts privilege escalation.
