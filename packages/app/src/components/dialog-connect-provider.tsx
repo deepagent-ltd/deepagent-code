@@ -16,7 +16,7 @@ import { useServerSDK } from "@/context/server-sdk"
 import { useServerSync } from "@/context/server-sync"
 import { useLanguage } from "@/context/language"
 import { useProviders } from "@/hooks/use-providers"
-import { isOfficialProvider } from "@deepagent-code/core/provider"
+import { isOfficialProvider } from "@deepagent-code/core/provider-official"
 
 // Recommended/official providers ship a fixed protocol (npm) tied to a canonical endpoint. Letting
 // users point one of these at a relay/local server silently breaks because the protocol no longer
