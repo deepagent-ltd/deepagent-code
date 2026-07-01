@@ -37,6 +37,9 @@ import { MessageID, SessionID } from "@/session/schema"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { ProviderV2 } from "@deepagent-code/core/provider"
 import { ModelV2 } from "@deepagent-code/core/model"
+import { DebugService } from "@/debug/service"
+import { RuntimeBase } from "@/runtime/base"
+import { Worktree } from "@/worktree"
 
 const node = CrossSpawnSpawner.defaultLayer
 const configLayer = TestConfig.layer({
@@ -51,26 +54,39 @@ type RegistryLayerOptions = {
 const registryLayer = (opts: RegistryLayerOptions = {}) =>
   ToolRegistry.layer
     .pipe(
-      Layer.provide(configLayer),
-      Layer.provide(opts.plugin ?? Plugin.defaultLayer),
-      Layer.provide(Question.defaultLayer),
-      Layer.provide(Todo.defaultLayer),
-      Layer.provide(Skill.defaultLayer),
-      Layer.provide(Agent.defaultLayer),
-      Layer.provide(Session.defaultLayer),
-      Layer.provide(Layer.mergeAll(SessionStatus.defaultLayer, BackgroundJob.defaultLayer)),
-      Layer.provide(Provider.defaultLayer),
-      Layer.provide(Layer.mergeAll(Git.defaultLayer, RepositoryCache.defaultLayer)),
-      Layer.provide(Reference.defaultLayer),
-      Layer.provide(LSP.defaultLayer),
-      Layer.provide(Instruction.defaultLayer),
-      Layer.provide(FSUtil.defaultLayer),
-      Layer.provide(EventV2Bridge.defaultLayer),
-      Layer.provide(FetchHttpClient.layer),
-      Layer.provide(Format.defaultLayer),
-      Layer.provide(Layer.mergeAll(node, Database.defaultLayer)),
-      Layer.provide(Search.defaultLayer),
-      Layer.provide(Truncate.defaultLayer),
+      // V3.5: debug/profile tools route through DebugService (D1) + RuntimeBase (R0).
+      // Provided closest to the base so the merged EventV2Bridge below (applied last)
+      // satisfies DebugService's requirement, mirroring ToolRegistry.defaultLayer.
+      Layer.provide(DebugService.layer),
+      Layer.provide(RuntimeBase.layer),
+      Layer.provide(Worktree.defaultLayer),
+      Layer.provide(
+        Layer.mergeAll(
+          configLayer,
+          opts.plugin ?? Plugin.defaultLayer,
+          Question.defaultLayer,
+          Todo.defaultLayer,
+          Skill.defaultLayer,
+          Agent.defaultLayer,
+          Session.defaultLayer,
+          SessionStatus.defaultLayer,
+          BackgroundJob.defaultLayer,
+          Provider.defaultLayer,
+          Git.defaultLayer,
+          RepositoryCache.defaultLayer,
+          Reference.defaultLayer,
+          LSP.defaultLayer,
+          Instruction.defaultLayer,
+          FSUtil.defaultLayer,
+          EventV2Bridge.defaultLayer,
+          FetchHttpClient.layer,
+          Format.defaultLayer,
+          node,
+          Database.defaultLayer,
+          Search.defaultLayer,
+          Truncate.defaultLayer,
+        ),
+      ),
     )
     .pipe(Layer.provide(RuntimeFlags.layer(opts.flags ?? {})))
 
