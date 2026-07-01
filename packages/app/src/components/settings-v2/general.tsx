@@ -10,6 +10,7 @@ import { useParams } from "@solidjs/router"
 import { useLanguage } from "@/context/language"
 import { usePermission } from "@/context/permission"
 import { usePlatform, type DisplayBackend } from "@/context/platform"
+import { ZOOM_LEVELS } from "@/zoom-levels"
 import { useServerSync } from "@/context/server-sync"
 import { useServerSDK } from "@/context/server-sdk"
 import { useUpdaterAction } from "../updater-action"
@@ -284,6 +285,10 @@ export const SettingsGeneralV2: Component = () => {
     })),
   )
 
+  const zoomOptions = createMemo(() =>
+    ZOOM_LEVELS.map((level) => ({ value: String(level), label: `${Math.round(level * 100)}%` })),
+  )
+
   const noneSound = { id: "none", label: "sound.option.none" } as const
   const soundOptions = [noneSound, ...SOUND_OPTIONS]
   const mono = () => monoInput(settings.appearance.font())
@@ -418,7 +423,18 @@ export const SettingsGeneralV2: Component = () => {
               if (option.value === deepAgentWishModel()) return
               void updateDeepAgentOptions(serverSync, { wishModel: option.value })
             }}
-          />
+          >
+            {(o) => (
+              <span class="flex items-center gap-2">
+                <span>{o.label}</span>
+                <Show when={o.description}>
+                  <span class="rounded-sm bg-background-strong px-1.5 py-0.5 text-11-regular text-text-weak">
+                    {o.description}
+                  </span>
+                </Show>
+              </span>
+            )}
+          </SelectV2>
         </SettingsRowV2>
 
         <SettingsRowV2
@@ -809,6 +825,23 @@ export const SettingsGeneralV2: Component = () => {
             <div data-action="settings-pinch-zoom">
               <Switch checked={pinchZoom.latest} onChange={onPinchZoomChange} />
             </div>
+          </SettingsRowV2>
+
+          <SettingsRowV2
+            title={language.t("settings.general.row.zoom.title")}
+            description={language.t("settings.general.row.zoom.description")}
+          >
+            <SelectV2
+              appearance="inline"
+              data-action="settings-zoom"
+              options={zoomOptions()}
+              current={zoomOptions().find((o) => o.value === String(platform.webviewZoom?.()))}
+              placement="bottom-end"
+              gutter={6}
+              value={(o) => o.value}
+              label={(o) => o.label}
+              onSelect={(option) => option && platform.setWebviewZoom?.(Number(option.value))}
+            />
           </SettingsRowV2>
 
           <Show when={linux()}>

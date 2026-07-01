@@ -1,6 +1,7 @@
 import { BrowserWindow } from "electron"
 import type { DesktopMenuAction } from "@deepagent-code/app/desktop-menu"
-import { createMainWindow, updateTitlebar } from "./windows"
+import { clampZoom, nextZoomLevel } from "@deepagent-code/app/zoom-levels"
+import { createMainWindow, updateZoom } from "./windows"
 
 export type DesktopMenuActionHandlers = Partial<{
   checkForUpdates: () => void
@@ -45,10 +46,10 @@ export function runDesktopMenuAction(
       setZoom(win, 1)
       return
     case "view.zoomIn":
-      setZoom(win, (win?.webContents.getZoomFactor() ?? 1) + 0.2)
+      setZoom(win, nextZoomLevel(win?.webContents.getZoomFactor() ?? 1, "in"))
       return
     case "view.zoomOut":
-      setZoom(win, (win?.webContents.getZoomFactor() ?? 1) - 0.2)
+      setZoom(win, nextZoomLevel(win?.webContents.getZoomFactor() ?? 1, "out"))
       return
     case "view.toggleFullscreen":
       win?.setFullScreen(!win.isFullScreen())
@@ -79,6 +80,6 @@ export function runDesktopMenuAction(
 
 function setZoom(win: BrowserWindow | null, value: number) {
   if (!win) return
-  win.webContents.setZoomFactor(Math.min(Math.max(value, 0.2), 10))
-  updateTitlebar(win)
+  win.webContents.setZoomFactor(clampZoom(value))
+  updateZoom(win)
 }

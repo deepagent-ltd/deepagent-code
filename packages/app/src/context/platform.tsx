@@ -113,6 +113,9 @@ type PlatformBase = {
   /** Webview zoom level (desktop only) */
   webviewZoom?: Accessor<number>
 
+  /** Set the webview zoom level (desktop only) */
+  setWebviewZoom?(level: number): void
+
   /** Get whether native pinch/Ctrl-scroll zoom gestures are enabled (desktop only) */
   getPinchZoomEnabled?(): Promise<boolean> | boolean
 

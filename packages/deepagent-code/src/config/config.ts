@@ -33,6 +33,8 @@ import { ConfigPaths } from "./paths"
 import { ConfigPlugin } from "./plugin"
 import { ConfigVariable } from "./variable"
 import { Npm } from "@deepagent-code/core/npm"
+import { SettingsStore } from "@/settings/store"
+import { OFFICIAL_PROVIDER_ID_SET } from "@deepagent-code/core/provider-official"
 import { withTransientReadRetry } from "@/util/effect-http-client"
 
 const log = Log.create({ service: "config" })
@@ -277,6 +279,164 @@ function writableGlobal(info: Info) {
   return next
 }
 
+// ── First-party settings overlay ─────────────────────────────────────────────────────────────────
+// First-party runtime settings live in SettingsStore (~/.deepagent/code/settings.json), NOT the
+// user config file (which is reserved for third-party providers). To keep every existing reader
+// working unchanged (backend gatewayConfig/wishModel read `provider.deepagent.options`; the frontend
+// reads the synced config), we OVERLAY those settings onto the in-memory config on read, and
+// INTERCEPT+STRIP them on write so they never land in the config file.
+
+// The DeepAgent first-party settings are surfaced under this pseudo-provider id (matches the historic
+// `provider.deepagent.options` location that every reader already knows).
+const DEEPAGENT_PSEUDO_PROVIDER_ID = "deepagent"
+
+// Transport keys that official providers accept only via SettingsStore (config is ignored for them).
+const OFFICIAL_TRANSPORT_KEYS = ["headerTimeout", "chunkTimeout", "timeout", "maxRetries"] as const
+
+/**
+ * Merge SettingsStore values onto a config object (returns a shallow-cloned copy; never mutates input).
+ * - deepagent runtime settings → `provider.deepagent.options` (always; deepagent is not an official
+ *   provider so this never triggers the official-conflict check in the provider loader).
+ * - official-provider transport → `provider.<id>.options` (only when `officialTransport` is true;
+ *   the backend provider loader reads transport straight from SettingsStore, and overlaying an
+ *   official id into the config the loader sees would trip the official-conflict rejection — so this
+ *   overlay is for the FRONTEND view only, via getGlobal()).
+ */
+function overlaySettings(info: Info, settings: SettingsStore.Settings, officialTransport: boolean): Info {
+  if (!settings.deepagent && !(officialTransport && settings.providers)) return info
+  const provider = { ...(info.provider ?? {}) }
+
+  if (settings.deepagent && Object.keys(settings.deepagent).length > 0) {
+    const existing = provider[DEEPAGENT_PSEUDO_PROVIDER_ID] ?? {}
+    provider[DEEPAGENT_PSEUDO_PROVIDER_ID] = {
+      name: "DeepAgent",
+      ...existing,
+      options: { ...(existing.options ?? {}), ...settings.deepagent },
+      models: existing.models ?? {},
+    }
+  }
+
+  if (officialTransport && settings.providers) {
+    for (const [id, transport] of Object.entries(settings.providers)) {
+      if (!transport || Object.keys(transport).length === 0) continue
+      const existing = provider[id] ?? {}
+      provider[id] = {
+        ...existing,
+        options: { ...(existing.options ?? {}), ...transport },
+      }
+    }
+  }
+
+  return { ...info, provider }
+}
+
+/**
+ * Pull first-party settings out of an incoming config patch and produce (a) the SettingsStore patch
+ * to persist and (b) a cleaned config with those keys removed so they never reach the config file.
+ */
+function extractSettingsPatch(config: Info): {
+  cleaned: Info
+  patch: { deepagent?: SettingsStore.DeepAgentSettings; providers?: Record<string, SettingsStore.TransportSettings> }
+  hasPatch: boolean
+} {
+  const patch: {
+    deepagent?: SettingsStore.DeepAgentSettings
+    providers?: Record<string, SettingsStore.TransportSettings>
+  } = {}
+  if (!config.provider) return { cleaned: config, patch, hasPatch: false }
+
+  const provider = { ...config.provider }
+  let changed = false
+
+  // deepagent: the whole pseudo-provider entry is first-party — route its options, drop it from file.
+  const deepagent = provider[DEEPAGENT_PSEUDO_PROVIDER_ID]
+  if (deepagent) {
+    const opts = (deepagent.options ?? {}) as Record<string, unknown>
+    patch.deepagent = {
+      promptMode: opts.promptMode as SettingsStore.PromptMode | undefined,
+      wishModel: typeof opts.wishModel === "string" ? opts.wishModel : undefined,
+      agentMode: opts.agentMode as SettingsStore.AgentMode | undefined,
+      selfLearning: opts.selfLearning as SettingsStore.SelfLearning | undefined,
+      runsDir: typeof opts.runsDir === "string" ? opts.runsDir : undefined,
+      allowProviderExecutedTools:
+        typeof opts.allowProviderExecutedTools === "boolean" ? opts.allowProviderExecutedTools : undefined,
+      allowProviderExecutedToolNames: Array.isArray(opts.allowProviderExecutedToolNames)
+        ? (opts.allowProviderExecutedToolNames.filter((i) => typeof i === "string") as string[])
+        : undefined,
+    }
+    delete provider[DEEPAGENT_PSEUDO_PROVIDER_ID]
+    changed = true
+  }
+
+  // official providers: route only the transport keys; the rest of an official entry is ignored by
+  // the loader anyway, so we drop the whole entry to keep the file third-party-only.
+  const providers: Record<string, SettingsStore.TransportSettings> = {}
+  for (const id of Object.keys(provider)) {
+    if (!OFFICIAL_PROVIDER_ID_SET.has(id)) continue
+    const opts = (provider[id]?.options ?? {}) as Record<string, unknown>
+    const transport: SettingsStore.TransportSettings = {}
+    for (const key of OFFICIAL_TRANSPORT_KEYS) {
+      if (key in opts) (transport as Record<string, unknown>)[key] = opts[key]
+    }
+    if (Object.keys(transport).length > 0) providers[id] = transport
+    delete provider[id]
+    changed = true
+  }
+  if (Object.keys(providers).length > 0) patch.providers = providers
+
+  const hasPatch = patch.deepagent !== undefined || patch.providers !== undefined
+  return { cleaned: changed ? { ...config, provider } : config, patch, hasPatch }
+}
+
+/**
+ * One-shot migration: move any `provider.deepagent.options` from the config file into SettingsStore,
+ * then strip the `provider.deepagent` entry from the file so the config file is third-party-only.
+ * Idempotent: if SettingsStore already has deepagent settings we still strip the stale file entry.
+ */
+async function migrateFirstPartySettings() {
+  const file = globalConfigFile()
+  let text: string
+  try {
+    text = await fsNode.readFile(file, "utf8")
+  } catch {
+    return // no config file yet — nothing to migrate
+  }
+  let parsed: Record<string, unknown>
+  try {
+    const value = ConfigParse.jsonc(text, "settings-migrate")
+    if (!isRecord(value)) return
+    ConfigParse.schema(ConfigV1.Info, value, "settings-migrate") // skip migration if the file is broken
+    parsed = value as Record<string, unknown>
+  } catch {
+    return
+  }
+  const provider = isRecord(parsed.provider) ? parsed.provider : undefined
+  const deepagent = provider && isRecord(provider.deepagent) ? provider.deepagent : undefined
+  if (!deepagent) return
+
+  const opts = isRecord(deepagent.options) ? deepagent.options : {}
+  const existing = await SettingsStore.read()
+  if (!existing.deepagent) {
+    await SettingsStore.update({
+      deepagent: {
+        promptMode: opts.promptMode as SettingsStore.PromptMode | undefined,
+        wishModel: typeof opts.wishModel === "string" ? opts.wishModel : undefined,
+        agentMode: opts.agentMode as SettingsStore.AgentMode | undefined,
+        selfLearning: opts.selfLearning as SettingsStore.SelfLearning | undefined,
+        runsDir: typeof opts.runsDir === "string" ? opts.runsDir : undefined,
+        allowProviderExecutedTools:
+          typeof opts.allowProviderExecutedTools === "boolean" ? opts.allowProviderExecutedTools : undefined,
+        allowProviderExecutedToolNames: Array.isArray(opts.allowProviderExecutedToolNames)
+          ? (opts.allowProviderExecutedToolNames.filter((i) => typeof i === "string") as string[])
+          : undefined,
+      },
+    })
+  }
+  // Strip provider.deepagent from the file (preserving comments/formatting for the rest).
+  const stripped = patchJsonc(text, { deepagent: undefined }, ["provider"])
+  if (stripped !== text) await fsNode.writeFile(file, stripped).catch(() => {})
+}
+
 export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
@@ -362,6 +522,9 @@ export const layer = Layer.effect(
         // deepagent-code.jsonc and remove the old files, so there is one config file to edit.
         // Best-effort: a failure here must not block config loading (we still merge all names below).
         yield* Effect.promise(() => migrateGlobalConfigFiles()).pipe(Effect.catch(() => Effect.void))
+        // Move any first-party runtime settings (provider.deepagent.options) out of the config file
+        // into SettingsStore, so the config file stays third-party-only. Best-effort.
+        yield* Effect.promise(() => migrateFirstPartySettings()).pipe(Effect.catch(() => Effect.void))
         const file = globalConfigFile()
         if (!existsSync(file)) {
           yield* fs
@@ -403,7 +566,12 @@ export const layer = Layer.effect(
     )
 
     const getGlobal = Effect.fn("Config.getGlobal")(function* () {
-      return (yield* cachedGlobal).config
+      const base = (yield* cachedGlobal).config
+      // Frontend view: overlay first-party settings so the app renders current values. Official
+      // transport is included here (getGlobal is only read by the app / global routes, never by the
+      // provider loader), so the connect dialog can show/edit timeouts.
+      const settings = yield* Effect.promise(() => SettingsStore.read())
+      return overlaySettings(base, settings, true)
     })
 
     const ensureGitignore = Effect.fn("Config.ensureGitignore")(function* (dir: string) {
@@ -731,7 +899,13 @@ export const layer = Layer.effect(
     )
 
     const get = Effect.fn("Config.get")(function* () {
-      return yield* InstanceState.use(state, (s) => s.config)
+      const base = yield* InstanceState.use(state, (s) => s.config)
+      // Backend view: overlay ONLY the deepagent runtime settings (gatewayConfig/wishModel read them
+      // from provider.deepagent.options). Official-provider transport is deliberately NOT overlaid
+      // here — the provider loader reads transport straight from SettingsStore, and injecting an
+      // official id into the config it sees would trip the official-conflict rejection.
+      const settings = yield* Effect.promise(() => SettingsStore.read())
+      return overlaySettings(base, settings, false)
     })
 
     const directories = Effect.fn("Config.directories")(function* () {
@@ -766,28 +940,40 @@ export const layer = Layer.effect(
     })
 
     const updateGlobal = Effect.fn("Config.updateGlobal")(function* (config: Info) {
+      // Route first-party settings (deepagent runtime + official transport) to SettingsStore and strip
+      // them from the config payload so they never land in the third-party-only config file.
+      const { cleaned, patch, hasPatch } = extractSettingsPatch(config)
+      let settingsChanged = false
+      if (hasPatch) {
+        const result = yield* Effect.promise(() => SettingsStore.update(patch))
+        settingsChanged = result.changed
+      }
+
       const file = globalConfigFile()
       const before = (yield* readConfigFile(file)) ?? "{}"
-      const patch = writableGlobal(config)
+      const patchGlobal = writableGlobal(cleaned)
 
       let next: Info
       let changed: boolean
       if (!file.endsWith(".jsonc")) {
         const existing = ConfigParse.schema(ConfigV1.Info, ConfigParse.jsonc(before, file), file)
-        const merged = mergeDeep(writable(existing), patch)
+        const merged = mergeDeep(writable(existing), patchGlobal)
         const serialized = JSON.stringify(merged, null, 2)
         changed = serialized !== before
         if (changed) yield* fs.writeFileString(file, serialized).pipe(Effect.orDie)
         next = merged
       } else {
-        const updated = patchJsonc(before, patch)
+        const updated = patchJsonc(before, patchGlobal)
         next = ConfigParse.schema(ConfigV1.Info, ConfigParse.jsonc(updated, file), file)
         changed = updated !== before
         if (changed) yield* fs.writeFileString(file, updated).pipe(Effect.orDie)
       }
 
       if (changed) yield* invalidate()
-      return { info: next, changed }
+      // Re-overlay the persisted settings onto the returned info so the caller (app) immediately sees
+      // the values it just set, including official transport (this is the getGlobal-equivalent view).
+      const settings = yield* Effect.promise(() => SettingsStore.read())
+      return { info: overlaySettings(next, settings, true), changed: changed || settingsChanged }
     })
 
     return Service.of({
