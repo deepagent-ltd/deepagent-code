@@ -21,6 +21,7 @@ import {
   initialPlanLatch,
   markStale,
   clearStale,
+  planStatusesChanged,
   type PlanLatchState,
   type StaleReason,
   type PlanDoc,
@@ -45,6 +46,14 @@ export type SessionRunState = {
   // Kept on run state (hot path, atomically persisted) — graduated into the durable run-graph as a
   // `plan` doc at run close, mirroring how DESIGN.md is materialized.
   plan: PlanDoc | null
+  // U10 step-reporting: count of mutating tool calls since the model last CHANGED a plan step's
+  // status. Drives the progress-nudge count backstop (nudgeTrigger). Reset to 0 only when setPlan
+  // detects a real status change — a no-op plan re-write must not silence the nudge.
+  mutationsSinceReport: number
+  // U10 hybrid nudge: set true when a validation run went (back) to all-passing since the last plan
+  // update. The SEMANTIC primary trigger for the progress nudge ("a step probably just finished").
+  // Reset with the counter on a real status change.
+  validationPassedSinceReport: boolean
   createdAt: string
   completedAt: string | null
 }
@@ -75,6 +84,8 @@ export const getOrCreate = (sessionId: string, mode: AgentMode): SessionRunState
     runId: `run_${randomUUID()}`,
     planLatch: initialPlanLatch(),
     plan: null,
+    mutationsSinceReport: 0,
+    validationPassedSinceReport: false,
     createdAt: new Date().toISOString(),
     completedAt: null,
   }
@@ -124,6 +135,11 @@ export const recordValidation = (sessionId: string, results: ValidationResult[],
   // flip the latch from truth, not from the model's self-report.
   if (results.some((r) => !r.passed)) {
     state.planLatch = markStale(state.planLatch, "validation_failed")
+  } else if (results.length > 0) {
+    // U10 hybrid nudge: an all-passing validation is the SEMANTIC signal that a step probably just
+    // finished. Latch it (cleared on the next real plan status change) so the nudge can fire on this
+    // completion boundary rather than waiting for the count backstop.
+    state.validationPassedSinceReport = true
   }
   saveToDisk()
 }
@@ -141,12 +157,45 @@ export const advanceToNextRound = (sessionId: string, decision: import("./mode")
 export const setPlan = (sessionId: string, plan: PlanDoc): void => {
   const state = sessions.get(sessionId)
   if (!state) return
+  // U10: reset the progress-nudge state ONLY when the model actually moved a step's status (or
+  // added a step). A no-op re-write leaves the counter/flag running so the nudge is not silenced by
+  // an empty update ("report theater").
+  if (planStatusesChanged(state.plan, plan)) {
+    state.mutationsSinceReport = 0
+    state.validationPassedSinceReport = false
+  }
   state.plan = plan
   state.planLatch = clearStale({ ...state.planLatch, plan_id: plan.plan_id })
   saveToDisk()
 }
 
 export const getPlan = (sessionId: string): PlanDoc | null => sessions.get(sessionId)?.plan ?? null
+
+// U10: count one mutating tool call toward the progress-nudge budget. Called after a mutating tool
+// executes. No-op when there is no plan (the nudge only applies once the model has a plan to report
+// against).
+export const recordMutation = (sessionId: string): void => {
+  const state = sessions.get(sessionId)
+  if (!state || state.plan == null) return
+  state.mutationsSinceReport += 1
+  saveToDisk()
+}
+
+export const mutationsSinceReport = (sessionId: string): number => sessions.get(sessionId)?.mutationsSinceReport ?? 0
+
+export const validationPassedSinceReport = (sessionId: string): boolean =>
+  sessions.get(sessionId)?.validationPassedSinceReport ?? false
+
+// U10 / P2-E: a compact summary of the latest validation run, used as step evidence when a step
+// moves to `done`. Null when nothing has been validated yet.
+export const lastValidationSummary = (sessionId: string): string | null => {
+  const state = sessions.get(sessionId)
+  if (!state || state.lastValidationResults.length === 0) return null
+  const results = state.lastValidationResults
+  const passed = results.filter((r) => r.passed).length
+  const cmds = results.map((r) => `${r.command}${r.passed ? "✓" : "✗"}`).join(", ")
+  return `validation ${passed}/${results.length} passed: ${cmds}`
+}
 
 // U1: flip the latch to stale from a RUNTIME signal (never from the model). Idempotent on reason.
 export const markPlanStale = (sessionId: string, reason: StaleReason): void => {
@@ -238,6 +287,9 @@ function normalizeState(state: SessionRunState): SessionRunState {
     // Backfill: sessions persisted before U1 have no planLatch/plan on disk.
     planLatch: state.planLatch ?? initialPlanLatch(),
     plan: state.plan ?? null,
+    // Backfill: sessions persisted before U10 have no counter on disk.
+    mutationsSinceReport: state.mutationsSinceReport ?? 0,
+    validationPassedSinceReport: state.validationPassedSinceReport ?? false,
   }
   sessions.set(state.sessionId, normalized)
   return normalized
