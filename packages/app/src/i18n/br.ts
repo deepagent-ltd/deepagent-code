@@ -918,6 +918,8 @@ export const dict = {
   "settings.general.row.pinchZoom.title": "Pinçar para zoom",
   "settings.general.row.pinchZoom.description":
     "Permitir gestos de pellizco en trackpad y Ctrl-desplazamiento para ampliar",
+  "settings.general.row.zoom.title": "Zoom level",
+  "settings.general.row.zoom.description": "Set the interface zoom level",
   "settings.updates.action.downloading": "Baixando...",
   "settings.updates.action.installing": "Instalando...",
   "settings.providers.section.deepagentBackends": "Backends de modelos DeepAgent",

@@ -23,7 +23,7 @@ import { render } from "solid-js/web"
 import pkg from "../../package.json"
 import { initI18n, t } from "./i18n"
 import { initializationData, initializationReady } from "./initialization"
-import { resetZoom, setPinchZoomEnabled, webviewZoom, zoomIn, zoomOut } from "./webview-zoom"
+import { resetZoom, setPinchZoomEnabled, setZoom, webviewZoom, zoomIn, zoomOut } from "./webview-zoom"
 import { availableStartupServer, readyWslConnections } from "./wsl/connections"
 import "./styles.css"
 import { Splash } from "@deepagent-code/ui/logo"
@@ -249,6 +249,8 @@ const createPlatform = (): Platform => {
     parseMarkdown: (markdown: string) => window.api.parseMarkdownCommand(markdown),
 
     webviewZoom,
+
+    setWebviewZoom: setZoom,
 
     getPinchZoomEnabled: () => window.api.getPinchZoomEnabled(),
 

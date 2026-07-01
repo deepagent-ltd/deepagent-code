@@ -184,6 +184,19 @@ export const dict = {
   "provider.connect.toast.connected.title": "{{provider}} 已连接",
   "provider.connect.toast.connected.description": "现在可以使用 {{provider}} 模型了。",
 
+  "provider.connect.transport.title": "高级：请求超时与重试",
+  "provider.connect.transport.description":
+    "官方 provider 的传输设置独立于配置文件保存。留空则使用默认值。",
+  "provider.connect.transport.headerTimeout.label": "响应头超时（毫秒）",
+  "provider.connect.transport.headerTimeout.placeholder": "例如 10000",
+  "provider.connect.transport.chunkTimeout.label": "数据块超时（毫秒）",
+  "provider.connect.transport.chunkTimeout.placeholder": "例如 30000",
+  "provider.connect.transport.timeout.label": "请求超时（毫秒）",
+  "provider.connect.transport.timeout.placeholder": "例如 120000",
+  "provider.connect.transport.maxRetries.label": "最大重试次数",
+  "provider.connect.transport.maxRetries.placeholder": "例如 2",
+  "provider.connect.transport.error.number": "请输入正整数，或留空。",
+
   "provider.custom.title": "自定义提供商",
   "provider.custom.description.prefix": "配置与 OpenAI 兼容的提供商。请查看",
   "provider.custom.description.link": "提供商配置文档",
@@ -1106,6 +1119,8 @@ export const dict = {
   "settings.general.row.newLayoutDesigns.description": "启用重新设计的布局、首页、输入器和会话界面",
   "settings.general.row.pinchZoom.title": "双指缩放",
   "settings.general.row.pinchZoom.description": "允许触控板双指和 Ctrl 滚动手势缩放",
+  "settings.general.row.zoom.title": "缩放比例",
+  "settings.general.row.zoom.description": "设置界面缩放比例",
   "settings.updates.action.downloading": "正在下载...",
   "settings.updates.action.installing": "正在安装...",
   "common.clear": "清除",

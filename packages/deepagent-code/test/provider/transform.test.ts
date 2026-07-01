@@ -159,7 +159,7 @@ describe("ProviderTransform.options - zai/zhipuai thinking", () => {
       headers: {},
     }) as any
 
-  for (const providerID of ["zai-coding-plan", "zhipuai-coding-plan"]) {
+  for (const providerID of ["zai-coding-plan", "zhipuai-coding-plan", "zai", "zhipuai"]) {
     test(`${providerID} should set thinking cfg`, () => {
       const result = ProviderTransform.options({
         model: createModel(providerID),
@@ -171,18 +171,6 @@ describe("ProviderTransform.options - zai/zhipuai thinking", () => {
         type: "enabled",
         clear_thinking: false,
       })
-    })
-  }
-
-  for (const providerID of ["zai", "zhipuai"]) {
-    test(`${providerID} should not set coding-plan thinking cfg`, () => {
-      const result = ProviderTransform.options({
-        model: createModel(providerID),
-        sessionID,
-        providerOptions: {},
-      })
-
-      expect(result.thinking).toBeUndefined()
     })
   }
 
@@ -2503,7 +2491,7 @@ describe("ProviderTransform.variants", () => {
     expect(result).toEqual({})
   })
 
-  test("glm-5.2 openai-compatible on generic zhipuai returns no inferred reasoning variants", () => {
+  test("glm-5.2 openai-compatible on generic zhipuai returns reasoning effort variants", () => {
     const model = createMockModel({
       id: "zhipuai/glm-5.2",
       providerID: "zhipuai",
@@ -2515,7 +2503,11 @@ describe("ProviderTransform.variants", () => {
       capabilities: { reasoning: true },
     })
     const result = ProviderTransform.variants(model)
-    expect(result).toEqual({})
+    // Aligned with upstream: plain (non-coding-plan) GLM-5.2 also exposes high/max thinking tiers.
+    expect(result).toEqual({
+      high: { reasoningEffort: "high" },
+      max: { reasoningEffort: "max" },
+    })
   })
 
   test("glm-5.2 coding-plan openai-compatible returns reasoning effort variants", () => {
