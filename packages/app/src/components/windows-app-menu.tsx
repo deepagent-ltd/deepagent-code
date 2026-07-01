@@ -6,8 +6,9 @@ import { IconButtonV2 } from "@deepagent-code/ui/v2/icon-button-v2"
 import { Icon as IconV2 } from "@deepagent-code/ui/v2/icon"
 
 import { useCommand } from "@/context/command"
-import { DESKTOP_MENU, desktopMenuVisible, type DesktopMenuAction, type DesktopMenuEntry } from "@/desktop-menu"
+import { DESKTOP_MENU, desktopMenuVisible, type DesktopMenuAction, type DesktopMenuEntry, type DesktopMenuItem } from "@/desktop-menu"
 import { usePlatform } from "@/context/platform"
+import { canZoomIn, canZoomOut, zoomPercent } from "@/zoom-levels"
 
 export function WindowsAppMenu(props: {
   command: ReturnType<typeof useCommand>
@@ -44,6 +45,18 @@ export function WindowsAppMenu(props: {
       return
     }
     if (entry.href) props.platform.openLink(entry.href)
+  }
+
+  const zoom = () => props.platform.webviewZoom?.() ?? 1
+  const isZoomAction = (action: DesktopMenuAction | undefined) =>
+    action === "view.zoomIn" || action === "view.zoomOut" || action === "view.resetZoom"
+  const zoomLabel = (entry: DesktopMenuItem) =>
+    isZoomAction(entry.action) ? `${entry.label ?? ""}  ${zoomPercent(zoom())}%` : entry.label ?? ""
+  const zoomDisabled = (entry: DesktopMenuItem) => {
+    if (entry.command) return commandDisabled(entry.command)
+    if (entry.action === "view.zoomIn") return !canZoomIn(zoom())
+    if (entry.action === "view.zoomOut") return !canZoomOut(zoom())
+    return false
   }
 
   return (
@@ -87,9 +100,9 @@ export function WindowsAppMenu(props: {
                       <DropdownMenu.Separator />
                     ) : (
                       <DesktopMenuItem
-                        label={entry.label ?? ""}
+                        label={zoomLabel(entry)}
                         keybind={entry.command ? props.command.keybind(entry.command) : entry.accelerator?.windows}
-                        disabled={entry.command ? commandDisabled(entry.command) : false}
+                        disabled={zoomDisabled(entry)}
                         onSelect={() => runEntry(entry)}
                       />
                     ),

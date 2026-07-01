@@ -303,8 +303,14 @@ export const maybeRunRounds = <T>(ops: MultiRoundOps<T>): Effect.Effect<T> =>
       const hardGate = AgentGateway.DeepAgentPlanController.hardGateEnabled(ops.agentMode)
       const plan = AgentGateway.DeepAgentSessionState.getPlan(ops.sessionID)
       const planExists = plan != null
-      const hasCompletionReport =
-        planExists && AgentGateway.DeepAgentPlanController.buildCompletionReport(plan).complete
+      const completionReport = planExists ? AgentGateway.DeepAgentPlanController.buildCompletionReport(plan) : null
+      const hasCompletionReport = completionReport?.complete === true
+      // U10: a plan that finished with a `blocked` step is NOT a clean "done" — finalize is allowed
+      // (blocked counts as resolved so the run never deadlocks), but it must route to needs_human so
+      // the operator sees WHY the plan could not be fully executed. This is the honest escape hatch
+      // that stops the model from marking a step falsely `done` to satisfy the gate.
+      const blockedSteps = completionReport?.blocked ?? []
+      const hasBlocked = blockedSteps.length > 0
       const stopDecision = StopHook.evaluate({
         name: "stop",
         payload: { requiredValidationsRun, planStale, hardGate, planExists, hasCompletionReport },
@@ -312,7 +318,10 @@ export const maybeRunRounds = <T>(ops: MultiRoundOps<T>): Effect.Effect<T> =>
       const baseStatus = RoundReport.deriveStatus(report)
       // T3: a 🔴 triage exit (or exhausted narrowing) forces needs_human with the triage reason, so the
       // operator sees "not auto-fixable: <reason>" rather than a generic continue/done.
-      const status = redReason != null || stopDecision.decision === "block" || packChanged ? "needs_human" : baseStatus
+      const status =
+        redReason != null || stopDecision.decision === "block" || packChanged || hasBlocked
+          ? "needs_human"
+          : baseStatus
       const suggestion: NextRoundSuggestion = {
         status,
         body: redReason
@@ -321,7 +330,9 @@ export const maybeRunRounds = <T>(ops: MultiRoundOps<T>): Effect.Effect<T> =>
             ? `Domain pack set changed mid-run (${ops.baselinePackSnapshotId} -> ${ops.packSnapshotId}); risk/scope may have shifted, human review required before continuing.`
             : stopDecision.decision === "block"
               ? `${stopDecision.blockReason}. Configured validations: ${ops.validationCommands.join(", ")}.`
-              : RoundReport.summarizeForSuggestion(report),
+              : hasBlocked
+                ? `Plan finished with blocked step(s) needing human input: ${blockedSteps.join("; ")}.`
+                : RoundReport.summarizeForSuggestion(report),
       }
       yield* ops.onMacroRound(suggestion, report)
     }

@@ -1000,6 +1000,8 @@ export const dict = {
   "settings.general.row.pinchZoom.title": "Sıkıştırarak yakınlaştır",
   "settings.general.row.pinchZoom.description":
     "Trackpad sıkıştırma ve Ctrl-kaydırma hareketleriyle yakınlaştırmaya izin ver",
+  "settings.general.row.zoom.title": "Zoom level",
+  "settings.general.row.zoom.description": "Set the interface zoom level",
   "settings.updates.action.downloading": "İndiriliyor...",
   "settings.updates.action.installing": "Yükleniyor...",
   "settings.providers.section.deepagentBackends": "DeepAgent model arka uçları",

@@ -658,6 +658,8 @@ export function variants(model: Provider.Model): Record<string, Record<string, a
       }
     }
     if (model.api.npm === "@ai-sdk/openai-compatible") {
+      // Aligned with upstream: GLM-5.2 on the openai-compatible protocol exposes high/max thinking
+      // tiers on every Zhipu/Z.AI face (plain pay-as-you-go AND coding-plan), not just coding-plan.
       return {
         high: { reasoningEffort: "high" },
         max: { reasoningEffort: "max" },
@@ -1078,8 +1080,10 @@ export function options(input: {
     result["chat_template_args"] = { enable_thinking: true }
   }
 
+  // Aligned with upstream: enable thinking for the whole Zhipu/Z.AI brand family on the
+  // openai-compatible protocol (zhipuai / zai / their coding-plan variants), not just coding-plan.
   if (
-    ["zai", "zhipuai"].some((id) => input.model.providerID.includes(id)) &&
+    ["zai", "zhipuai"].some((id) => input.model.providerID.toLowerCase().includes(id)) &&
     input.model.api.npm === "@ai-sdk/openai-compatible"
   ) {
     result["thinking"] = {
