@@ -14,13 +14,14 @@ import { ConfigMCPV1 } from "@deepagent-code/core/v1/config/mcp"
  *    WeakMap provenance side-channel, never guessed from the tool name.
  *  - default not connected: `defaultEnabled: false` (readonly literal).
  *  - credentials by KEY NAME only in the catalog: an entry declares which credentials it needs
- *    (key + description), never values. ⚠️ The secure-storage resolution layer is NOT yet built:
- *    today the frontend collects the raw secret and `credentialRefs` carries the actual value, which
- *    `instantiate` splices into env/headers. So secrets currently live in the connected server's
- *    config (in-memory, and persisted to the config file on enable). Routing through an indirection
- *    (handle resolved from OS keychain at connect time) is a tracked follow-up; until then treat the
- *    config as secret-bearing. The KEY-NAME-only guarantee holds for the catalog DEFINITION, not yet
- *    for the runtime value path.
+ *    (key + description), never values. M-CRED (S1-v3.4 M7 defer, delivered S1-v3.5): the runtime
+ *    value path is now indirected too — `instantiate` writes `secret:true` credentials as a `${KEY}`
+ *    env REFERENCE (or passes through a caller-supplied `${VAR}` ref / `secret://` keychain handle),
+ *    NEVER the plaintext value. The real value is resolved from the process env / OS keychain at
+ *    connect time (`mcp/index.ts` + `secret-store.ts`) and never lands in `cfg.mcp`, logs, or
+ *    snapshots. Existing plaintext configs are migrated to handles at startup (see
+ *    `SecretStore.migratePlaintextSecrets`). The KEY-NAME-only guarantee now holds for BOTH the
+ *    catalog definition and the runtime value path.
  *  - dangerous writes fail-closed: anything not provably read-only defaults to
  *    `write_guarded` → `ctx.ask` approval. This is LIVE, and the tier is NOT trusted from persisted
  *    config: `mcp/index.ts` DERIVES it at `tools()` time by matching the live server config against
@@ -100,6 +101,16 @@ const PLACEHOLDER = /\{\{([A-Z0-9_]+)\}\}/g
 /** True if a string contains any `{{PLACEHOLDER}}` token. */
 const containsPlaceholder = (s: string): boolean => /\{\{[A-Z0-9_]+\}\}/.test(s)
 
+/**
+ * M-CRED (S1-v3.5): true if a supplied credential ref is ALREADY an indirection — a
+ * `${VAR}` / `${VAR:-default}` env reference or a `secret://` keychain handle — and should
+ * therefore be persisted verbatim rather than re-wrapped as a `${KEY}` reference. Mirrors
+ * `SecretStore.isReference`; kept local to avoid a catalog ⇄ secret-store import cycle.
+ */
+function isCredentialReference(s: string): boolean {
+  return s.startsWith("secret://") || /\$\{[A-Za-z_][A-Za-z0-9_]*(?::-[^}]*)?\}/.test(s)
+}
+
 /** Substitute {{KEY}} placeholders from a flat lookup. Throws on an unresolved placeholder (fail-closed). */
 function substitute(template: string, lookup: Record<string, string>): string {
   return template.replace(PLACEHOLDER, (_match, key: string) => {
@@ -158,8 +169,17 @@ export function instantiate(entry: McpCatalogEntry, filled: FilledEntry): { name
   for (const [k, v] of Object.entries(filled.params)) {
     if (typeof v === "string") scalarLookup[k] = v
   }
+  // M-CRED (S1-v3.5): for `secret:true` credentials, NEVER splice the raw value into config.
+  // Instead persist a `${KEY}` env REFERENCE (resolved from the process env at connect time)
+  // — unless the caller already supplied an indirection (`${VAR}` ref or `secret://` handle),
+  // which is passed through verbatim. Non-secret credential refs (e.g. file paths) pass through.
+  const secretKeys = new Set(entry.credentials.filter((c) => c.secret).map((c) => c.key))
   for (const [k, v] of Object.entries(filled.credentialRefs)) {
-    scalarLookup[k] = v
+    if (secretKeys.has(k) && !isCredentialReference(v)) {
+      scalarLookup[k] = `\${${k}}`
+    } else {
+      scalarLookup[k] = v
+    }
   }
 
   // 3. Multi-value params (e.g. ALLOWED_DIRS) expand a single template token into several args.
