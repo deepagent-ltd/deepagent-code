@@ -26,7 +26,7 @@ import { FSUtil } from "@deepagent-code/core/fs-util"
 import { isRecord } from "@/util/record"
 import { optionalOmitUndefined } from "@deepagent-code/core/schema"
 import { ProviderTransform } from "./transform"
-import { ProviderV2 } from "@deepagent-code/core/provider"
+import { ProviderV2, OFFICIAL_PROVIDER_ID_SET } from "@deepagent-code/core/provider"
 import { ModelV2 } from "@deepagent-code/core/model"
 import { ModelStatus } from "./model-status"
 import { RuntimeFlags } from "@/effect/runtime-flags"
@@ -44,6 +44,10 @@ import {
 
 const log = Log.create({ service: "provider" })
 const OPENAI_HEADER_TIMEOUT_DEFAULT = 10_000
+const THIRD_PARTY_PROVIDER_CONFLICT_MESSAGE =
+  "Provider id conflicts with an official provider. Rename this third-party provider in your config."
+const LEGACY_AUTH_KEY_MESSAGE =
+  "Saved API key is no longer used. Only official providers read keys from the key store. Re-add this as a third-party provider in your config and set the key under options.apiKey."
 
 function providerEnvKey(configuredEnv: string[], envs: Record<string, string | undefined>) {
   const configured = configuredEnv.find((item) => envs[item])
@@ -1015,8 +1019,10 @@ export type Info = Types.DeepMutable<Schema.Schema.Type<typeof Info>>
 
 const DefaultModelIDs = Schema.Record(Schema.String, Schema.String)
 
-// A non-fatal config-load problem (bad JSON or invalid fields in a config/provider file) surfaced to the UI
-// so the user can tell *why* a provider was not imported. `source` is the offending file path.
+// A non-fatal config-load problem surfaced to the UI so the user can tell *why* a provider was not
+// imported. `source` is a human-readable locator for the offending input: a config/provider file path
+// for parse/schema failures, or a `provider.<id>` / `auth.<id>` locator for provider-level problems
+// (id conflicts, legacy auth-store keys). `kind` is the failure category.
 export const ConfigError = Schema.Struct({
   source: Schema.String,
   kind: Schema.Literals(["json", "schema"]),
@@ -1091,6 +1097,7 @@ export type Error = ModelNotFoundError | InitError | NoProvidersError | NoModels
 
 export interface Interface {
   readonly list: () => Effect.Effect<Record<ProviderV2.ID, Info>>
+  readonly errors: () => Effect.Effect<ConfigError[]>
   readonly getProvider: (providerID: ProviderV2.ID) => Effect.Effect<Info>
   readonly getModel: (providerID: ProviderV2.ID, modelID: ModelV2.ID) => Effect.Effect<Model, ModelNotFoundError>
   readonly getLanguage: (model: Model) => Effect.Effect<LanguageModelV3, ModelNotFoundError>
@@ -1106,6 +1113,7 @@ interface State {
   models: Map<string, LanguageModelV3>
   providers: Record<ProviderV2.ID, Info>
   catalog: Record<ProviderV2.ID, Info>
+  errors: ConfigError[]
   sdk: Map<string, BundledSDK>
   modelLoaders: Record<string, CustomModelLoader>
   varsLoaders: Record<string, CustomVarsLoader>
@@ -1288,6 +1296,11 @@ export const layer = Layer.effect(
         const modelsDev = yield* modelsDevSvc.get()
         const catalog = mapValues(modelsDev, fromModelsDevProvider)
         const database = mapValues(catalog, toPublicInfo)
+        // "Official" is a fixed, curated set (openai/deepseek/anthropic/zhipuai/xai/google) — NOT the
+        // whole models.dev catalog. Only these read credentials from the auth key store and reject
+        // config redefinition; every other catalog id is a normal third-party provider configurable
+        // via `provider.<id>` in config (credentials from options.apiKey/env).
+        const officialProviderIDs = OFFICIAL_PROVIDER_ID_SET
 
         const providers: Record<ProviderV2.ID, Info> = {} as Record<ProviderV2.ID, Info>
         const languages = new Map<string, LanguageModelV3>()
@@ -1332,6 +1345,7 @@ export const layer = Layer.effect(
         const enabled = cfg.enabled_providers ? new Set(cfg.enabled_providers) : null
         const envs = yield* env.all()
         const allAuths = yield* auth.all().pipe(Effect.orDie)
+        const errors: ConfigError[] = []
 
         function isProviderAllowed(providerID: ProviderV2.ID): boolean {
           if (enabled && !enabled.has(providerID)) return false
@@ -1366,15 +1380,44 @@ export const layer = Layer.effect(
           })
         }
 
-        // extend database from config
+        function isOfficialProviderID(providerID: string) {
+          return officialProviderIDs.has(providerID)
+        }
+
+        function providerConfigError(
+          providerID: string,
+          message: string,
+          scope: "provider" | "auth" = "provider",
+        ): ConfigError {
+          return {
+            source: `${scope}.${providerID}`,
+            kind: "schema",
+            message,
+          }
+        }
+
+        // Configured providers are always third-party providers. They must not share ids with
+        // official catalog providers; otherwise a custom endpoint can silently hijack official
+        // provider semantics and auth.
         for (const [providerID, provider] of configProviders) {
+          // The hosted first-party gateway is credentialed via config (provider.deepagent-code.
+          // options.apiKey) but its catalog identity/models are fixed. Leave its catalog entry
+          // intact — the custom loader reads the config key — and never treat it as third-party.
+          if (providerID === "deepagent-code") continue
+          if (isOfficialProviderID(providerID)) {
+            errors.push(providerConfigError(providerID, THIRD_PARTY_PROVIDER_CONFLICT_MESSAGE))
+            continue
+          }
+          // Non-official providers are third-party. If the id also exists in the catalog (e.g.
+          // mistral, cloudflare, nvidia), config MERGES onto the catalog entry so shipped models and
+          // loaders survive while config overrides name/options/models. A brand-new id starts empty.
           const existing = database[providerID]
           const parsed: Info = {
             id: ProviderV2.ID.make(providerID),
             name: provider.name ?? existing?.name ?? providerID,
             env: provider.env ?? existing?.env ?? [],
             options: mergeDeep(existing?.options ?? {}, provider.options ?? {}),
-            source: "config",
+            source: "custom",
             models: existing?.models ?? {},
           }
 
@@ -1459,10 +1502,13 @@ export const layer = Layer.effect(
             parsed.models[modelID] = parsedModel
           }
           database[providerID] = parsed
+          mergeProvider(ProviderV2.ID.make(providerID), { source: "custom" })
         }
 
-        // load env
+        // Official providers use the auth/key store only. Env API keys are only honored for
+        // third-party providers declared in config via their `env` field.
         for (const [id, provider] of Object.entries(database)) {
+          if (isOfficialProviderID(id)) continue
           const providerID = ProviderV2.ID.make(id)
           if (!isProviderAllowed(providerID)) continue
           const envKey = providerEnvKey(provider.env, envs)
@@ -1475,8 +1521,16 @@ export const layer = Layer.effect(
         }
 
         // load apikeys
+        // The auth/key store is read for official ids AND for shipped integrations that consume auth
+        // via a custom loader or plugin auth loader (digitalocean, azure, bedrock, gitlab, …). Any
+        // other id with a stored key is a leftover from the old flow — see the orphan warning below.
+        const credentialLoaderIDs = new Set<string>([
+          ...Object.keys(custom(dep)),
+          ...plugins.flatMap((p) => (p.auth ? [p.auth.provider] : [])),
+        ])
+        const canUseKeyStore = (id: string) => isOfficialProviderID(id) || credentialLoaderIDs.has(id)
         const auths = Object.fromEntries(
-          Object.entries(allAuths).filter(([id]) => isProviderAllowed(ProviderV2.ID.make(id))),
+          Object.entries(allAuths).filter(([id]) => canUseKeyStore(id) && isProviderAllowed(ProviderV2.ID.make(id))),
         )
         for (const [id, provider] of Object.entries(auths)) {
           const providerID = ProviderV2.ID.make(id)
@@ -1487,6 +1541,15 @@ export const layer = Layer.effect(
               key: provider.key,
             })
           }
+        }
+
+        // Warn about legacy key-store entries left behind by the old flow (where third-party keys were
+        // written to the auth store). Those keys are no longer read for a plain third-party provider, so
+        // the key silently does nothing until the user re-adds it in config under options.apiKey.
+        for (const [id, provider] of Object.entries(allAuths)) {
+          if (provider.type !== "api") continue
+          if (canUseKeyStore(id)) continue
+          errors.push(providerConfigError(id, LEGACY_AUTH_KEY_MESSAGE, "auth"))
         }
 
         // plugin auth loader - database now has entries for config providers
@@ -1532,16 +1595,6 @@ export const layer = Layer.effect(
           }
         }
 
-        // load config - re-apply with updated data
-        for (const [id, provider] of configProviders) {
-          const providerID = ProviderV2.ID.make(id)
-          const partial: Partial<Info> = { source: "config" }
-          if (provider.env) partial.env = provider.env
-          if (provider.name) partial.name = provider.name
-          if (provider.options) partial.options = provider.options
-          mergeProvider(providerID, partial)
-        }
-
         const gitlab = ProviderV2.ID.make("gitlab")
         if (discoveryLoaders[gitlab] && providers[gitlab] && isProviderAllowed(gitlab)) {
           yield* Effect.promise(async () => {
@@ -1565,7 +1618,7 @@ export const layer = Layer.effect(
             continue
           }
 
-          const configProvider = cfg.provider?.[providerID]
+          const configProvider = isOfficialProviderID(providerID) ? undefined : cfg.provider?.[providerID]
 
           for (const [modelID, model] of Object.entries(provider.models)) {
             model.api.id = model.api.id ?? model.id ?? modelID
@@ -1632,6 +1685,7 @@ export const layer = Layer.effect(
           models: languages,
           providers,
           catalog,
+          errors,
           sdk,
           modelLoaders,
           varsLoaders,
@@ -1640,6 +1694,7 @@ export const layer = Layer.effect(
     )
 
     const list = Effect.fn("Provider.list")(() => InstanceState.use(state, (s) => s.providers))
+    const errors = Effect.fn("Provider.errors")(() => InstanceState.use(state, (s) => s.errors))
 
     function deepagentModelAuthProviderID(model: Model) {
       if (model.providerID !== "deepagent") return
@@ -1970,7 +2025,7 @@ export const layer = Layer.effect(
       }
     })
 
-    return Service.of({ list, getProvider, getModel, getLanguage, closest, getSmallModel, defaultModel })
+    return Service.of({ list, errors, getProvider, getModel, getLanguage, closest, getSmallModel, defaultModel })
   }),
 )
 

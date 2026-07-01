@@ -135,8 +135,10 @@ it.live("headerTimeout is opt-in for non-OpenAI providers", () =>
   }),
 )
 
-it.live("OpenAI Codex headerTimeout default can be disabled by config", () =>
+it.live("OpenAI Codex headerTimeout default cannot be overridden via config for official providers", () =>
   Effect.gen(function* () {
+    // Official providers (openai, anthropic, …) ignore ALL config including transport options.
+    // headerTimeout can only be tuned through the provider settings UI, not config files.
     yield* withAuthContent(
       Effect.gen(function* () {
         yield* provideTmpdirInstance(
@@ -144,7 +146,8 @@ it.live("OpenAI Codex headerTimeout default can be disabled by config", () =>
             Effect.gen(function* () {
               const provider = yield* Provider.Service
               const openai = yield* provider.getProvider(ProviderV2.ID.openai)
-              expect(openai.options.headerTimeout).toBe(false)
+              // config sets false but official isolation means the catalog default (10_000) wins
+              expect(openai.options.headerTimeout).toBe(10_000)
             }),
           { config: { provider: { openai: { options: { headerTimeout: false } } } } },
         )

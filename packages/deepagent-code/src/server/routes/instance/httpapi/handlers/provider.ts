@@ -54,7 +54,9 @@ export const providerHandlers = HttpApiBuilder.group(InstanceHttpApi, "provider"
         mapValues(filtered, (item) => Provider.fromModelsDevProvider(item)),
         connected,
       )
-      const errors = yield* cfg.getErrors()
+      const configErrors = yield* cfg.getErrors()
+      const providerErrors = yield* provider.errors()
+      const errors = [...configErrors, ...providerErrors]
       return {
         all: Object.values(providers).map(Provider.toPublicInfo),
         default: Provider.defaultModelIDs(providers),
