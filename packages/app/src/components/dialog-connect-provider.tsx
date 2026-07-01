@@ -16,19 +16,27 @@ import { useServerSDK } from "@/context/server-sdk"
 import { useServerSync } from "@/context/server-sync"
 import { useLanguage } from "@/context/language"
 import { useProviders } from "@/hooks/use-providers"
+import { isOfficialProvider } from "@deepagent-code/core/provider"
 
 // Recommended/official providers ship a fixed protocol (npm) tied to a canonical endpoint. Letting
 // users point one of these at a relay/local server silently breaks because the protocol no longer
 // matches the endpoint — those users must add a custom provider instead. So the connect dialog hides
-// the baseURL field for these and only exposes it for ad-hoc config/custom providers.
+// the baseURL field for these and only exposes it for ad-hoc config/custom providers. Google and xAI
+// resolve their real endpoint from the bundled SDK; the URL here only satisfies form validation and
+// the placeholder. Keys must exist for every official id (see OFFICIAL_PROVIDER_IDS in core).
 const providerBaseURL: Record<string, string> = {
   openai: "https://api.openai.com/v1",
   deepseek: "https://api.deepseek.com",
   anthropic: "https://api.anthropic.com/v1",
   zhipuai: "https://open.bigmodel.cn/api/paas/v4",
+  xai: "https://api.x.ai/v1",
+  google: "https://generativelanguage.googleapis.com/v1beta",
 }
 
-const isBuiltinProvider = (providerID: string) => providerID in providerBaseURL
+// Official = first-party in the backend (key store credentials, fixed protocol). This must match the
+// backend's OFFICIAL_PROVIDER_IDS exactly so the connect flow routes credentials the same way the
+// loader reads them (auth for official, config options.apiKey for third-party).
+const isBuiltinProvider = (providerID: string) => isOfficialProvider(providerID)
 
 const providerKind = (providerID: string) => (providerID === "anthropic" ? "anthropic" : "openai-compatible")
 
@@ -456,6 +464,29 @@ export function DialogConnectProvider(props: { provider: string }) {
 
       setFormStore("error", undefined)
       setFormStore("baseURLError", undefined)
+
+      if (isBuiltinProvider(props.provider)) {
+        if (key) {
+          await serverSDK.client.auth.set({
+            providerID: props.provider,
+            auth: {
+              type: "api",
+              key,
+            },
+          })
+        }
+        const disabled = (serverSync.data.config.disabled_providers ?? []).filter((id) => id !== props.provider)
+        await serverSync.updateConfig({ disabled_providers: disabled })
+        await serverSDK.client.global.dispose()
+        showToast({
+          variant: "success",
+          icon: "circle-check",
+          title: language.t("provider.connect.toast.connected.title", { provider: provider().name }),
+          description: language.t("provider.connect.toast.connected.description", { provider: provider().name }),
+        })
+        return
+      }
+
       setFormStore("discovering", true)
       try {
         const discovered = await serverSDK.client.provider.models
@@ -484,15 +515,6 @@ export function DialogConnectProvider(props: { provider: string }) {
         setFormStore("discovered", nextModels)
         setFormStore("selectedModel", nextSelected.id)
 
-        if (key) {
-          await serverSDK.client.auth.set({
-            providerID: props.provider,
-            auth: {
-              type: "api",
-              key,
-            },
-          })
-        }
         const current = serverSync.data.config.provider?.[props.provider] ?? {}
         await serverSync.updateConfig({
           provider: {
@@ -502,6 +524,7 @@ export function DialogConnectProvider(props: { provider: string }) {
               options: {
                 ...(current.options ?? {}),
                 baseURL,
+                ...(key ? { apiKey: key } : {}),
               },
               models: {
                 ...(current.models ?? {}),
