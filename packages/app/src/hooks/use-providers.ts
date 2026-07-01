@@ -3,9 +3,13 @@ import { decode64 } from "@/utils/base64"
 import { useParams } from "@solidjs/router"
 import { Iterable, pipe } from "effect"
 import { createMemo } from "solid-js"
+import { OFFICIAL_PROVIDER_IDS } from "@deepagent-code/core/provider"
 
-export const popularProviders = ["openai", "deepseek", "anthropic", "zhipuai"]
-const popularProviderSet = new Set(popularProviders)
+// Official providers are the recommended-first display set and the only ids the backend treats as
+// first-party (key store credentials, fixed protocol). Everything else is a custom third-party
+// provider. Single source of truth lives in core; see OFFICIAL_PROVIDER_IDS.
+export const popularProviders: string[] = [...OFFICIAL_PROVIDER_IDS]
+const popularProviderSet = new Set<string>(popularProviders)
 
 export function useProviders() {
   const serverSync = useServerSync()
