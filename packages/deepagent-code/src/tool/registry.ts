@@ -27,6 +27,13 @@ import { WebSearchTool } from "./websearch"
 import * as Log from "@deepagent-code/core/util/log"
 import { LspTool } from "./lsp"
 import { CodeIntelTool } from "./code_intel"
+import { ProfileTool } from "./profile"
+import { DebugTool } from "./debug"
+import { DebugService } from "@/debug/service"
+import { RuntimeBase } from "@/runtime/base"
+import { Worktree } from "@/worktree"
+import { InstanceStore } from "@/project/instance-store"
+import { InstanceBootstrap } from "@/project/bootstrap-service"
 import * as Truncate from "./truncate"
 import { ApplyPatchTool } from "./apply_patch"
 import { Glob } from "@deepagent-code/core/util/glob"
@@ -108,6 +115,8 @@ export const layer: Layer.Layer<
   | Truncate.Service
   | RuntimeFlags.Service
   | Database.Service
+  | DebugService.Service
+  | RuntimeBase.Service
 > = Layer.effect(
   Service,
   Effect.gen(function* () {
@@ -135,6 +144,8 @@ export const layer: Layer.Layer<
     const patchtool = yield* ApplyPatchTool
     const skilltool = yield* SkillTool
     const codeintel = yield* CodeIntelTool
+    const profiletool = yield* ProfileTool
+    const debugtool = yield* DebugTool
     const agent = yield* Agent.Service
 
     const state = yield* InstanceState.make<State>(
@@ -253,6 +264,8 @@ export const layer: Layer.Layer<
           question: Tool.init(question),
           lsp: Tool.init(lsptool),
           code_intel: Tool.init(codeintel),
+          profile: Tool.init(profiletool),
+          debug: Tool.init(debugtool),
           plan: Tool.init(plan),
           planwrite: Tool.init(planwrite),
         })
@@ -277,6 +290,8 @@ export const layer: Layer.Layer<
             tool.planwrite,
             ...(flags.experimentalLspTool ? [tool.lsp] : []),
             ...(flags.codeIntelTool ? [tool.code_intel] : []),
+            ...(flags.profileTool ? [tool.profile] : []),
+            ...(flags.debugTool ? [tool.debug] : []),
             ...(flags.experimentalPlanMode && flags.client === "cli" ? [tool.plan] : []),
           ],
           task: tool.task,
@@ -367,30 +382,62 @@ export const layer: Layer.Layer<
   }),
 )
 
+/**
+ * InstanceStore backed by a NO-OP InstanceBootstrap — used only to satisfy the
+ * Worktree dependency for debug/profile `withIsolation`. The real InstanceBootstrap
+ * (FFF warm + eager config.get + service init) is provided by the app-runtime at the
+ * top level; wiring it here would eagerly freeze config.directories() at instance
+ * creation and race tools that read files written after the instance starts.
+ */
+const noopBootstrapInstanceStore = InstanceStore.defaultLayer.pipe(
+  Layer.provide(Layer.succeed(InstanceBootstrap.Service, InstanceBootstrap.Service.of({ run: Effect.void }))),
+)
+
 export const defaultLayer = Layer.suspend(() =>
-  layer
-    .pipe(
-      Layer.provide(Config.defaultLayer),
-      Layer.provide(Plugin.defaultLayer),
-      Layer.provide(Question.defaultLayer),
-      Layer.provide(Todo.defaultLayer),
-      Layer.provide(Skill.defaultLayer),
-      Layer.provide(Agent.defaultLayer),
-      Layer.provide(Session.defaultLayer),
-      Layer.provide(BackgroundJob.defaultLayer),
-      Layer.provide(Provider.defaultLayer),
-      Layer.provide(Reference.defaultLayer),
-      Layer.provide(LSP.defaultLayer),
-      Layer.provide(Instruction.defaultLayer),
-      Layer.provide(FSUtil.defaultLayer),
-      Layer.provide(EventV2Bridge.defaultLayer),
-      Layer.provide(FetchHttpClient.layer),
-      Layer.provide(Format.defaultLayer),
-      Layer.provide(CrossSpawnSpawner.defaultLayer),
-      Layer.provide(Search.defaultLayer),
-      Layer.provide(Truncate.defaultLayer),
-    )
-    .pipe(Layer.provide(Database.defaultLayer), Layer.provide(RuntimeFlags.defaultLayer)),
+  layer.pipe(
+    // Ordered dependency chain (must stay explicit so instances are SHARED):
+    // DebugService.layer needs RuntimeBase.Service + EventV2Bridge.Service; RuntimeBase.layer
+    // needs Worktree.Service. Providing them outermost-last means the EventV2Bridge in the
+    // merged block below is the SAME instance DebugService publishes debug.* events onto, and
+    // RuntimeBase is shared between the profile tool's gate and DebugService's gate.
+    Layer.provide(DebugService.layer),
+    Layer.provide(RuntimeBase.layer),
+    // Worktree here is used only by debug/profile withIsolation (create/safeRemove). It must
+    // NOT pull in InstanceLayer's real InstanceBootstrap: that boostrap eagerly runs config.get()
+    // (+ FFF warm) at instance creation, which would freeze config.directories() before a tool
+    // (e.g. skill scanning) sees files written after instance start. A no-op bootstrap satisfies
+    // the InstanceStore tag without that eager side effect. In production the app-runtime provides
+    // the real InstanceLayer at the top level for actual instance init; this sealed one only backs
+    // worktree create/remove.
+    Layer.provide(Worktree.appLayer.pipe(Layer.provide(noopBootstrapInstanceStore))),
+    // All remaining requirements are self-contained default layers with no ordering needs;
+    // merge them into one provide (Layer.suspend's pipe caps at 20 chained args).
+    Layer.provide(
+      Layer.mergeAll(
+        Config.defaultLayer,
+        Plugin.defaultLayer,
+        Question.defaultLayer,
+        Todo.defaultLayer,
+        Skill.defaultLayer,
+        Agent.defaultLayer,
+        Session.defaultLayer,
+        BackgroundJob.defaultLayer,
+        Provider.defaultLayer,
+        Reference.defaultLayer,
+        LSP.defaultLayer,
+        Instruction.defaultLayer,
+        FSUtil.defaultLayer,
+        EventV2Bridge.defaultLayer,
+        FetchHttpClient.layer,
+        Format.defaultLayer,
+        CrossSpawnSpawner.defaultLayer,
+        Search.defaultLayer,
+        Truncate.defaultLayer,
+        Database.defaultLayer,
+        RuntimeFlags.defaultLayer,
+      ),
+    ),
+  ),
 )
 
 function isZodType(value: unknown): value is z.ZodType {
