@@ -898,6 +898,8 @@ export const dict = {
   "settings.general.row.newLayoutDesigns.description": "재설계된 레이아웃, 홈, 작성기 및 세션 UI를 활성화합니다",
   "settings.general.row.pinchZoom.title": "핀치로 확대/축소",
   "settings.general.row.pinchZoom.description": "트랙패드 핀치와 Ctrl-스크롤 제스처로 확대/축소를 허용합니다",
+  "settings.general.row.zoom.title": "Zoom level",
+  "settings.general.row.zoom.description": "Set the interface zoom level",
   "settings.updates.action.downloading": "다운로드 중...",
   "settings.updates.action.installing": "설치 중...",
   "settings.providers.section.deepagentBackends": "DeepAgent 모델 백엔드",

@@ -160,6 +160,19 @@ export const dict = {
   "provider.connect.toast.connected.title": "{{provider}} connected",
   "provider.connect.toast.connected.description": "{{provider}} models are now available to use.",
 
+  "provider.connect.transport.title": "Advanced: request timeouts & retries",
+  "provider.connect.transport.description":
+    "Transport settings for this official provider are stored separately from your config file. Leave blank to use defaults.",
+  "provider.connect.transport.headerTimeout.label": "Header timeout (ms)",
+  "provider.connect.transport.headerTimeout.placeholder": "e.g. 10000",
+  "provider.connect.transport.chunkTimeout.label": "Chunk timeout (ms)",
+  "provider.connect.transport.chunkTimeout.placeholder": "e.g. 30000",
+  "provider.connect.transport.timeout.label": "Request timeout (ms)",
+  "provider.connect.transport.timeout.placeholder": "e.g. 120000",
+  "provider.connect.transport.maxRetries.label": "Max retries",
+  "provider.connect.transport.maxRetries.placeholder": "e.g. 2",
+  "provider.connect.transport.error.number": "Enter a positive whole number, or leave blank.",
+
   "provider.custom.title": "Custom provider",
   "provider.custom.description.prefix": "Configure an OpenAI-compatible provider. See the ",
   "provider.custom.description.link": "provider config docs",
@@ -1006,6 +1019,8 @@ export const dict = {
   "settings.general.row.newLayoutDesigns.description": "Enable the redesigned layout, home, composer, and session UI",
   "settings.general.row.pinchZoom.title": "Pinch to zoom",
   "settings.general.row.pinchZoom.description": "Allow trackpad pinch and Ctrl-scroll gestures to zoom",
+  "settings.general.row.zoom.title": "Zoom level",
+  "settings.general.row.zoom.description": "Set the interface zoom level",
 
   "settings.general.row.wayland.title": "Use native Wayland",
   "settings.general.row.wayland.description": "Disable X11 fallback on Wayland. Requires restart.",

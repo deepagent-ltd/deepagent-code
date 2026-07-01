@@ -894,6 +894,8 @@ export const dict = {
     "تفعيل التخطيط والصفحة الرئيسية والمحرر وواجهة الجلسة المعاد تصميمها",
   "settings.general.row.pinchZoom.title": "التكبير بالقرص",
   "settings.general.row.pinchZoom.description": "السماح بإيماءات قرص لوحة اللمس و Ctrl-تمرير للتكبير",
+  "settings.general.row.zoom.title": "Zoom level",
+  "settings.general.row.zoom.description": "Set the interface zoom level",
   "settings.updates.action.downloading": "جار التنزيل...",
   "settings.updates.action.installing": "جار التثبيت...",
   "settings.providers.section.deepagentBackends": "واجهات نماذج DeepAgent الخلفية",
