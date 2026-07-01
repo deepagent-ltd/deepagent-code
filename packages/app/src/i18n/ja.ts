@@ -907,6 +907,8 @@ export const dict = {
     "再設計されたレイアウト、ホーム、コンポーザー、セッションUIを有効にします",
   "settings.general.row.pinchZoom.title": "ピンチでズーム",
   "settings.general.row.pinchZoom.description": "トラックパッドのピンチとCtrlスクロールでズームを許可します",
+  "settings.general.row.zoom.title": "Zoom level",
+  "settings.general.row.zoom.description": "Set the interface zoom level",
   "settings.updates.action.downloading": "ダウンロード中...",
   "settings.updates.action.installing": "インストール中...",
   "settings.providers.section.deepagentBackends": "DeepAgentモデルバックエンド",

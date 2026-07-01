@@ -992,6 +992,8 @@ export const dict = {
     "Включить обновленный макет, главную страницу, композер и интерфейс сессии",
   "settings.general.row.pinchZoom.title": "Масштабирование щипком",
   "settings.general.row.pinchZoom.description": "Разрешить масштабирование щипком на трекпаде и Ctrl-прокруткой",
+  "settings.general.row.zoom.title": "Zoom level",
+  "settings.general.row.zoom.description": "Set the interface zoom level",
   "settings.updates.action.downloading": "Загрузка...",
   "settings.updates.action.installing": "Установка...",
   "settings.providers.section.deepagentBackends": "Бэкенды моделей DeepAgent",
