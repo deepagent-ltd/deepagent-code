@@ -360,6 +360,39 @@ describe("A3 macro-round suggestion ({status,body}, objective)", () => {
     )
     expect(emitted?.status).toBe("needs_human")
   })
+
+  test("U10: a completed plan with a blocked step -> needs_human, body names the blocker", async () => {
+    const sessionID = setup()
+    // A plan whose steps are all resolved (done + blocked): completion report is `complete` so the
+    // hard-gate finalize check passes, but the blocked step must still route to human review.
+    AgentGateway.DeepAgentSessionState.setPlan(sessionID, {
+      plan_id: "plan_blocked",
+      session_id: sessionID,
+      goal: "ship the feature",
+      assumptions: [],
+      steps: [
+        { step_id: "s1", title: "build", status: "done" },
+        { step_id: "s2", title: "deploy to prod", status: "blocked", note: "no prod credentials" },
+      ],
+      active_step_id: null,
+      created_at: new Date().toISOString(),
+    })
+    let emitted: { status: string; body: string } | undefined
+    await Effect.runPromise(
+      maybeRunRounds(
+        ops(sessionID, {
+          runValidation: () => Effect.succeed([vr("npm test", true)]),
+          onMacroRound: (s) =>
+            Effect.sync(() => {
+              emitted = s
+            }),
+        }),
+      ),
+    )
+    expect(emitted?.status).toBe("needs_human")
+    expect(emitted?.body).toContain("deploy to prod")
+    expect(emitted?.body).toContain("no prod credentials")
+  })
 })
 
 // T3 (S1-v3.4): three-light triage routing in the microbatch loop.
