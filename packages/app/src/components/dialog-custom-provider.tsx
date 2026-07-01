@@ -132,16 +132,6 @@ export function DialogCustomProvider(props: Props) {
       const disabledProviders = serverSync.data.config.disabled_providers ?? []
       const nextDisabled = disabledProviders.filter((id) => id !== result.providerID)
 
-      if (result.key) {
-        await serverSDK.client.auth.set({
-          providerID: result.providerID,
-          auth: {
-            type: "api",
-            key: result.key,
-          },
-        })
-      }
-
       await serverSync.updateConfig({
         provider: { [result.providerID]: result.config },
         disabled_providers: nextDisabled,

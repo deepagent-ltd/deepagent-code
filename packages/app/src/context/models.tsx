@@ -93,12 +93,23 @@ export const { use: useModels, provider: ModelsProvider } = createSimpleContext(
       return map
     })
 
+    const duplicateModelIDs = createMemo(() => {
+      const counts = available().reduce(
+        (acc, model) => acc.set(model.id, (acc.get(model.id) ?? 0) + 1),
+        new Map<string, number>(),
+      )
+      return new Set([...counts.entries()].filter((entry) => entry[1] > 1).map((entry) => entry[0]))
+    })
+
     const list = createMemo(() =>
-      available().map((m) => ({
-        ...m,
-        name: m.name.replace("(latest)", "").trim(),
-        latest: m.name.includes("(latest)"),
-      })),
+      available().map((m) => {
+        const name = m.name.replace("(latest)", "").trim()
+        return {
+          ...m,
+          name: duplicateModelIDs().has(m.id) ? `${name} (${m.provider.name})` : name,
+          latest: m.name.includes("(latest)"),
+        }
+      }),
     )
 
     const find = (key: ModelKey) => list().find((m) => m.id === key.modelID && m.provider.id === key.providerID)
