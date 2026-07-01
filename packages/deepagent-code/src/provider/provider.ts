@@ -1151,7 +1151,7 @@ function cost(c: ModelsDev.Model["cost"]): Model["cost"] {
 function inferredReasoning(providerID: string, apiID: string, modelID = apiID) {
   const provider = providerID.toLowerCase()
   const model = `${apiID} ${modelID}`.toLowerCase()
-  if (!["zai", "zhipuai"].some((id) => provider.includes(id))) return false
+  if (!["zai-coding-plan", "zhipuai-coding-plan"].includes(provider)) return false
   return ["glm-5.2", "glm-5-2", "glm-5p2"].some((id) => model.includes(id))
 }
 
