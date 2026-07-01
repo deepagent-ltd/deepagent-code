@@ -32,6 +32,8 @@ import { TestLLMServer } from "../lib/llm-server"
 import { NodeFileSystem } from "@effect/platform-node"
 import { Database } from "@deepagent-code/core/database/database"
 import { EventV2Bridge } from "@/event-v2-bridge"
+import { DebugService } from "@/debug/service"
+import { RuntimeBase } from "@/runtime/base"
 import { Agent as AgentSvc } from "../../src/agent/agent"
 import { Auth } from "../../src/auth"
 import { BackgroundJob } from "@/background/job"
@@ -133,6 +135,38 @@ const status = SessionStatus.layer.pipe(Layer.provideMerge(EventV2Bridge.default
 const run = SessionRunState.layer.pipe(Layer.provide(status))
 const infra = Layer.mergeAll(NodeFileSystem.layer, CrossSpawnSpawner.defaultLayer)
 
+// V3.5: no-op RuntimeBase (R0) stub — lets the tool registry layer build without the
+// heavy Worktree→Project→Database chain. This test never invokes debug/profile.
+const stubRuntimeBaseLayer = Layer.succeed(
+  RuntimeBase.Service,
+  RuntimeBase.Service.of({
+    gate: () => Effect.void,
+    withIsolation: (_input, body) => body(""),
+    checkPrivileges: () => Effect.succeed([]),
+  }),
+)
+
+// Fully-inert DebugService (D1) stub — avoids InstanceState.make + finalizer side effects
+// at registry-build time. This test never invokes the debug tool.
+const debugStubDie = <A>(): Effect.Effect<A, never, never> =>
+  Effect.die("DebugService stub (not used in this test)")
+const stubDebugServiceLayer = Layer.succeed(
+  DebugService.Service,
+  DebugService.Service.of({
+    start: debugStubDie,
+    setBreakpoints: debugStubDie,
+    continue: debugStubDie,
+    step: debugStubDie,
+    stackTrace: debugStubDie,
+    scopes: debugStubDie,
+    variables: debugStubDie,
+    evaluate: debugStubDie,
+    terminate: debugStubDie,
+    get: () => Effect.succeed(undefined),
+    list: () => Effect.succeed([]),
+  }),
+)
+
 function makeHttp() {
   const deps = Layer.mergeAll(
     Session.defaultLayer,
@@ -166,6 +200,11 @@ function makeHttp() {
     Layer.provide(Search.defaultLayer),
     Layer.provide(Format.defaultLayer),
     Layer.provide(RuntimeFlags.layer({ experimentalEventSystem: true })),
+    // V3.5: debug/profile tools require DebugService + RuntimeBase. Provide the real
+    // (lightweight) DebugService over a no-op RuntimeBase stub — this test never invokes
+    // those tools, and it avoids the heavy Worktree→Database chain.
+    Layer.provide(stubDebugServiceLayer),
+    Layer.provide(stubRuntimeBaseLayer),
     Layer.provideMerge(todo),
     Layer.provideMerge(question),
     Layer.provideMerge(deps),
