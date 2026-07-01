@@ -975,6 +975,8 @@ export const dict = {
   "settings.general.row.newLayoutDesigns.description": "เปิดใช้เลย์เอาต์ หน้าแรก ตัวเขียน และ UI เซสชันที่ออกแบบใหม่",
   "settings.general.row.pinchZoom.title": "จีบนิ้วเพื่อซูม",
   "settings.general.row.pinchZoom.description": "อนุญาตท่าทางจีบนิ้วบนแทร็กแพดและ Ctrl-เลื่อนเพื่อซูม",
+  "settings.general.row.zoom.title": "Zoom level",
+  "settings.general.row.zoom.description": "Set the interface zoom level",
   "settings.updates.action.downloading": "กำลังดาวน์โหลด...",
   "settings.updates.action.installing": "กำลังติดตั้ง...",
   "settings.providers.section.deepagentBackends": "แบ็กเอนด์โมเดล DeepAgent",

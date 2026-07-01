@@ -913,6 +913,8 @@ export const dict = {
   "settings.general.row.pinchZoom.title": "Powiększanie gestem szczypania",
   "settings.general.row.pinchZoom.description":
     "Zezwól na powiększanie gestem szczypania na trackpadzie i Ctrl-przewijaniem",
+  "settings.general.row.zoom.title": "Zoom level",
+  "settings.general.row.zoom.description": "Set the interface zoom level",
   "settings.updates.action.downloading": "Pobieranie...",
   "settings.updates.action.installing": "Instalowanie...",
   "settings.providers.section.deepagentBackends": "Backendy modeli DeepAgent",

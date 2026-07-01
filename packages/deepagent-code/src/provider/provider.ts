@@ -27,6 +27,7 @@ import { isRecord } from "@/util/record"
 import { optionalOmitUndefined } from "@deepagent-code/core/schema"
 import { ProviderTransform } from "./transform"
 import { ProviderV2, OFFICIAL_PROVIDER_ID_SET } from "@deepagent-code/core/provider"
+import { SettingsStore } from "@/settings/store"
 import { ModelV2 } from "@deepagent-code/core/model"
 import { ModelStatus } from "./model-status"
 import { RuntimeFlags } from "@/effect/runtime-flags"
@@ -1159,7 +1160,9 @@ function cost(c: ModelsDev.Model["cost"]): Model["cost"] {
 function inferredReasoning(providerID: string, apiID: string, modelID = apiID) {
   const provider = providerID.toLowerCase()
   const model = `${apiID} ${modelID}`.toLowerCase()
-  if (!["zai-coding-plan", "zhipuai-coding-plan"].includes(provider)) return false
+  // Aligned with upstream: GLM-5.2 is a reasoning model across the whole Zhipu/Z.AI brand family
+  // (plain pay-as-you-go AND coding-plan), so its thinking tiers apply on every face.
+  if (!["zai", "zhipuai"].some((id) => provider.includes(id))) return false
   return ["glm-5.2", "glm-5-2", "glm-5p2"].some((id) => model.includes(id))
 }
 
@@ -1293,6 +1296,10 @@ export const layer = Layer.effect(
         using _ = log.time("state")
         const bridge = yield* EffectBridge.make()
         const cfg = yield* config.get()
+        // Official providers ignore config.provider.<id> entirely; their transport tuning
+        // (header/chunk/request timeouts, retries) is read straight from SettingsStore — the only
+        // place the connect dialog's advanced section persists it (never the config file).
+        const officialTransport = (yield* Effect.promise(() => SettingsStore.read())).providers ?? {}
         const modelsDev = yield* modelsDevSvc.get()
         const catalog = mapValues(modelsDev, fromModelsDevProvider)
         const database = mapValues(catalog, toPublicInfo)
@@ -1620,6 +1627,16 @@ export const layer = Layer.effect(
 
           const configProvider = isOfficialProviderID(providerID) ? undefined : cfg.provider?.[providerID]
 
+          // Official providers: merge transport tuning from SettingsStore onto the loader/catalog
+          // defaults (settings win). maxRetries maps to the SDK option; the fetch-level timeouts are
+          // consumed by resolveSDK. Third-party providers get their transport from config.options.
+          if (isOfficialProviderID(providerID)) {
+            const transport = officialTransport[providerID]
+            if (transport && Object.keys(transport).length > 0) {
+              provider.options = { ...provider.options, ...transport }
+            }
+          }
+
           for (const [modelID, model] of Object.entries(provider.models)) {
             model.api.id = model.api.id ?? model.id ?? modelID
             // Registration-time boundary for the hosted "deepagent" gateway provider only. Third-party
@@ -1764,6 +1781,8 @@ export const layer = Layer.effect(
         const headerTimeout = options["headerTimeout"]
         delete options["chunkTimeout"]
         delete options["headerTimeout"]
+        // maxRetries is applied at the generate call (see session/llm.ts), not the SDK factory.
+        delete options["maxRetries"]
 
         options["fetch"] = async (input: any, init?: BunFetchRequestInit) => {
           const fetchFn = customFetch ?? fetch
