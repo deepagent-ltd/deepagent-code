@@ -9,17 +9,9 @@ import { usePermission } from "@/context/permission"
 import { useSDK } from "@/context/sdk"
 import { useSync } from "@/context/sync"
 import { sessionPermissionRequest, sessionQuestionRequest } from "./session-request-tree"
+import { planStepTodoStatus, todoState } from "./session-composer-state-model"
 
-export const todoState = (input: {
-  count: number
-  done: boolean
-  live: boolean
-}): "hide" | "clear" | "open" | "close" => {
-  if (input.count === 0) return "hide"
-  if (!input.live) return "clear"
-  if (!input.done) return "open"
-  return "close"
-}
+export { planStepTodoStatus, todoState }
 
 const idle = { type: "idle" as const }
 
@@ -59,16 +51,10 @@ export function createSessionComposerState(options?: { closeMs?: number | (() =>
   const planAsTodos = createMemo((): Todo[] => {
     const p = plan()
     if (!p) return []
-    const map: Record<string, Todo["status"]> = {
-      pending: "pending",
-      active: "in_progress",
-      done: "completed",
-      cancelled: "cancelled",
-    }
     return p.steps.map((s, i) => ({
       id: s.step_id || `step_${i}`,
       content: s.title,
-      status: map[s.status] ?? "pending",
+      status: planStepTodoStatus(s.status),
       priority: "medium",
     })) as unknown as Todo[]
   })
