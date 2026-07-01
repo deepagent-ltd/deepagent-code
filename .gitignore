@@ -36,3 +36,6 @@ tsconfig.tsbuildinfo
 # Internal design docs — kept local-only, not tracked in git (see S2-v3.4.1 DOC-2).
 # Erased from history via git-filter-repo; the public distilled version lives in design/.
 docs/
+
+# Non-code domain packs — own git repo (deepagent-domain), not tracked by main repo.
+extra-domain/

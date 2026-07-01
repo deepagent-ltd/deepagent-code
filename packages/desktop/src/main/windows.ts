@@ -1,6 +1,7 @@
 import windowState from "electron-window-state"
 import { resolveThemeVariant } from "@deepagent-code/ui/theme/resolve"
 import type { DesktopTheme } from "@deepagent-code/ui/theme/types"
+import { nextZoomLevel } from "@deepagent-code/app/zoom-levels"
 import oc2ThemeJson from "../../../ui/src/theme/themes/oc-2.json"
 import { app, BrowserWindow, dialog, net, nativeImage, nativeTheme, protocol } from "electron"
 import { dirname, isAbsolute, join, relative, resolve } from "node:path"
@@ -45,8 +46,6 @@ let relaunchHandler = () => {
 const titlebarThemes = new WeakMap<BrowserWindow, Partial<TitlebarTheme>>()
 const pinchZoomEnabled = new WeakMap<BrowserWindow, boolean>()
 const titlebarHeight = 40
-const maxZoomLevel = 10
-const minZoomLevel = 0.2
 
 export function setRelaunchHandler(handler: () => void) {
   relaunchHandler = handler
@@ -394,7 +393,7 @@ function wireZoom(win: BrowserWindow) {
   win.webContents.on("zoom-changed", (event, zoomDirection) => {
     event.preventDefault()
     if (pinchZoomEnabled.get(win)) {
-      win.webContents.setZoomFactor(clampZoom(win.webContents.getZoomFactor() + (zoomDirection === "in" ? 0.2 : -0.2)))
+      win.webContents.setZoomFactor(nextZoomLevel(win.webContents.getZoomFactor(), zoomDirection === "in" ? "in" : "out"))
       updateZoom(win)
       return
     }
@@ -403,11 +402,7 @@ function wireZoom(win: BrowserWindow) {
   })
 }
 
-function clampZoom(value: number) {
-  return Math.min(Math.max(value, minZoomLevel), maxZoomLevel)
-}
-
-function updateZoom(win: BrowserWindow) {
+export function updateZoom(win: BrowserWindow) {
   updateTitlebar(win)
   win.webContents.send("zoom-factor-changed", win.webContents.getZoomFactor())
 }

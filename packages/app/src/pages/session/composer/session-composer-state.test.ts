@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import type { PermissionRequest, QuestionRequest, Session } from "@deepagent-code/sdk/v2/client"
-import { todoState } from "./session-composer-state"
+import { planStepTodoStatus, todoState } from "./session-composer-state-model"
 import { sessionPermissionRequest, sessionQuestionRequest } from "./session-request-tree"
 
 const session = (input: { id: string; parentID?: string }) =>
@@ -124,5 +124,17 @@ describe("todoState", () => {
 
   test("clears completed todos when the session is no longer live", () => {
     expect(todoState({ count: 2, done: true, live: false })).toBe("clear")
+  })
+})
+
+describe("planStepTodoStatus", () => {
+  test("maps plan and todo vocabularies to todo statuses", () => {
+    expect(planStepTodoStatus("active")).toBe("in_progress")
+    expect(planStepTodoStatus("in_progress")).toBe("in_progress")
+    expect(planStepTodoStatus("done")).toBe("completed")
+    expect(planStepTodoStatus("completed")).toBe("completed")
+    expect(planStepTodoStatus("cancelled")).toBe("cancelled")
+    expect(planStepTodoStatus("canceled")).toBe("cancelled")
+    expect(planStepTodoStatus("unknown")).toBe("pending")
   })
 })
