@@ -69,19 +69,21 @@ describe("mcp.catalog", () => {
     expect(config.enabled).toBe(true)
   })
 
-  it("M1/M7: instantiate(postgres) routes the connection string through env, never the command line", () => {
+  it("M1/M7/M-CRED: instantiate(postgres) routes the connection string through env as a ${KEY} ref, never plaintext", () => {
     const pg = McpCatalog.find("postgres-readonly")!
     const { config } = McpCatalog.instantiate(pg, {
       params: {},
       credentialRefs: { DATABASE_URI: "postgres://u:p@h/db" },
     })
     if (config.type !== "local") throw new Error("expected local config")
-    // The secret must be in env, not argv (process-table leakage).
-    expect(config.environment?.DATABASE_URI).toBe("postgres://u:p@h/db")
+    // M-CRED: the secret is an env REFERENCE, not the plaintext value.
+    expect(config.environment?.DATABASE_URI).toBe("${DATABASE_URI}")
+    expect(JSON.stringify(config)).not.toContain("postgres://")
+    // And never on the command line (process-table leakage).
     expect(config.command.join(" ")).not.toContain("postgres://")
   })
 
-  it("M1: instantiate(github) builds a remote config with the PAT in an Authorization header", () => {
+  it("M1/M-CRED: instantiate(github) builds a remote config with a ${KEY} ref in the Authorization header, never the PAT", () => {
     const github = McpCatalog.find("github")!
     const { config } = McpCatalog.instantiate(github, {
       params: {},
@@ -89,7 +91,9 @@ describe("mcp.catalog", () => {
     })
     if (config.type !== "remote") throw new Error("expected remote config")
     expect(config.url).toContain("/readonly")
-    expect(config.headers?.Authorization).toBe("Bearer ghp_x")
+    // M-CRED: the PAT is an env REFERENCE, not the plaintext token.
+    expect(config.headers?.Authorization).toBe("Bearer ${GITHUB_PERSONAL_ACCESS_TOKEN}")
+    expect(JSON.stringify(config)).not.toContain("ghp_x")
   })
 
   it("M1: instantiate fails-closed on a missing required param", () => {

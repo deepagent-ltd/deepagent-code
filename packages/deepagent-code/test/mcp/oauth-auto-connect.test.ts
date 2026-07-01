@@ -128,6 +128,7 @@ const { MCP } = await import("../../src/mcp/index")
 const { EventV2Bridge } = await import("../../src/event-v2-bridge")
 const { Config } = await import("../../src/config/config")
 const { McpAuth } = await import("../../src/mcp/auth")
+const { SecretStore } = await import("../../src/mcp/secret-store")
 const { McpOAuthProvider } = await import("../../src/mcp/oauth-provider")
 const { FSUtil } = await import("@deepagent-code/core/fs-util")
 const { CrossSpawnSpawner } = await import("@deepagent-code/core/cross-spawn-spawner")
@@ -136,6 +137,7 @@ const mcpTest = testEffect(
   Layer.mergeAll(
     MCP.layer.pipe(
       Layer.provide(McpAuth.defaultLayer),
+      Layer.provide(SecretStore.testLayer()),
       Layer.provideMerge(EventV2Bridge.defaultLayer),
       Layer.provide(Config.defaultLayer),
       Layer.provide(CrossSpawnSpawner.defaultLayer),
