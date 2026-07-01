@@ -925,6 +925,8 @@ export const dict = {
     "Überarbeitetes Layout, Startseite, Composer und Sitzungs-UI aktivieren",
   "settings.general.row.pinchZoom.title": "Zum Zoomen kneifen",
   "settings.general.row.pinchZoom.description": "Trackpad-Kneifen und Strg-Scrollen zum Zoomen erlauben",
+  "settings.general.row.zoom.title": "Zoom level",
+  "settings.general.row.zoom.description": "Set the interface zoom level",
   "settings.updates.action.downloading": "Wird heruntergeladen...",
   "settings.updates.action.installing": "Wird installiert...",
   "settings.providers.section.deepagentBackends": "DeepAgent-Modell-Backends",

@@ -1480,7 +1480,7 @@ test("models.dev normalization fills required response fields", () => {
   expect(model.release_date).toBe("")
 })
 
-test("models.dev normalization does not infer reasoning for generic zhipuai glm-5.2", () => {
+test("models.dev normalization infers reasoning for generic zhipuai glm-5.2", () => {
   const provider = {
     id: "zhipuai",
     name: "Zhipu AI",
@@ -1499,9 +1499,14 @@ test("models.dev normalization does not infer reasoning for generic zhipuai glm-
     },
   } as unknown as ModelsDev.Provider
 
+  // Aligned with upstream: GLM-5.2 is a reasoning model across the whole Zhipu/Z.AI brand family,
+  // so the plain (non-coding-plan) face also infers reasoning and exposes high/max thinking tiers.
   const model = Provider.fromModelsDevProvider(provider).models["glm-5.2"]
-  expect(model.capabilities.reasoning).toBe(false)
-  expect(model.variants).toEqual({})
+  expect(model.capabilities.reasoning).toBe(true)
+  expect(model.variants).toEqual({
+    high: { reasoningEffort: "high" },
+    max: { reasoningEffort: "max" },
+  })
 })
 
 test("models.dev normalization infers reasoning for zhipuai coding-plan glm-5.2", () => {
