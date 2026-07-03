@@ -658,7 +658,7 @@ export const dict = {
   "session.header.open.menu": "打开选项",
   "session.header.open.copyPath": "复制路径",
 
-  "status.popover.trigger": "状态",
+  "status.popover.trigger": "服务器与MCP",
   "status.popover.ariaLabel": "服务器配置",
   "status.popover.tab.servers": "服务器",
   "status.popover.tab.mcp": "MCP",
