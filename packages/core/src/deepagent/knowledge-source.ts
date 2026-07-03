@@ -152,7 +152,19 @@ export type ReviewItem = {
   readonly approval_status: "pending" | "approved" | "rejected"
 }
 
+// A built-in seeded pack doc carries a pack id (extensions.pack_id or a "pack:" tag). These are the
+// curated, pre-approved domain-pack documents imported by the seeder on every boot — they are NOT
+// user-learned candidates. The retriever already excludes them via activePackIds scoping; the Review
+// queue must likewise hide them so a fresh install does not surface ~3k "already-approved" seed docs
+// as if they were the user's own learned knowledge (V3.6 P0-2). Only genuinely learned docs
+// (no pack id) belong in the review queue.
+const isSeededPackDoc = (doc: import("./document-store").Doc): boolean => {
+  if (typeof doc.extensions?.pack_id === "string" && doc.extensions.pack_id.length > 0) return true
+  return doc.tags.some((tag) => tag.startsWith("pack:"))
+}
+
 // Union the review queue (a given status) across user-global + this workspace's project store.
+// Built-in seeded pack docs are filtered out (see isSeededPackDoc).
 export const listByStatusForWorkspace = (
   workspacePath: string,
   status: import("./document-store").DocStatus,
@@ -166,6 +178,7 @@ export const listByStatusForWorkspace = (
       seen.add(ref.id)
       const doc = store.documentStore.get(ref.id)
       if (!doc) continue
+      if (isSeededPackDoc(doc)) continue
       out.push({
         id: doc.id,
         type: doc.type,

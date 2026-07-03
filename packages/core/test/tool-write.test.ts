@@ -4,6 +4,7 @@ import { fileURLToPath } from "url"
 import { describe, expect, test } from "bun:test"
 import { Effect, Layer } from "effect"
 import { FileMutation } from "@deepagent-code/core/file-mutation"
+import { FileLock } from "@deepagent-code/core/file-lock"
 import { FSUtil } from "@deepagent-code/core/fs-util"
 import { Location } from "@deepagent-code/core/location"
 import { LocationMutation } from "@deepagent-code/core/location-mutation"
@@ -70,6 +71,7 @@ const withTool = <A, E, R>(directory: string, body: (registry: ToolRegistry.Inte
     Layer.provide(permission),
     Layer.provide(resolution),
     Layer.provide(mutation),
+    Layer.provide(FileLock.layer),
   )
   return Effect.gen(function* () {
     return yield* body(yield* ToolRegistry.Service)

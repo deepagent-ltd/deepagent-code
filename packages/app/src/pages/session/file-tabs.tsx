@@ -171,7 +171,7 @@ function createScrollSync(input: { tab: () => string; view: ReturnType<typeof us
   }
 }
 
-export function FileTabContent(props: { tab: string }) {
+export function FileTabContent(props: { tab: string; class?: string }) {
   const file = useFile()
   const comments = useComments()
   const language = useLanguage()
@@ -441,7 +441,7 @@ export function FileTabContent(props: { tab: string }) {
   )
 
   return (
-    <Tabs.Content value={props.tab} class="mt-3 relative h-full">
+    <div class={props.class ?? "mt-3 relative h-full"}>
       <ScrollView class="h-full" viewportRef={scrollSync.setViewport} onScroll={scrollSync.handleScroll as any}>
         <Switch>
           <Match when={state()?.loaded}>{renderFile(contents())}</Match>
@@ -451,6 +451,6 @@ export function FileTabContent(props: { tab: string }) {
           <Match when={state()?.error}>{(err) => <div class="px-6 py-4 text-text-weak">{err()}</div>}</Match>
         </Switch>
       </ScrollView>
-    </Tabs.Content>
+    </div>
   )
 }
