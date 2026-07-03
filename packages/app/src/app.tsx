@@ -29,6 +29,7 @@ import {
 import { Dynamic } from "solid-js/web"
 import { CommandProvider } from "@/context/command"
 import { CommentsProvider } from "@/context/comments"
+import { DebugProvider } from "@/context/debug"
 import { FileProvider } from "@/context/file"
 import { ServerSDKProvider } from "@/context/server-sdk"
 import { ServerSyncProvider } from "@/context/server-sync"
@@ -131,7 +132,9 @@ function SessionProviders(props: ParentProps) {
     <TerminalProvider>
       <FileProvider>
         <PromptProvider>
-          <CommentsProvider>{props.children}</CommentsProvider>
+          <DebugProvider>
+            <CommentsProvider>{props.children}</CommentsProvider>
+          </DebugProvider>
         </PromptProvider>
       </FileProvider>
     </TerminalProvider>

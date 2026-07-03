@@ -280,6 +280,69 @@ export const { use: useFile, provider: FileProvider } = createSimpleContext({
       setSelectedLines,
       searchFiles: (query: string) => search(query, "false"),
       searchFilesAndDirectories: (query: string) => search(query, "true"),
+
+      // ── V3.6 Phase 1B mutation helpers ──────────────────────────────────
+      // These wrap sdk.client.file mutations and avoid the DOM-File naming
+      // conflict that arises when components import the SDK client directly.
+
+      writeFile: (
+        filePath: string,
+        content: string,
+        expected?: string,
+      ): Promise<{ ok: boolean; error?: string }> =>
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (sdk.client.file.write({ path: path.normalize(filePath), content, expected }) as any).then(
+          (r: any) => (r.data as { ok: boolean; error?: string } | undefined) ?? { ok: false, error: "no_response" },
+        ),
+
+      createFile: (filePath: string, content = ""): Promise<{ ok: boolean; error?: string }> =>
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (sdk.client.file.createFile({ path: path.normalize(filePath), content }) as any).then(
+          (r: any) => (r.data as { ok: boolean; error?: string } | undefined) ?? { ok: false, error: "no_response" },
+        ),
+
+      deleteFile: (filePath: string): Promise<{ ok: boolean; error?: string }> =>
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (sdk.client.file.deleteFile({ path: path.normalize(filePath) }) as any).then(
+          (r: any) => (r.data as { ok: boolean; error?: string } | undefined) ?? { ok: false, error: "no_response" },
+        ),
+
+      renameFile: (from: string, to: string): Promise<{ ok: boolean; error?: string }> =>
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (sdk.client.file.rename({ from: path.normalize(from), to: path.normalize(to) }) as any).then(
+          (r: any) => (r.data as { ok: boolean; error?: string } | undefined) ?? { ok: false, error: "no_response" },
+        ),
+
+      mkdir: (dirPath: string): Promise<{ ok: boolean; error?: string }> =>
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (sdk.client.file.mkdir({ path: path.normalize(dirPath) }) as any).then(
+          (r: any) => (r.data as { ok: boolean; error?: string } | undefined) ?? { ok: false, error: "no_response" },
+        ),
+
+      // ── V3.7 Phase 4.1D 编辑锁方法 ──────────────────────────────────────────
+
+      /** 获取文件编辑锁（human 锁可抢占 agent 锁）。返回 lockId 或 error。 */
+      acquireLock: (filePath: string): Promise<{ ok: boolean; lockId?: string; error?: string }> =>
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (sdk.client.file.lockAcquire({ path: path.normalize(filePath), kind: "human" }) as any).then(
+          (r: any) => {
+            const d = r.data as { ok: boolean; lock?: { lockId: string }; error?: string } | undefined
+            if (!d?.ok) return { ok: false, error: d?.error ?? "no_response" }
+            return { ok: true, lockId: d.lock?.lockId }
+          },
+        ),
+
+      /** 续租锁（心跳，每15s调一次）。lockId 不匹配时静默失败。 */
+      renewLock: (lockId: string): Promise<boolean> =>
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (sdk.client.file.lockRenew({ lockId }) as any).then(
+          (r: any) => (r.data as { ok: boolean } | undefined)?.ok ?? false,
+        ).catch(() => false),
+
+      /** 释放锁（关闭编辑器时调用）。 */
+      releaseLock: (lockId: string): Promise<void> =>
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (sdk.client.file.lockRelease({ lockId }) as any).catch(() => undefined),
     }
   },
 })

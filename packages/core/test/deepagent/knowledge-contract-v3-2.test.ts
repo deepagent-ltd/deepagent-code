@@ -87,4 +87,26 @@ describe("docs/34 knowledge retrieval contract", () => {
     const result = retrieve({ mode: "max", task, tools, round: 1, previousFailures: 0 })
     expect(result?.memoryRefs ?? []).toHaveLength(0)
   })
+
+  // V3.6 P0-2: a fresh install seeds ~3k pre-approved domain-pack docs into the user-global store.
+  // The Review queue must hide those (they are built-in, not user-learned) so it does not look like
+  // the app arrived with thousands of "already-approved" knowledge entries. Only genuinely learned
+  // docs (no pack id) belong in the queue.
+  test("P0-2: built-in seeded pack docs are excluded from the review queue", () => {
+    // The beforeEach already seeded the full built-in pack set (all carry a pack id / pack: tag).
+    // A learned candidate + a learned-then-approved doc are the only things a reviewer should see.
+    const store = openUserGlobalStore(base)
+    store.stageCandidate(memInput("learned: prefer tiled matmul on this repo", { idSlug: "learned-pending" }))
+    const approvedId = seedApproved(memInput("learned: build runs green after bun install", { idSlug: "learned-ok" }))
+    invalidateCache()
+
+    const queue = knowledgeSource.listAllForWorkspace(base)
+    const ids = queue.map((item) => item.id)
+
+    // exactly the two learned docs, none of the seeded pack docs
+    expect(queue.length).toBe(2)
+    expect(ids).toContain(approvedId)
+    expect(queue.some((item) => item.approval_status === "pending")).toBe(true)
+    expect(queue.some((item) => item.approval_status === "approved")).toBe(true)
+  })
 })

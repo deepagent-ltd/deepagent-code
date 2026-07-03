@@ -44,7 +44,7 @@ describe("createOpenSessionFileTab", () => {
         return tab.slice("file://".length)
       },
       loadFile: (path) => calls.push(`load:${path}`),
-      openReviewPanel: () => calls.push("review"),
+      onOpen: () => calls.push("open-preview"),
       setActive: (tab) => calls.push(`active:${tab}`),
     })
 
@@ -55,7 +55,7 @@ describe("createOpenSessionFileTab", () => {
       "open:file://src/a.ts",
       "path:file://src/a.ts",
       "load:src/a.ts",
-      "review",
+      "open-preview",
       "active:file://src/a.ts",
     ])
   })

@@ -10,6 +10,7 @@ import {
 } from "effect/unstable/http"
 import * as Socket from "effect/unstable/socket/Socket"
 import { FSUtil } from "@deepagent-code/core/fs-util"
+import { FileLock } from "@deepagent-code/core/file-lock"
 import { Account } from "@/account/account"
 import { Agent } from "@/agent/agent"
 import { Auth } from "@/auth"
@@ -77,7 +78,9 @@ import { controlHandlers } from "./handlers/control"
 import { controlPlaneHandlers } from "./handlers/control-plane"
 import { deepagentHandlers } from "./handlers/deepagent"
 import { experimentalHandlers } from "./handlers/experimental"
+import { debugHandlers } from "./handlers/debug"
 import { fileHandlers } from "./handlers/file"
+import { profileHandlers } from "./handlers/profile"
 import { globalHandlers } from "./handlers/global"
 import { instanceHandlers } from "./handlers/instance"
 import { mcpHandlers } from "./handlers/mcp"
@@ -142,6 +145,8 @@ const ptyConnectApiRoutes = HttpApiBuilder.layer(PtyConnectApi).pipe(
 const instanceApiRoutes = HttpApiBuilder.layer(InstanceHttpApi).pipe(
   Layer.provide([
     configHandlers,
+    debugHandlers,
+    profileHandlers,
     deepagentHandlers,
     experimentalHandlers,
     fileHandlers,
@@ -261,6 +266,7 @@ export function createRoutes(
       Workspace.defaultLayer,
       Worktree.appLayer,
       FSUtil.defaultLayer,
+      FileLock.layer,
       FetchHttpClient.layer,
       HttpServer.layerServices,
     ]),

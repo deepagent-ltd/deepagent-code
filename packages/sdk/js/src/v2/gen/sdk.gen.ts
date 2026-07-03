@@ -2561,6 +2561,125 @@ export class File extends HeyApiClient {
       ...params,
     })
   }
+
+  // ── V3.6 Phase 1A mutation methods ─────────────────────────────────────────
+
+  public write<ThrowOnError extends boolean = false>(
+    parameters: { directory?: string; workspace?: string; path: string; content: string; expected?: string },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [{ args: [{ in: "query", key: "directory" }, { in: "query", key: "workspace" }, { in: "body", key: "path" }, { in: "body", key: "content" }, { in: "body", key: "expected" }] }],
+    )
+    return (options?.client ?? this.client).post<unknown, unknown, ThrowOnError>({
+      url: "/file/write", ...options, ...params,
+      headers: { "Content-Type": "application/json", ...options?.headers, ...params.headers },
+    })
+  }
+
+  public createFile<ThrowOnError extends boolean = false>(
+    parameters: { directory?: string; workspace?: string; path: string; content?: string },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [{ args: [{ in: "query", key: "directory" }, { in: "query", key: "workspace" }, { in: "body", key: "path" }, { in: "body", key: "content" }] }],
+    )
+    return (options?.client ?? this.client).post<unknown, unknown, ThrowOnError>({
+      url: "/file/create", ...options, ...params,
+      headers: { "Content-Type": "application/json", ...options?.headers, ...params.headers },
+    })
+  }
+
+  public deleteFile<ThrowOnError extends boolean = false>(
+    parameters: { directory?: string; workspace?: string; path: string },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [{ args: [{ in: "query", key: "directory" }, { in: "query", key: "workspace" }, { in: "body", key: "path" }] }],
+    )
+    return (options?.client ?? this.client).post<unknown, unknown, ThrowOnError>({
+      url: "/file/delete", ...options, ...params,
+      headers: { "Content-Type": "application/json", ...options?.headers, ...params.headers },
+    })
+  }
+
+  public rename<ThrowOnError extends boolean = false>(
+    parameters: { directory?: string; workspace?: string; from: string; to: string },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [{ args: [{ in: "query", key: "directory" }, { in: "query", key: "workspace" }, { in: "body", key: "from" }, { in: "body", key: "to" }] }],
+    )
+    return (options?.client ?? this.client).post<unknown, unknown, ThrowOnError>({
+      url: "/file/rename", ...options, ...params,
+      headers: { "Content-Type": "application/json", ...options?.headers, ...params.headers },
+    })
+  }
+
+  public mkdir<ThrowOnError extends boolean = false>(
+    parameters: { directory?: string; workspace?: string; path: string },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [{ args: [{ in: "query", key: "directory" }, { in: "query", key: "workspace" }, { in: "body", key: "path" }] }],
+    )
+    return (options?.client ?? this.client).post<unknown, unknown, ThrowOnError>({
+      url: "/file/mkdir", ...options, ...params,
+      headers: { "Content-Type": "application/json", ...options?.headers, ...params.headers },
+    })
+  }
+
+  // ── V3.7 Phase 4.1C lock methods ───────────────────────────────────────────
+
+  /** Acquire a file edit lock. kind="human" preempts agent locks. */
+  public lockAcquire<ThrowOnError extends boolean = false>(
+    parameters: { directory?: string; workspace?: string; path: string; kind: "human" | "agent" },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [{ args: [{ in: "query", key: "directory" }, { in: "query", key: "workspace" }, { in: "body", key: "path" }, { in: "body", key: "kind" }] }],
+    )
+    return (options?.client ?? this.client).post<unknown, unknown, ThrowOnError>({
+      url: "/file/lock", ...options, ...params,
+      headers: { "Content-Type": "application/json", ...options?.headers, ...params.headers },
+    })
+  }
+
+  /** Renew (heartbeat) an existing lock. Call every ~15s from the editor. */
+  public lockRenew<ThrowOnError extends boolean = false>(
+    parameters: { directory?: string; workspace?: string; lockId: string },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [{ args: [{ in: "query", key: "directory" }, { in: "query", key: "workspace" }, { in: "body", key: "lockId" }] }],
+    )
+    return (options?.client ?? this.client).post<unknown, unknown, ThrowOnError>({
+      url: "/file/lock/renew", ...options, ...params,
+      headers: { "Content-Type": "application/json", ...options?.headers, ...params.headers },
+    })
+  }
+
+  /** Release a file lock on editor close/save. */
+  public lockRelease<ThrowOnError extends boolean = false>(
+    parameters: { directory?: string; workspace?: string; lockId: string },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [{ args: [{ in: "query", key: "directory" }, { in: "query", key: "workspace" }, { in: "body", key: "lockId" }] }],
+    )
+    return (options?.client ?? this.client).post<unknown, unknown, ThrowOnError>({
+      url: "/file/lock/release", ...options, ...params,
+      headers: { "Content-Type": "application/json", ...options?.headers, ...params.headers },
+    })
+  }
 }
 
 export class Instance extends HeyApiClient {
@@ -2857,6 +2976,100 @@ export class Lsp extends HeyApiClient {
       url: "/lsp",
       ...options,
       ...params,
+    })
+  }
+
+  // ── V3.6 Phase 2 LSP methods (human IDE smart capabilities, L1) ───────────
+
+  /** Get current per-file diagnostics from the language server. */
+  public diagnostics<ThrowOnError extends boolean = false>(
+    parameters?: { directory?: string; workspace?: string; path?: string },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [{ args: [{ in: "query", key: "directory" }, { in: "query", key: "workspace" }, { in: "query", key: "path" }] }],
+    )
+    return (options?.client ?? this.client).get<unknown, unknown, ThrowOnError>({
+      url: "/lsp/diagnostics", ...options, ...params,
+    })
+  }
+
+  /** Hover info at a 0-based position. */
+  public hover<ThrowOnError extends boolean = false>(
+    parameters: { directory?: string; workspace?: string; file: string; line: number; character: number },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [{ args: [{ in: "query", key: "directory" }, { in: "query", key: "workspace" }, { in: "body", key: "file" }, { in: "body", key: "line" }, { in: "body", key: "character" }] }],
+    )
+    return (options?.client ?? this.client).post<unknown, unknown, ThrowOnError>({
+      url: "/lsp/hover", ...options, ...params,
+      headers: { "Content-Type": "application/json", ...options?.headers, ...params.headers },
+    })
+  }
+
+  /** Go-to-definition at a 0-based position. */
+  public definition<ThrowOnError extends boolean = false>(
+    parameters: { directory?: string; workspace?: string; file: string; line: number; character: number },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [{ args: [{ in: "query", key: "directory" }, { in: "query", key: "workspace" }, { in: "body", key: "file" }, { in: "body", key: "line" }, { in: "body", key: "character" }] }],
+    )
+    return (options?.client ?? this.client).post<unknown, unknown, ThrowOnError>({
+      url: "/lsp/definition", ...options, ...params,
+      headers: { "Content-Type": "application/json", ...options?.headers, ...params.headers },
+    })
+  }
+
+  /** Autocomplete at a 0-based position. */
+  public completion<ThrowOnError extends boolean = false>(
+    parameters: { directory?: string; workspace?: string; file: string; line: number; character: number },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [{ args: [{ in: "query", key: "directory" }, { in: "query", key: "workspace" }, { in: "body", key: "file" }, { in: "body", key: "line" }, { in: "body", key: "character" }] }],
+    )
+    return (options?.client ?? this.client).post<unknown, unknown, ThrowOnError>({
+      url: "/lsp/completion", ...options, ...params,
+      headers: { "Content-Type": "application/json", ...options?.headers, ...params.headers },
+    })
+  }
+
+  /** Code actions for a 0-based range. */
+  public codeAction<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string; workspace?: string; file: string
+      startLine: number; startCharacter: number; endLine: number; endCharacter: number
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [{ args: [{ in: "query", key: "directory" }, { in: "query", key: "workspace" }, { in: "body", key: "file" }, { in: "body", key: "startLine" }, { in: "body", key: "startCharacter" }, { in: "body", key: "endLine" }, { in: "body", key: "endCharacter" }] }],
+    )
+    return (options?.client ?? this.client).post<unknown, unknown, ThrowOnError>({
+      url: "/lsp/code-action", ...options, ...params,
+      headers: { "Content-Type": "application/json", ...options?.headers, ...params.headers },
+    })
+  }
+
+  /** Rename preview — returns WorkspaceEdit. NEVER applies changes. */
+  public renamePreview<ThrowOnError extends boolean = false>(
+    parameters: { directory?: string; workspace?: string; file: string; line: number; character: number; newName: string },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [{ args: [{ in: "query", key: "directory" }, { in: "query", key: "workspace" }, { in: "body", key: "file" }, { in: "body", key: "line" }, { in: "body", key: "character" }, { in: "body", key: "newName" }] }],
+    )
+    return (options?.client ?? this.client).post<unknown, unknown, ThrowOnError>({
+      url: "/lsp/rename", ...options, ...params,
+      headers: { "Content-Type": "application/json", ...options?.headers, ...params.headers },
     })
   }
 }
@@ -6856,5 +7069,383 @@ export class DeepAgentCodeClient extends HeyApiClient {
   private _v2?: V2
   get v2(): V2 {
     return (this._v2 ??= new V2({ client: this.client }))
+  }
+
+  private _debug?: Debug
+  get debug(): Debug {
+    return (this._debug ??= new Debug({ client: this.client }))
+  }
+
+  private _profile?: Profile
+  get profile(): Profile {
+    return (this._profile ??= new Profile({ client: this.client }))
+  }
+}
+
+// ── V3.7 Phase 4.3 Debug SDK class ──────────────────────────────────────────
+
+/**
+ * Debug — DAP debug session methods (V3.7 D1H).
+ *
+ * All methods correspond 1-to-1 with the `/debug/*` HTTP routes added in
+ * groups/debug.ts.  The `directory` / `workspace` query fields come from
+ * WorkspaceRoutingQueryFields and are forwarded as usual.
+ */
+export class Debug extends HeyApiClient {
+  /** Start a debug session. R0 privilege gate runs inside DebugService. */
+  public start<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      workspace?: string
+      adapter: string
+      program: string
+      args?: string[]
+      cwd?: string
+      sessionId?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [{
+        args: [
+          { in: "query", key: "directory" },
+          { in: "query", key: "workspace" },
+          { in: "body", key: "adapter" },
+          { in: "body", key: "program" },
+          { in: "body", key: "args" },
+          { in: "body", key: "cwd" },
+          { in: "body", key: "sessionId" },
+        ],
+      }],
+    )
+    return (options?.client ?? this.client).post<unknown, unknown, ThrowOnError>({
+      url: "/debug/start",
+      ...options,
+      ...params,
+      headers: { "Content-Type": "application/json", ...options?.headers, ...params.headers },
+    })
+  }
+
+  /** Set (replace) breakpoints for a source file. */
+  public breakpoints<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      workspace?: string
+      sessionId: string
+      file: string
+      breakpoints: Array<{ line: number; condition?: string }>
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [{
+        args: [
+          { in: "query", key: "directory" },
+          { in: "query", key: "workspace" },
+          { in: "body", key: "sessionId" },
+          { in: "body", key: "file" },
+          { in: "body", key: "breakpoints" },
+        ],
+      }],
+    )
+    return (options?.client ?? this.client).post<unknown, unknown, ThrowOnError>({
+      url: "/debug/breakpoints",
+      ...options,
+      ...params,
+      headers: { "Content-Type": "application/json", ...options?.headers, ...params.headers },
+    })
+  }
+
+  /** Resume execution from a stopped state. */
+  public continue<ThrowOnError extends boolean = false>(
+    parameters: { directory?: string; workspace?: string; sessionId: string },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [{ args: [{ in: "query", key: "directory" }, { in: "query", key: "workspace" }, { in: "body", key: "sessionId" }] }],
+    )
+    return (options?.client ?? this.client).post<unknown, unknown, ThrowOnError>({
+      url: "/debug/continue",
+      ...options,
+      ...params,
+      headers: { "Content-Type": "application/json", ...options?.headers, ...params.headers },
+    })
+  }
+
+  /** Single-step (next / stepIn / stepOut). */
+  public step<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      workspace?: string
+      sessionId: string
+      kind: "next" | "stepIn" | "stepOut"
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [{
+        args: [
+          { in: "query", key: "directory" },
+          { in: "query", key: "workspace" },
+          { in: "body", key: "sessionId" },
+          { in: "body", key: "kind" },
+        ],
+      }],
+    )
+    return (options?.client ?? this.client).post<unknown, unknown, ThrowOnError>({
+      url: "/debug/step",
+      ...options,
+      ...params,
+      headers: { "Content-Type": "application/json", ...options?.headers, ...params.headers },
+    })
+  }
+
+  /** Get call-stack frames (session must be stopped). */
+  public stack<ThrowOnError extends boolean = false>(
+    parameters: { directory?: string; workspace?: string; sessionId: string },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [{ args: [{ in: "query", key: "directory" }, { in: "query", key: "workspace" }, { in: "query", key: "sessionId" }] }],
+    )
+    return (options?.client ?? this.client).get<unknown, unknown, ThrowOnError>({
+      url: "/debug/stack",
+      ...options,
+      ...params,
+    })
+  }
+
+  /** Get variable scopes for a stack frame. */
+  public scopes<ThrowOnError extends boolean = false>(
+    parameters: { directory?: string; workspace?: string; sessionId: string; frameId: number },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [{
+        args: [
+          { in: "query", key: "directory" },
+          { in: "query", key: "workspace" },
+          { in: "query", key: "sessionId" },
+          { in: "query", key: "frameId" },
+        ],
+      }],
+    )
+    return (options?.client ?? this.client).get<unknown, unknown, ThrowOnError>({
+      url: "/debug/scopes",
+      ...options,
+      ...params,
+    })
+  }
+
+  /** Get variables for a scope or structured variable reference. */
+  public variables<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      workspace?: string
+      sessionId: string
+      variablesReference: number
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [{
+        args: [
+          { in: "query", key: "directory" },
+          { in: "query", key: "workspace" },
+          { in: "query", key: "sessionId" },
+          { in: "query", key: "variablesReference" },
+        ],
+      }],
+    )
+    return (options?.client ?? this.client).get<unknown, unknown, ThrowOnError>({
+      url: "/debug/variables",
+      ...options,
+      ...params,
+    })
+  }
+
+  /** Evaluate an expression in the current frame (REPL / watch). */
+  public evaluate<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      workspace?: string
+      sessionId: string
+      expression: string
+      frameId?: number
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [{
+        args: [
+          { in: "query", key: "directory" },
+          { in: "query", key: "workspace" },
+          { in: "body", key: "sessionId" },
+          { in: "body", key: "expression" },
+          { in: "body", key: "frameId" },
+        ],
+      }],
+    )
+    return (options?.client ?? this.client).post<unknown, unknown, ThrowOnError>({
+      url: "/debug/evaluate",
+      ...options,
+      ...params,
+      headers: { "Content-Type": "application/json", ...options?.headers, ...params.headers },
+    })
+  }
+
+  /** Terminate a debug session and tear down the adapter. */
+  public terminate<ThrowOnError extends boolean = false>(
+    parameters: { directory?: string; workspace?: string; sessionId: string },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [{ args: [{ in: "query", key: "directory" }, { in: "query", key: "workspace" }, { in: "body", key: "sessionId" }] }],
+    )
+    return (options?.client ?? this.client).post<unknown, unknown, ThrowOnError>({
+      url: "/debug/terminate",
+      ...options,
+      ...params,
+      headers: { "Content-Type": "application/json", ...options?.headers, ...params.headers },
+    })
+  }
+
+  /** List all live debug sessions. */
+  public sessions<ThrowOnError extends boolean = false>(
+    parameters?: { directory?: string; workspace?: string },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [{ args: [{ in: "query", key: "directory" }, { in: "query", key: "workspace" }] }],
+    )
+    return (options?.client ?? this.client).get<unknown, unknown, ThrowOnError>({
+      url: "/debug/sessions",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Open the debug event SSE stream.
+   *
+   * Returns a native `EventSource`-compatible URL you can pass to `new EventSource(url)`,
+   * or call `eventsUrl()` then use `fetch` with `{ signal }` for more control.
+   */
+  public eventsUrl(parameters?: { directory?: string; workspace?: string; sessionId?: string }): string {
+    const qs = new URLSearchParams()
+    if (parameters?.directory) qs.set("directory", parameters.directory)
+    if (parameters?.workspace) qs.set("workspace", parameters.workspace)
+    if (parameters?.sessionId) qs.set("sessionId", parameters.sessionId)
+    const q = qs.toString()
+    return `/debug/events${q ? `?${q}` : ""}`
+  }
+}
+
+// ── V3.7 Phase 4.4 Profile SDK class ─────────────────────────────────────────
+
+/**
+ * Profile — PAP profiling methods (V3.7 P1H).
+ *
+ * Wraps the four /profile/* endpoints that expose the V3.5 ProfileService to
+ * the human UI. All requests inherit workspace routing (directory / workspace
+ * query params) from the shared buildClientParams helper.
+ */
+export class Profile extends HeyApiClient {
+  /** Start a profile run. Returns runId immediately; poll `result()` for completion. */
+  public run<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      workspace?: string
+      program: string
+      profiler?: string
+      args?: string[]
+      cwd?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [{
+        args: [
+          { in: "query", key: "directory" },
+          { in: "query", key: "workspace" },
+          { in: "body", key: "program" },
+          { in: "body", key: "profiler" },
+          { in: "body", key: "args" },
+          { in: "body", key: "cwd" },
+        ],
+      }],
+    )
+    return (options?.client ?? this.client).post<unknown, unknown, ThrowOnError>({
+      url: "/profile/run",
+      ...options,
+      ...params,
+      headers: { "Content-Type": "application/json", ...options?.headers, ...params.headers },
+    })
+  }
+
+  /** Get the full PROFILE_RESULT.json artifact for a completed run. */
+  public result<ThrowOnError extends boolean = false>(
+    parameters: { directory?: string; workspace?: string; runId: string },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [{ args: [{ in: "query", key: "directory" }, { in: "query", key: "workspace" }, { in: "query", key: "runId" }] }],
+    )
+    return (options?.client ?? this.client).get<unknown, unknown, ThrowOnError>({
+      url: "/profile/result",
+      ...options,
+      ...params,
+    })
+  }
+
+  /** Get the top-N normalized hotspots for a completed run (sorted by self-time desc). */
+  public hotspots<ThrowOnError extends boolean = false>(
+    parameters: { directory?: string; workspace?: string; runId: string; limit?: number },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [{
+        args: [
+          { in: "query", key: "directory" },
+          { in: "query", key: "workspace" },
+          { in: "query", key: "runId" },
+          { in: "query", key: "limit" },
+        ],
+      }],
+    )
+    return (options?.client ?? this.client).get<unknown, unknown, ThrowOnError>({
+      url: "/profile/hotspots",
+      ...options,
+      ...params,
+    })
+  }
+
+  /** List the most recent profile runs (up to 20), newest first. */
+  public runs<ThrowOnError extends boolean = false>(
+    parameters?: { directory?: string; workspace?: string },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters ?? {}],
+      [{ args: [{ in: "query", key: "directory" }, { in: "query", key: "workspace" }] }],
+    )
+    return (options?.client ?? this.client).get<unknown, unknown, ThrowOnError>({
+      url: "/profile/runs",
+      ...options,
+      ...params,
+    })
   }
 }

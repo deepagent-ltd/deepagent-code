@@ -252,7 +252,10 @@ export const createOpenSessionFileTab = (input: {
   openTab: (tab: string) => void
   pathFromTab: (tab: string) => string | undefined
   loadFile: (path: string) => void
-  openReviewPanel: () => void
+  // Called after the file is loaded/opened so the caller can surface the preview (e.g. focus the
+  // files panel and leave "file tree" mode). Previously this forced the review panel open, which
+  // only renders diffs — so clicking a non-changed file appeared to do nothing (V3.6 P0-1).
+  onOpen?: () => void
   setActive: (tab: string) => void
 }) => {
   return (value: string) => {
@@ -263,7 +266,7 @@ export const createOpenSessionFileTab = (input: {
     if (!path) return
 
     input.loadFile(path)
-    input.openReviewPanel()
+    input.onOpen?.()
     input.setActive(next)
   }
 }

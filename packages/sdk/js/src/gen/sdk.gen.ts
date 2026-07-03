@@ -2561,6 +2561,167 @@ export class File extends HeyApiClient {
       ...params,
     })
   }
+
+  // ── V3.6 Phase 1A mutation methods ─────────────────────────────────────────
+
+  /**
+   * Write (overwrite) a file.
+   * Pass `expected` (base64 snapshot of bytes last read) for a compare-and-swap
+   * save: the call returns `{ok:false, error:"stale_content"}` when the on-disk
+   * bytes changed since the snapshot. Without `expected` the write is unconditional.
+   */
+  public write<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      workspace?: string
+      path: string
+      content: string
+      /** Base64-encoded snapshot of the file bytes at the time they were loaded. */
+      expected?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "path" },
+            { in: "body", key: "content" },
+            { in: "body", key: "expected" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<unknown, unknown, ThrowOnError>({
+      url: "/file/write",
+      ...options,
+      ...params,
+      headers: { "Content-Type": "application/json", ...options?.headers, ...params.headers },
+    })
+  }
+
+  /** Create a new file. Returns `{ok:false, error:"already_exists"}` if the target exists. */
+  public createFile<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      workspace?: string
+      path: string
+      content?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "path" },
+            { in: "body", key: "content" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<unknown, unknown, ThrowOnError>({
+      url: "/file/create",
+      ...options,
+      ...params,
+      headers: { "Content-Type": "application/json", ...options?.headers, ...params.headers },
+    })
+  }
+
+  /** Delete a file or empty directory. */
+  public deleteFile<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      workspace?: string
+      path: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "path" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<unknown, unknown, ThrowOnError>({
+      url: "/file/delete",
+      ...options,
+      ...params,
+      headers: { "Content-Type": "application/json", ...options?.headers, ...params.headers },
+    })
+  }
+
+  /** Rename / move a file or directory within the same workspace root. */
+  public rename<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      workspace?: string
+      from: string
+      to: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "from" },
+            { in: "body", key: "to" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<unknown, unknown, ThrowOnError>({
+      url: "/file/rename",
+      ...options,
+      ...params,
+      headers: { "Content-Type": "application/json", ...options?.headers, ...params.headers },
+    })
+  }
+
+  /** Create a directory and any missing parent directories. */
+  public mkdir<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      workspace?: string
+      path: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "path" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<unknown, unknown, ThrowOnError>({
+      url: "/file/mkdir",
+      ...options,
+      ...params,
+      headers: { "Content-Type": "application/json", ...options?.headers, ...params.headers },
+    })
+  }
 }
 
 export class Instance extends HeyApiClient {

@@ -19,6 +19,19 @@ import { terminalWebSocketURL } from "@/utils/terminal-websocket-url"
 
 const TOGGLE_TERMINAL_ID = "terminal.toggle"
 const DEFAULT_TOGGLE_TERMINAL_KEYBIND = "ctrl+`"
+
+// Pane-management keybinds handled by the session command layer. Ghostty swallows
+// keys while a terminal is focused unless this handler returns true, so these must
+// be allowed to bubble up for split/close/focus-neighbour to work (V3.7 Phase 4.2).
+const PASSTHROUGH_KEYBINDS: Record<string, string> = {
+  "terminal.split.horizontal": "ctrl+\\",
+  "terminal.split.vertical": "ctrl+shift+\\",
+  "terminal.closePane": "ctrl+w",
+  "terminal.focus.left": "ctrl+arrowleft",
+  "terminal.focus.right": "ctrl+arrowright",
+  "terminal.focus.up": "ctrl+arrowup",
+  "terminal.focus.down": "ctrl+arrowdown",
+}
 export interface TerminalProps extends ComponentProps<"div"> {
   pty: LocalPTY
   autoFocus?: boolean
@@ -384,9 +397,15 @@ export const Terminal = (props: TerminalProps) => {
 
         // allow for toggle terminal keybinds in parent
         const config = settings.keybinds.get(TOGGLE_TERMINAL_ID) ?? DEFAULT_TOGGLE_TERMINAL_KEYBIND
-        const keybinds = parseKeybind(config)
+        if (matchKeybind(parseKeybind(config), event)) return true
 
-        return matchKeybind(keybinds, event)
+        // let pane-management keybinds bubble to the session command layer
+        for (const [id, fallback] of Object.entries(PASSTHROUGH_KEYBINDS)) {
+          const bind = settings.keybinds.get(id) ?? fallback
+          if (matchKeybind(parseKeybind(bind), event)) return true
+        }
+
+        return false
       })
 
       const fit = new mod.FitAddon()

@@ -9,6 +9,7 @@ export * as WriteTool from "./write"
 
 import { ToolFailure, toolText } from "@deepagent-code/llm"
 import { Effect, Layer, Schema } from "effect"
+import { FileLock } from "../file-lock"
 import { FileMutation } from "../file-mutation"
 import { LocationMutation } from "../location-mutation"
 import { PermissionV2 } from "../permission"
@@ -49,6 +50,7 @@ export const layer = Layer.effectDiscard(
     const mutation = yield* LocationMutation.Service
     const files = yield* FileMutation.Service
     const permission = yield* PermissionV2.Service
+    const fileLock = yield* FileLock.Service
 
     yield* tools
       .register({
@@ -83,6 +85,13 @@ export const layer = Layer.effectDiscard(
                   agent: context.agent,
                   source,
                 })
+                // V3.7 Phase 4.1C: block agent write when a human editor holds the lock
+                const lock = fileLock.status(target.canonical)
+                if (lock?.kind === "human") {
+                  return yield* Effect.fail(
+                    new ToolFailure({ message: `File ${input.path} is locked by a human editor. Wait for them to finish or ask them to save.` }),
+                  )
+                }
                 return yield* files.writeTextPreservingBom({ target, content: input.content })
               }).pipe(Effect.mapError(() => new ToolFailure({ message: `Unable to write ${input.path}` }))),
           }),
@@ -91,4 +100,6 @@ export const layer = Layer.effectDiscard(
       })
       .pipe(Effect.orDie)
   }),
-)
+  // V3.7 Phase 4.1C: FileLock.layer is self-contained (no external deps),
+  // provided here so WriteTool.layer doesn't leak FileLock.Service as a requirement.
+).pipe(Layer.provide(FileLock.layer))
