@@ -9,6 +9,7 @@ import type { SnapshotFileDiff, VcsFileDiff } from "@deepagent-code/sdk/v2"
 
 import FileTree from "@/components/file-tree"
 import { StatusPopoverBody } from "@/components/status-popover-body"
+import { SidePanelPlugins } from "@/pages/session/side-panel-plugins"
 import { useCommand } from "@/context/command"
 import { useFile, type SelectedLineRange } from "@/context/file"
 import { useLanguage } from "@/context/language"
@@ -64,9 +65,17 @@ export function SessionSidePanel(props: {
   const subagentsOpen = createMemo(() => isDesktop() && view().rightPanel.mode() === "subagents")
   const browserOpen = createMemo(() => isDesktop() && view().rightPanel.mode() === "browser")
   const worktreeOpen = createMemo(() => isDesktop() && view().rightPanel.mode() === "worktree")
+  const pluginsOpen = createMemo(() => isDesktop() && view().rightPanel.mode() === "plugins")
   const open = createMemo(
     () =>
-      menuOpen() || reviewOpen() || fileOpen() || statusOpen() || subagentsOpen() || browserOpen() || worktreeOpen(),
+      menuOpen() ||
+      reviewOpen() ||
+      fileOpen() ||
+      statusOpen() ||
+      subagentsOpen() ||
+      browserOpen() ||
+      worktreeOpen() ||
+      pluginsOpen(),
   )
   const panelWidth = createMemo(() => (open() ? `${layout.rightPanel.width()}px` : "0px"))
 
@@ -180,6 +189,12 @@ export function SessionSidePanel(props: {
     view().rightPanel.open("worktree")
   }
 
+  const openPlugins = () => {
+    view().reviewPanel.close()
+    layout.fileTree.close()
+    view().rightPanel.open("plugins")
+  }
+
   const openTerminal = () => {
     view().terminal.open()
     queueMicrotask(() => {
@@ -235,6 +250,12 @@ export function SessionSidePanel(props: {
       active: worktreeOpen(),
       onClick: openWorktree,
     },
+    {
+      icon: "dot-grid",
+      title: language.t("status.popover.tab.plugins"),
+      active: pluginsOpen(),
+      onClick: openPlugins,
+    },
   ])
 
   createEffect(() => {
@@ -280,8 +301,8 @@ export function SessionSidePanel(props: {
                 direction="horizontal"
                 edge="start"
                 size={layout.rightPanel.width()}
-                min={300}
-                max={typeof window === "undefined" ? 640 : Math.min(720, Math.max(360, window.innerWidth * 0.5))}
+                min={layout.rightPanel.minWidth}
+                max={layout.rightPanel.maxWidth()}
                 onResize={(width) => {
                   props.size.touch()
                   layout.rightPanel.resize(width)
@@ -381,6 +402,9 @@ export function SessionSidePanel(props: {
               </Match>
               <Match when={worktreeOpen()}>
                 <SidePanelWorktree onClose={openMenu} />
+              </Match>
+              <Match when={pluginsOpen()}>
+                <SidePanelPlugins onClose={openMenu} />
               </Match>
             </Switch>
           </div>
