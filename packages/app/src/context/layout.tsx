@@ -68,7 +68,7 @@ type SessionView = {
   reviewOpen?: string[]
   // U3/U4/U7: added "worktree" (isolated worktree diff/merge), "subagents" (child-session list),
   // "browser" (isolated WebContentsView).
-  rightPanelMode?: "menu" | "review" | "files" | "status" | "worktree" | "subagents" | "browser" | "plugins"
+  rightPanelMode?: "menu" | "review" | "files" | "status" | "worktree" | "subagents" | "browser" | "plugins" | "profile" | "debug"
   pendingMessage?: string
   pendingMessageAt?: number
   todoCollapsed?: boolean
