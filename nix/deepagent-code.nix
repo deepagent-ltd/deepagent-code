@@ -18,6 +18,11 @@ stdenvNoCC.mkDerivation (finalAttrs: {
   inherit (node_modules) version src;
   inherit node_modules;
 
+  patchPhase = ''
+    BUN_VERSION=$(bun --version)
+    sed -i "s/const expectedBunVersionRange.*/const expectedBunVersionRange = \"^$BUN_VERSION\";/" packages/script/src/index.ts
+  '';
+
   nativeBuildInputs = [
     bun
     nodejs # for patchShebangs node_modules
