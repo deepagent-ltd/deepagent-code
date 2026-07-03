@@ -9,7 +9,9 @@ import { ControlPlaneApi } from "./groups/control-plane"
 import { DeepAgentApi } from "./groups/deepagent"
 import { EventApi } from "./groups/event"
 import { ExperimentalApi } from "./groups/experimental"
+import { DebugApi } from "./groups/debug"
 import { FileApi } from "./groups/file"
+import { ProfileApi } from "./groups/profile"
 import { InstanceApi } from "./groups/instance"
 import { McpApi } from "./groups/mcp"
 import { PermissionApi } from "./groups/permission"
@@ -52,6 +54,8 @@ export const RootHttpApi = HttpApi.make("deepagent-code-root")
 
 export const InstanceHttpApi = HttpApi.make("deepagent-code-instance")
   .addHttpApi(ConfigApi)
+  .addHttpApi(DebugApi)
+  .addHttpApi(ProfileApi)
   .addHttpApi(DeepAgentApi)
   .addHttpApi(ExperimentalApi)
   .addHttpApi(FileApi)
