@@ -73,6 +73,15 @@ export const dict = {
 
   "command.terminal.new": "新建终端",
   "command.terminal.new.description": "创建新的终端标签页",
+  "command.terminal.split.horizontal": "水平分裂终端",
+  "command.terminal.split.horizontal.description": "在当前面板下方新建终端",
+  "command.terminal.split.vertical": "垂直分裂终端",
+  "command.terminal.split.vertical.description": "在当前面板右侧新建终端",
+  "command.terminal.focus.left": "焦点移到左侧面板",
+  "command.terminal.focus.right": "焦点移到右侧面板",
+  "command.terminal.focus.up": "焦点移到上方面板",
+  "command.terminal.focus.down": "焦点移到下方面板",
+  "command.terminal.closePane": "关闭当前面板",
 
   "command.steps.toggle": "切换步骤",
   "command.steps.toggle.description": "显示或隐藏当前消息的步骤",
@@ -665,6 +674,8 @@ export const dict = {
   "status.popover.tab.lsp": "LSP",
   "status.popover.tab.plugins": "插件",
   "status.popover.action.manageServers": "管理服务器",
+  // V3.6 Phase 3C
+  "sidebar.extensions": "扩展与服务",
 
   "session.share.popover.title": "发布到网页",
   "session.share.popover.description.shared": "此会话已在网页上公开。任何拥有链接的人都可以访问。",
@@ -687,6 +698,12 @@ export const dict = {
   "terminal.title": "终端",
   "terminal.title.numbered": "终端 {{number}}",
   "terminal.close": "关闭终端",
+  "terminal.split.horizontal": "水平分裂",
+  "terminal.split.vertical": "垂直分裂",
+  "terminal.pane.close": "关闭面板",
+  "terminal.dock.terminal": "终端",
+  "terminal.dock.debugConsole": "调试控制台",
+  "terminal.debugConsole.placeholder": "调试控制台将在会话激活后可用。",
   "terminal.connectionLost.title": "连接已丢失",
   "terminal.connectionLost.description": "终端连接已中断。这可能发生在服务器重启时。",
 
@@ -708,7 +725,7 @@ export const dict = {
   "sidebar.nav.projectsAndSessions": "项目和会话",
   "sidebar.settings": "设置",
   "sidebar.help": "帮助",
-  "sidebar.review": "审阅知识",
+  "sidebar.review": "知识治理",
   "sidebar.workspaces.enable": "启用工作区",
   "sidebar.workspaces.disable": "禁用工作区",
   "sidebar.gettingStarted.title": "入门",

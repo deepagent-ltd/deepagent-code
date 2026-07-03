@@ -516,6 +516,8 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
     }),
   ]
 
+  const terminalOpen = () => view().terminal.opened()
+  const focusedPane = () => terminal.focusedPaneId()
   const terminalCmds = () => [
     terminalCommand({
       id: "terminal.new",
@@ -523,6 +525,62 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
       description: language.t("command.terminal.new.description"),
       keybind: "ctrl+alt+t",
       onSelect: openTerminal,
+    }),
+    terminalCommand({
+      // V3.7 review P1-1: split/close moved to the ctrl+alt+* family (matching
+      // terminal.new's ctrl+alt+t) to avoid colliding with fileTree.toggle (mod+\)
+      // and tab.close (mod+w) — mod resolves to ctrl on non-Mac, so ctrl+\/ctrl+w
+      // were being preempted by the earlier-registered view/file commands.
+      // P2-2: "split.vertical" = side-by-side (equal width); "split.horizontal" = stacked.
+      id: "terminal.split.vertical",
+      title: language.t("command.terminal.split.vertical"),
+      description: language.t("command.terminal.split.vertical.description"),
+      keybind: "ctrl+alt+\\",
+      disabled: !terminalOpen() || !terminal.canSplit(focusedPane()),
+      onSelect: () => terminal.split("vertical"),
+    }),
+    terminalCommand({
+      id: "terminal.split.horizontal",
+      title: language.t("command.terminal.split.horizontal"),
+      description: language.t("command.terminal.split.horizontal.description"),
+      keybind: "ctrl+alt+shift+\\",
+      disabled: !terminalOpen() || !terminal.canSplit(focusedPane()),
+      onSelect: () => terminal.split("horizontal"),
+    }),
+    terminalCommand({
+      id: "terminal.closePane",
+      title: language.t("command.terminal.closePane"),
+      keybind: "ctrl+alt+w",
+      disabled: !terminalOpen(),
+      onSelect: () => void terminal.closePane(focusedPane()),
+    }),
+    terminalCommand({
+      id: "terminal.focus.left",
+      title: language.t("command.terminal.focus.left"),
+      keybind: "ctrl+arrowleft",
+      disabled: !terminalOpen(),
+      onSelect: () => terminal.focusNeighbor("left"),
+    }),
+    terminalCommand({
+      id: "terminal.focus.right",
+      title: language.t("command.terminal.focus.right"),
+      keybind: "ctrl+arrowright",
+      disabled: !terminalOpen(),
+      onSelect: () => terminal.focusNeighbor("right"),
+    }),
+    terminalCommand({
+      id: "terminal.focus.up",
+      title: language.t("command.terminal.focus.up"),
+      keybind: "ctrl+arrowup",
+      disabled: !terminalOpen(),
+      onSelect: () => terminal.focusNeighbor("up"),
+    }),
+    terminalCommand({
+      id: "terminal.focus.down",
+      title: language.t("command.terminal.focus.down"),
+      keybind: "ctrl+arrowdown",
+      disabled: !terminalOpen(),
+      onSelect: () => terminal.focusNeighbor("down"),
     }),
   ]
 
