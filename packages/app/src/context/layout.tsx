@@ -1,5 +1,5 @@
 import { createStore, produce } from "solid-js/store"
-import { batch, createEffect, createMemo, onCleanup, onMount, type Accessor } from "solid-js"
+import { batch, createEffect, createMemo, createSignal, onCleanup, onMount, type Accessor } from "solid-js"
 import { useLocation } from "@solidjs/router"
 import { createSimpleContext } from "@deepagent-code/ui/context"
 import { makeEventListener } from "@solid-primitives/event-listener"
@@ -24,7 +24,13 @@ export type { ProjectAvatarVariant }
 const AVATAR_COLOR_KEYS = ["pink", "mint", "orange", "purple", "cyan", "lime"] as const
 const DEFAULT_SIDEBAR_WIDTH = 344
 const DEFAULT_FILE_TREE_WIDTH = 200
-const DEFAULT_RIGHT_PANEL_WIDTH = 360
+// Right panel width is stored as a fraction of the window width (ratio strategy) so it stays
+// visually consistent across screen sizes / zoom levels. px is derived live from the current
+// window width and clamped to [MIN_RIGHT_PANEL_PX, window * MAX_RIGHT_PANEL_RATIO].
+const DEFAULT_RIGHT_PANEL_RATIO = 0.26
+const MIN_RIGHT_PANEL_PX = 300
+const MAX_RIGHT_PANEL_RATIO = 0.6
+const FALLBACK_WINDOW_WIDTH = 1280
 const DEFAULT_SESSION_WIDTH = 600
 const DEFAULT_TERMINAL_HEIGHT = 280
 export type AvatarColorKey = (typeof AVATAR_COLOR_KEYS)[number]
@@ -62,7 +68,7 @@ type SessionView = {
   reviewOpen?: string[]
   // U3/U4/U7: added "worktree" (isolated worktree diff/merge), "subagents" (child-session list),
   // "browser" (isolated WebContentsView).
-  rightPanelMode?: "menu" | "review" | "files" | "status" | "worktree" | "subagents" | "browser"
+  rightPanelMode?: "menu" | "review" | "files" | "status" | "worktree" | "subagents" | "browser" | "plugins"
   pendingMessage?: string
   pendingMessageAt?: number
   todoCollapsed?: boolean
@@ -223,11 +229,24 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
         return next
       })()
 
+      // rightPanel moved from a fixed px width to a window-width ratio. Convert the legacy
+      // { width: px } shape into { ratio } using the current window width.
+      const rightPanel = value.rightPanel
+      const migratedRightPanel = (() => {
+        if (!isRecord(rightPanel)) return rightPanel
+        if (typeof rightPanel.ratio === "number") return rightPanel
+        if (typeof rightPanel.width !== "number") return rightPanel
+        const w = typeof window === "undefined" ? 1280 : window.innerWidth
+        const ratio = w > 0 ? rightPanel.width / w : DEFAULT_RIGHT_PANEL_RATIO
+        return { ratio }
+      })()
+
       if (
         migratedSidebar === sidebar &&
         migratedReview === review &&
         migratedFileTree === fileTree &&
         migratedSessionTabs === value.sessionTabs &&
+        migratedRightPanel === rightPanel &&
         sessionView === value.sessionView
       ) {
         return value
@@ -239,6 +258,7 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
         review: migratedReview,
         fileTree: migratedFileTree,
         sessionTabs: migratedSessionTabs,
+        rightPanel: migratedRightPanel,
         sessionView,
       }
     }
@@ -267,7 +287,7 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
           tab: "changes" as "changes" | "all",
         },
         rightPanel: {
-          width: DEFAULT_RIGHT_PANEL_WIDTH,
+          ratio: DEFAULT_RIGHT_PANEL_RATIO,
         },
         session: {
           width: DEFAULT_SESSION_WIDTH,
@@ -282,6 +302,14 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
         },
       }),
     )
+
+    // Reactive window width, used to derive the right panel px width from its stored ratio.
+    const [windowWidth, setWindowWidth] = createSignal(typeof window === "undefined" ? 1280 : window.innerWidth)
+    if (typeof window !== "undefined") {
+      const onResize = () => setWindowWidth(window.innerWidth)
+      window.addEventListener("resize", onResize)
+      onCleanup(() => window.removeEventListener("resize", onResize))
+    }
 
     const MAX_SESSION_KEYS = 50
     const PENDING_MESSAGE_TTL_MS = 2 * 60 * 1000
@@ -683,13 +711,23 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
         },
       },
       rightPanel: {
-        width: createMemo(() => store.rightPanel?.width ?? DEFAULT_RIGHT_PANEL_WIDTH),
+        // Stored value is a ratio of the window width; px is derived live from the current window
+        // width and clamped so the panel stays proportional across screens and can stretch with the
+        // window (no fixed 720px ceiling).
+        maxWidth: createMemo(() => Math.round(windowWidth() * MAX_RIGHT_PANEL_RATIO)),
+        minWidth: MIN_RIGHT_PANEL_PX,
+        width: createMemo(() => {
+          const ratio = store.rightPanel?.ratio ?? DEFAULT_RIGHT_PANEL_RATIO
+          const max = Math.max(MIN_RIGHT_PANEL_PX, Math.round(windowWidth() * MAX_RIGHT_PANEL_RATIO))
+          return Math.min(max, Math.max(MIN_RIGHT_PANEL_PX, Math.round(windowWidth() * ratio)))
+        }),
         resize(width: number) {
+          const ratio = windowWidth() > 0 ? width / windowWidth() : DEFAULT_RIGHT_PANEL_RATIO
           if (!store.rightPanel) {
-            setStore("rightPanel", { width })
+            setStore("rightPanel", { ratio })
             return
           }
-          setStore("rightPanel", "width", width)
+          setStore("rightPanel", "ratio", ratio)
         },
       },
       session: {
