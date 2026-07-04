@@ -5,6 +5,7 @@ import { EventV2 } from "@deepagent-code/core/event"
 import { Installation } from "@/installation"
 import { disposeAllInstancesAndEmitGlobalDisposed } from "@/server/global-lifecycle"
 import { InstallationVersion } from "@deepagent-code/core/installation/version"
+import { IM_PROTOCOL_VERSION } from "@deepagent-code/core/im/protocol"
 import * as Log from "@deepagent-code/core/util/log"
 import { Effect, Queue, Schema } from "effect"
 import * as Stream from "effect/Stream"
@@ -74,6 +75,19 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
 
     const health = Effect.fn("GlobalHttpApi.health")(function* () {
       return { healthy: true as const, version: InstallationVersion }
+    })
+
+    const capabilities = Effect.fn("GlobalHttpApi.capabilities")(function* () {
+      return {
+        protocolVersion: IM_PROTOCOL_VERSION,
+        version: InstallationVersion,
+        features: {
+          im: true,
+          sessions: true,
+          pty: true,
+          workspaces: true,
+        },
+      }
     })
 
     const event = Effect.fn("GlobalHttpApi.event")(function* () {
@@ -148,6 +162,7 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
 
     return handlers
       .handle("health", health)
+      .handle("capabilities", capabilities)
       .handleRaw("event", event)
       .handle("configGet", configGet)
       .handle("configUpdate", configUpdate)
