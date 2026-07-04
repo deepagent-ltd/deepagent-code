@@ -24,10 +24,14 @@ export function createSdkForServer({
   server: ServerConnection.HttpBase
 }) {
   const auth = (() => {
-    if (!server.password) return
-    return {
-      Authorization: `Basic ${authTokenFromCredentials({ username: server.username, password: server.password })}`,
-    }
+    // Server Edition (gateway) connections authenticate with a JWT bearer.
+    if (server.bearer) return { Authorization: `Bearer ${server.bearer}` }
+    // Self-hosted / local connections use HTTP Basic.
+    if (server.password)
+      return {
+        Authorization: `Basic ${authTokenFromCredentials({ username: server.username, password: server.password })}`,
+      }
+    return
   })()
 
   return createDeepAgentCodeClient({
