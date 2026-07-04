@@ -73,6 +73,25 @@ describe("instance HttpApi", () => {
     }),
   )
 
+  it.live("reports capabilities and protocol version", () =>
+    Effect.gen(function* () {
+      const response = yield* HttpClient.get("/global/capabilities")
+
+      expect(response.status).toBe(200)
+      const body = yield* response.json
+      expect(body).toMatchObject({
+        protocolVersion: "3.8",
+        version: expect.any(String),
+        features: {
+          im: true,
+          sessions: true,
+          pty: true,
+          workspaces: true,
+        },
+      })
+    }),
+  )
+
   it.live("emits a sync fence header for fixed-workspace mutations", () =>
     Effect.gen(function* () {
       const originalWorkspaceID = Flag.DEEPAGENT_CODE_WORKSPACE_ID
