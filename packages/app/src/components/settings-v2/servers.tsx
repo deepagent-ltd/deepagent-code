@@ -13,6 +13,7 @@ import { useLanguage } from "@/context/language"
 import { ServerConnection, serverName } from "@/context/server"
 import { useServerManagementController } from "../dialog-select-server"
 import { DialogServerV2 } from "./dialog-server-v2"
+import { DialogConnectServer } from "./dialog-connect-server"
 import { SettingsListV2 } from "./parts/list"
 import { isWslServer, useFilteredWslServers, WslAddServerButton, WslServerSettings } from "@/wsl/settings"
 import "./settings-v2.css"
@@ -43,6 +44,10 @@ export const SettingsServersV2: Component = () => {
     dialog.push(() => <DialogServerV2 mode="add" />)
   }
 
+  const openConnectServer = () => {
+    dialog.push(() => <DialogConnectServer />)
+  }
+
   const openEdit = (server: ServerConnection.Http) => {
     dialog.push(() => <DialogServerV2 mode="edit" server={server} />)
   }
@@ -57,6 +62,9 @@ export const SettingsServersV2: Component = () => {
           <h2 class="settings-v2-tab-title">{language.t("status.popover.tab.servers")}</h2>
           <ButtonV2 variant="ghost-muted" icon="plus" onClick={openAdd}>
             {language.t("dialog.server.add.button")}
+          </ButtonV2>
+          <ButtonV2 variant="ghost-muted" icon="cloud" onClick={openConnectServer}>
+            Connect to Server
           </ButtonV2>
           <WslAddServerButton />
         </div>
