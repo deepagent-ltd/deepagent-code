@@ -15,8 +15,17 @@ export default Runtime.handler(
     return yield* Effect.scoped(
       Effect.gen(function* () {
         const daemon = yield* Daemon.Service
-        const address = yield* listen(input.hostname, input.port, yield* daemon.password())
-        if (input.register) yield* daemon.register(address)
+        // Server-mode (e.g. deepagent-code-server workspace-agent) injects the
+        // Basic Auth credential via DEEPAGENT_CODE_SERVER_PASSWORD and expects
+        // the server to honor it. When present, use it directly and skip daemon
+        // registration (that discovery/reconnect flow is a local-desktop concern
+        // and would otherwise overwrite the injected credential with a random
+        // file-based one). When absent, preserve the existing local behavior.
+        const envPassword = process.env.DEEPAGENT_CODE_SERVER_PASSWORD
+        const serverMode = typeof envPassword === "string" && envPassword !== ""
+        const password = serverMode ? envPassword : yield* daemon.password()
+        const address = yield* listen(input.hostname, input.port, password)
+        if (input.register && !serverMode) yield* daemon.register(address)
         console.log(`server listening on ${HttpServer.formatAddress(address)}`)
         return yield* Effect.never
       }),

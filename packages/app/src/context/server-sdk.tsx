@@ -7,6 +7,7 @@ import { createSdkForServer } from "@/utils/server"
 import { useLanguage } from "./language"
 import { usePlatform } from "./platform"
 import { ServerConnection, useServer } from "./server"
+import { useGateway } from "./gateway"
 import { createRefCountMap } from "@/utils/refcount"
 import { useGlobal } from "./global"
 import { ServerScope } from "@/utils/server-scope"
@@ -23,9 +24,19 @@ export function resumeStreamAfterPageShow(event: PageTransitionEvent, start: () 
 
 export function createServerSdkContext(server: ServerConnection.Any, scope: ServerScope) {
   const platform = usePlatform()
+  const gateway = useGateway()
   const abort = new AbortController()
 
+  // In Server Edition mode, all requests must carry the live JWT bearer and
+  // survive its ~15m rotation. The gateway's authenticating fetch injects the
+  // current token and refreshes-and-retries on 401, so we route every SDK/event
+  // call through it (and pin the connection's live bearer into `http`).
+  const gatewayFetch = ServerConnection.server(server) ? gateway.fetchFor(server) : undefined
+  const serverHttp = (): ServerConnection.HttpBase =>
+    ServerConnection.server(server) ? { ...server.http, bearer: gateway.token(server) ?? server.http.bearer } : server.http
+
   const eventFetch = (() => {
+    if (gatewayFetch) return gatewayFetch
     if (!platform.fetch || !server) return
     try {
       const url = new URL(server.http.url)
@@ -39,7 +50,7 @@ export function createServerSdkContext(server: ServerConnection.Any, scope: Serv
   const eventSdk = createSdkForServer({
     signal: abort.signal,
     fetch: eventFetch,
-    server: server.http,
+    server: serverHttp(),
   })
   const emitter = createGlobalEmitter<{
     [key: string]: Event
@@ -237,8 +248,8 @@ export function createServerSdkContext(server: ServerConnection.Any, scope: Serv
   })
 
   const sdk = createSdkForServer({
-    server: server.http,
-    fetch: platform.fetch,
+    server: serverHttp(),
+    fetch: gatewayFetch ?? platform.fetch,
     throwOnError: true,
   })
 
@@ -253,8 +264,8 @@ export function createServerSdkContext(server: ServerConnection.Any, scope: Serv
     },
     createClient(opts: Omit<Parameters<typeof createSdkForServer>[0], "server" | "fetch">) {
       return createSdkForServer({
-        server: server.http,
-        fetch: platform.fetch,
+        server: serverHttp(),
+        fetch: gatewayFetch ?? platform.fetch,
         ...opts,
       })
     },

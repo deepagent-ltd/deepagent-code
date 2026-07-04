@@ -5,7 +5,7 @@ import { Persist, persisted } from "@/utils/persist"
 import { ServerScope } from "@/utils/server-scope"
 
 type StoredProject = { worktree: string; expanded: boolean }
-type StoredServer = string | ServerConnection.HttpBase | ServerConnection.Http
+type StoredServer = string | ServerConnection.HttpBase | ServerConnection.Http | ServerConnection.Server
 type ServerProjectState = { projects: Record<string, StoredProject[]>; lastProject: Record<string, string> }
 const HEALTH_POLL_INTERVAL_MS = 10_000
 
@@ -120,15 +120,22 @@ export function resolveServerList(input: {
   )
 
   for (const value of input.stored) {
-    const conn: ServerConnection.Http =
+    const conn: ServerConnection.Any =
       typeof value === "string"
         ? {
             type: "http" as const,
             http: { url: value },
           }
-        : "http" in value
-          ? value
-          : { type: "http", http: value }
+        : "type" in value
+          ? // Already a typed connection (Http or Server). Drop any persisted
+            // bearer — the live token is memory-only and re-derived via the
+            // refresh cookie on restart.
+            value.type === "server"
+            ? { ...value, http: { ...value.http, bearer: undefined } }
+            : value
+          : "http" in value
+            ? { type: "http", http: value }
+            : { type: "http", http: value }
     const key = ServerConnection.key(conn)
 
     const existing = deduped.get(key)
@@ -137,7 +144,7 @@ export function resolveServerList(input: {
         ...existing,
         ...conn,
         http: { ...existing.http, ...conn.http },
-      })
+      } as ServerConnection.Any)
     else deduped.set(key, conn)
   }
 
@@ -151,6 +158,9 @@ export namespace ServerConnection {
     url: string
     username?: string
     password?: string
+    // Bearer access token for Server Edition (gateway) connections. When set,
+    // the SDK/IM clients send `Authorization: Bearer <token>` instead of Basic.
+    bearer?: string
   }
 
   // Regular web connections
@@ -158,6 +168,18 @@ export namespace ServerConnection {
     type: "http"
     http: HttpBase
     authToken?: boolean
+  } & Base
+
+  // Server Edition: connect through the deepagent-server gateway. `http.url` is
+  // the workspace-agent proxy base (`<gateway>/w`) so all existing SDK code that
+  // reads `conn.http.url` targets the container transparently. `gatewayUrl` is
+  // the control-plane origin (login/refresh/containers). Auth is JWT bearer,
+  // refreshed via an HttpOnly cookie — the live token lives in HttpBase.bearer.
+  export type Server = {
+    type: "server"
+    gatewayUrl: string
+    http: HttpBase
+    email?: string
   } & Base
 
   export type Sidecar = {
@@ -184,6 +206,7 @@ export namespace ServerConnection {
 
   export type Any =
     | Http
+    | Server
     // All these are desktop-only
     | (Sidecar | Ssh)
 
@@ -191,6 +214,8 @@ export namespace ServerConnection {
     switch (conn.type) {
       case "http":
         return Key.make(conn.http.url)
+      case "server":
+        return Key.make(`server:${conn.gatewayUrl}`)
       case "sidecar": {
         if (conn.variant === "wsl") return Key.make(`wsl:${conn.distro}`)
         return Key.make("sidecar")
@@ -204,6 +229,9 @@ export namespace ServerConnection {
   export const Key = { make: (v: string) => v as Key }
 
   export const builtin = (conn: Any) => conn.type === "sidecar" && conn.variant === "base"
+  // A Server Edition connection is never "local" — it always routes through a
+  // remote gateway, regardless of the gateway's hostname.
+  export const server = (conn?: Any): conn is Server => conn?.type === "server"
   export const local = (conn?: Any) =>
     !!conn && (builtin(conn) || (conn.type === "http" && isLocalHost(conn.http.url) === "local"))
 }
@@ -240,6 +268,15 @@ export const { use: useServer, provider: ServerProvider } = createSimpleContext(
 
     const url = (x: StoredServer) => (typeof x === "string" ? x : "type" in x ? x.http.url : x.url)
 
+    // Normalize a stored entry to a typed connection so we can key it uniformly
+    // (Http keys by url, Server keys by `server:<gatewayUrl>`).
+    const toConnection = (x: StoredServer): ServerConnection.Any =>
+      typeof x === "string"
+        ? { type: "http", http: { url: x } }
+        : "type" in x
+          ? x
+          : { type: "http", http: x }
+
     const allServers = createMemo((): Array<ServerConnection.Any> => {
       return resolveServerList({ stored: store.list, props: props.servers })
     })
@@ -268,9 +305,24 @@ export const { use: useServer, provider: ServerProvider } = createSimpleContext(
       })
     }
 
+    // Add (or replace) a Server Edition connection and make it active. Keyed by
+    // `server:<gatewayUrl>` (see ServerConnection.key). The live bearer is NOT
+    // persisted — it is memory-only and re-derived from the refresh cookie.
+    function addServerConnection(input: ServerConnection.Server) {
+      const key = ServerConnection.key(input)
+      const persisted: ServerConnection.Server = { ...input, http: { ...input.http, bearer: undefined } }
+      return batch(() => {
+        const existing = store.list.findIndex((x) => ServerConnection.key(toConnection(x)) === key)
+        if (existing !== -1) setStore("list", existing, persisted)
+        else setStore("list", store.list.length, persisted)
+        setState("active", key)
+        return input
+      })
+    }
+
     function remove(key: ServerConnection.Key) {
       const next = nextServerAfterRemoval(allServers(), key, props.defaultServer)
-      const list = store.list.filter((x) => url(x) !== key)
+      const list = store.list.filter((x) => ServerConnection.key(toConnection(x)) !== key)
       batch(() => {
         setStore("list", list)
         if (state.active === key) setState("active", next)
@@ -311,6 +363,7 @@ export const { use: useServer, provider: ServerProvider } = createSimpleContext(
       },
       setActive,
       add,
+      addServerConnection,
       remove,
       scope,
       projects: {

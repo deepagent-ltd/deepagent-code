@@ -13,6 +13,23 @@ const GlobalHealth = Schema.Struct({
   version: Schema.String,
 })
 
+// Capabilities / version handshake for the Server Edition. A desktop client
+// connecting through the gateway `/w` proxy hits `/w/global/capabilities` to
+// confirm it is talking to a compatible data-plane before driving the app.
+// `protocolVersion` is the IM/session wire-protocol contract version (V3.8);
+// `version` is the deepagent-code build. `features` advertises optional
+// subsystems the client can gate UI on.
+const GlobalCapabilities = Schema.Struct({
+  protocolVersion: Schema.String,
+  version: Schema.String,
+  features: Schema.Struct({
+    im: Schema.Boolean,
+    sessions: Schema.Boolean,
+    pty: Schema.Boolean,
+    workspaces: Schema.Boolean,
+  }),
+})
+
 const SyncEventSchemas = EventV2.registry
   .values()
   .flatMap((definition) => {
@@ -66,6 +83,7 @@ const GlobalUpgradeResult = Schema.Union([
 
 export const GlobalPaths = {
   health: "/global/health",
+  capabilities: "/global/capabilities",
   event: "/global/event",
   config: "/global/config",
   dispose: "/global/dispose",
@@ -82,6 +100,16 @@ export const GlobalApi = HttpApi.make("global").add(
           identifier: "global.health",
           summary: "Get health",
           description: "Get health information about the DeepAgent Code server.",
+        }),
+      ),
+      HttpApiEndpoint.get("capabilities", GlobalPaths.capabilities, {
+        success: described(GlobalCapabilities, "Server capabilities and protocol version"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "global.capabilities",
+          summary: "Get capabilities",
+          description:
+            "Report the data-plane protocol version, build version, and available features. Used by Server Edition clients to verify compatibility through the gateway proxy before driving the app.",
         }),
       ),
       HttpApiEndpoint.get("event", GlobalPaths.event, {

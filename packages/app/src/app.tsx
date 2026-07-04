@@ -31,6 +31,7 @@ import { CommandProvider } from "@/context/command"
 import { CommentsProvider } from "@/context/comments"
 import { DebugProvider } from "@/context/debug"
 import { FileProvider } from "@/context/file"
+import { GatewayProvider } from "@/context/gateway"
 import { ServerSDKProvider } from "@/context/server-sdk"
 import { ServerSyncProvider } from "@/context/server-sync"
 import { GlobalProvider } from "@/context/global"
@@ -55,6 +56,7 @@ const HomeRoute = lazy(() => import("@/pages/home"))
 const Session = lazy(() => import("@/pages/session"))
 const AgentSystemRoute = lazy(() => import("@/pages/agent-system"))
 const ReviewRoute = lazy(() => import("@/pages/review"))
+const IMRoute = lazy(() => import("@/pages/im"))
 
 const SessionRoute = Object.assign(
   () => (
@@ -311,39 +313,42 @@ export function AppInterface(props: {
   disableHealthCheck?: boolean
 }) {
   return (
-    <ServerProvider
-      defaultServer={props.defaultServer}
-      canonicalLocalServer={props.canonicalLocalServer}
-      servers={props.servers}
-    >
-      <GlobalProvider>
-        <ConnectionGate disableHealthCheck={props.disableHealthCheck}>
-          <Dynamic
-            component={props.router ?? Router}
-            root={(routerProps) => (
-              <TabsProvider>
-                <ServerKey>
-                  <QueryProvider>
-                    <ServerSDKProvider>
-                      <ServerSyncProvider>
-                        <RouterRoot appChildren={props.children}>{routerProps.children}</RouterRoot>
-                      </ServerSyncProvider>
-                    </ServerSDKProvider>
-                  </QueryProvider>
-                </ServerKey>
-              </TabsProvider>
-            )}
-          >
-            <Route path="/" component={HomeRoute} />
-            <Route path="/:dir" component={DirectoryLayout}>
+    <GatewayProvider>
+      <ServerProvider
+        defaultServer={props.defaultServer}
+        canonicalLocalServer={props.canonicalLocalServer}
+        servers={props.servers}
+      >
+        <GlobalProvider>
+          <ConnectionGate disableHealthCheck={props.disableHealthCheck}>
+            <Dynamic
+              component={props.router ?? Router}
+              root={(routerProps) => (
+                <TabsProvider>
+                  <ServerKey>
+                    <QueryProvider>
+                      <ServerSDKProvider>
+                        <ServerSyncProvider>
+                          <RouterRoot appChildren={props.children}>{routerProps.children}</RouterRoot>
+                        </ServerSyncProvider>
+                      </ServerSDKProvider>
+                    </QueryProvider>
+                  </ServerKey>
+                </TabsProvider>
+              )}
+            >
+              <Route path="/" component={HomeRoute} />
+              <Route path="/:dir" component={DirectoryLayout}>
               <Route path="/" component={() => <Navigate href="session" />} />
               <Route path="/agent" component={AgentSystemRoute} />
               <Route path="/review" component={ReviewRoute} />
               <Route path="/session/:id?" component={SessionRoute} />
-            </Route>
-          </Dynamic>
-        </ConnectionGate>
-      </GlobalProvider>
-    </ServerProvider>
+              <Route path="/im" component={IMRoute} />
+              </Route>
+            </Dynamic>
+          </ConnectionGate>
+        </GlobalProvider>
+      </ServerProvider>
+    </GatewayProvider>
   )
 }

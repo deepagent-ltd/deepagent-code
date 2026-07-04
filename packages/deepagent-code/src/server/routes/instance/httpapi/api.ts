@@ -25,6 +25,8 @@ import { SessionApi } from "./groups/session"
 import { SyncApi } from "./groups/sync"
 import { TuiApi } from "./groups/tui"
 import { WorkspaceApi } from "./groups/workspace"
+import { IMApi } from "./groups/im"
+import { IMWebSocketApi } from "./groups/im-websocket"
 import { Api } from "@deepagent-code/server/api"
 // GlobalEventSchema snapshots the registry after event-producing groups register their variants.
 import { GlobalApi } from "./groups/global"
@@ -59,6 +61,7 @@ export const InstanceHttpApi = HttpApi.make("deepagent-code-instance")
   .addHttpApi(DeepAgentApi)
   .addHttpApi(ExperimentalApi)
   .addHttpApi(FileApi)
+  .addHttpApi(IMApi)
   .addHttpApi(InstanceApi)
   .addHttpApi(McpApi)
   .addHttpApi(ProjectApi)
@@ -78,6 +81,7 @@ export const DeepAgentCodeHttpApi = HttpApi.make("deepagent-code")
   .addHttpApi(RootHttpApi)
   .addHttpApi(EventApi)
   .addHttpApi(InstanceHttpApi)
+  .addHttpApi(IMWebSocketApi)
   .addHttpApi(Api)
   .addHttpApi(PtyConnectApi)
   .annotate(HttpApi.AdditionalSchemas, [EventSchema, Question.Replied, Question.Rejected])

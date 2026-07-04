@@ -58,6 +58,10 @@ import { lazy } from "@/util/lazy"
 import { Vcs } from "@/project/vcs"
 import { Worktree } from "@/worktree"
 import { Workspace } from "@/control-plane/workspace"
+import { IMRepository, IMRepositoryLive } from "@deepagent-code/core/im/repository"
+import { IMBroadcasterLive } from "@deepagent-code/core/im/broadcaster"
+import { AgentContextBuilderLive } from "@deepagent-code/core/im/context-builder"
+import { ServerAgentExecutorLive, ServerAgentListProviderLive } from "@/im/agent-executor-server"
 import { CorsConfig, isAllowedCorsOrigin, type CorsOptions } from "@/server/cors"
 import { serveUIEffect } from "@/server/shared/ui"
 import { ServerAuth } from "@/server/auth"
@@ -71,6 +75,7 @@ import {
   serverAuthorizationLayer,
 } from "./middleware/authorization"
 import { EventApi } from "./groups/event"
+import { IMWebSocketApi } from "./groups/im-websocket"
 import { PtyConnectApi } from "./groups/pty"
 import { eventHandlers } from "./handlers/event"
 import { configHandlers } from "./handlers/config"
@@ -82,6 +87,8 @@ import { debugHandlers } from "./handlers/debug"
 import { fileHandlers } from "./handlers/file"
 import { profileHandlers } from "./handlers/profile"
 import { globalHandlers } from "./handlers/global"
+import { imHandlers } from "./handlers/im"
+import { imWebSocketHandlers } from "./handlers/im-websocket"
 import { instanceHandlers } from "./handlers/instance"
 import { mcpHandlers } from "./handlers/mcp"
 import { permissionHandlers } from "./handlers/permission"
@@ -129,6 +136,20 @@ const httpApiAuthLayer = authorizationLayer.pipe(Layer.provide(ServerAuth.Config
 const ptyConnectHttpApiAuthLayer = ptyConnectAuthorizationLayer.pipe(Layer.provide(ServerAuth.Config.defaultLayer))
 const serverHttpApiAuthLayer = serverAuthorizationLayer.pipe(Layer.provide(ServerAuth.Config.defaultLayer))
 const workspaceRoutingLive = workspaceRoutingLayer.pipe(Layer.provide(Socket.layerWebSocketConstructorGlobal))
+const imRepositoryLayer = IMRepositoryLive.pipe(Layer.provide(Database.defaultLayer))
+// IM agent execution is driven by the deepagent-code session stack (Session +
+// SessionPrompt), NOT core SessionV2 (which binds a no-op execution layer and
+// never runs an agent). ServerAgentExecutorLive / ServerAgentListProviderLive
+// require Session/SessionPrompt/Agent, which are provided by the instance
+// runtime graph at the bottom of createRoutes — so these are declared here
+// WITHOUT their session deps and resolved against that shared graph.
+const imRuntimeLayer = Layer.mergeAll(
+  imRepositoryLayer,
+  IMBroadcasterLive,
+  ServerAgentExecutorLive,
+  ServerAgentListProviderLive,
+  AgentContextBuilderLive.pipe(Layer.provide(imRepositoryLayer)),
+)
 const rootApiRoutes = HttpApiBuilder.layer(RootHttpApi).pipe(
   Layer.provide([controlHandlers, controlPlaneHandlers, globalHandlers]),
   Layer.provide(schemaErrorLayer),
@@ -142,6 +163,11 @@ const ptyConnectApiRoutes = HttpApiBuilder.layer(PtyConnectApi).pipe(
   Layer.provide(ptyConnectHandlers),
   Layer.provide([ptyConnectHttpApiAuthLayer, workspaceRoutingLive, instanceContextLayer]),
 )
+const imWebSocketApiRoutes = HttpApiBuilder.layer(IMWebSocketApi).pipe(
+  Layer.provide(imWebSocketHandlers),
+  Layer.provide([httpApiAuthLayer, workspaceRoutingLive, instanceContextLayer]),
+  Layer.provide(imRuntimeLayer),
+)
 const instanceApiRoutes = HttpApiBuilder.layer(InstanceHttpApi).pipe(
   Layer.provide([
     configHandlers,
@@ -150,6 +176,7 @@ const instanceApiRoutes = HttpApiBuilder.layer(InstanceHttpApi).pipe(
     deepagentHandlers,
     experimentalHandlers,
     fileHandlers,
+    imHandlers,
     instanceHandlers,
     mcpHandlers,
     projectHandlers,
@@ -168,6 +195,7 @@ const instanceApiRoutes = HttpApiBuilder.layer(InstanceHttpApi).pipe(
 
 const instanceRoutes = instanceApiRoutes.pipe(
   Layer.provide([httpApiAuthLayer, workspaceRoutingLive, instanceContextLayer, schemaErrorLayer]),
+  Layer.provide(imRuntimeLayer),
 )
 const serverRoutes = HttpApiBuilder.layer(Api).pipe(
   Layer.provide(handlers),
@@ -210,6 +238,7 @@ export function createRoutes(
     rootApiRoutes,
     eventApiRoutes,
     ptyConnectApiRoutes,
+    imWebSocketApiRoutes,
     instanceRoutes,
     serverRoutes,
     docRoute,
