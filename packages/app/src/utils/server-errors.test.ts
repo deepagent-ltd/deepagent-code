@@ -155,4 +155,20 @@ describe("formatServerError", () => {
 
     expect(formatServerError(wrapped, language.t)).toBe("Wish prompt preparation failed")
   })
+
+  test("surfaces top-level message from tagged errors (pty stale-directory 400)", () => {
+    const wrapped = new Error("deepagent-code server POST /pty → 400", {
+      cause: {
+        body: {
+          _tag: "InvalidRequestError",
+          message: "Working directory no longer exists: /Users/x/code/gone",
+          kind: "Directory",
+          field: "directory",
+        },
+        status: 400,
+      },
+    })
+
+    expect(formatServerError(wrapped)).toBe("Working directory no longer exists: /Users/x/code/gone")
+  })
 })

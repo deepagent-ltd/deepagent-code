@@ -6,9 +6,25 @@ import { useSDK } from "./sdk"
 import type { Platform } from "./platform"
 import { useServer } from "./server"
 import { defaultTitle, titleNumber } from "./terminal-title"
+import { withServerAbortRetry } from "./terminal-retry"
 import { Persist, persisted, removePersisted } from "@/utils/persist"
 import { ScopedKey, ServerScope, type ServerScope as ServerScopeValue } from "@/utils/server-scope"
 import { uuid } from "@/utils/uuid"
+import { formatServerError } from "@/utils/server-errors"
+
+// Surface a terminal-create failure to the user. The most common cause is a
+// stale working directory (the server replies 400 "Working directory no longer
+// exists: …"); previously this only hit the console and the terminal silently
+// never appeared. Imported lazily so the toast module isn't pulled into the
+// terminal context's initial graph.
+async function notifyTerminalCreateFailed(error: unknown) {
+  try {
+    const { showToast } = await import("@/utils/toast")
+    showToast({ variant: "error", title: "Failed to open terminal", description: formatServerError(error) })
+  } catch {
+    // toast is best-effort; the console.error above is the durable record
+  }
+}
 
 // ─── Pane tree types (V3.7 Phase 4.2) ────────────────────────────────────────
 
@@ -103,6 +119,29 @@ function edgeLeaf(node: PaneNode, side: 0 | 1): PaneLeaf {
   return current
 }
 
+/**
+ * Deep-clone a pane tree into plain objects, detaching every node from the
+ * reactive store proxy. The tree helpers (splitLeaf/collapseLeaf) reuse an
+ * existing node — which may still be a live store proxy — inside the tree they
+ * return. Committing that back through `reconcile` re-parents a proxy under a
+ * fresh object and creates a self-reference: `JSON.stringify` in the persist
+ * layer then throws "circular structure" and reconcile recurses to a stack
+ * overflow. Cloning here guarantees the committed value is a plain, acyclic
+ * graph with fresh object identities.
+ */
+function clonePaneTree(node: PaneNode): PaneNode {
+  if (node.kind === "leaf") {
+    return { kind: "leaf", id: node.id, activeId: node.activeId, ptys: [...node.ptys] }
+  }
+  return {
+    kind: "split",
+    id: node.id,
+    dir: node.dir,
+    sizes: [node.sizes[0], node.sizes[1]],
+    children: [clonePaneTree(node.children[0]), clonePaneTree(node.children[1])] as [PaneNode, PaneNode],
+  }
+}
+
 /** Replace a leaf's fields, returning a new tree. */
 function updateLeaf(root: PaneNode, id: PaneId, patch: Partial<Omit<PaneLeaf, "kind" | "id">>): PaneNode {
   if (root.kind === "leaf") return root.id === id ? { ...root, ...patch } : root
@@ -141,6 +180,7 @@ function splitLeaf(
 /** @internal */ export const _removePtyFromTree = (root: PaneNode, ptyId: string) => removePtyFromTree(root, ptyId)
 /** @internal */ export const _treeDepth = (root: PaneNode) => treeDepth(root)
 /** @internal */ export const _getLeaves = (root: PaneNode) => getLeaves(root)
+/** @internal */ export const _clonePaneTree = (root: PaneNode) => clonePaneTree(root)
 
 /** Remove a pty from whatever leaf owns it; collapse the leaf into its sibling when it empties. */
 function removePtyFromTree(root: PaneNode, ptyId: string): PaneNode {
@@ -529,7 +569,9 @@ function createWorkspaceTerminalSession(
    */
   const setRoot = (next: PaneNode | ((prev: PaneNode) => PaneNode)) => {
     const value = typeof next === "function" ? next(store.root) : next
-    setStore("root", reconcile(value, { key: "id", merge: false }))
+    // Clone to plain objects first: helpers may embed a live store proxy in the
+    // returned tree, and reconciling a proxy back into the store forms a cycle.
+    setStore("root", reconcile(clonePaneTree(value), { key: "id", merge: false }))
   }
 
   /** Commit a new root, keeping focusedPaneId pointing at a real leaf. */
@@ -614,14 +656,12 @@ function createWorkspaceTerminalSession(
     const index = store.all.findIndex((x) => x.id === id)
     const pty = store.all[index]
     if (!pty) return
-    const next = await client.pty
-      .create({
-        title: pty.title,
-      })
-      .catch((error: unknown) => {
+    const next = await withServerAbortRetry(() => client.pty.create({ title: pty.title })).catch(
+      (error: unknown) => {
         console.error("Failed to clone terminal", error)
         return undefined
-      })
+      },
+    )
     if (!next?.data) return
 
     batch(() => {
@@ -643,8 +683,7 @@ function createWorkspaceTerminalSession(
   const createPty = (place: (id: string, title: string, titleNumber: number) => void) => {
     if (store.all.length >= MAX_TERMINAL_SESSIONS) return
     const nextNumber = pickNextTerminalNumber()
-    sdk.client.pty
-      .create({ title: defaultTitle(nextNumber) })
+    withServerAbortRetry(() => sdk.client.pty.create({ title: defaultTitle(nextNumber) }))
       .then((pty: { data?: { id?: string; title?: string } }) => {
         const id = pty.data?.id
         if (!id) return
@@ -656,6 +695,7 @@ function createWorkspaceTerminalSession(
       })
       .catch((error: unknown) => {
         console.error("Failed to create terminal", error)
+        void notifyTerminalCreateFailed(error)
       })
   }
 
