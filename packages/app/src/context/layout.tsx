@@ -15,7 +15,13 @@ import { createScrollPersistence, type SessionScroll } from "./layout-scroll"
 import { createPathHelpers } from "./file/path"
 import type { ProjectAvatarVariant } from "@deepagent-code/ui/v2/project-avatar-v2"
 import { migrateLegacySessionStateKeys, ServerScope, SessionStateKey } from "@/utils/server-scope"
-import { createSessionKeyReader, ensureSessionKey, pruneSessionKeys } from "./layout-helpers"
+import {
+  createSessionKeyReader,
+  ensureSessionKey,
+  isPanelOpen,
+  pruneSessionKeys,
+  toggledPanelMode,
+} from "./layout-helpers"
 
 export { createSessionKeyReader, ensureSessionKey, pruneSessionKeys }
 
@@ -68,7 +74,18 @@ type SessionView = {
   reviewOpen?: string[]
   // U3/U4/U7: added "worktree" (isolated worktree diff/merge), "subagents" (child-session list),
   // "browser" (isolated WebContentsView).
-  rightPanelMode?: "menu" | "review" | "files" | "status" | "worktree" | "subagents" | "browser" | "plugins" | "profile" | "debug"
+  rightPanelMode?:
+    | "menu"
+    | "review"
+    | "files"
+    | "status"
+    | "worktree"
+    | "subagents"
+    | "browser"
+    | "plugins"
+    | "profile"
+    | "debug"
+    | "im"
   pendingMessage?: string
   pendingMessageAt?: number
   todoCollapsed?: boolean
@@ -883,7 +900,7 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
           },
           rightPanel: {
             mode: rightPanelMode,
-            opened: createMemo(() => rightPanelMode() !== undefined),
+            opened: createMemo(() => isPanelOpen(rightPanelMode())),
             open(mode: NonNullable<SessionView["rightPanelMode"]>) {
               setRightPanelMode(mode)
             },
@@ -891,7 +908,7 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
               setRightPanelMode(undefined)
             },
             toggle(mode: NonNullable<SessionView["rightPanelMode"]>) {
-              setRightPanelMode(rightPanelMode() === mode ? undefined : mode)
+              setRightPanelMode(toggledPanelMode(rightPanelMode(), mode))
             },
           },
           review: {
