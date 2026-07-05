@@ -136,6 +136,10 @@ function SplitPane(props: { node: Extract<PaneNode, { kind: "split" }> }) {
         }}
         class="shrink-0"
         classList={{
+          // Same token + weight as the panel borders (bottom bar's `border-t
+          // border-weak-base`, sidebar's edge): a solid border-weak-base line that
+          // reads clearly against the panes' bg-background-stronger. Brightens to
+          // border-base on hover for the drag affordance.
           "cursor-col-resize w-px hover:w-0.5 bg-border-weak-base hover:bg-border-base": !stacked(),
           "cursor-row-resize h-px hover:h-0.5 bg-border-weak-base hover:bg-border-base": stacked(),
         }}
@@ -152,7 +156,6 @@ function SplitPane(props: { node: Extract<PaneNode, { kind: "split" }> }) {
 function LeafPane(props: { node: PaneLeaf }) {
   const terminal = useTerminal()
   const language = useLanguage()
-  const command = useCommand()
   const { view } = useSessionLayout()
   const [store, setStore] = createStore({
     recovered: {} as Record<string, boolean>,
@@ -170,7 +173,6 @@ function LeafPane(props: { node: PaneLeaf }) {
     })
   })
   const activeId = createMemo(() => props.node.activeId)
-  const canSplit = createMemo(() => terminal.canSplit(props.node.id))
 
   const recoverTerminal = (key: string, id: string, clone: (id: string) => Promise<void>) => {
     if (store.recovered[key]) return
@@ -199,9 +201,12 @@ function LeafPane(props: { node: PaneLeaf }) {
 
   return (
     <div
-      class="absolute inset-0 flex flex-col overflow-hidden"
+      data-terminal-pane={props.node.id}
+      data-focused={focused() ? "true" : undefined}
+      class="absolute inset-0 flex flex-col overflow-hidden border bg-background-stronger"
       classList={{
-        "ring-1 ring-inset ring-border-base": focused(),
+        "border-border-base ring-1 ring-inset ring-border-base": focused(),
+        "border-border-weak-base": !focused(),
       }}
       onPointerDown={() => terminal.setFocusedPane(props.node.id)}
     >
@@ -217,59 +222,17 @@ function LeafPane(props: { node: PaneLeaf }) {
           }}
           class="!h-auto !flex-none"
         >
-          <div class="flex items-stretch h-10 border-b border-border-weaker-base">
+          {/* Per-pane header holds only its own tabs. Split/new actions live once
+              in the panel dock strip (VSCode-style) and target the focused pane. */}
+          <div class="flex items-stretch h-10 border-b border-border-weak-base bg-background-base">
             <Tabs.List class="h-10 min-w-0 flex-1 !border-b-0">
               <SortableProvider ids={ids()}>
                 <For each={ptys()}>{(pty) => <SortableTerminalTab terminal={pty} />}</For>
               </SortableProvider>
             </Tabs.List>
-            <div class="h-full shrink-0 flex items-center justify-center gap-0.5 px-1">
-              <Tooltip value={language.t("terminal.split.vertical")}>
-                <IconButton
-                  icon="layout-left"
-                  variant="ghost"
-                  iconSize="normal"
-                  disabled={!canSplit()}
-                  onClick={() => {
-                    terminal.setFocusedPane(props.node.id)
-                    terminal.split("vertical", props.node.id)
-                  }}
-                  aria-label={language.t("terminal.split.vertical")}
-                />
-              </Tooltip>
-              <Tooltip value={language.t("terminal.split.horizontal")}>
-                <IconButton
-                  icon="layout-bottom"
-                  variant="ghost"
-                  iconSize="normal"
-                  disabled={!canSplit()}
-                  onClick={() => {
-                    terminal.setFocusedPane(props.node.id)
-                    terminal.split("horizontal", props.node.id)
-                  }}
-                  aria-label={language.t("terminal.split.horizontal")}
-                />
-              </Tooltip>
-              <TooltipKeybind
-                title={language.t("command.terminal.new")}
-                keybind={command.keybind("terminal.new")}
-                class="flex items-center"
-              >
-                <IconButton
-                  icon="plus-small"
-                  variant="ghost"
-                  iconSize="large"
-                  onClick={() => {
-                    terminal.setFocusedPane(props.node.id)
-                    terminal.new()
-                  }}
-                  aria-label={language.t("command.terminal.new")}
-                />
-              </TooltipKeybind>
-            </div>
           </div>
         </Tabs>
-        <div class="flex-1 min-h-0 relative">
+        <div class="flex-1 min-h-0 relative bg-background-stronger">
           <Show
             when={activeId()}
             keyed
@@ -314,6 +277,7 @@ export function TerminalPanel() {
   const layout = useLayout()
   const terminal = useTerminal()
   const language = useLanguage()
+  const command = useCommand()
   const { params, workspaceKey, view } = useSessionLayout()
 
   const opened = createMemo(() => view().terminal.opened())
@@ -487,7 +451,9 @@ export function TerminalPanel() {
           }
         >
           <div class="flex flex-col h-full">
-            {/* Dock strip: switches the bottom panel between terminal and (future) debug console. */}
+            {/* Dock strip: tabs on the left, a single set of terminal actions on the
+                right (VSCode-style). Split/new act on the focused pane, so they never
+                duplicate as panes split. */}
             <div class="flex items-stretch h-8 shrink-0 border-b border-border-weaker-base bg-background-stronger">
               <For each={dockTabs}>
                 {(tab) => (
@@ -504,6 +470,35 @@ export function TerminalPanel() {
                   </button>
                 )}
               </For>
+              <div class="flex-1" />
+              <Show when={store.dock === "terminal"}>
+                <div class="h-full shrink-0 flex items-center justify-center gap-0.5 px-1">
+                  <Tooltip value={language.t("terminal.split")}>
+                    <IconButton
+                      icon="split-columns"
+                      variant="ghost"
+                      iconSize="normal"
+                      disabled={!terminal.canSplit(terminal.focusedPaneId())}
+                      onClick={() => terminal.split("vertical")}
+                      aria-label={language.t("terminal.split")}
+                    />
+                  </Tooltip>
+                  <div class="mx-0.5 h-4 w-px shrink-0 bg-border-weaker-base" aria-hidden="true" />
+                  <TooltipKeybind
+                    title={language.t("command.terminal.new")}
+                    keybind={command.keybind("terminal.new")}
+                    class="flex items-center"
+                  >
+                    <IconButton
+                      icon="plus-small"
+                      variant="ghost"
+                      iconSize="large"
+                      onClick={() => terminal.new()}
+                      aria-label={language.t("command.terminal.new")}
+                    />
+                  </TooltipKeybind>
+                </div>
+              </Show>
             </div>
             <div class="flex-1 min-h-0 relative">
               <Show when={store.dock === "terminal"} fallback={<DebugConsole />}>
