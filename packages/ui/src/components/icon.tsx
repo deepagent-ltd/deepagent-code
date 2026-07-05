@@ -103,6 +103,14 @@ const icons = {
   providers: `<path d="M10.0001 4.37562V2.875M13 4.37793V2.87793M7.00014 4.37793V2.875M10 17.1279V15.6279M13 17.1279V15.6279M7 17.1279V15.6279M15.625 13.0029H17.125M15.625 7.00293H17.125M15.625 10.0029H17.125M2.875 10.0029H4.375M2.875 13.0029H4.375M2.875 7.00293H4.375M4.375 4.37793H15.625V15.6279H4.375V4.37793ZM12.6241 10.0022C12.6241 11.4519 11.4488 12.6272 9.99908 12.6272C8.54934 12.6272 7.37408 11.4519 7.37408 10.0022C7.37408 8.55245 8.54934 7.3772 9.99908 7.3772C11.4488 7.3772 12.6241 8.55245 12.6241 10.0022Z" stroke="currentColor" stroke-linecap="square"/>`,
   models: `<path fill-rule="evenodd" clip-rule="evenodd" d="M17.5 10C12.2917 10 10 12.2917 10 17.5C10 12.2917 7.70833 10 2.5 10C7.70833 10 10 7.70833 10 2.5C10 7.70833 12.2917 10 17.5 10Z" stroke="currentColor"/>`,
   "arrow-undo-down": `<path d="M4.08333 11.0859L1.75 8.7526L4.08333 6.41927M2.33333 8.7526L12.5417 8.7526L12.5417 3.21094L7 3.21094" stroke="currentColor" stroke-width="1" stroke-linecap="square"/>`,
+  // Split terminal into two side-by-side panes. An outer frame divided by a
+  // vertical line with a "+" in the new (right) half. Deliberately NOT part of
+  // the layout-* family (which draws a filled sidebar bar) so it reads as a
+  // terminal action, not a panel toggle.
+  "split-columns": `<path d="M2.91699 2.91699H17.0837V17.0837H2.91699V2.91699Z" stroke="currentColor" stroke-linecap="square"/><path d="M10 2.91699V17.0837" stroke="currentColor" stroke-linecap="square"/><path d="M13.5423 10.0003H11.4590M13.5423 10.0003H15.6257M13.5423 10.0003V7.91699M13.5423 10.0003V12.0837" stroke="currentColor" stroke-linecap="square"/>`,
+  // Split terminal into stacked panes. Same frame divided by a horizontal line
+  // with a "+" in the lower half.
+  "split-rows": `<path d="M2.91699 2.91699H17.0837V17.0837H2.91699V2.91699Z" stroke="currentColor" stroke-linecap="square"/><path d="M2.91699 10H17.0837" stroke="currentColor" stroke-linecap="square"/><path d="M10.0007 13.5423V11.459M10.0007 13.5423V15.6257M10.0007 13.5423H7.91732M10.0007 13.5423H12.084" stroke="currentColor" stroke-linecap="square"/>`,
 }
 
 const spriteID = "deepagent-code-icon-sprite"

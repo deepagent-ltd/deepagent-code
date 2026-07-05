@@ -11,7 +11,7 @@ import {
   WorkspaceRoutingQuery,
   WorkspaceRoutingQueryFields,
 } from "../middleware/workspace-routing"
-import { PtyForbiddenError, PtyNotFoundError } from "../errors"
+import { InvalidRequestError, PtyForbiddenError, PtyNotFoundError } from "../errors"
 import { described } from "./metadata"
 
 const root = "/pty"
@@ -65,7 +65,7 @@ export const PtyApi = HttpApi.make("pty")
           query: WorkspaceRoutingQuery,
           payload: Pty.CreateInput,
           success: described(Pty.Info, "Created session"),
-          error: HttpApiError.BadRequest,
+          error: InvalidRequestError,
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "pty.create",
