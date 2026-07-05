@@ -1,4 +1,5 @@
 import { MCP } from "@/mcp"
+import { ServerCapabilities } from "@deepagent-code/core/server-capabilities"
 import { Effect, Schema } from "effect"
 import { HttpApiBuilder, HttpApiError } from "effect/unstable/httpapi"
 import { InstanceHttpApi } from "../api"
@@ -21,6 +22,12 @@ export const mcpHandlers = HttpApiBuilder.group(InstanceHttpApi, "mcp", (handler
     })
 
     const add = Effect.fn("McpHttpApi.add")(function* (ctx: { payload: typeof AddPayload.Type }) {
+      // Admin-controlled ServerCapabilities gate. The instance runtime has no core
+      // Policy service, so we evaluate the injected capability set directly from the
+      // env (deny-only, fail-open-when-unset — same semantics as Policy.evaluate).
+      // See server-capabilities.ts / docs/code-server-runtime-v1.md §3.1.
+      if (!ServerCapabilities.isAllowed(ServerCapabilities.Actions.mcpInstall))
+        return yield* new HttpApiError.BadRequest({})
       // M7 (S1-v3.4) SECURITY: strip any client-supplied `riskTier`. The permission gate derives the
       // tier by catalog-matching the live config (mcp/index.ts), so a persisted `riskTier` is never
       // trusted — but dropping it here keeps the stored config honest and avoids a misleading flag.
@@ -40,6 +47,13 @@ export const mcpHandlers = HttpApiBuilder.group(InstanceHttpApi, "mcp", (handler
     const catalogEnable = Effect.fn("McpHttpApi.catalogEnable")(function* (ctx: {
       payload: typeof CatalogEnablePayload.Type
     }) {
+      // Same ServerCapabilities gate as `add` — enabling a catalog entry installs an
+      // MCP server. This endpoint does not declare BadRequest, so deny surfaces as
+      // CatalogInstantiateApiError (a declared error on this endpoint).
+      if (!ServerCapabilities.isAllowed(ServerCapabilities.Actions.mcpInstall))
+        return yield* new CatalogInstantiateApiError({
+          error: "MCP server installation is disabled by the server administrator.",
+        })
       const enabled = yield* mcp
         .enableCatalogEntry(ctx.payload.id, {
           params: ctx.payload.params,
