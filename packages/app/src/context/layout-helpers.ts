@@ -1,5 +1,17 @@
 import type { Accessor } from "solid-js"
 
+// Pure reducer for the right-side-panel mode. Kept out of the provider so the
+// open/close/toggle contract — most importantly "toggling the active tab closes
+// the panel" — is unit-testable without constructing the full LayoutProvider.
+// `undefined` means the panel is closed.
+export function toggledPanelMode<Mode extends string>(current: Mode | undefined, mode: Mode): Mode | undefined {
+  return current === mode ? undefined : mode
+}
+
+export function isPanelOpen(current: string | undefined): boolean {
+  return current !== undefined
+}
+
 export function ensureSessionKey(key: string, touch: (key: string) => void, seed: (key: string) => void) {
   touch(key)
   seed(key)
