@@ -10,6 +10,7 @@ let _neighborLeafId: typeof import("./terminal")._neighborLeafId
 let _removePtyFromTree: typeof import("./terminal")._removePtyFromTree
 let _treeDepth: typeof import("./terminal")._treeDepth
 let _getLeaves: typeof import("./terminal")._getLeaves
+let _clonePaneTree: typeof import("./terminal")._clonePaneTree
 
 beforeAll(async () => {
   mock.module("@solidjs/router", () => ({
@@ -38,6 +39,7 @@ beforeAll(async () => {
   _removePtyFromTree = mod._removePtyFromTree
   _treeDepth = mod._treeDepth
   _getLeaves = mod._getLeaves
+  _clonePaneTree = mod._clonePaneTree
 })
 
 describe("getWorkspaceTerminalCacheKey", () => {
@@ -282,5 +284,29 @@ describe("pane tree helpers", () => {
   test("neighborLeafId returns undefined when there is only one leaf", () => {
     const root = mkLeaf("root", ["a"])
     expect(_neighborLeafId(root, "root", "right")).toBeUndefined()
+  })
+})
+
+describe("clonePaneTree (circular-structure regression)", () => {
+  test("splitting a store-proxy leaf yields a plain, JSON-safe, acyclic tree", async () => {
+    const { createStore, unwrap } = await import("solid-js/store")
+    // Mirror the real bug: the leaf being split lives inside the reactive store,
+    // so splitLeaf embeds a live proxy as children[0]. Before the fix, cloning
+    // was absent and reconcile/JSON.stringify hit a circular structure.
+    const [store] = createStore({ root: mkLeaf("root", ["a"]) as ReturnType<typeof mkLeaf> })
+    const proxyLeaf = store.root // a Solid store proxy
+    const split = _splitLeaf(proxyLeaf, "root", "vertical", mkLeaf("second", ["b"], "b"))
+
+    const cloned = _clonePaneTree(split)
+
+    // Serializable without throwing "circular structure".
+    expect(() => JSON.stringify(cloned)).not.toThrow()
+    // Structure preserved.
+    const roundTrip = JSON.parse(JSON.stringify(cloned))
+    expect(roundTrip.kind).toBe("split")
+    expect(roundTrip.children.map((c: { id: string }) => c.id)).toEqual(["root", "second"])
+    // Detached from the store: the clone shares no identity with the proxy.
+    expect(cloned).not.toBe(split)
+    expect((cloned as PS).children[0]).not.toBe(unwrap(proxyLeaf))
   })
 })

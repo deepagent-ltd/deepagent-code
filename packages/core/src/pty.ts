@@ -91,6 +91,17 @@ export class NotFoundError extends Schema.TaggedErrorClass<NotFoundError>()("Pty
   ptyID: PtyID,
 }) {}
 
+// The pty backend (@lydell/node-pty / bun-pty) throws synchronously when it
+// cannot spawn — most commonly because `cwd` no longer exists (a stale project
+// directory). Left as a raw throw it becomes an Effect defect inside the
+// per-directory location scope, which the runtime surfaces as an empty-body
+// `503` server-abort instead of a usable error. Making it a typed failure keeps
+// it on the declared error channel so the client sees a real message.
+export class SpawnError extends Schema.TaggedErrorClass<SpawnError>()("Pty.SpawnError", {
+  cwd: Schema.String,
+  message: Schema.String,
+}) {}
+
 export const Event = {
   Created: EventV2.define({ type: "pty.created", schema: { info: Info } }),
   Updated: EventV2.define({ type: "pty.updated", schema: { info: Info } }),
@@ -101,7 +112,7 @@ export const Event = {
 export interface Interface {
   readonly list: () => Effect.Effect<Info[]>
   readonly get: (id: PtyID) => Effect.Effect<Info, NotFoundError>
-  readonly create: (input: PreparedCreate) => Effect.Effect<Info>
+  readonly create: (input: PreparedCreate) => Effect.Effect<Info, SpawnError>
   readonly update: (id: PtyID, input: UpdateInput) => Effect.Effect<Info, NotFoundError>
   readonly remove: (id: PtyID) => Effect.Effect<void, NotFoundError>
   readonly resize: (id: PtyID, cols: number, rows: number) => Effect.Effect<void, NotFoundError>
@@ -181,12 +192,20 @@ export const layer = Layer.effect(
       const id = PtyID.ascending()
       log.info("creating session", { id, cmd: input.command, args: input.args, cwd: input.cwd })
       const { spawn } = yield* Effect.promise(() => pty())
-      const proc = yield* Effect.sync(() =>
-        spawn(input.command, input.args, {
-          name: "xterm-256color",
-          cwd: input.cwd,
-          env: input.env,
-        }),
+      const proc = yield* Effect.try({
+        try: () =>
+          spawn(input.command, input.args, {
+            name: "xterm-256color",
+            cwd: input.cwd,
+            env: input.env,
+          }),
+        catch: (error) =>
+          new SpawnError({
+            cwd: input.cwd,
+            message: error instanceof Error ? error.message : String(error),
+          }),
+      }).pipe(
+        Effect.tapError((error) => Effect.sync(() => log.warn("spawn failed", { cwd: error.cwd, error: error.message }))),
       )
       const info = {
         id,

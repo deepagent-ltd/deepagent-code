@@ -273,9 +273,20 @@ export const layer = Layer.effect(
 
       if (flags.experimentalIconDiscovery) yield* discover(existing).pipe(Effect.ignore, Effect.forkIn(scope))
 
+      // A git project keys on repo identity, so two clones of the same repo share
+      // one row. We normally keep the stored worktree, but if it no longer exists
+      // on disk (a moved/deleted clone) we'd hand back a dead path — the client
+      // then redirects into it and every directory-scoped route (pty, files, …)
+      // fails. Adopt the freshly-opened, existing directory instead so opening a
+      // live clone actually switches to it.
+      const storedWorktreeAlive =
+        projectID === ProjectV2.ID.global ? true : yield* fs.exists(existing.worktree).pipe(Effect.orElseSucceed(() => true))
+      const resolvedWorktree =
+        projectID === ProjectV2.ID.global ? worktree : storedWorktreeAlive ? existing.worktree : data.directory
+
       const result: Info = {
         ...existing,
-        worktree: projectID === ProjectV2.ID.global ? worktree : existing.worktree,
+        worktree: resolvedWorktree,
         vcs: data.vcs?.type ?? fakeVcs,
         time: { ...existing.time, updated: Date.now() },
       }
