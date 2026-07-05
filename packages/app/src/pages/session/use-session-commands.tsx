@@ -531,21 +531,14 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
       // terminal.new's ctrl+alt+t) to avoid colliding with fileTree.toggle (mod+\)
       // and tab.close (mod+w) — mod resolves to ctrl on non-Mac, so ctrl+\/ctrl+w
       // were being preempted by the earlier-registered view/file commands.
-      // P2-2: "split.vertical" = side-by-side (equal width); "split.horizontal" = stacked.
-      id: "terminal.split.vertical",
-      title: language.t("command.terminal.split.vertical"),
-      description: language.t("command.terminal.split.vertical.description"),
+      // Only a left/right (side-by-side) split is exposed; "vertical" here means a
+      // vertical divider ⇒ panes arranged left and right.
+      id: "terminal.split",
+      title: language.t("command.terminal.split"),
+      description: language.t("command.terminal.split.description"),
       keybind: "ctrl+alt+\\",
       disabled: !terminalOpen() || !terminal.canSplit(focusedPane()),
       onSelect: () => terminal.split("vertical"),
-    }),
-    terminalCommand({
-      id: "terminal.split.horizontal",
-      title: language.t("command.terminal.split.horizontal"),
-      description: language.t("command.terminal.split.horizontal.description"),
-      keybind: "ctrl+alt+shift+\\",
-      disabled: !terminalOpen() || !terminal.canSplit(focusedPane()),
-      onSelect: () => terminal.split("horizontal"),
     }),
     terminalCommand({
       id: "terminal.closePane",
