@@ -9,6 +9,8 @@ import { FSUtil } from "../fs-util"
 import { LocationMutation } from "../location-mutation"
 import { AppProcess } from "../process"
 import { PermissionV2 } from "../permission"
+import { Policy } from "../policy"
+import { ServerCapabilities } from "../server-capabilities"
 import { PositiveInt } from "../schema"
 import { Tool } from "./tool"
 import { Tools } from "./tools"
@@ -91,6 +93,14 @@ const isTimeout = (error: AppProcess.AppProcessError) =>
 // TODO: Stream full shell output into managed storage while retaining only a bounded in-memory preview.
 
 const shellTokens = (command: string) => command.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) ?? []
+// Best-effort `git push` detection for the git.push capability gate. Advisory
+// like externalCommandDirectories: catches the direct form, not shell tricks.
+const isGitPush = (command: string) => {
+  const tokens = shellTokens(command).map((token) => token.replace(/^(['"])(.*)\1$/, "$2"))
+  const git = tokens.indexOf("git")
+  if (git === -1) return false
+  return tokens.slice(git + 1).some((token) => token === "push")
+}
 const unquote = (value: string) => value.replace(/^(['"])(.*)\1$/, "$2")
 const externalCommandDirectories = (command: string, cwd: string) => {
   const directories = new Set<string>()
@@ -112,6 +122,7 @@ export const layer = Layer.effectDiscard(
     const appProcess = yield* AppProcess.Service
     const config = yield* Config.Service
     const permission = yield* PermissionV2.Service
+    const policy = yield* Policy.Service
 
     yield* tools
       .register({
@@ -148,6 +159,25 @@ export const layer = Layer.effectDiscard(
                 agent: context.agent,
                 source,
               })
+
+              // Admin-controlled ServerCapabilities gate. Evaluated AFTER the
+              // user permission prompt so an admin deny is a hard override that
+              // user approval cannot bypass. No-op unless a capability set is
+              // injected (statements empty → fallback "allow"). See
+              // server-capabilities.ts / config.ts policy.load wiring.
+              if (policy.hasStatements()) {
+                if ((yield* policy.evaluate(ServerCapabilities.Actions.shell, input.command, "allow")) === "deny")
+                  return yield* Effect.fail(
+                    new ToolFailure({ message: "Shell execution is disabled by the server administrator." }),
+                  )
+                if (
+                  isGitPush(input.command) &&
+                  (yield* policy.evaluate(ServerCapabilities.Actions.gitPush, input.command, "allow")) === "deny"
+                )
+                  return yield* Effect.fail(
+                    new ToolFailure({ message: "`git push` is disabled by the server administrator." }),
+                  )
+              }
 
               if ((yield* fs.stat(target.canonical)).type !== "Directory")
                 return yield* Effect.fail(new Error(`Working directory is not a directory: ${target.canonical}`))
@@ -198,7 +228,13 @@ export const layer = Layer.effectDiscard(
                 ...(result.stdoutTruncated ? { stdoutTruncated: true } : {}),
                 ...(result.stderrTruncated ? { stderrTruncated: true } : {}),
               }
-            }).pipe(Effect.mapError(() => new ToolFailure({ message: `Unable to execute command: ${input.command}` }))),
+            }).pipe(
+              Effect.mapError((error) =>
+                // Preserve deliberate ToolFailure messages (e.g. capability denials);
+                // only opaque runtime errors get the generic fallback.
+                error instanceof ToolFailure ? error : new ToolFailure({ message: `Unable to execute command: ${input.command}` }),
+              ),
+            ),
         }),
       })
       .pipe(Effect.orDie)

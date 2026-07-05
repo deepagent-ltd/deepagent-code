@@ -8,6 +8,7 @@ import { Global } from "./global"
 import { Location } from "./location"
 import { PermissionSchema } from "./permission/schema"
 import { Policy } from "./policy"
+import { ServerCapabilities } from "./server-capabilities"
 import { AbsolutePath } from "./schema"
 import { ConfigAgent } from "./config/agent"
 import { ConfigAttachments } from "./config/attachments"
@@ -202,12 +203,17 @@ export const layer = Layer.effect(
     const configs = [...(supplementary[0] ?? []), ...direct, ...supplementary.slice(1).flat()]
     // Rules use the opposite order so a user-global rule can override a
     // repository rule. Statement order inside each file stays unchanged.
-    yield* policy.load(
-      configs
+    // User/repo config statements first, then admin-controlled ServerCapabilities
+    // statements LAST: Policy.evaluate is last-match-wins, so admin denies win
+    // over anything the user's config tried to allow. In local/desktop mode
+    // envStatements() is empty and this is a no-op (see server-capabilities.ts).
+    yield* policy.load([
+      ...configs
         .filter((config): config is Document => config.type === "document")
         .toReversed()
         .flatMap((config) => config.info.experimental?.policies ?? []),
-    )
+      ...ServerCapabilities.envStatements(),
+    ])
 
     return Service.of({
       entries: Effect.fn("Config.entries")(function* () {
