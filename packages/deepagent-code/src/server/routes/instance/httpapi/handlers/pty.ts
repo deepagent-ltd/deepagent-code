@@ -7,6 +7,7 @@ import { handlePtyInput } from "@deepagent-code/core/pty/input"
 import { PtyID } from "@deepagent-code/core/pty/schema"
 import { PtyTicket } from "@deepagent-code/core/pty/ticket"
 import { LocationServiceMap } from "@deepagent-code/core/location-layer"
+import { FSUtil } from "@deepagent-code/core/fs-util"
 import { AbsolutePath } from "@deepagent-code/core/schema"
 import { Shell } from "@/shell/shell"
 import { EffectBridge } from "@/effect/bridge"
@@ -45,10 +46,37 @@ export const ptyHandlers = HttpApiBuilder.group(InstanceHttpApi, "pty", (handler
     )
     yield* Effect.addFinalizer(() => Effect.sync(unregister))
 
+    // Building the per-directory location layer (plugins, watcher, tools, …)
+    // throws when the directory no longer exists — a stale project path is the
+    // common trigger. Left unhandled inside the scope, that defect races the
+    // scope teardown and the runtime emits an empty-body `503` server-abort,
+    // which the client renders as "(empty response body)". Guard the directory
+    // up front so PTY routes fail with a clear, typed `400` instead.
+    const requireDirectory = Effect.fnUntraced(function* () {
+      const directory = (yield* InstanceState.context).directory
+      const fs = yield* FSUtil.Service
+      if (!(yield* fs.isDir(directory))) {
+        return yield* Effect.fail(
+          new ApiError.InvalidRequestError({
+            message: `Working directory no longer exists: ${directory}`,
+            kind: "Directory",
+            field: "directory",
+          }),
+        )
+      }
+      return directory
+    })
+
     const pty = Effect.fnUntraced(function* <A, E, R>(effect: Effect.Effect<A, E, R>) {
-      return yield* effect.pipe(
-        Effect.provide(locations.get({ directory: AbsolutePath.make((yield* InstanceState.context).directory) })),
-      )
+      const directory = (yield* InstanceState.context).directory
+      return yield* effect.pipe(Effect.provide(locations.get({ directory: AbsolutePath.make(directory) })))
+    })
+
+    // Same guard, but scoped to routes that must build the location layer for a
+    // live directory. `create` uses this so a stale cwd yields a clean 400.
+    const ptyChecked = Effect.fnUntraced(function* <A, E, R>(effect: Effect.Effect<A, E, R>) {
+      yield* requireDirectory()
+      return yield* pty(effect)
     })
 
     const shells = Effect.fn("PtyHttpApi.shells")(function* () {
@@ -56,11 +84,16 @@ export const ptyHandlers = HttpApiBuilder.group(InstanceHttpApi, "pty", (handler
     })
 
     const list = Effect.fn("PtyHttpApi.list")(function* () {
+      // A stale/removed directory has no sessions — return empty rather than
+      // building the location layer (which would defect on a missing path).
+      const directory = (yield* InstanceState.context).directory
+      const fs = yield* FSUtil.Service
+      if (!(yield* fs.isDir(directory))) return []
       return yield* pty(Pty.Service.use((service) => service.list()))
     })
 
     const create = Effect.fn("PtyHttpApi.create")(function* (ctx: { payload: typeof Pty.CreateInput.Type }) {
-      return yield* pty(
+      return yield* ptyChecked(
         Pty.Service.use((service) =>
           Effect.flatMap(
             PtyPreparation.prepareCreate({
@@ -69,6 +102,19 @@ export const ptyHandlers = HttpApiBuilder.group(InstanceHttpApi, "pty", (handler
               env: ctx.payload.env ? { ...ctx.payload.env } : undefined,
             }),
             service.create,
+          ),
+        ),
+      ).pipe(
+        // A spawn failure (typically a stale/nonexistent cwd) is a client-fixable
+        // condition, not a server fault — surface it as 400 with a real message
+        // instead of letting the defect become an empty-body 503.
+        Effect.catchTag("Pty.SpawnError", (error) =>
+          Effect.fail(
+            new ApiError.InvalidRequestError({
+              message: `Cannot open terminal in "${error.cwd}": ${error.message}`,
+              kind: "Spawn",
+              field: "cwd",
+            }),
           ),
         ),
       )
