@@ -9,6 +9,8 @@ import { Config } from "@deepagent-code/core/config"
 import { Location } from "@deepagent-code/core/location"
 import { LocationMutation } from "@deepagent-code/core/location-mutation"
 import { PermissionV2 } from "@deepagent-code/core/permission"
+import { Policy } from "@deepagent-code/core/policy"
+import { Wildcard } from "@deepagent-code/core/util/wildcard"
 import { AppProcess } from "@deepagent-code/core/process"
 import { AbsolutePath } from "@deepagent-code/core/schema"
 import { SessionV2 } from "@deepagent-code/core/session"
@@ -74,11 +76,31 @@ const config = Layer.succeed(
   }),
 )
 
+// Admin-controlled capability statements the bash gate evaluates. Populated by
+// individual tests; empty by default so the gate is a no-op (hasStatements()
+// false → real /bin/sh path unchanged).
+let policyStatements: Policy.Info[] = []
+const policy = Layer.succeed(
+  Policy.Service,
+  Policy.Service.of({
+    load: (input) => Effect.sync(() => void (policyStatements = input)),
+    hasStatements: () => policyStatements.length > 0,
+    evaluate: (action, resource, fallback) =>
+      Effect.sync(
+        () =>
+          policyStatements.findLast(
+            (statement) => Wildcard.match(action, statement.action) && Wildcard.match(resource, statement.resource),
+          )?.effect ?? fallback,
+      ),
+  }),
+)
+
 const reset = () => {
   assertions.length = 0
   runs.length = 0
   denyAction = undefined
   runFailure = undefined
+  policyStatements = []
   afterPermission = () => Effect.void
   result = {
     command: "mock",
@@ -109,6 +131,7 @@ const withTool = <A, E, R>(
     Layer.provide(filesystem),
     Layer.provide(processLayer),
     Layer.provide(config),
+    Layer.provide(policy),
   )
   return Effect.gen(function* () {
     return yield* body(yield* ToolRegistry.Service)
@@ -363,6 +386,74 @@ describe("BashTool", () => {
                 value: expect.stringContaining("stdout capture truncated"),
               })
               expect(settled.output?.structured).not.toHaveProperty("resource")
+            }),
+          ),
+        )
+      },
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ),
+  )
+
+  it.live("denies all shell execution when the shell capability is off", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => {
+        reset()
+        policyStatements = [new Policy.Info({ action: "shell.exec", effect: "deny", resource: "*" })]
+        return withTool(tmp.path, (registry) => settleTool(registry, call({ command: "pwd" }))).pipe(
+          Effect.andThen((settled) =>
+            Effect.sync(() => {
+              expect(settled.result).toMatchObject({
+                type: "error",
+                value: expect.stringContaining("Shell execution is disabled by the server administrator"),
+              })
+              // Gate fires only after the user permission prompt, and blocks the run.
+              expect(assertions.map((item) => item.action)).toEqual(["bash"])
+              expect(runs).toEqual([])
+            }),
+          ),
+        )
+      },
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ),
+  )
+
+  it.live("denies `git push` while allowing other git commands when git.push is off", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => {
+        reset()
+        policyStatements = [new Policy.Info({ action: "git.push", effect: "deny", resource: "*" })]
+        return withTool(tmp.path, (registry) =>
+          Effect.gen(function* () {
+            const push = yield* settleTool(registry, call({ command: "git push origin main" }))
+            expect(push.result).toMatchObject({
+              type: "error",
+              value: expect.stringContaining("`git push` is disabled by the server administrator"),
+            })
+            expect(runs).toEqual([])
+            // A non-push git command is unaffected by the git.push deny.
+            const status = yield* settleTool(registry, call({ command: "git status" }))
+            expect(status.result).toMatchObject({ type: "text" })
+            expect(runs).toMatchObject([{ command: "git status" }])
+          }),
+        )
+      },
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ),
+  )
+
+  it.live("leaves the shell path untouched when no capability statements are present", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => {
+        reset()
+        // policyStatements stays empty → hasStatements() false → gate is a no-op.
+        return withTool(tmp.path, (registry) => settleTool(registry, call({ command: "git push origin main" }))).pipe(
+          Effect.andThen((settled) =>
+            Effect.sync(() => {
+              expect(settled.result).toMatchObject({ type: "text" })
+              expect(runs).toMatchObject([{ command: "git push origin main" }])
             }),
           ),
         )
