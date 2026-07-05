@@ -25,6 +25,7 @@ import { SidePanelBrowser } from "@/pages/session/side-panel-browser"
 import { SidePanelWorktree } from "@/pages/session/side-panel-worktree"
 import { SidePanelDebug } from "@/pages/session/side-panel-debug"
 import { SidePanelProfile } from "@/pages/session/side-panel-profile"
+import { SidePanelIM } from "@/pages/session/side-panel-im"
 
 type RenderDiff = (SnapshotFileDiff & { file: string }) | VcsFileDiff
 type SidePanelItem = {
@@ -73,6 +74,7 @@ export function SessionSidePanel(props: {
   const pluginsOpen = createMemo(() => isDesktop() && view().rightPanel.mode() === "plugins")
   const debugOpen = createMemo(() => isDesktop() && view().rightPanel.mode() === "debug")
   const profileOpen = createMemo(() => isDesktop() && view().rightPanel.mode() === "profile")
+  const imOpen = createMemo(() => isDesktop() && view().rightPanel.mode() === "im")
   const open = createMemo(
     () =>
       menuOpen() ||
@@ -84,7 +86,8 @@ export function SessionSidePanel(props: {
       worktreeOpen() ||
       pluginsOpen() ||
       debugOpen() ||
-      profileOpen(),
+      profileOpen() ||
+      imOpen(),
   )
   const panelWidth = createMemo(() => (open() ? `${layout.rightPanel.width()}px` : "0px"))
 
@@ -268,6 +271,12 @@ export function SessionSidePanel(props: {
     view().rightPanel.open("profile")
   }
 
+  const openIM = () => {
+    view().reviewPanel.close()
+    layout.fileTree.close()
+    view().rightPanel.open("im")
+  }
+
   const openTerminal = () => {
     view().terminal.open()
     queueMicrotask(() => {
@@ -300,6 +309,12 @@ export function SessionSidePanel(props: {
       title: language.t("session.subagents.title"),
       active: subagentsOpen(),
       onClick: openSubagents,
+    },
+    {
+      icon: "bubble-5",
+      title: language.t("session.tab.im"),
+      active: imOpen(),
+      onClick: openIM,
     },
     {
       icon: "link",
@@ -565,6 +580,9 @@ export function SessionSidePanel(props: {
               <Match when={profileOpen()}>
                 <SidePanelProfile onClose={openMenu} />
               </Match>
+              <Match when={imOpen()}>
+                <SidePanelIM onClose={openMenu} />
+              </Match>
             </Switch>
           </div>
         </Show>
@@ -587,8 +605,11 @@ function SidePanelMenu(props: { items: () => SidePanelItem[]; onClose: () => voi
           aria-label={language.t("common.close")}
         />
       </div>
-      <div class="h-[calc(100%-40px)] min-h-0 flex items-center">
-        <div class="w-full px-4 flex flex-col gap-2">
+      {/* Scrollable so items stay reachable when the bottom terminal shortens the
+          sidebar. Center vertically only while there's spare room (justify-center on
+          a min-h-full inner track); once items overflow, scrolling takes over. */}
+      <div class="h-[calc(100%-40px)] min-h-0 overflow-y-auto">
+        <div class="min-h-full w-full px-4 py-2 flex flex-col justify-center gap-2">
           <For each={props.items()}>
             {(item) => (
               <button

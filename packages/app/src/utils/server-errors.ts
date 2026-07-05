@@ -58,10 +58,16 @@ function isProviderModelNotFoundErrorLike(error: unknown): error is ProviderMode
 
 function readableErrorMessage(error: unknown) {
   if (typeof error !== "object" || error === null) return
-  const data = (error as Record<string, unknown>).data
-  if (typeof data !== "object" || data === null) return
-  const message = (data as Record<string, unknown>).message
-  return typeof message === "string" && message.trim() ? message.trim() : undefined
+  const o = error as Record<string, unknown>
+  // Nested `data.message` (v2 NamedError shape) takes precedence…
+  const data = o.data
+  if (typeof data === "object" && data !== null) {
+    const nested = (data as Record<string, unknown>).message
+    if (typeof nested === "string" && nested.trim()) return nested.trim()
+  }
+  // …then a top-level `message` (tagged errors like InvalidRequestError).
+  const top = o.message
+  return typeof top === "string" && top.trim() ? top.trim() : undefined
 }
 
 export function parseReadableConfigInvalidError(errorInput: ConfigInvalidError, translator?: Translator) {
