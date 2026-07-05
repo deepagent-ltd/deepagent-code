@@ -24,8 +24,7 @@ const DEFAULT_TOGGLE_TERMINAL_KEYBIND = "ctrl+`"
 // keys while a terminal is focused unless this handler returns true, so these must
 // be allowed to bubble up for split/close/focus-neighbour to work (V3.7 Phase 4.2).
 const PASSTHROUGH_KEYBINDS: Record<string, string> = {
-  "terminal.split.horizontal": "ctrl+\\",
-  "terminal.split.vertical": "ctrl+shift+\\",
+  "terminal.split": "ctrl+alt+\\",
   "terminal.closePane": "ctrl+w",
   "terminal.focus.left": "ctrl+arrowleft",
   "terminal.focus.right": "ctrl+arrowright",
@@ -677,7 +676,7 @@ export const Terminal = (props: TerminalProps) => {
       classList={{
         ...local.classList,
         "select-text": true,
-        "size-full px-6 py-3 font-mono relative overflow-hidden": true,
+        "size-full pl-6 pr-0 py-3 font-mono relative overflow-hidden": true,
         [local.class ?? ""]: !!local.class,
       }}
       {...others}
