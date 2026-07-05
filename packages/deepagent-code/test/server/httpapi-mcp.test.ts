@@ -130,6 +130,33 @@ describe("mcp HttpApi", () => {
   )
 
   it.instance(
+    "rejects add when mcp installation is denied by ServerCapabilities",
+    () =>
+      Effect.gen(function* () {
+        const KEY = "DEEPAGENT_SERVER_CAPABILITIES"
+        const original = process.env[KEY]
+        process.env[KEY] = JSON.stringify({ allowMcpInstall: false })
+        try {
+          const tmp = yield* TestInstance
+          const handler = HttpApiApp.webHandler()
+          const added = yield* request(handler, McpPaths.status, tmp.directory, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              name: "blocked",
+              config: { type: "local", command: ["echo", "blocked"], enabled: false },
+            }),
+          })
+          expect(added.status).toBe(400)
+        } finally {
+          if (original === undefined) delete process.env[KEY]
+          else process.env[KEY] = original
+        }
+      }),
+    { config: { mcp: {} } },
+  )
+
+  it.instance(
     "serves deterministic OAuth endpoints",
     () =>
       Effect.gen(function* () {
