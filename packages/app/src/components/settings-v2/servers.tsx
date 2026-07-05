@@ -63,8 +63,8 @@ export const SettingsServersV2: Component = () => {
           <ButtonV2 variant="ghost-muted" icon="plus" onClick={openAdd}>
             {language.t("dialog.server.add.button")}
           </ButtonV2>
-          <ButtonV2 variant="ghost-muted" icon="cloud" onClick={openConnectServer}>
-            Connect to Server
+          <ButtonV2 variant="ghost-muted" icon="server" onClick={openConnectServer}>
+            {language.t("dialog.server.connect.button")}
           </ButtonV2>
           <WslAddServerButton />
         </div>
