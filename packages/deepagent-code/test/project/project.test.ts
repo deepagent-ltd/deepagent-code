@@ -196,6 +196,29 @@ describe("Project.fromDirectory", () => {
     }),
   )
 
+  it.live("adopts a live clone's directory when the stored worktree is gone", () =>
+    Effect.gen(function* () {
+      const project = yield* Project.Service
+      // Two clones of the same repo → same project ID → one shared row.
+      const stale = yield* tmpdirScoped({ git: true })
+      const live = yield* tmpdirScoped({ git: true })
+      yield* Effect.promise(() => $`git remote add origin https://github.com/owner/dup.git`.cwd(stale).quiet())
+      yield* Effect.promise(() => $`git remote add origin https://github.com/owner/dup.git`.cwd(live).quiet())
+
+      const first = yield* project.fromDirectory(stale)
+      expect(first.project.worktree).toBe(stale)
+
+      // The stale clone is moved/deleted. Opening the live clone must switch the
+      // worktree to it — otherwise the server hands back a dead path and the
+      // client redirects into a directory where every scoped route 503s.
+      yield* Effect.promise(() => $`rm -rf ${stale}`.quiet())
+
+      const second = yield* project.fromDirectory(live)
+      expect(second.project.id).toBe(first.project.id)
+      expect(second.project.worktree).toBe(live)
+    }),
+  )
+
   it.live("migrates cached root project data when origin becomes available", () =>
     Effect.gen(function* () {
       const { db } = yield* Database.Service
