@@ -56,7 +56,6 @@ const HomeRoute = lazy(() => import("@/pages/home"))
 const Session = lazy(() => import("@/pages/session"))
 const AgentSystemRoute = lazy(() => import("@/pages/agent-system"))
 const ReviewRoute = lazy(() => import("@/pages/review"))
-const IMRoute = lazy(() => import("@/pages/im"))
 
 const SessionRoute = Object.assign(
   () => (
@@ -343,7 +342,6 @@ export function AppInterface(props: {
               <Route path="/agent" component={AgentSystemRoute} />
               <Route path="/review" component={ReviewRoute} />
               <Route path="/session/:id?" component={SessionRoute} />
-              <Route path="/im" component={IMRoute} />
               </Route>
             </Dynamic>
           </ConnectionGate>

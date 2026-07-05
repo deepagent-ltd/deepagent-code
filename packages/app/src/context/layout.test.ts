@@ -1,6 +1,39 @@
 import { describe, expect, test } from "bun:test"
 import { createRoot, createSignal } from "solid-js"
-import { createSessionKeyReader, ensureSessionKey, pruneSessionKeys } from "./layout-helpers"
+import {
+  createSessionKeyReader,
+  ensureSessionKey,
+  isPanelOpen,
+  pruneSessionKeys,
+  toggledPanelMode,
+} from "./layout-helpers"
+
+describe("right-side-panel mode reducer", () => {
+  // Regression guard for the IM panel "进去出不来" bug: opening a panel must be
+  // reversible. These exercise the exact reducer the LayoutProvider's
+  // rightPanel.open/close/toggle delegate to.
+  test("opening a mode from closed sets that mode", () => {
+    expect(toggledPanelMode(undefined, "im")).toBe("im")
+  })
+
+  test("toggling the active mode closes the panel", () => {
+    // open IM, then toggle IM again → closed. This is the click-to-open,
+    // click-to-close contract the IM tab relies on.
+    const opened = toggledPanelMode(undefined, "im")
+    expect(opened).toBe("im")
+    expect(toggledPanelMode(opened, "im")).toBeUndefined()
+  })
+
+  test("toggling a different mode switches instead of closing", () => {
+    expect(toggledPanelMode("review", "im")).toBe("im")
+  })
+
+  test("isPanelOpen reflects presence of a mode", () => {
+    expect(isPanelOpen(undefined)).toBe(false)
+    expect(isPanelOpen("im")).toBe(true)
+    expect(isPanelOpen("review")).toBe(true)
+  })
+})
 
 describe("layout session-key helpers", () => {
   test("couples touch and scroll seed in order", () => {
