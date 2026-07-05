@@ -2,6 +2,7 @@ import path from "path"
 import { Context, Effect, Layer, Schema } from "effect"
 import { FSUtil } from "@deepagent-code/core/fs-util"
 import { Flock } from "@deepagent-code/core/util/flock"
+import { ServerCapabilities } from "@deepagent-code/core/server-capabilities"
 import { Git } from "@/git"
 import {
   repositoryCachePath,
@@ -228,6 +229,17 @@ const ensureWithServices = Effect.fn("RepositoryCache.ensureWithServices")(funct
         })
 
         if (status === "cloned") {
+          // Admin-controlled ServerCapabilities gate. The deepagent-code instance
+          // runtime does not mount the core Policy service, so we evaluate the
+          // injected capability set directly from the env (same deny-only,
+          // fail-open-when-unset semantics as Policy.evaluate). See
+          // server-capabilities.ts / docs/code-server-runtime-v1.md §3.1.
+          if (!ServerCapabilities.isAllowed(ServerCapabilities.Actions.repoCloneRemote, remote)) {
+            return yield* new CloneFailedError({
+              repository,
+              message: "Cloning remote repositories is disabled by the server administrator.",
+            })
+          }
           const clone = yield* services.git.run(
             ["clone", "--depth", "100", ...(input.branch ? ["--branch", input.branch] : []), "--", remote, localPath],
             { cwd: path.dirname(localPath) },
