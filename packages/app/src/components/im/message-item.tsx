@@ -1,11 +1,14 @@
 import { Show } from "solid-js"
 import { AgentStatusChip } from "./agent-status-chip"
+import { AgentReasoningCard } from "./agent-reasoning-card"
 import { MessageMetadataCard } from "./message-metadata-card"
-import type { LocalMessage } from "@/hooks/use-im-websocket"
+import type { AgentProgressPart, LocalMessage } from "@/hooks/use-im-websocket"
 
 interface MessageItemProps {
   message: LocalMessage
   agentStatus?: { agentID: string; status: string }
+  /** Live reasoning/tool/text parts for the turn this message triggered. */
+  agentProgress?: AgentProgressPart[]
 }
 
 export function MessageItem(props: MessageItemProps) {
@@ -39,6 +42,15 @@ export function MessageItem(props: MessageItemProps) {
             </div>
           </Show>
         </div>
+
+        <Show when={props.agentProgress && props.agentProgress.length > 0}>
+          <div class="w-full px-2">
+            <AgentReasoningCard
+              parts={props.agentProgress!}
+              active={props.agentStatus?.status === "started" || props.agentStatus?.status === "running"}
+            />
+          </div>
+        </Show>
 
         <Show when={props.agentStatus}>
           <div class="px-2">
