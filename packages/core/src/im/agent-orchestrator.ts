@@ -9,7 +9,7 @@ import {
   type AgentExecutor,
 } from "./agent-executor"
 import { AgentListProviderService } from "./agent-list-provider"
-import { AgentReplySinkService, type AgentReplySink } from "./agent-reply-sink"
+import { AgentReplySinkService, type AgentReplySink, type AgentProgressPart } from "./agent-reply-sink"
 import type { IMBroadcaster } from "./websocket"
 
 interface AgentDescriptorLike {
@@ -116,7 +116,7 @@ function executeSingleAgent(input: {
       .pipe(
         Effect.catch(() =>
           Effect.succeed({
-            code: undefined,
+            code: [],
             knowledge: [],
             memory: [],
             documents: [],
@@ -124,6 +124,29 @@ function executeSingleAgent(input: {
           }),
         ),
       )
+
+    // Live progress: broadcast each throttled batch on the IM WebSocket (the
+    // plane the chat UI listens to — same as agent_status) so users see the
+    // agent's reasoning/tool activity as it happens, and mirror it to the
+    // optional reply sink (authoritative hub) for parity. Best-effort: a
+    // progress failure must never affect the run.
+    const onProgress = (parts: ReadonlyArray<AgentProgressPart>): Effect.Effect<void, never, never> =>
+      Effect.gen(function* () {
+        input.broadcaster.broadcast(input.groupID, {
+          type: "agent_progress",
+          data: { messageID: input.messageID, agentID: input.agent.id, parts: [...parts] },
+        })
+        if (input.replySink?.progress) {
+          yield* input.replySink
+            .progress({
+              groupID: input.groupID,
+              messageID: input.messageID,
+              agentID: input.agent.id,
+              parts,
+            })
+            .pipe(Effect.catch(() => Effect.succeed(undefined)))
+        }
+      }).pipe(Effect.catch(() => Effect.succeed(undefined)))
 
     const result = yield* input.executor
       .execute({
@@ -136,6 +159,7 @@ function executeSingleAgent(input: {
         content: input.content,
         context,
         timeoutMs: getAgentTimeout(),
+        onProgress,
       })
       .pipe(
         Effect.catch((error) =>
