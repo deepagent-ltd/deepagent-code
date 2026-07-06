@@ -85,6 +85,13 @@ export function serveUIEffect(
 
     if (embeddedWebUI) return yield* serveEmbeddedUIEffect(path, services.fs, embeddedWebUI)
 
+    // Embedded UI disabled (Server Edition: the UI is served by the gateway, the
+    // kernel runs headless): an unmatched path is a genuine 404, not a cue to
+    // reach out to the public UI upstream. Proxying to app.deepagent-code.ai here
+    // would (a) 500 in an offline/egress-restricted container, and (b) turn any
+    // unknown path into an unexpected outbound fetch. Fail closed with 404.
+    if (services.disableEmbeddedWebUi) return notFound()
+
     const response = yield* services.client.execute(
       HttpClientRequest.make(request.method)(upstreamURL(path), {
         headers: ProxyUtil.headers(request.headers, { host: UI_UPSTREAM.host }),
