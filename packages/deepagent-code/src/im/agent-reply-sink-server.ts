@@ -1,5 +1,9 @@
 import { Effect, Layer } from "effect"
-import { AgentReplySinkService, type AgentReplySink } from "@deepagent-code/core/im/agent-reply-sink"
+import {
+  AgentReplySinkService,
+  type AgentProgressUpdate,
+  type AgentReplySink,
+} from "@deepagent-code/core/im/agent-reply-sink"
 
 /**
  * Server Edition AgentReplySink.
@@ -73,6 +77,47 @@ class ServerAgentReplySink implements AgentReplySink {
         Effect.catch((error) =>
           Effect.logWarning(`[im-reply-sink] gateway callback failed: ${String(error)}`),
         ),
+      )
+    })
+  }
+
+  /**
+   * Forward a throttled batch of in-progress reasoning/tool/text snapshots to
+   * the gateway progress callback so the hub can stream a live "thinking" view.
+   * Fire-and-forget and strictly best-effort — the authoritative reply still
+   * arrives via {@link notify}, so a lost progress batch only costs a little
+   * live fidelity, never correctness.
+   */
+  progress(input: AgentProgressUpdate): Effect.Effect<void, never, never> {
+    const callbackUrl = this.callbackUrl
+    const internalToken = this.internalToken
+    return Effect.gen(function* () {
+      const body = {
+        // Kernel-native correlation keys, same mapping the gateway uses for
+        // agent-reply: (groupId, triggerMessageId) → its conversation/message.
+        groupId: input.groupID,
+        triggerMessageId: input.messageID,
+        agentName: input.agentID,
+        parts: input.parts,
+      }
+
+      yield* Effect.tryPromise(() =>
+        fetch(`${callbackUrl}/im/agent-progress`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "X-Internal-Token": internalToken,
+          },
+          body: JSON.stringify(body),
+        }),
+      ).pipe(
+        Effect.flatMap((res) =>
+          res.ok
+            ? Effect.void
+            : Effect.logDebug(`[im-reply-sink] progress callback returned ${res.status}`),
+        ),
+        // Best-effort: progress is lossy by design; never surface failures.
+        Effect.catch(() => Effect.void),
       )
     })
   }

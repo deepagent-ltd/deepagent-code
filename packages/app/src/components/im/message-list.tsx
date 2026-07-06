@@ -1,19 +1,24 @@
 import { For, Show, createEffect } from "solid-js"
 import { MessageItem } from "./message-item"
-import type { LocalMessage } from "@/hooks/use-im-websocket"
+import type { AgentProgressPart, LocalMessage } from "@/hooks/use-im-websocket"
 
 interface MessageListProps {
   messages: LocalMessage[]
   agentStatuses: Map<string, { agentID: string; status: string }>
+  agentProgress: Map<string, AgentProgressPart[]>
 }
 
 export function MessageList(props: MessageListProps) {
   let containerRef: HTMLDivElement | undefined
   let bottomRef: HTMLDivElement | undefined
 
-  // Auto-scroll to bottom on new messages
+  // Auto-scroll to bottom on new messages AND as live reasoning streams in, so
+  // the agent's in-progress thinking stays in view without manual scrolling.
   createEffect(() => {
-    if (props.messages.length > 0 && bottomRef) {
+    // Track both signals so streaming progress updates also trigger a scroll.
+    const count = props.messages.length
+    props.agentProgress
+    if (count > 0 && bottomRef) {
       bottomRef.scrollIntoView({ behavior: "smooth" })
     }
   })
@@ -33,6 +38,7 @@ export function MessageList(props: MessageListProps) {
             <MessageItem
               message={message}
               agentStatus={props.agentStatuses.get(message.id)}
+              agentProgress={props.agentProgress.get(message.id)}
             />
           )}
         </For>

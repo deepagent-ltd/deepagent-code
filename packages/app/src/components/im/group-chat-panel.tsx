@@ -16,10 +16,8 @@ export function GroupChatPanel(props: GroupChatPanelProps) {
   const [agents, setAgents] = createSignal<AgentDescriptor[]>([])
   const [loading, setLoading] = createSignal(true)
 
-  const { connected, messages: realtimeMessages, agentStatuses, typingMembers, send } = useIMWebSocket(
-    client,
-    () => props.groupID,
-  )
+  const { connected, messages: realtimeMessages, agentStatuses, agentProgress, typingMembers, send } =
+    useIMWebSocket(client, () => props.groupID)
 
   // The single desktop user identity, as the server assigns it. Used to exclude
   // our own echoed typing/read events from the UI.
@@ -111,7 +109,7 @@ export function GroupChatPanel(props: GroupChatPanelProps) {
           </div>
         </div>
 
-        <MessageList messages={allMessages()} agentStatuses={agentStatuses()} />
+        <MessageList messages={allMessages()} agentStatuses={agentStatuses()} agentProgress={agentProgress()} />
 
         <Show when={othersTyping().length > 0}>
           <div class="px-4 py-1 text-xs text-muted-foreground italic">
