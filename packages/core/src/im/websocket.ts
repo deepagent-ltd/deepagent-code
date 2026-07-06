@@ -50,6 +50,33 @@ export const AgentStatusEvent = Schema.Struct({
 })
 export type AgentStatusEvent = typeof AgentStatusEvent.Type
 
+// Server -> Client: Agent 推理过程实时流（可展开查看）
+// One changed part of an in-flight agent turn. The client keeps a map keyed by
+// `partID` and REPLACES each entry, so a dropped/reordered batch self-heals on
+// the next snapshot. The authoritative final reply still arrives as a normal
+// `message_created`. Fields mirror agent_status's uppercase kernel-WS style.
+export const AgentProgressPart = Schema.Struct({
+  partID: Schema.String,
+  order: Schema.Number,
+  kind: Schema.Literals(["reasoning", "text", "tool"]),
+  text: Schema.optional(Schema.String),
+  tool: Schema.optional(Schema.String),
+  status: Schema.optional(Schema.String),
+})
+export type AgentProgressPart = typeof AgentProgressPart.Type
+
+export const AgentProgressEvent = Schema.Struct({
+  type: Schema.Literal("agent_progress"),
+  data: Schema.Struct({
+    // Trigger message id the reasoning belongs to (same key agent_status uses),
+    // so the client attaches the live view to the right conversation slot.
+    messageID: Schema.String,
+    agentID: Schema.String,
+    parts: Schema.Array(AgentProgressPart),
+  }),
+})
+export type AgentProgressEvent = typeof AgentProgressEvent.Type
+
 // Both directions: 正在输入
 export const TypingEvent = Schema.Struct({
   type: Schema.Literal("typing"),
@@ -94,6 +121,7 @@ export const ServerEvent = Schema.Union([
   MessageCreatedEvent,
   MessageFailedEvent,
   AgentStatusEvent,
+  AgentProgressEvent,
   TypingEvent,
   ReadReceiptEvent,
   PingEvent,

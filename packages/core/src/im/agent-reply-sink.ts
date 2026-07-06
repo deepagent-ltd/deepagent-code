@@ -1,5 +1,8 @@
 import { Context, Effect } from "effect"
 import type { AgentExecutionResult } from "./agent-executor"
+import type { AgentProgressPart } from "./websocket"
+
+export type { AgentProgressPart }
 
 /**
  * Optional sink notified after an IM agent finishes a mention turn.
@@ -21,6 +24,22 @@ import type { AgentExecutionResult } from "./agent-executor"
  * requirements nor its behavior. Notifications are best-effort — a sink failure
  * must never fail the agent run.
  */
+/**
+ * A throttled batch of changed progress parts for one agent turn. Each
+ * {@link AgentProgressPart} is a live snapshot the client applies by REPLACING
+ * its per-`partID` entry, so a dropped/reordered batch self-heals on the next
+ * snapshot (and the authoritative final reply arrives separately via
+ * {@link AgentReplySink.notify}). The part shape is the schema-backed
+ * `AgentProgressPart` from ./websocket, shared so the WS event and the sink
+ * payload can never drift.
+ */
+export interface AgentProgressUpdate {
+  readonly groupID: string
+  readonly messageID: string
+  readonly agentID: string
+  readonly parts: ReadonlyArray<AgentProgressPart>
+}
+
 export interface AgentReplySink {
   /**
    * Report the outcome of an agent mention turn.
@@ -36,6 +55,15 @@ export interface AgentReplySink {
     agentID: string
     result: AgentExecutionResult
   }): Effect.Effect<void, never, never>
+
+  /**
+   * OPTIONAL. Report a throttled batch of in-progress reasoning/tool/text
+   * snapshots while the agent runs, so the hub can stream a live "thinking"
+   * view. Absent on sinks that don't support streaming (standalone kernel, or
+   * the no-op sink); the executor only calls it when defined. Best-effort — a
+   * failure here must never affect the agent run or the final {@link notify}.
+   */
+  progress?(input: AgentProgressUpdate): Effect.Effect<void, never, never>
 }
 
 export class AgentReplySinkService extends Context.Service<AgentReplySinkService, AgentReplySink>()(
