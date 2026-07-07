@@ -10,6 +10,7 @@ import { type Session } from "@deepagent-code/sdk/v2/client"
 import {
   childSessionOnPath,
   closeHomeProject,
+  directChildSessions,
   displayName,
   effectiveWorkspaceOrder,
   errorMessage,
@@ -18,6 +19,8 @@ import {
   homeProjectDirectories,
   homeSessionServerStatus,
   latestRootSession,
+  roots,
+  sessionOriginID,
   toggleHomeProjectSelection,
 } from "./helpers"
 import { pathKey } from "@/utils/path-key"
@@ -220,6 +223,52 @@ describe("layout workspace helpers", () => {
     expect(childSessionOnPath(list, "child", "leaf")?.id).toBe("leaf")
     expect(childSessionOnPath(list, "root", "root")).toBeUndefined()
     expect(childSessionOnPath(list, "root", "other")).toBeUndefined()
+  })
+
+  test("resolves session origin from subagent parentID or fork metadata", () => {
+    expect(sessionOriginID(session({ id: "a", directory: "/w" }))).toBeUndefined()
+    expect(sessionOriginID(session({ id: "b", directory: "/w", parentID: "root" }))).toBe("root")
+    expect(
+      sessionOriginID(session({ id: "c", directory: "/w", metadata: { forkedFrom: { parentSessionID: "root" } } })),
+    ).toBe("root")
+    // parentID (subagent) wins if both are somehow present.
+    expect(
+      sessionOriginID(
+        session({ id: "d", directory: "/w", parentID: "p", metadata: { forkedFrom: { parentSessionID: "f" } } }),
+      ),
+    ).toBe("p")
+  })
+
+  test("roots exclude both subagents and forks so a fork is never double-listed", () => {
+    const store = {
+      path: { directory: "/w" },
+      session: [
+        session({ id: "root", directory: "/w" }),
+        session({ id: "sub", directory: "/w", parentID: "root" }),
+        session({ id: "fork", directory: "/w", metadata: { forkedFrom: { parentSessionID: "root" } } }),
+      ],
+    }
+    expect(roots(store).map((s) => s.id)).toEqual(["root"])
+  })
+
+  test("directChildSessions groups subagents and forks under their origin, newest first", () => {
+    const list = [
+      session({ id: "root", directory: "/w" }),
+      session({ id: "sub", directory: "/w", parentID: "root", time: { created: 1, updated: 10, archived: undefined } }),
+      session({
+        id: "fork",
+        directory: "/w",
+        metadata: { forkedFrom: { parentSessionID: "root" } },
+        time: { created: 2, updated: 20, archived: undefined },
+      }),
+      session({
+        id: "archived",
+        directory: "/w",
+        parentID: "root",
+        time: { created: 3, updated: 30, archived: 99 },
+      }),
+    ]
+    expect(directChildSessions(list, "root").map((s) => s.id)).toEqual(["fork", "sub"])
   })
 
   test("formats fallback project display name", () => {
