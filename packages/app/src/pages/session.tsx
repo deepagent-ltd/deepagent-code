@@ -29,7 +29,7 @@ import { previewSelectedLines } from "@deepagent-code/ui/pierre/selection-bridge
 import { Button } from "@deepagent-code/ui/button"
 import { showToast } from "@/utils/toast"
 import { checksum } from "@deepagent-code/core/util/encode"
-import { useLocation, useSearchParams } from "@solidjs/router"
+import { useLocation, useNavigate, useSearchParams } from "@solidjs/router"
 import { NewSessionView, SessionHeader } from "@/components/session"
 import { useComments } from "@/context/comments"
 import { getSessionPrefetch, SESSION_PREFETCH_TTL } from "@/context/global-sync/session-prefetch"
@@ -52,6 +52,7 @@ import {
 } from "@/components/prompt-input/submit"
 import { createSessionComposerState, SessionComposerRegion } from "@/pages/session/composer"
 import {
+  createForkAction,
   createOpenReviewFile,
   createSessionTabs,
   createSizing,
@@ -203,6 +204,7 @@ export default function Page() {
   const comments = useComments()
   const terminal = useTerminal()
   const server = useServer()
+  const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams<{ prompt?: string }>()
   const location = useLocation()
   const { params, sessionKey, workspaceKey, tabs, view } = useSessionLayout()
@@ -446,8 +448,6 @@ export default function Page() {
   let reviewFrame: number | undefined
   let refreshFrame: number | undefined
   let refreshTimer: number | undefined
-  let todoFrame: number | undefined
-  let todoTimer: number | undefined
   let diffFrame: number | undefined
   let diffTimer: number | undefined
 
@@ -697,40 +697,9 @@ export default function Page() {
     },
   )
 
-  createEffect(
-    on(
-      () => {
-        const id = params.id
-        return [
-          sdk.directory,
-          id,
-          id ? (sync.data.session_status[id]?.type ?? "idle") : "idle",
-          id ? composer.blocked() : false,
-        ] as const
-      },
-      ([dir, id, status, blocked]) => {
-        if (todoFrame !== undefined) cancelAnimationFrame(todoFrame)
-        if (todoTimer !== undefined) window.clearTimeout(todoTimer)
-        todoFrame = undefined
-        todoTimer = undefined
-        if (!id) return
-        if (status === "idle" && !blocked) return
-        const cached = untrack(() => sync.data.todo[id] !== undefined || serverSync.data.session_todo[id] !== undefined)
-
-        todoFrame = requestAnimationFrame(() => {
-          todoFrame = undefined
-          todoTimer = window.setTimeout(() => {
-            todoTimer = undefined
-            if (sdk.directory !== dir || params.id !== id) return
-            untrack(() => {
-              void sync.session.todo(id, cached ? { force: true } : undefined)
-            })
-          }, 0)
-        })
-      },
-      { defer: true },
-    ),
-  )
+  // NOTE: the per-turn todo prefetch effect was removed when task tracking unified onto the plan
+  // system. The task dock is now driven exclusively by the persistent plan (session_plan), which
+  // arrives via the plan.updated SSE stream — there is no REST todo endpoint to prime on activation.
 
   createEffect(
     on(
@@ -1652,7 +1621,31 @@ export default function Page() {
       .map((item) => ({ id: item.id, text: line(item.id) }))
   })
 
-  const actions = { revert }
+  const fork = createForkAction({
+    open: (DialogFork) => dialog.show(() => <DialogFork />),
+    messages: (sessionID) => sync.data.message[sessionID] ?? [],
+    fork: async (input) => {
+      const forked = await sdk.client.session.fork(input)
+      if (!forked.data) {
+        showToast({ title: language.t("common.requestFailed") })
+        return
+      }
+      return forked.data
+    },
+    navigate: (sessionID) => {
+      local.session.promote(sdk.directory, sessionID)
+      layout.handoff.setTabs(local.slug(), sessionID)
+      navigate(`/${local.slug()}/session/${sessionID}`)
+    },
+    onError: (err) => {
+      showToast({
+        title: language.t("common.requestFailed"),
+        description: formatServerError(err),
+      })
+    },
+  })
+
+  const actions = { revert, fork }
 
   createEffect(() => {
     const sessionID = params.id
@@ -1729,8 +1722,6 @@ export default function Page() {
     if (reviewFrame !== undefined) cancelAnimationFrame(reviewFrame)
     if (refreshFrame !== undefined) cancelAnimationFrame(refreshFrame)
     if (refreshTimer !== undefined) window.clearTimeout(refreshTimer)
-    if (todoFrame !== undefined) cancelAnimationFrame(todoFrame)
-    if (todoTimer !== undefined) window.clearTimeout(todoTimer)
     if (diffFrame !== undefined) cancelAnimationFrame(diffFrame)
     if (diffTimer !== undefined) window.clearTimeout(diffTimer)
     if (scrollStateFrame !== undefined) cancelAnimationFrame(scrollStateFrame)

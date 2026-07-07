@@ -7,7 +7,8 @@ import { GlobalBus, type GlobalEvent } from "../../src/bus/global"
 import { Git } from "../../src/git"
 import { Worktree } from "../../src/worktree"
 import { disposeAllInstances, provideInstance, TestInstance } from "../fixture/fixture"
-import { testEffect } from "../lib/effect"
+import { awaitWithTimeout, testEffect } from "../lib/effect"
+import { Identifier } from "../../src/id/id"
 
 const it = testEffect(
   Layer.mergeAll(Worktree.defaultLayer, FSUtil.defaultLayer, CrossSpawnSpawner.defaultLayer, Git.defaultLayer),
@@ -284,6 +285,58 @@ describe("Worktree", () => {
           })
 
           yield* svc.remove({ directory: target })
+        }),
+      { git: true },
+    )
+  })
+
+  // P5 (C7): the task tool now derives a per-invocation unique worktree name
+  // (`agent-<type>-<Identifier.ascending("tool")>`) instead of a shared `agent-<type>`. This proves
+  // that N concurrent same-type allocations each land in a DISTINCT worktree — none collide, none
+  // fall back to the shared (instance) checkout — which is what the silent-fallback bug used to do.
+  describe("concurrent same-type isolation", () => {
+    it.instance(
+      "N concurrent same-type creates yield N distinct worktrees, never the shared directory",
+      () =>
+        Effect.gen(function* () {
+          const test = yield* TestInstance
+          const svc = yield* Worktree.Service
+          const N = 8
+          const subagentType = "general"
+
+          // Mirror task.ts: one unique name per invocation. Uniqueness must hold even when the
+          // identifiers are minted back-to-back within the same millisecond (monotonic counter).
+          const names = Array.from({ length: N }, () => `agent-${subagentType}-${Identifier.ascending("tool")}`)
+          expect(new Set(names).size).toBe(N)
+
+          // `create` returns once `git worktree add` has registered the checkout (boot is forked); the
+          // isolation guarantee is fully decided by then, so we assert on the returned info + git's own
+          // worktree list rather than waiting on the async bootstrap.
+          const infos = yield* awaitWithTimeout(
+            Effect.forEach(names, (name) => svc.create({ name }), { concurrency: "unbounded" }),
+            "timed out allocating concurrent worktrees",
+            "20 seconds",
+          )
+
+          try {
+            // Every create resolved to a real, distinct worktree (no shared-dir fallback).
+            const directories = infos.map((info) => normalize(info.directory))
+            expect(directories).toHaveLength(N)
+            expect(new Set(directories).size).toBe(N)
+
+            // None of them is the shared instance checkout.
+            const shared = normalize(test.directory)
+            for (const directory of directories) expect(directory).not.toBe(shared)
+
+            // Branches are distinct too, and git actually registered every worktree.
+            const branches = infos.map((info) => info.branch)
+            expect(new Set(branches).size).toBe(N)
+
+            const list = normalize(yield* git(test.directory, ["worktree", "list", "--porcelain"]))
+            for (const directory of directories) expect(list).toContain(directory)
+          } finally {
+            yield* Effect.forEach(infos, (info) => removeCreatedWorktree(info.directory), { concurrency: 1 })
+          }
         }),
       { git: true },
     )

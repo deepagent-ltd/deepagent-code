@@ -2,19 +2,26 @@ import { Component, createMemo, For, Show } from "solid-js"
 import { useSync } from "@/context/sync"
 import { useLanguage } from "@/context/language"
 import { IconButton } from "@deepagent-code/ui/icon-button"
-import { useNavigate } from "@solidjs/router"
+import { useNavigate, useParams } from "@solidjs/router"
 
 // U4 (S1 §P1): subagent list panel. Subagents = child sessions (Session.parentID === current). The
 // task tool already spawns them and the app already receives session.created/updated events with
 // parentID; this surfaces them as a list with status + click-to-open. Plan-step linkage is shown
 // via the child session title (the task tool titles children "<desc> (@<agent> subagent)").
-export const SidePanelSubagents: Component<{ sessionID?: string; onClose: () => void }> = (props) => {
+//
+// The current session id is the ROUTE param (`params.id`) — a plain SessionID that matches a
+// child's `Session.parentID`. It must NOT come from the caller's composite `sessionKey()`
+// (scope+route SessionStateKey): that never equals a child's parentID, so the list was always
+// empty. Resolving it internally here (like SidePanelIM / SidePanelDebug do) keeps the contract
+// simple and immune to that mismatch.
+export const SidePanelSubagents: Component<{ onClose: () => void }> = (props) => {
   const sync = useSync()
   const language = useLanguage()
   const navigate = useNavigate()
+  const params = useParams()
 
   const children = createMemo(() => {
-    const id = props.sessionID
+    const id = params.id
     if (!id) return []
     return sync.data.session
       .filter((s) => s.parentID === id)

@@ -358,10 +358,25 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
     })
   }
 
-  const fork = () => {
-    void import("@/components/dialog-fork").then((x) => {
-      dialog.show(() => <x.DialogFork />)
-    })
+  const fork = async () => {
+    const sessionID = params.id
+    if (!sessionID) return
+
+    const forked = await sdk.client.session
+      .fork({ sessionID })
+      .then((x) => x.data)
+      .catch((err) => {
+        showToast({
+          title: language.t("common.requestFailed"),
+          description: errorMessage(err, language.t("common.requestFailed")),
+        })
+        return undefined
+      })
+    if (!forked) return
+
+    local.session.promote(sdk.directory, forked.id)
+    layout.handoff.setTabs(local.slug(), forked.id)
+    navigate(`/${local.slug()}/session/${forked.id}`)
   }
 
   const shareCmds = () => {

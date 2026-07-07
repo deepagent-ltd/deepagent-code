@@ -215,6 +215,8 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
         session.fork({
           sessionID: ctx.params.sessionID,
           messageID: ctx.payload?.messageID,
+          directory: ctx.payload?.directory,
+          isolate: ctx.payload?.isolate,
         }),
       )
     })
@@ -320,7 +322,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       const rawInput = promptText(ctx.payload.parts)
       if (!rawInput.trim()) return yield* new HttpApiError.BadRequest({})
       return yield* promptSvc
-        .refineWishDraft({
+        .refineIntelligenceDraft({
           sessionID: ctx.params.sessionID,
           rawInput,
           outputLanguage: ctx.payload.output_language ?? "english",
@@ -331,12 +333,12 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
           // with the user's raw input instead of blocking the turn. The client treats a "general"
           // route as direct_override, so the user's message still goes through.
           //
-          // We log the cause first: a wish→direct degradation is exactly the "the plan/confirm
-          // popup didn't appear" symptom, and it is otherwise invisible (refineWishDraft already
+          // We log the cause first: an intelligence→direct degradation is exactly the "the plan/confirm
+          // popup didn't appear" symptom, and it is otherwise invisible (refineIntelligenceDraft already
           // fails soft internally for chat). The log makes the degrade reason diagnosable —
           // model schema failure vs. an aborted prepare (e.g. the renderer reloaded mid-call).
           Effect.catch((error: unknown) =>
-            Effect.logWarning("wish prompt prepare degraded to direct").pipe(
+            Effect.logWarning("intelligence prompt prepare degraded to direct").pipe(
               Effect.annotateLogs({
                 sessionID: ctx.params.sessionID,
                 reason: error instanceof Error ? error.message : String(error),
@@ -346,7 +348,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
                 prompt_draft_id: "",
                 context_plan_id: "",
                 state: "general_ready",
-                mode: "wish" as const,
+                mode: "intelligence" as const,
                 goal: rawInput,
                 preview: rawInput,
               }),

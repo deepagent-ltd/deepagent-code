@@ -940,18 +940,22 @@ export const dict = {
   "settings.general.deepagent.mode.xhigh": "xhigh",
   "settings.general.deepagent.mode.max": "max",
   "settings.general.deepagent.mode.ultra": "ultra",
-  "settings.general.deepagent.mode.ultraRequiresWish": "ultra kræver wish-scenarietilstand.",
+  "settings.general.deepagent.mode.ultraRequiresIntelligence": "ultra kræver intelligence-scenarietilstand.",
+  "settings.general.deepagent.subagentMode.title": "Subagent",
+  "settings.general.deepagent.subagentMode.description": "Choose the work intensity of subagents relative to the main agent.",
+  "settings.general.deepagent.subagentMode.inherit": "Inherit from parent",
+  "settings.general.deepagent.subagentMode.downgrade": "One level lower",
   "settings.general.deepagent.prompt.title": "Scenarietilstand",
   "settings.general.deepagent.prompt.description": "Vælg hvordan composeren håndterer din prompt før afsendelse.",
   "settings.general.deepagent.prompt.direct": "Direkte tilstand",
   "settings.general.deepagent.prompt.direct.description":
     "Send din prompt præcis som skrevet, uden at DeepAgent forbereder et udkast.",
-  "settings.general.deepagent.prompt.wish": "Wish-tilstand",
-  "settings.general.deepagent.prompt.wish.description":
+  "settings.general.deepagent.prompt.intelligence": "Intelligence-tilstand",
+  "settings.general.deepagent.prompt.intelligence.description":
     "DeepAgent forbereder først en komplet prompt, som du kan gennemse og redigere.",
-  "settings.general.deepagent.wishModel.title": "Wish-tilstandsmodel",
-  "settings.general.deepagent.wishModel.description":
-    "Vælg modellen der kun bruges til at forberede promptudkast i wish-tilstand.",
+  "settings.general.deepagent.intelligenceModel.title": "Intelligence-tilstandsmodel",
+  "settings.general.deepagent.intelligenceModel.description":
+    "Vælg modellen der kun bruges til at forberede promptudkast i intelligence-tilstand.",
   "settings.general.deepagent.selfLearning.title": "Godkendelse af selvlæring",
   "settings.general.deepagent.selfLearning.description":
     "Bestem hvordan viden DeepAgent lærer fra dine sessioner bliver søgbar.",

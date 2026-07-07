@@ -6,7 +6,6 @@ import type {
   Path,
   Project,
   ProviderAuthResponse,
-  Todo,
 } from "@deepagent-code/sdk/v2/client"
 import { showToast } from "@/utils/toast"
 import { getFilename } from "@deepagent-code/core/util/path"
@@ -55,11 +54,9 @@ type GlobalStore = {
   error?: InitError
   path: Path
   project: Project[]
-  session_todo: {
-    [sessionID: string]: Todo[]
-  }
-  // U2: the live plan per session (goal + steps + progress) pushed by the `plan` tool's
-  // plan.updated event. Persistent — survives a session going idle (unlike the todo cache).
+  // The live plan per session (goal + steps + progress) pushed by the `plan` tool's plan.updated
+  // event. Persistent — survives a session going idle. This is the SINGLE source for the task dock;
+  // the legacy `session_todo` cache was removed when task tracking unified onto the plan system.
   session_plan: {
     [sessionID: string]: SessionPlan
   }
@@ -135,7 +132,6 @@ export function createServerSyncContextInner(_serverSDK?: ServerSDK) {
       return !bootstrap.isPending
     },
     project: [],
-    session_todo: {},
     session_plan: {},
     provider_auth: {},
     get path() {
@@ -238,21 +234,7 @@ export function createServerSyncContextInner(_serverSDK?: ServerSDK) {
     return (setGlobalStore as (...args: unknown[]) => unknown)(...input)
   }) as typeof setGlobalStore
 
-  const setSessionTodo = (sessionID: string, todos: Todo[] | undefined) => {
-    if (!sessionID) return
-    if (!todos) {
-      setGlobalStore(
-        "session_todo",
-        produce((draft) => {
-          delete draft[sessionID]
-        }),
-      )
-      return
-    }
-    setGlobalStore("session_todo", sessionID, reconcile(todos, { key: "id" }))
-  }
-
-  // U2: set/clear the live plan for a session.
+  // Set/clear the live plan for a session.
   const setSessionPlan = (sessionID: string, plan: SessionPlan | undefined) => {
     if (!sessionID) return
     if (!plan) {
@@ -264,7 +246,16 @@ export function createServerSyncContextInner(_serverSDK?: ServerSDK) {
       )
       return
     }
-    setGlobalStore("session_plan", sessionID, reconcile(plan, { key: "plan_id" }))
+    // The outer object is a single plan per session (not an array), so a key is meaningless at this
+    // level — but reconcile applies `key` RECURSIVELY to the nested `steps[]` array, where the
+    // identity field is `step_id`, not `plan_id`. With the wrong key every step resolves to
+    // `key=undefined`, so reconcile can't match steps across updates and falls back to replacing
+    // whole step objects by position (extra store-cell churn). NOTE: this does NOT drop status
+    // changes — field values still land either way (verified), and the dock renders steps via
+    // <Index> over plain objects re-created by the `planAsTodos` memo, so proxy identity is never
+    // consumed by the render. Keying by `step_id` is the correct, minimal-diff choice (field-level
+    // updates, stable identity) and is future-proof if the render ever switches to a keyed <For>.
+    setGlobalStore("session_plan", sessionID, reconcile(plan, { key: "step_id" }))
   }
 
   const paused = () => untrack(() => globalStore.reload) !== undefined
@@ -332,7 +323,7 @@ export function createServerSyncContextInner(_serverSDK?: ServerSDK) {
       })
       if (next.length !== store.session.length) {
         setStore("session", reconcile(next, { key: "id" }))
-        cleanupDroppedSessionCaches(store, setStore, next, setSessionTodo)
+        cleanupDroppedSessionCaches(store, setStore, next)
       }
       children.unpin(key)
       return
@@ -369,7 +360,7 @@ export function createServerSyncContextInner(_serverSDK?: ServerSDK) {
                   }),
                 )
                 setStore("session", reconcile(sessions, { key: "id" }))
-                cleanupDroppedSessionCaches(store, setStore, sessions, setSessionTodo)
+                cleanupDroppedSessionCaches(store, setStore, sessions)
               })
               sessionMeta.set(key, { limit })
             })
@@ -469,7 +460,6 @@ export function createServerSyncContextInner(_serverSDK?: ServerSDK) {
       store,
       setStore,
       push: queue.push,
-      setSessionTodo,
       setSessionPlan,
       retainedLimit: sessionMeta.get(key)?.limit,
       vcsCache: children.vcsCache.get(key),
@@ -618,9 +608,6 @@ export function createServerSyncContextInner(_serverSDK?: ServerSDK) {
     updateConfig: updateConfigMutation.mutateAsync,
     refreshProviders,
     project: projectApi,
-    todo: {
-      set: setSessionTodo,
-    },
     plan: {
       set: setSessionPlan,
     },

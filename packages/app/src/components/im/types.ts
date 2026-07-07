@@ -1,10 +1,10 @@
-export interface AgentDescriptor {
-  id: string
-  name: string
-  displayName: string
-  description?: string
-  visible: boolean
-}
+// The IM agent descriptor is defined canonically in the core package
+// (`packages/core/src/im/mention-parser.ts`) and served verbatim by the HTTP
+// API (`AgentDescriptorResponse = AgentDescriptor`). Re-export the canonical
+// types here instead of hand-mirroring them, so the frontend can never drift
+// from the backend contract. `Trigger`, `AutonomyLevel` and `AgentLimits` are
+// the sub-schemas referenced by `AgentDescriptor`.
+export type { AgentDescriptor, AgentLimits, AutonomyLevel, Trigger } from "@deepagent-code/core/im/mention-parser"
 
 export interface IMGroup {
   id: string

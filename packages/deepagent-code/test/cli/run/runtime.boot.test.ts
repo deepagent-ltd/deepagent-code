@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, mock, spyOn, test } from "bun:test"
-import { OpencodeClient, type Provider } from "@deepagent-code/sdk/v2"
+import { createOpencodeClient, type OpencodeClient, type Provider } from "@deepagent-code/sdk/v2"
 import type { Resolved } from "@deepagent-code/tui/config"
 import { TuiConfig } from "@/config/tui"
 import { resolveDiffStyle, resolveModelInfo, resolveRunTuiConfig } from "@/cli/cmd/run/runtime.boot"
@@ -161,7 +161,7 @@ describe("run runtime boot", () => {
   })
 
   test("prefers configured providers for model selector data", async () => {
-    const sdk = new OpencodeClient()
+    const sdk = createOpencodeClient()
     const data: {
       all: Provider[]
       default: Record<string, string>
@@ -227,7 +227,7 @@ describe("run runtime boot", () => {
   })
 
   test("falls back to provider list when configured providers are unavailable", async () => {
-    const sdk = new OpencodeClient()
+    const sdk = createOpencodeClient()
     const data: {
       all: Provider[]
       default: Record<string, string>

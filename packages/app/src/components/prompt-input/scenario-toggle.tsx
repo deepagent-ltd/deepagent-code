@@ -16,15 +16,15 @@ const scenarios = [
     tooltip: "prompt.scenario.direct.tooltip" as const,
   },
   {
-    mode: "wish" as const,
+    mode: "intelligence" as const,
     icon: "speech-bubble" as const,
-    label: "prompt.scenario.wish" as const,
-    tooltip: "prompt.scenario.wish.tooltip" as const,
+    label: "prompt.scenario.intelligence" as const,
+    tooltip: "prompt.scenario.intelligence.tooltip" as const,
   },
 ]
 
 // D1: the per-turn scenario-mode toggle that sits to the left of the send button. It flips the
-// scenario between `direct` (the user owns the prompt) and `wish` (DeepAgent prepares the prompt
+// scenario between `direct` (the user owns the prompt) and `intelligence` (DeepAgent prepares the prompt
 // and proposes next-round suggestions). It writes a DIRECTORY-scoped override (stable before a
 // session exists) that submit.ts resolves session-then-directory, so a toggle made on the
 // new-session composer still applies to the first turn. It defaults to the configured promptMode
@@ -39,12 +39,12 @@ export function ScenarioToggle() {
   onCleanup(subscribeScenarioOverride(() => setVersion((value) => value + 1)))
 
   // Effective scenario = directory override if set, else the configured default.
-  const scenario = createMemo<"direct" | "wish">(() => {
+  const scenario = createMemo<"direct" | "intelligence">(() => {
     version()
     return getScenarioOverride(dirKey()) ?? deepAgentPromptModeFromConfig(serverSync.data.config)
   })
 
-  const select = (mode: "direct" | "wish") => setScenarioOverride(dirKey(), mode)
+  const select = (mode: "direct" | "intelligence") => setScenarioOverride(dirKey(), mode)
 
   return (
     <div

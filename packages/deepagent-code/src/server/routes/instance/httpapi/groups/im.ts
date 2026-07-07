@@ -1,6 +1,7 @@
 import { Schema } from "effect"
 import { HttpApi, HttpApiEndpoint, HttpApiError, HttpApiGroup, OpenApi } from "effect/unstable/httpapi"
 import { MessageMetadata } from "@deepagent-code/core/im/sql"
+import { AgentDescriptor } from "@deepagent-code/core/im/mention-parser"
 import { Authorization } from "../middleware/authorization"
 import { InstanceContextMiddleware } from "../middleware/instance-context"
 import {
@@ -147,13 +148,11 @@ export const MarkReadPayload = Schema.Struct({
   readAt: Schema.optional(Schema.Number),
 })
 
-export const AgentDescriptorResponse = Schema.Struct({
-  id: Schema.String,
-  name: Schema.String,
-  displayName: Schema.String,
-  description: Schema.optional(Schema.String),
-  visible: Schema.Boolean,
-})
+// HTTP wire shape for an agent descriptor. Converged onto the canonical
+// `AgentDescriptor` schema (V3.8.1 §C.3 / conflict C6) so the new optional
+// metadata fields serialize on the wire without a second definition drifting.
+// The canonical schema is plain Structs/Literals/Records — fully serializable.
+export const AgentDescriptorResponse = AgentDescriptor
 
 // Query params
 export const ListMessagesQuery = Schema.Struct({
