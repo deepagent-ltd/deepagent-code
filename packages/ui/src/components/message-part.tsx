@@ -181,6 +181,8 @@ export interface MessagePartProps {
   virtualizeDiff?: boolean
   showAssistantCopyPartID?: string | null
   turnDurationMs?: number
+  /** Fork from this reply bubble. When set, the assistant reply action row shows a fork affordance. */
+  onFork?: SessionAction
 }
 
 export type PartComponent = Component<MessagePartProps>
@@ -1274,6 +1276,7 @@ export function Part(props: MessagePartProps) {
         virtualizeDiff={props.virtualizeDiff}
         showAssistantCopyPartID={props.showAssistantCopyPartID}
         turnDurationMs={props.turnDurationMs}
+        onFork={props.onFork}
       />
     </Show>
   )
@@ -1533,6 +1536,7 @@ PART_MAPPING["text"] = function TextPartDisplay(props) {
     return isLastTextPart()
   })
   const [copied, setCopied] = createSignal(false)
+  const [forking, setForking] = createSignal(false)
 
   const handleCopy = async () => {
     const content = text()
@@ -1541,6 +1545,19 @@ PART_MAPPING["text"] = function TextPartDisplay(props) {
       setCopied(true)
       setTimeout(() => setCopied(false), 2000)
     }
+  }
+
+  // Fork is anchored to this reply's assistant message: the new branch inherits
+  // the full conversation memory up to (and including) this turn.
+  const showFork = createMemo(() => props.message.role === "assistant" && !!props.onFork)
+
+  const handleFork = () => {
+    const act = props.onFork
+    if (!act || forking()) return
+    setForking(true)
+    void Promise.resolve()
+      .then(() => act({ sessionID: props.message.sessionID, messageID: props.message.id }))
+      .finally(() => setForking(false))
   }
 
   return (
@@ -1567,6 +1584,19 @@ PART_MAPPING["text"] = function TextPartDisplay(props) {
                 aria-label={copied() ? i18n.t("ui.message.copied") : i18n.t("ui.message.copyResponse")}
               />
             </Tooltip>
+            <Show when={showFork()}>
+              <Tooltip value={i18n.t("ui.message.forkMessage")} placement="top" gutter={4}>
+                <IconButton
+                  icon="branch"
+                  size="normal"
+                  variant="ghost"
+                  disabled={forking()}
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={handleFork}
+                  aria-label={i18n.t("ui.message.forkMessage")}
+                />
+              </Tooltip>
+            </Show>
             <Show when={meta()}>
               <span data-slot="text-part-meta" class="text-12-regular text-text-weak cursor-default">
                 {meta()}

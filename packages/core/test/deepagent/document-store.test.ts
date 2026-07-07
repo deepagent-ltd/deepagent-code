@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { DocumentStore, knowledgeSimilarity, tokenizeForSimilarity } from "../../src/deepagent/document-store"
+import { DurableKnowledgeStore } from "../../src/deepagent/durable-knowledge-store"
 
 let root: string
 let store: DocumentStore
@@ -96,6 +97,93 @@ describe("V3 DocumentStore", () => {
       provenance: { source: "runner" },
     })
     expect(store.list({ type: "memory" }).length).toBe(0)
+  })
+})
+
+// V3.8 Phase 0: the new NON-knowledge derived-data node/edge types must round-trip through the graph
+// exactly like any other doc, must NOT trigger the knowledge confidence check, and must obey INV-3
+// (single-store links only). No knowledge semantics ride on them.
+describe("V3.8 Phase 0 graph-model extension (code_symbol / ledger / bridge)", () => {
+  const codeSymbol = (desc = "auth service") => ({
+    type: "code_symbol" as const,
+    scope: "durable:project:p1",
+    body: JSON.stringify({ path: "src/auth.ts", language: "ts", symbol: "AuthService" }),
+    description: desc,
+    provenance: prov,
+  })
+
+  test("code_symbol create/link/neighbors round-trip (references code->doc)", () => {
+    const design = store.create({ type: "design", scope: "durable:project:p1", body: "d", description: "auth design", provenance: prov })
+    const code = store.create(codeSymbol())
+    expect(code.id).toMatch(/^doc:code_symbol:/)
+    expect(code.version).toBe(1)
+    store.link(code.id, "references", design.id)
+    expect(store.neighbors(code.id, ["references"], 1).some((x) => x.id === design.id)).toBe(true)
+    expect(store.getRefsIn(design.id).some((r) => r.from.id === code.id && r.rel === "references")).toBe(true)
+  })
+
+  test("code_symbol implements requirements edge round-trips", () => {
+    const req = store.create({ type: "requirements", scope: "durable:project:p1", body: "r", description: "must auth", provenance: prov })
+    const code = store.create(codeSymbol("login handler"))
+    store.link(code.id, "implements", req.id)
+    expect(store.neighbors(code.id, ["implements"], 1).some((x) => x.id === req.id)).toBe(true)
+  })
+
+  test("ledger and bridge create + reuse existing derived_from/refines edges", () => {
+    const ledger = store.create({ type: "ledger", scope: "run:t1", body: "{}", description: "session ledger", provenance: prov })
+    const bridge = store.create({ type: "bridge", scope: "durable:project:p1", body: "{}", description: "project bridge", provenance: prov })
+    expect(ledger.id).toMatch(/^doc:ledger:/)
+    expect(bridge.id).toMatch(/^doc:bridge:/)
+    // App-A reuse: bridge refines the session ledger it was distilled from.
+    store.link(bridge.id, "refines", ledger.id)
+    expect(store.neighbors(bridge.id, ["refines"], 1).some((x) => x.id === ledger.id)).toBe(true)
+  })
+
+  test("new types do NOT trigger the knowledge confidence check (no confidence needed)", () => {
+    for (const type of ["code_symbol", "ledger", "bridge"] as const) {
+      expect(() =>
+        store.create({ type, scope: "durable:project:p1", body: "x", description: `${type} doc`, provenance: prov }),
+      ).not.toThrow()
+    }
+  })
+
+  test("linking a new-type node across two stores is rejected by INV-3", () => {
+    const otherRoot = mkdtempSync(path.join(tmpdir(), "deepagent-ds-other-"))
+    try {
+      const other = new DocumentStore(otherRoot)
+      const remoteDesign = other.create({ type: "design", scope: "durable:project:p1", body: "d", description: "remote design", provenance: prov })
+      const code = store.create(codeSymbol())
+      // The link target lives in `other`, not `store` — INV-3 (link target must exist) rejects it.
+      expect(() => store.link(code.id, "references", remoteDesign.id)).toThrow()
+    } finally {
+      rmSync(otherRoot, { recursive: true, force: true })
+    }
+  })
+
+  // C3 (the OTHER half): even when a new-type doc is ACTIVE in the durable store, retrieve()'s
+  // KNOWLEDGE_DOC_TYPES whitelist must keep it out of knowledge retrieval — it is derived data reached
+  // only via the documentStore getter (Phase 1 GraphQuery), never surfaced as knowledge.
+  test("active new-type docs never pass retrieve()'s knowledge whitelist", () => {
+    const durable = new DurableKnowledgeStore(root)
+    const conf = { evidence_strength: "strong" as const, support_count: 1 }
+    for (const type of ["code_symbol", "ledger", "bridge"] as const) {
+      durable.seedActive({
+        type,
+        description: `${type} derived doc`,
+        body: "{}",
+        domain: null,
+        scope: "project-shared",
+        projectId: "p1",
+        sensitivity: "source_code",
+        risk: "low",
+        confidence: conf,
+        provenance: prov,
+      })
+    }
+    // Requesting them explicitly still yields nothing: the whitelist filters them at the type gate.
+    expect(
+      durable.retrieve({ types: ["code_symbol", "ledger", "bridge"], projectId: "p1", limit: 10 }),
+    ).toHaveLength(0)
   })
 })
 

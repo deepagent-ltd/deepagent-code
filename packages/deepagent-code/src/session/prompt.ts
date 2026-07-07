@@ -80,6 +80,8 @@ import { referencePromptMetadata, referenceTextPart } from "./prompt/reference"
 import { SessionReminders } from "./reminders"
 import { SessionTools } from "./tools"
 import { LLMEvent } from "@deepagent-code/llm"
+import { ConversationLogWriter } from "./conversation-log-writer"
+import { CodeIndexTrigger } from "./code-index-trigger"
 
 // @ts-ignore
 globalThis.AI_SDK_LOG_WARNINGS = false
@@ -113,16 +115,16 @@ export interface Interface {
   readonly shell: (input: ShellInput) => Effect.Effect<SessionV1.WithParts, Session.BusyError>
   readonly command: (input: CommandInput) => Effect.Effect<SessionV1.WithParts, Image.Error>
   readonly resolvePromptParts: (template: string) => Effect.Effect<PromptInput["parts"]>
-  readonly refineWishDraft: (input: {
+  readonly refineIntelligenceDraft: (input: {
     sessionID: SessionID
     rawInput: string
-    outputLanguage?: AgentGateway.DeepAgentPromptPipeline.WishRefinementOutputLanguage
+    outputLanguage?: AgentGateway.DeepAgentPromptPipeline.IntelligenceRefinementOutputLanguage
   }) => Effect.Effect<
     {
       prompt_draft_id: string
       context_plan_id: string
       state: string
-      mode: "wish"
+      mode: "intelligence"
       route: "code" | "general"
       goal: string
       preview: string
@@ -170,6 +172,10 @@ export const layer = Layer.effect(
     const flags = yield* RuntimeFlags.Service
     const database = yield* Database.Service
     const { db } = database
+    // V3.8 Phase 3: sessions that already had their one lightweight code-index pass this process, so a
+    // re-prompt does not re-walk the tree (content-sha gating makes re-indexing idempotent regardless,
+    // but this avoids the redundant fs walk entirely).
+    const indexedSessions = new Set<SessionID>()
     const ops = Effect.fn("SessionPrompt.ops")(function* () {
       return {
         cancel: (sessionID: SessionID) => cancel(sessionID),
@@ -717,8 +723,12 @@ export const layer = Layer.effect(
       return yield* provider.defaultModel().pipe(Effect.orDie)
     })
 
-    const wishRefinementModel = Effect.fnUntraced(function* (sessionID: SessionID) {
-      const value = (yield* config.get()).provider?.deepagent?.options?.wishModel
+    const intelligenceRefinementModel = Effect.fnUntraced(function* (sessionID: SessionID) {
+      const opts = (yield* config.get()).provider?.deepagent?.options
+      // Legacy-compat: `wishModel` is the pre-rename option key. Prefer the new `intelligenceModel`
+      // key but still read `wishModel` so an existing user's configured model keeps resolving.
+      // Do NOT drop the `wishModel` read.
+      const value = opts?.intelligenceModel ?? opts?.wishModel
       if (typeof value === "string") {
         const separator = value.indexOf("/")
         if (separator > 0 && separator < value.length - 1) {
@@ -726,8 +736,8 @@ export const layer = Layer.effect(
             providerID: ProviderV2.ID.make(value.slice(0, separator)),
             modelID: ModelV2.ID.make(value.slice(separator + 1)),
           }
-          // Graceful fallback: a syntactically valid but non-existent wishModel (unknown provider
-          // or model) must fall back to the session model rather than fail the wish refinement.
+          // Graceful fallback: a syntactically valid but non-existent intelligenceModel (unknown provider
+          // or model) must fall back to the session model rather than fail the intelligence refinement.
           // Probe getModel; only use the configured model if it actually resolves.
           const resolved = yield* provider.getModel(candidate.providerID, candidate.modelID).pipe(Effect.option)
           if (Option.isSome(resolved)) return candidate
@@ -742,12 +752,12 @@ export const layer = Layer.effect(
       return typeof value === "string" && value.length > 0 ? value : undefined
     }
 
-    // Wish refinement asks the model for a JSON object describing the refined prompt, but we do
+    // Intelligence refinement asks the model for a JSON object describing the refined prompt, but we do
     // NOT force a structured/tool-call output: LLMs are non-deterministic, and a hard schema gate
     // makes weaker models (e.g. small/flash variants) fail the whole turn instead of producing a
     // usable result. We generate plain text and extract the JSON leniently — the goal is a clear,
     // readable refinement, not strict format compliance. If parsing fails, the caller fails soft.
-    const extractWishJson = (text: string): unknown => {
+    const extractIntelligenceJson = (text: string): unknown => {
       const trimmed = text.trim()
       // Prefer a fenced ```json block when present, else the first balanced-looking {...} span.
       const fence = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i)
@@ -767,13 +777,13 @@ export const layer = Layer.effect(
       return undefined
     }
 
-    const generateWishRefinement = Effect.fnUntraced(function* (input: {
+    const generateIntelligenceRefinement = Effect.fnUntraced(function* (input: {
       sessionID: SessionID
       rawInput: string
-      outputLanguage?: AgentGateway.DeepAgentPromptPipeline.WishRefinementOutputLanguage
+      outputLanguage?: AgentGateway.DeepAgentPromptPipeline.IntelligenceRefinementOutputLanguage
     }) {
       const cfg = yield* config.get()
-      const model = yield* wishRefinementModel(input.sessionID)
+      const model = yield* intelligenceRefinementModel(input.sessionID)
       const resolved = yield* provider.getModel(model.providerID, model.modelID)
       const language = yield* provider.getLanguage(resolved)
       const modelAuthID = deepagentModelAuthProviderID(resolved)
@@ -781,7 +791,7 @@ export const layer = Layer.effect(
       const modelAuth = modelAuthID ? yield* auth.get(modelAuthID).pipe(Effect.orDie) : undefined
       const authInfo = model.providerID === "deepagent" ? (modelAuth ?? providerAuth) : providerAuth
       const isOpenaiOauth = (model.providerID === "openai" || modelAuthID === "openai") && authInfo?.type === "oauth"
-      const system = AgentGateway.DeepAgentPromptPipeline.wishRefinementSystemPrompt(input.outputLanguage ?? "english")
+      const system = AgentGateway.DeepAgentPromptPipeline.intelligenceRefinementSystemPrompt(input.outputLanguage ?? "english")
 
       // Feed the refiner the recent conversation so it reuses already-stated facts (target
       // directory, paths, prior decisions) instead of guessing them and emitting misleading
@@ -789,7 +799,7 @@ export const layer = Layer.effect(
       const recent = yield* sessions
         .messages({ sessionID: input.sessionID, limit: 8 })
         .pipe(Effect.orElseSucceed(() => [] as SessionV1.WithParts[]))
-      const turns: AgentGateway.DeepAgentPromptPipeline.WishContextTurn[] = recent
+      const turns: AgentGateway.DeepAgentPromptPipeline.IntelligenceContextTurn[] = recent
         .filter((m) => m.info.role === "user" || m.info.role === "assistant")
         .map((m) => ({
           role: m.info.role as "user" | "assistant",
@@ -800,9 +810,9 @@ export const layer = Layer.effect(
             .trim(),
         }))
         .filter((t) => t.text.length > 0)
-      const briefing = AgentGateway.DeepAgentPromptPipeline.buildWishContextBriefing(turns)
+      const briefing = AgentGateway.DeepAgentPromptPipeline.buildIntelligenceContextBriefing(turns)
       const contextMessages: ModelMessage[] = briefing
-        ? [{ role: "user", content: AgentGateway.DeepAgentPromptPipeline.wishContextMessage(briefing) }]
+        ? [{ role: "user", content: AgentGateway.DeepAgentPromptPipeline.intelligenceContextMessage(briefing) }]
         : []
 
       const params = {
@@ -816,15 +826,15 @@ export const layer = Layer.effect(
       } satisfies Parameters<typeof generateText>[0]
       const run = {
         callKind: "auxiliary_ai_call" as const,
-        feature: "wish_prompt_prepare",
+        feature: "intelligence_prompt_prepare",
         providerID: model.providerID,
         modelID: model.modelID,
         sessionID: input.sessionID,
-        auxiliaryCallID: `wish_${randomUUID()}`,
-        agent: "wish.prepare",
+        auxiliaryCallID: `intelligence_${randomUUID()}`,
+        agent: "intelligence.prepare",
         origin: {
           file: "packages/deepagent-code/src/session/prompt.ts",
-          function: "SessionPrompt.refineWishDraft",
+          function: "SessionPrompt.refineIntelligenceDraft",
         },
       }
 
@@ -842,7 +852,7 @@ export const layer = Layer.effect(
               if (part.type === "error") throw part.error
               if (part.type === "text-delta") text += part.text
             }
-            return extractWishJson(text)
+            return extractIntelligenceJson(text)
           }),
         )
       }
@@ -850,41 +860,41 @@ export const layer = Layer.effect(
       configureGateway(cfg)
       return yield* AgentGateway.runAuxiliary(
         run,
-        Effect.tryPromise(() => generateText(params).then((r) => extractWishJson(r.text))),
+        Effect.tryPromise(() => generateText(params).then((r) => extractIntelligenceJson(r.text))),
       )
     })
 
-    // A2: model-driven wish first-turn refinement. Calls the user-specified model to turn a raw
+    // A2: model-driven intelligence first-turn refinement. Calls the user-specified model to turn a raw
     // request into a complete, directly-executable prompt with explicit assumptions, persists a
     // draft, and returns its id/preview. The draft is NOT submitted here — the client shows the
     // preview in the input box for review and only later confirms via confirmedDraftID. General
     // chat can bypass DeepAgent when refinement is unavailable; code tasks fail closed instead of
-    // pretending wish produced a useful prompt.
-    const refineWishDraft = Effect.fn("SessionPrompt.refineWishDraft")(function* (input: {
+    // pretending intelligence produced a useful prompt.
+    const refineIntelligenceDraft = Effect.fn("SessionPrompt.refineIntelligenceDraft")(function* (input: {
       sessionID: SessionID
       rawInput: string
-      outputLanguage?: AgentGateway.DeepAgentPromptPipeline.WishRefinementOutputLanguage
+      outputLanguage?: AgentGateway.DeepAgentPromptPipeline.IntelligenceRefinementOutputLanguage
     }) {
       const ctx = yield* InstanceState.context
       const home = new AgentGateway.DeepAgentWorkspace.DeepAgentCodeHome(Global.Path.agent.data)
       const sessionPath = home.ensureSession(projectIDForDirectory(ctx.directory), input.sessionID)
       const store = new AgentGateway.DeepAgentPromptPipeline.PromptDraftStore(sessionPath)
-      const fallbackRoute = AgentGateway.DeepAgentPromptPipeline.classifyWishRoute(input.rawInput)
+      const fallbackRoute = AgentGateway.DeepAgentPromptPipeline.classifyIntelligenceRoute(input.rawInput)
 
       const built = yield* Effect.gen(function* () {
-        const output = AgentGateway.DeepAgentPromptPipeline.normalizeWishRefinementOutput(
-          yield* generateWishRefinement(input),
+        const output = AgentGateway.DeepAgentPromptPipeline.normalizeIntelligenceRefinementOutput(
+          yield* generateIntelligenceRefinement(input),
           input.rawInput,
         )
         if (!output) {
           return yield* Effect.fail(
-            new AgentGateway.DeepAgentPromptPipeline.PromptRefinerModelError("invalid wish refinement output"),
+            new AgentGateway.DeepAgentPromptPipeline.PromptRefinerModelError("invalid intelligence refinement output"),
           )
         }
         if (fallbackRoute === "code" && output.route === "general") {
           return yield* Effect.fail(
             new AgentGateway.DeepAgentPromptPipeline.PromptRefinerModelError(
-              "code wish refinement was routed as general",
+              "code intelligence refinement was routed as general",
             ),
           )
         }
@@ -894,21 +904,21 @@ export const layer = Layer.effect(
             prompt_draft_id: "",
             context_plan_id: "",
             state: "general_ready",
-            mode: "wish" as const,
+            mode: "intelligence" as const,
             goal: output.goal.trim() || input.rawInput,
             preview: input.rawInput,
           }
         }
-        if (!AgentGateway.DeepAgentPromptPipeline.isUsefulWishRefinement(input.rawInput, output)) {
+        if (!AgentGateway.DeepAgentPromptPipeline.isUsefulIntelligenceRefinement(input.rawInput, output)) {
           return yield* Effect.fail(
             new AgentGateway.DeepAgentPromptPipeline.PromptRefinerModelError(
-              "wish refinement did not improve the prompt",
+              "intelligence refinement did not improve the prompt",
             ),
           )
         }
         return {
           route: "code" as const,
-          ...AgentGateway.DeepAgentPromptPipeline.draftFromWishRefinement(store, input.rawInput, output),
+          ...AgentGateway.DeepAgentPromptPipeline.draftFromIntelligenceRefinement(store, input.rawInput, output),
         }
       }).pipe(
         // Fail-soft only for obvious general chat. Code tasks need a real, useful refinement.
@@ -919,13 +929,13 @@ export const layer = Layer.effect(
                 prompt_draft_id: "",
                 context_plan_id: "",
                 state: "general_ready",
-                mode: "wish" as const,
+                mode: "intelligence" as const,
                 goal: input.rawInput,
                 preview: input.rawInput,
               })
             : Effect.fail(
                 new AgentGateway.DeepAgentPromptPipeline.PromptRefinerModelError(
-                  "wish refinement failed for code task",
+                  "intelligence refinement failed for code task",
                 ),
               ),
         ),
@@ -936,7 +946,7 @@ export const layer = Layer.effect(
         prompt_draft_id: built.draft.id,
         context_plan_id: built.draft.context_plan_id,
         state: built.draft.state,
-        mode: "wish" as const,
+        mode: "intelligence" as const,
         route: "code" as const,
         goal: built.draft.goal,
         preview: AgentGateway.DeepAgentPromptPipeline.renderDraftMarkdown(built.draft),
@@ -1563,29 +1573,29 @@ export const layer = Layer.effect(
             },
           )
         }
-        // ultra requires the wish scenario: its supervisor advances macro-rounds by seeding the
-        // next turn with the wish next-round suggestion, which only exists under wish. Under
+        // ultra requires the intelligence scenario: its supervisor advances macro-rounds by seeding the
+        // next turn with the intelligence next-round suggestion, which only exists under intelligence. Under
         // `direct` the contract forbids ultra autonomy, so we fall back to a single human-approved
         // macro pass (high/max behavior) even when the strength is ultra.
-        const isWish = (() => {
+        const isIntelligence = (() => {
           const req = promptPipelineRequest(input.metadata)
-          if (req.mode === "wish" || req.confirmedDraftID) return true
+          if (req.mode === "intelligence" || req.confirmedDraftID) return true
           if (req.mode === "direct_override") return false
           // P2-E: fail CLOSED on ambiguous metadata. ultra autonomy (up to ultraMaxRounds with no
-          // human in the loop) must require positive evidence of the wish scenario; absent an
-          // explicit wish mode or a confirmed draft we treat it as NON-wish, so ultra degrades to a
+          // human in the loop) must require positive evidence of the intelligence scenario; absent an
+          // explicit intelligence mode or a confirmed draft we treat it as NON-intelligence, so ultra degrades to a
           // single human-approved macro pass instead of looping unattended on a request that never
           // opted into autonomy.
           return false
         })()
-        const autonomous = AgentGateway.DeepAgentMode.isAutonomous(agentMode) && isWish
-        if (AgentGateway.DeepAgentMode.isAutonomous(agentMode) && !isWish) {
+        const autonomous = AgentGateway.DeepAgentMode.isAutonomous(agentMode) && isIntelligence
+        if (AgentGateway.DeepAgentMode.isAutonomous(agentMode) && !isIntelligence) {
           yield* events
             .publish(Session.Event.Error, {
               sessionID: input.sessionID,
               error: new NamedError.Unknown({
                 message:
-                  "DeepAgent ultra requires the wish scenario; under direct it runs a single human-approved macro pass.",
+                  "DeepAgent ultra requires the intelligence scenario; under direct it runs a single human-approved macro pass.",
               }).toObject(),
             })
             .pipe(Effect.catch(() => Effect.void))
@@ -1705,7 +1715,7 @@ export const layer = Layer.effect(
           if (!autonomous || !suggestion || suggestion.status !== "continue") break
 
           // ultra supervisor approved another macro-round: seed the next turn with the suggestion
-          // body (the wish next-goal prose) and continue. Budget exhaustion stops the loop.
+          // body (the intelligence next-goal prose) and continue. Budget exhaustion stops the loop.
           if (input.sessionID && AgentGateway.DeepAgentSessionState.isBudgetExhausted(input.sessionID)) break
           result = yield* Effect.gen(function* () {
             yield* createUserMessage({
@@ -1736,6 +1746,24 @@ export const layer = Layer.effect(
         let step = 0
         const session = yield* sessions.get(sessionID).pipe(Effect.orDie)
 
+        // V3.8 App-A C2.5 (Stage 5): the Conversation Log writer. Constructed ONCE per run so its
+        // in-memory seq + seen-set persist across the loop's iterations (dedup by content identity).
+        // default-safe: a construction defect (fs error) yields a no-op writer, never a turn crash.
+        const logWriter = yield* ConversationLogWriter.make(sessionID)
+
+        // V3.8 Phase 3 (v3.8.1 §B.3): fire ONE lightweight code-index pass for this workspace, the real
+        // trigger that finally puts code_symbol nodes on the graph (indexFiles had zero prod callers).
+        // Gated to once-per-session-per-process (indexedSessions) so re-prompts don't re-walk; forked
+        // into the run scope so it never blocks the turn; fully default-safe inside indexWorkspace.
+        // SEAM: incremental fs-walking + AST symbol extraction are the follow-up (see code-index-trigger.ts).
+        if (!indexedSessions.has(sessionID)) {
+          indexedSessions.add(sessionID)
+          yield* CodeIndexTrigger.indexWorkspace({ workspacePath: ctx.directory, fsys }).pipe(
+            Effect.asVoid,
+            Effect.forkIn(scope),
+          )
+        }
+
         while (true) {
           yield* status.set(sessionID, { type: "busy" })
           yield* slog.info("loop", { step })
@@ -1743,6 +1771,11 @@ export const layer = Layer.effect(
           let msgs = yield* MessageV2.filterCompactedEffect(sessionID).pipe(
             Effect.provideService(Database.Service, database),
           )
+
+          // Archive everything settled so far (user turn + any completed assistant/tool parts from the
+          // prior iteration). Deduped by content, so re-scanning the same messages each loop is cheap
+          // and idempotent. Wrapped default-safe (matchCauseEffect inside record) — never fails a turn.
+          yield* ConversationLogWriter.record(logWriter, msgs)
 
           const { user: lastUser, assistant: lastAssistant, finished: lastFinished, tasks } = MessageV2.latest(msgs)
 
@@ -1982,6 +2015,15 @@ export const layer = Layer.effect(
           continue
         }
 
+        // Final archive pass: the last assistant turn only completes AFTER the loop's final iteration,
+        // so re-scan once more to capture its now-settled text/reasoning/tool parts. Deduped, so any
+        // already-logged parts are skipped. default-safe.
+        const finalMsgs = yield* MessageV2.filterCompactedEffect(sessionID).pipe(
+          Effect.provideService(Database.Service, database),
+          Effect.orElseSucceed(() => [] as SessionV1.WithParts[]),
+        )
+        yield* ConversationLogWriter.record(logWriter, finalMsgs)
+
         yield* compaction.prune({ sessionID }).pipe(Effect.ignore, Effect.forkIn(scope))
         return yield* lastAssistant(sessionID)
       },
@@ -2124,7 +2166,7 @@ export const layer = Layer.effect(
       shell,
       command,
       resolvePromptParts,
-      refineWishDraft,
+      refineIntelligenceDraft,
       latestSuggestion,
     })
   }),
@@ -2253,13 +2295,17 @@ const rawInputFromPromptParts = (parts: readonly PromptInput["parts"][number][])
 const promptPipelineRequest = (
   metadata: unknown,
 ): {
-  mode?: "wish" | "direct_override"
+  mode?: "intelligence" | "direct_override"
   confirmedDraftID?: string
   editedGoal?: string
 } => {
   const deepagent = isRecord(metadata) && isRecord(metadata.deepagent) ? metadata.deepagent : {}
   const raw = isRecord(deepagent.prompt_pipeline) ? deepagent.prompt_pipeline : deepagent
-  const mode = raw.mode === "wish" || raw.mode === "direct_override" ? raw.mode : undefined
+  // Legacy-compat: "wish" is the pre-rename wire/metadata literal for "intelligence". Normalize it
+  // so an older client (or a session persisted before the rename) whose mode is "wish" still
+  // resolves to the intelligence pipeline.
+  const rawMode = raw.mode === "wish" ? "intelligence" : raw.mode
+  const mode = rawMode === "intelligence" || rawMode === "direct_override" ? rawMode : undefined
   return {
     mode,
     confirmedDraftID:

@@ -1,7 +1,7 @@
 import type { ValidationResult } from "./round-state"
 
 // V3.1 A4: the structured round report is the reconciliation contract between an execution
-// turn and the wish/reviewer that decides the next macro-round. Its governing principle:
+// turn and the intelligence/reviewer that decides the next macro-round. Its governing principle:
 // MACHINE-READ DATA MUST BE STRUCTURED; LM-READ DATA MAY BE LOOSE. The report is machine-read
 // (by reconcile() and the macro-round loop), so it is structured and carries two distinct
 // provenance classes:
@@ -161,7 +161,7 @@ export const buildRoundReport = (input: BuildRoundReportInput): RoundReport => {
 
 // --- Macro-round suggestion envelope -------------------------------------------------------
 //
-// The wish next-round suggestion is `{ status, body }`: `status` is the only structured field
+// The intelligence next-round suggestion is `{ status, body }`: `status` is the only structured field
 // (machine-read, controls the loop) and `body` is free-form prose (LM-read, shown in the input
 // box). `deriveStatus` computes status OBJECTIVELY from the report, never from the model's
 // self-report, so the loop cannot be talked into continuing or stopping by the model alone.

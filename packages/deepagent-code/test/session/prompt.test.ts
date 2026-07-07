@@ -2391,7 +2391,7 @@ noLLMServer.instance(
 // pipeline so the confirm step can load it through the real PromptDraftStore. This is the
 // same code path the HTTP handler uses, so the test exercises the production confirm flow
 // (prepare -> confirmedDraftID submit) rather than the removed requires_confirmation branch.
-const prepareDraft = (directory: string, sessionID: string, mode: "wish", rawInput: string) => {
+const prepareDraft = (directory: string, sessionID: string, mode: "intelligence", rawInput: string) => {
   const projectID = `project_${createHash("sha256").update(directory).digest("hex").slice(0, 16)}`
   const home = new AgentGateway.DeepAgentWorkspace.DeepAgentCodeHome()
   const sessionPath = home.ensureSession(projectID, sessionID)
@@ -2402,7 +2402,7 @@ const prepareDraft = (directory: string, sessionID: string, mode: "wish", rawInp
 }
 
 noLLMServer.instance(
-  "prepared wish draft is not submitted until it is confirmed",
+  "prepared intelligence draft is not submitted until it is confirmed",
   () =>
     Effect.gen(function* () {
       const { directory: dir } = yield* TestInstance
@@ -2410,7 +2410,7 @@ noLLMServer.instance(
       const session = yield* sessions.create({})
 
       // Preparing a draft (what prompt_prepare does) must not create a user message on its own.
-      prepareDraft(dir, session.id, "wish", "Implement prompt confirmation")
+      prepareDraft(dir, session.id, "intelligence", "Implement prompt confirmation")
       const beforeConfirm = yield* sessions.messages({ sessionID: session.id })
       expect(beforeConfirm.filter((message) => message.info.role === "user")).toHaveLength(0)
     }),
@@ -2418,7 +2418,7 @@ noLLMServer.instance(
 )
 
 noLLMServer.instance(
-  "wish draft fails closed for code tasks when model refinement fails",
+  "intelligence draft fails closed for code tasks when model refinement fails",
   () =>
     Effect.gen(function* () {
       const prompt = yield* SessionPrompt.Service
@@ -2426,7 +2426,7 @@ noLLMServer.instance(
       const session = yield* sessions.create({})
 
       const exit = yield* prompt
-        .refineWishDraft({
+        .refineIntelligenceDraft({
           sessionID: session.id,
           rawInput: "写一个 cuda 的 GEMM kernel",
         })
@@ -2442,7 +2442,7 @@ noLLMServer.instance(
 )
 
 it.instance(
-  "wish draft rejects code refinements that are equivalent to the raw input",
+  "intelligence draft rejects code refinements that are equivalent to the raw input",
   () =>
     Effect.gen(function* () {
       const { llm } = yield* useServerConfig(providerCfg)
@@ -2463,7 +2463,7 @@ it.instance(
       )
 
       const exit = yield* prompt
-        .refineWishDraft({
+        .refineIntelligenceDraft({
           sessionID: session.id,
           rawInput: "写一个 cuda 的 GEMM kernel",
         })
@@ -2479,7 +2479,7 @@ it.instance(
 )
 
 it.instance(
-  "wish draft uses DeepAgent model scoped upstream auth",
+  "intelligence draft uses DeepAgent model scoped upstream auth",
   () =>
     Effect.gen(function* () {
       const { llm } = yield* useServerConfig((url) => ({
@@ -2526,7 +2526,7 @@ it.instance(
       )
 
       const exit = yield* prompt
-        .refineWishDraft({
+        .refineIntelligenceDraft({
           sessionID: session.id,
           rawInput: "修复登录测试",
           outputLanguage: "chinese",
@@ -2555,7 +2555,7 @@ noLLMServer.instance(
       const sessions = yield* Session.Service
       const session = yield* sessions.create({})
 
-      const draftID = prepareDraft(dir, session.id, "wish", "Design the prompt confirmation flow")
+      const draftID = prepareDraft(dir, session.id, "intelligence", "Design the prompt confirmation flow")
       expect(draftID).toMatch(/^prompt_draft:/)
 
       const submitted = yield* prompt.prompt({
@@ -2577,6 +2577,40 @@ noLLMServer.instance(
         })
       }
       expect(submitted.parts.some((part) => part.type === "text" && part.text === "Confirmed prompt goal")).toBe(true)
+    }),
+  30_000,
+)
+
+// Tier-3 wire compat: an older client (or a session persisted before the wish→intelligence rename)
+// submits metadata with the legacy `mode: "wish"` literal. The server-side normalizer
+// (promptPipelineRequest) must map it to "intelligence" so the submitted message records
+// mode "intelligence" — NOT "direct_override" (which is what an unrecognized mode would degrade to).
+// This is the deterministic guard for the server READ side of the wire contract that the `.live`
+// prompt-prepare CLI test otherwise covers only end-to-end.
+noLLMServer.instance(
+  "legacy 'wish' prompt_pipeline mode is normalized to intelligence on submit",
+  () =>
+    Effect.gen(function* () {
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const session = yield* sessions.create({})
+
+      const submitted = yield* prompt.prompt({
+        sessionID: session.id,
+        agent: "build",
+        noReply: true,
+        metadata: {
+          deepagent: { prompt_pipeline: { mode: "wish" } },
+        },
+        parts: [{ type: "text", text: "修复登录测试" }],
+      })
+
+      expect(submitted.info.role).toBe("user")
+      if (submitted.info.role === "user") {
+        // The normalizer mapped "wish" → "intelligence"; a broken normalizer would leave the raw
+        // "wish" mode unrecognized and fall through to "direct_override".
+        expect(submitted.info.metadata?.deepagent?.prompt_pipeline?.mode).toBe("intelligence")
+      }
     }),
   30_000,
 )

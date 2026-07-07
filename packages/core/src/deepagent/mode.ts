@@ -5,6 +5,27 @@
 //           -> ultra (+ autonomous workspace + auto macro-rounds)
 export type AgentMode = "general" | "high" | "xhigh" | "max" | "ultra"
 
+// Single source of truth for the monotonic strength ordering (weakest -> strongest).
+// Used for tier arithmetic (rank / downgrade); keep aligned with the AgentMode union above.
+export const MODE_ORDER: readonly AgentMode[] = ["general", "high", "xhigh", "max", "ultra"]
+
+// Index of `mode` within MODE_ORDER, or -1 for an unknown value.
+export const modeRank = (mode: AgentMode): number => MODE_ORDER.indexOf(mode)
+
+// Pure helper for "child agent downgrade inheritance": a child that inherits-then-downgrades runs
+// exactly one strength below its parent. ultra -> max -> xhigh -> high -> general; general -> general
+// (already the floor, cannot descend further).
+//
+// Robustness: an unknown input (rank -1) has no defined tier, so we fail safe to the weakest mode
+// ("general") rather than returning the unrecognized value unchanged — a downgrade must never hand
+// back an equal-or-higher strength than intended.
+export const downgradeOneLevel = (mode: AgentMode): AgentMode => {
+  const rank = modeRank(mode)
+  if (rank < 0) return "general"
+  if (rank === 0) return "general"
+  return MODE_ORDER[rank - 1]
+}
+
 export type ActivationStage =
   | "first_fast_design"
   | "revision_minimal"

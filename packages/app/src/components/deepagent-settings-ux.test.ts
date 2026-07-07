@@ -5,15 +5,15 @@ import path from "node:path"
 const here = import.meta.dir
 
 describe("DeepAgent settings UX", () => {
-  test("keeps agent mode, scenario mode, and wish model in the unified General settings", async () => {
+  test("keeps agent mode, scenario mode, and intelligence model in the unified General settings", async () => {
     const v2 = await readFile(path.join(here, "settings-v2/general.tsx"), "utf8")
 
     expect(v2).toContain('data-action="settings-language"')
     expect(v2).toContain('data-action="settings-deepagent-mode"')
     expect(v2).toContain('data-action="settings-deepagent-prompt-mode"')
-    expect(v2).toContain('data-action="settings-deepagent-wish-model"')
+    expect(v2).toContain('data-action="settings-deepagent-intelligence-model"')
     expect(v2).toContain("settings.general.deepagent.prompt.direct")
-    expect(v2).toContain("settings.general.deepagent.prompt.wish")
+    expect(v2).toContain("settings.general.deepagent.prompt.intelligence")
     expect(v2.indexOf('data-action="settings-language"')).toBeLessThan(
       v2.indexOf('data-action="settings-deepagent-mode"'),
     )
@@ -21,9 +21,9 @@ describe("DeepAgent settings UX", () => {
       v2.indexOf('data-action="settings-deepagent-prompt-mode"'),
     )
     expect(v2.indexOf('data-action="settings-deepagent-prompt-mode"')).toBeLessThan(
-      v2.indexOf('data-action="settings-deepagent-wish-model"'),
+      v2.indexOf('data-action="settings-deepagent-intelligence-model"'),
     )
-    expect(v2.indexOf('data-action="settings-deepagent-wish-model"')).toBeLessThan(
+    expect(v2.indexOf('data-action="settings-deepagent-intelligence-model"')).toBeLessThan(
       v2.indexOf('data-action="settings-auto-accept-permissions"'),
     )
   })
