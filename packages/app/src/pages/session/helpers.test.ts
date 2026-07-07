@@ -2,10 +2,12 @@ import { describe, expect, test } from "bun:test"
 import { createMemo, createRoot } from "solid-js"
 import { createStore } from "solid-js/store"
 import {
+  createForkAction,
   createOpenReviewFile,
   createOpenSessionFileTab,
   createSessionTabs,
   focusTerminalById,
+  forkCutoffMessageID,
   getTabReorderIndex,
   shouldFocusTerminalOnKeyDown,
 } from "./helpers"
@@ -27,6 +29,71 @@ describe("createOpenReviewFile", () => {
     openReviewFile("src/a.ts")
 
     expect(calls).toEqual(["show", "load:src/a.ts", "tab:src/a.ts", "open:file://src/a.ts", "active:file://src/a.ts"])
+  })
+})
+
+describe("createForkAction", () => {
+  test("uses the next message as the cutoff so the clicked bubble is included", async () => {
+    const calls: string[] = []
+
+    const fork = createForkAction({
+      open: () => calls.push("dialog"),
+      messages: () => [{ id: "msg_1" }, { id: "msg_2" }, { id: "msg_3" }],
+      fork: (input) => {
+        calls.push(`fork:${input.sessionID}:${input.messageID}`)
+        return Promise.resolve({ id: "ses_fork" })
+      },
+      navigate: (sessionID) => calls.push(`navigate:${sessionID}`),
+    })
+
+    await fork({ sessionID: "ses_1", messageID: "msg_2" })
+
+    expect(calls).toEqual(["fork:ses_1:msg_3", "navigate:ses_fork"])
+  })
+
+  test("omits the cutoff when forking from the final bubble", async () => {
+    const calls: string[] = []
+
+    const fork = createForkAction({
+      open: () => calls.push("dialog"),
+      messages: () => [{ id: "msg_1" }, { id: "msg_2" }],
+      fork: (input) => {
+        calls.push(`fork:${input.sessionID}:${input.messageID ?? "full"}`)
+        return Promise.resolve({ id: "ses_fork" })
+      },
+      navigate: (sessionID) => calls.push(`navigate:${sessionID}`),
+    })
+
+    await fork({ sessionID: "ses_1", messageID: "msg_2" })
+
+    expect(calls).toEqual(["fork:ses_1:full", "navigate:ses_fork"])
+  })
+
+  test("falls back to the dialog without an explicit bubble anchor", async () => {
+    const Sentinel = () => null
+    let opened: unknown
+
+    const fork = createForkAction({
+      open: (component) => {
+        opened = component
+      },
+      loadDialog: () => Promise.resolve({ DialogFork: Sentinel }),
+    })
+
+    await fork()
+
+    expect(opened).toBe(Sentinel)
+  })
+})
+
+describe("forkCutoffMessageID", () => {
+  test("returns the message after the clicked anchor", () => {
+    expect(forkCutoffMessageID([{ id: "msg_1" }, { id: "msg_2" }, { id: "msg_3" }], "msg_2")).toBe("msg_3")
+  })
+
+  test("returns undefined for the last or missing anchor", () => {
+    expect(forkCutoffMessageID([{ id: "msg_1" }, { id: "msg_2" }], "msg_2")).toBeUndefined()
+    expect(forkCutoffMessageID([{ id: "msg_1" }, { id: "msg_2" }], "msg_missing")).toBeUndefined()
   })
 })
 

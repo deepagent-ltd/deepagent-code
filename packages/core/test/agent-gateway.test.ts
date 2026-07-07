@@ -115,6 +115,65 @@ describe("AgentGateway", () => {
     AgentGateway.configure({ enabled: false, agentMode: "high", runsDir: undefined })
   })
 
+  test("agent_mode_override is a DOWNGRADE-ONLY per-request channel (clamped to the process-global mode)", () => {
+    const base = {
+      id: "req_override",
+      model: Model.make({ id: "deepagent/default", provider: "deepagent", route: OpenAIChat.route }),
+      prompt: "hello",
+    }
+
+    // SECURITY: the override rides on the client-writable user-message metadata. It may LOWER the
+    // effective mode (a downgraded subagent pinning a weaker mode) but must NEVER escalate above the
+    // operator-configured process-global agentMode. Otherwise any authenticated HTTP client could set
+    // `agent_mode_override: "ultra"` and unlock autonomous macro-rounds / higher budget on demand.
+
+    // (1) Global "max": a downgrade override ("high"/"xhigh") is honored; an escalation override
+    //     ("ultra") is rejected and falls back to the global mode.
+    AgentGateway.configure({ enabled: true, agentMode: "max", runsDir: undefined })
+    try {
+      for (const mode of ["general", "high", "xhigh", "max"] as const) {
+        const req = LLM.request({ ...base, metadata: { deepagent: { agent_mode_override: mode } } })
+        const routed = AgentGateway.routeRequest(req)
+        // "general" override ⇒ unmanaged passthrough (unchanged); the rest stay managed (decorated).
+        if (mode === "general") {
+          expect(routed).toBe(req)
+        } else {
+          expect(routed).not.toBe(req)
+          expect((routed.metadata?.deepagent as Record<string, unknown> | undefined)?.router).toBeDefined()
+        }
+      }
+      // Escalation attempt: global "max" + override "ultra" ⇒ clamped back to "max" (still managed,
+      // but NOT promoted to ultra). We assert it did not error and stayed within the global ceiling by
+      // confirming the request is still routed as managed (max), not that ultra took effect.
+      const escalate = LLM.request({ ...base, metadata: { deepagent: { agent_mode_override: "ultra" } } })
+      const escalated = AgentGateway.routeRequest(escalate)
+      expect(escalated).not.toBe(escalate)
+      expect((escalated.metadata?.deepagent as Record<string, unknown> | undefined)?.router).toBeDefined()
+    } finally {
+      AgentGateway.configure({ enabled: false, agentMode: "high", runsDir: undefined })
+    }
+
+    // (2) Global "general" (unmanaged): NO override can promote a request into managed routing —
+    //     every escalation attempt is clamped down to general and returned unchanged.
+    AgentGateway.configure({ enabled: true, agentMode: "general", runsDir: undefined })
+    try {
+      const plain = LLM.request(base)
+      expect(AgentGateway.routeRequest(plain)).toBe(plain)
+
+      for (const mode of ["high", "xhigh", "max", "ultra"] as const) {
+        const req = LLM.request({ ...base, metadata: { deepagent: { agent_mode_override: mode } } })
+        // Escalation above the global "general" ceiling is rejected ⇒ unmanaged ⇒ unchanged.
+        expect(AgentGateway.routeRequest(req)).toBe(req)
+      }
+
+      // Invalid/garbage override falls back to the global mode (general ⇒ unmanaged, unchanged).
+      const bogus = LLM.request({ ...base, metadata: { deepagent: { agent_mode_override: "bogus" } } })
+      expect(AgentGateway.routeRequest(bogus)).toBe(bogus)
+    } finally {
+      AgentGateway.configure({ enabled: false, agentMode: "high", runsDir: undefined })
+    }
+  })
+
   test("writes minimal DeepAgent artifacts for managed passthrough streams", async () => {
     const dir = await tempRunsDir()
     try {
@@ -149,8 +208,10 @@ describe("AgentGateway", () => {
         provider_id: "deepagent",
         model_id: "deepagent/default",
         agent_mode: "high",
-        activation_mode: "first_fast_design",
-        knowledge_enabled: false,
+        // docs/39 §3: durable knowledge retrieval is enabled for ALL non-general modes (high enables
+        // skills + project/fact-memory bounded retrieval), so high activates first_fast_design_bounded_knowledge.
+        activation_mode: "first_fast_design_bounded_knowledge",
+        knowledge_enabled: true,
         agent_managed: true,
         original_path_allowed: false,
         generic_agent_session_id: "ses_test",
@@ -160,8 +221,8 @@ describe("AgentGateway", () => {
         schema_version: "deepagent_global_run_state.v1",
         provider_id: "deepagent",
         agent_mode: "high",
-        activation_mode: "first_fast_design",
-        knowledge_enabled: false,
+        activation_mode: "first_fast_design_bounded_knowledge",
+        knowledge_enabled: true,
         state: "completed",
         passthrough: true,
         default_agent_preserved: true,
@@ -169,11 +230,14 @@ describe("AgentGateway", () => {
       })
       expect(await readJson(runDir, "MODEL_WORK_PACKAGE.json")).toMatchObject({
         agent_mode: "high",
-        activation_mode: "first_fast_design",
-        knowledge_enabled: false,
+        // docs/39 §3: high enables bounded retrieval (skills + project/fact memory). Strategies stay
+        // max/ultra-only, and this bare session_chat task with no tools/keywords selects nothing, so
+        // the per-kind ref lists are empty while retrieval itself is enabled.
+        activation_mode: "first_fast_design_bounded_knowledge",
+        knowledge_enabled: true,
         selected_memory_refs: [],
         selected_strategy_refs: [],
-        knowledge_retrieval: { enabled: false, mode: "disabled" },
+        knowledge_retrieval: { enabled: true, mode: "bounded_retrieval_refs_only" },
       })
       expect(await readFile(path.join(runDir, "HISTORY.md"), "utf8")).toContain('"event_type": "finish"')
       expect(await readJson(runDir, "token_usage_ledger.json")).toMatchObject({
@@ -367,15 +431,17 @@ describe("AgentGateway", () => {
       const knowledge = await readJson(runDir, "KNOWLEDGE_RETRIEVAL_RESULT.json")
       const workPackage = await readJson(runDir, "MODEL_WORK_PACKAGE.json")
       const refIDs = knowledge.selected_refs.map((ref: { ref_id: string }) => ref.ref_id)
-      expect(knowledge.candidate_refs.map((ref: { ref_id: string }) => ref.ref_id)).toContain(
-        "strategy:mcp-tool-coordination",
-      )
-      expect(refIDs).toContain("strategy:mcp-tool-coordination")
+      // DAP-11: strategies are disk-seeded into DocumentStore, so the ref is the store-allocated id
+      // (doc:strategy:<slug>), not the authoring ref (strategy:mcp-tool-coordination).
+      const mcpCoordinationRef = "doc:strategy:strategy-mcp-tool-coordination"
+      expect(knowledge.candidate_refs.map((ref: { ref_id: string }) => ref.ref_id)).toContain(mcpCoordinationRef)
+      expect(refIDs).toContain(mcpCoordinationRef)
       expect(knowledge).toMatchObject({
         retriever: "packages/core/src/deepagent/knowledge-retriever.ts",
         retrieval_policy: {
-          // V3 anti-misleading gates (docs/30 §4): mandatory per-kind top-k + evidence gate
-          topk_by_kind: { strategy: 3, methodology: 1, memory: 3 },
+          // V3 anti-misleading gates (docs/30 §4): mandatory per-kind top-k + evidence gate.
+          // TOPK_DEFAULT (knowledge-retriever.ts): strategy 3 / methodology 2 / memory 3 / skill 2 / knowledge 2.
+          topk_by_kind: { strategy: 3, methodology: 2, memory: 3 },
           evidence_threshold: 0.6,
           body_policy: "refs_and_short_synthesis_only",
           deterministic_ranking: true,
@@ -389,7 +455,7 @@ describe("AgentGateway", () => {
       expect(workPackage.knowledge_retrieval.selected_ref_details.map((ref: { ref_id: string }) => ref.ref_id)).toEqual(
         refIDs,
       )
-      expect(workPackage.selected_strategy_refs).toContain("strategy:mcp-tool-coordination")
+      expect(workPackage.selected_strategy_refs).toContain(mcpCoordinationRef)
       expect(knowledge.synthesis).toContain("MCP tools extend capabilities")
     } finally {
       AgentGateway.configure({ enabled: false, agentMode: "high", runsDir: undefined })

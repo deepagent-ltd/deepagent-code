@@ -179,6 +179,23 @@ export const Info = Schema.Struct({
       policies: Schema.optional(Schema.mutable(Schema.Array(ConfigExperimental.Policy))).annotate({
         description: "Policy statements applied to supported resources, such as provider access",
       }),
+      // L2/§5 multi-agent orchestration caps. CONFIGURABLE with LENIENT defaults: unset ⇒ the
+      // generous built-in defaults (max_fanout 8, max_concurrency 4). These are the CODE-layer
+      // runaway guard for how many subagents (task tool calls) a single parent session may spawn /
+      // run in parallel, NOT a tight leash — raise or lower per deployment. A value <= 0 is treated
+      // as "unset" (falls back to the default) rather than disabling orchestration.
+      orchestration: Schema.optional(
+        Schema.Struct({
+          max_fanout: Schema.optional(PositiveInt).annotate({
+            description: "Max total subagents spawned in one orchestration round-set (default: 8, lenient).",
+          }),
+          max_concurrency: Schema.optional(PositiveInt).annotate({
+            description: "Max task-type subagents dispatched in parallel per parent session (default: 4, lenient).",
+          }),
+        }),
+      ).annotate({
+        description: "Multi-agent orchestration ceilings (configurable, lenient defaults).",
+      }),
     }),
   ),
 }).annotate({ identifier: "Config" })

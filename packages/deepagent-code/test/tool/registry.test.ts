@@ -178,6 +178,31 @@ describe("tool.registry", () => {
     }),
   )
 
+  // L1 (v3.8.0 §L1): describeTask auto-wires every mode!=="primary" agent whose `task` permission is
+  // not denied into the task tool's description — this is what makes researcher/reviewer visible and
+  // selectable by the primary agent. No registry change was needed; assert both surface.
+  it.instance("task tool description surfaces the researcher and reviewer subagents to the primary agent", () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      const agent = yield* Agent.Service
+      const build = yield* agent.get("build")
+      if (!build) throw new Error("build agent not found")
+      const task = (yield* registry.tools({
+        providerID: ProviderV2.ID.make("deepagent-code"),
+        modelID: ModelV2.ID.make("test"),
+        agent: build,
+      })).find((tool) => tool.id === "task")
+
+      expect(task).toBeDefined()
+      const description = task!.description ?? ""
+      // describeTask lists subagents as "- <name>: <description>"
+      expect(description).toContain("researcher:")
+      expect(description).toContain("reviewer:")
+      // and it must not list primary agents (build/plan)
+      expect(description).not.toContain("build:")
+    }),
+  )
+
   it.instance("loads tools from .deepagent-code/tool (singular)", () =>
     Effect.gen(function* () {
       const test = yield* TestInstance

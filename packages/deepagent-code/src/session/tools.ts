@@ -30,7 +30,7 @@ const log = Log.create({ service: "session.tools" })
 
 // U1 PlanController soft gate: a HookPolicy with the before_tool_use plan gate. While the runtime
 // has flagged the plan as stale, mutating tools (write/edit/patch/shell) are soft-blocked until the
-// model calls `plan` to update it; read/diagnosis/`todowrite`/`plan` always pass. Lightweight modes
+// model calls `plan` to update it; read/diagnosis/`plan` always pass. Lightweight modes
 // (general/direct) only warn. Evaluated at the per-tool dispatch chokepoint below.
 const PlanHook = new AgentGateway.DeepAgentHooks.HookPolicy().on(
   "before_tool_use",

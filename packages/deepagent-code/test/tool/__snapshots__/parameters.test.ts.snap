@@ -338,6 +338,17 @@ exports[`tool parameters JSON Schema (wire shape) task 1`] = `
       ],
       "type": "string",
     },
+    "output_schema": {
+      "anyOf": [
+        {
+          "type": "string",
+        },
+        {
+          "type": "object",
+        },
+      ],
+      "description": "Optional. Force the subagent to return a structured result matching this schema. Pass a named schema ("ReviewResult", "ResearchResult", "ReviewFinding"), "default" to use the subagent's natural schema (reviewer→ReviewResult, researcher→ResearchResult), or a raw JSON Schema object. Omit for a free-text result.",
+    },
     "prompt": {
       "description": "The task for the agent to perform",
       "type": "string",
@@ -360,43 +371,6 @@ exports[`tool parameters JSON Schema (wire shape) task 1`] = `
 }
 `;
 
-exports[`tool parameters JSON Schema (wire shape) todo 1`] = `
-{
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "properties": {
-    "todos": {
-      "description": "The updated todo list",
-      "items": {
-        "properties": {
-          "content": {
-            "description": "Brief description of the task",
-            "type": "string",
-          },
-          "priority": {
-            "description": "Priority level of the task: high, medium, low",
-            "type": "string",
-          },
-          "status": {
-            "description": "Current status of the task: pending, in_progress, completed, cancelled",
-            "type": "string",
-          },
-        },
-        "required": [
-          "content",
-          "status",
-          "priority",
-        ],
-        "type": "object",
-      },
-      "type": "array",
-    },
-  },
-  "required": [
-    "todos",
-  ],
-  "type": "object",
-}
-`;
 
 exports[`tool parameters JSON Schema (wire shape) webfetch 1`] = `
 {
