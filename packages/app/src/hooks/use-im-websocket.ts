@@ -2,11 +2,25 @@ import { createSignal, createEffect, onCleanup } from "solid-js"
 import type { IMMessage } from "@/components/im/types"
 import type { IMClient } from "@/utils/im-client"
 
+// One live snapshot of a part of an in-flight agent turn (reasoning / assistant
+// text / tool activity). The client keeps a map keyed by `partID` and REPLACES
+// each entry as batches arrive, so a dropped/reordered batch self-heals on the
+// next snapshot. `order` gives stable render order.
+export interface AgentProgressPart {
+  partID: string
+  order: number
+  kind: "reasoning" | "text" | "tool"
+  text?: string
+  tool?: string
+  status?: string
+}
+
 // WebSocket event types
 export type IMWebSocketEvent =
   | { type: "message_created"; data: IMMessage }
   | { type: "message_failed"; data: { clientMessageID?: string; code: string; message: string; retryable: boolean } }
   | { type: "agent_status"; data: { messageID: string; agentID: string; status: string; error?: any } }
+  | { type: "agent_progress"; data: { messageID: string; agentID: string; parts: AgentProgressPart[] } }
   | { type: "typing"; data: { groupID: string; memberID: string; typing: boolean } }
   | { type: "read_receipt"; data: { groupID: string; memberID: string; readAt: number } }
   | { type: "ping"; data: { ts: number } }
@@ -31,6 +45,9 @@ export function useIMWebSocket(client: IMClient, groupID: () => string | null) {
   const [reconnectAttempt, setReconnectAttempt] = createSignal(0)
   const [messages, setMessages] = createSignal<LocalMessage[]>([])
   const [agentStatuses, setAgentStatuses] = createSignal<Map<string, { agentID: string; status: string }>>(new Map())
+  // trigger messageID -> ordered live reasoning/tool/text parts for that turn.
+  // Parts are keyed by partID within each turn and REPLACED as batches arrive.
+  const [agentProgress, setAgentProgress] = createSignal<Map<string, AgentProgressPart[]>>(new Map())
   // memberID -> last read timestamp, populated from read_receipt events.
   const [readReceipts, setReadReceipts] = createSignal<Map<string, number>>(new Map())
   // memberIDs currently typing (excluding self, resolved by the caller).
@@ -94,6 +111,21 @@ export function useIMWebSocket(client: IMClient, groupID: () => string | null) {
                 agentID: wsEvent.data.agentID,
                 status: wsEvent.data.status,
               })
+              return next
+            })
+            break
+
+          case "agent_progress":
+            // Merge the batch into this turn's parts: replace by partID (a part
+            // may update many times), then re-sort by `order` so the reasoning
+            // card renders in production order regardless of batch arrival.
+            setAgentProgress((prev) => {
+              const next = new Map(prev)
+              const existing = next.get(wsEvent.data.messageID) ?? []
+              const byPart = new Map(existing.map((p) => [p.partID, p]))
+              for (const part of wsEvent.data.parts) byPart.set(part.partID, part)
+              const merged = Array.from(byPart.values()).sort((a, b) => a.order - b.order)
+              next.set(wsEvent.data.messageID, merged)
               return next
             })
             break
@@ -173,6 +205,7 @@ export function useIMWebSocket(client: IMClient, groupID: () => string | null) {
 
     setMessages([])
     setAgentStatuses(new Map())
+    setAgentProgress(new Map())
     setReadReceipts(new Map())
     setTypingMembers(new Set<string>())
     for (const timer of typingTimers.values()) clearTimeout(timer)
@@ -207,6 +240,7 @@ export function useIMWebSocket(client: IMClient, groupID: () => string | null) {
     connected,
     messages,
     agentStatuses,
+    agentProgress,
     readReceipts,
     typingMembers,
     send,

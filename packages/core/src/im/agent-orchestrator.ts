@@ -1,4 +1,4 @@
-import { Effect } from "effect"
+import { Effect, Option } from "effect"
 import { IMRepository, type IMRepositoryInterface } from "./repository"
 import { IMBroadcasterService } from "./broadcaster"
 import {
@@ -9,6 +9,7 @@ import {
   type AgentExecutor,
 } from "./agent-executor"
 import { AgentListProviderService } from "./agent-list-provider"
+import { AgentReplySinkService, type AgentReplySink, type AgentProgressPart } from "./agent-reply-sink"
 import type { IMBroadcaster } from "./websocket"
 
 interface AgentDescriptorLike {
@@ -50,6 +51,9 @@ export function executeAgentMentions(input: {
     const contextBuilder = yield* AgentContextBuilderService
     const repo = yield* IMRepository
     const broadcaster = yield* IMBroadcasterService
+    // Optional: present only in the Server Edition, where the reply must be
+    // reported back to the gateway hub. Absent in the standalone kernel.
+    const replySink = Option.getOrUndefined(yield* Effect.serviceOption(AgentReplySinkService))
 
     const availableAgents = yield* agentListProvider
       .listAgents({ workspaceID: input.workspaceID, userID: input.userID })
@@ -74,6 +78,7 @@ export function executeAgentMentions(input: {
           contextBuilder,
           repo,
           broadcaster,
+          replySink,
         }).pipe(Effect.catch(() => Effect.succeed(undefined))),
       ),
       { concurrency: 3, discard: true },
@@ -93,6 +98,7 @@ function executeSingleAgent(input: {
   contextBuilder: AgentContextBuilder
   repo: IMRepositoryInterface
   broadcaster: IMBroadcaster
+  replySink?: AgentReplySink
 }): Effect.Effect<void, never, never> {
   return Effect.gen(function* () {
     input.broadcaster.broadcast(input.groupID, {
@@ -110,7 +116,7 @@ function executeSingleAgent(input: {
       .pipe(
         Effect.catch(() =>
           Effect.succeed({
-            code: undefined,
+            code: [],
             knowledge: [],
             memory: [],
             documents: [],
@@ -118,6 +124,29 @@ function executeSingleAgent(input: {
           }),
         ),
       )
+
+    // Live progress: broadcast each throttled batch on the IM WebSocket (the
+    // plane the chat UI listens to — same as agent_status) so users see the
+    // agent's reasoning/tool activity as it happens, and mirror it to the
+    // optional reply sink (authoritative hub) for parity. Best-effort: a
+    // progress failure must never affect the run.
+    const onProgress = (parts: ReadonlyArray<AgentProgressPart>): Effect.Effect<void, never, never> =>
+      Effect.gen(function* () {
+        input.broadcaster.broadcast(input.groupID, {
+          type: "agent_progress",
+          data: { messageID: input.messageID, agentID: input.agent.id, parts: [...parts] },
+        })
+        if (input.replySink?.progress) {
+          yield* input.replySink
+            .progress({
+              groupID: input.groupID,
+              messageID: input.messageID,
+              agentID: input.agent.id,
+              parts,
+            })
+            .pipe(Effect.catch(() => Effect.succeed(undefined)))
+        }
+      }).pipe(Effect.catch(() => Effect.succeed(undefined)))
 
     const result = yield* input.executor
       .execute({
@@ -130,6 +159,7 @@ function executeSingleAgent(input: {
         content: input.content,
         context,
         timeoutMs: getAgentTimeout(),
+        onProgress,
       })
       .pipe(
         Effect.catch((error) =>
@@ -153,6 +183,19 @@ function executeSingleAgent(input: {
       broadcaster: input.broadcaster,
       repo: input.repo,
     })
+
+    // Report the outcome to the optional reply sink (Server Edition → gateway
+    // hub). Best-effort: never let a sink failure fail the agent run.
+    if (input.replySink) {
+      yield* input.replySink
+        .notify({
+          groupID: input.groupID,
+          messageID: input.messageID,
+          agentID: input.agent.id,
+          result,
+        })
+        .pipe(Effect.catch(() => Effect.succeed(undefined)))
+    }
   })
 }
 

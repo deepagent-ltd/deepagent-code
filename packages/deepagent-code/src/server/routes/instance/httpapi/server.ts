@@ -62,6 +62,7 @@ import { IMRepository, IMRepositoryLive } from "@deepagent-code/core/im/reposito
 import { IMBroadcasterLive } from "@deepagent-code/core/im/broadcaster"
 import { AgentContextBuilderLive } from "@deepagent-code/core/im/context-builder"
 import { ServerAgentExecutorLive, ServerAgentListProviderLive } from "@/im/agent-executor-server"
+import { ServerAgentReplySinkLive } from "@/im/agent-reply-sink-server"
 import { CorsConfig, isAllowedCorsOrigin, type CorsOptions } from "@/server/cors"
 import { serveUIEffect } from "@/server/shared/ui"
 import { ServerAuth } from "@/server/auth"
@@ -148,6 +149,9 @@ const imRuntimeLayer = Layer.mergeAll(
   IMBroadcasterLive,
   ServerAgentExecutorLive,
   ServerAgentListProviderLive,
+  // Server Edition: reports agent outcomes back to the gateway hub. No-op when
+  // GATEWAY_CALLBACK_URL is unset (standalone/desktop), so behavior is unchanged.
+  ServerAgentReplySinkLive,
   AgentContextBuilderLive.pipe(Layer.provide(imRepositoryLayer)),
 )
 const rootApiRoutes = HttpApiBuilder.layer(RootHttpApi).pipe(

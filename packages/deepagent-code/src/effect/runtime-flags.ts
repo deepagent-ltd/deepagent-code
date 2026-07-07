@@ -49,6 +49,18 @@ export class Service extends ConfigService.Service<Service>()("@deepagent-code/R
   experimentalBackgroundSubagents: stableOn("DEEPAGENT_CODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS"),
   experimentalLspTy: bool("DEEPAGENT_CODE_EXPERIMENTAL_LSP_TY"),
   experimentalLspTool: enabledByExperimental("DEEPAGENT_CODE_EXPERIMENTAL_LSP_TOOL"),
+  // V3.8 App-A C2.5 (Stage 5): query_log tool — lets the agent retrieve slices of the append-only
+  // Conversation Log (full reasoning / edited-withdrawn originals / untruncated tool IO) on demand.
+  // Promoted ON by default: the WRITE side is now wired (SessionPrompt.runLoop drives
+  // ConversationLogWriter each iteration + a final pass), so the log is actually populated and the
+  // read tool returns real entries. The writer is default-safe (matchCauseEffect → no-op on any fs
+  // failure), so enabling the tool by default cannot crash a turn. Set `=false` to disable.
+  experimentalQueryLogTool: stableOn("DEEPAGENT_CODE_EXPERIMENTAL_QUERY_LOG"),
+  // V3.8 App-A Stage 1: maintain the Session Ledger alongside compaction (parse each compaction
+  // summary into structured ledger entries + persist as the `ledger` DocType). Coexists with V1
+  // compaction — does NOT replace the assembly path. Default OFF (gated grey rollout, C6 §1). Enable
+  // with DEEPAGENT_CODE_EXPERIMENTAL_CONTEXT_LEDGER.
+  experimentalContextLedger: enabledByExperimental("DEEPAGENT_CODE_EXPERIMENTAL_CONTEXT_LEDGER"),
   // L6 (V3.4): code_intel (symbol-driven AI IDE entry) ships ON by default and is promoted out of
   // the experimental gate — `=false` disables. grep is never disabled; no-server files fall back.
   codeIntelTool: stableOn("DEEPAGENT_CODE_CODE_INTEL_TOOL"),

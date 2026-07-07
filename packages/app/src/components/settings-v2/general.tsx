@@ -35,11 +35,13 @@ import "./settings-v2.css"
 import {
   deepAgentModeFromConfig,
   deepAgentPromptModeFromConfig,
-  deepAgentWishModelFromConfig,
+  deepAgentIntelligenceModelFromConfig,
   deepAgentSelfLearningFromConfig,
+  deepAgentSubagentIntensityFromConfig,
   type DeepAgentMode,
   type DeepAgentPromptMode,
   type DeepAgentSelfLearning,
+  type DeepAgentSubagentIntensity,
   updateDeepAgentOptions,
 } from "@/utils/deepagent-settings"
 import { useModels } from "@/context/models"
@@ -205,15 +207,15 @@ export const SettingsGeneralV2: Component = () => {
       description: language.t("settings.general.deepagent.prompt.direct.description"),
     },
     {
-      value: "wish",
-      label: language.t("settings.general.deepagent.prompt.wish"),
-      description: language.t("settings.general.deepagent.prompt.wish.description"),
+      value: "intelligence",
+      label: language.t("settings.general.deepagent.prompt.intelligence"),
+      description: language.t("settings.general.deepagent.prompt.intelligence.description"),
     },
   ])
   const scenarioModeDescription = createMemo(
     () => scenarioModeCards().find((card) => card.value === deepAgentPromptMode())?.description ?? "",
   )
-  // #3: `ultra` requires the wish scenario; it cannot run under `direct`. Gate against the
+  // #3: `ultra` requires the intelligence scenario; it cannot run under `direct`. Gate against the
   // config-level scenario mode (this selector is a session/config-level setting, not per-turn).
   // When the scenario is `direct`, drop `ultra` from the selectable options (unless it is somehow
   // already the current value, so the control still reflects state) and surface an explanatory
@@ -231,8 +233,15 @@ export const SettingsGeneralV2: Component = () => {
     }
     return options
   })
-  const deepAgentWishModel = createMemo(() => deepAgentWishModelFromConfig(serverSync.data.config) ?? "")
-  const wishModelOptions = createMemo(() =>
+  const deepAgentSubagentIntensity = createMemo(() => deepAgentSubagentIntensityFromConfig(serverSync.data.config))
+  const subagentIntensityOptions = createMemo<{ value: DeepAgentSubagentIntensity; label: string }[]>(() => [
+    { value: "inherit", label: language.t("settings.general.deepagent.subagentMode.inherit") },
+    { value: "downgrade", label: language.t("settings.general.deepagent.subagentMode.downgrade") },
+  ])
+  const deepAgentIntelligenceModel = createMemo(
+    () => deepAgentIntelligenceModelFromConfig(serverSync.data.config) ?? "",
+  )
+  const intelligenceModelOptions = createMemo(() =>
     models.list().map((model) => ({
       value: `${model.provider.id}/${model.id}`,
       label: model.name,
@@ -357,7 +366,9 @@ export const SettingsGeneralV2: Component = () => {
               {language.t("settings.general.deepagent.mode.description")}
               <Show when={ultraDisabled()}>
                 {" "}
-                <span class="text-text-weak">{language.t("settings.general.deepagent.mode.ultraRequiresWish")}</span>
+                <span class="text-text-weak">
+                  {language.t("settings.general.deepagent.mode.ultraRequiresIntelligence")}
+                </span>
               </Show>
             </>
           }
@@ -376,6 +387,27 @@ export const SettingsGeneralV2: Component = () => {
               if (option.value === deepAgentMode()) return
               if (option.value === "ultra" && ultraDisabled()) return
               void updateDeepAgentOptions(serverSync, { agentMode: option.value })
+            }}
+          />
+        </SettingsRowV2>
+
+        <SettingsRowV2
+          title={language.t("settings.general.deepagent.subagentMode.title")}
+          description={language.t("settings.general.deepagent.subagentMode.description")}
+        >
+          <SelectV2
+            appearance="inline"
+            data-action="settings-deepagent-subagent-intensity"
+            options={subagentIntensityOptions()}
+            placement="bottom-end"
+            gutter={6}
+            current={subagentIntensityOptions().find((o) => o.value === deepAgentSubagentIntensity())}
+            value={(o) => o.value}
+            label={(o) => o.label}
+            onSelect={(option) => {
+              if (!option) return
+              if (option.value === deepAgentSubagentIntensity()) return
+              void updateDeepAgentOptions(serverSync, { subagentIntensity: option.value })
             }}
           />
         </SettingsRowV2>
@@ -404,24 +436,25 @@ export const SettingsGeneralV2: Component = () => {
         </SettingsRowV2>
 
         <SettingsRowV2
-          title={language.t("settings.general.deepagent.wishModel.title")}
-          description={language.t("settings.general.deepagent.wishModel.description")}
+          title={language.t("settings.general.deepagent.intelligenceModel.title")}
+          description={language.t("settings.general.deepagent.intelligenceModel.description")}
         >
           <SelectV2
             appearance="inline"
-            data-action="settings-deepagent-wish-model"
-            options={wishModelOptions()}
+            data-action="settings-deepagent-intelligence-model"
+            options={intelligenceModelOptions()}
             placement="bottom-end"
             gutter={6}
             current={
-              wishModelOptions().find((option) => option.value === deepAgentWishModel()) ?? wishModelOptions()[0]
+              intelligenceModelOptions().find((option) => option.value === deepAgentIntelligenceModel()) ??
+              intelligenceModelOptions()[0]
             }
             value={(o) => o.value}
             label={(o) => o.label}
             onSelect={(option) => {
               if (!option) return
-              if (option.value === deepAgentWishModel()) return
-              void updateDeepAgentOptions(serverSync, { wishModel: option.value })
+              if (option.value === deepAgentIntelligenceModel()) return
+              void updateDeepAgentOptions(serverSync, { intelligenceModel: option.value })
             }}
           >
             {(o) => (

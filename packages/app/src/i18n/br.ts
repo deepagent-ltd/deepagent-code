@@ -870,18 +870,22 @@ export const dict = {
   "settings.general.deepagent.mode.xhigh": "xhigh",
   "settings.general.deepagent.mode.max": "max",
   "settings.general.deepagent.mode.ultra": "ultra",
-  "settings.general.deepagent.mode.ultraRequiresWish": "ultra requiere el modo de escenario wish.",
+  "settings.general.deepagent.mode.ultraRequiresIntelligence": "ultra requiere el modo de escenario intelligence.",
+  "settings.general.deepagent.subagentMode.title": "Subagent",
+  "settings.general.deepagent.subagentMode.description": "Choose the work intensity of subagents relative to the main agent.",
+  "settings.general.deepagent.subagentMode.inherit": "Inherit from parent",
+  "settings.general.deepagent.subagentMode.downgrade": "One level lower",
   "settings.general.deepagent.prompt.title": "Modo de cenário",
   "settings.general.deepagent.prompt.description": "Elige cómo el compositor gestiona tu prompt antes de enviarlo.",
   "settings.general.deepagent.prompt.direct": "Modo direto",
   "settings.general.deepagent.prompt.direct.description":
     "Envía tu prompt tal como está escrito, sin que DeepAgent prepare un borrador.",
-  "settings.general.deepagent.prompt.wish": "Modo wish",
-  "settings.general.deepagent.prompt.wish.description":
+  "settings.general.deepagent.prompt.intelligence": "Modo intelligence",
+  "settings.general.deepagent.prompt.intelligence.description":
     "DeepAgent prepara primero un prompt completo y luego te permite revisarlo y editarlo.",
-  "settings.general.deepagent.wishModel.title": "Modelo do modo wish",
-  "settings.general.deepagent.wishModel.description":
-    "Elige el modelo usado solo para preparar borradores de prompts del modo wish.",
+  "settings.general.deepagent.intelligenceModel.title": "Modelo do modo intelligence",
+  "settings.general.deepagent.intelligenceModel.description":
+    "Elige el modelo usado solo para preparar borradores de prompts del modo intelligence.",
   "settings.general.deepagent.selfLearning.title": "Aprobación de autoaprendizaje",
   "settings.general.deepagent.selfLearning.description":
     "Decide cómo el conocimiento que DeepAgent aprende de tus sesiones se vuelve recuperable.",

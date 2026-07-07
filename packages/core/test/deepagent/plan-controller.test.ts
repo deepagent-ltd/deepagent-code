@@ -95,8 +95,8 @@ describe("tool classification", () => {
     }
   })
 
-  test("read/search/todowrite/task are never mutating (must pass even when stale)", () => {
-    for (const t of ["read", "grep", "glob", "list", "search", "todowrite", "task", "webfetch"]) {
+  test("read/search/plan/task are never mutating (must pass even when stale)", () => {
+    for (const t of ["read", "grep", "glob", "list", "search", "plan", "task", "webfetch"]) {
       expect(isMutatingTool(t)).toBe(false)
     }
   })

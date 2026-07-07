@@ -143,6 +143,13 @@ const live: Layer.Layer<
         plugin,
         flags,
         isWorkflow,
+        // §5b: surface the configurable (lenient) orchestration caps so the advisory fan-out decision
+        // in the prompt reflects the deployment's configured per-round concurrency. Hard enforcement
+        // is the §5a semaphore in task.ts, not this number.
+        orchestrationCaps: {
+          maxFanout: cfg.experimental?.orchestration?.max_fanout,
+          maxConcurrency: cfg.experimental?.orchestration?.max_concurrency,
+        },
       })
 
       // Wire up toolExecutor for DWS workflow models so that tool calls

@@ -1,4 +1,4 @@
-import { batch, createMemo, onCleanup, onMount, type Accessor } from "solid-js"
+import { batch, createMemo, onCleanup, onMount, type Accessor, type Component } from "solid-js"
 import { createStore } from "solid-js/store"
 import { makeEventListener } from "@solid-primitives/event-listener"
 import type { Part, UserMessage } from "@deepagent-code/sdk/v2"
@@ -41,6 +41,47 @@ export function turnPreview(parts: Part[]): TurnPreview {
 
 /** The turn rail only shows when there's more than one turn to navigate. */
 export const shouldRenderTurnRail = (turnCount: number) => turnCount > 1
+
+export const forkCutoffMessageID = (messages: { id: string }[], messageID: string) => {
+  const index = messages.findIndex((message) => message.id === messageID)
+  if (index < 0) return undefined
+  return messages[index + 1]?.id
+}
+
+/**
+ * Build the reply-bubble "fork" action. The clicked bubble is the anchor, so
+ * the new session includes messages through that bubble. Session.fork treats
+ * `messageID` as the first message NOT copied, so the UI passes the next
+ * message as the cutoff; no next message means a full-history fork.
+ */
+export const createForkAction =
+  (deps: {
+    open: (component: DialogForkComponent) => void
+    loadDialog?: () => Promise<{ DialogFork: DialogForkComponent }>
+    messages?: (sessionID: string) => { id: string }[]
+    fork?: (input: { sessionID: string; messageID?: string }) => Promise<{ id: string } | undefined>
+    navigate?: (sessionID: string) => void
+    onError?: (error: unknown) => void
+  }) =>
+  (input?: { sessionID: string; messageID: string }) => {
+    if (input && deps.messages && deps.fork && deps.navigate) {
+      const navigate = deps.navigate
+      return deps
+        .fork({
+          sessionID: input.sessionID,
+          messageID: forkCutoffMessageID(deps.messages(input.sessionID), input.messageID),
+        })
+        .then((session) => {
+          if (session) navigate(session.id)
+        })
+        .catch((error: unknown) => deps.onError?.(error))
+    }
+
+    const load = deps.loadDialog ?? (() => import("@/components/dialog-fork"))
+    return load().then((mod) => deps.open(mod.DialogFork))
+  }
+
+type DialogForkComponent = Component
 
 /**
  * Fisheye width (px) for a turn rail segment given how far it sits from the

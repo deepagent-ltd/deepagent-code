@@ -7,6 +7,10 @@ import * as Budget from "./budget"
 import * as Validation from "./validation"
 import type { PromptContext, EnvironmentContext, ToolContext, PreviousResults } from "./prompt-policy"
 import type { ValidationResult } from "./round-state"
+import { decideFanout, estimateSignalsFromText, type OrchestrationCaps } from "./orchestration"
+import * as KnowledgeSource from "./knowledge-source"
+import { projectIdForWorkspace } from "./durable-knowledge-store"
+import { ProjectBridge } from "./context"
 
 export type OrchestratorInput = {
   readonly sessionId: string
@@ -15,6 +19,10 @@ export type OrchestratorInput = {
   readonly tools: ToolContext
   readonly userRequest: string | null
   readonly workspacePath: string | null
+  // §5b: configurable (lenient) orchestration caps from config.experimental.orchestration. Unset ⇒
+  // lenient defaults. Surfaced only to make the advisory per-round concurrency number in the prompt
+  // match the deployment; the HARD cap is the §5a semaphore in task.ts, independent of this.
+  readonly orchestrationCaps?: OrchestrationCaps
 }
 
 export type PostTurnDecision = {
@@ -112,6 +120,41 @@ export const buildPromptContext = (input: OrchestratorInput): PromptContext => {
         }
       : null
 
+  // §5b: compute the concrete per-turn fan-out verdict from this turn's request text so the
+  // DeepAgent-active prompt (the primary user path) surfaces task-specific numbers, not just the
+  // generic guidance. Deterministic pure function; ADVISORY only (the §5a semaphore is the hard cap).
+  const fanoutDecision = state.userRequest
+    ? decideFanout({
+        mode: state.mode,
+        signals: estimateSignalsFromText({ userRequest: state.userRequest }),
+        caps: input.orchestrationCaps,
+      })
+    : undefined
+
+  // V3.8 App-A C3: cross-session handoff injection. Gated at the SAME door as knowledge
+  // (shouldLoadBridge: mode !== general/disabled). Load the project bridge from the project-scoped
+  // durable store (same physical store knowledge-source unions) and pre-render the handoff summary.
+  // DEFAULT-SAFE: buildPromptContext is sync and DocumentStore construction throws SYNCHRONOUSLY when
+  // knowledge-source is unconfigured or the store is corrupt — a try/catch here keeps any failure from
+  // reaching the assembly path; bridge stays undefined and the rest of the context (fanout included)
+  // is unaffected.
+  let bridge: string | undefined
+  try {
+    if (
+      state.workspacePath &&
+      ProjectBridge.shouldLoadBridge(state.mode) &&
+      KnowledgeSource.isConfigured()
+    ) {
+      const store = KnowledgeSource.projectStoreFor(state.workspacePath).documentStore
+      const projectId = projectIdForWorkspace(state.workspacePath)
+      const loaded = ProjectBridge.loadBridge(store, projectId)
+      const rendered = ProjectBridge.renderHandoff(loaded)
+      if (rendered.trim().length > 0) bridge = rendered
+    }
+  } catch {
+    bridge = undefined
+  }
+
   return {
     mode: state.mode,
     round: roundState.round,
@@ -131,6 +174,8 @@ export const buildPromptContext = (input: OrchestratorInput): PromptContext => {
     knowledge,
     previousResults,
     userInstructions: null,
+    ...(fanoutDecision ? { fanoutDecision } : {}),
+    ...(bridge ? { bridge } : {}),
   }
 }
 

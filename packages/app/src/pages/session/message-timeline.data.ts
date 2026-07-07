@@ -6,6 +6,12 @@ import { Data, Equal } from "effect"
 export type SummaryDiff = SnapshotFileDiff & { file: string }
 
 export type TimelineRowMap = {
+  // Full-width "derived from ‹parent›" banner shown at the very top of a forked session's
+  // transcript. Data comes from Session.metadata.forkedFrom (set by the backend fork()).
+  ForkBanner: {
+    parentSessionID: string
+    parentTitle: string
+  }
   CommentStrip: {
     userMessageID: string
     previousUserMessage: boolean
@@ -32,6 +38,10 @@ export type TimelineRowMap = {
 }
 
 export namespace TimelineRow {
+  export class ForkBanner extends Data.TaggedClass("ForkBanner")<{
+    parentSessionID: string
+    parentTitle: string
+  }> {}
   export class CommentStrip extends Data.TaggedClass("CommentStrip")<{
     userMessageID: string
     previousUserMessage: boolean
@@ -68,6 +78,7 @@ export namespace TimelineRow {
   export class BottomSpacer extends Data.TaggedClass("BottomSpacer")<{}> {}
 
   export type TimelineRow =
+    | ForkBanner
     | CommentStrip
     | UserMessage
     | TurnDivider
@@ -80,6 +91,8 @@ export namespace TimelineRow {
 
   export const key = (row: TimelineRow) => {
     switch (row._tag) {
+      case "ForkBanner":
+        return `fork-banner:${row.parentSessionID}`
       case "CommentStrip":
         return `comment-strip:${row.userMessageID}`
       case "UserMessage":

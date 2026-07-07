@@ -9,7 +9,6 @@ import { GrepTool } from "./grep"
 import { ReadTool } from "./read"
 import { TaskTool } from "./task"
 import { Database } from "@deepagent-code/core/database/database"
-import { TodoWriteTool } from "./todo"
 import { WebFetchTool } from "./webfetch"
 import { WriteTool } from "./write"
 import { InvalidTool } from "./invalid"
@@ -29,6 +28,7 @@ import { LspTool } from "./lsp"
 import { CodeIntelTool } from "./code_intel"
 import { ProfileTool } from "./profile"
 import { DebugTool } from "./debug"
+import { QueryLogTool } from "./query_log"
 import { DebugService } from "@/debug/service"
 import { RuntimeBase } from "@/runtime/base"
 import { Worktree } from "@/worktree"
@@ -48,7 +48,6 @@ import { Format } from "../format"
 import { InstanceState } from "@/effect/instance-state"
 import { EffectBridge } from "@/effect/bridge"
 import { Question } from "../question"
-import { Todo } from "../session/todo"
 import { LSP } from "@/lsp/lsp"
 import { Instruction } from "../session/instruction"
 import { FSUtil } from "@deepagent-code/core/fs-util"
@@ -97,7 +96,6 @@ export const layer: Layer.Layer<
   | Config.Service
   | Plugin.Service
   | Question.Service
-  | Todo.Service
   | Agent.Service
   | Skill.Service
   | Session.Service
@@ -130,7 +128,6 @@ export const layer: Layer.Layer<
     const task = yield* TaskTool
     const read = yield* ReadTool
     const question = yield* QuestionTool
-    const todo = yield* TodoWriteTool
     const lsptool = yield* LspTool
     const plan = yield* PlanExitTool
     const planwrite = yield* PlanTool
@@ -146,6 +143,7 @@ export const layer: Layer.Layer<
     const codeintel = yield* CodeIntelTool
     const profiletool = yield* ProfileTool
     const debugtool = yield* DebugTool
+    const querylog = yield* QueryLogTool
     const agent = yield* Agent.Service
 
     const state = yield* InstanceState.make<State>(
@@ -257,7 +255,6 @@ export const layer: Layer.Layer<
           write: Tool.init(writetool),
           task: Tool.init(task),
           fetch: Tool.init(webfetch),
-          todo: Tool.init(todo),
           search: Tool.init(websearch),
           skill: Tool.init(skilltool),
           patch: Tool.init(patchtool),
@@ -268,6 +265,7 @@ export const layer: Layer.Layer<
           debug: Tool.init(debugtool),
           plan: Tool.init(plan),
           planwrite: Tool.init(planwrite),
+          query_log: Tool.init(querylog),
         })
 
         return {
@@ -283,7 +281,6 @@ export const layer: Layer.Layer<
             tool.write,
             tool.task,
             tool.fetch,
-            tool.todo,
             tool.search,
             tool.skill,
             tool.patch,
@@ -292,6 +289,7 @@ export const layer: Layer.Layer<
             ...(flags.codeIntelTool ? [tool.code_intel] : []),
             ...(flags.profileTool ? [tool.profile] : []),
             ...(flags.debugTool ? [tool.debug] : []),
+            ...(flags.experimentalQueryLogTool ? [tool.query_log] : []),
             ...(flags.experimentalPlanMode && flags.client === "cli" ? [tool.plan] : []),
           ],
           task: tool.task,
@@ -417,7 +415,6 @@ export const defaultLayer = Layer.suspend(() =>
         Config.defaultLayer,
         Plugin.defaultLayer,
         Question.defaultLayer,
-        Todo.defaultLayer,
         Skill.defaultLayer,
         Agent.defaultLayer,
         Session.defaultLayer,

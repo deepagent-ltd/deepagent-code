@@ -5,6 +5,7 @@ import { SessionV1 } from "@deepagent-code/core/v1/session"
 import { BackgroundJob } from "@/background/job"
 import { Session } from "@/session/session"
 import { SessionID, MessageID } from "../session/schema"
+import { Identifier } from "@/id/id"
 import { MessageV2 } from "../session/message-v2"
 import { Agent } from "../agent/agent"
 import { deriveSubagentSessionPermission } from "../agent/subagent-permissions"
@@ -15,6 +16,52 @@ import { EffectBridge } from "@/effect/bridge"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Database } from "@deepagent-code/core/database/database"
 import { Worktree } from "@/worktree"
+import { Orchestration } from "../agent/schema/orchestration"
+import { Orchestration as CoreOrchestration } from "@deepagent-code/core/deepagent/orchestration"
+import { AgentGateway } from "@deepagent-code/core/agent-gateway"
+import { downgradeOneLevel } from "@deepagent-code/core/deepagent/mode"
+import { TaskConcurrency } from "./task-concurrency"
+
+/**
+ * L3 (v3.8.0 §L3): resolve the task tool's optional `output_schema` param into a raw JSON Schema
+ * object suitable for the structured-output path (PromptInput.format json_schema).
+ *
+ * Accepts: a named orchestration schema, the alias "default"/"auto" (mapped to the subagent's
+ * natural default schema), or a raw JSON Schema object passed through verbatim.
+ *
+ * Task 6 (§5 auto-mount): when the caller does NOT pass an explicit `output_schema` AND the
+ * subagent is one of the native orchestration subagents that has a natural default
+ * (`DEFAULT_OUTPUT_SCHEMA_BY_AGENT` — reviewer→ReviewResult, researcher→ResearchResult), the
+ * default schema is applied automatically. This makes the native research/review subagents return
+ * a structured, deterministically-parsed result by default instead of depending on the model to
+ * remember to pass a schema. Precedence: an EXPLICIT schema (named / alias / raw object) always
+ * wins over the auto-mounted default. Any other subagent with no registered default keeps the
+ * unchanged free-text extraction path (returns undefined).
+ */
+export function resolveOutputSchema(
+  outputSchema: string | Record<string, unknown> | undefined,
+  subagentType: string,
+): Record<string, unknown> | undefined {
+  if (outputSchema === undefined) {
+    // Auto-mount: native researcher/reviewer default to their structured schema even when the
+    // model omitted `output_schema`. Subagents without a registered default stay free-text.
+    const autoName = Orchestration.DEFAULT_OUTPUT_SCHEMA_BY_AGENT[subagentType]
+    if (!autoName) return undefined
+    const autoSchema = Orchestration.OrchestrationSchemas[autoName]
+    if (!autoSchema) return undefined
+    return ToolJsonSchema.fromSchema(autoSchema) as unknown as Record<string, unknown>
+  }
+  if (typeof outputSchema === "object") return outputSchema
+  const key = outputSchema.trim()
+  const named =
+    key === "default" || key === "auto"
+      ? Orchestration.DEFAULT_OUTPUT_SCHEMA_BY_AGENT[subagentType]
+      : (key as Orchestration.OrchestrationSchemaName)
+  if (!named) return undefined
+  const schema = Orchestration.OrchestrationSchemas[named]
+  if (!schema) return undefined
+  return ToolJsonSchema.fromSchema(schema) as unknown as Record<string, unknown>
+}
 
 export interface TaskPromptOps {
   cancel(sessionID: SessionID): Effect.Effect<void>
@@ -50,6 +97,17 @@ const BaseParameterFields = {
       "This should only be set if you mean to resume a previous task (you can pass a prior task_id and the task will continue the same subagent session as before instead of creating a fresh one)",
   }),
   command: Schema.optional(Schema.String).annotate({ description: "The command that triggered this task" }),
+  // L3 (v3.8.0 §L3, 路 B hard constraint): when set, the subagent's FINAL turn is forced through
+  // the structured-output path (a `StructuredOutput` tool call gated by `toolChoice: "required"` —
+  // the in-session equivalent of `generateObject`) so the result parses deterministically, instead
+  // of scraping its last text part. Accepts a named orchestration schema ("ReviewResult" /
+  // "ResearchResult" / "ReviewFinding"), the alias "default"/"auto" (⇒ the subagent's natural
+  // default: reviewer→ReviewResult, researcher→ResearchResult), or a raw JSON Schema object. When
+  // omitted, the existing free-text extraction is used unchanged.
+  output_schema: Schema.optional(Schema.Union([Schema.String, Schema.Record(Schema.String, Schema.Any)])).annotate({
+    description:
+      'Optional. Force the subagent to return a structured result matching this schema. Pass a named schema ("ReviewResult", "ResearchResult", "ReviewFinding"), "default" to use the subagent\'s natural schema (reviewer→ReviewResult, researcher→ResearchResult), or a raw JSON Schema object. Omit for a free-text result.',
+  }),
 }
 
 const BaseParameters = Schema.Struct(BaseParameterFields)
@@ -134,15 +192,23 @@ export const TaskTool = Tool.define(
       // U5: per-subagent worktree isolation. When isolation:"worktree" and this is a fresh subagent
       // (not a resume), allocate a dedicated worktree so parallel subagents can't collide on the same
       // files. The Worktree service is resolved OPTIONALLY (serviceOption) so the task tool does not
-      // add it to the registry's requirement set — when it's absent (e.g. minimal test layers) or
-      // creation fails (not a git project) we fall back to the shared directory rather than failing.
+      // add it to the registry's requirement set — when it's absent (e.g. minimal test layers) we fall
+      // back to the shared directory rather than failing.
+      //
+      // P5 (C7): the worktree name MUST be unique per task invocation. The old code hardcoded
+      // `agent-${subagent_type}`, so two concurrent subagents of the SAME type raced on one name — and
+      // on the resulting collision the create was silently swallowed, dropping BOTH agents into the
+      // shared parent checkout where they'd corrupt each other's edits. A fresh monotonic identifier
+      // (unique even within the same millisecond) guarantees no two invocations request the same name.
+      // Only the non-git degradation (NotGitError) is tolerated as a shared-directory fallback; any
+      // other create failure now FAILS the task loudly instead of silently un-isolating it.
       const isolate = params.isolation === "worktree" && !session
       const worktreeOpt = isolate ? yield* Effect.serviceOption(Worktree.Service) : Option.none<Worktree.Interface>()
       const worktreeInfo =
         isolate && Option.isSome(worktreeOpt)
           ? yield* worktreeOpt.value
-              .create({ name: `agent-${params.subagent_type}` })
-              .pipe(Effect.catchCause(() => Effect.succeed(undefined)))
+              .create({ name: `agent-${params.subagent_type}-${Identifier.ascending("tool")}` })
+              .pipe(Effect.catchTag("WorktreeNotGitError", () => Effect.succeed(undefined)))
           : undefined
 
       const nextSession =
@@ -184,6 +250,19 @@ export const TaskTool = Tool.define(
         ...(runInBackground ? { background: true } : {}),
       }
 
+      // Subagent work-intensity: "downgrade" runs each child exactly one strength below the parent's
+      // EFFECTIVE agentMode (ultra→max→…→general; general stays general); "inherit" (default) leaves
+      // the child on the process-global mode. The chosen mode is injected ONLY as this child session's
+      // first user-message metadata (`deepagent.agent_mode_override`) — a per-request channel that
+      // request.ts reads per prompt and never touches the process-global agentMode, so concurrent
+      // subagents stay isolated from each other. "inherit" injects nothing (natural global inheritance).
+      const subagentIntensity =
+        (cfg.provider?.deepagent?.options?.subagentIntensity as string | undefined) === "downgrade"
+          ? "downgrade"
+          : "inherit"
+      const childAgentModeOverride =
+        subagentIntensity === "downgrade" ? downgradeOneLevel(AgentGateway.snapshot().agentMode) : undefined
+
       yield* ctx.metadata({
         title: params.description,
         metadata,
@@ -192,7 +271,34 @@ export const TaskTool = Tool.define(
       const ops = ctx.extra?.promptOps as TaskPromptOps
       if (!ops) return yield* Effect.fail(new Error("TaskTool requires promptOps in ctx.extra"))
 
+      // L3 (路 B): when the caller supplied output_schema, drive the subagent's final turn through
+      // the structured-output path so the result parses deterministically. Undefined ⇒ free-text.
+      const resolvedOutputSchema = resolveOutputSchema(params.output_schema, params.subagent_type)
+
+      // §5a: resolve the CODE-layer orchestration caps (configurable, lenient defaults). The
+      // per-parent-session semaphore below is the hard concurrency gate for parallel `task` calls;
+      // §C.3 agent `limits.maxConcurrency` tightens it further (min) when the subagent declares one.
+      const caps: CoreOrchestration.OrchestrationCaps = {
+        maxFanout: cfg.experimental?.orchestration?.max_fanout,
+        maxConcurrency: cfg.experimental?.orchestration?.max_concurrency,
+      }
+      const agentMaxConcurrency = next.limits?.maxConcurrency
+
       const runTask = Effect.fn("TaskTool.runTask")(function* () {
+        // §5a chokepoint: BOTH the foreground and background dispatch paths route the subagent's
+        // actual work through `runTask`, so acquiring the concurrency slot HERE bounds how many
+        // subagents of this parent session execute in parallel — regardless of how many the model
+        // fanned out in one message. Ordinary tools never reach this code path.
+        return yield* TaskConcurrency.withTaskSlot({
+          parentSessionID: ctx.sessionID,
+          subagentType: params.subagent_type,
+          agentMaxConcurrency,
+          caps,
+          effect: runTaskInner(),
+        })
+      })
+
+      const runTaskInner = Effect.fn("TaskTool.runTaskInner")(function* () {
         const parts = yield* ops.resolvePromptParts(params.prompt)
         // U5: when isolated in a worktree, tell the subagent it inherited the parent's context but
         // operates in a separate checkout — paths translate, and it must re-read files before editing.
@@ -217,6 +323,10 @@ export const TaskTool = Tool.define(
           },
           variant: next.model ? undefined : variant,
           agent: next.name,
+          ...(childAgentModeOverride
+            ? { metadata: { deepagent: { agent_mode_override: childAgentModeOverride } } }
+            : {}),
+          ...(resolvedOutputSchema ? { format: { type: "json_schema" as const, schema: resolvedOutputSchema } } : {}),
           tools: {
             ...(next.permission.some((rule) => rule.permission === "todowrite") ? {} : { todowrite: false }),
             ...(next.permission.some((rule) => rule.permission === id) ? {} : { task: false }),
@@ -224,6 +334,15 @@ export const TaskTool = Tool.define(
           },
           parts: promptParts,
         })
+        // L3 (路 B): with output_schema, the structured object is surfaced on the assistant message's
+        // `structured` field (via the forced StructuredOutput tool). Return it as JSON so the parent
+        // agent parses a guaranteed-conformant result. Fall back to the free-text extraction only when
+        // no schema was requested — that path (the brittle `findLast(text)`) is UNCHANGED for callers
+        // that don't pass output_schema.
+        if (resolvedOutputSchema) {
+          const structured = result.info.role === "assistant" ? result.info.structured : undefined
+          if (structured !== undefined) return JSON.stringify(structured)
+        }
         return result.parts.findLast((item) => item.type === "text")?.text ?? ""
       })
 

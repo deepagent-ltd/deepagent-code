@@ -40,7 +40,7 @@ export type FollowupDraft = {
   metadata?: {
     deepagent?: {
       prompt_pipeline?: {
-        mode: "wish" | "direct_override"
+        mode: "intelligence" | "direct_override"
         confirmed_draft_id?: string
         edited_goal?: string
       }
@@ -53,7 +53,7 @@ export type DeepAgentPromptPrepareResult = {
   prompt_draft_id: string
   context_plan_id: string
   state: string
-  mode: "wish"
+  mode: "intelligence"
   route: "code" | "general"
   goal: string
   preview: string
@@ -102,7 +102,7 @@ const draftImages = (prompt: Prompt) => prompt.filter((part): part is ImageAttac
 
 const promptPipelineMode = (metadata: FollowupDraft["metadata"]): DeepAgentPromptModeForConfirmation | undefined => {
   const mode = metadata?.deepagent?.prompt_pipeline?.mode
-  return mode === "wish" ? mode : undefined
+  return mode === "intelligence" ? mode : undefined
 }
 
 async function prepareDeepAgentPromptDraft(input: {
@@ -227,7 +227,7 @@ export async function sendFollowupDraft(input: FollowupSendInput) {
     waited = true
     if (!ok) return false
 
-    // D2: while wish prepares the prompt (a real model call), surface a busy/"advice generating"
+    // D2: while intelligence prepares the prompt (a real model call), surface a busy/"advice generating"
     // state so the composer indicates work is in progress rather than appearing frozen. The
     // existing confirm surface then shows the prepared prompt for review/edit before send.
     setBusy()
@@ -397,12 +397,8 @@ export function createPromptSubmit(input: PromptSubmitInput) {
 
     // D3: any stop resets the scenario to `direct` and pauses scenario automation for this
     // session and its directory scope, so the next user message is a plain direct submission
-    // until they re-engage wish.
+    // until they re-engage intelligence.
     resetScenarioOnStop(pendingKey(sessionID), ScopedKey.from(sdk.scope, sdk.directory))
-
-    serverSync.todo.set(sessionID, [])
-    const [, setStore] = serverSync.child(sdk.directory)
-    setStore("todo", sessionID, [])
 
     input.onAbort?.()
 
@@ -585,11 +581,11 @@ export function createPromptSubmit(input: PromptSubmitInput) {
     // selection swaps `sessionDirectory` to the new worktree dir). Read the same project-scoped
     // key so the toggle's override is found at submit time even in the worktree case; resolve
     // session-then-directory. After a stop (D3) the override is "direct", so the next turn is a
-    // plain direct submission until the user re-engages wish.
+    // plain direct submission until the user re-engages intelligence.
     const promptMode =
       resolveScenarioOverride(pendingKey(session.id), ScopedKey.from(sdk.scope, projectDirectory)) ??
       deepAgentPromptModeFromConfig(serverSync.data.config)
-    if (promptMode === "wish") {
+    if (promptMode === "intelligence") {
       draft.metadata = {
         deepagent: {
           prompt_pipeline: {
@@ -681,7 +677,7 @@ export function createPromptSubmit(input: PromptSubmitInput) {
 
     const commentItems = context.filter((item) => item.type === "file" && !!item.comment?.trim())
     const messageID = Identifier.ascending("message")
-    const preparesPromptDraft = promptPipelineMode(draft.metadata) === "wish"
+    const preparesPromptDraft = promptPipelineMode(draft.metadata) === "intelligence"
 
     const removeOptimisticMessage = () => {
       sync.session.optimistic.remove({

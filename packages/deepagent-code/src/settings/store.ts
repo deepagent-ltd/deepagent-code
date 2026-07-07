@@ -8,7 +8,7 @@ import { OFFICIAL_PROVIDER_ID_SET } from "@deepagent-code/core/provider-official
  * user-editable config file (`deepagent-code.jsonc`, which is reserved for third-party
  * providers). Two families live here:
  *
- *   1. `deepagent`  — first-party runtime settings (prompt/wish/agent-mode/self-learning +
+ *   1. `deepagent`  — first-party runtime settings (prompt/intelligence/agent-mode/self-learning +
  *                     gateway knobs) that used to piggyback on `provider.deepagent.options`.
  *   2. `providers`  — per-official-provider transport tuning (header/chunk/request timeouts,
  *                     retries). Official providers deliberately ignore `config.provider.<id>`,
@@ -20,14 +20,18 @@ import { OFFICIAL_PROVIDER_ID_SET } from "@deepagent-code/core/provider-official
  * backend-only; the renderer never imports it (it reads/writes through the config overlay).
  */
 export namespace SettingsStore {
-  export type PromptMode = "direct" | "wish"
+  export type PromptMode = "direct" | "intelligence"
   export type AgentMode = "general" | "high" | "xhigh" | "max" | "ultra"
   export type SelfLearning = "manual" | "auto"
+  // Child-agent work intensity: "inherit" (default) → subagents run at the parent's agentMode;
+  // "downgrade" → subagents run exactly one strength below the parent (ultra→max→…→general).
+  export type SubagentIntensity = "inherit" | "downgrade"
 
   export interface DeepAgentSettings {
     promptMode?: PromptMode
-    wishModel?: string
+    intelligenceModel?: string
     agentMode?: AgentMode
+    subagentIntensity?: SubagentIntensity
     selfLearning?: SelfLearning
     runsDir?: string
     allowProviderExecutedTools?: boolean
@@ -66,9 +70,15 @@ export namespace SettingsStore {
   const strArray = (v: unknown): string[] | undefined =>
     Array.isArray(v) ? v.filter((i): i is string => typeof i === "string" && i.length > 0) : undefined
 
-  const promptMode = (v: unknown): PromptMode | undefined => (v === "direct" || v === "wish" ? v : undefined)
+  // Legacy-compat: "wish" is the pre-rename value for "intelligence". Accept it on READ and
+  // normalize to the canonical "intelligence" so a user's stored "wish" still resolves; we only
+  // ever WRITE "intelligence" (or "direct"). Do NOT remove the "wish" branch.
+  const promptMode = (v: unknown): PromptMode | undefined =>
+    v === "direct" ? "direct" : v === "intelligence" || v === "wish" ? "intelligence" : undefined
   const agentMode = (v: unknown): AgentMode | undefined =>
     v === "general" || v === "high" || v === "xhigh" || v === "max" || v === "ultra" ? v : undefined
+  const subagentIntensity = (v: unknown): SubagentIntensity | undefined =>
+    v === "inherit" || v === "downgrade" ? v : undefined
   const selfLearning = (v: unknown): SelfLearning | undefined => (v === "manual" || v === "auto" ? v : undefined)
 
   function normalizeDeepAgent(input: unknown): DeepAgentSettings | undefined {
@@ -76,10 +86,15 @@ export namespace SettingsStore {
     const out: DeepAgentSettings = {}
     const pm = promptMode(input.promptMode)
     if (pm) out.promptMode = pm
-    const wm = str(input.wishModel)
-    if (wm) out.wishModel = wm
+    // Legacy-compat: read the new `intelligenceModel` key first, fall back to the pre-rename
+    // `wishModel` key so an existing user's configured model is not lost. We only WRITE
+    // `intelligenceModel`. Do NOT drop the `wishModel` read.
+    const wm = str(input.intelligenceModel) ?? str(input.wishModel)
+    if (wm) out.intelligenceModel = wm
     const am = agentMode(input.agentMode)
     if (am) out.agentMode = am
+    const si = subagentIntensity(input.subagentIntensity)
+    if (si) out.subagentIntensity = si
     const sl = selfLearning(input.selfLearning)
     if (sl) out.selfLearning = sl
     const rd = str(input.runsDir)

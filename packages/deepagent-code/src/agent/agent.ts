@@ -11,6 +11,8 @@ import { ProviderTransform } from "@/provider/transform"
 import PROMPT_GENERATE from "./generate.txt"
 import PROMPT_COMPACTION from "./prompt/compaction.txt"
 import PROMPT_EXPLORE from "./prompt/explore.txt"
+import PROMPT_RESEARCHER from "./prompt/researcher.txt"
+import PROMPT_REVIEWER from "./prompt/reviewer.txt"
 import PROMPT_SUMMARY from "./prompt/summary.txt"
 import PROMPT_TITLE from "./prompt/title.txt"
 import { Permission } from "@/permission"
@@ -29,7 +31,28 @@ import { ModelV2 } from "@deepagent-code/core/model"
 import { type LLMError } from "@deepagent-code/llm"
 import { AgentGateway } from "@deepagent-code/core/agent-gateway"
 import { configureGateway } from "@/deepagent/config"
+import * as AgentMeta from "@deepagent-code/core/im/mention-parser"
 
+/**
+ * Canonical agent definition for the PRODUCTION runtime (the CLI/server code
+ * path, `Agent.Service` in this package). This is DELIBERATELY a separate entity
+ * from core's `AgentV2.Info` (`packages/core/src/agent.ts`), which is the
+ * canonical definition for the core embedded runtime + core session stack. The
+ * two overlap in intent but differ in shape and validation:
+ *   - identity: here a plain `name: string`; there a branded `AgentV2.ID`.
+ *   - permission: here `PermissionV1.Ruleset`; there `permissions:
+ *     PermissionSchema.Ruleset` (different permission systems).
+ *   - This type carries the V3.8.1 §C.3 registry metadata below (triggers /
+ *     capabilities / autonomy / context_sources / approval_required / limits)
+ *     plus options / variant / native / prompt / topP / temperature; core's
+ *     `AgentV2.Info` has none of those.
+ * There is intentionally NO converter between the two `Info` types, and none is
+ * needed: each is projected independently onto the shared IM `AgentDescriptor`
+ * (this one via `ServerAgentListProvider` in
+ * `packages/deepagent-code/src/im/agent-executor-server.ts`; core's via
+ * `AgentListProviderImpl`). Changing this `Info` does NOT require changing
+ * core's — keep them separate on purpose.
+ */
 export const Info = Schema.Struct({
   name: Schema.String,
   description: Schema.optional(Schema.String),
@@ -50,6 +73,18 @@ export const Info = Schema.Struct({
   prompt: Schema.optional(Schema.String),
   options: Schema.Record(Schema.String, Schema.Unknown),
   steps: Schema.optional(Schema.Finite),
+  // --- V3.8.1 §C.3: optional, backward-compatible agent registry metadata,
+  // consumed by V4.0 (Event Router / Task Partitioner / autonomy gates). Unset
+  // ⇒ V3.8 behavior exactly (not event-triggerable, no declared capabilities,
+  // autonomy level_0, no extra limits). Declaration/registration only — V3.8.1
+  // does NOT dispatch on triggers. `limits` provides configurable ceilings with
+  // lenient/unlimited defaults (an unset field imposes no limit).
+  triggers: Schema.optional(Schema.Array(AgentMeta.Trigger)),
+  capabilities: Schema.optional(Schema.Array(Schema.String)),
+  autonomy: Schema.optional(AgentMeta.AutonomyLevel),
+  context_sources: Schema.optional(Schema.Array(Schema.String)),
+  approval_required: Schema.optional(Schema.Boolean),
+  limits: Schema.optional(AgentMeta.AgentLimits),
 }).annotate({ identifier: "Agent" })
 export type Info = DeepMutable<Schema.Schema.Type<typeof Info>>
 
@@ -203,6 +238,58 @@ export const layer = Layer.effect(
             mode: "subagent",
             native: true,
           },
+          // L1 (v3.8.0 §L1): native research/review subagents for multi-agent orchestration.
+          // Both are subagents (so ToolRegistry.describeTask surfaces them to the primary agent's
+          // `task` tool) and read-only: `"*": "deny"` allow-lists only the read/analysis tools.
+          // `task: "deny"` and edit/write staying denied prevents recursive fan-out and mutation —
+          // they read and report, they do not delegate or change files. (deriveSubagentSessionPermission
+          // already denies `task` by default; the explicit deny here is belt-and-suspenders.)
+          researcher: {
+            name: "researcher",
+            permission: Permission.merge(
+              defaults,
+              Permission.fromConfig({
+                "*": "deny",
+                grep: "allow",
+                glob: "allow",
+                list: "allow",
+                bash: "allow",
+                webfetch: "allow",
+                websearch: "allow",
+                read: "allow",
+                task: "deny",
+                external_directory: readonlyExternalDirectory,
+              }),
+              user,
+            ),
+            description: `Deep sub-module research agent. Use this when you need a decidable explanation of HOW a specific sub-module or subsystem works (not just where it is): its mechanism, key files, outward interfaces, risks, and open questions. Prefer this over "explore" when the task is to understand and report on one module in depth so you can synthesize a plan; prefer "explore" for quick file/keyword location. Returns a structured research result.`,
+            prompt: PROMPT_RESEARCHER,
+            options: {},
+            mode: "subagent",
+            native: true,
+          },
+          reviewer: {
+            name: "reviewer",
+            permission: Permission.merge(
+              defaults,
+              Permission.fromConfig({
+                "*": "deny",
+                grep: "allow",
+                glob: "allow",
+                list: "allow",
+                bash: "allow",
+                read: "allow",
+                task: "deny",
+                external_directory: readonlyExternalDirectory,
+              }),
+              user,
+            ),
+            description: `Independent, adversarial review agent. Use this to critique a plan or a set of changes from a skeptical, outside perspective — its default stance is that the change has problems. It hunts for correctness bugs, security issues, edge cases, convention conflicts, and missing tests, and reports reproducible failure scenarios. Read-only. Returns structured findings with an overall verdict.`,
+            prompt: PROMPT_REVIEWER,
+            options: {},
+            mode: "subagent",
+            native: true,
+          },
           compaction: {
             name: "compaction",
             mode: "primary",
@@ -278,6 +365,12 @@ export const layer = Layer.effect(
           item.steps = value.steps ?? item.steps
           item.options = mergeDeep(item.options, value.options ?? {})
           item.permission = Permission.merge(item.permission, Permission.fromConfig(value.permission ?? {}))
+          // V3.8.1 §C.3: carry per-agent resource ceilings from config into the authoritative
+          // Agent.Info. Without this, `next.limits` at the task-tool consumption point
+          // (task.ts §5a → next.limits?.maxConcurrency) was permanently undefined, so a
+          // configured `agent.<name>.limits.maxConcurrency` never reached the concurrency
+          // semaphore. Unset ⇒ no limit (lenient default preserved).
+          if (value.limits) item.limits = value.limits
         }
 
         // Ensure Truncate.GLOB is allowed unless explicitly configured

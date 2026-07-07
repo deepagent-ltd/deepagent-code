@@ -54,6 +54,42 @@ describe("ServerCapabilities.toStatements", () => {
   })
 })
 
+describe("ServerCapabilities.parseModelRef", () => {
+  test("splits a well-formed providerID/modelID on the first slash", () => {
+    expect(ServerCapabilities.parseModelRef("deepseek/deepseek-chat")).toEqual({
+      providerID: "deepseek",
+      modelID: "deepseek-chat",
+    })
+  })
+
+  test("keeps later slashes in the modelID (only the first slash separates)", () => {
+    expect(ServerCapabilities.parseModelRef("openrouter/anthropic/claude-3.5")).toEqual({
+      providerID: "openrouter",
+      modelID: "anthropic/claude-3.5",
+    })
+  })
+
+  test("returns null for undefined / empty / missing-slash / empty-side refs", () => {
+    expect(ServerCapabilities.parseModelRef(undefined)).toBeNull()
+    expect(ServerCapabilities.parseModelRef("")).toBeNull()
+    expect(ServerCapabilities.parseModelRef("deepseek")).toBeNull()
+    expect(ServerCapabilities.parseModelRef("/deepseek-chat")).toBeNull()
+    expect(ServerCapabilities.parseModelRef("deepseek/")).toBeNull()
+  })
+
+  test("fromEnv decodes imModel as a string capability", () => {
+    const KEY = "DEEPAGENT_SERVER_CAPABILITIES"
+    const original = process.env[KEY]
+    try {
+      process.env[KEY] = JSON.stringify({ imModel: "deepseek/deepseek-chat" })
+      expect(ServerCapabilities.fromEnv()?.imModel).toBe("deepseek/deepseek-chat")
+    } finally {
+      if (original === undefined) delete process.env[KEY]
+      else process.env[KEY] = original
+    }
+  })
+})
+
 describe("ServerCapabilities.fromEnv", () => {
   const KEY = "DEEPAGENT_SERVER_CAPABILITIES"
   const original = process.env[KEY]
