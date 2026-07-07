@@ -997,10 +997,17 @@ const selectMethodologies = (input: RetrievalInput, activation: KnowledgeActivat
   }))
 }
 
+// DAP-11: strategies are now seeded into DocumentStore, so their ref_id is the store-allocated id
+// (`doc:strategy:strategy-mcp-tool-coordination`) — no longer the authoring ref (`strategy:mcp-tool-
+// coordination`). Match on the stable slug tail so the MCP-coordination boost survives the disk-seed
+// id scheme; an exact-string compare against the old ref silently went dead (candidate never lifted
+// over the evidence gate ⇒ retrieve() returned null whenever MCP tools were present).
+const isMcpCoordinationStrategy = (refId: string): boolean => refId.endsWith("mcp-tool-coordination")
+
 const contextualStrategies = (input: RetrievalInput, activation: KnowledgeActivation): StrategyRef[] => {
   const hasMcp = input.tools.mcpServers.length > 0 || input.tools.availableTools.some((tool) => tool.source === "mcp")
   return getAllStrategies(input.workspacePath, activation).map((strategy) => {
-    if (hasMcp && strategy.ref_id === "strategy:mcp-tool-coordination") {
+    if (hasMcp && isMcpCoordinationStrategy(strategy.ref_id)) {
       return { ...strategy, relevance: Math.max(strategy.relevance, 0.98) }
     }
     return strategy

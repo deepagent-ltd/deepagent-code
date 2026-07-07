@@ -69,7 +69,10 @@ export const SummarizePayload = Schema.Struct({
 })
 export const PromptPayload = Schema.Struct(Struct.omit(SessionPrompt.PromptInput.fields, ["sessionID"]))
 export const PromptPreparePayload = Schema.Struct({
-  mode: Schema.Literal("wish"),
+  // Legacy-compat: "wish" is the pre-rename wire literal for "intelligence". The server accepts BOTH
+  // so an older client sending "wish" still works while new clients send "intelligence"; the handler
+  // normalizes internally. Do NOT drop "wish" from this union.
+  mode: Schema.Literals(["wish", "intelligence"]),
   output_language: Schema.optional(Schema.Literals(["chinese", "english"])),
   parts: SessionPrompt.PromptInput.fields.parts,
 })
@@ -77,7 +80,8 @@ export const PromptPrepareResult = Schema.Struct({
   prompt_draft_id: Schema.String,
   context_plan_id: Schema.String,
   state: Schema.String,
-  mode: Schema.Literal("wish"),
+  // The result echoes the canonical post-rename literal; older clients tolerate the string.
+  mode: Schema.Literal("intelligence"),
   route: Schema.Union([Schema.Literal("code"), Schema.Literal("general")]),
   goal: Schema.String,
   preview: Schema.String,
@@ -359,7 +363,8 @@ export const SessionApi = HttpApi.make("session")
           OpenApi.annotations({
             identifier: "session.prompt_prepare",
             summary: "Prepare prompt draft",
-            description: "Create a DeepAgent wish prompt draft for user confirmation before task submission.",
+            description:
+              "Create a DeepAgent intelligence prompt draft for user confirmation before task submission.",
           }),
         ),
         HttpApiEndpoint.get("promptSuggestion", SessionPaths.promptSuggestion, {

@@ -147,13 +147,13 @@ describe("formatServerError", () => {
       cause: {
         body: {
           name: "BadRequest",
-          data: { message: "Wish prompt preparation failed" },
+          data: { message: "Intelligence prompt preparation failed" },
         },
         status: 400,
       },
     })
 
-    expect(formatServerError(wrapped, language.t)).toBe("Wish prompt preparation failed")
+    expect(formatServerError(wrapped, language.t)).toBe("Intelligence prompt preparation failed")
   })
 
   test("surfaces top-level message from tagged errors (pty stale-directory 400)", () => {

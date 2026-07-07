@@ -43,8 +43,12 @@ describe("IM AgentReplySink", () => {
       )`)
   })
 
+  // Capture broadcasts so progress-event wiring can be asserted.
+  const broadcasts: Array<{ groupID: string; type: string; data: any }> = []
   const fakeBroadcaster: IMBroadcaster = {
-    broadcast: () => {},
+    broadcast: (groupID, event) => {
+      broadcasts.push({ groupID, type: event.type, data: (event as any).data })
+    },
     sendToUser: () => {},
     register: (_conn: IMWebSocketConnection) => {},
     unregister: () => {},
@@ -62,6 +66,8 @@ describe("IM AgentReplySink", () => {
   }
   const FakeAgentListLive = Layer.succeed(AgentListProviderService, {
     listAgents: () => Effect.succeed([AGENT]),
+    findByTrigger: () => Effect.succeed([]),
+    findByCapability: () => Effect.succeed([]),
   })
   const FakeContextBuilderLive = Layer.succeed(AgentContextBuilderService, {
     build: (): Effect.Effect<AgentContext, never, never> =>
@@ -76,8 +82,9 @@ describe("IM AgentReplySink", () => {
   const makeExecutor = (result: AgentExecutionResult) =>
     Layer.succeed(AgentExecutorService, { execute: () => Effect.succeed(result) })
 
-  // Capture sink notifications.
+  // Capture sink notifications + progress mirrors.
   const captured: Array<{ groupID: string; messageID: string; agentID: string; status: string; content?: string }> = []
+  const progressed: Array<{ messageID: string; agentID: string; count: number }> = []
   const fakeSink: AgentReplySink = {
     notify: (input) =>
       Effect.sync(() => {
@@ -89,6 +96,10 @@ describe("IM AgentReplySink", () => {
           status,
           content: input.result.content,
         })
+      }),
+    progress: (input) =>
+      Effect.sync(() => {
+        progressed.push({ messageID: input.messageID, agentID: input.agentID, count: input.parts.length })
       }),
   }
   const FakeSinkLive = Layer.succeed(AgentReplySinkService, fakeSink)
@@ -176,5 +187,76 @@ describe("IM AgentReplySink", () => {
     expect(captured.length).toBe(1)
     expect(captured[0]?.status).toBe("failed")
     expect(captured[0]?.content).toBeUndefined()
+  })
+
+  it("broadcasts agent_progress on the WS plane and mirrors it to the sink", async () => {
+    captured.length = 0
+    broadcasts.length = 0
+    progressed.length = 0
+
+    // An executor that emits one progress batch (as the streamer would) before
+    // returning its final result, exercising the orchestrator's onProgress wiring.
+    const ProgressingExecutorLive = Layer.succeed(AgentExecutorService, {
+      execute: (input) =>
+        Effect.gen(function* () {
+          if (input.onProgress) {
+            yield* input.onProgress([
+              { partID: "p1", order: 0, kind: "reasoning", text: "thinking..." },
+              { partID: "p2", order: 1, kind: "tool", tool: "read", status: "running" },
+            ])
+          }
+          return { success: true, timeout: false, content: "done" } satisfies AgentExecutionResult
+        }),
+    })
+
+    const program = Effect.gen(function* () {
+      yield* setupDatabase
+      const repo = yield* IMRepository
+      const group = yield* repo.createGroup({
+        workspaceID: "ws1",
+        name: "G",
+        type: "project",
+        createdBy: "server",
+      })
+      yield* executeAgentMentions({
+        workspaceID: "ws1",
+        directory: "/tmp/ws1",
+        groupID: group.id,
+        messageID: "msg-3",
+        userID: "server",
+        content: "@code-agent stream please",
+        mentionedAgentNames: ["code-agent"],
+      })
+      return group.id
+    })
+
+    const layer = Layer.merge(
+      Layer.mergeAll(
+        Database.defaultLayer,
+        IMRepositoryLive.pipe(Layer.provide(Database.defaultLayer)),
+        FakeBroadcasterLive,
+        FakeAgentListLive,
+        FakeContextBuilderLive,
+        FakeSinkLive,
+      ),
+      ProgressingExecutorLive,
+    )
+    const groupId = await Effect.runPromise(program.pipe(Effect.provide(layer)))
+
+    // Broadcast on the WS plane (what the chat UI listens to).
+    const progressEvents = broadcasts.filter((b) => b.type === "agent_progress")
+    expect(progressEvents.length).toBe(1)
+    expect(progressEvents[0]?.groupID).toBe(groupId)
+    expect(progressEvents[0]?.data).toMatchObject({ messageID: "msg-3", agentID: "code-agent" })
+    expect(progressEvents[0]?.data.parts.length).toBe(2)
+    expect(progressEvents[0]?.data.parts[0]).toMatchObject({ partID: "p1", kind: "reasoning" })
+
+    // Mirrored to the sink (authoritative hub) with the same batch.
+    expect(progressed.length).toBe(1)
+    expect(progressed[0]).toMatchObject({ messageID: "msg-3", agentID: "code-agent", count: 2 })
+
+    // Final reply still flows through notify.
+    expect(captured.length).toBe(1)
+    expect(captured[0]?.status).toBe("success")
   })
 })

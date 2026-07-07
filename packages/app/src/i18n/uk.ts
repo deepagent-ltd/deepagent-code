@@ -980,18 +980,22 @@ export const dict = {
   "settings.general.deepagent.mode.xhigh": "xhigh",
   "settings.general.deepagent.mode.max": "max",
   "settings.general.deepagent.mode.ultra": "ultra",
-  "settings.general.deepagent.mode.ultraRequiresWish": "ultra потребує режиму сценарію wish.",
+  "settings.general.deepagent.mode.ultraRequiresIntelligence": "ultra потребує режиму сценарію intelligence.",
+  "settings.general.deepagent.subagentMode.title": "Subagent",
+  "settings.general.deepagent.subagentMode.description": "Choose the work intensity of subagents relative to the main agent.",
+  "settings.general.deepagent.subagentMode.inherit": "Inherit from parent",
+  "settings.general.deepagent.subagentMode.downgrade": "One level lower",
   "settings.general.deepagent.prompt.title": "Режим сценарію",
   "settings.general.deepagent.prompt.description": "Выберите, как композер обрабатывает ваш промпт перед отправкой.",
   "settings.general.deepagent.prompt.direct": "Прямий режим",
   "settings.general.deepagent.prompt.direct.description":
     "Отправлять промпт как написано, без подготовки черновика DeepAgent.",
-  "settings.general.deepagent.prompt.wish": "Режим wish",
-  "settings.general.deepagent.prompt.wish.description":
+  "settings.general.deepagent.prompt.intelligence": "Режим intelligence",
+  "settings.general.deepagent.prompt.intelligence.description":
     "DeepAgent сначала готовит полный промпт, затем позволяет проверить и отредактировать его.",
-  "settings.general.deepagent.wishModel.title": "Модель режиму wish",
-  "settings.general.deepagent.wishModel.description":
-    "Выберите модель, используемую только для подготовки черновиков промптов в режиме wish.",
+  "settings.general.deepagent.intelligenceModel.title": "Модель режиму intelligence",
+  "settings.general.deepagent.intelligenceModel.description":
+    "Выберите модель, используемую только для подготовки черновиков промптов в режиме intelligence.",
   "settings.general.deepagent.selfLearning.title": "Схвалення самонавчання",
   "settings.general.deepagent.selfLearning.description":
     "Определите, как знания, полученные DeepAgent из ваших сессий, становятся доступными для поиска.",

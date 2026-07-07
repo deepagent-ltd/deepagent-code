@@ -1,0 +1,12 @@
+Query the session's Conversation Log — the complete, append-only, time-ordered archive of everything that happened this session, including content NOT in your current context: full reasoning/thinking, full (untruncated) tool inputs and outputs, and messages that were later edited or withdrawn (with their originals preserved).
+
+Use this to "look up old records": recall a decision that scrolled out of your working context, re-read a tool result that was truncated, check what an edited/withdrawn message originally said, or find when a system event (compaction, fork, model switch) occurred.
+
+Filters (all optional, combined with AND):
+- keyword: case-insensitive substring match over entry text and structured data.
+- messageId: entries for one specific message.
+- event: one event type — user_message, assistant_message, reasoning, tool_call, tool_result, edited, withdrawn, compaction, ledger_change, model_switch, fork, revert, bridge_handoff.
+- since / until: epoch-millisecond time bounds.
+- limit: max entries returned, most-recent first.
+
+Results are returned most-recent first. Prefer specific filters (keyword + event) over broad scans so only the relevant slice is pulled back into context. If nothing matches, you get an explicit "no matching log entries" — the log may simply not have that record yet.

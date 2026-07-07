@@ -59,12 +59,14 @@ export function createSessionComposerState(options?: { closeMs?: number | (() =>
     })) as unknown as Todo[]
   })
 
+  // Task tracking is unified onto the plan system — the dock renders the plan's steps (mapped to
+  // the Todo shape it already knows). The legacy per-turn `todowrite` track was removed because it
+  // shadowed the plan here (a plan with >0 steps unconditionally won), so todo-based progress
+  // reports were never visible. There is now a single source: the persistent plan.
   const todos = createMemo((): Todo[] => {
     const id = params.id
     if (!id) return []
-    const planTodos = planAsTodos()
-    if (planTodos.length > 0) return planTodos
-    return serverSync.data.session_todo[id] ?? []
+    return planAsTodos()
   })
 
   // True when this session is driven by a persistent plan — clear() must NOT wipe it on idle.
@@ -126,16 +128,11 @@ export function createSessionComposerState(options?: { closeMs?: number | (() =>
     }, closeMs())
   }
 
-  // Keep stale turn todos from reopening if the model never clears them.
-  // U2 guard: a persistent plan must NOT be wiped on idle — only the transient per-turn todo cache
-  // is cleared. The plan lives under session_plan and is left untouched here.
-  const clear = () => {
-    const id = params.id
-    if (!id) return
-    if (hasPlan()) return
-    serverSync.todo.set(id, [])
-    sync.set("todo", id, [])
-  }
+  // The task dock is now driven exclusively by the persistent plan (session_plan), which must NOT
+  // be wiped on idle. Since the dock's todos come only from the plan, `todos().length > 0` implies
+  // `hasPlan()`, so the FSM's "clear" state (count > 0 && !live) is unreachable and this is a no-op
+  // guard kept for clarity — there is no transient per-turn todo cache left to clear.
+  const clear = () => {}
 
   createEffect(
     on(

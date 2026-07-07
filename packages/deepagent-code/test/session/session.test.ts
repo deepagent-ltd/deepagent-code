@@ -1,8 +1,10 @@
 import { describe, expect } from "bun:test"
+import path from "path"
 import { SessionV1 } from "@deepagent-code/core/v1/session"
 import { Database } from "@deepagent-code/core/database/database"
 import { EventV2 } from "@deepagent-code/core/event"
 import { SessionProjector } from "@deepagent-code/core/session/projector"
+import { FSUtil } from "@deepagent-code/core/fs-util"
 import { Deferred, Effect, Exit, Layer } from "effect"
 import { Session as SessionNs } from "@/session/session"
 import * as Log from "@deepagent-code/core/util/log"
@@ -16,6 +18,11 @@ import { RuntimeFlags } from "@/effect/runtime-flags"
 import { BackgroundJob } from "@/background/job"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { GlobalBus } from "@/bus/global"
+import { InstanceState } from "@/effect/instance-state"
+import { Worktree } from "@/worktree"
+import { Git } from "../../src/git"
+import { DeepAgentContext, DeepAgentDocumentStore } from "@deepagent-code/core/deepagent/index"
+import { contextStoreRoot, loadForkOrigin, forwardLedgerOnFork } from "@/session/context-ledger"
 
 void Log.init({ print: false })
 
@@ -218,7 +225,7 @@ describe("Session", () => {
     }),
   )
 
-  it.instance("persists metadata and copies it on fork by default", () =>
+  it.instance("persists metadata and copies it on fork, stamping fork lineage", () =>
     Effect.gen(function* () {
       const session = yield* SessionNs.Service
       const meta = { source: "sdk", trace: { id: "abc" } }
@@ -231,8 +238,13 @@ describe("Session", () => {
       )
 
       expect(saved.metadata).toEqual(meta)
-      expect(fork.metadata).toEqual(meta)
+      // The fork inherits the source metadata (deep-cloned, not the same reference) …
+      expect(fork.metadata).toMatchObject(meta)
       expect(fork.metadata).not.toBe(meta)
+      // … and additionally records its lineage so the UI can render "derived from" + nest the fork.
+      expect((fork.metadata as { forkedFrom?: { parentSessionID?: string } }).forkedFrom?.parentSessionID).toBe(
+        created.id,
+      )
     }),
   )
 
@@ -246,6 +258,299 @@ describe("Session", () => {
 
       expect(created.metadata).toBeUndefined()
       expect(saved.metadata).toBeUndefined()
+    }),
+  )
+
+  // 附-D 阶段3: fork without a directory keeps today's behavior — the fork inherits the source
+  // session's (instance) directory and worktree-relative path. This is the backward-compat guard.
+  it.instance("fork without a directory inherits the source directory (backward compat)", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionNs.Service
+      const created = yield* Effect.acquireRelease(session.create({ title: "fork-default-dir" }), (info) =>
+        session.remove(info.id).pipe(Effect.ignore),
+      )
+      const fork = yield* Effect.acquireRelease(session.fork({ sessionID: created.id }), (info) =>
+        session.remove(info.id).pipe(Effect.ignore),
+      )
+
+      expect(fork.directory).toBe(created.directory)
+      expect(fork.path).toBe(created.path)
+    }),
+  )
+
+  // Fork depth is capped at MAX_FORK_DEPTH levels (root → fork → fork-of-fork). A further fork off a
+  // depth-2 session is rejected so lineage can't grow without bound.
+  it.instance("rejects a fork beyond the max depth (root → fork → fork, no 4th level)", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionNs.Service
+      const root = yield* Effect.acquireRelease(session.create({ title: "depth-root" }), (info) =>
+        session.remove(info.id).pipe(Effect.ignore),
+      )
+      const fork1 = yield* Effect.acquireRelease(session.fork({ sessionID: root.id }), (info) =>
+        session.remove(info.id).pipe(Effect.ignore),
+      )
+      const fork2 = yield* Effect.acquireRelease(session.fork({ sessionID: fork1.id }), (info) =>
+        session.remove(info.id).pipe(Effect.ignore),
+      )
+      // root=depth0, fork1=depth1, fork2=depth2 — all allowed. A fork off fork2 would be depth3 → reject.
+      const tooDeep = yield* session.fork({ sessionID: fork2.id }).pipe(Effect.exit)
+      expect(Exit.isFailure(tooDeep)).toBe(true)
+    }),
+  )
+
+  // 附-D 阶段3: an explicit directory forks into that directory, and the stored session `path` is
+  // re-derived relative to the instance worktree root (not the raw absolute directory).
+  it.instance(
+    "fork with an explicit directory forks into that directory and re-derives path",
+    () =>
+      Effect.gen(function* () {
+        const session = yield* SessionNs.Service
+        const ctx = yield* InstanceState.context
+        const target = path.join(ctx.directory, "packages", "sub")
+        const created = yield* Effect.acquireRelease(session.create({ title: "fork-explicit-dir" }), (info) =>
+          session.remove(info.id).pipe(Effect.ignore),
+        )
+        const fork = yield* Effect.acquireRelease(session.fork({ sessionID: created.id, directory: target }), (info) =>
+          session.remove(info.id).pipe(Effect.ignore),
+        )
+
+        expect(fork.directory).toBe(target)
+        // path is worktree-relative and never an absolute escape out of the worktree root.
+        expect(fork.path).toBe(path.relative(path.resolve(ctx.worktree), target).replaceAll("\\", "/"))
+        expect(path.isAbsolute(fork.path ?? "")).toBe(false)
+      }),
+    { git: true },
+  )
+
+  // 附-D 阶段3 (boundary guard): unlike create(), fork's `directory` is reachable from the public
+  // HTTP ForkPayload, so an untrusted client could aim the fork's cwd anywhere. A directory that
+  // escapes the instance boundary (ctx.directory / worktree root) must be rejected fail-closed
+  // rather than silently becoming the session's working directory.
+  it.instance(
+    "fork rejects a directory that escapes the project boundary",
+    () =>
+      Effect.gen(function* () {
+        const session = yield* SessionNs.Service
+        const created = yield* Effect.acquireRelease(session.create({ title: "fork-escape" }), (info) =>
+          session.remove(info.id).pipe(Effect.ignore),
+        )
+        // An absolute path well outside the instance directory / worktree root.
+        const escape = path.resolve(path.sep, "definitely", "outside", "the", "boundary")
+        const exit = yield* session.fork({ sessionID: created.id, directory: escape }).pipe(Effect.exit)
+        expect(Exit.isFailure(exit)).toBe(true)
+      }),
+    { git: true },
+  )
+})
+
+// 附-D 阶段4: worktree isolation. Uses a layer that DOES provide Worktree.Service so fork can
+// allocate a dedicated checkout. In a git project the fork lands in a distinct worktree directory;
+// in a non-git project the WorktreeNotGitError degrades gracefully to a same-directory fork.
+describe("Session fork worktree isolation (附-D 阶段4)", () => {
+  const itWt = testEffect(
+    Layer.mergeAll(
+      SessionNs.layer.pipe(
+        Layer.provide(Storage.defaultLayer),
+        Layer.provide(Database.defaultLayer),
+        Layer.provideMerge(EventV2Bridge.defaultLayer),
+        Layer.provide(SessionProjector.defaultLayer),
+        Layer.provide(RuntimeFlags.layer({ experimentalWorkspaces: false })),
+        Layer.provide(BackgroundJob.defaultLayer),
+      ),
+      Worktree.defaultLayer,
+      FSUtil.defaultLayer,
+      Git.defaultLayer,
+      CrossSpawnSpawner.defaultLayer,
+      testInstanceStoreLayer,
+    ),
+  )
+  const gitOnly = process.platform !== "win32" ? itWt.instance : itWt.instance.skip
+
+  gitOnly(
+    "fork with isolate:worktree creates a distinct worktree directory",
+    () =>
+      Effect.gen(function* () {
+        const session = yield* SessionNs.Service
+        const ctx = yield* InstanceState.context
+        const created = yield* Effect.acquireRelease(session.create({ title: "fork-isolate" }), (info) =>
+          session.remove(info.id).pipe(Effect.ignore),
+        )
+        const fork = yield* Effect.acquireRelease(
+          session.fork({ sessionID: created.id, isolate: "worktree" }),
+          (info) => session.remove(info.id).pipe(Effect.ignore),
+        )
+
+        // Dedicated worktree => a directory distinct from the instance directory. Git worktrees are
+        // allocated by Worktree.Service as siblings of the main checkout, so the worktree-relative
+        // `path` may legitimately be "../<name>"; the boundary here is owned by Worktree.Service, not
+        // by sessionPath. What matters: the fork got its OWN directory and a derived (relative) path.
+        expect(fork.directory).not.toBe(ctx.directory)
+        expect(fork.directory.length).toBeGreaterThan(0)
+        expect(path.isAbsolute(fork.path ?? "")).toBe(false)
+
+        // clean up the created worktree
+        const worktree = yield* Worktree.Service
+        yield* worktree.remove({ directory: fork.directory }).pipe(Effect.ignore)
+      }),
+    { git: true },
+  )
+
+  itWt.instance("fork with isolate:worktree degrades to same-directory in a non-git project", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionNs.Service
+      const ctx = yield* InstanceState.context
+      const created = yield* Effect.acquireRelease(session.create({ title: "fork-isolate-nongit" }), (info) =>
+        session.remove(info.id).pipe(Effect.ignore),
+      )
+      const fork = yield* Effect.acquireRelease(
+        session.fork({ sessionID: created.id, isolate: "worktree" }),
+        (info) => session.remove(info.id).pipe(Effect.ignore),
+      )
+
+      // WorktreeNotGitError tolerated => falls back to the instance directory.
+      expect(fork.directory).toBe(ctx.directory)
+    }),
+  )
+})
+
+// 附-D fork memory completeness: fork now carries the parent's "memory" — its Session Ledger
+// (App-A §C2) plus a persisted OBJECT cutoff marker (ForkOrigin) — not just messages/parts/metadata.
+describe("Session fork memory completeness (附-D)", () => {
+  const { SessionLedger } = DeepAgentContext
+  const { DocumentStore } = DeepAgentDocumentStore
+
+  // Seed a parent session's ledger the same way the compaction path does: construct the run-scoped
+  // store at contextStoreRoot(sessionID) and persist entries. Keyed only by sessionID (independent of
+  // the session's directory / worktree).
+  const seedLedger = (
+    sessionID: SessionID,
+    texts: { kind: DeepAgentContext.SessionLedger.LedgerEntryKind; text: string }[],
+  ) => {
+    const store = new DocumentStore(contextStoreRoot(sessionID))
+    const ledger = SessionLedger.applyUpdate(SessionLedger.emptyLedger(sessionID), { append: texts })
+    SessionLedger.persistLedger(store, ledger)
+  }
+
+  it.instance("forwards the parent's Session Ledger into the fork's own ledger store", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionNs.Service
+      const created = yield* Effect.acquireRelease(session.create({ title: "fork-ledger-src" }), (info) =>
+        session.remove(info.id).pipe(Effect.ignore),
+      )
+      seedLedger(created.id, [
+        { kind: "goal", text: "ship the feature" },
+        { kind: "constraint", text: "keep it backward compatible" },
+        { kind: "decision", text: "reuse the DocumentStore" },
+      ])
+
+      const fork = yield* Effect.acquireRelease(session.fork({ sessionID: created.id }), (info) =>
+        session.remove(info.id).pipe(Effect.ignore),
+      )
+
+      // The fork opens with the parent's structured facts, re-keyed to its own sessionID and stored
+      // under its OWN context store root.
+      const forkStore = new DocumentStore(contextStoreRoot(fork.id))
+      const forwarded = SessionLedger.loadLedger(forkStore, fork.id)
+      expect(forwarded.sessionId).toBe(fork.id)
+      expect(forwarded.entries.map((e) => e.text).sort()).toEqual([
+        "keep it backward compatible",
+        "reuse the DocumentStore",
+        "ship the feature",
+      ])
+      // Parent and fork ledgers are independent stores (fork got its own copy).
+      expect(fork.id).not.toBe(created.id)
+    }),
+  )
+
+  it.instance("persists a readable ForkOrigin cutoff marker recording parent + cutoff message", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionNs.Service
+      const created = yield* Effect.acquireRelease(session.create({ title: "fork-cutoff-src" }), (info) =>
+        session.remove(info.id).pipe(Effect.ignore),
+      )
+
+      // Add two messages so a cutoff at the second carries only the first into the fork.
+      const m1 = MessageID.ascending()
+      yield* session.updateMessage({
+        id: m1,
+        sessionID: created.id,
+        role: "user",
+        time: { created: Date.now() },
+        agent: "user",
+        model: { providerID: "test", modelID: "test" },
+        tools: {},
+        mode: "",
+      } as unknown as SessionV1.Info)
+      const m2 = MessageID.ascending()
+      yield* session.updateMessage({
+        id: m2,
+        sessionID: created.id,
+        role: "user",
+        time: { created: Date.now() },
+        agent: "user",
+        model: { providerID: "test", modelID: "test" },
+        tools: {},
+        mode: "",
+      } as unknown as SessionV1.Info)
+
+      const fork = yield* Effect.acquireRelease(
+        session.fork({ sessionID: created.id, messageID: m2 }),
+        (info) => session.remove(info.id).pipe(Effect.ignore),
+      )
+
+      const origin = loadForkOrigin(fork.id)
+      expect(origin).toBeDefined()
+      expect(origin?.parentSessionID).toBe(created.id)
+      expect(origin?.cutoffMessageID).toBe(m2)
+      expect(typeof origin?.forkedAt).toBe("number")
+    }),
+  )
+
+  it.instance("ForkOrigin marker omits cutoffMessageID for a full fork", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionNs.Service
+      const created = yield* Effect.acquireRelease(session.create({ title: "fork-full" }), (info) =>
+        session.remove(info.id).pipe(Effect.ignore),
+      )
+      const fork = yield* Effect.acquireRelease(session.fork({ sessionID: created.id }), (info) =>
+        session.remove(info.id).pipe(Effect.ignore),
+      )
+
+      const origin = loadForkOrigin(fork.id)
+      expect(origin?.parentSessionID).toBe(created.id)
+      expect(origin?.cutoffMessageID).toBeUndefined()
+    }),
+  )
+
+  it.instance("fork still succeeds when the parent has no ledger (default-safe, no forwarded memory)", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionNs.Service
+      const created = yield* Effect.acquireRelease(session.create({ title: "fork-no-ledger" }), (info) =>
+        session.remove(info.id).pipe(Effect.ignore),
+      )
+      // No ledger seeded for the parent.
+      const fork = yield* Effect.acquireRelease(session.fork({ sessionID: created.id }), (info) =>
+        session.remove(info.id).pipe(Effect.ignore),
+      )
+
+      expect(fork.id).not.toBe(created.id)
+      const forkStore = new DocumentStore(contextStoreRoot(fork.id))
+      expect(SessionLedger.loadLedger(forkStore, fork.id).entries).toEqual([])
+      // The cutoff marker is still written even with no ledger to forward.
+      expect(loadForkOrigin(fork.id)?.parentSessionID).toBe(created.id)
+    }),
+  )
+
+  it.live("forwardLedgerOnFork is default-safe: a copy failure degrades to 0, never throws", () =>
+    Effect.gen(function* () {
+      // A structurally invalid sessionID that yields a bogus store path still returns 0 rather than
+      // failing the effect — proving the matchCauseEffect cause-recovery (DocumentStore construction
+      // throws synchronously; catch would miss it).
+      const copied = yield* forwardLedgerOnFork({
+        parentSessionID: "\0/nonexistent" as unknown as SessionID,
+        forkSessionID: "\0/also-bad" as unknown as SessionID,
+      })
+      expect(copied).toBe(0)
     }),
   )
 })

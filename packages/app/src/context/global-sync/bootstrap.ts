@@ -7,7 +7,6 @@ import type {
   ProviderAuthResponse,
   QuestionRequest,
   Session,
-  Todo,
 } from "@deepagent-code/sdk/v2/client"
 import { showToast } from "@/utils/toast"
 import { getFilename } from "@deepagent-code/core/util/path"
@@ -26,9 +25,6 @@ type GlobalStore = {
   ready: boolean
   path: Path
   project: Project[]
-  session_todo: {
-    [sessionID: string]: Todo[]
-  }
   session_plan: {
     [sessionID: string]: import("./types").SessionPlan
   }

@@ -1,24 +1,40 @@
 import { Effect, Layer } from "effect"
 import type { AgentExecutor, AgentExecutionResult, AgentContext } from "@deepagent-code/core/im/agent-executor"
 import { AgentExecutorService } from "@deepagent-code/core/im/agent-executor"
-import type { AgentListProvider } from "@deepagent-code/core/im/agent-list-provider"
-import { AgentListProviderService } from "@deepagent-code/core/im/agent-list-provider"
+import type { AgentListProvider, AgentQueryScope } from "@deepagent-code/core/im/agent-list-provider"
+import {
+  AgentListProviderService,
+  matchByTrigger,
+  matchByCapability,
+} from "@deepagent-code/core/im/agent-list-provider"
 import type { AgentDescriptor } from "@deepagent-code/core/im/mention-parser"
+import { DEFAULT_AUTONOMY_LEVEL } from "@deepagent-code/core/im/mention-parser"
+import { Option } from "effect"
+import type { AgentProgressPart } from "@deepagent-code/core/im/agent-reply-sink"
+import { ServerCapabilities } from "@deepagent-code/core/server-capabilities"
+import { ModelV2 } from "@deepagent-code/core/model"
+import { ProviderV2 } from "@deepagent-code/core/provider"
 import { SessionV1 } from "@deepagent-code/core/v1/session"
 import { WorkspaceV2 } from "@deepagent-code/core/workspace"
 import { Agent } from "@/agent/agent"
+import { EventV2Bridge } from "@/event-v2-bridge"
 import { Session } from "@/session/session"
 import { SessionPrompt } from "@/session/prompt"
+import { withAgentProgress } from "./agent-progress-stream"
 
 /**
- * Production AgentExecutor for the IM feature.
+ * THE canonical live implementation of the core `AgentExecutor` port
+ * (`packages/core/src/im/agent-executor.ts`) — the single real IM agent execution
+ * path, driven by `SessionPrompt.Service`.
  *
- * The core `AgentExecutorLive` (packages/core) drives `SessionV2`, whose default
- * layer binds a NO-OP execution stack — so it never actually runs an agent in the
- * deepagent-code server (see docs/deepagent-im-v3.8.md §9 "F-exec"). The real agent
- * loop is `SessionPrompt.Service` (the same service the session HTTP handlers use):
- * `prompt(...)` runs the LLM + tool turns to completion and returns the assistant
- * message, so no separate `wait()` is needed.
+ * core declares the `AgentExecutor` port but ships no real implementation: its only
+ * default is `AgentExecutorFailFastLive`, an explicit fail-fast that errors clearly
+ * when no adapter is injected (there is NO core `AgentExecutorLive`/SessionV2 path —
+ * that was deleted in V3.8; see docs/deepagentcore-v3.8.1.md §A.1). This class is the
+ * one place agents actually run: `SessionPrompt.Service.prompt(...)` executes the
+ * LLM + tool turns to completion and returns the assistant message, so no separate
+ * `wait()` is needed. V4.0's Multi-Agent Runtime layers concurrency, isolation,
+ * timeout, and audit on top of this single port-backed path.
  *
  * This implementation must run inside the instance-scoped runtime (it needs
  * `InstanceState.context` for the worktree/directory, resolved from `InstanceRef`).
@@ -42,6 +58,7 @@ class ServerAgentExecutor implements AgentExecutor {
     content: string
     context: AgentContext
     timeoutMs: number
+    onProgress?: (parts: ReadonlyArray<AgentProgressPart>) => Effect.Effect<void, never, never>
   }): Effect.Effect<AgentExecutionResult, Error, never> {
     const sessions = this.sessions
     const prompts = this.prompts
@@ -63,13 +80,42 @@ class ServerAgentExecutor implements AgentExecutor {
         workspaceID,
       })
 
+      // Server-configured IM model: when the platform sets `imModel` in the
+      // injected ServerCapabilities, every IM turn runs with that model instead
+      // of the agent's own default — a central lever to pick a fast/cheap chat
+      // model. Unset (or malformed) leaves the kernel's normal model precedence
+      // (agent model → session model → provider default) untouched.
+      const imModelRef = ServerCapabilities.parseModelRef(ServerCapabilities.fromEnv()?.imModel)
+      const imModel = imModelRef
+        ? { providerID: ProviderV2.ID.make(imModelRef.providerID), modelID: ModelV2.ID.make(imModelRef.modelID) }
+        : undefined
+
       // Run the agent to completion. `prompt` returns the assistant message with
       // its parts; extract the concatenated text as the IM reply.
-      const reply = yield* prompts.prompt({
+      const runPrompt = prompts.prompt({
         sessionID: session.id,
         agent: input.agentID,
+        ...(imModel ? { model: imModel } : {}),
         parts: [{ type: "text", text: input.content }],
       })
+
+      // Live streaming: when the orchestrator supplied an `onProgress` sink and
+      // the session event bridge is present, tap the turn's session events and
+      // forward throttled reasoning/tool/text batches. The bridge is resolved at
+      // RUNTIME via serviceOption (adds no static requirement, so execute stays
+      // R = never); it's part of the instance runtime this executor runs in.
+      // `withAgentProgress` is transparent — returns exactly prompt's result and
+      // never fails the run. No sink or no bridge → run bare, unchanged.
+      const onProgress = input.onProgress
+      const eventBridge = Option.getOrUndefined(yield* Effect.serviceOption(EventV2Bridge.Service))
+      const reply =
+        onProgress && eventBridge !== undefined
+          ? yield* withAgentProgress({
+              sessionID: session.id,
+              onBatch: onProgress,
+              body: runPrompt,
+            }).pipe(Effect.provideService(EventV2Bridge.Service, eventBridge))
+          : yield* runPrompt
 
       const text = reply.parts
         .filter((part): part is SessionV1.TextPart => part.type === "text")
@@ -153,22 +199,47 @@ export const ServerAgentExecutorLive = Layer.effect(
 class ServerAgentListProvider implements AgentListProvider {
   constructor(private readonly agents: Agent.Interface) {}
 
-  listAgents(_input: { workspaceID: string; userID: string }): Effect.Effect<AgentDescriptor[], Error, never> {
+  listAgents(_input: AgentQueryScope): Effect.Effect<AgentDescriptor[], Error, never> {
     const agents = this.agents
     return Effect.gen(function* () {
       const all = yield* agents.list()
       return all
         .filter((agent) => !agent.hidden && (agent.mode === "all" || agent.mode === "primary"))
-        .map(
-          (agent): AgentDescriptor => ({
+        .map((agent): AgentDescriptor => {
+          // Resolve autonomy to its conservative default when the agent didn't
+          // declare one, so V4.0 autonomy gates always see a concrete level.
+          const autonomy = agent.autonomy ?? DEFAULT_AUTONOMY_LEVEL
+          // `approval_required` defaults BY autonomy (V3.8.1 §C.3): level_0 is
+          // all-manual ⇒ approval required; any higher declared level ⇒ the
+          // agent may act up to that level ⇒ not required. An explicit value
+          // always wins.
+          const approvalRequired = agent.approval_required ?? autonomy === DEFAULT_AUTONOMY_LEVEL
+          // Pass declarative metadata through only when present, so an agent
+          // that declared none stays free of empty arrays (V3.8 shape). Built
+          // immutably — AgentDescriptor fields are readonly.
+          return {
             id: agent.name,
             name: agent.name,
             displayName: agent.description || agent.name,
             description: agent.description,
             visible: true,
-          }),
-        )
+            autonomy,
+            approval_required: approvalRequired,
+            ...(agent.triggers !== undefined ? { triggers: agent.triggers } : {}),
+            ...(agent.capabilities !== undefined ? { capabilities: agent.capabilities } : {}),
+            ...(agent.context_sources !== undefined ? { context_sources: agent.context_sources } : {}),
+            ...(agent.limits !== undefined ? { limits: agent.limits } : {}),
+          } satisfies AgentDescriptor
+        })
     })
+  }
+
+  findByTrigger(input: AgentQueryScope & { event: string }): Effect.Effect<AgentDescriptor[], Error, never> {
+    return this.listAgents(input).pipe(Effect.map((descriptors) => matchByTrigger(descriptors, input.event)))
+  }
+
+  findByCapability(input: AgentQueryScope & { capability: string }): Effect.Effect<AgentDescriptor[], Error, never> {
+    return this.listAgents(input).pipe(Effect.map((descriptors) => matchByCapability(descriptors, input.capability)))
   }
 }
 

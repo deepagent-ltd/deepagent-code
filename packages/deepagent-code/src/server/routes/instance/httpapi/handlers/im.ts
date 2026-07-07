@@ -342,13 +342,9 @@ export const imHandlers = HttpApiBuilder.group(InstanceHttpApi, "im", (handlers)
 
           const agents = yield* agentListProvider.listAgents({ workspaceID, userID })
 
-          return agents.map((a) => ({
-            id: a.id,
-            name: a.name,
-            displayName: a.displayName,
-            description: a.description,
-            visible: a.visible,
-          }))
+          // Descriptors already match the canonical `AgentDescriptor` wire shape
+          // (V3.8.1 §C.3), including the optional metadata fields — return as-is.
+          return agents
         }).pipe(
           Effect.catch((error) =>
             Effect.fail(

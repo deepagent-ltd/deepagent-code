@@ -5,7 +5,7 @@ import { InstanceRef } from "@/effect/instance-ref"
 import { disposeInstance as runDisposers } from "@/effect/instance-registry"
 import { FSUtil } from "@deepagent-code/core/fs-util"
 import { Context, Deferred, Duration, Effect, Exit, Layer, Scope } from "effect"
-import { type InstanceContext } from "./instance-context"
+import { assertSafeInstanceRoot, type InstanceContext } from "./instance-context"
 import { InstanceBootstrap } from "./bootstrap-service"
 import * as Project from "./project"
 
@@ -42,6 +42,12 @@ export const layer: Layer.Layer<Service, never, Project.Service | InstanceBootst
 
     const boot = (input: LoadInput & { directory: string }) =>
       Effect.gen(function* () {
+        // Fail-closed security boundary: never boot an instance rooted at the
+        // filesystem root (or an empty path). ctx.directory becomes the file-tool
+        // permission boundary (containsPath); rooting it at "/" would expose the
+        // whole filesystem. The route directory is client-supplied and untrusted,
+        // so this is the hard enforcement point. See assertSafeInstanceRoot.
+        yield* Effect.sync(() => assertSafeInstanceRoot(input.directory))
         const ctx: InstanceContext =
           input.project && input.worktree
             ? {

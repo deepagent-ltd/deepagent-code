@@ -24,6 +24,34 @@ import type {
   ConfigProvidersResponses,
   ConfigUpdateErrors,
   ConfigUpdateResponses,
+  DebugBreakpointsBody,
+  DebugBreakpointsErrors,
+  DebugBreakpointsResponses,
+  DebugContinueBody,
+  DebugContinueErrors,
+  DebugContinueResponses,
+  DebugEvaluateBody,
+  DebugEvaluateErrors,
+  DebugEvaluateResponses,
+  DebugEventsErrors,
+  DebugEventsResponses,
+  DebugScopesErrors,
+  DebugScopesResponses,
+  DebugSessionsErrors,
+  DebugSessionsResponses,
+  DebugStackErrors,
+  DebugStackResponses,
+  DebugStartBody,
+  DebugStartErrors,
+  DebugStartResponses,
+  DebugStepBody,
+  DebugStepErrors,
+  DebugStepResponses,
+  DebugTerminateBody,
+  DebugTerminateErrors,
+  DebugTerminateResponses,
+  DebugVariablesErrors,
+  DebugVariablesResponses,
   DeepagentKnowledgeApproveErrors,
   DeepagentKnowledgeApproveResponses,
   DeepagentKnowledgePendingErrors,
@@ -84,14 +112,37 @@ import type {
   ExperimentalWorkspaceSyncListResponses,
   ExperimentalWorkspaceWarpErrors,
   ExperimentalWorkspaceWarpResponses,
+  FileCreateBody,
+  FileCreateErrors,
+  FileCreateResponses,
+  FileDeleteBody,
+  FileDeleteErrors,
+  FileDeleteResponses,
   FileListErrors,
   FileListResponses,
+  FileLockAcquireErrors,
+  FileLockAcquireResponses,
+  FileLockReleaseErrors,
+  FileLockReleaseResponses,
+  FileLockRenewErrors,
+  FileLockRenewResponses,
+  FileLockStatusErrors,
+  FileLockStatusResponses,
+  FileMkdirBody,
+  FileMkdirErrors,
+  FileMkdirResponses,
   FilePartInput,
   FilePartSource,
   FileReadErrors,
   FileReadResponses,
+  FileRenameBody,
+  FileRenameErrors,
+  FileRenameResponses,
   FileStatusErrors,
   FileStatusResponses,
+  FileWriteBody,
+  FileWriteErrors,
+  FileWriteResponses,
   FindFilesErrors,
   FindFilesResponses,
   FindSymbolsErrors,
@@ -100,6 +151,8 @@ import type {
   FindTextResponses,
   FormatterStatusErrors,
   FormatterStatusResponses,
+  GlobalCapabilitiesErrors,
+  GlobalCapabilitiesResponses,
   GlobalConfigGetErrors,
   GlobalConfigGetResponses,
   GlobalConfigUpdateErrors,
@@ -112,8 +165,41 @@ import type {
   GlobalHealthResponses,
   GlobalUpgradeErrors,
   GlobalUpgradeResponses,
+  ImAgentsListErrors,
+  ImAgentsListResponses,
+  ImGroupsCreateErrors,
+  ImGroupsCreateResponses,
+  ImGroupsListErrors,
+  ImGroupsListResponses,
+  ImMessagesCreateErrors,
+  ImMessagesCreateResponses,
+  ImMessagesGetErrors,
+  ImMessagesGetResponses,
+  ImMessagesListErrors,
+  ImMessagesListResponses,
+  ImMessagesMarkReadErrors,
+  ImMessagesMarkReadResponses,
+  ImWebsocketConnectResponses,
   InstanceDisposeErrors,
   InstanceDisposeResponses,
+  LockAcquireBody,
+  LockReleaseBody,
+  LockRenewBody,
+  LspCodeActionErrors,
+  LspCodeActionResponses,
+  LspCompletionErrors,
+  LspCompletionResponses,
+  LspDefinitionErrors,
+  LspDefinitionResponses,
+  LspDiagnosticsErrors,
+  LspDiagnosticsResponses,
+  LspHoverErrors,
+  LspHoverResponses,
+  LspLocInput,
+  LspRangeInput,
+  LspRenameErrors,
+  LspRenameInput,
+  LspRenameResponses,
   LspStatusErrors,
   LspStatusResponses,
   McpAddErrors,
@@ -155,6 +241,15 @@ import type {
   PermissionRespondResponses,
   PermissionRuleset,
   PermissionV2Reply,
+  ProfileHotspotsErrors,
+  ProfileHotspotsResponses,
+  ProfileResultErrors,
+  ProfileResultResponses,
+  ProfileRunBody,
+  ProfileRunErrors,
+  ProfileRunResponses,
+  ProfileRunsErrors,
+  ProfileRunsResponses,
   ProjectCurrentErrors,
   ProjectCurrentResponses,
   ProjectDirectoriesErrors,
@@ -1339,6 +1434,18 @@ export class Global extends HeyApiClient {
   }
 
   /**
+   * Get capabilities
+   *
+   * Report the data-plane protocol version, build version, and available features. Used by Server Edition clients to verify compatibility through the gateway proxy before driving the app.
+   */
+  public capabilities<ThrowOnError extends boolean = false>(options?: Options<never, ThrowOnError>) {
+    return (options?.client ?? this.client).get<GlobalCapabilitiesResponses, GlobalCapabilitiesErrors, ThrowOnError>({
+      url: "/global/capabilities",
+      ...options,
+    })
+  }
+
+  /**
    * Get global events
    *
    * Subscribe to global events from the DeepAgent Code system using server-sent events.
@@ -1517,6 +1624,436 @@ export class Config2 extends HeyApiClient {
     )
     return (options?.client ?? this.client).get<ConfigProvidersResponses, ConfigProvidersErrors, ThrowOnError>({
       url: "/config/providers",
+      ...options,
+      ...params,
+    })
+  }
+}
+
+export class Debug extends HeyApiClient {
+  /**
+   * Start debug session
+   *
+   * Start a debug session for the given adapter and program. Passes through the R0 privilege gate inside DebugService. Returns the initial session state.
+   */
+  public start<ThrowOnError extends boolean = false>(
+    parameters?: {
+      debugStartBody?: DebugStartBody
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ key: "debugStartBody", map: "body" }] }])
+    return (options?.client ?? this.client).post<DebugStartResponses, DebugStartErrors, ThrowOnError>({
+      url: "/debug/start",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Set breakpoints
+   *
+   * Set (replace) breakpoints for a source file in an existing session.
+   */
+  public breakpoints<ThrowOnError extends boolean = false>(
+    parameters?: {
+      debugBreakpointsBody?: DebugBreakpointsBody
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ key: "debugBreakpointsBody", map: "body" }] }])
+    return (options?.client ?? this.client).post<DebugBreakpointsResponses, DebugBreakpointsErrors, ThrowOnError>({
+      url: "/debug/breakpoints",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Continue execution
+   *
+   * Resume execution of a stopped session.
+   */
+  public continue<ThrowOnError extends boolean = false>(
+    parameters?: {
+      debugContinueBody?: DebugContinueBody
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ key: "debugContinueBody", map: "body" }] }])
+    return (options?.client ?? this.client).post<DebugContinueResponses, DebugContinueErrors, ThrowOnError>({
+      url: "/debug/continue",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Step
+   *
+   * Single-step the current thread (next / stepIn / stepOut).
+   */
+  public step<ThrowOnError extends boolean = false>(
+    parameters?: {
+      debugStepBody?: DebugStepBody
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ key: "debugStepBody", map: "body" }] }])
+    return (options?.client ?? this.client).post<DebugStepResponses, DebugStepErrors, ThrowOnError>({
+      url: "/debug/step",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Stack trace
+   *
+   * Return the current call-stack frames for the stopped session.
+   */
+  public stack<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      workspace?: string
+      sessionId: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "query", key: "sessionId" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<DebugStackResponses, DebugStackErrors, ThrowOnError>({
+      url: "/debug/stack",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Frame scopes
+   *
+   * Return variable scopes for a stack frame.
+   */
+  public scopes<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      workspace?: string
+      sessionId: string
+      frameId: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "query", key: "sessionId" },
+            { in: "query", key: "frameId" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<DebugScopesResponses, DebugScopesErrors, ThrowOnError>({
+      url: "/debug/scopes",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Variables
+   *
+   * Return variables for a scope or structured variable reference.
+   */
+  public variables<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      workspace?: string
+      sessionId: string
+      variablesReference: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "query", key: "sessionId" },
+            { in: "query", key: "variablesReference" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<DebugVariablesResponses, DebugVariablesErrors, ThrowOnError>({
+      url: "/debug/variables",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Evaluate expression
+   *
+   * Evaluate an expression in the context of the current frame (REPL / watch).
+   */
+  public evaluate<ThrowOnError extends boolean = false>(
+    parameters?: {
+      debugEvaluateBody?: DebugEvaluateBody
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ key: "debugEvaluateBody", map: "body" }] }])
+    return (options?.client ?? this.client).post<DebugEvaluateResponses, DebugEvaluateErrors, ThrowOnError>({
+      url: "/debug/evaluate",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Terminate session
+   *
+   * Terminate the debug session and tear down the adapter process.
+   */
+  public terminate<ThrowOnError extends boolean = false>(
+    parameters?: {
+      debugTerminateBody?: DebugTerminateBody
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ key: "debugTerminateBody", map: "body" }] }])
+    return (options?.client ?? this.client).post<DebugTerminateResponses, DebugTerminateErrors, ThrowOnError>({
+      url: "/debug/terminate",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * List sessions
+   *
+   * Return a snapshot of all live debug sessions.
+   */
+  public sessions<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<DebugSessionsResponses, DebugSessionsErrors, ThrowOnError>({
+      url: "/debug/sessions",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Debug event stream (SSE)
+   *
+   * Server-sent events for debug.stopped / debug.output / debug.terminated / debug.updated. Optionally filter to a single sessionId.
+   */
+  public events<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      sessionId?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "query", key: "sessionId" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<DebugEventsResponses, DebugEventsErrors, ThrowOnError>({
+      url: "/debug/events",
+      ...options,
+      ...params,
+    })
+  }
+}
+
+export class Profile extends HeyApiClient {
+  /**
+   * Start a profile run
+   *
+   * Launch a profile run for the given program. Returns a runId immediately; poll /profile/result to check completion. The profiler adapter is auto-selected from env heuristics when 'profiler' is omitted.
+   */
+  public run<ThrowOnError extends boolean = false>(
+    parameters?: {
+      profileRunBody?: ProfileRunBody
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ key: "profileRunBody", map: "body" }] }])
+    return (options?.client ?? this.client).post<ProfileRunResponses, ProfileRunErrors, ThrowOnError>({
+      url: "/profile/run",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Get full profile result
+   *
+   * Return the full PROFILE_RESULT.json artifact for a completed run. Returns { status:'running' } if the run is still in progress, or { status:'error', error } on failure.
+   */
+  public result<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      workspace?: string
+      runId: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "query", key: "runId" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<ProfileResultResponses, ProfileResultErrors, ThrowOnError>({
+      url: "/profile/result",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Get normalized hotspot list
+   *
+   * Return the top-N normalized hotspots for a completed run, sorted by self-time percentage descending. Limit defaults to 10.
+   */
+  public hotspots<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      workspace?: string
+      runId: string
+      limit?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "query", key: "runId" },
+            { in: "query", key: "limit" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<ProfileHotspotsResponses, ProfileHotspotsErrors, ThrowOnError>({
+      url: "/profile/hotspots",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * List recent profile runs
+   *
+   * Return the most recent profile runs (up to 20), newest first.
+   */
+  public runs<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<ProfileRunsResponses, ProfileRunsErrors, ThrowOnError>({
+      url: "/profile/runs",
       ...options,
       ...params,
     })
@@ -2467,6 +3004,112 @@ export class Find extends HeyApiClient {
   }
 }
 
+export class Lock extends HeyApiClient {
+  /**
+   * Acquire file lock
+   *
+   * Acquire an edit lock for a file. Human locks take priority over agent locks.
+   */
+  public acquire<ThrowOnError extends boolean = false>(
+    parameters?: {
+      lockAcquireBody?: LockAcquireBody
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ key: "lockAcquireBody", map: "body" }] }])
+    return (options?.client ?? this.client).post<FileLockAcquireResponses, FileLockAcquireErrors, ThrowOnError>({
+      url: "/file/lock",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Renew file lock
+   *
+   * Extend the TTL of an existing lock. Call every 15s from the editor (heartbeat).
+   */
+  public renew<ThrowOnError extends boolean = false>(
+    parameters?: {
+      lockRenewBody?: LockRenewBody
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ key: "lockRenewBody", map: "body" }] }])
+    return (options?.client ?? this.client).post<FileLockRenewResponses, FileLockRenewErrors, ThrowOnError>({
+      url: "/file/lock/renew",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Release file lock
+   *
+   * Release a lock. No-op if the lockId does not match.
+   */
+  public release<ThrowOnError extends boolean = false>(
+    parameters?: {
+      lockReleaseBody?: LockReleaseBody
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ key: "lockReleaseBody", map: "body" }] }])
+    return (options?.client ?? this.client).post<FileLockReleaseResponses, FileLockReleaseErrors, ThrowOnError>({
+      url: "/file/lock/release",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Get lock status
+   *
+   * Returns the current lock entry for a path, or null if not locked.
+   */
+  public status<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      workspace?: string
+      path: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "query", key: "path" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<FileLockStatusResponses, FileLockStatusErrors, ThrowOnError>({
+      url: "/file/lock/status",
+      ...options,
+      ...params,
+    })
+  }
+}
+
 export class File extends HeyApiClient {
   /**
    * List files
@@ -2562,144 +3205,143 @@ export class File extends HeyApiClient {
     })
   }
 
-  // ── V3.6 Phase 1A mutation methods ─────────────────────────────────────────
-
   /**
-   * Write (overwrite) a file.
-   * Pass `expected` (base64 snapshot of bytes last read) for a compare-and-swap
-   * save: the call returns `{ok:false, error:"stale_content"}` when the on-disk
-   * bytes changed since the snapshot. Without `expected` the write is unconditional.
+   * Write file
+   *
+   * Overwrite a file with new content. When `expected` (base64 snapshot) is provided the write is a compare-and-swap: it fails with error:stale_content if the on-disk bytes changed since the snapshot was taken.
    */
   public write<ThrowOnError extends boolean = false>(
-    parameters: {
-      directory?: string
-      workspace?: string
-      path: string
-      content: string
-      /** Base64-encoded snapshot of the file bytes at the time they were loaded. */
-      expected?: string
+    parameters?: {
+      fileWriteBody?: FileWriteBody
     },
     options?: Options<never, ThrowOnError>,
   ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "query", key: "directory" },
-            { in: "query", key: "workspace" },
-            { in: "body", key: "path" },
-            { in: "body", key: "content" },
-            { in: "body", key: "expected" },
-          ],
-        },
-      ],
-    )
-    return (options?.client ?? this.client).post<unknown, unknown, ThrowOnError>({
+    const params = buildClientParams([parameters], [{ args: [{ key: "fileWriteBody", map: "body" }] }])
+    return (options?.client ?? this.client).post<FileWriteResponses, FileWriteErrors, ThrowOnError>({
       url: "/file/write",
       ...options,
       ...params,
-      headers: { "Content-Type": "application/json", ...options?.headers, ...params.headers },
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
     })
   }
 
-  /** Create a new file. Returns `{ok:false, error:"already_exists"}` if the target exists. */
-  public createFile<ThrowOnError extends boolean = false>(
-    parameters: {
-      directory?: string
-      workspace?: string
-      path: string
-      content?: string
+  /**
+   * Create file
+   *
+   * Create a new file. Returns error:already_exists if the target path already exists.
+   */
+  public create<ThrowOnError extends boolean = false>(
+    parameters?: {
+      fileCreateBody?: FileCreateBody
     },
     options?: Options<never, ThrowOnError>,
   ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "query", key: "directory" },
-            { in: "query", key: "workspace" },
-            { in: "body", key: "path" },
-            { in: "body", key: "content" },
-          ],
-        },
-      ],
-    )
-    return (options?.client ?? this.client).post<unknown, unknown, ThrowOnError>({
+    const params = buildClientParams([parameters], [{ args: [{ key: "fileCreateBody", map: "body" }] }])
+    return (options?.client ?? this.client).post<FileCreateResponses, FileCreateErrors, ThrowOnError>({
       url: "/file/create",
       ...options,
       ...params,
-      headers: { "Content-Type": "application/json", ...options?.headers, ...params.headers },
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
     })
   }
 
-  /** Delete a file or empty directory. */
-  public deleteFile<ThrowOnError extends boolean = false>(
-    parameters: {
-      directory?: string
-      workspace?: string
-      path: string
+  /**
+   * Delete file
+   *
+   * Delete a file or empty directory.
+   */
+  public delete<ThrowOnError extends boolean = false>(
+    parameters?: {
+      fileDeleteBody?: FileDeleteBody
     },
     options?: Options<never, ThrowOnError>,
   ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "query", key: "directory" },
-            { in: "query", key: "workspace" },
-            { in: "body", key: "path" },
-          ],
-        },
-      ],
-    )
-    return (options?.client ?? this.client).post<unknown, unknown, ThrowOnError>({
+    const params = buildClientParams([parameters], [{ args: [{ key: "fileDeleteBody", map: "body" }] }])
+    return (options?.client ?? this.client).post<FileDeleteResponses, FileDeleteErrors, ThrowOnError>({
       url: "/file/delete",
       ...options,
       ...params,
-      headers: { "Content-Type": "application/json", ...options?.headers, ...params.headers },
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
     })
   }
 
-  /** Rename / move a file or directory within the same workspace root. */
+  /**
+   * Rename / move
+   *
+   * Rename or move a file/directory within the same workspace root.
+   */
   public rename<ThrowOnError extends boolean = false>(
-    parameters: {
-      directory?: string
-      workspace?: string
-      from: string
-      to: string
+    parameters?: {
+      fileRenameBody?: FileRenameBody
     },
     options?: Options<never, ThrowOnError>,
   ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "query", key: "directory" },
-            { in: "query", key: "workspace" },
-            { in: "body", key: "from" },
-            { in: "body", key: "to" },
-          ],
-        },
-      ],
-    )
-    return (options?.client ?? this.client).post<unknown, unknown, ThrowOnError>({
+    const params = buildClientParams([parameters], [{ args: [{ key: "fileRenameBody", map: "body" }] }])
+    return (options?.client ?? this.client).post<FileRenameResponses, FileRenameErrors, ThrowOnError>({
       url: "/file/rename",
       ...options,
       ...params,
-      headers: { "Content-Type": "application/json", ...options?.headers, ...params.headers },
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
     })
   }
 
-  /** Create a directory and any missing parent directories. */
+  /**
+   * Make directory
+   *
+   * Create a directory and any missing parent directories.
+   */
   public mkdir<ThrowOnError extends boolean = false>(
-    parameters: {
+    parameters?: {
+      fileMkdirBody?: FileMkdirBody
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ key: "fileMkdirBody", map: "body" }] }])
+    return (options?.client ?? this.client).post<FileMkdirResponses, FileMkdirErrors, ThrowOnError>({
+      url: "/file/mkdir",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  private _lock?: Lock
+  get lock(): Lock {
+    return (this._lock ??= new Lock({ client: this.client }))
+  }
+}
+
+export class Lsp extends HeyApiClient {
+  /**
+   * Get diagnostics
+   *
+   * Return the current per-file diagnostics from the language server.
+   */
+  public diagnostics<ThrowOnError extends boolean = false>(
+    parameters?: {
       directory?: string
       workspace?: string
-      path: string
+      path?: string
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -2710,17 +3352,520 @@ export class File extends HeyApiClient {
           args: [
             { in: "query", key: "directory" },
             { in: "query", key: "workspace" },
-            { in: "body", key: "path" },
+            { in: "query", key: "path" },
           ],
         },
       ],
     )
-    return (options?.client ?? this.client).post<unknown, unknown, ThrowOnError>({
-      url: "/file/mkdir",
+    return (options?.client ?? this.client).get<LspDiagnosticsResponses, LspDiagnosticsErrors, ThrowOnError>({
+      url: "/lsp/diagnostics",
       ...options,
       ...params,
-      headers: { "Content-Type": "application/json", ...options?.headers, ...params.headers },
     })
+  }
+
+  /**
+   * Hover info
+   *
+   * Return hover information (type / docs) at a position. Coordinates are 0-based.
+   */
+  public hover<ThrowOnError extends boolean = false>(
+    parameters?: {
+      lspLocInput?: LspLocInput
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ key: "lspLocInput", map: "body" }] }])
+    return (options?.client ?? this.client).post<LspHoverResponses, LspHoverErrors, ThrowOnError>({
+      url: "/lsp/hover",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Go to definition
+   *
+   * Return definition location(s) for the symbol at a position.
+   */
+  public definition<ThrowOnError extends boolean = false>(
+    parameters?: {
+      lspLocInput?: LspLocInput
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ key: "lspLocInput", map: "body" }] }])
+    return (options?.client ?? this.client).post<LspDefinitionResponses, LspDefinitionErrors, ThrowOnError>({
+      url: "/lsp/definition",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Autocomplete
+   *
+   * Return completion items at a position.
+   */
+  public completion<ThrowOnError extends boolean = false>(
+    parameters?: {
+      lspLocInput?: LspLocInput
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ key: "lspLocInput", map: "body" }] }])
+    return (options?.client ?? this.client).post<LspCompletionResponses, LspCompletionErrors, ThrowOnError>({
+      url: "/lsp/completion",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Code actions
+   *
+   * Return code actions (quick fixes) for the given range.
+   */
+  public codeAction<ThrowOnError extends boolean = false>(
+    parameters?: {
+      lspRangeInput?: LspRangeInput
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ key: "lspRangeInput", map: "body" }] }])
+    return (options?.client ?? this.client).post<LspCodeActionResponses, LspCodeActionErrors, ThrowOnError>({
+      url: "/lsp/code-action",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Rename preview
+   *
+   * Return a WorkspaceEdit preview for renaming the symbol. Does NOT apply changes.
+   */
+  public rename<ThrowOnError extends boolean = false>(
+    parameters?: {
+      lspRenameInput?: LspRenameInput
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ key: "lspRenameInput", map: "body" }] }])
+    return (options?.client ?? this.client).post<LspRenameResponses, LspRenameErrors, ThrowOnError>({
+      url: "/lsp/rename",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Get LSP status
+   *
+   * Get LSP server status
+   */
+  public status<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<LspStatusResponses, LspStatusErrors, ThrowOnError>({
+      url: "/lsp",
+      ...options,
+      ...params,
+    })
+  }
+}
+
+export class Groups extends HeyApiClient {
+  /**
+   * List IM groups
+   *
+   * List all IM groups in the workspace.
+   */
+  public list<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<ImGroupsListResponses, ImGroupsListErrors, ThrowOnError>({
+      url: "/api/v1/im/groups",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Create IM group
+   *
+   * Create a new IM group.
+   */
+  public create<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      name?: string
+      type?: "project" | "system"
+      projectID?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "name" },
+            { in: "body", key: "type" },
+            { in: "body", key: "projectID" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<ImGroupsCreateResponses, ImGroupsCreateErrors, ThrowOnError>({
+      url: "/api/v1/im/groups",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+}
+
+export class Messages extends HeyApiClient {
+  /**
+   * List messages
+   *
+   * List messages in an IM group with pagination.
+   */
+  public list<ThrowOnError extends boolean = false>(
+    parameters: {
+      groupId: string
+      directory?: string
+      workspace?: string
+      cursor?: string
+      limit?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "groupId" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "query", key: "cursor" },
+            { in: "query", key: "limit" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<ImMessagesListResponses, ImMessagesListErrors, ThrowOnError>({
+      url: "/api/v1/im/groups/{groupId}/messages",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Create message
+   *
+   * Create a new message in an IM group.
+   */
+  public create<ThrowOnError extends boolean = false>(
+    parameters: {
+      groupId: string
+      directory?: string
+      workspace?: string
+      senderType?: "user" | "agent" | "system"
+      type?: "text" | "code" | "file" | "agent_status" | "system"
+      content?: string
+      mentions?: Array<string>
+      metadata?:
+        | {
+            type: "file_ref"
+            path: string
+            line?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+            endLine?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          }
+        | {
+            type: "code_ref"
+            path?: string
+            language?: string
+            startLine?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+            endLine?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          }
+        | {
+            type: "agent_run"
+            sessionID: string
+            runID?: string
+            status: "running" | "success" | "failed" | "timeout"
+          }
+        | {
+            type: "debug"
+            sessionID: string
+            target?: string
+          }
+        | {
+            type: "profile"
+            runID: string
+            artifactPath?: string
+          }
+        | {
+            type: "error"
+            code: string
+            message: string
+            retryable: boolean
+          }
+      replyToID?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "groupId" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "senderType" },
+            { in: "body", key: "type" },
+            { in: "body", key: "content" },
+            { in: "body", key: "mentions" },
+            { in: "body", key: "metadata" },
+            { in: "body", key: "replyToID" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<ImMessagesCreateResponses, ImMessagesCreateErrors, ThrowOnError>({
+      url: "/api/v1/im/groups/{groupId}/messages",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Mark messages as read
+   *
+   * Mark all messages in a group as read.
+   */
+  public markRead<ThrowOnError extends boolean = false>(
+    parameters: {
+      groupId: string
+      directory?: string
+      workspace?: string
+      readAt?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "groupId" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "readAt" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<ImMessagesMarkReadResponses, ImMessagesMarkReadErrors, ThrowOnError>({
+      url: "/api/v1/im/groups/{groupId}/read",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Get message
+   *
+   * Get a single message by ID.
+   */
+  public get<ThrowOnError extends boolean = false>(
+    parameters: {
+      messageId: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "messageId" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<ImMessagesGetResponses, ImMessagesGetErrors, ThrowOnError>({
+      url: "/api/v1/im/messages/{messageId}",
+      ...options,
+      ...params,
+    })
+  }
+}
+
+export class Agents extends HeyApiClient {
+  /**
+   * List agents
+   *
+   * List all available agents.
+   */
+  public list<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<ImAgentsListResponses, ImAgentsListErrors, ThrowOnError>({
+      url: "/api/v1/im/agents",
+      ...options,
+      ...params,
+    })
+  }
+}
+
+export class Websocket extends HeyApiClient {
+  /**
+   * Connect to IM WebSocket
+   *
+   * Establish a WebSocket connection to receive real-time IM events for a group.
+   */
+  public connect<ThrowOnError extends boolean = false>(
+    parameters: {
+      groupId: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "groupId" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<ImWebsocketConnectResponses, unknown, ThrowOnError>({
+      url: "/ws/im/group/{groupId}",
+      ...options,
+      ...params,
+    })
+  }
+}
+
+export class Im extends HeyApiClient {
+  private _groups?: Groups
+  get groups(): Groups {
+    return (this._groups ??= new Groups({ client: this.client }))
+  }
+
+  private _messages?: Messages
+  get messages(): Messages {
+    return (this._messages ??= new Messages({ client: this.client }))
+  }
+
+  private _agents?: Agents
+  get agents(): Agents {
+    return (this._agents ??= new Agents({ client: this.client }))
+  }
+
+  private _websocket?: Websocket
+  get websocket(): Websocket {
+    return (this._websocket ??= new Websocket({ client: this.client }))
   }
 }
 
@@ -2984,38 +4129,6 @@ export class Command extends HeyApiClient {
     )
     return (options?.client ?? this.client).get<CommandListResponses, CommandListErrors, ThrowOnError>({
       url: "/command",
-      ...options,
-      ...params,
-    })
-  }
-}
-
-export class Lsp extends HeyApiClient {
-  /**
-   * Get LSP status
-   *
-   * Get LSP server status
-   */
-  public status<ThrowOnError extends boolean = false>(
-    parameters?: {
-      directory?: string
-      workspace?: string
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "query", key: "directory" },
-            { in: "query", key: "workspace" },
-          ],
-        },
-      ],
-    )
-    return (options?.client ?? this.client).get<LspStatusResponses, LspStatusErrors, ThrowOnError>({
-      url: "/lsp",
       ...options,
       ...params,
     })
@@ -4858,9 +5971,11 @@ export class Session2 extends HeyApiClient {
   public fork<ThrowOnError extends boolean = false>(
     parameters: {
       sessionID: string
-      directory?: string
+      query_directory?: string
       workspace?: string
       messageID?: string
+      body_directory?: string
+      isolate?: "worktree"
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -4870,9 +5985,19 @@ export class Session2 extends HeyApiClient {
         {
           args: [
             { in: "path", key: "sessionID" },
-            { in: "query", key: "directory" },
+            {
+              in: "query",
+              key: "query_directory",
+              map: "directory",
+            },
             { in: "query", key: "workspace" },
             { in: "body", key: "messageID" },
+            {
+              in: "body",
+              key: "body_directory",
+              map: "directory",
+            },
+            { in: "body", key: "isolate" },
           ],
         },
       ],
@@ -5074,14 +6199,14 @@ export class Session2 extends HeyApiClient {
   /**
    * Prepare prompt draft
    *
-   * Create a DeepAgent wish prompt draft for user confirmation before task submission.
+   * Create a DeepAgent intelligence prompt draft for user confirmation before task submission.
    */
   public promptPrepare<ThrowOnError extends boolean = false>(
     parameters: {
       sessionID: string
       directory?: string
       workspace?: string
-      mode?: "wish"
+      mode?: "wish" | "intelligence"
       output_language?: "chinese" | "english"
       parts?: Array<TextPartInput | FilePartInput | AgentPartInput | SubtaskPartInput>
     },
@@ -6904,6 +8029,16 @@ export class DeepAgentCodeClient extends HeyApiClient {
     return (this._config ??= new Config2({ client: this.client }))
   }
 
+  private _debug?: Debug
+  get debug(): Debug {
+    return (this._debug ??= new Debug({ client: this.client }))
+  }
+
+  private _profile?: Profile
+  get profile(): Profile {
+    return (this._profile ??= new Profile({ client: this.client }))
+  }
+
   private _deepagent?: Deepagent
   get deepagent(): Deepagent {
     return (this._deepagent ??= new Deepagent({ client: this.client }))
@@ -6929,6 +8064,16 @@ export class DeepAgentCodeClient extends HeyApiClient {
     return (this._file ??= new File({ client: this.client }))
   }
 
+  private _lsp?: Lsp
+  get lsp(): Lsp {
+    return (this._lsp ??= new Lsp({ client: this.client }))
+  }
+
+  private _im?: Im
+  get im(): Im {
+    return (this._im ??= new Im({ client: this.client }))
+  }
+
   private _instance?: Instance
   get instance(): Instance {
     return (this._instance ??= new Instance({ client: this.client }))
@@ -6947,11 +8092,6 @@ export class DeepAgentCodeClient extends HeyApiClient {
   private _command?: Command
   get command(): Command {
     return (this._command ??= new Command({ client: this.client }))
-  }
-
-  private _lsp?: Lsp
-  get lsp(): Lsp {
-    return (this._lsp ??= new Lsp({ client: this.client }))
   }
 
   private _formatter?: Formatter

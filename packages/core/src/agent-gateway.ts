@@ -13,7 +13,7 @@ import {
 import { buildRunContext } from "./deepagent/run-context"
 import { DocumentStore } from "./deepagent/document-store"
 import { buildRunGraph } from "./deepagent/run-graph"
-import { knowledgeEnabled, strategyMethodologyEnabled, domainKnowledgeEnabled } from "./deepagent/mode"
+import { knowledgeEnabled, strategyMethodologyEnabled, domainKnowledgeEnabled, modeRank } from "./deepagent/mode"
 import type { AgentMode } from "./deepagent/mode"
 import { resolveDeepAgentCodeHome } from "./deepagent/workspace"
 import * as KnowledgeRetriever from "./deepagent/knowledge-retriever"
@@ -377,7 +377,7 @@ export const isActiveDeepAgentRuntime = () => current.enabled && !current.killSw
 const isManagedDeepAgentRuntimeWith = (config: CurrentConfig) =>
   config.enabled && !config.killSwitch && config.agentMode !== "general"
 
-import { buildSystemPrompt, type PromptContext } from "./deepagent/prompt-policy"
+import { buildSystemPrompt, type KnowledgeRefProjection, type PromptContext } from "./deepagent/prompt-policy"
 import * as DeepAgentOrchestrator from "./deepagent/orchestrator"
 import * as DeepAgentSessionState from "./deepagent/session-state"
 import * as DeepAgentPlanController from "./deepagent/plan-controller"
@@ -538,8 +538,25 @@ const deepAgentBudgetMessage = (status: DeepAgentBudget.BudgetCheck) => {
 
 const effectiveAgentMode = (metadata: Record<string, unknown> | undefined): AgentMode | undefined => {
   const deepagent = metadata && isRecord(metadata.deepagent) ? metadata.deepagent : {}
-  return deepagent.agent_mode_override === "general" ? "general" : undefined
+  const override = deepagent.agent_mode_override
+  // Accept any valid AgentMode as a per-request override (not just "general"), so a downgraded
+  // subagent can pin e.g. "max"/"xhigh". A MISSING or invalid override returns undefined (⇒ fall
+  // back to the process-global agentMode) — we do NOT route through parseAgentMode here because it
+  // fails-closed to "high" for unknown strings, which would silently promote a bad value.
+  if (!isValidAgentMode(override)) return undefined
+  // SECURITY (downgrade-only clamp): the override arrives on the user-message `metadata`, which is a
+  // fully client-writable field on the HTTP `prompt` payload (Schema.Record(String, Any)). Every
+  // LEGITIMATE producer only ever downgrades: the desktop client sets at most "general", and the
+  // task tool injects `downgradeOneLevel(global)` — both ≤ the process-global agentMode. Widening the
+  // accepted set beyond "general" (to support subagent pinning) otherwise lets ANY authenticated
+  // client escalate a request to "ultra" (autonomous macro-rounds + higher round/token budget +
+  // knowledge/orchestration) regardless of the operator-configured DEEPAGENT_MODE ceiling. Clamp so
+  // the override can only LOWER the effective mode, never raise it above the process-global setting.
+  return modeRank(override) <= modeRank(current.agentMode) ? override : undefined
 }
+
+const isValidAgentMode = (value: unknown): value is AgentMode =>
+  value === "general" || value === "high" || value === "xhigh" || value === "max" || value === "ultra"
 
 export const runAuxiliary = <A, E, R>(
   input: RunInput,
@@ -1293,11 +1310,15 @@ const deterministicResultArtifact = (run: RunRecord) => {
 
 const modelWorkPackage = (run: RunRecord) => {
   const selectedRefs = knowledgeRefsForRun(run)
-  const selectedStrategyRefs = selectedRefs.filter((ref) => ref.ref_id.startsWith("strategy:")).map((ref) => ref.ref_id)
-  const selectedMemoryRefs = selectedRefs.filter((ref) => ref.ref_id.startsWith("memory:")).map((ref) => ref.ref_id)
-  const selectedMethodologyRefs = selectedRefs
-    .filter((ref) => ref.ref_id.startsWith("methodology:"))
-    .map((ref) => ref.ref_id)
+  // DAP-11: refs are disk-seeded DocumentStore ids (`doc:strategy:<slug>`), not authoring refs
+  // (`strategy:<slug>`), so a `ref_id.startsWith("strategy:")` split silently produced empty
+  // per-kind lists. Split on the projection's `kind` field — the authoritative, id-scheme-independent
+  // discriminator carried by every KnowledgeRefProjection.
+  const refIdsOfKind = (kind: KnowledgeRefProjection["kind"]) =>
+    selectedRefs.filter((ref) => ref.kind === kind).map((ref) => ref.ref_id)
+  const selectedStrategyRefs = refIdsOfKind("strategy")
+  const selectedMemoryRefs = refIdsOfKind("memory")
+  const selectedMethodologyRefs = refIdsOfKind("methodology")
   return {
     schema_version: "model_work_package.v1",
     work_package_id: run.workPackageID,
@@ -2596,7 +2617,7 @@ const activePackSnapshot = (run: RunRecord): DeepAgentDomainPackRegistry.PackSna
   try {
     const signals = run.input.feature ?? ""
     const profile: DeepAgentDomainPackRegistry.ExtendedProblemProfile = {
-      scenario_mode: "wish",
+      scenario_mode: "intelligence",
       agent_strength: run.agentMode as DeepAgentDomainPackRegistry.ExtendedProblemProfile["agent_strength"],
       task_kind: "implement",
       code_domains: ["code"],

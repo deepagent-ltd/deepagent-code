@@ -81,7 +81,7 @@ export type PackScore = {
 // The extended ProblemProfile used by the registry for multi-dimensional pack scoring.
 // docs/34 §4.1. The simpler profile in domain-pack.ts is retained for backward compat.
 export type ExtendedProblemProfile = {
-  readonly scenario_mode: "direct" | "wish"
+  readonly scenario_mode: "direct" | "intelligence"
   readonly agent_strength: "general" | "high" | "xhigh" | "max" | "ultra"
   readonly task_kind: "implement" | "debug" | "review" | "test" | "migrate" | "optimize" | "explain" | "operate"
   readonly code_domains: readonly string[]

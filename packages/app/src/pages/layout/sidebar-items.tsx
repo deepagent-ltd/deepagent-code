@@ -15,7 +15,12 @@ import { usePermission } from "@/context/permission"
 import { messageAgentColor } from "@/utils/agent"
 import { sessionTitle } from "@/utils/session-title"
 import { sessionPermissionRequest } from "../session/composer/session-request-tree"
-import { childSessionOnPath, getProjectAvatarSource, hasProjectPermissions } from "./helpers"
+import {
+  directChildSessions,
+  getProjectAvatarSource,
+  hasProjectPermissions,
+  MAX_SESSION_TREE_LEVEL,
+} from "./helpers"
 
 export const ProjectIcon = (props: {
   project: LocalProject
@@ -162,9 +167,14 @@ export const SessionItem = (props: SessionItemProps): JSX.Element => {
 
   const tint = createMemo(() => messageAgentColor(sessionStore.message[props.session.id], sessionStore.agent))
   const tooltip = createMemo(() => props.showTooltip ?? (props.mobile || !props.sidebarExpanded()))
-  const currentChild = createMemo(() => {
-    if (!props.showChild) return
-    return childSessionOnPath(sessionStore.session, props.session.id, params.id)
+  const level = createMemo(() => props.level ?? 0)
+  // Folder-style nesting: show ALL direct children (subagents + forks) under this row, capped at the
+  // same depth as the backend fork limit. Stops descending past the cap so a corrupted lineage chain
+  // can't recurse without bound.
+  const childSessions = createMemo(() => {
+    if (!props.showChild) return []
+    if (level() >= MAX_SESSION_TREE_LEVEL) return []
+    return directChildSessions(sessionStore.session, props.session.id)
   })
 
   const warm = (span: number, priority: "high" | "low") => {
@@ -258,12 +268,12 @@ export const SessionItem = (props: SessionItemProps): JSX.Element => {
           </Show>
         </div>
       </div>
-      <Show when={currentChild()} keyed>
-        {(child) => (
-          <div class="w-full">
-            <SessionItem {...props} session={child} level={(props.level ?? 0) + 1} />
-          </div>
-        )}
+      <Show when={childSessions().length > 0}>
+        <div class="w-full">
+          <For each={childSessions()}>
+            {(child) => <SessionItem {...props} session={child} list={childSessions()} level={level() + 1} />}
+          </For>
+        </div>
       </Show>
     </>
   )
