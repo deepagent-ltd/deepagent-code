@@ -61,7 +61,7 @@ export const stopHookGate = (): HookHandler => (e) => {
 
 // U1 PlanController soft gate (wired into before_tool_use). While the plan latch is stale, MUTATING
 // tools (write/edit/patch/shell) are soft-blocked so the model must update the plan before changing
-// more files; READ/diagnosis/`todowrite` always pass (otherwise a stale plan could never be
+// more files; READ/diagnosis tools always pass (otherwise a stale plan could never be
 // repaired). Lightweight modes (general/direct) only WARN — ordinary tasks are never slowed
 // (docs/38 §9). The caller supplies planStale, isMutating and lightweight in the payload.
 //

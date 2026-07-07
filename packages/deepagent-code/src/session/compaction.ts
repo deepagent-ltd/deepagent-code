@@ -25,6 +25,7 @@ import { ProviderV2 } from "@deepagent-code/core/provider"
 import { ModelV2 } from "@deepagent-code/core/model"
 import { EventV2 } from "@deepagent-code/core/event"
 import { buildPrompt } from "@deepagent-code/core/session/compaction"
+import { updateLedgerFromSummary, carryOverToBridge } from "./context-ledger"
 
 const log = Log.create({ service: "session.compaction" })
 
@@ -545,6 +546,20 @@ export const layer = Layer.effect(
               text: summary ?? "",
               recent,
             })
+        }
+        // V3.8 App-A Stage 1 (coexist, gated, default-safe): mirror the compaction summary into the
+        // structured Session Ledger. This does NOT change compaction behavior — it maintains the
+        // ledger as a structured-summary candidate for the Stage 2 Curator. updateLedgerFromSummary
+        // recovers the CAUSE internally and can never throw into this loop.
+        if (flags.experimentalContextLedger && summary) {
+          yield* updateLedgerFromSummary({ sessionID: input.sessionID, summary })
+          // V3.8 App-A C3 (Stage 3): project the freshly-updated ledger into the project-level bridge
+          // so a future session in this workspace opens with the cross-session handoff. Same gate as
+          // the ledger mirror; carryOverToBridge recovers the CAUSE internally (never throws into this
+          // loop). ctx.directory is this session's workspace dir (the project-store key).
+          if (ctx.directory) {
+            yield* carryOverToBridge({ sessionID: input.sessionID, workspacePath: ctx.directory })
+          }
         }
         yield* events.publish(Event.Compacted, { sessionID: input.sessionID })
       }

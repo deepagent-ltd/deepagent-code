@@ -859,17 +859,21 @@ export const dict = {
   "settings.general.deepagent.mode.xhigh": "xhigh",
   "settings.general.deepagent.mode.max": "max",
   "settings.general.deepagent.mode.ultra": "ultra",
-  "settings.general.deepagent.mode.ultraRequiresWish": "ultra는 wish 시나리오 모드가 필요합니다.",
+  "settings.general.deepagent.mode.ultraRequiresIntelligence": "ultra는 인텔리전스 시나리오 모드가 필요합니다.",
+  "settings.general.deepagent.subagentMode.title": "서브에이전트",
+  "settings.general.deepagent.subagentMode.description": "메인 에이전트 대비 서브에이전트의 작업 강도를 선택합니다.",
+  "settings.general.deepagent.subagentMode.inherit": "상위에서 상속",
+  "settings.general.deepagent.subagentMode.downgrade": "한 단계 낮추기",
   "settings.general.deepagent.prompt.title": "시나리오 모드",
   "settings.general.deepagent.prompt.description": "전송 전에 작성기가 프롬프트를 처리하는 방식을 선택하세요.",
   "settings.general.deepagent.prompt.direct": "직접 모드",
   "settings.general.deepagent.prompt.direct.description":
     "DeepAgent가 초안을 준비하지 않고 작성한 프롬프트를 그대로 보냅니다.",
-  "settings.general.deepagent.prompt.wish": "Wish 모드",
-  "settings.general.deepagent.prompt.wish.description":
+  "settings.general.deepagent.prompt.intelligence": "인텔리전스 모드",
+  "settings.general.deepagent.prompt.intelligence.description":
     "DeepAgent가 먼저 완전한 프롬프트를 준비한 뒤 검토하고 편집할 수 있게 합니다.",
-  "settings.general.deepagent.wishModel.title": "Wish 모드 모델",
-  "settings.general.deepagent.wishModel.description": "Wish 모드 프롬프트 초안 준비에만 사용할 모델을 선택하세요.",
+  "settings.general.deepagent.intelligenceModel.title": "인텔리전스 모드 모델",
+  "settings.general.deepagent.intelligenceModel.description": "인텔리전스 모드 프롬프트 초안 준비에만 사용할 모델을 선택하세요.",
   "settings.general.deepagent.selfLearning.title": "자가 학습 승인",
   "settings.general.deepagent.selfLearning.description":
     "DeepAgent가 세션에서 학습한 지식이 검색 가능해지는 방식을 결정합니다.",

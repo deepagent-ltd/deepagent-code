@@ -128,6 +128,52 @@ describe("DeepAgent request prep", () => {
     AgentGateway.configure({ enabled: false, agentMode: "high" })
   })
 
+  // L2 (v3.8.0 §L2): the orchestration guidance section is injected on BOTH assembly paths.
+  test("injects the orchestration section on the DeepAgent path (high mode)", async () => {
+    AgentGateway.configure({ enabled: true, agentMode: "high" })
+    const prepared = await prepare("deepseek", "deepseek-v4-flash", "ses_orch_deepagent_high")
+    expect(prepared.system[0]).toContain("多-Agent 编排")
+    expect(prepared.system[0]).toContain("扇出判据")
+    AgentGateway.configure({ enabled: false, agentMode: "high" })
+  })
+
+  test("injects the tier-0 orchestration section on the non-DeepAgent path (general)", async () => {
+    AgentGateway.configure({ enabled: true, agentMode: "general" })
+    const prepared = await prepare("deepseek", "deepseek-v4-flash", "ses_orch_general")
+    // non-DeepAgent path keeps the inherited prompt AND appends the tier-0 (off-by-default) guidance
+    expect(prepared.system[0]).toContain("generic agent prompt")
+    expect(prepared.system[0]).toContain("多-Agent 编排")
+    expect(prepared.system[0]).toContain("默认不自动编排")
+    AgentGateway.configure({ enabled: false, agentMode: "high" })
+  })
+
+  // §5b: on the non-DeepAgent path at a fan-out-capable mode, the runtime decision (from the user
+  // request's ComplexitySignals) is injected as CONCRETE, task-specific numbers — not just generic
+  // guidance. DeepAgent is DISABLED here but agentMode is high, so the else-branch fires.
+  test("§5b injects a concrete fan-out decision for a complex request (non-DeepAgent, high)", async () => {
+    AgentGateway.configure({ enabled: false, agentMode: "high" })
+    const prepared = await prepare("deepseek", "deepseek-v4-flash", "ses_orch_decision_complex", {
+      messages: [
+        {
+          role: "user",
+          content: "migrate the auth interface across subsystems and review it thoroughly",
+        },
+      ],
+    })
+    expect(prepared.system[0]).toContain("本轮调度判定")
+    expect(prepared.system[0]).toContain("researcher")
+    AgentGateway.configure({ enabled: false, agentMode: "high" })
+  })
+
+  test("§5b a trivial single-file typo request is advised NOT to fan out (non-DeepAgent, high)", async () => {
+    AgentGateway.configure({ enabled: false, agentMode: "high" })
+    const prepared = await prepare("deepseek", "deepseek-v4-flash", "ses_orch_decision_trivial", {
+      messages: [{ role: "user", content: "fix the typo in utils.ts" }],
+    })
+    expect(prepared.system[0]).toContain("不建议扇出")
+    AgentGateway.configure({ enabled: false, agentMode: "high" })
+  })
+
   test("wish-routed general turns use the inherited prompt and bypass DeepAgent metadata", async () => {
     AgentGateway.configure({ enabled: true, agentMode: "high" })
 
@@ -142,6 +188,31 @@ describe("DeepAgent request prep", () => {
     expect(prepared.system[0]).toContain("generic agent prompt")
     expect(prepared.system[0]).not.toContain(AgentGateway.DEEPAGENT_BOOT_MESSAGE)
     expect(prepared.metadata.deepagent).toMatchObject({ agent_mode_override: "general" })
+  })
+
+  test("SECURITY: a client-supplied agent_mode_override cannot escalate above the process-global mode", async () => {
+    // The override rides on the client-writable user-message metadata. When the process-global mode
+    // is "high", an "ultra" override (an ESCALATION) must be clamped away — the prepared metadata must
+    // NOT re-emit `agent_mode_override: "ultra"`, so a subagent/HTTP client cannot self-promote into
+    // autonomous ultra mode. A downgrade ("general") on the same global is still honored.
+    AgentGateway.configure({ enabled: true, agentMode: "high" })
+
+    const escalated = await prepare(
+      "deepagent",
+      "deepseek-deepseek-v4-flash",
+      "ses_deepagent_request_prep_escalate",
+      { metadata: { deepagent: { agent_mode_override: "ultra" } } },
+    )
+    // Clamped: the escalation is dropped, so no override is re-emitted (falls back to global "high").
+    expect((escalated.metadata.deepagent as Record<string, unknown> | undefined)?.agent_mode_override).toBeUndefined()
+
+    const downgraded = await prepare(
+      "deepagent",
+      "deepseek-deepseek-v4-flash",
+      "ses_deepagent_request_prep_downgrade",
+      { metadata: { deepagent: { agent_mode_override: "general" } } },
+    )
+    expect((downgraded.metadata.deepagent as Record<string, unknown>).agent_mode_override).toBe("general")
   })
 
   test("plain later user messages do not advance DeepAgent rounds", async () => {

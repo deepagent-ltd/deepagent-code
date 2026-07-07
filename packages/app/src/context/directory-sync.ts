@@ -191,7 +191,6 @@ export const createDirSyncContext = (
   const historyMessagePageSize = 200
   const inflight = new Map<string, Promise<void>>()
   const inflightDiff = new Map<string, Promise<void>>()
-  const inflightTodo = new Map<string, Promise<void>>()
   const optimistic = new Map<string, Map<string, OptimisticItem>>()
   const maxDirs = 30
   const seen = new Map<string, Set<string>>()
@@ -277,9 +276,6 @@ export const createDirSyncContext = (
   const evict = (directory: string, setStore: Setter, sessionIDs: string[]) => {
     if (sessionIDs.length === 0) return
     clearSessionPrefetch(serverSDK.scope, directory, sessionIDs)
-    for (const sessionID of sessionIDs) {
-      serverSync.todo.set(sessionID, undefined)
-    }
     setStore(
       produce((draft) => {
         dropSessionCaches(draft, sessionIDs)
@@ -519,32 +515,6 @@ export const createDirSyncContext = (
           retry(() => client.session.diff({ sessionID })).then((diff) => {
             if (!tracked(directory, sessionID)) return
             setStore("session_diff", sessionID, reconcile(list(diff.data), { key: "file" }))
-          }),
-        )
-      },
-      async todo(sessionID: string, opts?: { force?: boolean }) {
-        const [store, setStore] = serverSync.child(directory)
-        touch(directory, setStore, sessionID)
-        const existing = store.todo[sessionID]
-        const cached = serverSync.data.session_todo[sessionID]
-        if (existing !== undefined) {
-          if (cached === undefined) {
-            serverSync.todo.set(sessionID, existing)
-          }
-          if (!opts?.force) return
-        }
-
-        if (cached !== undefined) {
-          setStore("todo", sessionID, reconcile(cached, { key: "id" }))
-        }
-
-        const key = keyFor(directory, sessionID)
-        return runInflight(inflightTodo, key, () =>
-          retry(() => client.session.todo({ sessionID })).then((todo) => {
-            if (!tracked(directory, sessionID)) return
-            const list = todo.data ?? []
-            setStore("todo", sessionID, reconcile(list, { key: "id" }))
-            serverSync.todo.set(sessionID, list)
           }),
         )
       },

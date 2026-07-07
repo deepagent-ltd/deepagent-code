@@ -880,19 +880,23 @@ export const dict = {
   "settings.general.deepagent.mode.xhigh": "xhigh",
   "settings.general.deepagent.mode.max": "max",
   "settings.general.deepagent.mode.ultra": "ultra",
-  "settings.general.deepagent.mode.ultraRequiresWish": "ultra nécessite le mode scénario wish.",
+  "settings.general.deepagent.mode.ultraRequiresIntelligence": "ultra nécessite le mode scénario intelligence.",
+  "settings.general.deepagent.subagentMode.title": "Subagent",
+  "settings.general.deepagent.subagentMode.description": "Choose the work intensity of subagents relative to the main agent.",
+  "settings.general.deepagent.subagentMode.inherit": "Inherit from parent",
+  "settings.general.deepagent.subagentMode.downgrade": "One level lower",
   "settings.general.deepagent.prompt.title": "Mode scénario",
   "settings.general.deepagent.prompt.description":
     "Choisissez comment le compositeur traite votre prompt avant l’envoi.",
   "settings.general.deepagent.prompt.direct": "Mode direct",
   "settings.general.deepagent.prompt.direct.description":
     "Envoyez votre prompt exactement tel qu’il est écrit, sans brouillon préparé par DeepAgent.",
-  "settings.general.deepagent.prompt.wish": "Mode wish",
-  "settings.general.deepagent.prompt.wish.description":
+  "settings.general.deepagent.prompt.intelligence": "Mode intelligence",
+  "settings.general.deepagent.prompt.intelligence.description":
     "DeepAgent prépare d’abord un prompt complet, puis vous pouvez le relire et le modifier.",
-  "settings.general.deepagent.wishModel.title": "Modèle du mode wish",
-  "settings.general.deepagent.wishModel.description":
-    "Choisissez le modèle utilisé uniquement pour préparer les brouillons de prompts en mode wish.",
+  "settings.general.deepagent.intelligenceModel.title": "Modèle du mode intelligence",
+  "settings.general.deepagent.intelligenceModel.description":
+    "Choisissez le modèle utilisé uniquement pour préparer les brouillons de prompts en mode intelligence.",
   "settings.general.deepagent.selfLearning.title": "Approbation de l’auto-apprentissage",
   "settings.general.deepagent.selfLearning.description":
     "Décidez comment les connaissances apprises par DeepAgent dans vos sessions deviennent récupérables.",

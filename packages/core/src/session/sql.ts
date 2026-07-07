@@ -96,6 +96,10 @@ export const PartTable = sqliteTable(
   ],
 )
 
+// DEPRECATED (task-tracking unification): the `todowrite` tool that wrote this table was removed in
+// favor of the `plan` system. No LLM-facing tool writes here anymore. The table is retained (not
+// dropped) for migration safety and so the existing read/REST path keeps working for historical
+// sessions. Do not add new writers; use the plan system instead.
 export const TodoTable = sqliteTable(
   "todo",
   {

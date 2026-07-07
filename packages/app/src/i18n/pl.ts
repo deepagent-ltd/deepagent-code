@@ -869,18 +869,22 @@ export const dict = {
   "settings.general.deepagent.mode.xhigh": "xhigh",
   "settings.general.deepagent.mode.max": "max",
   "settings.general.deepagent.mode.ultra": "ultra",
-  "settings.general.deepagent.mode.ultraRequiresWish": "ultra wymaga trybu scenariusza wish.",
+  "settings.general.deepagent.mode.ultraRequiresIntelligence": "ultra wymaga trybu scenariusza intelligence.",
+  "settings.general.deepagent.subagentMode.title": "Subagent",
+  "settings.general.deepagent.subagentMode.description": "Choose the work intensity of subagents relative to the main agent.",
+  "settings.general.deepagent.subagentMode.inherit": "Inherit from parent",
+  "settings.general.deepagent.subagentMode.downgrade": "One level lower",
   "settings.general.deepagent.prompt.title": "Tryb scenariusza",
   "settings.general.deepagent.prompt.description": "Wybierz, jak kompozytor obsługuje prompt przed wysłaniem.",
   "settings.general.deepagent.prompt.direct": "Tryb bezpośredni",
   "settings.general.deepagent.prompt.direct.description":
     "Wyślij prompt dokładnie tak, jak został napisany, bez przygotowywania szkicu przez DeepAgent.",
-  "settings.general.deepagent.prompt.wish": "Tryb wish",
-  "settings.general.deepagent.prompt.wish.description":
+  "settings.general.deepagent.prompt.intelligence": "Tryb intelligence",
+  "settings.general.deepagent.prompt.intelligence.description":
     "DeepAgent najpierw przygotuje pełny prompt, a potem pozwoli go przejrzeć i edytować.",
-  "settings.general.deepagent.wishModel.title": "Model trybu wish",
-  "settings.general.deepagent.wishModel.description":
-    "Wybierz model używany tylko do przygotowywania szkiców promptów w trybie wish.",
+  "settings.general.deepagent.intelligenceModel.title": "Model trybu intelligence",
+  "settings.general.deepagent.intelligenceModel.description":
+    "Wybierz model używany tylko do przygotowywania szkiców promptów w trybie intelligence.",
   "settings.general.deepagent.selfLearning.title": "Zatwierdzanie samouczenia",
   "settings.general.deepagent.selfLearning.description":
     "Zdecyduj, jak wiedza nauczona przez DeepAgent z sesji staje się dostępna do wyszukiwania.",

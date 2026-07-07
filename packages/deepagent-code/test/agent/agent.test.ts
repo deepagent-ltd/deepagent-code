@@ -55,6 +55,8 @@ it.instance("returns default native agents when no config", () =>
     expect(names).toContain("plan")
     expect(names).toContain("general")
     expect(names).toContain("explore")
+    expect(names).toContain("researcher")
+    expect(names).toContain("reviewer")
     expect(names).toContain("compaction")
     expect(names).toContain("title")
     expect(names).toContain("summary")
@@ -91,6 +93,49 @@ it.instance("explore agent denies edit and write", () =>
     expect(evalPerm(explore, "edit")).toBe("deny")
     expect(evalPerm(explore, "write")).toBe("deny")
     expect(evalPerm(explore, "todowrite")).toBe("deny")
+  }),
+)
+
+// L1 (v3.8.0 §L1): native researcher/reviewer subagents for multi-agent orchestration.
+it.instance("researcher agent is a read-only subagent that denies edit/write/task", () =>
+  Effect.gen(function* () {
+    const researcher = yield* load((svc) => svc.get("researcher"))
+    expect(researcher).toBeDefined()
+    expect(researcher?.mode).toBe("subagent")
+    expect(researcher?.native).toBe(true)
+    expect(researcher?.hidden).toBeUndefined()
+    expect(researcher?.description).toBeTruthy()
+    expect(researcher?.prompt).toBeTruthy()
+    // read + analysis tools allowed
+    expect(evalPerm(researcher, "read")).toBe("allow")
+    expect(evalPerm(researcher, "grep")).toBe("allow")
+    expect(evalPerm(researcher, "webfetch")).toBe("allow")
+    // mutation + recursive fan-out denied
+    expect(evalPerm(researcher, "edit")).toBe("deny")
+    expect(evalPerm(researcher, "write")).toBe("deny")
+    expect(Permission.evaluate("task", "researcher", researcher!.permission).action).toBe("deny")
+  }),
+)
+
+it.instance("reviewer agent is a read-only subagent that denies edit/write/task and web access", () =>
+  Effect.gen(function* () {
+    const reviewer = yield* load((svc) => svc.get("reviewer"))
+    expect(reviewer).toBeDefined()
+    expect(reviewer?.mode).toBe("subagent")
+    expect(reviewer?.native).toBe(true)
+    expect(reviewer?.hidden).toBeUndefined()
+    expect(reviewer?.description).toBeTruthy()
+    expect(reviewer?.prompt).toBeTruthy()
+    // read-only analysis tools allowed
+    expect(evalPerm(reviewer, "read")).toBe("allow")
+    expect(evalPerm(reviewer, "grep")).toBe("allow")
+    // mutation + recursive fan-out denied
+    expect(evalPerm(reviewer, "edit")).toBe("deny")
+    expect(evalPerm(reviewer, "write")).toBe("deny")
+    expect(Permission.evaluate("task", "reviewer", reviewer!.permission).action).toBe("deny")
+    // reviewer is strictly local: no web tools
+    expect(evalPerm(reviewer, "webfetch")).toBe("deny")
+    expect(evalPerm(reviewer, "websearch")).toBe("deny")
   }),
 )
 

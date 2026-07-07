@@ -68,6 +68,8 @@ cliIt.live(
         {
           method: "POST",
           headers,
+          // Tier-3 wire compat: send the LEGACY "wish" literal. The server must still accept it (an
+          // older client may send it) and normalize internally; a passing prepare proves acceptance.
           body: JSON.stringify({
             mode: "wish",
             output_language: "chinese",

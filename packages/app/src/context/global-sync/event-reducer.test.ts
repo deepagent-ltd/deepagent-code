@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test"
 import type { Message, Part, PermissionRequest, Project, QuestionRequest, Session } from "@deepagent-code/sdk/v2/client"
-import { createStore } from "solid-js/store"
-import type { State } from "./types"
+import { createRoot } from "solid-js"
+import { isServer } from "solid-js/web"
+import { createStore, reconcile, unwrap } from "solid-js/store"
+import type { SessionPlan, State } from "./types"
 import { applyDirectoryEvent, applyGlobalEvent, cleanupDroppedSessionCaches } from "./event-reducer"
 
 const rootSession = (input: { id: string; parentID?: string; archived?: number }) =>
@@ -274,7 +276,6 @@ describe("applyDirectoryEvent", () => {
     const dropped = rootSession({ id: "ses_b" })
     const kept = rootSession({ id: "ses_a" })
     const message = userMessage("msg_1", dropped.id)
-    const todos: string[] = []
     const [store, setStore] = createStore(
       baseState({
         limit: 1,
@@ -296,10 +297,6 @@ describe("applyDirectoryEvent", () => {
       push() {},
       directory: "/tmp",
       loadLsp() {},
-      setSessionTodo(sessionID, value) {
-        if (value !== undefined) return
-        todos.push(sessionID)
-      },
     })
 
     expect(store.session.map((x) => x.id)).toEqual([kept.id])
@@ -310,7 +307,6 @@ describe("applyDirectoryEvent", () => {
     expect(store.permission[dropped.id]).toBeUndefined()
     expect(store.question[dropped.id]).toBeUndefined()
     expect(store.session_status[dropped.id]).toBeUndefined()
-    expect(todos).toEqual([dropped.id])
   })
 
   test("cleanupDroppedSessionCaches clears part-only orphan state", () => {
@@ -574,3 +570,125 @@ describe("applyDirectoryEvent", () => {
     expect(lspLoads).toBe(1)
   })
 })
+
+// Regression guard for the plan panel. The model pushes repeated plan.updated events that advance
+// step statuses; the reducer feeds them into a per-session plan store via reconcile. The previous
+// code used `{ key: "plan_id" }`, which reconcile applies recursively to the nested `steps[]` array
+// — but a step's identity field is `step_id`, not `plan_id`, so every step resolved to
+// `key=undefined`.
+//
+// IMPORTANT (verified against solid-js@1.9.10): the wrong key does NOT drop status updates — field
+// values land correctly under plan_id, step_id, or null alike (see the status-advance test below,
+// which passes under all three keys). The only behavioural difference is per-step PROXY IDENTITY on
+// reorder, and even that is invisible to the current UI: the dock renders via <Index> (positional)
+// over plain objects the `planAsTodos` memo re-creates every tick, so store-proxy identity is never
+// consumed by the render. `key: "step_id"` is therefore the correct minimal-diff choice on data-
+// contract grounds (field-level updates instead of whole-object replace, correct identity if the
+// render ever moves to a keyed <For>), not a fix for a reproducible "stuck" symptom at this layer.
+// The status-advance test IS the meaningful CI regression guard; the identity test below only
+// documents the proxy-identity contract and requires --conditions=browser (see its comment).
+describe("plan.updated reconcile (session_plan)", () => {
+  const planEvent = (
+    sessionID: string,
+    steps: Array<[step_id: string, status: string]>,
+    activeStepID: string | null,
+  ) => ({
+    type: "plan.updated",
+    properties: {
+      sessionID,
+      plan_id: "plan_1",
+      goal: "ship it",
+      active_step_id: activeStepID,
+      steps: steps.map(([step_id, status]) => ({ step_id, title: step_id.toUpperCase(), status })),
+      done: steps.filter(([, status]) => status === "done").length,
+      total: steps.length,
+    },
+  })
+
+  // Mirror the real setSessionPlan writer in server-sync.tsx: session_plan[sid] = reconcile(plan, ...).
+  const makeSetSessionPlan = (
+    setPlanStore: (path: "sp", sid: string, value: unknown) => void,
+    key: string | null,
+  ) => {
+    return (sessionID: string, plan: SessionPlan | undefined) => {
+      if (!plan) return
+      setPlanStore("sp", sessionID, reconcile(plan, { key }) as never)
+    }
+  }
+
+  const dispatch = (setStore: any, store: any, setSessionPlan: any, event: any) => {
+    applyDirectoryEvent({
+      event,
+      store,
+      setStore,
+      push() {},
+      directory: "/tmp",
+      loadLsp() {},
+      setSessionPlan,
+    })
+  }
+
+  test("two consecutive plan.updated events advance step status through the reducer", () => {
+    createRoot((dispose) => {
+      const [store, setStore] = createStore(baseState())
+      const [planStore, setPlanStore] = createStore<{ sp: Record<string, SessionPlan> }>({ sp: {} })
+      const setSessionPlan = makeSetSessionPlan(setPlanStore as never, "step_id")
+
+      // First plan.updated: step "a" is active, the rest pending.
+      dispatch(setStore, store, setSessionPlan, planEvent("ses_1", [["a", "active"], ["b", "pending"], ["c", "pending"]], "a"))
+      expect(planStore.sp.ses_1.steps.map((s) => s.status)).toEqual(["active", "pending", "pending"])
+
+      // Second plan.updated: same plan_id, "a" done and "b" now active. This is the event the old
+      // code effectively dropped from the panel's point of view.
+      dispatch(setStore, store, setSessionPlan, planEvent("ses_1", [["a", "done"], ["b", "active"], ["c", "pending"]], "b"))
+      expect(planStore.sp.ses_1.steps.map((s) => s.status)).toEqual(["done", "active", "pending"])
+
+      // Third advance, to be thorough.
+      dispatch(setStore, store, setSessionPlan, planEvent("ses_1", [["a", "done"], ["b", "done"], ["c", "active"]], "c"))
+      expect(planStore.sp.ses_1.steps.map((s) => s.status)).toEqual(["done", "done", "active"])
+      expect(planStore.sp.ses_1.active_step_id).toBe("c")
+      expect(planStore.sp.ses_1.done).toBe(2)
+
+      dispose()
+    })
+  })
+
+  // Per-step proxy identity across reorder only manifests under the CLIENT (browser) build of
+  // Solid's store; the SSR build never retains proxy identity, so this assertion is only meaningful
+  // under `--conditions=browser`. CI GAP: the package `test`/`test:ci` scripts run SSR-only, so this
+  // test is skipped in CI today. It is NOT a user-visible regression guard — the dock renders steps
+  // positionally via <Index> over memo-recreated plain objects, so proxy identity never reaches the
+  // render. It documents the reconcile identity contract for a future keyed-<For> render only. To
+  // exercise it locally: `bun test --conditions=browser --preload ./happydom.ts <this file>`.
+  test.skipIf(isServer)("keying by step_id preserves per-step identity across reorder", () => {
+    const mk = (rows: Array<[string, string]>): SessionPlan => ({
+      plan_id: "plan_1",
+      goal: "g",
+      active_step_id: rows[0]?.[0] ?? null,
+      steps: rows.map(([step_id, status]) => ({ step_id, title: step_id.toUpperCase(), status })),
+      done: rows.filter(([, s]) => s === "done").length,
+      total: rows.length,
+    })
+
+    const identityStable = (key: string) =>
+      createRoot((dispose) => {
+        const [store, setStore] = createStore<{ p?: SessionPlan }>({})
+        setStore("p", reconcile(mk([["a", "active"], ["b", "pending"]]), { key }))
+        const before = unwrap(store.p!.steps.find((s) => s.step_id === "a")!)
+        setStore("p", reconcile(mk([["b", "active"], ["a", "done"]]), { key }))
+        const after = unwrap(store.p!.steps.find((s) => s.step_id === "a")!)
+        dispose()
+        return before === after
+      })
+
+    // The fix keys by step_id and keeps a step's identity stable when the array reorders.
+    expect(identityStable("step_id")).toBe(true)
+    // The old (buggy) key does not.
+    expect(identityStable("plan_id")).toBe(false)
+  })
+})
+
+// NOTE: the `todo.updated reconcile` describe block was removed here. Task tracking is unified onto
+// the plan system: the backend no longer emits `todo.updated` (both todowrite tool writers were
+// removed) and the reducer no longer handles it. The plan panel's live-update coverage lives in the
+// `plan.updated reconcile (session_plan)` describe block below.

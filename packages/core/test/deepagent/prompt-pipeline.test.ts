@@ -6,17 +6,17 @@ import { DeepAgentCodeHome } from "../../src/deepagent/workspace"
 import {
   PromptDraftStore,
   PromptRefiner,
-  WISH_REFINEMENT_SYSTEM_PROMPT,
-  buildWishContextBriefing,
-  classifyWishRoute,
-  draftFromWishRefinement,
-  isWishRefinementOutput,
-  isUsefulWishRefinement,
-  normalizeWishRefinementOutput,
+  INTELLIGENCE_REFINEMENT_SYSTEM_PROMPT,
+  buildIntelligenceContextBriefing,
+  classifyIntelligenceRoute,
+  draftFromIntelligenceRefinement,
+  isIntelligenceRefinementOutput,
+  isUsefulIntelligenceRefinement,
+  normalizeIntelligenceRefinementOutput,
   renderDraftMarkdown,
   scrubMemoryContext,
-  wishContextMessage,
-  wishRefinementSystemPrompt,
+  intelligenceContextMessage,
+  intelligenceRefinementSystemPrompt,
 } from "../../src/deepagent/prompt-pipeline"
 
 let root: string
@@ -32,7 +32,7 @@ afterEach(() => rmSync(root, { recursive: true, force: true }))
 const storeFor = () => new PromptDraftStore(home.ensureSession("projA", "sess1"))
 
 describe("V3.1 Prompt Pipeline", () => {
-  test("wish mode keeps raw input out of TaskThread until confirmation", () => {
+  test("intelligence mode keeps raw input out of TaskThread until confirmation", () => {
     const store = storeFor()
     const refiner = new PromptRefiner(store)
     const { draft, contextPlan } = refiner.refine({
@@ -121,10 +121,10 @@ describe("V3.1 Prompt Pipeline", () => {
     expect(scrubMemoryContext("a <!-- memory-context secret --> b")).toBe("a [memory context hidden] b")
   })
 
-  // A2: model-driven wish first-turn refinement.
-  test("draftFromWishRefinement uses the model prompt and surfaces inferences as assumptions", () => {
+  // A2: model-driven intelligence first-turn refinement.
+  test("draftFromIntelligenceRefinement uses the model prompt and surfaces inferences as assumptions", () => {
     const store = storeFor()
-    const { draft } = draftFromWishRefinement(store, "add login", {
+    const { draft } = draftFromIntelligenceRefinement(store, "add login", {
       route: "code",
       refined_prompt: "Implement a JWT-based login endpoint under the existing /auth router with tests.",
       goal: "add login",
@@ -145,7 +145,7 @@ describe("V3.1 Prompt Pipeline", () => {
   })
 
   test("renderDraftMarkdown stays human-readable and omits template scaffolding", () => {
-    const { draft } = draftFromWishRefinement(storeFor(), "add login", {
+    const { draft } = draftFromIntelligenceRefinement(storeFor(), "add login", {
       route: "code",
       refined_prompt: "Implement a JWT-based login endpoint under the existing /auth router with tests.",
       goal: "add login",
@@ -163,8 +163,8 @@ describe("V3.1 Prompt Pipeline", () => {
     expect(preview).not.toContain("Confirm the refined prompt before execution.")
   })
 
-  test("draftFromWishRefinement falls back to a default assumption when the model lists none", () => {
-    const { draft } = draftFromWishRefinement(storeFor(), "do the thing", {
+  test("draftFromIntelligenceRefinement falls back to a default assumption when the model lists none", () => {
+    const { draft } = draftFromIntelligenceRefinement(storeFor(), "do the thing", {
       route: "code",
       refined_prompt: "Do the thing precisely.",
       goal: "do the thing",
@@ -177,9 +177,9 @@ describe("V3.1 Prompt Pipeline", () => {
     expect(draft.assumptions[0]!.status).toBe("pending_confirmation")
   })
 
-  test("isWishRefinementOutput rejects malformed model output", () => {
+  test("isIntelligenceRefinementOutput rejects malformed model output", () => {
     expect(
-      isWishRefinementOutput({
+      isIntelligenceRefinementOutput({
         route: "code",
         refined_prompt: "x",
         goal: "y",
@@ -190,7 +190,7 @@ describe("V3.1 Prompt Pipeline", () => {
       }),
     ).toBe(true)
     expect(
-      isWishRefinementOutput({
+      isIntelligenceRefinementOutput({
         route: "general",
         refined_prompt: "x",
         goal: "y",
@@ -200,13 +200,13 @@ describe("V3.1 Prompt Pipeline", () => {
         assumptions: [],
       }),
     ).toBe(true)
-    expect(isWishRefinementOutput({ refined_prompt: "x" })).toBe(false)
-    expect(isWishRefinementOutput(null)).toBe(false)
+    expect(isIntelligenceRefinementOutput({ refined_prompt: "x" })).toBe(false)
+    expect(isIntelligenceRefinementOutput(null)).toBe(false)
   })
 
-  test("normalizeWishRefinementOutput fills optional fields from partial JSON-mode output", () => {
+  test("normalizeIntelligenceRefinementOutput fills optional fields from partial JSON-mode output", () => {
     expect(
-      normalizeWishRefinementOutput(
+      normalizeIntelligenceRefinementOutput(
         {
           route: "code",
           refined_prompt: "请定位登录测试失败原因，修复实现或测试夹具，并运行对应测试。",
@@ -223,12 +223,12 @@ describe("V3.1 Prompt Pipeline", () => {
       acceptance: [],
       assumptions: ["存在已有登录测试"],
     })
-    expect(normalizeWishRefinementOutput({ route: "code" }, "修复登录测试")).toBeUndefined()
+    expect(normalizeIntelligenceRefinementOutput({ route: "code" }, "修复登录测试")).toBeUndefined()
   })
 
-  test("useful wish refinement rejects code prompts equivalent to raw input", () => {
+  test("useful intelligence refinement rejects code prompts equivalent to raw input", () => {
     expect(
-      isUsefulWishRefinement("修复登录测试", {
+      isUsefulIntelligenceRefinement("修复登录测试", {
         route: "code",
         refined_prompt: "修复登录测试",
         goal: "修复登录测试",
@@ -239,7 +239,7 @@ describe("V3.1 Prompt Pipeline", () => {
       }),
     ).toBe(false)
     expect(
-      isUsefulWishRefinement("修复登录测试", {
+      isUsefulIntelligenceRefinement("修复登录测试", {
         route: "code",
         refined_prompt: "请在当前仓库中定位登录相关测试失败的原因，修复实现或测试夹具，并运行对应测试验证。",
         goal: "修复登录测试",
@@ -251,23 +251,23 @@ describe("V3.1 Prompt Pipeline", () => {
     ).toBe(true)
   })
 
-  test("wish refinement prompt is compatible with OpenAI JSON mode", () => {
-    expect(WISH_REFINEMENT_SYSTEM_PROMPT.toLowerCase()).toContain("json")
+  test("intelligence refinement prompt is compatible with OpenAI JSON mode", () => {
+    expect(INTELLIGENCE_REFINEMENT_SYSTEM_PROMPT.toLowerCase()).toContain("json")
   })
 
-  test("wish refinement prompt pins the requested output language", () => {
-    expect(wishRefinementSystemPrompt("chinese")).toContain("in Chinese")
-    expect(wishRefinementSystemPrompt("english")).toContain("in English")
+  test("intelligence refinement prompt pins the requested output language", () => {
+    expect(intelligenceRefinementSystemPrompt("chinese")).toContain("in Chinese")
+    expect(intelligenceRefinementSystemPrompt("english")).toContain("in English")
   })
 
   test("fallback route classifier keeps obvious chat out of DeepAgent", () => {
-    expect(classifyWishRoute("你好")).toBe("general")
-    expect(classifyWishRoute("你是谁")).toBe("general")
-    expect(classifyWishRoute("修复登录测试")).toBe("code")
+    expect(classifyIntelligenceRoute("你好")).toBe("general")
+    expect(classifyIntelligenceRoute("你是谁")).toBe("general")
+    expect(classifyIntelligenceRoute("修复登录测试")).toBe("code")
   })
 
-  test("wish refinement system prompt forbids guessing the environment and asks to leave gaps", () => {
-    const prompt = WISH_REFINEMENT_SYSTEM_PROMPT.toLowerCase()
+  test("intelligence refinement system prompt forbids guessing the environment and asks to leave gaps", () => {
+    const prompt = INTELLIGENCE_REFINEMENT_SYSTEM_PROMPT.toLowerCase()
     expect(prompt).toContain("already known")
     expect(prompt).toContain("not guess a concrete value")
     expect(prompt).toContain("placeholder")
@@ -276,11 +276,11 @@ describe("V3.1 Prompt Pipeline", () => {
     expect(prompt).toContain("only the task description")
   })
 
-  test("buildWishContextBriefing keeps recent turns and is empty on first turn", () => {
-    expect(buildWishContextBriefing([])).toBe("")
-    expect(buildWishContextBriefing([{ role: "user", text: "   " }])).toBe("")
+  test("buildIntelligenceContextBriefing keeps recent turns and is empty on first turn", () => {
+    expect(buildIntelligenceContextBriefing([])).toBe("")
+    expect(buildIntelligenceContextBriefing([{ role: "user", text: "   " }])).toBe("")
 
-    const briefing = buildWishContextBriefing([
+    const briefing = buildIntelligenceContextBriefing([
       { role: "user", text: "work in packages/app" },
       { role: "assistant", text: "ok, scoped to packages/app" },
     ])
@@ -288,20 +288,20 @@ describe("V3.1 Prompt Pipeline", () => {
     expect(briefing).toContain("Assistant: ok, scoped to packages/app")
   })
 
-  test("buildWishContextBriefing caps turns and truncates long messages", () => {
+  test("buildIntelligenceContextBriefing caps turns and truncates long messages", () => {
     const turns = Array.from({ length: 12 }, (_, i) => ({ role: "user" as const, text: `turn ${i}` }))
-    const briefing = buildWishContextBriefing(turns, { maxTurns: 4 })
+    const briefing = buildIntelligenceContextBriefing(turns, { maxTurns: 4 })
     expect(briefing.split("\n")).toHaveLength(4)
     expect(briefing).toContain("turn 11")
     expect(briefing).not.toContain("turn 7")
 
-    const long = buildWishContextBriefing([{ role: "user", text: "x".repeat(50) }], { maxCharsPerTurn: 10 })
+    const long = buildIntelligenceContextBriefing([{ role: "user", text: "x".repeat(50) }], { maxCharsPerTurn: 10 })
     expect(long).toContain("…")
     expect(long.length).toBeLessThan("User: ".length + 50)
   })
 
-  test("wishContextMessage wraps the briefing and instructs reuse over guessing", () => {
-    const msg = wishContextMessage("User: target dir is packages/app")
+  test("intelligenceContextMessage wraps the briefing and instructs reuse over guessing", () => {
+    const msg = intelligenceContextMessage("User: target dir is packages/app")
     expect(msg).toContain("<conversation_context>")
     expect(msg).toContain("target dir is packages/app")
     expect(msg.toLowerCase()).toContain("do not")

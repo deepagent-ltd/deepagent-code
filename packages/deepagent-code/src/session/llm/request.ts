@@ -11,6 +11,13 @@ import { ProviderTransform } from "@/provider/transform"
 import { SystemPrompt } from "../system"
 import { InstallationVersion } from "@deepagent-code/core/installation/version"
 import { AgentGateway } from "@deepagent-code/core/agent-gateway"
+import { modeRank } from "@deepagent-code/core/deepagent/mode"
+import {
+  buildOrchestrationSection,
+  decideFanout,
+  estimateSignalsFromText,
+  type OrchestrationCaps,
+} from "@deepagent-code/core/deepagent/orchestration"
 import { Effect, Exit, Record } from "effect"
 import os from "node:os"
 import { writeFile, mkdir } from "node:fs/promises"
@@ -44,6 +51,10 @@ type PrepareInput = {
   readonly plugin: Plugin.Interface
   readonly flags: RuntimeFlags.Info
   readonly isWorkflow: boolean
+  // §5b: configurable orchestration caps (from config.experimental.orchestration). Unset ⇒ lenient
+  // defaults. Only used to surface the concrete per-round concurrency number in the advisory prompt;
+  // the hard code-layer cap is enforced by the §5a semaphore in task.ts.
+  readonly orchestrationCaps?: OrchestrationCaps
 }
 
 export type Prepared = {
@@ -89,8 +100,27 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
   } else {
     const baseAgentSystem = input.agent.prompt ? [input.agent.prompt] : SystemPrompt.provider(input.model)
     const runtimeSystem = input.system
+    // L2 (v3.8.0 §L2): inject the orchestration guidance on the NON-DeepAgent path too, so it appears
+    // regardless of mode. `agentMode` is `general` here (DeepAgent disabled / plain session), so the
+    // section is the tier-0 "only on explicit request" variant. Only the PRIMARY agent orchestrates —
+    // subagents (which have their own prompt and cannot re-dispatch `task`) are excluded.
+    //
+    // §5b: run the pure `decideFanout` scheduler from this turn's ComplexitySignals (a lightweight
+    // heuristic over the user request) and pass its verdict to `buildOrchestrationSection`, which
+    // turns the generic guidance into a concrete, task-specific recommendation. This is ADVISORY —
+    // the model still issues the `task` calls; the HARD concurrency cap is the §5a semaphore. We only
+    // compute a decision at tier >= 1 (buildOrchestrationSection ignores it at tier 0 anyway).
+    const orchestration =
+      input.agent.mode !== "subagent"
+        ? buildOrchestrationSection(agentMode, buildFanoutDecision(input, agentMode))
+        : null
     system = [
-      [...baseAgentSystem, ...runtimeSystem, ...(input.user.system ? [input.user.system] : [])]
+      [
+        ...baseAgentSystem,
+        ...runtimeSystem,
+        ...(orchestration ? [orchestration] : []),
+        ...(input.user.system ? [input.user.system] : []),
+      ]
         .filter((x) => x)
         .join("\n"),
     ]
@@ -230,6 +260,20 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
   }
 })
 
+/**
+ * §5b: compute the runtime fan-out decision for the CURRENT turn from a lightweight complexity
+ * heuristic over the latest user request, clamped by the configured (lenient) orchestration caps.
+ * Returns `undefined` when there is no user text to read (⇒ buildOrchestrationSection falls back to
+ * its generic guidance). Pure aside from reading `input.messages`; the numbers it yields are ADVISORY
+ * — the hard concurrency ceiling is the §5a semaphore in task.ts.
+ */
+const buildFanoutDecision = (input: PrepareInput, mode: AgentGateway.AgentMode) => {
+  const userRequest = extractLatestUserContent(input.messages)
+  if (!userRequest) return undefined
+  const signals = estimateSignalsFromText({ userRequest })
+  return decideFanout({ mode, signals, caps: input.orchestrationCaps })
+}
+
 const prepareMetadata = (input: PrepareInput, tools: Record<string, Tool>): Record<string, unknown> => {
   const agentMode = deepAgentAgentModeOverride(input.user.metadata)
   const deepagent =
@@ -348,6 +392,9 @@ const buildDeepAgentPromptContext = Effect.fn("LLMRequestPrep.buildDeepAgentProm
     tools,
     userRequest,
     workspacePath: envCtx.cwd,
+    // §5b: surface the configured (lenient) caps so the DeepAgent-path fan-out decision reflects the
+    // deployment's per-round concurrency. Hard enforcement remains the §5a semaphore in task.ts.
+    ...(input.orchestrationCaps ? { orchestrationCaps: input.orchestrationCaps } : {}),
   }
 
   const sessionExistedBefore = AgentGateway.DeepAgentSessionState.get(input.sessionID) !== undefined
@@ -397,9 +444,23 @@ function extractLatestUserContent(messages: ModelMessage[]): string | null {
   return null
 }
 
+const isValidAgentMode = (value: unknown): value is AgentGateway.AgentMode =>
+  value === "general" || value === "high" || value === "xhigh" || value === "max" || value === "ultra"
+
 const deepAgentAgentModeOverride = (metadata: unknown): AgentGateway.AgentMode | undefined => {
   const deepagent = isRecord(metadata) && isRecord(metadata.deepagent) ? metadata.deepagent : {}
-  return deepagent.agent_mode_override === "general" ? "general" : undefined
+  const override = deepagent.agent_mode_override
+  // Accept any valid AgentMode as a per-request override (not just "general"), so a downgraded
+  // subagent can pin e.g. "max"/"xhigh". A missing/invalid override returns undefined ⇒ the caller
+  // falls back to the process-global agentMode (see prepare(): `?? AgentGateway.snapshot().agentMode`).
+  if (!isValidAgentMode(override)) return undefined
+  // SECURITY (downgrade-only clamp — mirrors agent-gateway.effectiveAgentMode): `metadata` is a
+  // fully client-writable field on the HTTP prompt payload. Every legitimate producer only ever
+  // downgrades (desktop → at most "general"; task tool → downgradeOneLevel(global)). Clamp so a
+  // client-supplied override can only LOWER the effective mode, never escalate above the
+  // operator-configured process-global agentMode (ultra ⇒ autonomous macro-rounds + higher budget).
+  const globalMode = AgentGateway.snapshot().agentMode
+  return modeRank(override) <= modeRank(globalMode) ? override : undefined
 }
 
 // T3 (S1-v3.4): round_control.action carries the microbatch triage action that was written onto an

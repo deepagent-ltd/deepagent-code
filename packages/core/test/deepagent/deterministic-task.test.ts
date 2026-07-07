@@ -10,7 +10,7 @@ import { configureRegistry, discover, score } from "../../src/deepagent/domain-p
 import type { ExtendedProblemProfile } from "../../src/deepagent/domain-pack-registry"
 
 const profile = (over: Partial<ExtendedProblemProfile> = {}): ExtendedProblemProfile => ({
-  scenario_mode: "wish",
+  scenario_mode: "intelligence",
   agent_strength: "high",
   task_kind: "explain",
   code_domains: ["code"],

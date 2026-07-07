@@ -78,7 +78,9 @@ const emptyTools: ToolPart[] = []
 const emptyAssistantMessages: AssistantMessage[] = []
 const idle = { type: "idle" as const }
 
-type FramedTimelineRow = Exclude<TimelineRow.TimelineRow, { _tag: "BottomSpacer" }>
+// ForkBanner and BottomSpacer render their own top-level container (no TimelineRowFrame, which
+// assumes a per-turn `userMessageID`), so they're excluded from the framed-row union.
+type FramedTimelineRow = Exclude<TimelineRow.TimelineRow, { _tag: "BottomSpacer" | "ForkBanner" }>
 type TimelineRowByTag<T extends TimelineRow.TimelineRow["_tag"]> = Extract<TimelineRow.TimelineRow, { _tag: T }>
 
 function sameKeys(a: readonly string[] | undefined, b: readonly string[] | undefined) {
@@ -382,6 +384,15 @@ export function MessageTimeline(props: {
   const shareUrl = createMemo(() => info()?.share?.url)
   const shareEnabled = createMemo(() => sync.data.config.share !== "disabled")
   const parentID = createMemo(() => info()?.parentID)
+  // Fork lineage carried on the session's own metadata (set by backend fork()). Drives the
+  // full-width "derived from ‹parent›" banner at the top of the forked transcript.
+  const forkedFrom = createMemo(() => {
+    const value = info()?.metadata?.forkedFrom as
+      | { parentSessionID?: string; parentTitle?: string }
+      | undefined
+    if (!value?.parentSessionID) return undefined
+    return { parentSessionID: value.parentSessionID, parentTitle: value.parentTitle ?? "" }
+  })
   const parent = createMemo(() => {
     const id = parentID()
     if (!id) return
@@ -435,7 +446,11 @@ export function MessageTimeline(props: {
   const timelineRows = createMemo((previous: TimelineRow.TimelineRow[] | undefined) => {
     const rows = messageRowMemos().flatMap((memo) => memo())
     if (rows.length === 0) return rows
-    return reuseTimelineRows(previous, [...rows, new TimelineRow.BottomSpacer()])
+    const origin = forkedFrom()
+    const banner = origin
+      ? [new TimelineRow.ForkBanner({ parentSessionID: origin.parentSessionID, parentTitle: origin.parentTitle })]
+      : []
+    return reuseTimelineRows(previous, [...banner, ...rows, new TimelineRow.BottomSpacer()])
   })
   const timelineRowKeys = createMemo(() => timelineRows().map(TimelineRow.key), [] as string[], { equals: sameKeys })
   const virtualCache = createMemo(() => readTimelineCache(sessionKey(), timelineRowKeys()))
@@ -1073,6 +1088,7 @@ export function MessageTimeline(props: {
                 onToolOpenChange={(open) => setToolOpen(part().id, open)}
                 deferToolContent={false}
                 virtualizeDiff={false}
+                onFork={props.actions?.fork}
               />
             )}
           </Show>
@@ -1117,6 +1133,39 @@ export function MessageTimeline(props: {
 
   const renderTimelineRow = (row: Accessor<TimelineRow.TimelineRow>) => {
     switch (row()._tag) {
+      case "ForkBanner": {
+        const forkBannerRow = row as Accessor<TimelineRowByTag<"ForkBanner">>
+        const label = createMemo(() => {
+          const title = sessionTitle(forkBannerRow().parentTitle) || forkBannerRow().parentTitle
+          return title
+            ? language.t("session.fork.derivedFrom", { title })
+            : language.t("session.fork.derivedFromUnknown")
+        })
+        return (
+          <div class="w-full px-4 md:px-5 pt-2 pb-1">
+            <button
+              type="button"
+              class="w-full group/fork-banner cursor-pointer"
+              onClick={() => navigate(`/${params.dir}/session/${forkBannerRow().parentSessionID}`)}
+              title={label()}
+            >
+              <div data-component="compaction-part">
+                <div data-slot="compaction-part-divider">
+                  <span data-slot="compaction-part-line" />
+                  <span
+                    data-slot="compaction-part-label"
+                    class="text-12-regular text-text-weaker group-hover/fork-banner:text-text-weak inline-flex items-center gap-1"
+                  >
+                    <Icon name="branch" size="small" class="shrink-0" />
+                    {label()}
+                  </span>
+                  <span data-slot="compaction-part-line" />
+                </div>
+              </div>
+            </button>
+          </div>
+        )
+      }
       case "CommentStrip": {
         const commentStripRow = row as Accessor<TimelineRowByTag<"CommentStrip">>
         const comments = createMemo(() =>

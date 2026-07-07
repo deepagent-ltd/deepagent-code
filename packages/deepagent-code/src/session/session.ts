@@ -30,12 +30,15 @@ import { PartTable, SessionTable } from "@deepagent-code/core/session/sql"
 import { ProjectTable } from "@deepagent-code/core/project/sql"
 import { Log } from "@deepagent-code/core/util/log"
 import { MessageV2 } from "./message-v2"
-import type { InstanceContext } from "../project/instance-context"
+import { forwardLedgerOnFork, persistForkOrigin } from "./context-ledger"
+import { containsPath, type InstanceContext } from "../project/instance-context"
 import { InstanceState } from "@/effect/instance-state"
 import { Snapshot } from "@/snapshot"
 import { ProjectV2 } from "@deepagent-code/core/project"
 import { WorkspaceV2 } from "@deepagent-code/core/workspace"
 import { SessionID, MessageID, PartID } from "./schema"
+import { Worktree } from "@/worktree"
+import { Identifier } from "@/id/id"
 
 import type { Provider } from "@/provider/provider"
 import { Permission } from "@/permission"
@@ -158,6 +161,10 @@ function getForkedTitle(title: string): string {
   return `${title} (fork #1)`
 }
 
+// Fork lineage is capped at MAX_FORK_DEPTH levels (root → fork → fork-of-fork = 3), i.e. at most two
+// successive forks. The tree UI mirrors this cap when nesting sessions under their origin.
+export const MAX_FORK_DEPTH = 3
+
 function sessionPath(worktree: string, cwd: string) {
   return path.relative(path.resolve(worktree), cwd).replaceAll("\\", "/")
 }
@@ -263,6 +270,16 @@ export type CreateInput = Types.DeepMutable<Schema.Schema.Type<typeof CreateInpu
 export const ForkInput = Schema.Struct({
   sessionID: SessionID,
   messageID: Schema.optional(MessageID),
+  // 附-D 阶段3: optionally fork into a specific directory instead of inheriting the source
+  // session's directory. When omitted, fork behaves exactly as before (inherits ctx.directory).
+  // This field is reachable from the public HTTP ForkPayload, so fork() enforces a fail-closed
+  // boundary guard (containsPath) before adopting it — a client-supplied directory that escapes the
+  // instance boundary is rejected. The stored `path` is additionally re-derived worktree-relative.
+  directory: Schema.optional(Schema.String),
+  // 附-D 阶段4: when "worktree", allocate a dedicated git worktree for the fork so parallel forks
+  // don't collide on the same checkout. Resolved OPTIONALLY (serviceOption); non-git projects
+  // degrade to a same-directory fork (WorktreeNotGitError tolerated).
+  isolate: Schema.optional(Schema.Literal("worktree")),
 })
 export const GetInput = SessionID
 export const ChildrenInput = SessionID
@@ -472,7 +489,12 @@ export interface Interface {
     workspaceID?: WorkspaceV2.ID
     directory?: string
   }) => Effect.Effect<Info>
-  readonly fork: (input: { sessionID: SessionID; messageID?: MessageID }) => Effect.Effect<Info, NotFound>
+  readonly fork: (input: {
+    sessionID: SessionID
+    messageID?: MessageID
+    directory?: string
+    isolate?: "worktree"
+  }) => Effect.Effect<Info, NotFound>
   readonly touch: (sessionID: SessionID) => Effect.Effect<void>
   readonly get: (id: SessionID) => Effect.Effect<Info, NotFound>
   readonly setTitle: (input: { sessionID: SessionID; title: string }) => Effect.Effect<void>
@@ -737,16 +759,96 @@ export const layer: Layer.Layer<
       })
     })
 
-    const fork = Effect.fn("Session.fork")(function* (input: { sessionID: SessionID; messageID?: MessageID }) {
+    const fork = Effect.fn("Session.fork")(function* (input: {
+      sessionID: SessionID
+      messageID?: MessageID
+      directory?: string
+      isolate?: "worktree"
+    }) {
       const ctx = yield* InstanceState.context
       const original = yield* get(input.sessionID)
       const title = getForkedTitle(original.title)
+
+      // Depth guard (max 3 levels ⇒ at most 2 forks deep). A fork's lineage is recorded in
+      // `metadata.forkedFrom.parentSessionID` (foreground-safe: unlike `parentID`, it does NOT
+      // trigger subagent semantics — notification suppression, disabled followup queue). Walk the
+      // chain up from the source; if the source already sits at depth 2 (i.e. is itself a
+      // fork-of-a-fork), a further fork would be depth 3 → reject fail-closed. Bounded by
+      // MAX_FORK_DEPTH iterations so a corrupted cycle can't loop forever.
+      const sourceDepth = yield* Effect.gen(function* () {
+        let depth = 0
+        let cursor: SessionID | undefined = input.sessionID
+        for (let i = 0; i < MAX_FORK_DEPTH && cursor; i++) {
+          const node: Info = cursor === input.sessionID ? original : yield* get(cursor)
+          const parent = (node.metadata?.forkedFrom as { parentSessionID?: string } | undefined)?.parentSessionID
+          if (!parent) break
+          depth++
+          cursor = SessionID.make(parent)
+        }
+        return depth
+      })
+      if (sourceDepth >= MAX_FORK_DEPTH - 1) {
+        return yield* Effect.fail(
+          new NotFoundError({
+            message: `Fork depth limit reached (max ${MAX_FORK_DEPTH} levels): ${input.sessionID}`,
+          }),
+        )
+      }
+
+      // 附-D 阶段4: optionally allocate a dedicated worktree for this fork. Mirrors the race-safe,
+      // non-git-tolerant pattern in tool/task.ts (P5 C7): the Worktree service is resolved OPTIONALLY
+      // so fork never becomes a hard requirement, the worktree name is unique per invocation via a
+      // monotonic identifier so concurrent forks can't collide on one name, and ONLY the non-git
+      // degradation (WorktreeNotGitError) falls back to a same-directory fork. Any other worktree
+      // failure is a defect (orDie) so it fails loud rather than silently un-isolating the fork —
+      // while keeping fork's typed error channel as NotFound.
+      const worktreeOpt =
+        input.isolate === "worktree" ? yield* Effect.serviceOption(Worktree.Service) : Option.none<Worktree.Interface>()
+      const worktreeInfo =
+        input.isolate === "worktree" && Option.isSome(worktreeOpt)
+          ? yield* worktreeOpt.value
+              .create({ name: `fork-${Identifier.ascending("session")}` })
+              .pipe(
+                Effect.catchTag("WorktreeNotGitError", () => Effect.succeed(undefined)),
+                Effect.orDie,
+              )
+          : undefined
+
+      // 附-D 阶段3: resolve the effective fork directory. Precedence: a fresh worktree (阶段4) >
+      // an explicit input.directory (阶段3) > the instance directory (today's behavior).
+      //
+      // Boundary guard (fail-closed): unlike create(), whose HTTP CreateInput schema does NOT expose a
+      // `directory` field (only trusted internal callers like tool/task.ts set it to a managed path),
+      // ForkInput DOES expose `directory` and it flows through the public ForkPayload/forkRaw HTTP
+      // route — so an untrusted client can pick the fork's cwd. sessionPath() only re-derives the
+      // stored `path` string; it does NOT stop the session's `directory` (the real cwd downstream
+      // tools operate in) from pointing outside the managed boundary. We therefore reject a
+      // client-supplied directory that escapes the instance boundary (ctx.directory OR the worktree
+      // root, per containsPath). The worktree-allocated path is trusted (Worktree.Service owns it and
+      // it can legitimately be a sibling of the checkout), and ctx.directory is trivially contained,
+      // so only an explicit input.directory is validated.
+      if (worktreeInfo === undefined && input.directory !== undefined && !containsPath(input.directory, ctx)) {
+        return yield* Effect.die(new Error(`Fork directory escapes the project boundary: ${input.directory}`))
+      }
+      const directory = worktreeInfo?.directory ?? input.directory ?? ctx.directory
+      // Record the fork lineage on the new session's metadata so the client can (a) render a
+      // "derived from ‹parent›" banner at the top of the transcript and (b) nest the fork under its
+      // parent in the session tree. This is carried in `metadata` (already DB-persisted + synced to
+      // the client + cloned by fork) rather than `parentID` — a fork is a foreground session, and
+      // `parentID` would misclassify it as a background subagent. It mirrors the ForkOrigin marker
+      // persisted below (context store), but travels with Session.Info so no extra IO/route is needed.
+      const forkedFrom = {
+        parentSessionID: input.sessionID,
+        parentTitle: original.title,
+        ...(input.messageID ? { cutoffMessageID: input.messageID } : {}),
+        forkedAt: Date.now(),
+      }
       const session = yield* createNext({
-        directory: ctx.directory,
-        path: sessionPath(ctx.worktree, ctx.directory),
+        directory,
+        path: sessionPath(ctx.worktree, directory),
         workspaceID: original.workspaceID,
         title,
-        metadata: structuredClone(original.metadata),
+        metadata: { ...structuredClone(original.metadata), forkedFrom },
       })
       const msgs = yield* messages({ sessionID: input.sessionID })
       const idMap = new Map<string, MessageID>()
@@ -777,6 +879,30 @@ export const layer: Layer.Layer<
           yield* updatePart(p)
         }
       }
+
+      // 附-D fork memory completeness: fork now carries the parent's "memory", not just its
+      // messages/parts/metadata. (1) Forward the parent's Session Ledger (App-A §C2) into the fork's
+      // own ledger store so it opens with the parent's structured facts. (2) Persist an OBJECT cutoff
+      // marker (ForkOrigin) recording parent sessionID + the messageID the fork was cut at — the
+      // divergence point was previously only an imperative "skip messages" with no persisted record.
+      // Both are default-safe (recover from the CAUSE — DocumentStore construction throws
+      // synchronously; a copy/IO failure degrades to "fork without forwarded memory", never a failed
+      // fork), and both are keyed only by sessionID (context store root is under
+      // Global.Path.agent.data/state/context/<sessionID>) so they are independent of the fork's
+      // directory / dedicated worktree.
+      //
+      // SEAM — 附-D 阶段5 compare/merge (diff a fork's ledger against its parent, reconcile divergent
+      // branches) is a V4.0 parallel-exploration workflow and is NOT implemented here. The ForkOrigin
+      // marker written below is its future anchor: the cutoff point compare/merge will diff around.
+      yield* forwardLedgerOnFork({ parentSessionID: input.sessionID, forkSessionID: session.id })
+      yield* persistForkOrigin({
+        forkSessionID: session.id,
+        origin: {
+          parentSessionID: input.sessionID,
+          ...(input.messageID ? { cutoffMessageID: input.messageID } : {}),
+          forkedAt: Date.now(),
+        },
+      })
       return session
     })
 

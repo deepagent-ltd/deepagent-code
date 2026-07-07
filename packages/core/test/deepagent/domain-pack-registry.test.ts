@@ -14,7 +14,7 @@ import type {
 let dir: string
 
 const profile = (over: Partial<ExtendedProblemProfile> = {}): ExtendedProblemProfile => ({
-  scenario_mode: "wish",
+  scenario_mode: "intelligence",
   agent_strength: "max",
   task_kind: "implement",
   code_domains: ["code"],

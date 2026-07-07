@@ -57,6 +57,16 @@ const projectStore = (workspacePath: string): DurableKnowledgeStore => {
   return store
 }
 
+// Shared store-union accessor (V3.8 Phase 1, roadmap C5). The ordered set of durable stores a
+// workspace query spans — user-global first, then this workspace's project store when a path is
+// given — reusing the SAME cached DurableKnowledgeStore instances queryKnowledge uses. GraphQuery
+// unions these and walks the graph directly through each store's documentStore getter (bypassing the
+// retrieve() whitelist so design/requirements/code_symbol surface), while queryKnowledge keeps its
+// own retrieve()-based union below (behavior unchanged — this is an additive helper). Throws if not
+// configured; callers guard with isConfigured().
+export const storesForWorkspace = (workspacePath?: string): readonly DurableKnowledgeStore[] =>
+  workspacePath ? [userGlobalStore(), projectStore(workspacePath)] : [userGlobalStore()]
+
 export type SourceQuery = {
   readonly types: readonly DocType[]
   readonly domain?: string | null

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, mock, spyOn, test } from "bun:test"
-import { OpencodeClient, type GlobalEvent } from "@deepagent-code/sdk/v2"
+import { createOpencodeClient, type OpencodeClient, type GlobalEvent } from "@deepagent-code/sdk/v2"
 import { createSessionTransport } from "@/cli/cmd/run/stream.transport"
 import type { FooterApi, FooterEvent, LocalReplayRow, RunFilePart, StreamCommit } from "@/cli/cmd/run/types"
 
@@ -427,7 +427,7 @@ function sdk(
     questions?: OpencodeClient["question"]["list"]
   } = {},
 ) {
-  const client = new OpencodeClient()
+  const client = createOpencodeClient()
 
   const subscribe: OpencodeClient["event"]["subscribe"] = input.subscribe ?? (() => sse(input.stream ?? emptyStream()))
   const globalEvent: OpencodeClient["global"]["event"] =

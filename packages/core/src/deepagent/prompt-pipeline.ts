@@ -20,8 +20,8 @@ export type AdmittedHit = {
 export const PROMPT_DRAFT_SCHEMA_VERSION = "deepagent-code.prompt_draft.v1"
 export const CONTEXT_PLAN_SCHEMA_VERSION = "deepagent-code.context_plan.v1"
 
-export type PromptMode = "wish" | "direct_override"
-export type WishRoute = "code" | "general"
+export type PromptMode = "intelligence" | "direct_override"
+export type IntelligenceRoute = "code" | "general"
 export type PromptDraftState = "draft_ready" | "confirmed" | "archived" | "task_submitted"
 export type TaskType = "implementation" | "review" | "test" | "research" | "document" | "unknown"
 
@@ -293,7 +293,7 @@ export class PromptRefiner {
     const draft: AgentPromptDraft = {
       schema_version: PROMPT_DRAFT_SCHEMA_VERSION,
       id: draftID,
-      mode: input.mode ?? "wish",
+      mode: input.mode ?? "intelligence",
       state: "draft_ready",
       raw_input_ref: rawRef,
       goal: summarizeGoal(input.rawInput),
@@ -330,9 +330,9 @@ export class PromptRefiner {
   }
 }
 
-// --- A2: model-driven wish refinement -------------------------------------------------------
+// --- A2: model-driven intelligence refinement -------------------------------------------------------
 //
-// `wish` must call the user-specified model to turn a raw need into a COMPLETE, directly
+// `intelligence` must call the user-specified model to turn a raw need into a COMPLETE, directly
 // executable agent prompt: the model understands intent and fills gaps so the executing agent
 // does not have to re-interpret the raw request. Two hard rules:
 //   1. It must NOT rewrite the user's core goal.
@@ -341,9 +341,9 @@ export class PromptRefiner {
 // There is NO content template — only this structured OUTPUT shape the model fills. The prompt
 // body is free-form prose; the structure exists so assumptions stay visible and machine-listable.
 
-export type WishRefinementOutput = {
+export type IntelligenceRefinementOutput = {
   // `general` means the request is conversational/non-code and should bypass DeepAgent runtime.
-  readonly route: WishRoute
+  readonly route: IntelligenceRoute
   // The complete, directly-executable prompt for the executing agent. Free-form prose.
   readonly refined_prompt: string
   // A faithful restatement of the user's core goal. Must not change user intent.
@@ -355,10 +355,10 @@ export type WishRefinementOutput = {
   readonly assumptions: readonly string[]
 }
 
-export type WishRefinementOutputLanguage = "chinese" | "english"
+export type IntelligenceRefinementOutputLanguage = "chinese" | "english"
 
-// The single, code-task-generic system prompt for first-turn wish refinement. Not domain-specific.
-export const WISH_REFINEMENT_SYSTEM_PROMPT = [
+// The single, code-task-generic system prompt for first-turn intelligence refinement. Not domain-specific.
+export const INTELLIGENCE_REFINEMENT_SYSTEM_PROMPT = [
   "You classify and prepare a raw user request for DeepAgent Code.",
   "Goals:",
   "- First decide whether the request is a meaningful coding task.",
@@ -389,23 +389,23 @@ export const WISH_REFINEMENT_SYSTEM_PROMPT = [
   "- A fenced ```json block is acceptable, but raw JSON is preferred.",
 ].join("\n")
 
-export const wishRefinementSystemPrompt = (outputLanguage: WishRefinementOutputLanguage = "english") =>
+export const intelligenceRefinementSystemPrompt = (outputLanguage: IntelligenceRefinementOutputLanguage = "english") =>
   [
-    WISH_REFINEMENT_SYSTEM_PROMPT,
+    INTELLIGENCE_REFINEMENT_SYSTEM_PROMPT,
     outputLanguage === "chinese"
       ? "Output language: generate `refined_prompt`, `goal`, `constraints`, `acceptance`, and `assumptions` in Chinese."
       : "Output language: generate `refined_prompt`, `goal`, `constraints`, `acceptance`, and `assumptions` in English.",
   ].join("\n")
 
-export type WishContextTurn = { readonly role: "user" | "assistant"; readonly text: string }
+export type IntelligenceContextTurn = { readonly role: "user" | "assistant"; readonly text: string }
 
-// Build the compact conversation-context block fed to wish refinement. It lets the refiner reuse
+// Build the compact conversation-context block fed to intelligence refinement. It lets the refiner reuse
 // what the user already established (target directory, paths, prior decisions) instead of guessing
 // and emitting misleading assumptions. Pure + dependency-free so it can be unit tested in core and
 // shared by the session layer. Returns "" when there is no usable prior context (first turn), in
 // which case the caller should omit the context message entirely.
-export const buildWishContextBriefing = (
-  turns: ReadonlyArray<WishContextTurn>,
+export const buildIntelligenceContextBriefing = (
+  turns: ReadonlyArray<IntelligenceContextTurn>,
   options: { maxTurns?: number; maxCharsPerTurn?: number } = {},
 ): string => {
   const maxTurns = options.maxTurns ?? 6
@@ -426,13 +426,13 @@ export const buildWishContextBriefing = (
 
 // The user message wrapper that carries the context briefing into the refiner. Kept here so the
 // exact instruction (use context, don't re-guess established facts) lives next to the system prompt.
-export const wishContextMessage = (briefing: string) =>
+export const intelligenceContextMessage = (briefing: string) =>
   `<conversation_context>\n${briefing}\n</conversation_context>\n\n` +
   "Refine ONLY the new request below. Use the context above as already-known facts (target " +
   "directory, paths, prior decisions) — do not restate them as assumptions and do not guess values " +
   "that contradict it."
 
-export const WISH_REFINEMENT_OUTPUT_JSON_SCHEMA = {
+export const INTELLIGENCE_REFINEMENT_OUTPUT_JSON_SCHEMA = {
   type: "object",
   additionalProperties: false,
   required: ["route", "refined_prompt", "goal", "task_type", "constraints", "acceptance", "assumptions"],
@@ -447,7 +447,7 @@ export const WISH_REFINEMENT_OUTPUT_JSON_SCHEMA = {
   },
 } as const
 
-export const isWishRefinementOutput = (value: unknown): value is WishRefinementOutput => {
+export const isIntelligenceRefinementOutput = (value: unknown): value is IntelligenceRefinementOutput => {
   if (typeof value !== "object" || value === null) return false
   const v = value as Record<string, unknown>
   return (
@@ -461,10 +461,10 @@ export const isWishRefinementOutput = (value: unknown): value is WishRefinementO
   )
 }
 
-const wishRefinementStrings = (value: unknown) =>
+const intelligenceRefinementStrings = (value: unknown) =>
   Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : []
 
-export const normalizeWishRefinementOutput = (value: unknown, rawInput: string): WishRefinementOutput | undefined => {
+export const normalizeIntelligenceRefinementOutput = (value: unknown, rawInput: string): IntelligenceRefinementOutput | undefined => {
   if (typeof value !== "object" || value === null) return undefined
   const v = value as Record<string, unknown>
   if (v.route !== "code" && v.route !== "general") return undefined
@@ -482,15 +482,15 @@ export const normalizeWishRefinementOutput = (value: unknown, rawInput: string):
       v.task_type === "document"
         ? v.task_type
         : "unknown",
-    constraints: wishRefinementStrings(v.constraints),
-    acceptance: wishRefinementStrings(v.acceptance),
-    assumptions: wishRefinementStrings(v.assumptions),
+    constraints: intelligenceRefinementStrings(v.constraints),
+    acceptance: intelligenceRefinementStrings(v.acceptance),
+    assumptions: intelligenceRefinementStrings(v.assumptions),
   }
 }
 
 export class PromptRefinerModelError extends Error {}
 
-export const classifyWishRoute = (text: string): WishRoute => {
+export const classifyIntelligenceRoute = (text: string): IntelligenceRoute => {
   const lower = text.trim().toLowerCase()
   if (!lower) return "general"
   if (
@@ -511,16 +511,16 @@ export const classifyWishRoute = (text: string): WishRoute => {
   return "code"
 }
 
-const normalizeWishText = (text: string): string =>
+const normalizeIntelligenceText = (text: string): string =>
   text
     .toLowerCase()
     .replace(/[^\p{L}\p{N}]+/gu, "")
     .trim()
 
-export const isUsefulWishRefinement = (rawInput: string, output: WishRefinementOutput): boolean => {
+export const isUsefulIntelligenceRefinement = (rawInput: string, output: IntelligenceRefinementOutput): boolean => {
   if (output.route === "general") return true
-  const raw = normalizeWishText(rawInput)
-  const refined = normalizeWishText(output.refined_prompt)
+  const raw = normalizeIntelligenceText(rawInput)
+  const refined = normalizeIntelligenceText(output.refined_prompt)
   if (!raw || !refined) return false
   if (refined === raw) return false
   if (raw.includes(refined)) return false
@@ -528,11 +528,11 @@ export const isUsefulWishRefinement = (rawInput: string, output: WishRefinementO
   return true
 }
 
-// Build a draft from a model refinement result. This is the production wish first-turn path.
-export const draftFromWishRefinement = (
+// Build a draft from a model refinement result. This is the production intelligence first-turn path.
+export const draftFromIntelligenceRefinement = (
   store: PromptDraftStore,
   rawInput: string,
-  output: WishRefinementOutput,
+  output: IntelligenceRefinementOutput,
 ): { readonly draft: AgentPromptDraft; readonly contextPlan: ContextPlan } => {
   const rawRef = store.appendRawInput(rawInput)
   const seq = store.nextSequence()
@@ -551,7 +551,7 @@ export const draftFromWishRefinement = (
   const draft: AgentPromptDraft = {
     schema_version: PROMPT_DRAFT_SCHEMA_VERSION,
     id: draftID,
-    mode: "wish",
+    mode: "intelligence",
     state: "draft_ready",
     raw_input_ref: rawRef,
     // The submittable prompt IS the model's refined prompt; goal preserves user intent.

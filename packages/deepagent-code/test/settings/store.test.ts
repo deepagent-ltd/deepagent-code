@@ -30,17 +30,40 @@ describe("SettingsStore", () => {
   })
 
   test("update persists deepagent settings and reports changed", async () => {
-    const first = await SettingsStore.update({ deepagent: { agentMode: "xhigh", wishModel: "zhipuai/glm-4.7" } })
+    const first = await SettingsStore.update({ deepagent: { agentMode: "xhigh", intelligenceModel: "zhipuai/glm-4.7" } })
     expect(first.changed).toBe(true)
-    expect(first.settings.deepagent).toEqual({ agentMode: "xhigh", wishModel: "zhipuai/glm-4.7" })
+    expect(first.settings.deepagent).toEqual({ agentMode: "xhigh", intelligenceModel: "zhipuai/glm-4.7" })
 
     SettingsStore.invalidate()
     const reread = await SettingsStore.read()
-    expect(reread.deepagent).toEqual({ agentMode: "xhigh", wishModel: "zhipuai/glm-4.7" })
+    expect(reread.deepagent).toEqual({ agentMode: "xhigh", intelligenceModel: "zhipuai/glm-4.7" })
 
     // file exists and is valid JSON
     const raw = JSON.parse(await fs.readFile(settingsFile(), "utf8"))
     expect(raw.deepagent.agentMode).toBe("xhigh")
+  })
+
+  // Tier-2 legacy-compat: an existing user's settings.json written before the wish→intelligence
+  // rename still carries `wishModel` and `promptMode: "wish"`. Read must accept both and normalize
+  // to the canonical `intelligenceModel` / "intelligence" (read-old, write-new).
+  test("reads legacy wishModel and promptMode 'wish' as intelligence", async () => {
+    await fs.writeFile(
+      settingsFile(),
+      JSON.stringify({ deepagent: { promptMode: "wish", wishModel: "zhipuai/glm-4.7" } }),
+    )
+    SettingsStore.invalidate()
+    const reread = await SettingsStore.read()
+    expect(reread.deepagent).toEqual({ promptMode: "intelligence", intelligenceModel: "zhipuai/glm-4.7" })
+  })
+
+  test("prefers the new intelligenceModel key over legacy wishModel when both are present", async () => {
+    await fs.writeFile(
+      settingsFile(),
+      JSON.stringify({ deepagent: { intelligenceModel: "openai/gpt-5", wishModel: "zhipuai/glm-4.7" } }),
+    )
+    SettingsStore.invalidate()
+    const reread = await SettingsStore.read()
+    expect(reread.deepagent).toEqual({ intelligenceModel: "openai/gpt-5" })
   })
 
   test("no-op update reports unchanged", async () => {
@@ -53,6 +76,26 @@ describe("SettingsStore", () => {
     await SettingsStore.update({ deepagent: { agentMode: "high" } })
     const merged = await SettingsStore.update({ deepagent: { selfLearning: "auto" } })
     expect(merged.settings.deepagent).toEqual({ agentMode: "high", selfLearning: "auto" })
+  })
+
+  test("subagentIntensity round-trips (write → read back)", async () => {
+    const w = await SettingsStore.update({ deepagent: { subagentIntensity: "downgrade" } })
+    expect(w.changed).toBe(true)
+    expect(w.settings.deepagent).toEqual({ subagentIntensity: "downgrade" })
+
+    SettingsStore.invalidate()
+    const reread = await SettingsStore.read()
+    expect(reread.deepagent).toEqual({ subagentIntensity: "downgrade" })
+
+    // "inherit" is also accepted
+    const inherit = await SettingsStore.update({ deepagent: { subagentIntensity: "inherit" } })
+    expect(inherit.settings.deepagent).toEqual({ subagentIntensity: "inherit" })
+  })
+
+  test("invalid subagentIntensity is dropped on read", async () => {
+    await fs.writeFile(settingsFile(), JSON.stringify({ deepagent: { subagentIntensity: "bogus", agentMode: "high" } }))
+    SettingsStore.invalidate()
+    expect((await SettingsStore.read()).deepagent).toEqual({ agentMode: "high" })
   })
 
   test("keeps transport only for official providers", async () => {
@@ -98,7 +141,7 @@ describe("SettingsStore", () => {
   test("ignores unknown/garbage on read", async () => {
     await fs.writeFile(
       settingsFile(),
-      JSON.stringify({ deepagent: { agentMode: "bogus", wishModel: 42 }, providers: { notreal: { x: 1 } } }),
+      JSON.stringify({ deepagent: { agentMode: "bogus", intelligenceModel: 42 }, providers: { notreal: { x: 1 } } }),
     )
     SettingsStore.invalidate()
     expect(await SettingsStore.read()).toEqual({})
