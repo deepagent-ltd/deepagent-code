@@ -22,8 +22,12 @@ function sortSessions(now: number) {
   }
 }
 
+// A root row has no origin link of EITHER kind — neither a subagent `parentID` nor a fork
+// `metadata.forkedFrom`. Excluding fork origins here is what stops a fork from appearing both as a
+// top-level row AND nested under its parent (forks carry no parentID, so the old `!parentID` check
+// alone would double-list them).
 const isRootVisibleSession = (session: Session, directory: string) =>
-  pathKey(session.directory) === pathKey(directory) && !session.parentID && !session.time?.archived
+  pathKey(session.directory) === pathKey(directory) && !sessionOriginID(session) && !session.time?.archived
 
 export const roots = (store: SessionStore) =>
   (store.session ?? []).filter((session) => isRootVisibleSession(session, store.path.directory))
@@ -52,6 +56,29 @@ export const childSessionOnPath = (sessions: Session[] | undefined, rootID: stri
     id = session.parentID
   }
 }
+
+// The id of the session a child hangs off in the sidebar tree. Two lineage kinds are unified:
+//   • subagents — `parentID` (background workers spawned by the task tool)
+//   • forks — `metadata.forkedFrom.parentSessionID` (foreground "derived from" sessions; forks
+//     deliberately do NOT set parentID, which would give them subagent semantics)
+// Roots (`roots()` above) are sessions with neither link, so a fork/subagent never also shows as a
+// top-level row.
+export const sessionOriginID = (session: Session): string | undefined => {
+  if (session.parentID) return session.parentID
+  const forkedFrom = (session.metadata as { forkedFrom?: { parentSessionID?: string } } | undefined)?.forkedFrom
+  return forkedFrom?.parentSessionID
+}
+
+// Direct children (subagents + forks) of a session, newest first. Used to nest sessions folder-style
+// under their origin in the sidebar.
+export const directChildSessions = (sessions: Session[] | undefined, originID: string): Session[] =>
+  (sessions ?? [])
+    .filter((s) => !s.time?.archived && sessionOriginID(s) === originID)
+    .sort((a, b) => (b.time?.updated ?? b.time?.created ?? 0) - (a.time?.updated ?? a.time?.created ?? 0))
+
+// Max nesting depth mirrored from the backend fork cap (root → fork → fork-of-fork = 3 levels, i.e.
+// level indices 0..2). Deeper descendants stop nesting so a corrupted chain can't recurse forever.
+export const MAX_SESSION_TREE_LEVEL = 2
 
 export const displayName = (project: { name?: string; worktree: string }) =>
   project.name || getFilename(project.worktree) || project.worktree

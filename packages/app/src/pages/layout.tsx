@@ -755,9 +755,6 @@ export default function Layout(props: ParentProps) {
 
             if (stale.length > 0) {
               clearSessionPrefetch(serverSDK.scope, directory, stale)
-              for (const id of stale) {
-                serverSync.todo.set(id, undefined)
-              }
             }
 
             const current = store.message[sessionID] ?? []

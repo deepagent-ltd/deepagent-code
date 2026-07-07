@@ -15,6 +15,7 @@ import { useDebug } from "@/context/debug"
 import { useFile, type SelectedLineRange } from "@/context/file"
 import { useLanguage } from "@/context/language"
 import { useLayout } from "@/context/layout"
+import { useSync } from "@/context/sync"
 import { useTerminal } from "@/context/terminal"
 import { createOpenSessionFileTab, createSessionTabs, focusTerminalById, type Sizing } from "@/pages/session/helpers"
 import { IdeFileEditor } from "@/pages/session/ide-file-editor"
@@ -60,9 +61,22 @@ export function SessionSidePanel(props: {
   const language = useLanguage()
   const command = useCommand()
   const terminal = useTerminal()
-  const { sessionKey, tabs, view } = useSessionLayout()
+  const sync = useSync()
+  const { params, sessionKey, tabs, view } = useSessionLayout()
 
   const isDesktop = createMediaQuery("(min-width: 768px)")
+
+  // Subagents = child sessions (parentID === current). Surface a live count on the sidebar icon so
+  // the user sees a spawn happened without opening the panel; the running count (session_working)
+  // drives a pulsing badge, matching the running dot inside the panel list.
+  const subagentChildren = createMemo(() => {
+    const id = params.id
+    if (!id) return []
+    return sync.data.session.filter((s) => s.parentID === id)
+  })
+  const runningSubagentCount = createMemo(
+    () => subagentChildren().filter((s) => sync.data.session_working(s.id)).length,
+  )
 
   const menuOpen = createMemo(() => isDesktop() && view().rightPanel.mode() === "menu")
   const reviewOpen = createMemo(() => isDesktop() && view().rightPanel.mode() === "review")
@@ -307,6 +321,7 @@ export function SessionSidePanel(props: {
     {
       icon: "task",
       title: language.t("session.subagents.title"),
+      badge: runningSubagentCount() > 0 ? String(runningSubagentCount()) : undefined,
       active: subagentsOpen(),
       onClick: openSubagents,
     },
@@ -563,7 +578,7 @@ export function SessionSidePanel(props: {
                 </div>
               </Match>
               <Match when={subagentsOpen()}>
-                <SidePanelSubagents sessionID={sessionKey()} onClose={openMenu} />
+                <SidePanelSubagents onClose={openMenu} />
               </Match>
               <Match when={browserOpen()}>
                 <SidePanelBrowser onClose={openMenu} />

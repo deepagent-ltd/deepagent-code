@@ -361,7 +361,11 @@ export function make(input: {
       () =>
         input.sdk.session.fork(
           {
-            directory: params.cwd,
+            // The regenerated SDK splits fork's `directory` into query-scope (`query_directory`,
+            // the workspace this request targets — the same meaning every other session.* call in
+            // this file uses `directory` for) and body (`body_directory`, the 附-D fork-into-a-new
+            // -directory feature). This ACP path only ever meant the workspace scope → query.
+            query_directory: params.cwd,
             sessionID: params.sessionId,
           },
           { throwOnError: true },

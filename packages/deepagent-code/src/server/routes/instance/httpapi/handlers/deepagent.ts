@@ -254,7 +254,7 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
           const profile = buildProfile({
             cwd: dir,
             agentMode: "max",
-            scenarioMode: "wish",
+            scenarioMode: "intelligence",
             userRequest: "",
             userOverrides: [...pinned],
           })

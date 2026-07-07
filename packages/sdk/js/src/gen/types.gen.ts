@@ -47,6 +47,21 @@ export type Event =
   | EventSessionNextCompactionDelta
   | EventSessionNextCompactionEnded
   | EventMessagePartDelta
+  | EventTuiPromptAppend2
+  | EventTuiCommandExecute2
+  | EventTuiToastShow2
+  | EventTuiSessionSelect2
+  | EventMcpToolsChanged
+  | EventMcpBrowserOpenFailed
+  | EventPermissionV2Asked
+  | EventPermissionV2Replied
+  | EventPermissionAsked
+  | EventPermissionReplied
+  | EventCommandExecuted
+  | EventProjectDirectoriesUpdated
+  | EventProjectUpdated
+  | EventWorktreeReady
+  | EventWorktreeFailed
   | EventSessionDiff
   | EventSessionError
   | EventInstallationUpdated
@@ -55,8 +70,6 @@ export type Event =
   | EventAccountAdded
   | EventAccountRemoved
   | EventAccountSwitched
-  | EventPermissionV2Asked
-  | EventPermissionV2Replied
   | EventFileWatcherUpdated
   | EventPtyCreated
   | EventPtyUpdated
@@ -67,17 +80,6 @@ export type Event =
   | EventQuestionV2Rejected
   | EventTodoUpdated
   | EventLspUpdated
-  | EventPermissionAsked
-  | EventPermissionReplied
-  | EventTuiPromptAppend2
-  | EventTuiCommandExecute2
-  | EventTuiToastShow2
-  | EventTuiSessionSelect2
-  | EventMcpToolsChanged
-  | EventMcpBrowserOpenFailed
-  | EventCommandExecuted
-  | EventProjectDirectoriesUpdated
-  | EventProjectUpdated
   | EventQuestionAsked
   | EventQuestionReplied
   | EventQuestionRejected
@@ -85,8 +87,10 @@ export type Event =
   | EventSessionIdle
   | EventSessionCompacted
   | EventPlanUpdated
-  | EventWorktreeReady
-  | EventWorktreeFailed
+  | EventDebugStopped
+  | EventDebugOutput
+  | EventDebugTerminated
+  | EventDebugUpdated
   | EventVcsBranchUpdated
   | EventWorkspaceReady
   | EventWorkspaceFailed
@@ -1211,6 +1215,182 @@ export type GlobalEvent = {
       }
     | {
         id: string
+        type: "tui.prompt.append"
+        properties: {
+          text: string
+        }
+      }
+    | {
+        id: string
+        type: "tui.command.execute"
+        properties: {
+          command:
+            | "session.list"
+            | "session.new"
+            | "session.share"
+            | "session.interrupt"
+            | "session.compact"
+            | "session.page.up"
+            | "session.page.down"
+            | "session.line.up"
+            | "session.line.down"
+            | "session.half.page.up"
+            | "session.half.page.down"
+            | "session.first"
+            | "session.last"
+            | "prompt.clear"
+            | "prompt.submit"
+            | "agent.cycle"
+            | string
+        }
+      }
+    | {
+        id: string
+        type: "tui.toast.show"
+        properties: {
+          title?: string
+          message: string
+          variant: "info" | "success" | "warning" | "error"
+          duration?: number
+        }
+      }
+    | {
+        id: string
+        type: "tui.session.select"
+        properties: {
+          /**
+           * Session ID to navigate to
+           */
+          sessionID: string
+        }
+      }
+    | {
+        id: string
+        type: "mcp.tools.changed"
+        properties: {
+          server: string
+        }
+      }
+    | {
+        id: string
+        type: "mcp.browser.open.failed"
+        properties: {
+          mcpName: string
+          url: string
+        }
+      }
+    | {
+        id: string
+        type: "permission.v2.asked"
+        properties: {
+          id: string
+          sessionID: string
+          action: string
+          resources: Array<string>
+          save?: Array<string>
+          metadata?: {
+            [key: string]: unknown
+          }
+          source?: PermissionV2Source
+        }
+      }
+    | {
+        id: string
+        type: "permission.v2.replied"
+        properties: {
+          sessionID: string
+          requestID: string
+          reply: PermissionV2Reply
+        }
+      }
+    | {
+        id: string
+        type: "permission.asked"
+        properties: {
+          id: string
+          sessionID: string
+          permission: string
+          patterns: Array<string>
+          metadata: {
+            [key: string]: unknown
+          }
+          always: Array<string>
+          tool?: {
+            messageID: string
+            callID: string
+          }
+        }
+      }
+    | {
+        id: string
+        type: "permission.replied"
+        properties: {
+          sessionID: string
+          requestID: string
+          reply: "once" | "always" | "reject"
+        }
+      }
+    | {
+        id: string
+        type: "command.executed"
+        properties: {
+          name: string
+          sessionID: string
+          arguments: string
+          messageID: string
+        }
+      }
+    | {
+        id: string
+        type: "project.directories.updated"
+        properties: {
+          projectID: string
+        }
+      }
+    | {
+        id: string
+        type: "project.updated"
+        properties: {
+          id: string
+          worktree: string
+          vcs?: "git"
+          name?: string
+          icon?: {
+            url?: string
+            override?: string
+            color?: string
+          }
+          commands?: {
+            /**
+             * Startup script to run when creating a new workspace (worktree)
+             */
+            start?: string
+          }
+          time: {
+            created: number
+            updated: number
+            initialized?: number
+          }
+          sandboxes: Array<string>
+        }
+      }
+    | {
+        id: string
+        type: "worktree.ready"
+        properties: {
+          name: string
+          branch?: string
+        }
+      }
+    | {
+        id: string
+        type: "worktree.failed"
+        properties: {
+          message: string
+        }
+      }
+    | {
+        id: string
         type: "session.diff"
         properties: {
           sessionID: string
@@ -1274,30 +1454,6 @@ export type GlobalEvent = {
           serviceID: string
           from?: string
           to?: string
-        }
-      }
-    | {
-        id: string
-        type: "permission.v2.asked"
-        properties: {
-          id: string
-          sessionID: string
-          action: string
-          resources: Array<string>
-          save?: Array<string>
-          metadata?: {
-            [key: string]: unknown
-          }
-          source?: PermissionV2Source
-        }
-      }
-    | {
-        id: string
-        type: "permission.v2.replied"
-        properties: {
-          sessionID: string
-          requestID: string
-          reply: PermissionV2Reply
         }
       }
     | {
@@ -1384,143 +1540,6 @@ export type GlobalEvent = {
       }
     | {
         id: string
-        type: "permission.asked"
-        properties: {
-          id: string
-          sessionID: string
-          permission: string
-          patterns: Array<string>
-          metadata: {
-            [key: string]: unknown
-          }
-          always: Array<string>
-          tool?: {
-            messageID: string
-            callID: string
-          }
-        }
-      }
-    | {
-        id: string
-        type: "permission.replied"
-        properties: {
-          sessionID: string
-          requestID: string
-          reply: "once" | "always" | "reject"
-        }
-      }
-    | {
-        id: string
-        type: "tui.prompt.append"
-        properties: {
-          text: string
-        }
-      }
-    | {
-        id: string
-        type: "tui.command.execute"
-        properties: {
-          command:
-            | "session.list"
-            | "session.new"
-            | "session.share"
-            | "session.interrupt"
-            | "session.compact"
-            | "session.page.up"
-            | "session.page.down"
-            | "session.line.up"
-            | "session.line.down"
-            | "session.half.page.up"
-            | "session.half.page.down"
-            | "session.first"
-            | "session.last"
-            | "prompt.clear"
-            | "prompt.submit"
-            | "agent.cycle"
-            | string
-        }
-      }
-    | {
-        id: string
-        type: "tui.toast.show"
-        properties: {
-          title?: string
-          message: string
-          variant: "info" | "success" | "warning" | "error"
-          duration?: number
-        }
-      }
-    | {
-        id: string
-        type: "tui.session.select"
-        properties: {
-          /**
-           * Session ID to navigate to
-           */
-          sessionID: string
-        }
-      }
-    | {
-        id: string
-        type: "mcp.tools.changed"
-        properties: {
-          server: string
-        }
-      }
-    | {
-        id: string
-        type: "mcp.browser.open.failed"
-        properties: {
-          mcpName: string
-          url: string
-        }
-      }
-    | {
-        id: string
-        type: "command.executed"
-        properties: {
-          name: string
-          sessionID: string
-          arguments: string
-          messageID: string
-        }
-      }
-    | {
-        id: string
-        type: "project.directories.updated"
-        properties: {
-          projectID: string
-        }
-      }
-    | {
-        id: string
-        type: "project.updated"
-        properties: {
-          id: string
-          worktree: string
-          vcs?: "git"
-          name?: string
-          icon?: {
-            url?: string
-            override?: string
-            color?: string
-          }
-          commands?: {
-            /**
-             * Startup script to run when creating a new workspace (worktree)
-             */
-            start?: string
-          }
-          time: {
-            created: number
-            updated: number
-            initialized?: number
-          }
-          sandboxes: Array<string>
-        }
-      }
-    | {
-        id: string
         type: "question.asked"
         properties: {
           id: string
@@ -1585,24 +1604,44 @@ export type GlobalEvent = {
             status: string
             acceptance?: string
             assigned_agent?: string
+            note?: string
           }>
           done: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
           total: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          changes?: Array<string>
         }
       }
     | {
         id: string
-        type: "worktree.ready"
+        type: "debug.stopped"
         properties: {
-          name: string
-          branch?: string
+          sessionId: string
+          reason: string
+          threadId?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
         }
       }
     | {
         id: string
-        type: "worktree.failed"
+        type: "debug.output"
         properties: {
-          message: string
+          sessionId: string
+          category: string
+          output: string
+        }
+      }
+    | {
+        id: string
+        type: "debug.terminated"
+        properties: {
+          sessionId: string
+        }
+      }
+    | {
+        id: string
+        type: "debug.updated"
+        properties: {
+          sessionId: string
+          status: string
         }
       }
     | {
@@ -1774,6 +1813,13 @@ export type AgentConfig = {
   steps?: number
   maxSteps?: number
   permission?: PermissionConfig
+  limits?: {
+    maxConcurrency?: number
+    maxTokensPerTurn?: number
+    maxTurnDurationMs?: number
+    writablePaths?: Array<string>
+    toolWhitelist?: Array<string>
+  }
   [key: string]:
     | unknown
     | string
@@ -1798,6 +1844,13 @@ export type AgentConfig = {
     | "info"
     | number
     | PermissionConfig
+    | {
+        maxConcurrency?: number
+        maxTokensPerTurn?: number
+        maxTurnDurationMs?: number
+        writablePaths?: Array<string>
+        toolWhitelist?: Array<string>
+      }
     | undefined
 }
 
@@ -2091,6 +2144,10 @@ export type Config = {
     continue_loop_on_deny?: boolean
     mcp_timeout?: number
     policies?: Array<ConfigV2ExperimentalPolicy>
+    orchestration?: {
+      max_fanout?: number
+      max_concurrency?: number
+    }
   }
 }
 
@@ -2189,6 +2246,139 @@ export type Provider = {
   models: {
     [key: string]: Model
   }
+}
+
+export type DebugStartBody = {
+  directory?: string
+  workspace?: string
+  adapter: string
+  program: string
+  args?: Array<string>
+  cwd?: string
+  sessionId?: string
+}
+
+export type DebugStartResult = {
+  sessionId?: string
+  state?: {
+    id: string
+    adapterId: string
+    status: "initializing" | "initialized" | "configuring" | "running" | "stopped" | "terminated" | "exited" | "failed"
+    threadId?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    stoppedReason?: string
+    breakpoints: Array<{
+      source: string
+      lines: Array<number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN">
+    }>
+    exitCode?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    error?: string
+    workdir?: string
+    createdAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    updatedAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  }
+  error?: "adapter_unavailable"
+  message?: string
+}
+
+export type DebugBreakpointsBody = {
+  directory?: string
+  workspace?: string
+  sessionId: string
+  file: string
+  breakpoints: Array<{
+    line: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    condition?: string
+  }>
+}
+
+export type DebugStateResult = {
+  sessionId: string
+  state: {
+    id: string
+    adapterId: string
+    status: "initializing" | "initialized" | "configuring" | "running" | "stopped" | "terminated" | "exited" | "failed"
+    threadId?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    stoppedReason?: string
+    breakpoints: Array<{
+      source: string
+      lines: Array<number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN">
+    }>
+    exitCode?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    error?: string
+    workdir?: string
+    createdAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    updatedAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  }
+}
+
+export type DebugContinueBody = {
+  directory?: string
+  workspace?: string
+  sessionId: string
+}
+
+export type DebugStepBody = {
+  directory?: string
+  workspace?: string
+  sessionId: string
+  kind: "next" | "stepIn" | "stepOut"
+}
+
+export type DebugEvaluateBody = {
+  directory?: string
+  workspace?: string
+  sessionId: string
+  expression: string
+  frameId?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+}
+
+export type DebugTerminateBody = {
+  directory?: string
+  workspace?: string
+  sessionId: string
+}
+
+export type DebugSessionsResult = {
+  sessions: Array<{
+    id: string
+    adapterId: string
+    status: "initializing" | "initialized" | "configuring" | "running" | "stopped" | "terminated" | "exited" | "failed"
+    threadId?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    stoppedReason?: string
+    breakpoints: Array<{
+      source: string
+      lines: Array<number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN">
+    }>
+    exitCode?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    error?: string
+    workdir?: string
+    createdAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    updatedAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  }>
+}
+
+export type ProfileRunBody = {
+  directory?: string
+  workspace?: string
+  program: string
+  profiler?: string
+  args?: Array<string>
+  cwd?: string
+}
+
+export type ProfileRunResult = {
+  runId: string
+  status: "running" | "done" | "error"
+  artifactPath?: string
+  error?: string
+}
+
+export type ProfileHotspot = {
+  name: string
+  fileLine: string
+  selfPct: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  cumulPct: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  calls: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
 }
 
 export type DeepAgentPromotionError = {
@@ -2404,6 +2594,157 @@ export type File = {
   status: "added" | "deleted" | "modified"
 }
 
+export type FileWriteBody = {
+  directory?: string
+  workspace?: string
+  path: string
+  content: string
+  expected?: string
+}
+
+export type FileMutationResult = {
+  ok: boolean
+  path: string
+  existed?: boolean
+  error?: "stale_content" | "already_exists" | "path_escape" | "locked_by_human"
+}
+
+export type FileCreateBody = {
+  directory?: string
+  workspace?: string
+  path: string
+  content?: string
+}
+
+export type FileDeleteBody = {
+  directory?: string
+  workspace?: string
+  path: string
+}
+
+export type FileRenameBody = {
+  directory?: string
+  workspace?: string
+  from: string
+  to: string
+}
+
+export type FileMkdirBody = {
+  directory?: string
+  workspace?: string
+  path: string
+}
+
+export type LspLocInput = {
+  directory?: string
+  workspace?: string
+  file: string
+  line: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  character: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+}
+
+export type LspRangeInput = {
+  directory?: string
+  workspace?: string
+  file: string
+  startLine: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  startCharacter: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  endLine: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  endCharacter: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+}
+
+export type LspRenameInput = {
+  directory?: string
+  workspace?: string
+  file: string
+  line: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  character: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  newName: string
+}
+
+export type LockAcquireBody = {
+  directory?: string
+  workspace?: string
+  path: string
+  kind: "human" | "agent"
+}
+
+export type FileLockEntry = {
+  lockId: string
+  path: string
+  kind: "human" | "agent"
+  expiresAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+}
+
+export type LockAcquireResult = {
+  ok: boolean
+  lock?: FileLockEntry
+  error?: "already_locked" | "path_escape"
+}
+
+export type LockRenewBody = {
+  directory?: string
+  workspace?: string
+  lockId: string
+}
+
+export type LockReleaseBody = {
+  directory?: string
+  workspace?: string
+  lockId: string
+}
+
+export type ImInternalServerError = {
+  name: "INTERNAL_SERVER_ERROR"
+  data: {
+    message: string
+  }
+}
+
+export type ImValidationFailedError = {
+  name: "VALIDATION_FAILED"
+  data: {
+    message: string
+  }
+}
+
+export type ImGroupNotFoundError = {
+  name: "GROUP_NOT_FOUND"
+  data: {
+    message: string
+  }
+}
+
+export type ImPermissionDeniedError = {
+  name: "PERMISSION_DENIED"
+  data: {
+    message: string
+  }
+}
+
+export type ImMessageTooLargeError = {
+  name: "MESSAGE_TOO_LARGE"
+  data: {
+    message: string
+    maxLength: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  }
+}
+
+export type ImRateLimitExceededError = {
+  name: "RATE_LIMIT_EXCEEDED"
+  data: {
+    message: string
+    retryAfter?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  }
+}
+
+export type ImMessageNotFoundError = {
+  name: "MESSAGE_NOT_FOUND"
+  data: {
+    message: string
+  }
+}
+
 export type Path = {
   home: string
   data: string
@@ -2501,6 +2842,23 @@ export type Agent = {
     [key: string]: unknown
   }
   steps?: number
+  triggers?: Array<{
+    event: string
+    match?: {
+      [key: string]: unknown
+    }
+  }>
+  capabilities?: Array<string>
+  autonomy?: "level_0" | "level_1" | "level_2" | "level_3" | "level_4" | "level_5"
+  context_sources?: Array<string>
+  approval_required?: boolean
+  limits?: {
+    maxConcurrency?: number
+    maxTokensPerTurn?: number
+    maxTurnDurationMs?: number
+    writablePaths?: Array<string>
+    toolWhitelist?: Array<string>
+  }
 }
 
 export type LspStatus = {
@@ -3159,6 +3517,14 @@ export type SessionNextRetryError = {
   }
 }
 
+export type PermissionV2Source = {
+  type: "tool"
+  messageID: string
+  callID: string
+}
+
+export type PermissionV2Reply = "once" | "always" | "reject"
+
 export type AuthOAuthCredential = {
   type: "oauth"
   refresh: string
@@ -3182,14 +3548,6 @@ export type AuthInfo = {
   description: string
   credential: AuthCredential
 }
-
-export type PermissionV2Source = {
-  type: "tool"
-  messageID: string
-  callID: string
-}
-
-export type PermissionV2Reply = "once" | "always" | "reject"
 
 export type QuestionV2Option = {
   /**
@@ -4951,6 +5309,142 @@ export type EventMessagePartDelta = {
   }
 }
 
+export type EventMcpToolsChanged = {
+  id: string
+  type: "mcp.tools.changed"
+  properties: {
+    server: string
+  }
+}
+
+export type EventMcpBrowserOpenFailed = {
+  id: string
+  type: "mcp.browser.open.failed"
+  properties: {
+    mcpName: string
+    url: string
+  }
+}
+
+export type EventPermissionV2Asked = {
+  id: string
+  type: "permission.v2.asked"
+  properties: {
+    id: string
+    sessionID: string
+    action: string
+    resources: Array<string>
+    save?: Array<string>
+    metadata?: {
+      [key: string]: unknown
+    }
+    source?: PermissionV2Source
+  }
+}
+
+export type EventPermissionV2Replied = {
+  id: string
+  type: "permission.v2.replied"
+  properties: {
+    sessionID: string
+    requestID: string
+    reply: PermissionV2Reply
+  }
+}
+
+export type EventPermissionAsked = {
+  id: string
+  type: "permission.asked"
+  properties: {
+    id: string
+    sessionID: string
+    permission: string
+    patterns: Array<string>
+    metadata: {
+      [key: string]: unknown
+    }
+    always: Array<string>
+    tool?: {
+      messageID: string
+      callID: string
+    }
+  }
+}
+
+export type EventPermissionReplied = {
+  id: string
+  type: "permission.replied"
+  properties: {
+    sessionID: string
+    requestID: string
+    reply: "once" | "always" | "reject"
+  }
+}
+
+export type EventCommandExecuted = {
+  id: string
+  type: "command.executed"
+  properties: {
+    name: string
+    sessionID: string
+    arguments: string
+    messageID: string
+  }
+}
+
+export type EventProjectDirectoriesUpdated = {
+  id: string
+  type: "project.directories.updated"
+  properties: {
+    projectID: string
+  }
+}
+
+export type EventProjectUpdated = {
+  id: string
+  type: "project.updated"
+  properties: {
+    id: string
+    worktree: string
+    vcs?: "git"
+    name?: string
+    icon?: {
+      url?: string
+      override?: string
+      color?: string
+    }
+    commands?: {
+      /**
+       * Startup script to run when creating a new workspace (worktree)
+       */
+      start?: string
+    }
+    time: {
+      created: number
+      updated: number
+      initialized?: number
+    }
+    sandboxes: Array<string>
+  }
+}
+
+export type EventWorktreeReady = {
+  id: string
+  type: "worktree.ready"
+  properties: {
+    name: string
+    branch?: string
+  }
+}
+
+export type EventWorktreeFailed = {
+  id: string
+  type: "worktree.failed"
+  properties: {
+    message: string
+  }
+}
+
 export type EventSessionDiff = {
   id: string
   type: "session.diff"
@@ -5023,32 +5517,6 @@ export type EventAccountSwitched = {
     serviceID: string
     from?: string
     to?: string
-  }
-}
-
-export type EventPermissionV2Asked = {
-  id: string
-  type: "permission.v2.asked"
-  properties: {
-    id: string
-    sessionID: string
-    action: string
-    resources: Array<string>
-    save?: Array<string>
-    metadata?: {
-      [key: string]: unknown
-    }
-    source?: PermissionV2Source
-  }
-}
-
-export type EventPermissionV2Replied = {
-  id: string
-  type: "permission.v2.replied"
-  properties: {
-    sessionID: string
-    requestID: string
-    reply: PermissionV2Reply
   }
 }
 
@@ -5144,99 +5612,6 @@ export type EventLspUpdated = {
   }
 }
 
-export type EventPermissionAsked = {
-  id: string
-  type: "permission.asked"
-  properties: {
-    id: string
-    sessionID: string
-    permission: string
-    patterns: Array<string>
-    metadata: {
-      [key: string]: unknown
-    }
-    always: Array<string>
-    tool?: {
-      messageID: string
-      callID: string
-    }
-  }
-}
-
-export type EventPermissionReplied = {
-  id: string
-  type: "permission.replied"
-  properties: {
-    sessionID: string
-    requestID: string
-    reply: "once" | "always" | "reject"
-  }
-}
-
-export type EventMcpToolsChanged = {
-  id: string
-  type: "mcp.tools.changed"
-  properties: {
-    server: string
-  }
-}
-
-export type EventMcpBrowserOpenFailed = {
-  id: string
-  type: "mcp.browser.open.failed"
-  properties: {
-    mcpName: string
-    url: string
-  }
-}
-
-export type EventCommandExecuted = {
-  id: string
-  type: "command.executed"
-  properties: {
-    name: string
-    sessionID: string
-    arguments: string
-    messageID: string
-  }
-}
-
-export type EventProjectDirectoriesUpdated = {
-  id: string
-  type: "project.directories.updated"
-  properties: {
-    projectID: string
-  }
-}
-
-export type EventProjectUpdated = {
-  id: string
-  type: "project.updated"
-  properties: {
-    id: string
-    worktree: string
-    vcs?: "git"
-    name?: string
-    icon?: {
-      url?: string
-      override?: string
-      color?: string
-    }
-    commands?: {
-      /**
-       * Startup script to run when creating a new workspace (worktree)
-       */
-      start?: string
-    }
-    time: {
-      created: number
-      updated: number
-      initialized?: number
-    }
-    sandboxes: Array<string>
-  }
-}
-
 export type EventQuestionAsked = {
   id: string
   type: "question.asked"
@@ -5309,26 +5684,48 @@ export type EventPlanUpdated = {
       status: string
       acceptance?: string
       assigned_agent?: string
+      note?: string
     }>
     done: number | "NaN" | "Infinity" | "-Infinity"
     total: number | "NaN" | "Infinity" | "-Infinity"
+    changes?: Array<string>
   }
 }
 
-export type EventWorktreeReady = {
+export type EventDebugStopped = {
   id: string
-  type: "worktree.ready"
+  type: "debug.stopped"
   properties: {
-    name: string
-    branch?: string
+    sessionId: string
+    reason: string
+    threadId?: number | "NaN" | "Infinity" | "-Infinity"
   }
 }
 
-export type EventWorktreeFailed = {
+export type EventDebugOutput = {
   id: string
-  type: "worktree.failed"
+  type: "debug.output"
   properties: {
-    message: string
+    sessionId: string
+    category: string
+    output: string
+  }
+}
+
+export type EventDebugTerminated = {
+  id: string
+  type: "debug.terminated"
+  properties: {
+    sessionId: string
+  }
+}
+
+export type EventDebugUpdated = {
+  id: string
+  type: "debug.updated"
+  properties: {
+    sessionId: string
+    status: string
   }
 }
 
@@ -5545,6 +5942,40 @@ export type GlobalHealthResponses = {
 }
 
 export type GlobalHealthResponse = GlobalHealthResponses[keyof GlobalHealthResponses]
+
+export type GlobalCapabilitiesData = {
+  body?: never
+  path?: never
+  query?: never
+  url: "/global/capabilities"
+}
+
+export type GlobalCapabilitiesErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type GlobalCapabilitiesError = GlobalCapabilitiesErrors[keyof GlobalCapabilitiesErrors]
+
+export type GlobalCapabilitiesResponses = {
+  /**
+   * Server capabilities and protocol version
+   */
+  200: {
+    protocolVersion: string
+    version: string
+    features: {
+      im: boolean
+      sessions: boolean
+      pty: boolean
+      workspaces: boolean
+    }
+  }
+}
+
+export type GlobalCapabilitiesResponse = GlobalCapabilitiesResponses[keyof GlobalCapabilitiesResponses]
 
 export type GlobalEventData = {
   body?: never
@@ -5788,6 +6219,418 @@ export type ConfigProvidersResponses = {
 }
 
 export type ConfigProvidersResponse = ConfigProvidersResponses[keyof ConfigProvidersResponses]
+
+export type DebugStartData = {
+  body?: DebugStartBody
+  path?: never
+  query?: never
+  url: "/debug/start"
+}
+
+export type DebugStartErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type DebugStartError = DebugStartErrors[keyof DebugStartErrors]
+
+export type DebugStartResponses = {
+  /**
+   * Session started
+   */
+  200: DebugStartResult
+}
+
+export type DebugStartResponse = DebugStartResponses[keyof DebugStartResponses]
+
+export type DebugBreakpointsData = {
+  body?: DebugBreakpointsBody
+  path?: never
+  query?: never
+  url: "/debug/breakpoints"
+}
+
+export type DebugBreakpointsErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type DebugBreakpointsError = DebugBreakpointsErrors[keyof DebugBreakpointsErrors]
+
+export type DebugBreakpointsResponses = {
+  /**
+   * Breakpoints updated
+   */
+  200: DebugStateResult
+}
+
+export type DebugBreakpointsResponse = DebugBreakpointsResponses[keyof DebugBreakpointsResponses]
+
+export type DebugContinueData = {
+  body?: DebugContinueBody
+  path?: never
+  query?: never
+  url: "/debug/continue"
+}
+
+export type DebugContinueErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type DebugContinueError = DebugContinueErrors[keyof DebugContinueErrors]
+
+export type DebugContinueResponses = {
+  /**
+   * Resumed
+   */
+  200: DebugStateResult
+}
+
+export type DebugContinueResponse = DebugContinueResponses[keyof DebugContinueResponses]
+
+export type DebugStepData = {
+  body?: DebugStepBody
+  path?: never
+  query?: never
+  url: "/debug/step"
+}
+
+export type DebugStepErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type DebugStepError = DebugStepErrors[keyof DebugStepErrors]
+
+export type DebugStepResponses = {
+  /**
+   * Stepped
+   */
+  200: DebugStateResult
+}
+
+export type DebugStepResponse = DebugStepResponses[keyof DebugStepResponses]
+
+export type DebugStackData = {
+  body?: never
+  path?: never
+  query: {
+    directory?: string
+    workspace?: string
+    sessionId: string
+  }
+  url: "/debug/stack"
+}
+
+export type DebugStackErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type DebugStackError = DebugStackErrors[keyof DebugStackErrors]
+
+export type DebugStackResponses = {
+  /**
+   * Stack frames
+   */
+  200: {
+    frames: Array<unknown>
+  }
+}
+
+export type DebugStackResponse = DebugStackResponses[keyof DebugStackResponses]
+
+export type DebugScopesData = {
+  body?: never
+  path?: never
+  query: {
+    directory?: string
+    workspace?: string
+    sessionId: string
+    frameId: string
+  }
+  url: "/debug/scopes"
+}
+
+export type DebugScopesErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type DebugScopesError = DebugScopesErrors[keyof DebugScopesErrors]
+
+export type DebugScopesResponses = {
+  /**
+   * Scopes
+   */
+  200: {
+    scopes: Array<unknown>
+  }
+}
+
+export type DebugScopesResponse = DebugScopesResponses[keyof DebugScopesResponses]
+
+export type DebugVariablesData = {
+  body?: never
+  path?: never
+  query: {
+    directory?: string
+    workspace?: string
+    sessionId: string
+    variablesReference: string
+  }
+  url: "/debug/variables"
+}
+
+export type DebugVariablesErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type DebugVariablesError = DebugVariablesErrors[keyof DebugVariablesErrors]
+
+export type DebugVariablesResponses = {
+  /**
+   * Variables
+   */
+  200: {
+    variables: Array<unknown>
+  }
+}
+
+export type DebugVariablesResponse = DebugVariablesResponses[keyof DebugVariablesResponses]
+
+export type DebugEvaluateData = {
+  body?: DebugEvaluateBody
+  path?: never
+  query?: never
+  url: "/debug/evaluate"
+}
+
+export type DebugEvaluateErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type DebugEvaluateError = DebugEvaluateErrors[keyof DebugEvaluateErrors]
+
+export type DebugEvaluateResponses = {
+  /**
+   * Evaluation result
+   */
+  200: {
+    result: unknown
+  }
+}
+
+export type DebugEvaluateResponse = DebugEvaluateResponses[keyof DebugEvaluateResponses]
+
+export type DebugTerminateData = {
+  body?: DebugTerminateBody
+  path?: never
+  query?: never
+  url: "/debug/terminate"
+}
+
+export type DebugTerminateErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type DebugTerminateError = DebugTerminateErrors[keyof DebugTerminateErrors]
+
+export type DebugTerminateResponses = {
+  /**
+   * Session terminated
+   */
+  200: DebugStateResult
+}
+
+export type DebugTerminateResponse = DebugTerminateResponses[keyof DebugTerminateResponses]
+
+export type DebugSessionsData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/debug/sessions"
+}
+
+export type DebugSessionsErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type DebugSessionsError = DebugSessionsErrors[keyof DebugSessionsErrors]
+
+export type DebugSessionsResponses = {
+  /**
+   * Active sessions
+   */
+  200: DebugSessionsResult
+}
+
+export type DebugSessionsResponse = DebugSessionsResponses[keyof DebugSessionsResponses]
+
+export type DebugEventsData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+    sessionId?: string
+  }
+  url: "/debug/events"
+}
+
+export type DebugEventsErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type DebugEventsError = DebugEventsErrors[keyof DebugEventsErrors]
+
+export type DebugEventsResponses = {
+  /**
+   * SSE event stream
+   */
+  200: unknown
+}
+
+export type ProfileRunData = {
+  body?: ProfileRunBody
+  path?: never
+  query?: never
+  url: "/profile/run"
+}
+
+export type ProfileRunErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type ProfileRunError = ProfileRunErrors[keyof ProfileRunErrors]
+
+export type ProfileRunResponses = {
+  /**
+   * Run started
+   */
+  200: ProfileRunResult
+}
+
+export type ProfileRunResponse = ProfileRunResponses[keyof ProfileRunResponses]
+
+export type ProfileResultData = {
+  body?: never
+  path?: never
+  query: {
+    directory?: string
+    workspace?: string
+    runId: string
+  }
+  url: "/profile/result"
+}
+
+export type ProfileResultErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type ProfileResultError = ProfileResultErrors[keyof ProfileResultErrors]
+
+export type ProfileResultResponses = {
+  /**
+   * PROFILE_RESULT.json artifact
+   */
+  200: unknown
+}
+
+export type ProfileHotspotsData = {
+  body?: never
+  path?: never
+  query: {
+    directory?: string
+    workspace?: string
+    runId: string
+    limit?: string
+  }
+  url: "/profile/hotspots"
+}
+
+export type ProfileHotspotsErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type ProfileHotspotsError = ProfileHotspotsErrors[keyof ProfileHotspotsErrors]
+
+export type ProfileHotspotsResponses = {
+  /**
+   * Top hotspots
+   */
+  200: Array<ProfileHotspot>
+}
+
+export type ProfileHotspotsResponse = ProfileHotspotsResponses[keyof ProfileHotspotsResponses]
+
+export type ProfileRunsData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/profile/runs"
+}
+
+export type ProfileRunsErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type ProfileRunsError = ProfileRunsErrors[keyof ProfileRunsErrors]
+
+export type ProfileRunsResponses = {
+  /**
+   * Recent runs
+   */
+  200: Array<ProfileRunResult>
+}
+
+export type ProfileRunsResponse = ProfileRunsResponses[keyof ProfileRunsResponses]
 
 export type DeepagentReviewsData = {
   body?: never
@@ -6952,6 +7795,814 @@ export type FileStatusResponses = {
 
 export type FileStatusResponse = FileStatusResponses[keyof FileStatusResponses]
 
+export type FileWriteData = {
+  body?: FileWriteBody
+  path?: never
+  query?: never
+  url: "/file/write"
+}
+
+export type FileWriteErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type FileWriteError = FileWriteErrors[keyof FileWriteErrors]
+
+export type FileWriteResponses = {
+  /**
+   * Write result
+   */
+  200: FileMutationResult
+}
+
+export type FileWriteResponse = FileWriteResponses[keyof FileWriteResponses]
+
+export type FileCreateData = {
+  body?: FileCreateBody
+  path?: never
+  query?: never
+  url: "/file/create"
+}
+
+export type FileCreateErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type FileCreateError = FileCreateErrors[keyof FileCreateErrors]
+
+export type FileCreateResponses = {
+  /**
+   * Create result
+   */
+  200: FileMutationResult
+}
+
+export type FileCreateResponse = FileCreateResponses[keyof FileCreateResponses]
+
+export type FileDeleteData = {
+  body?: FileDeleteBody
+  path?: never
+  query?: never
+  url: "/file/delete"
+}
+
+export type FileDeleteErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type FileDeleteError = FileDeleteErrors[keyof FileDeleteErrors]
+
+export type FileDeleteResponses = {
+  /**
+   * Delete result
+   */
+  200: FileMutationResult
+}
+
+export type FileDeleteResponse = FileDeleteResponses[keyof FileDeleteResponses]
+
+export type FileRenameData = {
+  body?: FileRenameBody
+  path?: never
+  query?: never
+  url: "/file/rename"
+}
+
+export type FileRenameErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type FileRenameError = FileRenameErrors[keyof FileRenameErrors]
+
+export type FileRenameResponses = {
+  /**
+   * Rename result
+   */
+  200: FileMutationResult
+}
+
+export type FileRenameResponse = FileRenameResponses[keyof FileRenameResponses]
+
+export type FileMkdirData = {
+  body?: FileMkdirBody
+  path?: never
+  query?: never
+  url: "/file/mkdir"
+}
+
+export type FileMkdirErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type FileMkdirError = FileMkdirErrors[keyof FileMkdirErrors]
+
+export type FileMkdirResponses = {
+  /**
+   * Mkdir result
+   */
+  200: FileMutationResult
+}
+
+export type FileMkdirResponse = FileMkdirResponses[keyof FileMkdirResponses]
+
+export type LspDiagnosticsData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+    path?: string
+  }
+  url: "/lsp/diagnostics"
+}
+
+export type LspDiagnosticsErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type LspDiagnosticsError = LspDiagnosticsErrors[keyof LspDiagnosticsErrors]
+
+export type LspDiagnosticsResponses = {
+  /**
+   * Diagnostics map {[file]: Diagnostic[]}
+   */
+  200: unknown
+}
+
+export type LspHoverData = {
+  body?: LspLocInput
+  path?: never
+  query?: never
+  url: "/lsp/hover"
+}
+
+export type LspHoverErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type LspHoverError = LspHoverErrors[keyof LspHoverErrors]
+
+export type LspHoverResponses = {
+  /**
+   * Hover result
+   */
+  200: unknown
+}
+
+export type LspDefinitionData = {
+  body?: LspLocInput
+  path?: never
+  query?: never
+  url: "/lsp/definition"
+}
+
+export type LspDefinitionErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type LspDefinitionError = LspDefinitionErrors[keyof LspDefinitionErrors]
+
+export type LspDefinitionResponses = {
+  /**
+   * Location list
+   */
+  200: unknown
+}
+
+export type LspCompletionData = {
+  body?: LspLocInput
+  path?: never
+  query?: never
+  url: "/lsp/completion"
+}
+
+export type LspCompletionErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type LspCompletionError = LspCompletionErrors[keyof LspCompletionErrors]
+
+export type LspCompletionResponses = {
+  /**
+   * CompletionList
+   */
+  200: unknown
+}
+
+export type LspCodeActionData = {
+  body?: LspRangeInput
+  path?: never
+  query?: never
+  url: "/lsp/code-action"
+}
+
+export type LspCodeActionErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type LspCodeActionError = LspCodeActionErrors[keyof LspCodeActionErrors]
+
+export type LspCodeActionResponses = {
+  /**
+   * CodeAction list
+   */
+  200: unknown
+}
+
+export type LspRenameData = {
+  body?: LspRenameInput
+  path?: never
+  query?: never
+  url: "/lsp/rename"
+}
+
+export type LspRenameErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type LspRenameError = LspRenameErrors[keyof LspRenameErrors]
+
+export type LspRenameResponses = {
+  /**
+   * WorkspaceEdit preview
+   */
+  200: unknown
+}
+
+export type FileLockAcquireData = {
+  body?: LockAcquireBody
+  path?: never
+  query?: never
+  url: "/file/lock"
+}
+
+export type FileLockAcquireErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type FileLockAcquireError = FileLockAcquireErrors[keyof FileLockAcquireErrors]
+
+export type FileLockAcquireResponses = {
+  /**
+   * Lock acquire result
+   */
+  200: LockAcquireResult
+}
+
+export type FileLockAcquireResponse = FileLockAcquireResponses[keyof FileLockAcquireResponses]
+
+export type FileLockRenewData = {
+  body?: LockRenewBody
+  path?: never
+  query?: never
+  url: "/file/lock/renew"
+}
+
+export type FileLockRenewErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type FileLockRenewError = FileLockRenewErrors[keyof FileLockRenewErrors]
+
+export type FileLockRenewResponses = {
+  /**
+   * Renew result
+   */
+  200: {
+    ok: boolean
+  }
+}
+
+export type FileLockRenewResponse = FileLockRenewResponses[keyof FileLockRenewResponses]
+
+export type FileLockReleaseData = {
+  body?: LockReleaseBody
+  path?: never
+  query?: never
+  url: "/file/lock/release"
+}
+
+export type FileLockReleaseErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type FileLockReleaseError = FileLockReleaseErrors[keyof FileLockReleaseErrors]
+
+export type FileLockReleaseResponses = {
+  /**
+   * Release result
+   */
+  200: {
+    ok: boolean
+  }
+}
+
+export type FileLockReleaseResponse = FileLockReleaseResponses[keyof FileLockReleaseResponses]
+
+export type FileLockStatusData = {
+  body?: never
+  path?: never
+  query: {
+    directory?: string
+    workspace?: string
+    path: string
+  }
+  url: "/file/lock/status"
+}
+
+export type FileLockStatusErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type FileLockStatusError = FileLockStatusErrors[keyof FileLockStatusErrors]
+
+export type FileLockStatusResponses = {
+  /**
+   * Lock status
+   */
+  200: FileLockEntry
+}
+
+export type FileLockStatusResponse = FileLockStatusResponses[keyof FileLockStatusResponses]
+
+export type ImGroupsListData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/api/v1/im/groups"
+}
+
+export type ImGroupsListErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * IMInternalServerError
+   */
+  500: ImInternalServerError
+}
+
+export type ImGroupsListError = ImGroupsListErrors[keyof ImGroupsListErrors]
+
+export type ImGroupsListResponses = {
+  /**
+   * IM groups
+   */
+  200: Array<{
+    id: string
+    workspaceID: string
+    projectID: string
+    type: string
+    name: string
+    createdBy: string
+    createdAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    updatedAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  }>
+}
+
+export type ImGroupsListResponse = ImGroupsListResponses[keyof ImGroupsListResponses]
+
+export type ImGroupsCreateData = {
+  body: {
+    name: string
+    type: "project" | "system"
+    projectID?: string
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/api/v1/im/groups"
+}
+
+export type ImGroupsCreateErrors = {
+  /**
+   * IMValidationFailedError | BadRequest | InvalidRequestError
+   */
+  400: ImValidationFailedError | EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * IMInternalServerError
+   */
+  500: ImInternalServerError
+}
+
+export type ImGroupsCreateError = ImGroupsCreateErrors[keyof ImGroupsCreateErrors]
+
+export type ImGroupsCreateResponses = {
+  /**
+   * Created IM group
+   */
+  200: {
+    id: string
+    workspaceID: string
+    projectID: string
+    type: string
+    name: string
+    createdBy: string
+    createdAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    updatedAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  }
+}
+
+export type ImGroupsCreateResponse = ImGroupsCreateResponses[keyof ImGroupsCreateResponses]
+
+export type ImMessagesListData = {
+  body?: never
+  path: {
+    groupId: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+    cursor?: string
+    limit?: string
+  }
+  url: "/api/v1/im/groups/{groupId}/messages"
+}
+
+export type ImMessagesListErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * IMPermissionDeniedError
+   */
+  403: ImPermissionDeniedError
+  /**
+   * IMGroupNotFoundError
+   */
+  404: ImGroupNotFoundError
+  /**
+   * IMInternalServerError
+   */
+  500: ImInternalServerError
+}
+
+export type ImMessagesListError = ImMessagesListErrors[keyof ImMessagesListErrors]
+
+export type ImMessagesListResponses = {
+  /**
+   * IM messages
+   */
+  200: {
+    messages: Array<{
+      id: string
+      groupID: string
+      senderID: string
+      senderType: string
+      type: string
+      content: string
+      mentions: Array<string>
+      metadata: unknown
+      replyToID: string
+      createdAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      updatedAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    }>
+    nextCursor: string
+    hasMore: boolean
+  }
+}
+
+export type ImMessagesListResponse = ImMessagesListResponses[keyof ImMessagesListResponses]
+
+export type ImMessagesCreateData = {
+  body: {
+    senderType: "user" | "agent" | "system"
+    type: "text" | "code" | "file" | "agent_status" | "system"
+    content: string
+    mentions?: Array<string>
+    metadata?:
+      | {
+          type: "file_ref"
+          path: string
+          line?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          endLine?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        }
+      | {
+          type: "code_ref"
+          path?: string
+          language?: string
+          startLine?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          endLine?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        }
+      | {
+          type: "agent_run"
+          sessionID: string
+          runID?: string
+          status: "running" | "success" | "failed" | "timeout"
+        }
+      | {
+          type: "debug"
+          sessionID: string
+          target?: string
+        }
+      | {
+          type: "profile"
+          runID: string
+          artifactPath?: string
+        }
+      | {
+          type: "error"
+          code: string
+          message: string
+          retryable: boolean
+        }
+    replyToID?: string
+  }
+  path: {
+    groupId: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/api/v1/im/groups/{groupId}/messages"
+}
+
+export type ImMessagesCreateErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * IMPermissionDeniedError
+   */
+  403: ImPermissionDeniedError
+  /**
+   * IMGroupNotFoundError
+   */
+  404: ImGroupNotFoundError
+  /**
+   * IMMessageTooLargeError
+   */
+  413: ImMessageTooLargeError
+  /**
+   * IMRateLimitExceededError
+   */
+  429: ImRateLimitExceededError
+  /**
+   * IMInternalServerError
+   */
+  500: ImInternalServerError
+}
+
+export type ImMessagesCreateError = ImMessagesCreateErrors[keyof ImMessagesCreateErrors]
+
+export type ImMessagesCreateResponses = {
+  /**
+   * Created message
+   */
+  200: {
+    id: string
+    groupID: string
+    senderID: string
+    senderType: string
+    type: string
+    content: string
+    mentions: Array<string>
+    metadata: unknown
+    replyToID: string
+    createdAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    updatedAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  }
+}
+
+export type ImMessagesCreateResponse = ImMessagesCreateResponses[keyof ImMessagesCreateResponses]
+
+export type ImMessagesMarkReadData = {
+  body: {
+    readAt?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  }
+  path: {
+    groupId: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/api/v1/im/groups/{groupId}/read"
+}
+
+export type ImMessagesMarkReadErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * IMPermissionDeniedError
+   */
+  403: ImPermissionDeniedError
+  /**
+   * IMGroupNotFoundError
+   */
+  404: ImGroupNotFoundError
+  /**
+   * IMInternalServerError
+   */
+  500: ImInternalServerError
+}
+
+export type ImMessagesMarkReadError = ImMessagesMarkReadErrors[keyof ImMessagesMarkReadErrors]
+
+export type ImMessagesMarkReadResponses = {
+  /**
+   * Mark as read
+   */
+  200: {
+    ok: boolean
+  }
+}
+
+export type ImMessagesMarkReadResponse = ImMessagesMarkReadResponses[keyof ImMessagesMarkReadResponses]
+
+export type ImAgentsListData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/api/v1/im/agents"
+}
+
+export type ImAgentsListErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * IMInternalServerError
+   */
+  500: ImInternalServerError
+}
+
+export type ImAgentsListError = ImAgentsListErrors[keyof ImAgentsListErrors]
+
+export type ImAgentsListResponses = {
+  /**
+   * Available agents
+   */
+  200: Array<{
+    id: string
+    name: string
+    displayName: string
+    description?: string
+    visible: boolean
+    triggers?: Array<{
+      event: string
+      match?: {
+        [key: string]: unknown
+      }
+    }>
+    capabilities?: Array<string>
+    autonomy?: "level_0" | "level_1" | "level_2" | "level_3" | "level_4" | "level_5"
+    context_sources?: Array<string>
+    approval_required?: boolean
+    limits?: {
+      maxConcurrency?: number
+      maxTokensPerTurn?: number
+      maxTurnDurationMs?: number
+      writablePaths?: Array<string>
+      toolWhitelist?: Array<string>
+    }
+  }>
+}
+
+export type ImAgentsListResponse = ImAgentsListResponses[keyof ImAgentsListResponses]
+
+export type ImMessagesGetData = {
+  body?: never
+  path: {
+    messageId: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/api/v1/im/messages/{messageId}"
+}
+
+export type ImMessagesGetErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * IMPermissionDeniedError
+   */
+  403: ImPermissionDeniedError
+  /**
+   * IMMessageNotFoundError
+   */
+  404: ImMessageNotFoundError
+  /**
+   * IMInternalServerError
+   */
+  500: ImInternalServerError
+}
+
+export type ImMessagesGetError = ImMessagesGetErrors[keyof ImMessagesGetErrors]
+
+export type ImMessagesGetResponses = {
+  /**
+   * IM message
+   */
+  200: {
+    id: string
+    groupID: string
+    senderID: string
+    senderType: string
+    type: string
+    content: string
+    mentions: Array<string>
+    metadata: unknown
+    replyToID: string
+    createdAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    updatedAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  }
+}
+
+export type ImMessagesGetResponse = ImMessagesGetResponses[keyof ImMessagesGetResponses]
+
 export type InstanceDisposeData = {
   body?: never
   path?: never
@@ -8014,9 +9665,9 @@ export type PtyCreateData = {
 
 export type PtyCreateErrors = {
   /**
-   * BadRequest | InvalidRequestError
+   * InvalidRequestError
    */
-  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  400: InvalidRequestError
 }
 
 export type PtyCreateError = PtyCreateErrors[keyof PtyCreateErrors]
@@ -9051,6 +10702,8 @@ export type SessionMessageResponse = SessionMessageResponses[keyof SessionMessag
 export type SessionForkData = {
   body?: {
     messageID?: string
+    directory?: string
+    isolate?: "worktree"
   }
   path: {
     sessionID: string
@@ -9268,7 +10921,7 @@ export type SessionSummarizeResponse = SessionSummarizeResponses[keyof SessionSu
 
 export type SessionPromptPrepareData = {
   body?: {
-    mode: "wish"
+    mode: "wish" | "intelligence"
     output_language?: "chinese" | "english"
     parts: Array<TextPartInput | FilePartInput | AgentPartInput | SubtaskPartInput>
   }
@@ -9303,7 +10956,7 @@ export type SessionPromptPrepareResponses = {
     prompt_draft_id: string
     context_plan_id: string
     state: string
-    mode: "wish"
+    mode: "intelligence"
     route: "code" | "general"
     goal: string
     preview: string
@@ -10443,6 +12096,27 @@ export type ExperimentalWorkspaceWarpResponses = {
 
 export type ExperimentalWorkspaceWarpResponse =
   ExperimentalWorkspaceWarpResponses[keyof ExperimentalWorkspaceWarpResponses]
+
+export type ImWebsocketConnectData = {
+  body?: never
+  path: {
+    groupId: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/ws/im/group/{groupId}"
+}
+
+export type ImWebsocketConnectResponses = {
+  /**
+   * WebSocket connection
+   */
+  200: string
+}
+
+export type ImWebsocketConnectResponse = ImWebsocketConnectResponses[keyof ImWebsocketConnectResponses]
 
 export type V2HealthGetData = {
   body?: never

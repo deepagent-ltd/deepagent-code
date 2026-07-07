@@ -866,18 +866,22 @@ export const dict = {
   "settings.general.deepagent.mode.xhigh": "xhigh",
   "settings.general.deepagent.mode.max": "max",
   "settings.general.deepagent.mode.ultra": "ultra",
-  "settings.general.deepagent.mode.ultraRequiresWish": "ultraにはウィッシュシナリオモードが必要です。",
+  "settings.general.deepagent.mode.ultraRequiresIntelligence": "ultraにはインテリジェンスシナリオモードが必要です。",
+  "settings.general.deepagent.subagentMode.title": "サブエージェント",
+  "settings.general.deepagent.subagentMode.description": "メインエージェントに対するサブエージェントの作業強度を選択します。",
+  "settings.general.deepagent.subagentMode.inherit": "親から継承",
+  "settings.general.deepagent.subagentMode.downgrade": "1段階下げる",
   "settings.general.deepagent.prompt.title": "シナリオモード",
   "settings.general.deepagent.prompt.description": "送信前にコンポーザーがプロンプトを処理する方法を選択します。",
   "settings.general.deepagent.prompt.direct": "直接モード",
   "settings.general.deepagent.prompt.direct.description":
     "DeepAgentが下書きを準備せず、入力したプロンプトをそのまま送信します。",
-  "settings.general.deepagent.prompt.wish": "ウィッシュモード",
-  "settings.general.deepagent.prompt.wish.description":
+  "settings.general.deepagent.prompt.intelligence": "インテリジェンスモード",
+  "settings.general.deepagent.prompt.intelligence.description":
     "DeepAgentが完全なプロンプトを先に準備し、確認と編集を可能にします。",
-  "settings.general.deepagent.wishModel.title": "ウィッシュモードのモデル",
-  "settings.general.deepagent.wishModel.description":
-    "ウィッシュモードのプロンプト下書きだけに使うモデルを選択します。",
+  "settings.general.deepagent.intelligenceModel.title": "インテリジェンスモードのモデル",
+  "settings.general.deepagent.intelligenceModel.description":
+    "インテリジェンスモードのプロンプト下書きだけに使うモデルを選択します。",
   "settings.general.deepagent.selfLearning.title": "自己学習の承認",
   "settings.general.deepagent.selfLearning.description":
     "DeepAgentがセッションから学習した知識を検索可能にする方法を決めます。",

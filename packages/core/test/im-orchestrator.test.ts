@@ -64,6 +64,8 @@ describe("IM Agent Orchestrator", () => {
   }
   const FakeAgentListLive = Layer.succeed(AgentListProviderService, {
     listAgents: () => Effect.succeed([AGENT]),
+    findByTrigger: () => Effect.succeed([]),
+    findByCapability: () => Effect.succeed([]),
   })
 
   const FakeContextBuilderLive = Layer.succeed(AgentContextBuilderService, {

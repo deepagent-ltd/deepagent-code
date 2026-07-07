@@ -59,14 +59,11 @@ export const MessagePage = Schema.Struct({
 })
 export type MessagePage = typeof MessagePage.Type
 
-export const AgentDescriptor = Schema.Struct({
-  id: Schema.String,
-  name: Schema.String,
-  displayName: Schema.String,
-  description: Schema.optional(Schema.String),
-  visible: Schema.Boolean,
-})
-export type AgentDescriptor = typeof AgentDescriptor.Type
+// Converged to the single canonical definition in `mention-parser.ts`
+// (V3.8.1 §C.3 / conflict C6) so the new optional metadata fields
+// (triggers/capabilities/autonomy/context_sources/approval_required/limits)
+// live in one place. Re-exported here to preserve this module's public surface.
+export { AgentDescriptor } from "./mention-parser"
 
 // Input types
 export interface CreateGroupInput {
