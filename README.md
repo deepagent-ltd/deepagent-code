@@ -15,25 +15,53 @@
 
 ---
 
-DeepAgent Code is an AI coding agent built on persistent document memory. It keeps [opencode](https://github.com/sst/opencode)'s runtime foundations and adds a control plane for **durable knowledge**, **cross-session memory**, **context assembly**, **learning lifecycle**, and **runtime intelligence**.
+DeepAgent Code is an AI coding agent built on persistent document memory. It keeps [opencode](https://github.com/sst/opencode)'s runtime foundations and adds a control plane so the agent behaves less like a one-shot chat and more like a teammate that remembers your project, sharpens vague asks, and goes deep on hard problems.
 
-## What Makes It Different
+The features below start from a real need — something a plain coding agent, opencode included, leaves on the table — and work down to the architecture we built to serve it.
 
-**Persistent document system** — Knowledge, decisions, diagnostics, and learnings are stored as typed documents in a searchable graph. The agent builds understanding across sessions instead of starting from scratch each time.
+## What You Can Do
 
-**Project memory sharing** — Multiple conversations within the same project share knowledge, coding patterns, common pitfalls, and build commands. What one session learns becomes available to the next.
+### Keep one conversation going indefinitely
 
-**AI IDE microservice** — Query code by symbol name and intent (not file:line coordinates). Get definitions, references, call chains, type hierarchies, and diagnostics in one call. Built on LSP with 38 language servers.
+**The need:** Long tasks overflow the context window. Most agents respond by truncating history or summarizing everything at a threshold — so mid-task the agent forgets a decision you made an hour ago, or the window fills with stale tool output and quality falls off a cliff.
 
-**Preset MCP catalog** — Curated MCP servers for Git platforms, file search, read-only databases, and browser automation. Risk tiers derived at runtime from catalog structure, not user config.
+**What DeepAgent does:** Your conversation is treated as a continuously maintained work state, not a growing chat log. Before every turn, the agent rebuilds a working set — the task anchor, the most recent exchanges verbatim, active file references, and only the older facts that are relevant right now — while the full history is archived durably and stays queryable. The working set is held to a hard fraction of the model window, so there's always room for the model to actually think and respond. You just keep talking; the agent keeps focus.
 
-**Domain packs** — Specialized knowledge packages for specific domains (GPU kernels, React, backend APIs, security, testing). Each pack contains typed documents (strategies, methodologies, knowledge, skills) + validation/diagnostic adapters. Packs compose: activate multiple domains for your task.
+### Switch windows, fork freely, never lose memory
 
-**Learning lifecycle** — After completing work, the agent can generate candidate memories, facts, strategies, and methodologies. Evidence and approval gates control what gets persisted.
+**The need:** You want to try two approaches, or hand the work to a fresh conversation, without starting from amnesia and without polluting the original thread.
 
-**Work strength ladder** — `general`, `high`, `xhigh`, `max`, `ultra` scale capability without breaking contracts. Higher strengths add control-plane abilities (multi-agent orchestration, adversarial validation) on top of base behavior.
+**What DeepAgent does:** Fork any conversation from a chosen message. The fork opens carrying the parent's memory up to that point, shows a full-width "derived from" marker at the top of its transcript, and nests folder-style under its origin in the session tree (subagents and forks alike, up to three levels deep). Knowledge flows up a scope hierarchy — what one session learns can be promoted to the whole project, and cross-project preferences live at the user-global layer — so switching windows is a clean handoff, not a reset.
 
-**Scenario modes** — `direct` executes immediately; `wish` refines intent first, shows draft plan, waits for confirmation before automation.
+### Ask roughly, and let the agent sharpen it
+
+**The need:** A half-formed prompt gets a half-useful answer, and you don't always know how to phrase what you want.
+
+**What DeepAgent does:** Two scenario modes on the composer. **Direct** sends your prompt as-is — you own the wording. **Intelligence** refines a rough ask into a sharper prompt, surfaces a draft plan and decision suggestions, and waits for your confirmation before it automates anything. You decide how much the agent shapes the request.
+
+### Go deep on genuinely hard problems
+
+**The need:** Complex work — an architecture decision, a tricky migration, a subtle bug — needs more than a single confident pass. It needs research, a second opinion, and someone actively trying to poke holes.
+
+**What DeepAgent does:** At higher work strengths the primary agent decomposes the task, fans it out to focused subagents that research modules in parallel, synthesizes their findings, and then runs independent reviewers whose job is to *break* the plan rather than agree with it. Fan-out is bounded by a configurable concurrency ceiling, and live subagents surface in a session side panel and inline in the transcript so you can watch and jump into any of them.
+
+### Chat with your team and your agents in one place
+
+**The need:** Coordinating with teammates and driving agents usually happens in two different tools.
+
+**What DeepAgent does:** A per-project group chat lives in the session side panel. @mention an agent as a chat member and it runs the full agent loop — query code, generate, fix — pulling project knowledge and recent messages for context, then replies inline with live progress streaming.
+
+## How It Works
+
+Each capability above is served by a control-plane primitive underneath. These are the parts a plain runtime doesn't have.
+
+**Four-graph unification** — Code, knowledge, project memory, and the document graph are unified into one typed, bidirectionally-linked store. When the agent pulls context, a change to a symbol surfaces the design decisions, past diagnoses, and knowledge actually linked to it — connected context, not four disconnected keyword searches.
+
+**Domain packs** — 140+ composable knowledge packages spanning languages, frameworks, platforms (cloud, Kubernetes, CI), hardware, and business/risk domains (security, privacy, compliance). Each pack bundles typed documents (strategies, methodologies, knowledge, skills, failure dossiers) with detectors that auto-activate the right packs for your task; conflicts resolve stricter-policy-wins, and the active set is version-locked so a run is reproducible. Core stays domain-neutral — expertise is data on disk, not hardcoded.
+
+**Tiered knowledge invocation** — A monotonic strength ladder (`general → high → xhigh → max → ultra`) gates how much control-plane machinery engages. `general` stays close to the plain runtime — fast and cheap. Higher rungs progressively unlock durable knowledge, project handoff summaries, heavier strategy/methodology tiers, and multi-agent orchestration. You pay for depth only when you dial it up.
+
+**Self-learning** — After work lands, the agent proposes candidate knowledge, facts, and methodologies. Promotion is evidence-gated (a test passed, a diagnostic cleared, a validation confirmed) and user-controllable — durable knowledge is carried over deliberately, not silently guessed. Session-stable conclusions consolidate into project memory over time, so the next session starts smarter about *your* codebase.
 
 ## Installation
 
@@ -61,43 +89,41 @@ The agent will:
 
 1. Use LSP to find the endpoint definition and understand its structure
 2. Check project memory for existing middleware patterns
-3. Implement rate limiting following project conventions
-4. Run tests and capture diagnostics
-5. Generate a candidate memory: "This project uses express-rate-limit middleware"
+3. Activate the relevant domain packs (backend API, the project's language)
+4. Implement rate limiting following project conventions
+5. Run tests, capture diagnostics, and propose a candidate memory: "This project uses express-rate-limit middleware"
 
 On your next session, when you ask to add rate limiting elsewhere, the agent already knows the pattern.
 
 ## Core Concepts
 
-**Document graph** — All persistent state lives in typed documents: `knowledge`, `strategy`, `methodology`, `skill`, `memory`, `design`, `worklog`, `diagnosis`, `eval`. Documents link to each other (supports/blocks/conflicts/validates), forming a graph.
+**Document graph** — All persistent state lives in typed documents: `knowledge`, `strategy`, `methodology`, `skill`, `memory`, `design`, `worklog`, `diagnosis`, `eval`. Documents link to each other (supports/blocks/conflicts/validates), forming a graph you can traverse.
 
 **Scope layers** — `session-private` (current conversation), `project-shared` (all sessions in this project), `user-global` (cross-project preferences), `public-system` (built-in skills), `sealed` (audit-only, never enters context).
 
-**Domain packs** — Each pack (e.g., `code.frontend.react`, `code.gpu-kernel`, `risk.security`) is a bundle of typed documents + adapters. Documents include strategies (directions), methodologies (multi-step workflows), knowledge (facts), skills (executable capabilities), and failure dossiers. Packs auto-activate based on problem profile or explicit selection. Core stays domain-neutral.
+**Context admission** — Retrieval hits pass through admission gates. Full tool output (raw LSP dumps, diagnostics, capability indexes) is written to evidence artifacts, ref-linked and tool-only; only summaries and `file:line` snippets enter the model context. Sensitive values (SSH hosts, tokens, internal paths) are suggested, never auto-expanded.
 
-**Context admission** — Retrieval hits go through admission gates. Sensitive information (SSH hosts, tokens, internal paths) gets suggested but not auto-expanded into prompts.
+**AI IDE microservice** — Query code by symbol name and intent (e.g. `code_intel({ symbol: "AgentGateway.open", intent: "overview" })`), not file:line coordinates. Get definitions, references, call chains, type hierarchies, and diagnostics in one call. Built on LSP with 38 language servers; degrades gracefully to grep/read when no server is configured.
 
-**Evidence-gated learning** — Learnings require evidence (test pass, diagnostic clear, validation confirmed). Candidates enter a queue; auto-merge or manual review depends on policy.
-
-**Symbol-driven navigation** — Code intelligence tools accept symbol names (e.g., "AgentGateway.open"), not coordinates. The agent resolves names to locations internally via LSP workspace/document symbols.
+**Preset MCP catalog** — Curated MCP servers for Git platforms, file search, read-only databases, and browser automation. Risk tiers are derived at load time from the catalog template (not user config, so they can't be injected), and servers default to not-connected with write and external-fetch operations behind approval gates.
 
 ## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │  Control Plane (DeepAgent additions)                        │
-│  • Document graph (persistent memory)                       │
+│  • Four-graph unified store (code + knowledge + memory + doc)│
+│  • Continuously maintained working state (memory + compaction)│
+│  • Domain pack system (composable, auto-activating knowledge)│
 │  • Context assembly & admission gates                       │
-│  • Learning worker (background, non-blocking)               │
-│  • Evidence & approval gates                                │
-│  • Work strength orchestration                              │
-│  • Domain pack system (composable knowledge)                │
+│  • Multi-agent orchestration & adversarial review           │
+│  • Evidence-gated learning & work-strength ladder           │
 └─────────────────────────────────────────────────────────────┘
                              │
 ┌─────────────────────────────────────────────────────────────┐
 │  Runtime Foundations (from opencode)                        │
 │  • Agent loop & tool execution                              │
-│  • Session & provider management                            │
+│  • Session, fork & provider management                      │
 │  • MCP client runtime                                       │
 │  • Permission system                                        │
 └─────────────────────────────────────────────────────────────┘
@@ -111,7 +137,7 @@ On your next session, when you ask to add rate limiting elsewhere, the agent alr
 └─────────────────────────────────────────────────────────────┘
 ```
 
-DeepAgent's control plane operates at provider-turn boundaries: it selects context before each model call and writes evidence back into the document graph afterward. It does not replace opencode's runtime—it layers on top.
+DeepAgent's control plane operates at provider-turn boundaries: it selects context before each model call and writes evidence back into the document graph afterward. It does not replace opencode's runtime — it layers on top.
 
 ## Documentation
 
@@ -126,22 +152,6 @@ DeepAgent's control plane operates at provider-turn boundaries: it selects conte
 DeepAgent Code is licensed under **AGPL-3.0-or-later**. If you modify and run it as a network service, you must make your source code available to users.
 
 This project is derived from [opencode](https://github.com/sst/opencode) (MIT License). See [NOTICE](NOTICE) for the upstream license and attribution. No endorsement by opencode or its contributors is implied.
-
-## Project Status
-
-**V3.4.1** is the first public pre-release hardening milestone. It includes:
-
-- LSP-to-AI-IDE transformation (symbol-driven code intelligence)
-- Preset MCP catalog with security model
-- License and attribution cleanup
-- Secret scan baseline
-- Design documentation consolidation
-
-**V3.5** (planned) will add:
-
-- DAP integration (debug adapter protocol for runtime intelligence)
-- PAP (performance analysis protocol for profiling: NVIDIA NCU/nsys, AMD rocprof, Intel VTune, CPU perf)
-- OS-backed credential storage for MCP servers
 
 ---
 
