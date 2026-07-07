@@ -8,7 +8,7 @@ export type DeepAgentPromptDraft = {
   prompt_draft_id: string
   context_plan_id: string
   state: string
-  mode: "wish"
+  mode: "intelligence"
   goal: string
 }
 

@@ -53,7 +53,7 @@ describe("V3 domain pack activation (registry-based, docs/35)", () => {
   test("registry activates gpu-kernel for cuda backend profile", () => {
     Registry.configureRegistry(undefined)
     const { resolution } = Registry.activateForProfile({
-      scenario_mode: "wish",
+      scenario_mode: "intelligence",
       agent_strength: "max",
       task_kind: "optimize",
       code_domains: ["code", "gpu_kernel"],
@@ -73,7 +73,7 @@ describe("V3 domain pack activation (registry-based, docs/35)", () => {
   test("detect: unrelated profile does NOT activate gpu-kernel", () => {
     Registry.configureRegistry(undefined)
     const { resolution } = Registry.activateForProfile({
-      scenario_mode: "wish",
+      scenario_mode: "intelligence",
       agent_strength: "max",
       task_kind: "implement",
       code_domains: ["code"],

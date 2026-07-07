@@ -245,6 +245,13 @@ export function SessionHeader() {
   const tint = createMemo(() =>
     messageAgentColor(params.id ? sync.data.message[params.id] : undefined, sync.data.agent),
   )
+  // A running subagent (child session, parentID === current) puts a pulsing dot on the side-panel
+  // toggle so the user sees a spawn happened without opening the Subagents panel first.
+  const hasRunningSubagent = createMemo(() => {
+    const id = params.id
+    if (!id) return false
+    return sync.data.session.some((s) => s.parentID === id && sync.data.session_working(s.id))
+  })
   const selectApp = (app: OpenApp) => {
     if (!options().some((item) => item.id === app)) return
     setPrefs("app", app)
@@ -463,13 +470,20 @@ export function SessionHeader() {
                   >
                     <Button
                       variant="ghost"
-                      class="group/right-panel-toggle titlebar-icon w-8 h-6 p-0 box-border"
+                      class="group/right-panel-toggle titlebar-icon relative w-8 h-6 p-0 box-border"
                       onClick={toggleRightPanel}
                       aria-label={language.t("session.sidePanel.toggle")}
                       aria-expanded={rightPanelOpen()}
                       aria-controls="review-panel"
                     >
                       <Icon size="small" name={rightPanelOpen() ? "layout-right-full" : "layout-right"} />
+                      <Show when={hasRunningSubagent()}>
+                        <span
+                          class="absolute top-0.5 right-0.5 h-1.5 w-1.5 rounded-full bg-text-success"
+                          style={{ animation: "var(--animate-pulse-scale)" }}
+                          aria-hidden="true"
+                        />
+                      </Show>
                     </Button>
                   </TooltipKeybind>
                 </div>

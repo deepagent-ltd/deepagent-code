@@ -1,3 +1,7 @@
+// DEPRECATED (task-tracking unification): the `todowrite` builtin tool that called `update()` here
+// was removed in favor of the `plan` system (the two shadowed each other in the app UI). This
+// service now only backs the `session.todo` REST read path for historical sessions; no builtin tool
+// writes to it. Do not add new writers — use the `plan` tool / PlanController instead.
 import { SessionID } from "./schema"
 import { Effect, Layer, Context, Schema } from "effect"
 import { Database } from "@deepagent-code/core/database/database"

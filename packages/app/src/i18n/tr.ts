@@ -955,19 +955,23 @@ export const dict = {
   "settings.general.section.deepagent": "DeepAgent",
   "settings.general.deepagent.mode.title": "Ajan",
   "settings.general.deepagent.mode.description": "DeepAgent çalışma yoğunluğunu seçin.",
-  "settings.general.deepagent.mode.ultraRequiresWish": "ultra, wish senaryo modunu gerektirir.",
+  "settings.general.deepagent.mode.ultraRequiresIntelligence": "ultra, intelligence senaryo modunu gerektirir.",
+  "settings.general.deepagent.subagentMode.title": "Subagent",
+  "settings.general.deepagent.subagentMode.description": "Choose the work intensity of subagents relative to the main agent.",
+  "settings.general.deepagent.subagentMode.inherit": "Inherit from parent",
+  "settings.general.deepagent.subagentMode.downgrade": "One level lower",
   "settings.general.deepagent.prompt.title": "Senaryo modu",
   "settings.general.deepagent.prompt.description":
     "Göndermeden önce oluşturucunun isteminizi nasıl işleyeceğini seçin.",
   "settings.general.deepagent.prompt.direct": "Doğrudan mod",
   "settings.general.deepagent.prompt.direct.description":
     "DeepAgent taslak hazırlamadan isteminizi yazıldığı gibi gönderin.",
-  "settings.general.deepagent.prompt.wish": "Wish modu",
-  "settings.general.deepagent.prompt.wish.description":
+  "settings.general.deepagent.prompt.intelligence": "Intelligence modu",
+  "settings.general.deepagent.prompt.intelligence.description":
     "DeepAgent önce eksiksiz bir istem hazırlar, sonra gözden geçirip düzenlemenizi sağlar.",
-  "settings.general.deepagent.wishModel.title": "Wish modu modeli",
-  "settings.general.deepagent.wishModel.description":
-    "Yalnızca wish modu istem taslaklarını hazırlamak için kullanılan modeli seçin.",
+  "settings.general.deepagent.intelligenceModel.title": "Intelligence modu modeli",
+  "settings.general.deepagent.intelligenceModel.description":
+    "Yalnızca intelligence modu istem taslaklarını hazırlamak için kullanılan modeli seçin.",
   "settings.general.deepagent.selfLearning.title": "Kendi kendine öğrenme onayı",
   "settings.general.deepagent.selfLearning.description":
     "DeepAgent’ın oturumlarınızdan öğrendiği bilginin nasıl erişilebilir olacağını belirleyin.",

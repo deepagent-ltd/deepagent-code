@@ -43,7 +43,7 @@ describe("U1 soft-gate loop (chokepoint contract)", () => {
 
     expect(decideAt("gate-s1", "edit", "high").decision).toBe("block")
     expect(decideAt("gate-s1", "read", "high").decision).toBe("allow")
-    expect(decideAt("gate-s1", "todowrite", "high").decision).toBe("allow")
+    expect(decideAt("gate-s1", "plan", "high").decision).toBe("allow")
 
     // model calls the plan tool -> setPlan clears the latch
     SessionState.setPlan(

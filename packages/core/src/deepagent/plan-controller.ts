@@ -99,10 +99,11 @@ export const shouldEscapeToHuman = (state: PlanLatchState, limit: number = DEFAU
 export const isLightweightMode = (mode: AgentMode | string): boolean => mode === "general" || mode === "direct"
 
 // Tool intent classification for the soft gate. Mutating tools (write/edit/patch/shell-mutation) are
-// soft-blocked while the plan is stale; read/search/diagnosis and `todowrite` (used to UPDATE the
-// plan) always pass — otherwise a stale plan could never be repaired.
+// soft-blocked while the plan is stale; read/search/diagnosis tools always pass — otherwise a stale
+// plan could never be repaired (inspect first, then call `plan` to update, then continue). The
+// `plan` tool itself is never mutating, so it always passes the gate.
 const MUTATING_TOOLS = new Set(["edit", "write", "patch", "apply_patch", "multiedit"])
-const ALWAYS_ALLOWED_TOOLS = new Set(["read", "grep", "glob", "list", "ls", "search", "todowrite", "task", "webfetch"])
+const ALWAYS_ALLOWED_TOOLS = new Set(["read", "grep", "glob", "list", "ls", "search", "task", "webfetch"])
 
 export const isMutatingTool = (toolName: string): boolean => {
   const name = toolName.toLowerCase()

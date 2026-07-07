@@ -881,18 +881,22 @@ export const dict = {
   "settings.general.section.deepagent": "DeepAgent",
   "settings.general.deepagent.mode.title": "Agent",
   "settings.general.deepagent.mode.description": "Wähle die Arbeitsintensität von DeepAgent.",
-  "settings.general.deepagent.mode.ultraRequiresWish": "ultra erfordert den Wish-Szenariomodus.",
+  "settings.general.deepagent.mode.ultraRequiresIntelligence": "ultra erfordert den Intelligence-Szenariomodus.",
+  "settings.general.deepagent.subagentMode.title": "Subagent",
+  "settings.general.deepagent.subagentMode.description": "Choose the work intensity of subagents relative to the main agent.",
+  "settings.general.deepagent.subagentMode.inherit": "Inherit from parent",
+  "settings.general.deepagent.subagentMode.downgrade": "One level lower",
   "settings.general.deepagent.prompt.title": "Szenariomodus",
   "settings.general.deepagent.prompt.description": "Wähle, wie der Composer deinen Prompt vor dem Senden verarbeitet.",
   "settings.general.deepagent.prompt.direct": "Direktmodus",
   "settings.general.deepagent.prompt.direct.description":
     "Sende deinen Prompt genau wie geschrieben, ohne dass DeepAgent einen Entwurf vorbereitet.",
-  "settings.general.deepagent.prompt.wish": "Wish-Modus",
-  "settings.general.deepagent.prompt.wish.description":
+  "settings.general.deepagent.prompt.intelligence": "Intelligence-Modus",
+  "settings.general.deepagent.prompt.intelligence.description":
     "DeepAgent bereitet zuerst einen vollständigen Prompt vor, den du prüfen und bearbeiten kannst.",
-  "settings.general.deepagent.wishModel.title": "Wish-Modus-Modell",
-  "settings.general.deepagent.wishModel.description":
-    "Wähle das Modell, das nur für Prompt-Entwürfe im Wish-Modus verwendet wird.",
+  "settings.general.deepagent.intelligenceModel.title": "Intelligence-Modus-Modell",
+  "settings.general.deepagent.intelligenceModel.description":
+    "Wähle das Modell, das nur für Prompt-Entwürfe im Intelligence-Modus verwendet wird.",
   "settings.general.deepagent.selfLearning.title": "Selbstlern-Freigabe",
   "settings.general.deepagent.selfLearning.description":
     "Lege fest, wie von DeepAgent gelernte Sitzungskenntnisse abrufbar werden.",

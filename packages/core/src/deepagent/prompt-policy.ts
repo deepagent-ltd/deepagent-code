@@ -2,6 +2,7 @@ import type { AgentMode, ActivationStage } from "./mode"
 import { knowledgeEnabled } from "./mode"
 import type { ActivationDecision } from "./activation-policy"
 import type { RoundState, CandidateRef, DiagnosisRef } from "./round-state"
+import { buildOrchestrationSection, type FanoutDecision } from "./orchestration"
 
 export type PromptContext = {
   readonly mode: AgentMode
@@ -14,6 +15,13 @@ export type PromptContext = {
   readonly knowledge: KnowledgeSynthesis | null
   readonly previousResults: PreviousResults | null
   readonly userInstructions: string | null
+  // §5b: the concrete per-turn fan-out verdict (from decideFanout over this turn's ComplexitySignals).
+  // Injected as task-specific numbers by buildOrchestrationSection. Undefined ⇒ generic guidance only.
+  readonly fanoutDecision?: FanoutDecision
+  // V3.8 App-A C3: the cross-session Project Bridge handoff, pre-rendered (bridge.renderHandoff) by the
+  // orchestrator when the mode gate (shouldLoadBridge) admits it and the project has a non-empty bridge.
+  // Undefined/empty ⇒ nothing to hand off, section is omitted. Purely additive; independent of fanout.
+  readonly bridge?: string
 }
 
 export type EnvironmentContext = {
@@ -110,6 +118,18 @@ export const buildSystemPrompt = (ctx: PromptContext): string => {
   }
 
   sections.push(toolSection(ctx.tools))
+
+  // L2 (v3.8.0 §L2): orchestration guidance, injected after the tools/task section per the design.
+  // Tier-gated by mode; buildOrchestrationSection returns null when there is nothing to add.
+  const orchestration = buildOrchestrationSection(ctx.mode, ctx.fanoutDecision)
+  if (orchestration) sections.push(orchestration)
+
+  // V3.8 App-A C3: cross-session handoff. The orchestrator has already gated (shouldLoadBridge) and
+  // rendered this; a non-empty string means "another session left forward-looking state" — inject it
+  // so the new session opens knowing prior goals/decisions/open items/next.
+  if (ctx.bridge && ctx.bridge.trim().length > 0) {
+    sections.push(ctx.bridge)
+  }
 
   if (ctx.knowledge && knowledgeEnabled(ctx.mode)) {
     sections.push(knowledgeSection(ctx.knowledge))

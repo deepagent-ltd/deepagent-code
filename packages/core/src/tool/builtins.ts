@@ -9,7 +9,6 @@ import { GrepTool } from "./grep"
 import { QuestionTool } from "./question"
 import { ReadTool } from "./read"
 import { SkillTool } from "./skill"
-import { TodoWriteTool } from "./todowrite"
 import { WebFetchTool } from "./webfetch"
 import { WebSearchTool } from "./websearch"
 import { WriteTool } from "./write"
@@ -26,6 +25,13 @@ import { WriteTool } from "./write"
  * parity, task, LSP,
  * repo_clone, repo_overview, plan_exit, and Rune/code mode. Keep MCP and plugin
  * transforms separate from this static built-in list.
+ *
+ * NOTE: `todowrite` was removed from the built-in set as part of unifying task
+ * tracking onto the `plan` system (the two tracks shadowed each other: the app
+ * composer renders the plan and ignores todos, so todo-based progress reports
+ * were invisible). The SessionTodo store (session/todo.ts) and its read path are
+ * intentionally retained for migration safety and embedded-API compatibility;
+ * only the LLM-facing write tool is gone.
  */
 export const locationLayer = Layer.mergeAll(
   ApplyPatchTool.layer,
@@ -36,7 +42,6 @@ export const locationLayer = Layer.mergeAll(
   QuestionTool.layer,
   ReadTool.layer,
   SkillTool.layer,
-  TodoWriteTool.layer,
   WebFetchTool.layer,
   WebSearchTool.layer.pipe(Layer.provide(WebSearchTool.defaultConfigLayer)),
   WriteTool.layer,

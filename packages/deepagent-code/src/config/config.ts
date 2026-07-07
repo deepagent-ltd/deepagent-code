@@ -282,7 +282,7 @@ function writableGlobal(info: Info) {
 // ── First-party settings overlay ─────────────────────────────────────────────────────────────────
 // First-party runtime settings live in SettingsStore (~/.deepagent/code/settings.json), NOT the
 // user config file (which is reserved for third-party providers). To keep every existing reader
-// working unchanged (backend gatewayConfig/wishModel read `provider.deepagent.options`; the frontend
+// working unchanged (backend gatewayConfig/intelligenceModel read `provider.deepagent.options`; the frontend
 // reads the synced config), we OVERLAY those settings onto the in-memory config on read, and
 // INTERCEPT+STRIP them on write so they never land in the config file.
 
@@ -354,8 +354,16 @@ function extractSettingsPatch(config: Info): {
     const opts = (deepagent.options ?? {}) as Record<string, unknown>
     patch.deepagent = {
       promptMode: opts.promptMode as SettingsStore.PromptMode | undefined,
-      wishModel: typeof opts.wishModel === "string" ? opts.wishModel : undefined,
+      // Legacy-compat: prefer the new `intelligenceModel` option key, fall back to the pre-rename
+      // `wishModel` so a config written before the rename still carries the user's model over.
+      intelligenceModel:
+        typeof opts.intelligenceModel === "string"
+          ? opts.intelligenceModel
+          : typeof opts.wishModel === "string"
+            ? opts.wishModel
+            : undefined,
       agentMode: opts.agentMode as SettingsStore.AgentMode | undefined,
+      subagentIntensity: opts.subagentIntensity as SettingsStore.SubagentIntensity | undefined,
       selfLearning: opts.selfLearning as SettingsStore.SelfLearning | undefined,
       runsDir: typeof opts.runsDir === "string" ? opts.runsDir : undefined,
       allowProviderExecutedTools:
@@ -420,8 +428,15 @@ async function migrateFirstPartySettings() {
     await SettingsStore.update({
       deepagent: {
         promptMode: opts.promptMode as SettingsStore.PromptMode | undefined,
-        wishModel: typeof opts.wishModel === "string" ? opts.wishModel : undefined,
+        // Legacy-compat: prefer the new `intelligenceModel` key, fall back to legacy `wishModel`.
+        intelligenceModel:
+          typeof opts.intelligenceModel === "string"
+            ? opts.intelligenceModel
+            : typeof opts.wishModel === "string"
+              ? opts.wishModel
+              : undefined,
         agentMode: opts.agentMode as SettingsStore.AgentMode | undefined,
+        subagentIntensity: opts.subagentIntensity as SettingsStore.SubagentIntensity | undefined,
         selfLearning: opts.selfLearning as SettingsStore.SelfLearning | undefined,
         runsDir: typeof opts.runsDir === "string" ? opts.runsDir : undefined,
         allowProviderExecutedTools:
@@ -900,7 +915,7 @@ export const layer = Layer.effect(
 
     const get = Effect.fn("Config.get")(function* () {
       const base = yield* InstanceState.use(state, (s) => s.config)
-      // Backend view: overlay ONLY the deepagent runtime settings (gatewayConfig/wishModel read them
+      // Backend view: overlay ONLY the deepagent runtime settings (gatewayConfig/intelligenceModel read them
       // from provider.deepagent.options). Official-provider transport is deliberately NOT overlaid
       // here — the provider loader reads transport straight from SettingsStore, and injecting an
       // official id into the config it sees would trip the official-conflict rejection.
