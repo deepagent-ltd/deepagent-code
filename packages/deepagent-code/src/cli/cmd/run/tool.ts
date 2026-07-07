@@ -29,7 +29,6 @@ import type { QuestionTool } from "@/tool/question"
 import type { ReadTool } from "@/tool/read"
 import type { SkillTool } from "@/tool/skill"
 import type { TaskTool } from "@/tool/task"
-import type { TodoWriteTool } from "@/tool/todo"
 import type { WebFetchTool } from "@/tool/webfetch"
 import { webSearchProviderLabel, type WebSearchTool } from "@/tool/websearch"
 import type { WriteTool } from "@/tool/write"
@@ -91,6 +90,12 @@ type ToolPermissionCtx = {
   patterns: string[]
 }
 
+// Back-compat: the `todowrite` tool was removed (unified into `plan`), but historical sessions
+// still carry `todowrite` tool parts in their scrollback. These renderers keep those old entries
+// readable. The shape is inlined here (a minimal Tool.Info) so this file no longer depends on the
+// deleted tool module. New runs use the `plan` tool, which has its own renderer path.
+type LegacyTodoTool = Tool.Info<any, { todos: { content: string; status: string; priority: string }[] }>
+
 type ToolDefs = {
   invalid: typeof InvalidTool
   bash: typeof BashTool
@@ -99,7 +104,7 @@ type ToolDefs = {
   apply_patch: typeof ApplyPatchTool
   batch: Tool.Info
   task: typeof TaskTool
-  todowrite: typeof TodoWriteTool
+  todowrite: LegacyTodoTool
   question: typeof QuestionTool
   read: typeof ReadTool
   glob: typeof GlobTool
@@ -374,7 +379,7 @@ function runTask(p: ToolProps<typeof TaskTool>): ToolInline {
   }
 }
 
-function runTodo(p: ToolProps<typeof TodoWriteTool>): ToolInline {
+function runTodo(p: ToolProps<LegacyTodoTool>): ToolInline {
   return {
     icon: "#",
     title: "Todos",
@@ -582,7 +587,7 @@ function snapTask(p: ToolProps<typeof TaskTool>): ToolSnapshot {
   }
 }
 
-function snapTodo(p: ToolProps<typeof TodoWriteTool>): ToolSnapshot {
+function snapTodo(p: ToolProps<LegacyTodoTool>): ToolSnapshot {
   const items = list<{ status?: string; content?: string }>(p.frame.input.todos).flatMap((item) => {
     const content = typeof item?.content === "string" ? item.content : ""
     if (!content) {
@@ -790,11 +795,11 @@ function scrollTaskFinal(p: ToolProps<typeof TaskTool>): string {
   return `# ${kind} Task\n${row}`
 }
 
-function scrollTodoStart(_: ToolProps<typeof TodoWriteTool>): string {
+function scrollTodoStart(_: ToolProps<LegacyTodoTool>): string {
   return ""
 }
 
-function scrollTodoFinal(p: ToolProps<typeof TodoWriteTool>): string {
+function scrollTodoFinal(p: ToolProps<LegacyTodoTool>): string {
   const items = list<{ status?: string }>(p.input.todos)
   const time = span(p.frame.state)
   if (items.length === 0) {

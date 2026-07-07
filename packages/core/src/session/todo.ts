@@ -1,3 +1,7 @@
+// DEPRECATED (task-tracking unification): task tracking is unified onto the `plan` system. The
+// `todowrite` LLM tool that drove `update()` here was removed (it shadowed the plan in the UI). This
+// store + its `todo.updated` event + REST read path are retained for migration safety and
+// embedded-API compatibility, but nothing in the built-in tool set writes to it anymore.
 export * as SessionTodo from "./todo"
 
 import { asc, eq } from "drizzle-orm"

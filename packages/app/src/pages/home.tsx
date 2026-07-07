@@ -13,6 +13,8 @@ import { ServerConnection, useServer } from "@/context/server"
 import { useServerSync } from "@/context/server-sync"
 import { useLanguage } from "@/context/language"
 import { useGlobal } from "@/context/global"
+import { sandboxDir } from "@/utils/sandbox"
+import { showToast } from "@/utils/toast"
 
 export default function Home() {
   const sync = useServerSync()
@@ -43,6 +45,47 @@ export default function Home() {
     serverCtx.projects.open(directory)
     serverCtx.projects.touch(directory)
     navigate(`/${base64Encode(directory)}`)
+  }
+
+  // Appendix C 形态二 (form 2): folder-less new chat. Allocate a dedicated sandbox
+  // directory under the server's data dir, materialize it on the server (so the
+  // instance boots against a real path — an absent dir yields empty file trees and
+  // PTY 503s), then route through the existing /:dir route. The sandbox — never "/"
+  // — is what enforces the permission boundary for a project-less chat.
+  async function startFolderlessChat() {
+    const s = server.current
+    if (!s) return
+
+    let directory: string
+    try {
+      directory = sandboxDir(sync.data.path.data)
+    } catch {
+      // Path data not loaded yet — the server is still connecting.
+      showToast({
+        variant: "error",
+        title: language.t("common.requestFailed"),
+        description: language.t("common.loading"),
+      })
+      return
+    }
+
+    const serverCtx = global.createServerCtx(s)
+    // Create a dir-scoped client and ensure the sandbox exists. mkdir({ path: "." })
+    // resolves to the directory itself, which the server ensureDir's — bootstrapping
+    // the sandbox root without needing a pre-existing instance.
+    const client = serverCtx.sdk.createClient({ directory, throwOnError: true })
+    try {
+      await client.file.mkdir({ path: "." })
+    } catch (err) {
+      showToast({
+        variant: "error",
+        title: language.t("common.requestFailed"),
+        description: err instanceof Error ? err.message : String(err),
+      })
+      return
+    }
+
+    openProject(s, directory)
   }
 
   function chooseProject() {
@@ -89,9 +132,14 @@ export default function Home() {
           <div class="mt-20 w-full flex flex-col gap-4">
             <div class="flex gap-2 items-center justify-between pl-3">
               <div class="text-14-medium text-text-strong">{language.t("home.recentProjects")}</div>
-              <Button icon="folder-add-left" size="normal" class="pl-2 pr-3" onClick={chooseProject}>
-                {language.t("command.project.open")}
-              </Button>
+              <div class="flex gap-2 items-center">
+                <Button icon="prompt" size="normal" class="pl-2 pr-3" onClick={startFolderlessChat}>
+                  {language.t("home.newChat")}
+                </Button>
+                <Button icon="folder-add-left" size="normal" class="pl-2 pr-3" onClick={chooseProject}>
+                  {language.t("command.project.open")}
+                </Button>
+              </div>
             </div>
             <ul class="flex flex-col gap-2">
               <For each={recent()}>
@@ -127,9 +175,14 @@ export default function Home() {
               <div class="text-14-medium text-text-strong">{language.t("home.empty.title")}</div>
               <div class="text-12-regular text-text-weak">{language.t("home.empty.description")}</div>
             </div>
-            <Button class="px-3 mt-1" onClick={chooseProject}>
-              {language.t("command.project.open")}
-            </Button>
+            <div class="flex gap-2 items-center mt-1">
+              <Button icon="prompt" class="px-3" onClick={startFolderlessChat}>
+                {language.t("home.newChat")}
+              </Button>
+              <Button variant="ghost" class="px-3" onClick={chooseProject}>
+                {language.t("command.project.open")}
+              </Button>
+            </div>
           </div>
         </Match>
       </Switch>

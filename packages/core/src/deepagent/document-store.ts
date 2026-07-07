@@ -38,6 +38,34 @@ export type DocType =
   // version chain IS the plan change history surfaced by U2 — not a knowledge type, so no confidence
   // is required. Persisted under scope "run:<sessionId>".
   | "plan"
+  // --- V3.8 Phase 0 (roadmap C1): three NON-knowledge, derived-data node types added once so later
+  // phases (GraphQuery / IM code bucket / Context-management refactor) never re-touch this union.
+  // NONE of these are knowledge: they are excluded from KNOWLEDGE_TYPES (below) and from
+  // KNOWLEDGE_DOC_TYPES (durable-knowledge-store.ts) so they never require confidence
+  // (assertKnowledgeConfidence) and never pass the retrieve() whitelist. See the comments at each set.
+  //
+  // code_symbol (v3.8.1 §B): a code entity node (file / module / top-level symbol). Identity is
+  // slug-derived via allocateId (path/symbol name), NOT content-addressed; the content hash is only
+  // for integrity (INV-2). body carries path/language/symbol/signature; an optional content sha in
+  // extensions is for change-detection only, never identity/dedup. The lightweight indexer that
+  // registers these nodes is Phase 3's concern — this union entry is the only Phase-0 change.
+  //   ⚠ Phase 3 TODO (v3.8.1 §B.3 version-bloat tradeoff): upsert()/update() bump version+1 and write
+  //   a supersede link on every fingerprint change (INV-4, append-only). A frequently-edited code
+  //   base makes code_symbol version files grow linearly. Phase 3's indexer must decide the mitigation
+  //   (mtime-batched rate-limited rebuild, or relax append-only to in-place overwrite for code_symbol
+  //   since code nodes are derived data with no audit value). NOT relaxed here — left as a marker.
+  | "code_symbol"
+  // ledger (v3.8.0 App-A §C2 Session Ledger): the session's structured, incrementally-maintained
+  // authoritative fact ledger (entries {kind: goal|constraint|decision|done|open|next|artifact,
+  // refs, status}). Added as a NEW member rather than reusing context_snapshot/worklog/decision:
+  // context_snapshot is a point-in-time capture, worklog is a human-facing narrative, and decision is
+  // a single decision — none model a living, entry-superseding structured state container. Run-scoped.
+  | "ledger"
+  // bridge (v3.8.0 App-A §C3 Project Bridge): a cross-session, project-level handoff document
+  // (goals/decisions/open/next distilled from session Ledgers, loaded at new-session open). Added as a
+  // NEW member: no existing type models a durable cross-session handoff (context_snapshot is
+  // within-session). Persisted project-scoped ("durable:project:<id>") reusing existing storage.
+  | "bridge"
 
 export type DocStatus = "draft" | "candidate" | "active" | "superseded" | "rejected" | "quarantined"
 export type LinkRel =
@@ -53,8 +81,24 @@ export type LinkRel =
   | "refines"
   | "depends_on"
   | "triggered_by"
+  // --- V3.8 Phase 0 (roadmap C2): code-graph edge relations (v3.8.1 §B.2). code↔doc cross-type links.
+  | "references" // code_symbol -> doc (design/knowledge): the code references/uses that document
+  | "implements" // code_symbol -> requirements: the code implements that requirement
+  // Optional code_symbol -> code_symbol internal-dependency edges. The plan (roadmap Phase 0) says
+  // these can be deferred — added here trivially so the Phase 3 indexer needn't re-touch this union,
+  // but nothing produces or consumes them yet.
+  | "imports" // code_symbol -> code_symbol: module/file import edge (optional, deferred use)
+  | "calls" // code_symbol -> code_symbol: call edge (optional, deferred use)
+// NOTE (App-A ledger/bridge edges): no new relations added for Session Ledger / Project Bridge edges.
+// Ledger entries link to their sources with the existing `derived_from`; a bridge distilled/refined
+// from a session's ledger reuses `refines`; a superseding handoff reuses `supersedes`. Revisit only if
+// App-A implementation surfaces a genuinely distinct edge semantic.
 export type EvidenceStrength = "strong" | "medium" | "weak" | "none"
 
+// Knowledge-class types that MUST carry confidence (enforced by assertKnowledgeConfidence). The V3.8
+// Phase 0 additions code_symbol/ledger/bridge are deliberately NOT here (roadmap C3, decision #4):
+// they are non-knowledge derived data (code entities, session state, cross-session handoff), so they
+// never require confidence and never pass the retrieve() whitelist (KNOWLEDGE_DOC_TYPES). Do not add.
 export const KNOWLEDGE_TYPES: ReadonlySet<DocType> = new Set<DocType>([
   "knowledge",
   "strategy",

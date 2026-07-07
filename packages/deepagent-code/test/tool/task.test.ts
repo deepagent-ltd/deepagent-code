@@ -21,10 +21,17 @@ import { disposeAllInstances } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 import { ProviderV2 } from "@deepagent-code/core/provider"
 import { ModelV2 } from "@deepagent-code/core/model"
+import { AgentGateway } from "@deepagent-code/core/agent-gateway"
 
 afterEach(async () => {
   await disposeAllInstances()
 })
+
+// Read the agent_mode_override a task injected onto the child session's first user-message metadata.
+const childOverride = (input: SessionPrompt.PromptInput | undefined): string | undefined => {
+  const deepagent = (input?.metadata as { deepagent?: { agent_mode_override?: unknown } } | undefined)?.deepagent
+  return typeof deepagent?.agent_mode_override === "string" ? deepagent.agent_mode_override : undefined
+}
 
 const ref = {
   providerID: ProviderV2.ID.make("test"),
@@ -60,6 +67,8 @@ function defer<T>() {
   })
   return { promise, resolve }
 }
+
+const delay = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
 
 const seed = Effect.fn("TaskToolTest.seed")(function* (title = "Pinned") {
   const session = yield* Session.Service
@@ -206,6 +215,143 @@ describe("tool.task", () => {
             description: "Alpha agent",
             mode: "subagent",
           },
+        },
+      },
+    },
+  )
+
+  // Task 6 (§5 auto-mount): a native reviewer/researcher subagent goes through the structured-output
+  // path by default (format set on the subagent prompt) even when the model did NOT pass output_schema.
+  it.instance("auto-mounts the structured output schema for a native reviewer subagent", () =>
+    Effect.gen(function* () {
+      const { chat, assistant } = yield* seed()
+      const tool = yield* TaskTool
+      const def = yield* tool.init()
+      let seen: SessionPrompt.PromptInput | undefined
+      const promptOps = stubOps({ onPrompt: (input) => (seen = input) })
+
+      yield* def.execute(
+        {
+          description: "review the change",
+          prompt: "critique this diff",
+          subagent_type: "reviewer",
+        },
+        {
+          sessionID: chat.id,
+          messageID: assistant.id,
+          agent: "build",
+          abort: new AbortController().signal,
+          extra: { promptOps },
+          messages: [],
+          metadata: () => Effect.void,
+          ask: () => Effect.void,
+        },
+      )
+
+      // No output_schema was passed, yet the subagent prompt is driven through json_schema.
+      expect(seen?.format?.type).toBe("json_schema")
+      const schema = seen?.format?.type === "json_schema" ? (seen.format.schema as Record<string, unknown>) : undefined
+      expect((schema?.properties as Record<string, unknown>)?.verdict).toBeDefined()
+    }),
+  )
+
+  it.instance("does NOT auto-mount a schema for a plain (non-orchestration) subagent", () =>
+    Effect.gen(function* () {
+      const { chat, assistant } = yield* seed()
+      const tool = yield* TaskTool
+      const def = yield* tool.init()
+      let seen: SessionPrompt.PromptInput | undefined
+      const promptOps = stubOps({ onPrompt: (input) => (seen = input) })
+
+      yield* def.execute(
+        {
+          description: "inspect bug",
+          prompt: "look into the cache key path",
+          subagent_type: "general",
+        },
+        {
+          sessionID: chat.id,
+          messageID: assistant.id,
+          agent: "build",
+          abort: new AbortController().signal,
+          extra: { promptOps },
+          messages: [],
+          metadata: () => Effect.void,
+          ask: () => Effect.void,
+        },
+      )
+
+      expect(seen?.format).toBeUndefined()
+    }),
+  )
+
+  // §5a: N concurrent foreground `task` calls on ONE parent session never exceed the configured
+  // code-layer concurrency cap. The prompt op blocks on a shared latch while recording live count.
+  it.instance(
+    "throttles concurrent foreground subagents to the configured maxConcurrency",
+    () =>
+      Effect.gen(function* () {
+        const { chat, assistant } = yield* seed()
+        const tool = yield* TaskTool
+        const def = yield* tool.init()
+
+        let live = 0
+        let peak = 0
+        const release = defer<void>()
+        let started = 0
+        const allStarted = defer<void>()
+        const promptOps: TaskPromptOps = {
+          cancel: () => Effect.void,
+          resolvePromptParts: (template) => Effect.succeed([{ type: "text" as const, text: template }]),
+          prompt: (input) =>
+            Effect.gen(function* () {
+              live += 1
+              peak = Math.max(peak, live)
+              started += 1
+              if (started >= 4) allStarted.resolve()
+              // Hold the slot until every fiber that CAN start has started, so the peak is observable.
+              yield* Effect.promise(() => Promise.race([release.promise, delay(500)]))
+              live -= 1
+              return reply(input, "done")
+            }),
+        }
+
+        const exec = () =>
+          def.execute(
+            {
+              description: "research module",
+              prompt: "research the module",
+              subagent_type: "researcher",
+            },
+            {
+              sessionID: chat.id,
+              messageID: assistant.id,
+              agent: "build",
+              abort: new AbortController().signal,
+              extra: { promptOps },
+              messages: [],
+              metadata: () => Effect.void,
+              ask: () => Effect.void,
+            },
+          )
+
+        const fiber = yield* Effect.all([exec(), exec(), exec(), exec(), exec(), exec()], {
+          concurrency: "unbounded",
+        }).pipe(Effect.forkChild)
+
+        // Give the semaphore time to admit the first batch, then release everyone.
+        yield* Effect.sleep("150 millis")
+        release.resolve()
+        yield* Fiber.join(fiber)
+
+        // width configured to 2 below ⇒ peak concurrency must never exceed 2.
+        expect(peak).toBeLessThanOrEqual(2)
+        expect(peak).toBe(2)
+      }),
+    {
+      config: {
+        experimental: {
+          orchestration: { max_concurrency: 2 },
         },
       },
     },
@@ -900,5 +1046,129 @@ describe("tool.task", () => {
       expect((yield* jobs.get(child.id))?.status).toBe("cancelled")
       expect((yield* jobs.get(grandchild.id))?.status).toBe("cancelled")
     }),
+  )
+
+  // Subagent work-intensity — "downgrade": the child's prompt carries an agent_mode_override exactly
+  // one strength below the parent's EFFECTIVE agentMode (AgentGateway snapshot). Parent = max ⇒ child = xhigh.
+  it.instance(
+    "downgrade intensity injects agent_mode_override one level below the parent mode",
+    () =>
+      Effect.gen(function* () {
+        AgentGateway.configure({ enabled: true, agentMode: "max", runsDir: undefined })
+        try {
+          const { chat, assistant } = yield* seed()
+          const tool = yield* TaskTool
+          const def = yield* tool.init()
+          let seen: SessionPrompt.PromptInput | undefined
+          const promptOps = stubOps({ onPrompt: (input) => (seen = input) })
+
+          yield* def.execute(
+            { description: "inspect bug", prompt: "look into the cache key path", subagent_type: "general" },
+            {
+              sessionID: chat.id,
+              messageID: assistant.id,
+              agent: "build",
+              abort: new AbortController().signal,
+              extra: { promptOps },
+              messages: [],
+              metadata: () => Effect.void,
+              ask: () => Effect.void,
+            },
+          )
+
+          expect(childOverride(seen)).toBe("xhigh")
+        } finally {
+          AgentGateway.configure({ enabled: false, agentMode: "high", runsDir: undefined })
+        }
+      }),
+    { config: { provider: { deepagent: { name: "DeepAgent", options: { subagentIntensity: "downgrade" }, models: {} } } } },
+  )
+
+  // "inherit" (default): nothing is injected, so the child naturally runs at the process-global mode.
+  it.instance(
+    "inherit intensity injects no agent_mode_override",
+    () =>
+      Effect.gen(function* () {
+        AgentGateway.configure({ enabled: true, agentMode: "max", runsDir: undefined })
+        try {
+          const { chat, assistant } = yield* seed()
+          const tool = yield* TaskTool
+          const def = yield* tool.init()
+          let seen: SessionPrompt.PromptInput | undefined
+          const promptOps = stubOps({ onPrompt: (input) => (seen = input) })
+
+          yield* def.execute(
+            { description: "inspect bug", prompt: "look into the cache key path", subagent_type: "general" },
+            {
+              sessionID: chat.id,
+              messageID: assistant.id,
+              agent: "build",
+              abort: new AbortController().signal,
+              extra: { promptOps },
+              messages: [],
+              metadata: () => Effect.void,
+              ask: () => Effect.void,
+            },
+          )
+
+          expect(childOverride(seen)).toBeUndefined()
+        } finally {
+          AgentGateway.configure({ enabled: false, agentMode: "high", runsDir: undefined })
+        }
+      }),
+    { config: { provider: { deepagent: { name: "DeepAgent", options: { subagentIntensity: "inherit" }, models: {} } } } },
+  )
+
+  // Per-request isolation: many concurrent downgraded subagents each carry their OWN override on their
+  // OWN child-session prompt. The override rides per-prompt metadata (never the process-global mode),
+  // so parallel children never cross-contaminate — every one sees the same correct downgraded value.
+  it.instance(
+    "concurrent downgraded subagents each get an independent, uncontaminated override",
+    () =>
+      Effect.gen(function* () {
+        AgentGateway.configure({ enabled: true, agentMode: "ultra", runsDir: undefined })
+        try {
+          const { chat, assistant } = yield* seed()
+          const tool = yield* TaskTool
+          const def = yield* tool.init()
+
+          const byChild = new Map<string, string | undefined>()
+          const promptOps: TaskPromptOps = {
+            cancel: () => Effect.void,
+            resolvePromptParts: (template) => Effect.succeed([{ type: "text" as const, text: template }]),
+            prompt: (input) =>
+              Effect.gen(function* () {
+                // Yield so fibers interleave; if the channel leaked to shared state this would surface.
+                yield* Effect.sleep("5 millis")
+                byChild.set(input.sessionID, childOverride(input))
+                return reply(input, "done")
+              }),
+          }
+
+          const exec = () =>
+            def.execute(
+              { description: "research module", prompt: "research the module", subagent_type: "researcher" },
+              {
+                sessionID: chat.id,
+                messageID: assistant.id,
+                agent: "build",
+                abort: new AbortController().signal,
+                extra: { promptOps },
+                messages: [],
+                metadata: () => Effect.void,
+                ask: () => Effect.void,
+              },
+            )
+
+          yield* Effect.all([exec(), exec(), exec(), exec()], { concurrency: "unbounded" })
+
+          // Four distinct child sessions, each independently pinned to ultra→max. None missing/leaked.
+          expect(byChild.size).toBe(4)
+          for (const value of byChild.values()) expect(value).toBe("max")
+        } finally {
+          AgentGateway.configure({ enabled: false, agentMode: "high", runsDir: undefined })
+        }
+      }),
+    { config: { provider: { deepagent: { name: "DeepAgent", options: { subagentIntensity: "downgrade" }, models: {} } } } },
   )
 })

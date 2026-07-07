@@ -3,6 +3,7 @@ export * as ConfigAgentV1 from "./agent"
 import { Schema, SchemaGetter } from "effect"
 import { PositiveInt } from "../../schema"
 import { ConfigPermissionV1 } from "./permission"
+import { AgentLimits } from "../../im/mention-parser"
 
 const Color = Schema.Union([
   Schema.String.check(Schema.isPattern(/^#[0-9a-fA-F]{6}$/)),
@@ -36,6 +37,11 @@ const AgentSchema = Schema.StructWithRest(
     }),
     maxSteps: Schema.optional(PositiveInt).annotate({ description: "@deprecated Use 'steps' field instead." }),
     permission: Schema.optional(ConfigPermissionV1.Info),
+    // V3.8.1 §C.3: optional per-agent resource ceilings. Lenient defaults — an unset field (or
+    // unset `limits`) imposes no limit. `limits.maxConcurrency` is consumed by the task tool's
+    // per-parent-session semaphore (task.ts §5a) to tighten how many subagents of this type run
+    // in parallel; unset ⇒ unlimited (bounded only by the code-layer orchestration caps).
+    limits: Schema.optional(AgentLimits),
   }),
   [Schema.Record(Schema.String, Schema.Any)],
 )
@@ -57,6 +63,7 @@ const KNOWN_KEYS = new Set([
   "permission",
   "disable",
   "tools",
+  "limits",
 ])
 
 const normalize = (agent: Schema.Schema.Type<typeof AgentSchema>): Schema.Schema.Type<typeof AgentSchema> => {

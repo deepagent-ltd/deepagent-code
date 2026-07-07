@@ -36,7 +36,33 @@ export class Info extends Schema.Class<Info>("ServerCapabilities.Info")({
   allowExtensionInstall: Schema.Boolean.pipe(Schema.optional),
   maxProjectCount: Schema.Number.pipe(Schema.optional),
   maxUploadSize: Schema.Number.pipe(Schema.optional),
+  /**
+   * Model the IM agent runs with, as `"providerID/modelID"` (e.g.
+   * `"deepseek/deepseek-chat"`). When set, an IM agent turn uses this model
+   * instead of the agent's own default — letting the platform centrally pick a
+   * fast/cheap model for chat without touching per-agent config. Unset leaves
+   * the kernel's normal precedence (agent model → session model → provider
+   * default) intact. See {@link parseModelRef}.
+   */
+  imModel: Schema.String.pipe(Schema.optional),
 }) {}
+
+/**
+ * Parse an `imModel`-style `"providerID/modelID"` reference into the parts the
+ * session prompt expects. The modelID itself may contain slashes (e.g.
+ * `"openrouter/anthropic/claude-3.5"`), so only the FIRST slash separates the
+ * provider from the model. Returns null when the string is missing a slash or
+ * either side is empty — the caller then falls back to normal model precedence.
+ */
+export function parseModelRef(ref: string | undefined): { providerID: string; modelID: string } | null {
+  if (!ref) return null
+  const slash = ref.indexOf("/")
+  if (slash <= 0) return null
+  const providerID = ref.slice(0, slash)
+  const modelID = ref.slice(slash + 1)
+  if (!providerID || !modelID) return null
+  return { providerID, modelID }
+}
 
 const decode = Schema.decodeUnknownOption(Info, {
   errors: "all",

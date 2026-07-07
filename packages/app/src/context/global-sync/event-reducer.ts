@@ -9,7 +9,6 @@ import type {
   Session,
   SessionStatus,
   SnapshotFileDiff,
-  Todo,
 } from "@deepagent-code/sdk/v2/client"
 import type { State, VcsCache, SessionPlan } from "./types"
 import { trimSessions } from "./session-trim"
@@ -47,13 +46,8 @@ export function applyGlobalEvent(input: {
   )
 }
 
-function cleanupSessionCaches(
-  setStore: SetStoreFunction<State>,
-  sessionID: string,
-  setSessionTodo?: (sessionID: string, todos: Todo[] | undefined) => void,
-) {
+function cleanupSessionCaches(setStore: SetStoreFunction<State>, sessionID: string) {
   if (!sessionID) return
-  setSessionTodo?.(sessionID, undefined)
   setStore(
     produce((draft) => {
       dropSessionCaches(draft, [sessionID])
@@ -61,12 +55,7 @@ function cleanupSessionCaches(
   )
 }
 
-export function cleanupDroppedSessionCaches(
-  store: Store<State>,
-  setStore: SetStoreFunction<State>,
-  next: Session[],
-  setSessionTodo?: (sessionID: string, todos: Todo[] | undefined) => void,
-) {
+export function cleanupDroppedSessionCaches(store: Store<State>, setStore: SetStoreFunction<State>, next: Session[]) {
   const keep = new Set(next.map((item) => item.id))
   const stale = [
     ...Object.keys(store.message),
@@ -80,9 +69,6 @@ export function cleanupDroppedSessionCaches(
       .filter((sessionID): sessionID is string => !!sessionID),
   ].filter((sessionID, index, list) => !keep.has(sessionID) && list.indexOf(sessionID) === index)
   if (stale.length === 0) return
-  for (const sessionID of stale) {
-    setSessionTodo?.(sessionID, undefined)
-  }
   setStore(
     produce((draft) => {
       dropSessionCaches(draft, stale)
@@ -98,7 +84,6 @@ export function applyDirectoryEvent(input: {
   directory: string
   loadLsp: () => void
   vcsCache?: VcsCache
-  setSessionTodo?: (sessionID: string, todos: Todo[] | undefined) => void
   setSessionPlan?: (sessionID: string, plan: SessionPlan | undefined) => void
   retainedLimit?: number
 }) {
@@ -120,7 +105,7 @@ export function applyDirectoryEvent(input: {
       next.splice(result.index, 0, info)
       const trimmed = trimSessions(next, { limit, permission: input.store.permission })
       input.setStore("session", reconcile(trimmed, { key: "id" }))
-      cleanupDroppedSessionCaches(input.store, input.setStore, trimmed, input.setSessionTodo)
+      cleanupDroppedSessionCaches(input.store, input.setStore, trimmed)
       if (!info.parentID) input.setStore("sessionTotal", (value) => value + 1)
       break
     }
@@ -137,7 +122,7 @@ export function applyDirectoryEvent(input: {
             }),
           )
         }
-        cleanupSessionCaches(input.setStore, info.id, input.setSessionTodo)
+        cleanupSessionCaches(input.setStore, info.id)
         if (info.parentID) break
         input.setStore("sessionTotal", (value) => Math.max(0, value - 1))
         break
@@ -150,7 +135,7 @@ export function applyDirectoryEvent(input: {
       next.splice(result.index, 0, info)
       const trimmed = trimSessions(next, { limit, permission: input.store.permission })
       input.setStore("session", reconcile(trimmed, { key: "id" }))
-      cleanupDroppedSessionCaches(input.store, input.setStore, trimmed, input.setSessionTodo)
+      cleanupDroppedSessionCaches(input.store, input.setStore, trimmed)
       break
     }
     case "session.deleted": {
@@ -164,7 +149,7 @@ export function applyDirectoryEvent(input: {
           }),
         )
       }
-      cleanupSessionCaches(input.setStore, info.id, input.setSessionTodo)
+      cleanupSessionCaches(input.setStore, info.id)
       if (info.parentID) break
       input.setStore("sessionTotal", (value) => Math.max(0, value - 1))
       break
@@ -174,16 +159,12 @@ export function applyDirectoryEvent(input: {
       input.setStore("session_diff", props.sessionID, reconcile(list(props.diff), { key: "file" }))
       break
     }
-    case "todo.updated": {
-      const props = event.properties as { sessionID: string; todos: Todo[] }
-      input.setStore("todo", props.sessionID, reconcile(props.todos, { key: "id" }))
-      input.setSessionTodo?.(props.sessionID, props.todos)
-      break
-    }
+    // NOTE: the `todo.updated` event handler was removed when task tracking unified onto the plan
+    // system. The backend no longer emits `todo.updated` (both todowrite tool writers were removed),
+    // and the dock renders the plan exclusively. See `plan.updated` below for the live task source.
     case "plan.updated": {
-      // U2: the live plan (goal + steps + progress) from the `plan` tool. Stored under a distinct
-      // session_plan key so it persists when the session goes idle (unlike the todo cache, which the
-      // composer clears on idle).
+      // The live plan (goal + steps + progress) from the `plan` tool. Stored under a distinct
+      // session_plan key so it persists when the session goes idle.
       const props = event.properties as {
         sessionID: string
         plan_id: string

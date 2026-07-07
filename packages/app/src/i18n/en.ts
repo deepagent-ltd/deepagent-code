@@ -312,9 +312,9 @@ export const dict = {
   "prompt.action.stop": "Stop",
   "prompt.scenario.label": "Scenario mode",
   "prompt.scenario.direct": "Direct",
-  "prompt.scenario.wish": "Wish",
+  "prompt.scenario.intelligence": "Intelligence",
   "prompt.scenario.direct.tooltip": "Send your prompt directly",
-  "prompt.scenario.wish.tooltip": "DeepAgent prepares a prompt for you",
+  "prompt.scenario.intelligence.tooltip": "DeepAgent prepares a prompt for you",
 
   "prompt.toast.pasteUnsupported.title": "Unsupported attachment",
   "prompt.toast.pasteUnsupported.description": "Only images, PDFs, or text files can be attached here.",
@@ -658,6 +658,7 @@ export const dict = {
   "notification.session.error.fallbackDescription": "An error occurred",
 
   "home.recentProjects": "Recent projects",
+  "home.newChat": "New chat",
   "home.empty.title": "No recent projects",
   "home.empty.description": "Get started by opening a local project",
   "home.title": "Home",
@@ -716,6 +717,8 @@ export const dict = {
   "session.subagents.empty": "No subagents for this session",
   "session.subagents.running": "running",
   "session.subagents.idle": "idle",
+  "session.fork.derivedFrom": "Derived from {title}",
+  "session.fork.derivedFromUnknown": "Derived from another session",
   "browser.title": "Browser",
   "browser.address": "Enter a URL",
   "browser.back": "Back",
@@ -936,17 +939,22 @@ export const dict = {
   "settings.general.deepagent.mode.xhigh": "xhigh",
   "settings.general.deepagent.mode.max": "max",
   "settings.general.deepagent.mode.ultra": "ultra",
-  "settings.general.deepagent.mode.ultraRequiresWish": "ultra requires the wish scenario mode.",
+  "settings.general.deepagent.mode.ultraRequiresIntelligence": "ultra requires the intelligence scenario mode.",
+  "settings.general.deepagent.subagentMode.title": "Subagent",
+  "settings.general.deepagent.subagentMode.description":
+    "Choose the work intensity of subagents relative to the main agent.",
+  "settings.general.deepagent.subagentMode.inherit": "Inherit from parent",
+  "settings.general.deepagent.subagentMode.downgrade": "One level lower",
   "settings.general.deepagent.prompt.title": "Scenario mode",
   "settings.general.deepagent.prompt.description": "Choose how the composer handles your prompt before sending.",
   "settings.general.deepagent.prompt.direct": "Direct mode",
   "settings.general.deepagent.prompt.direct.description":
     "Send your prompt exactly as written, without DeepAgent preparing a draft.",
-  "settings.general.deepagent.prompt.wish": "Wish mode",
-  "settings.general.deepagent.prompt.wish.description":
+  "settings.general.deepagent.prompt.intelligence": "Intelligence mode",
+  "settings.general.deepagent.prompt.intelligence.description":
     "DeepAgent prepares a complete prompt first, then lets you review and edit it.",
-  "settings.general.deepagent.wishModel.title": "Wish mode model",
-  "settings.general.deepagent.wishModel.description": "Choose the model used only to prepare wish-mode prompt drafts.",
+  "settings.general.deepagent.intelligenceModel.title": "Intelligence mode model",
+  "settings.general.deepagent.intelligenceModel.description": "Choose the model used only to prepare intelligence-mode prompt drafts.",
   "settings.general.deepagent.selfLearning.title": "Self-learning approval",
   "settings.general.deepagent.selfLearning.description":
     "Decide how knowledge DeepAgent learns from your sessions becomes retrievable.",

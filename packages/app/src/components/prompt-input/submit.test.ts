@@ -33,7 +33,9 @@ const promptPrepareEvents: string[] = []
 let params: { id?: string } = {}
 let selected = "/repo/worktree-a"
 let variant: string | undefined
-let promptMode: "direct" | "wish" = "direct"
+// The config value may be the canonical "intelligence" or the legacy "wish" alias (which the app
+// normalizer maps to "intelligence"); either way submit sends "intelligence" on the wire.
+let promptMode: "direct" | "intelligence" | "wish" = "direct"
 let appLocale = "en"
 
 const promptValue: Prompt = [{ type: "text", content: "ls", start: 0, end: 2 }]
@@ -83,7 +85,10 @@ const clientFor = (directory: string) => {
         })
         if (text === "prepare fails") {
           throw new Error("POST /session/ses_1/prompt_prepare returned 400", {
-            cause: { body: { name: "BadRequest", data: { message: "Wish prompt preparation failed" } }, status: 400 },
+            cause: {
+              body: { name: "BadRequest", data: { message: "Intelligence prompt preparation failed" } },
+              status: 400,
+            },
           })
         }
         return {
@@ -91,7 +96,7 @@ const clientFor = (directory: string) => {
             prompt_draft_id: "prompt_draft:test:1",
             context_plan_id: "context_plan:test:1",
             state: "draft_ready",
-            mode: payload.body?.mode ?? "wish",
+            mode: payload.body?.mode ?? "intelligence",
             route: text === "hello" ? "general" : "code",
             goal: "Prepared goal",
             preview: "# Prepared prompt",
@@ -415,9 +420,9 @@ describe("prompt submit worktree selection", () => {
     expect(optimisticSeeded).toEqual([true])
   })
 
-  test("prepares and confirms wish prompts before async submission", async () => {
+  test("prepares and confirms intelligence prompts before async submission", async () => {
     params = { id: "session-1" }
-    promptMode = "wish"
+    promptMode = "intelligence"
 
     const submit = createPromptSubmit({
       info: () => ({ id: "session-1" }),
@@ -446,13 +451,13 @@ describe("prompt submit worktree selection", () => {
 
     expect(promptPrepareEvents).toEqual(["start", "end"])
     expect(preparedDrafts).toEqual([
-      { directory: "/repo/main", sessionID: "session-1", mode: "wish", outputLanguage: "english", text: "ls" },
+      { directory: "/repo/main", sessionID: "session-1", mode: "intelligence", outputLanguage: "english", text: "ls" },
     ])
     expect(sentPromptAsync[0]?.text).toBe("Edited prepared goal")
     expect(sentPromptAsync[0]?.metadata).toEqual({
       deepagent: {
         prompt_pipeline: {
-          mode: "wish",
+          mode: "intelligence",
           confirmed_draft_id: "prompt_draft:test:1",
           edited_goal: "Edited prepared goal",
         },
@@ -460,7 +465,9 @@ describe("prompt submit worktree selection", () => {
     })
   })
 
-  test("prepares wish prompts in Chinese when the app locale is Chinese", async () => {
+  // Legacy-compat: a config still storing the pre-rename "wish" value must normalize to
+  // "intelligence" on the wire (read-old/send-new). Also exercises the Chinese output language.
+  test("prepares intelligence prompts in Chinese, normalizing a legacy 'wish' config to 'intelligence'", async () => {
     params = { id: "session-1" }
     promptMode = "wish"
     appLocale = "zh"
@@ -487,13 +494,13 @@ describe("prompt submit worktree selection", () => {
     await flushAsyncSubmit()
 
     expect(preparedDrafts).toEqual([
-      { directory: "/repo/main", sessionID: "session-1", mode: "wish", outputLanguage: "chinese", text: "ls" },
+      { directory: "/repo/main", sessionID: "session-1", mode: "intelligence", outputLanguage: "chinese", text: "ls" },
     ])
   })
 
-  test("routes non-code wish prompts through general without confirmation", async () => {
+  test("routes non-code intelligence prompts through general without confirmation", async () => {
     params = { id: "session-1" }
-    promptMode = "wish"
+    promptMode = "intelligence"
     const confirms: string[] = []
     promptValue[0] = { type: "text", content: "hello", start: 0, end: 5 }
 
@@ -525,7 +532,7 @@ describe("prompt submit worktree selection", () => {
 
     expect(confirms).toEqual([])
     expect(preparedDrafts).toEqual([
-      { directory: "/repo/main", sessionID: "session-1", mode: "wish", outputLanguage: "english", text: "hello" },
+      { directory: "/repo/main", sessionID: "session-1", mode: "intelligence", outputLanguage: "english", text: "hello" },
     ])
     expect(sentPromptAsync[0]?.text).toBe("hello")
     expect(sentPromptAsync[0]?.metadata).toEqual({
@@ -539,9 +546,9 @@ describe("prompt submit worktree selection", () => {
     promptValue[0] = { type: "text", content: "ls", start: 0, end: 2 }
   })
 
-  test("does not submit when wish prompt preparation fails", async () => {
+  test("does not submit when intelligence prompt preparation fails", async () => {
     params = { id: "session-1" }
-    promptMode = "wish"
+    promptMode = "intelligence"
     promptValue[0] = { type: "text", content: "prepare fails", start: 0, end: 13 }
 
     const submit = createPromptSubmit({
@@ -570,7 +577,7 @@ describe("prompt submit worktree selection", () => {
       {
         directory: "/repo/main",
         sessionID: "session-1",
-        mode: "wish",
+        mode: "intelligence",
         outputLanguage: "english",
         text: "prepare fails",
       },
