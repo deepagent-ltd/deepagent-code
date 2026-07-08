@@ -5,6 +5,7 @@ import { HttpBody, HttpClient, HttpClientRequest, HttpRouter } from "effect/unst
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { Auth } from "../../src/auth"
 import { Config } from "../../src/config/config"
+import { Database } from "@deepagent-code/core/database/database"
 import { Installation } from "../../src/installation"
 import { MoveSession } from "@deepagent-code/core/control-plane/move-session"
 import { ServerAuth } from "../../src/server/auth"
@@ -39,6 +40,7 @@ const apiLayer = HttpRouter.serve(
     }),
   ),
   Layer.provide(ServerAuth.Config.layer({ password: Option.none(), username: "deepagent-code" })),
+  Layer.provide(Database.layerFromPath(":memory:")),
 )
 const it = testEffect(apiLayer)
 

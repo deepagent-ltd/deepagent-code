@@ -28,8 +28,11 @@ export const SidebarContent = (props: {
   settingsLabel: Accessor<string>
   settingsKeybind: Accessor<string | undefined>
   onOpenSettings: () => void
+  historyLabel: Accessor<string>
+  onOpenHistory: () => void
   reviewLabel: Accessor<string>
   onOpenReview: () => void
+  reviewPending?: Accessor<boolean>
   packsLabel?: Accessor<string>
   onOpenPacks?: () => void
   helpLabel: Accessor<string>
@@ -94,6 +97,29 @@ export const SidebarContent = (props: {
           </DragDropProvider>
         </div>
         <div class="shrink-0 w-full pt-3 pb-6 flex flex-col items-center gap-2">
+          <Tooltip placement={placement()} value={props.historyLabel()}>
+            <IconButton
+              icon="folder"
+              variant="ghost"
+              size="large"
+              onClick={props.onOpenHistory}
+              aria-label={props.historyLabel()}
+            />
+          </Tooltip>
+          <Tooltip placement={placement()} value={props.reviewLabel()}>
+            <div class="relative">
+              <IconButton
+                icon="checklist"
+                variant="ghost"
+                size="large"
+                onClick={props.onOpenReview}
+                aria-label={props.reviewLabel()}
+              />
+              <Show when={props.reviewPending?.()}>
+                <span class="absolute top-1 right-1 size-2 rounded-full bg-text-interactive-base ring-2 ring-background-base" />
+              </Show>
+            </div>
+          </Tooltip>
           <TooltipKeybind placement={placement()} title={props.settingsLabel()} keybind={props.settingsKeybind() ?? ""}>
             <IconButton
               icon="settings-gear"
@@ -103,15 +129,6 @@ export const SidebarContent = (props: {
               aria-label={props.settingsLabel()}
             />
           </TooltipKeybind>
-          <Tooltip placement={placement()} value={props.reviewLabel()}>
-            <IconButton
-              icon="checklist"
-              variant="ghost"
-              size="large"
-              onClick={props.onOpenReview}
-              aria-label={props.reviewLabel()}
-            />
-          </Tooltip>
           <Show when={!!props.onOpenPacks}>
             <Tooltip placement={placement()} value={props.packsLabel?.() ?? ""}>
               <IconButton
