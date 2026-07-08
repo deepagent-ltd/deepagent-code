@@ -95,6 +95,37 @@ describe("tool.question", () => {
     }),
   )
 
+  it.instance("returns a recoverable error (does not hang) when a question has empty options", () =>
+    Effect.gen(function* () {
+      const toolInfo = yield* QuestionTool
+      const tool = yield* toolInfo.init()
+      const questions = [
+        {
+          question: "Which direction should we take?",
+          header: "Direction",
+          options: [] as { label: string; description: string }[],
+        },
+      ]
+
+      // No reply is ever sent: a well-behaved tool must not block on `ask` here.
+      const result = yield* tool.execute({ questions }, ctx).pipe(Effect.timeout("2 seconds"))
+      expect(result.title).toBe("Invalid question input")
+      expect(result.output).toContain("no options")
+      expect(result.metadata.answers).toEqual([])
+    }),
+  )
+
+  it.instance("returns a recoverable error when questions array is empty", () =>
+    Effect.gen(function* () {
+      const toolInfo = yield* QuestionTool
+      const tool = yield* toolInfo.init()
+
+      const result = yield* tool.execute({ questions: [] }, ctx).pipe(Effect.timeout("2 seconds"))
+      expect(result.title).toBe("Invalid question input")
+      expect(result.output).toContain("empty")
+    }),
+  )
+
   // intentionally removed the zod validation due to tool call errors, hoping prompting is gonna be good enough
   //   test("should throw an Error for header exceeding 30 characters", async () => {
   //     const tool = await QuestionTool.init()
