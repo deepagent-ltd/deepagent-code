@@ -326,7 +326,12 @@ export const TaskTool = Tool.define(
           ...(childAgentModeOverride
             ? { metadata: { deepagent: { agent_mode_override: childAgentModeOverride } } }
             : {}),
-          ...(resolvedOutputSchema ? { format: { type: "json_schema" as const, schema: resolvedOutputSchema } } : {}),
+          // Build a Format INSTANCE (not a plain literal): OutputFormatJsonSchema is a Schema.Class
+          // whose encoder is instanceof-gated, so a plain object would fail when the message Info is
+          // serialized onto the MessageUpdated sync event. prompt() also normalizes defensively.
+          ...(resolvedOutputSchema
+            ? { format: new SessionV1.OutputFormatJsonSchema({ type: "json_schema", schema: resolvedOutputSchema }) }
+            : {}),
           tools: {
             ...(next.permission.some((rule) => rule.permission === "todowrite") ? {} : { todowrite: false }),
             ...(next.permission.some((rule) => rule.permission === id) ? {} : { task: false }),
