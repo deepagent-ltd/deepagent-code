@@ -21,6 +21,7 @@ import { McpCommand } from "./cli/cmd/mcp"
 import { GithubCommand } from "./cli/cmd/github"
 import { ExportCommand } from "./cli/cmd/export"
 import { ImportCommand } from "./cli/cmd/import"
+import { ImportHistoryCommand } from "./cli/cmd/import-history"
 import { AttachCommand } from "./cli/cmd/attach"
 import { TuiThreadCommand } from "./cli/cmd/tui"
 import { AcpCommand } from "./cli/cmd/acp"
@@ -138,6 +139,7 @@ const cli = yargs(args)
   .command(StatsCommand)
   .command(ExportCommand)
   .command(ImportCommand)
+  .command(ImportHistoryCommand)
   .command(GithubCommand)
   .command(PrCommand)
   .command(SessionCommand)
