@@ -88,6 +88,8 @@ globalThis.AI_SDK_LOG_WARNINGS = false
 
 const decodeMessageInfo = Schema.decodeUnknownExit(SessionV1.Info)
 const decodeMessagePart = Schema.decodeUnknownExit(SessionV1.Part)
+// Coerce a structurally-valid Format value into a Format INSTANCE (see the call site in prompt()).
+const decodeFormatSync = Schema.decodeUnknownSync(SessionV1.Format)
 
 const STRUCTURED_OUTPUT_DESCRIPTION = `Use this tool to return your final response in the requested structured format.
 
@@ -1042,7 +1044,15 @@ export const layer = Layer.effect(
           variant,
         },
         system: input.system,
-        format: input.format,
+        // `format` must be a decoded Format INSTANCE, not a plain object literal. `Format`'s
+        // json_schema member is a `Schema.Class`, whose encoder is `instanceof`-gated — a plain
+        // `{ type: "json_schema", schema }` (e.g. from the task tool) passes TS structural typing
+        // but fails at encode time when this message Info is serialized onto the MessageUpdated
+        // sync event ("Expected OutputFormatJsonSchema, got {...}"). Normalizing here — the single
+        // choke point every caller flows through — makes any structurally-valid format safe, and
+        // is idempotent for callers that already pass an instance. `withDecodingDefault` also fills
+        // retryCount. `format` is validated on the way in (PromptInput), so this decode never fails.
+        format: input.format === undefined ? undefined : decodeFormatSync(input.format),
         metadata: input.metadata,
       }
 
