@@ -644,6 +644,22 @@ function createWorkspaceTerminalSession(
         size: pty.cols && pty.rows ? { rows: pty.rows, cols: pty.cols } : undefined,
       })
       .catch((error: unknown) => {
+        // Benign races that must NOT surface as a scary error (or, in dev, kick
+        // the user out of their flow):
+        //  - "PTY session not found": a resize/title update racing with the PTY
+        //    exiting server-side. `pty.exited` + removeExited already retire it.
+        //  - HTTP 503 with empty body: the instance scope is tearing down during
+        //    a project switch / reload (see handlers/pty.ts). The terminal will
+        //    re-establish on the new instance; this is expected, not an error.
+        const message = error instanceof Error ? error.message : String(error)
+        const benign = /PTY session not found/.test(message) || /\b503\b/.test(message)
+        if (benign) {
+          if (previous) {
+            const currentIndex = store.all.findIndex((item) => item.id === pty.id)
+            if (currentIndex >= 0) setStore("all", currentIndex, previous)
+          }
+          return
+        }
         if (previous) {
           const currentIndex = store.all.findIndex((item) => item.id === pty.id)
           if (currentIndex >= 0) setStore("all", currentIndex, previous)
