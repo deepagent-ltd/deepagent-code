@@ -28,7 +28,27 @@ export const SidePanelSubagents: Component<{ onClose: () => void }> = (props) =>
       .sort((a, b) => (b.time?.updated ?? 0) - (a.time?.updated ?? 0))
   })
 
-  const statusOf = (id: string): "running" | "idle" => (sync.data.session_working(id) ? "running" : "idle")
+  // Three states. A subagent does one turn then finishes: the task tool persists a terminal marker
+  // in the child session's metadata (`deepagent.subagent.finished`) so a completed subagent reads as
+  // "finished" (read-only) instead of "idle" (looks available). `session_working` is the live signal
+  // for the brief window it's actually running; the persisted marker wins once set.
+  const isFinished = (child: { metadata?: Record<string, unknown> }): boolean => {
+    const sub = (child.metadata?.["deepagent"] as { subagent?: { finished?: boolean } } | undefined)?.subagent
+    return sub?.finished === true
+  }
+  const statusOf = (child: { id: string; metadata?: Record<string, unknown> }): "running" | "finished" | "idle" => {
+    if (sync.data.session_working(child.id)) return "running"
+    if (isFinished(child)) return "finished"
+    return "idle"
+  }
+  const statusLabel = (state: "running" | "finished" | "idle") =>
+    language.t(
+      state === "running"
+        ? "session.subagents.running"
+        : state === "finished"
+          ? "session.subagents.finished"
+          : "session.subagents.idle",
+    )
 
   return (
     <div class="h-full w-full min-w-0 overflow-y-auto bg-background-base">
@@ -56,17 +76,18 @@ export const SidePanelSubagents: Component<{ onClose: () => void }> = (props) =>
               <button
                 type="button"
                 class="w-full flex items-center justify-between gap-2 rounded-md px-2 py-2 text-left hover:bg-background-stronger"
-                onClick={() => navigate(`/session/${child.id}`)}
+                // The router nests every session route under a required `:dir` segment
+                // (`/:dir/session/:id`). Navigating to a bare `/session/${id}` matches no child
+                // route and renders a blank (black) panel. `params.dir` is the parent's dir and
+                // the subagent lives in the same scope, so it's the correct prefix — matching every
+                // other session navigation in the app (message-timeline, session-composer, etc.).
+                onClick={() => navigate(`/${params.dir}/session/${child.id}`)}
               >
                 <div class="flex flex-col gap-0.5 min-w-0">
                   <span class="truncate text-12-regular text-text">{child.title || child.id}</span>
-                  <span class="text-11-regular text-text-weaker">
-                    {language.t(
-                      statusOf(child.id) === "running" ? "session.subagents.running" : "session.subagents.idle",
-                    )}
-                  </span>
+                  <span class="text-11-regular text-text-weaker">{statusLabel(statusOf(child))}</span>
                 </div>
-                <Show when={statusOf(child.id) === "running"}>
+                <Show when={statusOf(child) === "running"}>
                   <span
                     class="h-2 w-2 shrink-0 rounded-full bg-text-success"
                     style={{ animation: "var(--animate-pulse-scale)" }}
