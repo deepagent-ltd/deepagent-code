@@ -1,6 +1,7 @@
-import { Component, For, Show, createMemo, createResource, createSignal } from "solid-js"
+import { Component, createMemo, createResource, createSignal, For, Show } from "solid-js"
 import { Dialog } from "@deepagent-code/ui/v2/dialog-v2"
 import { Button } from "@deepagent-code/ui/button"
+import { Icon } from "@deepagent-code/ui/icon"
 import { useLanguage } from "@/context/language"
 import { showToast } from "@/utils/toast"
 import "../settings-v2/settings-v2.css"
@@ -9,15 +10,11 @@ type KnowledgeItem = {
   id: string
   type: "knowledge" | "strategy" | "methodology" | "memory" | "skill" | "failure_dossier"
   summary: string
-  // The durable model carries a discrete evidence strength, NOT a raw confidence number.
-  // (Backend route /deepagent/knowledge/pending returns DeepAgentKnowledgeItem.)
   evidence_strength: "strong" | "medium" | "weak" | "none"
   evidence_refs: string[]
   approval_status: "pending" | "approved" | "rejected"
 }
 
-// The new id-based review routes are not in the generated SDK; use the raw-request escape hatch
-// (the dir-scoped client injects the workspace directory). Mirrors submit.ts's RawSdkClient.
 type RawSdkClient = {
   client: {
     request<TData>(options: {
@@ -29,13 +26,8 @@ type RawSdkClient = {
   }
 }
 
-// The dialog mounts outside SDKProvider (DialogProvider sits above it), so the dir-scoped sdk
-// client is passed in by the opener instead of read from useSDK. Shape mirrors submit.ts: the
-// generated client exposes the low-level request fn at `.client.request`.
 type ReviewClient = RawSdkClient
 
-// Exported for the route-contract test (review-dialog-contract.test.ts): these are the live V3.1
-// self-learning Review routes. The test asserts method/url/body so a backend rename breaks CI.
 export const listPending = async (client: ReviewClient): Promise<KnowledgeItem[]> => {
   const response = await client.client.request<{ items: KnowledgeItem[] }>({
     method: "GET",
@@ -61,21 +53,27 @@ export const DialogReview: Component<{ client: ReviewClient }> = (props) => {
   const language = useLanguage()
   const [selected, setSelected] = createSignal<ReadonlySet<string>>(new Set())
   const [busy, setBusy] = createSignal(false)
+  const [showApproved, setShowApproved] = createSignal(false)
   const [items, { refetch }] = createResource(async () => listPending(props.client))
 
-  const allItems = createMemo(() => items() ?? [])
+  // Rejected (and superseded, which the backend already excludes) are noise —
+  // hide them. Approved collapses into a single expandable row so the list is
+  // dominated by what actually needs attention (pending).
+  const pending = createMemo(() => (items() ?? []).filter((i) => i.approval_status === "pending"))
+  const approved = createMemo(() => (items() ?? []).filter((i) => i.approval_status === "approved"))
+
   const toggle = (id: string) => {
     const next = new Set<string>(selected())
     if (next.has(id)) next.delete(id)
     else next.add(id)
     setSelected(next)
   }
-  const selectAll = () => setSelected(new Set(allItems().map((i) => i.id)))
+  const selectAll = () => setSelected(new Set(pending().map((i) => i.id)))
   const invert = () => {
     const cur = selected()
     setSelected(
       new Set(
-        allItems()
+        pending()
           .map((i) => i.id)
           .filter((id) => !cur.has(id)),
       ),
@@ -101,6 +99,31 @@ export const DialogReview: Component<{ client: ReviewClient }> = (props) => {
     }
   }
 
+  const Row = (item: KnowledgeItem) => {
+    const checked = createMemo(() => selected().has(item.id))
+    return (
+      <label
+        data-action="review-item"
+        data-status={item.approval_status}
+        class="flex cursor-pointer items-start gap-3 border-b border-v2-border-border-muted px-3 py-2.5 last:border-b-0 hover:bg-v2-background-bg-layer-01"
+      >
+        <input type="checkbox" class="mt-0.5" checked={checked()} onChange={() => toggle(item.id)} />
+        <div class="flex min-w-0 flex-1 flex-col gap-0.5">
+          <span class="break-words text-13-medium text-v2-text-text-base">{item.summary}</span>
+          <span class="break-words text-11-regular text-v2-text-text-faint">
+            {item.type}
+            {" · "}
+            {language.t("review.strength", { value: language.t(`review.strength.${item.evidence_strength}`) })}
+            <Show when={item.evidence_refs.length > 0}>
+              {" · "}
+              {language.t("review.evidence", { count: item.evidence_refs.length })}
+            </Show>
+          </span>
+        </div>
+      </label>
+    )
+  }
+
   return (
     <Dialog size="x-large" variant="settings" title={language.t("review.title")}>
       <div class="settings-v2-panel" data-component="review-dialog">
@@ -113,60 +136,39 @@ export const DialogReview: Component<{ client: ReviewClient }> = (props) => {
               fallback={<div class="p-4 text-13-regular text-v2-text-text-faint">{language.t("review.loading")}</div>}
             >
               <Show
-                when={allItems().length > 0}
+                when={pending().length > 0 || approved().length > 0}
                 fallback={<div class="p-4 text-13-regular text-v2-text-text-faint">{language.t("review.empty")}</div>}
               >
-                <For each={allItems()}>
-                  {(item) => {
-                    const checked = createMemo(() => selected().has(item.id))
-                    // P2-J: render all THREE states. The backend returns approved entries too so a
-                    // reviewer can REVOKE a prior approval (select it, then Reject). Collapsing
-                    // approved into "pending" made Approve look like a no-op and hid revoke entirely.
-                    const statusKey = createMemo(() =>
-                      item.approval_status === "rejected"
-                        ? "review.status.rejected"
-                        : item.approval_status === "approved"
-                          ? "review.status.approved"
-                          : "review.status.pending",
-                    )
-                    return (
-                      <label
-                        data-action="review-item"
-                        data-status={item.approval_status}
-                        data-rejected={item.approval_status === "rejected" ? "true" : "false"}
-                        class="flex cursor-pointer items-start gap-3 border-b border-v2-border-border-muted px-3 py-2.5 last:border-b-0 hover:bg-v2-background-bg-layer-01 data-[rejected=true]:opacity-60"
-                      >
-                        <input type="checkbox" class="mt-0.5" checked={checked()} onChange={() => toggle(item.id)} />
-                        <div class="flex min-w-0 flex-1 flex-col gap-0.5">
-                          <span class="break-words text-13-medium text-v2-text-text-base">{item.summary}</span>
-                          <span class="break-words text-11-regular text-v2-text-text-faint">
-                            {item.type}
-                            {" · "}
-                            {language.t(statusKey())}
-                            {" · "}
-                            {language.t("review.strength", {
-                              value: language.t(`review.strength.${item.evidence_strength}`),
-                            })}
-                            <Show when={item.evidence_refs.length > 0}>
-                              {" · "}
-                              {language.t("review.evidence", { count: item.evidence_refs.length })}
-                            </Show>
-                          </span>
-                        </div>
-                      </label>
-                    )
-                  }}
-                </For>
+                {/* Pending: laid out flat — this is what needs attention. */}
+                <For each={pending()}>{(item) => Row(item)}</For>
+
+                {/* Approved: collapsed into one expandable row. */}
+                <Show when={approved().length > 0}>
+                  <button
+                    type="button"
+                    data-action="review-approved-toggle"
+                    class="flex w-full items-center gap-2 border-b border-v2-border-border-muted bg-v2-background-bg-layer-01 px-3 py-2.5 text-left hover:bg-v2-background-bg-layer-02"
+                    onClick={() => setShowApproved(!showApproved())}
+                  >
+                    <Icon name={showApproved() ? "chevron-down" : "chevron-right"} size="small" />
+                    <span class="text-13-medium text-v2-text-text-base">
+                      {language.t("review.status.approved")} ({approved().length})
+                    </span>
+                  </button>
+                  <Show when={showApproved()}>
+                    <For each={approved()}>{(item) => Row(item)}</For>
+                  </Show>
+                </Show>
               </Show>
             </Show>
           </div>
 
           <div class="deepagent-dialog-actions flex items-center justify-between">
             <div class="flex flex-wrap items-center gap-2">
-              <Button variant="secondary" size="small" onClick={selectAll} disabled={allItems().length === 0}>
+              <Button variant="secondary" size="small" onClick={selectAll} disabled={pending().length === 0}>
                 {language.t("review.selectAll")}
               </Button>
-              <Button variant="secondary" size="small" onClick={invert} disabled={allItems().length === 0}>
+              <Button variant="secondary" size="small" onClick={invert} disabled={pending().length === 0}>
                 {language.t("review.invertSelection")}
               </Button>
               <Show when={selected().size > 0}>
