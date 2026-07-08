@@ -21,6 +21,12 @@ The features below start from a real need — something a plain coding agent, op
 
 ## What You Can Do
 
+### Bring your history over — switch tools without starting from zero
+
+**The need:** You've built up months of context in another agent — Codex or Claude Code — and switching tools normally means abandoning all of it: the conversations, the accumulated memory, the skills you tuned. That cost alone keeps people on tools they've outgrown.
+
+**What DeepAgent does:** One-click import of your existing history. Point it at a Codex or Claude Code installation and it hot-imports your chat sessions, memory, and skills straight into DeepAgent — reading each tool's on-disk format, normalizing it, and replaying it into the document graph so imported conversations behave like native ones. Secrets are redacted on the way in, imported projects stay isolated so nothing collides with your active work, and re-running an import converges instead of duplicating. Available from the Settings "Import history" panel, a History view in the sidebar, or the `import-history` CLI command. Migration is a few minutes, not a fresh start.
+
 ### Keep one conversation going indefinitely
 
 **The need:** Long tasks overflow the context window. Most agents respond by truncating history or summarizing everything at a threshold — so mid-task the agent forgets a decision you made an hour ago, or the window fills with stale tool output and quality falls off a cliff.
