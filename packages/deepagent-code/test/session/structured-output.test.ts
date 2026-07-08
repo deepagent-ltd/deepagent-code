@@ -129,6 +129,58 @@ describe("structured-output.UserMessage", () => {
   })
 })
 
+// Regression: OutputFormatJsonSchema is a Schema.Class, so its ENCODER is instanceof-gated. A
+// user message whose `format` is a plain object literal (as the task tool built it) passes TS
+// structural typing and decode, but fails at encode when the message Info is serialized onto the
+// MessageUpdated sync event — the exact "Expected OutputFormatJsonSchema, got {...}" failure the
+// researcher subagent hit. These tests pin the encode path the old decode-only tests never touched.
+describe("structured-output.encode (sync-event serialization)", () => {
+  const encodeInfo = Schema.encodeUnknownExit(SessionV1.Info)
+  const userWith = (format: unknown) => ({
+    id: MessageID.ascending(),
+    sessionID: SessionID.descending(),
+    role: "user" as const,
+    time: { created: 1 },
+    agent: "researcher",
+    model: { providerID: "anthropic", modelID: "claude-3" },
+    format,
+  })
+  const jsonSchemaFormat = {
+    type: "json_schema" as const,
+    schema: { type: "object", properties: { module: { type: "string" } }, required: ["module"] },
+  }
+
+  test("a plain-object json_schema format does NOT survive Info encode (the original bug)", () => {
+    // Guards the invariant: a plain literal is unsafe. If a future refactor makes this pass, the
+    // instanceof gate has changed and the normalization below may no longer be load-bearing.
+    const result = encodeInfo(userWith(jsonSchemaFormat))
+    expect(Exit.isFailure(result)).toBe(true)
+  })
+
+  test("a decoded (normalized) json_schema format survives Info encode", () => {
+    const format = Schema.decodeUnknownSync(SessionV1.Format)(jsonSchemaFormat)
+    const result = encodeInfo(userWith(format))
+    expect(Exit.isSuccess(result)).toBe(true)
+    if (Exit.isSuccess(result)) {
+      const encoded = result.value as { format?: { type?: string } }
+      expect(encoded.format?.type).toBe("json_schema")
+    }
+  })
+
+  test("a constructed OutputFormatJsonSchema instance survives Info encode", () => {
+    const format = new SessionV1.OutputFormatJsonSchema({ ...jsonSchemaFormat, retryCount: 2 })
+    const result = encodeInfo(userWith(format))
+    expect(Exit.isSuccess(result)).toBe(true)
+  })
+
+  test("text format is instanceof-gated too: plain fails, decoded survives Info encode", () => {
+    // OutputFormatText is ALSO a Schema.Class, so normalization is load-bearing for both variants.
+    expect(Exit.isFailure(encodeInfo(userWith({ type: "text" })))).toBe(true)
+    const decoded = Schema.decodeUnknownSync(SessionV1.Format)({ type: "text" })
+    expect(Exit.isSuccess(encodeInfo(userWith(decoded)))).toBe(true)
+  })
+})
+
 describe("structured-output.AssistantMessage", () => {
   const baseAssistantMessage = {
     id: MessageID.ascending(),
