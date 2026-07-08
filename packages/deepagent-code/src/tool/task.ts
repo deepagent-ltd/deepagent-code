@@ -380,11 +380,43 @@ export const TaskTool = Tool.define(
           .pipe(Effect.ignore, Effect.forkIn(scope, { startImmediately: true }))
       })
 
+      // Mark the subagent session as FINISHED once it completes a run. A subagent does exactly one
+      // turn and is then done — but the runtime only drops it back to `idle` (an in-memory status that
+      // never persists), so the panel showed every completed subagent as merely "idle" forever, as if
+      // it were still available to talk to. We persist a terminal marker in the session's own metadata
+      // (`deepagent.subagent.finished`) instead of archiving it: archived sessions are filtered out of
+      // the app's session store, which would remove the subagent from the panel entirely — but the
+      // requirement is that it stays listed and its full reasoning/output remain viewable. This marker
+      // only flips the UI to "已完成" and disables the composer; it touches no message/part data.
+      // Read-merge because setMetadata replaces the whole metadata object.
+      const markFinished = Effect.fn("TaskTool.markSubagentFinished")(function* (
+        state: "completed" | "error" | "cancelled",
+      ) {
+        // Resume (`params.task_id`) reuses an existing session; a fresh finish marker is still correct
+        // (the reused session just completed another turn), so no special-casing is needed.
+        const current = yield* sessions.get(nextSession.id).pipe(Effect.orDie)
+        yield* sessions
+          .setMetadata({
+            sessionID: nextSession.id,
+            metadata: {
+              ...(current.metadata ?? {}),
+              deepagent: {
+                ...((current.metadata?.["deepagent"] as Record<string, unknown> | undefined) ?? {}),
+                subagent: { finished: true, state, at: Date.now() },
+              },
+            },
+          })
+          .pipe(Effect.ignore)
+      })
+
       const notify = Effect.fn("TaskTool.notifyBackgroundResult")(function* (jobID: string) {
         yield* background.wait({ id: jobID }).pipe(
           Effect.flatMap((result) => {
-            if (result.info?.status === "completed") return inject("completed", result.info.output ?? "")
-            if (result.info?.status === "error") return inject("error", result.info.error ?? "")
+            if (result.info?.status === "completed")
+              return markFinished("completed").pipe(Effect.andThen(inject("completed", result.info.output ?? "")))
+            if (result.info?.status === "error")
+              return markFinished("error").pipe(Effect.andThen(inject("error", result.info.error ?? "")))
+            if (result.info?.status === "cancelled") return markFinished("cancelled")
             return Effect.void
           }),
           Effect.forkIn(scope, { startImmediately: true }),
@@ -462,9 +494,17 @@ export const TaskTool = Tool.define(
               background.wait({ id: nextSession.id }).pipe(Effect.map((waited) => waited.info)),
               background.waitForPromotion(nextSession.id),
             )
+            // Promoted to background: `notify` (registered via onPromote) owns the finish marker.
             if (result?.metadata?.background === true) return backgroundResult()
-            if (result?.status === "error") return yield* Effect.fail(new Error(result.error ?? "Task failed"))
-            if (result?.status === "cancelled") return yield* Effect.fail(new Error("Task cancelled"))
+            if (result?.status === "error") {
+              yield* markFinished("error")
+              return yield* Effect.fail(new Error(result.error ?? "Task failed"))
+            }
+            if (result?.status === "cancelled") {
+              yield* markFinished("cancelled")
+              return yield* Effect.fail(new Error("Task cancelled"))
+            }
+            yield* markFinished("completed")
             return {
               title: params.description,
               metadata,
