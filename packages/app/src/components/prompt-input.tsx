@@ -330,6 +330,13 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
   })
   const info = createMemo(() => (params.id ? sync.session.get(params.id) : undefined))
   const working = createMemo(() => sync.data.session_working(params.id ?? ""))
+  // A finished subagent is read-only: it did its one turn and was marked done by the task tool
+  // (metadata.deepagent.subagent.finished). The panel still lists it so its history is viewable,
+  // but new prompts must be refused — the parent orchestrates work, you don't chat with a done child.
+  const subagentFinished = createMemo(() => {
+    const meta = info()?.metadata as { deepagent?: { subagent?: { finished?: boolean } } } | undefined
+    return meta?.deepagent?.subagent?.finished === true
+  })
   const imageAttachments = createMemo(() =>
     prompt.current().filter((part): part is ImageAttachmentPart => part.type === "image"),
   )
@@ -1264,6 +1271,11 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
   })
 
   const handlePromptSubmit = (event: Event) => {
+    // Read-only finished subagent: swallow the submit so no new turn is started.
+    if (subagentFinished()) {
+      event.preventDefault()
+      return
+    }
     if (draftPreparing() || composing()) {
       event.preventDefault()
       return
@@ -1778,7 +1790,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                 <IconButton
                   data-action="prompt-submit"
                   type="submit"
-                  disabled={draftPreparing() || (!working() && blank())}
+                  disabled={subagentFinished() || draftPreparing() || (!working() && blank())}
                   tabIndex={store.mode === "normal" ? undefined : -1}
                   icon={stopping() ? "stop" : store.mode === "shell" ? "arrow-undo-down" : "arrow-up"}
                   variant="primary"

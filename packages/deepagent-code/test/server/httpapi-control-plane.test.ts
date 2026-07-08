@@ -8,6 +8,7 @@ import { AbsolutePath } from "@deepagent-code/core/schema"
 import { SessionV2 } from "@deepagent-code/core/session"
 import { Auth } from "../../src/auth"
 import { Config } from "../../src/config/config"
+import { Database } from "@deepagent-code/core/database/database"
 import { Installation } from "../../src/installation"
 import { ServerAuth } from "../../src/server/auth"
 import { RootHttpApi } from "../../src/server/routes/instance/httpapi/api"
@@ -45,6 +46,7 @@ const apiLayer = HttpRouter.serve(
     }),
   ),
   Layer.provide(ServerAuth.Config.layer({ password: Option.none(), username: "deepagent-code" })),
+  Layer.provide(Database.layerFromPath(":memory:")),
 )
 const it = testEffect(apiLayer)
 
