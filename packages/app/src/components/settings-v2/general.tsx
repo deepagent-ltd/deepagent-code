@@ -31,6 +31,7 @@ import { playSoundById, SOUND_OPTIONS } from "@/utils/sound"
 import { Link } from "../link"
 import { SettingsListV2 } from "./parts/list"
 import { SettingsRowV2 } from "./parts/row"
+import { ImportSection } from "./import-history"
 import "./settings-v2.css"
 import {
   deepAgentModeFromConfig,
@@ -923,6 +924,8 @@ export const SettingsGeneralV2: Component = () => {
         <UpdatesSection />
 
         <DisplaySection />
+
+        <ImportSection />
       </div>
     </>
   )
