@@ -13,7 +13,11 @@ import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import * as Sse from "effect/unstable/encoding/Sse"
 import { RootHttpApi } from "../api"
-import { GlobalUpgradeInput } from "../groups/global"
+import { GlobalUpgradeInput, ImportRequestSchema } from "../groups/global"
+import { runImport } from "@/import"
+import { Database } from "@deepagent-code/core/database/database"
+import { ProjectTable } from "@deepagent-code/core/project/sql"
+import { resolveDataPath } from "@deepagent-code/core/global-path"
 
 const log = Log.create({ service: "server" })
 
@@ -72,6 +76,7 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
     const config = yield* Config.Service
     const installation = yield* Installation.Service
     const bridge = yield* EffectBridge.make()
+    const { db } = yield* Database.Service
 
     const health = Effect.fn("GlobalHttpApi.health")(function* () {
       return { healthy: true as const, version: InstallationVersion }
@@ -107,6 +112,11 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
     const dispose = Effect.fn("GlobalHttpApi.dispose")(function* () {
       yield* disposeAllInstancesAndEmitGlobalDisposed()
       return true
+    })
+
+    const projects = Effect.fn("GlobalHttpApi.projects")(function* () {
+      const rows = yield* db.select({ id: ProjectTable.id, worktree: ProjectTable.worktree, name: ProjectTable.name }).from(ProjectTable).all().pipe(Effect.orDie)
+      return rows.map((row) => ({ id: row.id, worktree: row.worktree, name: row.name ?? undefined }))
     })
 
     const upgrade = Effect.fn("GlobalHttpApi.upgrade")(function* (ctx: { payload: typeof GlobalUpgradeInput.Type }) {
@@ -160,6 +170,76 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
       return HttpServerResponse.jsonUnsafe(result.body, { status: result.status })
     })
 
+    const importRaw = Effect.fn("GlobalHttpApi.importRaw")(function* (ctx: {
+      request: HttpServerRequest.HttpServerRequest
+    }) {
+      const body = yield* Effect.orDie(ctx.request.text)
+      const json = parseBody(body)
+      if (json === undefined) {
+        return HttpServerResponse.jsonUnsafe({ error: "Invalid request body: not valid JSON", body: body.slice(0, 200) }, { status: 400 })
+      }
+      const decoded = yield* Schema.decodeUnknownEffect(ImportRequestSchema)(json).pipe(
+        Effect.map((payload) => ({ valid: true as const, payload, error: "" as string })),
+        Effect.catch((err) =>
+          Effect.succeed({
+            valid: false as const,
+            payload: null,
+            error: err instanceof Error ? err.message : String(err),
+          }),
+        ),
+      )
+      if (!decoded.valid || decoded.payload === null) {
+        return HttpServerResponse.jsonUnsafe({ error: "Invalid request body: schema decode failed", detail: decoded.error }, { status: 400 })
+      }
+      const opts = decoded.payload
+      const queue = yield* Queue.unbounded<unknown>()
+      // Hot-import: write into the SAME database + knowledge root this sidecar
+      // actually uses. `Database.path()` is channel-aware (dev vs prod use
+      // different `Global.Path.data` + a `deepagent-code-<channel>.db` file), so
+      // hardcoding a path would write to a DB the running app never reads — the
+      // root cause of "imported sessions invisible". Forcing live-write (not a
+      // snapshot copy) because a copy the app doesn't open defeats hot-import.
+      void runImport({
+        source: opts.source,
+        sourcePath: opts.sourcePath,
+        scopes: opts.scopes ? [...opts.scopes] : undefined,
+        dryRun: opts.dryRun ?? false,
+        copyLiveDb: false,
+        outputDbPath: Database.path(),
+        outputDataRoot: resolveDataPath(),
+        cwdFilter: opts.cwdFilter,
+        onProgress: (event) => {
+          Queue.offerUnsafe(queue, event)
+        },
+      })
+        .then((report) => {
+          Queue.offerUnsafe(queue, { phase: "done", report })
+          Queue.shutdown(queue)
+        })
+        .catch((err: unknown) => {
+          Queue.offerUnsafe(queue, {
+            phase: "error",
+            message: err instanceof Error ? err.message : String(err),
+          })
+          Queue.shutdown(queue)
+        })
+      return HttpServerResponse.stream(
+        Stream.fromQueue(queue).pipe(
+          Stream.map(eventData),
+          Stream.pipeThroughChannel(Sse.encode()),
+          Stream.encodeText,
+        ),
+        {
+          contentType: "text/event-stream",
+          headers: {
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+            "X-Content-Type-Options": "nosniff",
+          },
+        },
+      )
+    })
+
     return handlers
       .handle("health", health)
       .handle("capabilities", capabilities)
@@ -167,6 +247,8 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
       .handle("configGet", configGet)
       .handle("configUpdate", configUpdate)
       .handle("dispose", dispose)
+      .handle("projects", projects)
       .handleRaw("upgrade", upgradeRaw)
+      .handleRaw("import", importRaw)
   }),
 )

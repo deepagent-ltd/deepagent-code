@@ -70,6 +70,21 @@ export const GlobalUpgradeInput = Schema.Struct({
   target: Schema.optional(Schema.String),
 })
 
+export const ImportRequestSchema = Schema.Struct({
+  source: Schema.Literals(["codex", "claude"]),
+  sourcePath: Schema.optional(Schema.String),
+  scopes: Schema.optional(Schema.Array(Schema.Literals(["session", "memory", "skill"]))),
+  dryRun: Schema.optional(Schema.Boolean),
+  copyLiveDb: Schema.optional(Schema.Boolean),
+  cwdFilter: Schema.optional(Schema.String),
+}).annotate({ identifier: "ImportRequest" })
+
+export const ProjectListItemSchema = Schema.Struct({
+  id: Schema.String,
+  worktree: Schema.String,
+  name: Schema.optional(Schema.String),
+}).annotate({ identifier: "ProjectListItem" })
+
 const GlobalUpgradeResult = Schema.Union([
   Schema.Struct({
     success: Schema.Literal(true),
@@ -88,6 +103,8 @@ export const GlobalPaths = {
   config: "/global/config",
   dispose: "/global/dispose",
   upgrade: "/global/upgrade",
+  import: "/global/import",
+  projects: "/global/projects",
 } as const
 
 export const GlobalApi = HttpApi.make("global").add(
@@ -159,6 +176,27 @@ export const GlobalApi = HttpApi.make("global").add(
           identifier: "global.upgrade",
           summary: "Upgrade deepagent-code",
           description: "Upgrade deepagent-code to the specified version or latest if not specified.",
+        }),
+      ),
+      HttpApiEndpoint.post("import", GlobalPaths.import, {
+        success: Schema.String,
+        error: HttpApiError.BadRequest,
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "global.import",
+          summary: "Import history from Codex / Claude Code",
+          description:
+            "Hot-import chat history, memory, and skills from a Codex or Claude Code installation. The body is an ImportRequest JSON object; progress is streamed back as server-sent events (text/event-stream), one JSON ImportProgress object per event, ending with a `done` event carrying the ImportReport.",
+        }),
+      ),
+      HttpApiEndpoint.get("projects", GlobalPaths.projects, {
+        success: Schema.Array(ProjectListItemSchema),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "global.projects",
+          summary: "List all known projects",
+          description:
+            "List every project row in the database (including imported / not-yet-opened projects), so the History Projects view can surface sessions that do not belong to a currently-active project.",
         }),
       ),
     )

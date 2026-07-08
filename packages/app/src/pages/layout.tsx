@@ -63,6 +63,7 @@ import { useTheme, type ColorScheme } from "@deepagent-code/ui/theme/context"
 import { useCommand, type CommandOption } from "@/context/command"
 import { ConstrainDragXAxis, getDraggableId } from "@/utils/solid-dnd"
 import { DebugBar } from "@/components/debug-bar"
+import { listPending } from "@/components/review/dialog-review"
 import { Titlebar, type TitlebarUpdate } from "@/components/titlebar"
 import { useDirectoryPicker } from "@/components/directory-picker"
 import { ServerConnection, useServer } from "@/context/server"
@@ -155,6 +156,22 @@ export default function Layout(props: ParentProps) {
   }
   const colorSchemeLabel = (scheme: ColorScheme) => language.t(colorSchemeKey[scheme])
   const currentDir = createMemo(() => route().dir)
+
+  // Pending knowledge-candidate badge on the Review sidebar icon. Re-fetches on
+  // workspace change and on a slow interval so it stays fresh after imports /
+  // reviews without coupling to the dialog lifecycle.
+  const [reviewPending, { refetch: refetchReviewPending }] = createResource(currentDir, async (dir) => {
+    if (!dir) return false
+    try {
+      const sdk = serverSDK.createDirSdkContext(dir)
+      const items = await listPending(sdk.client as never)
+      return items.some((item) => item.approval_status === "pending")
+    } catch {
+      return false
+    }
+  })
+  const reviewBadgeTimer = setInterval(() => void refetchReviewPending(), 60_000)
+  onCleanup(() => clearInterval(reviewBadgeTimer))
 
   const [state, setState] = createStore({
     autoselect: !initialDirectory,
@@ -1232,6 +1249,23 @@ export default function Layout(props: ParentProps) {
     void import("@/components/review/dialog-review").then((x) => {
       if (dialogDead || dialogRun !== run) return
       dialog.show(() => <x.DialogReview client={sdk.client as never} />)
+    })
+    // Refresh the sidebar badge once the reviewer closes.
+    setTimeout(() => void refetchReviewPending(), 1500)
+  }
+
+  function openHistoryProjects() {
+    const run = ++dialogRun
+    const activeWorktrees = new Set(server.projects.list().map((p) => p.worktree))
+    void import("@/components/history/dialog-history-projects").then((x) => {
+      if (dialogDead || dialogRun !== run) return
+      dialog.show(() => (
+        <x.DialogHistoryProjects
+          client={serverSDK.client as never}
+          activeWorktrees={activeWorktrees}
+          onOpen={(directory: string) => openProject(directory)}
+        />
+      ))
     })
   }
 
@@ -2362,6 +2396,9 @@ export default function Layout(props: ParentProps) {
       onOpenSettings={openSettings}
       reviewLabel={() => language.t("sidebar.review")}
       onOpenReview={openReview}
+      reviewPending={() => !!reviewPending.latest}
+      historyLabel={() => language.t("sidebar.history")}
+      onOpenHistory={openHistoryProjects}
       packsLabel={() => language.t("packs.title")}
       onOpenPacks={openPacks}
       helpLabel={() => language.t("sidebar.help")}

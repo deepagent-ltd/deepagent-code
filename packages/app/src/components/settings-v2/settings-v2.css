@@ -729,3 +729,81 @@
   word-break: break-word;
   color: var(--v2-text-text-faint);
 }
+
+.settings-v2-import-log {
+  margin: 0;
+  padding: 10px 12px;
+  max-height: 220px;
+  min-width: 240px;
+  width: 100%;
+  overflow: auto;
+  border: 1px solid var(--v2-border-border-muted);
+  border-radius: 8px;
+  background: var(--v2-background-bg-layer-01);
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--v2-text-text-faint);
+}
+
+.settings-v2-scope-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  width: 100%;
+}
+
+.settings-v2-scope-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--v2-border-border-strong, var(--v2-border-border-muted));
+  background: var(--v2-background-bg-layer-01);
+  color: var(--v2-text-text-base);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  user-select: none;
+  transition:
+    background 0.12s ease,
+    border-color 0.12s ease,
+    color 0.12s ease;
+}
+
+.settings-v2-scope-toggle:hover:not(:disabled) {
+  border-color: var(--v2-border-border-hover, var(--v2-border-border-strong));
+  background: var(--v2-background-bg-layer-02, var(--v2-background-bg-layer-01));
+}
+
+.settings-v2-scope-toggle:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.settings-v2-scope-toggle--active {
+  border-color: var(--v2-border-border-strong, currentColor);
+  background: var(--v2-background-bg-strong, var(--v2-background-bg-layer-02));
+  color: var(--v2-text-text-base);
+}
+
+.settings-v2-scope-toggle-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  border: 1px solid var(--v2-border-border-muted);
+  background: var(--v2-background-bg-base, transparent);
+  color: var(--v2-text-text-invert, currentColor);
+}
+
+.settings-v2-scope-toggle--active .settings-v2-scope-toggle-mark {
+  border-color: var(--v2-accent-accent, var(--v2-border-border-strong));
+  background: var(--v2-accent-accent, var(--v2-background-bg-strong));
+  color: #fff;
+}
