@@ -3,7 +3,7 @@ import { GlobalBus, type GlobalEvent as GlobalBusEvent } from "@/bus/global"
 import { EffectBridge } from "@/effect/bridge"
 import { EventV2 } from "@deepagent-code/core/event"
 import { Installation } from "@/installation"
-import { disposeAllInstancesAndEmitGlobalDisposed } from "@/server/global-lifecycle"
+import { disposeAllInstancesAndEmitGlobalDisposed, disposeInstancesForDirectories } from "@/server/global-lifecycle"
 import { InstallationVersion } from "@deepagent-code/core/installation/version"
 import { IM_PROTOCOL_VERSION } from "@deepagent-code/core/im/protocol"
 import * as Log from "@deepagent-code/core/util/log"
@@ -16,8 +16,10 @@ import { RootHttpApi } from "../api"
 import { GlobalUpgradeInput, ImportRequestSchema } from "../groups/global"
 import { runImport } from "@/import"
 import { Database } from "@deepagent-code/core/database/database"
-import { ProjectTable } from "@deepagent-code/core/project/sql"
+import { ProjectDirectoryTable, ProjectTable } from "@deepagent-code/core/project/sql"
+import { ProjectV2 } from "@deepagent-code/core/project"
 import { resolveDataPath } from "@deepagent-code/core/global-path"
+import { eq } from "drizzle-orm"
 
 const log = Log.create({ service: "server" })
 
@@ -117,6 +119,37 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
     const projects = Effect.fn("GlobalHttpApi.projects")(function* () {
       const rows = yield* db.select({ id: ProjectTable.id, worktree: ProjectTable.worktree, name: ProjectTable.name }).from(ProjectTable).all().pipe(Effect.orDie)
       return rows.map((row) => ({ id: row.id, worktree: row.worktree, name: row.name ?? undefined }))
+    })
+
+    const projectDelete = Effect.fn("GlobalHttpApi.projectDelete")(function* (ctx: {
+      params: { projectID: ProjectV2.ID }
+    }) {
+      const projectID = ctx.params.projectID
+      // Dispose any live instances rooted at this project's known directories first, so a
+      // running instance does not keep writing to a row that is about to be deleted. The
+      // worktree column plus every project_directory row (main / root / git_worktree) covers
+      // all directories an instance could have booted against.
+      const worktreeRow = yield* db
+        .select({ worktree: ProjectTable.worktree })
+        .from(ProjectTable)
+        .where(eq(ProjectTable.id, projectID))
+        .get()
+        .pipe(Effect.orDie)
+      const directoryRows = yield* db
+        .select({ directory: ProjectDirectoryTable.directory })
+        .from(ProjectDirectoryTable)
+        .where(eq(ProjectDirectoryTable.project_id, projectID))
+        .all()
+        .pipe(Effect.orDie)
+      const directories = new Set<string>()
+      if (worktreeRow?.worktree) directories.add(worktreeRow.worktree)
+      for (const row of directoryRows) if (row.directory) directories.add(row.directory)
+      yield* disposeInstancesForDirectories([...directories])
+
+      // Delete the project row. Sessions, messages, parts, project_directory rows and every
+      // other table that references the project cascade automatically (onDelete: "cascade").
+      // Idempotent: deleting an unknown project affects zero rows and still succeeds.
+      yield* db.delete(ProjectTable).where(eq(ProjectTable.id, projectID)).run().pipe(Effect.orDie)
     })
 
     const upgrade = Effect.fn("GlobalHttpApi.upgrade")(function* (ctx: { payload: typeof GlobalUpgradeInput.Type }) {
@@ -248,6 +281,7 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
       .handle("configUpdate", configUpdate)
       .handle("dispose", dispose)
       .handle("projects", projects)
+      .handle("projectDelete", projectDelete)
       .handleRaw("upgrade", upgradeRaw)
       .handleRaw("import", importRaw)
   }),

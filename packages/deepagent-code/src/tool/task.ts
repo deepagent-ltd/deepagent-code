@@ -8,7 +8,7 @@ import { SessionID, MessageID } from "../session/schema"
 import { Identifier } from "@/id/id"
 import { MessageV2 } from "../session/message-v2"
 import { Agent } from "../agent/agent"
-import { deriveSubagentSessionPermission } from "../agent/subagent-permissions"
+import { deriveSubagentSessionPermission, filterPrimaryToolsForSubagent } from "../agent/subagent-permissions"
 import type { SessionPrompt } from "../session/prompt"
 import { Config } from "@/config/config"
 import { Effect, Exit, Option, Schema, Scope } from "effect"
@@ -224,11 +224,14 @@ export const TaskTool = Tool.define(
               parentAgent,
               subagent: next,
             }),
-            ...(cfg.experimental?.primary_tools?.map((item) => ({
+            // §E: primary_tools is a PRIMARY-agent escape hatch; on a SUBAGENT it must NOT be able to
+            // force-allow the capability-governed permissions (plan/todowrite) and thereby bypass the
+            // plan-write capability gate. Filter those out; every other primary_tool passes through.
+            ...filterPrimaryToolsForSubagent(cfg.experimental?.primary_tools).map((item) => ({
               pattern: "*",
               action: "allow" as const,
               permission: item,
-            })) ?? []),
+            })),
           ],
         }))
 

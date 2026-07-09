@@ -27,6 +27,8 @@ export const dict = {
 
   "command.sidebar.toggle": "切换侧边栏",
 
+  "command.chat.new": "新对话",
+
   "command.project.open": "打开项目",
 
   "command.provider.connect": "连接提供商",
@@ -815,6 +817,16 @@ export const dict = {
   "review.approve": "批准",
   "review.reject": "拒绝",
   "review.selected": "已选 {{count}} 项",
+  "review.search": "搜索知识…",
+  "review.searchEmpty": "没有匹配的知识。",
+  "review.type.knowledge": "知识",
+  "review.type.strategy": "策略",
+  "review.type.methodology": "方法论",
+  "review.type.memory": "记忆",
+  "review.type.skill": "技能",
+  "review.type.failure_dossier": "失败档案",
+  "review.type.other": "其他",
+  "review.groupCount": "{{count}}",
   "packs.title": "领域包",
   "packs.active": "自动检测",
   "packs.builtin": "内置领域包",
@@ -1011,6 +1023,20 @@ export const dict = {
   "session.delete.title": "删除会话",
   "session.delete.confirm": '删除会话 "{{name}}"？',
   "session.delete.button": "删除会话",
+  "project.delete.title": "删除项目",
+  "project.delete.confirm": '删除项目 "{{name}}"？',
+  "project.delete.warning": "将永久删除该项目的所有会话与消息。磁盘上的文件不会被改动。",
+  "project.delete.button": "删除项目",
+  "project.delete.failed.title": "删除项目失败",
+
+  "command.session.archived": "查看已归档会话",
+  "session.archived.title": "已归档会话",
+  "session.archived.search": "搜索已归档会话",
+  "session.archived.empty": "暂无已归档会话。",
+  "session.archived.error": "无法加载已归档会话。",
+  "session.archived.restore": "恢复",
+  "session.archived.restored": '已恢复 "{{name}}"',
+  "session.archived.restore.failed": "恢复会话失败",
 
   "workspace.new": "新建工作区",
   "workspace.type.local": "本地",

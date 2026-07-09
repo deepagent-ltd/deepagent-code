@@ -11,6 +11,7 @@ import {
 } from "../../src/deepagent/durable-knowledge-store"
 import type { DurableKnowledgeStore } from "../../src/deepagent/durable-knowledge-store"
 import { GraphQuery } from "../../src/deepagent/graph-query"
+import { indexFiles, indexSymbols, linkCallEdges } from "../../src/deepagent/code-indexer"
 import type { CreateDocInput, DocType, Provenance } from "../../src/deepagent/document-store"
 
 // V3.8 Phase 1 (roadmap C5, v3.8.1 B.4): the shared GraphQuery service. These tests prove the four
@@ -173,5 +174,41 @@ describe("GraphQuery — shared graph recall (Phase 1)", () => {
     const globalDesign = node(ug, "design", "standalone global design token xyz")
     const result = runQuery({ task: "standalone global design token xyz" })
     expect(ids(result, "design")).toContain(globalDesign)
+  })
+
+  // V3.9 §A.5 acceptance #4: a query can drill from a file node into its symbol children (contains) and
+  // traverse the code→code topology (imports between files, calls between symbols) using DEFAULT_RELS
+  // — no explicit rels needed. Uses the real indexer (indexFiles + indexSymbols) to build the graph.
+  test("§A: drills into symbol nodes and traverses imports/calls via DEFAULT_RELS", () => {
+    const proj = openProjectStore(base, WORK)
+    const a = { path: "src/a.ts", content: "import { helper } from './b'\nexport function useHelper(){ return helper() }" }
+    const b = { path: "src/b.ts", content: "export function helper(){ return 1 }" }
+    indexFiles(proj, [a, b], { buildDocEdges: false })
+    indexSymbols(proj, {
+      path: "src/a.ts",
+      symbols: [{ symbolPath: "useHelper", kind: "function", range: { start: 1, end: 1 } }],
+      imports: ["src/b.ts"],
+    })
+    indexSymbols(proj, {
+      path: "src/b.ts",
+      symbols: [{ symbolPath: "helper", kind: "function", range: { start: 0, end: 0 } }],
+    })
+    linkCallEdges(proj, "src/a.ts", [{ fromSymbolPath: "useHelper", toPath: "src/b.ts", toSymbolPath: "helper" }])
+
+    // Seed from the file-level node for src/a.ts; DEFAULT_RELS must reach: its symbol child (contains),
+    // the imported file src/b.ts (imports), and — via the call edge from useHelper → helper — b's symbol.
+    const aFileRef = proj.documentStore.list({ type: "code_symbol" }).find((r) => r.description === "src/a.ts")!
+    const result = runQuery({ workspacePath: WORK, seeds: [aFileRef.id], depth: 3 })
+
+    const codeIds = ids(result, "code_symbol")
+    const useHelperKey = "src/a.ts#useHelper"
+    const helperKey = "src/b.ts#helper"
+    const useHelperRef = proj.documentStore.list({ type: "code_symbol" }).find((r) => r.description === useHelperKey)!
+    const helperRef = proj.documentStore.list({ type: "code_symbol" }).find((r) => r.description === helperKey)!
+    const bFileRef = proj.documentStore.list({ type: "code_symbol" }).find((r) => r.description === "src/b.ts")!
+
+    expect(codeIds).toContain(useHelperRef.id) // contains: a-file → useHelper symbol
+    expect(codeIds).toContain(bFileRef.id) // imports: a-file → b-file
+    expect(codeIds).toContain(helperRef.id) // calls: useHelper → helper (reached transitively)
   })
 })

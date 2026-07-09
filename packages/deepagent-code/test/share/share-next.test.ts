@@ -134,6 +134,22 @@ describe("ShareNext", () => {
     ),
   )
 
+  it.live("request prefers share_url over enterprise and default", () =>
+    provideTmpdirInstance(
+      () =>
+        ShareNext.Service.use((svc) =>
+          Effect.gen(function* () {
+            const req = yield* svc.request()
+
+            expect(req.baseUrl).toBe("https://share.example.com")
+            expect(req.api.create).toBe("/api/share")
+            expect(req.headers).toEqual({})
+          }),
+        ).pipe(Effect.provide(live(none))),
+      { config: { share_url: "https://share.example.com", enterprise: { url: "https://legacy-share.example.com" } } },
+    ),
+  )
+
   it.live("request uses org share API with auth headers when account is active", () =>
     provideTmpdirInstance(() =>
       Effect.gen(function* () {
