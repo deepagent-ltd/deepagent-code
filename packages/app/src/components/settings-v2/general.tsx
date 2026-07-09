@@ -846,6 +846,45 @@ export const SettingsGeneralV2: Component = () => {
     </div>
   )
 
+  const shareUrl = createMemo(() => serverSync.data.config.share_url ?? "")
+
+  const onShareUrlChange = (value: string) => {
+    const next = value.trim()
+    const current = serverSync.data.config.share_url ?? ""
+    if (next === current) return
+    // An empty field means "use the default", so drop the key entirely rather than persisting "".
+    serverSync.updateConfig({ share_url: next === "" ? undefined : next })
+  }
+
+  const SharingSection = () => (
+    <div class="settings-v2-section">
+      <h3 class="settings-v2-section-title">{language.t("settings.general.section.sharing")}</h3>
+
+      <SettingsListV2>
+        <SettingsRowV2
+          title={language.t("settings.general.row.shareUrl.title")}
+          description={language.t("settings.general.row.shareUrl.description")}
+        >
+          <div class="w-full sm:w-[220px]">
+            <TextInputV2
+              data-action="settings-share-url"
+              type="text"
+              appearance="base"
+              value={shareUrl()}
+              onChange={(event) => onShareUrlChange(event.currentTarget.value)}
+              placeholder={language.t("settings.general.row.shareUrl.placeholder")}
+              spellcheck={false}
+              autocorrect="off"
+              autocomplete="off"
+              autocapitalize="off"
+              aria-label={language.t("settings.general.row.shareUrl.title")}
+            />
+          </div>
+        </SettingsRowV2>
+      </SettingsListV2>
+    </div>
+  )
+
   const DisplaySection = () => (
     <Show when={desktop()}>
       <div class="settings-v2-section">
@@ -920,6 +959,8 @@ export const SettingsGeneralV2: Component = () => {
         <NotificationsSection />
 
         <SoundsSection />
+
+        <SharingSection />
 
         <UpdatesSection />
 
