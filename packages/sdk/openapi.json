@@ -20940,6 +20940,10 @@
           "autoshare": {
             "type": "boolean"
           },
+          "share_url": {
+            "type": "string",
+            "description": "Base URL of the server used for session sharing. When set, overrides the default share endpoint. Falls back to the enterprise URL and then the built-in default when unset."
+          },
           "autoupdate": {
             "anyOf": [
               {

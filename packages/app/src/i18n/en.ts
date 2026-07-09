@@ -963,6 +963,7 @@ export const dict = {
   "settings.general.section.sounds": "Sound effects",
   "settings.general.section.feed": "Feed",
   "settings.general.section.display": "Display",
+  "settings.general.section.sharing": "Sharing",
 
   "settings.general.row.language.title": "Language",
   "settings.general.row.language.description": "Change the display language for DeepAgent Code",
@@ -1060,6 +1061,10 @@ export const dict = {
     "Choose the shell used for your terminal. Compatible shells are also used for agent tool calls.",
   "settings.general.row.shell.autoDefault": "Auto (Default)",
   "settings.general.row.shell.terminalOnly": "terminal only",
+  "settings.general.row.shareUrl.title": "Share server URL",
+  "settings.general.row.shareUrl.description":
+    "Base URL of the server used when sharing sessions. Leave blank to use the default.",
+  "settings.general.row.shareUrl.placeholder": "https://opncd.ai",
   "settings.general.row.appearance.title": "Appearance",
   "settings.general.row.appearance.description": "Customise how DeepAgent Code looks on your device",
   "settings.general.row.colorScheme.title": "Color scheme",
