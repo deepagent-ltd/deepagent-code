@@ -137,6 +137,20 @@ function matchLegacyOpenApi(input: Record<string, unknown>) {
             : operation.requestBody.content?.["application/json"]?.schema?.properties
           if (properties?.id) properties.id = { anyOf: [properties.id, { type: "null" }] }
         }
+        if ((path === "/session/{sessionID}" || path === "/api/session/{sessionID}") && method === "patch") {
+          // Session unarchive sends `time: { archived: null }` to clear the flag.
+          // `time.archived` is genuinely nullable (Schema.NullOr), not merely
+          // optional, so re-add the null that the component-level strip removed.
+          const ref = operation.requestBody.content?.["application/json"]?.schema?.$ref?.replace(
+            "#/components/schemas/",
+            "",
+          )
+          const properties = ref
+            ? spec.components?.schemas?.[ref]?.properties
+            : operation.requestBody.content?.["application/json"]?.schema?.properties
+          const archived = properties?.time?.properties?.archived
+          if (archived) properties!.time!.properties!.archived = { anyOf: [archived, { type: "null" }] }
+        }
       }
       for (const response of Object.values(operation.responses ?? {})) {
         for (const content of Object.values(response.content ?? {})) {

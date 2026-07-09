@@ -79,6 +79,29 @@ export class Service extends ConfigService.Service<Service>()("@deepagent-code/R
   experimentalPlanMode: enabledByExperimental("DEEPAGENT_CODE_EXPERIMENTAL_PLAN_MODE"),
   experimentalEventSystem: enabledByExperimental("DEEPAGENT_CODE_EXPERIMENTAL_EVENT_SYSTEM"),
   experimentalWorkspaces: enabledByExperimental("DEEPAGENT_CODE_EXPERIMENTAL_WORKSPACES"),
+  // V3.9 §C: Expert Panel（会诊机制）— differentiated expert lenses answer one frozen high-risk
+  // question independently, aggregated by a deterministic non-LLM Arbiter. Gated OFF by default
+  // (grey rollout); enable with DEEPAGENT_CODE_EXPERIMENTAL_EXPERT_PANEL or the broad
+  // DEEPAGENT_CODE_EXPERIMENTAL flag. The Arbiter itself is a pure function with no side effects,
+  // so it is always safe to call in tests; this flag gates the session-driven Convener orchestration.
+  experimentalExpertPanel: enabledByExperimental("DEEPAGENT_CODE_EXPERIMENTAL_EXPERT_PANEL"),
+  // V3.9 §B: Repo & Wiki（人向监督层）— the human-facing PROJECTION layer over the four graphs (not a
+  // fifth store): render doc/code nodes as Markdown, full-text search, docs↔code cross-links, and a
+  // per-session execution archive. Knowledge/Memory pages are governable (edit → new version + human
+  // provenance via evidence-gate); Document/Code pages are read-only; sealed scope is NEVER projected
+  // (INV-7). Gated OFF by default (grey rollout, §F.3 rollback-safe — it is pure projection + reuse of
+  // the existing promote/reject pipeline, so turning it off never touches graph data). Enable with
+  // DEEPAGENT_CODE_EXPERIMENTAL_WIKI or the broad DEEPAGENT_CODE_EXPERIMENTAL flag.
+  experimentalWiki: enabledByExperimental("DEEPAGENT_CODE_EXPERIMENTAL_WIKI"),
+  // V3.9 §D: Goal Loop（自主长跑原语）— a supervised, cross-tick control loop that drives 计划→执行→验证→
+  // 迭代 against an OBJECTIVELY decidable completion criterion until met or a HARD stop limit fires. The
+  // Controller + deterministic Grader live in core (`deepagent/goal-loop.ts`, PURE with injected ports);
+  // this flag gates the deepagent-code WIRING (GraderPorts → validation runner / LSP diagnostics /
+  // reviewer / Panel; step executor → SessionPrompt; rollback → revert) plus the goal-loop worker
+  // native agent. Gated OFF by default (grey rollout, §F.3 rollback-safe — the schemas are additive and
+  // the loop cannot start without objective criteria + hard limits). Enable with
+  // DEEPAGENT_CODE_EXPERIMENTAL_GOAL_LOOP or the broad DEEPAGENT_CODE_EXPERIMENTAL flag.
+  experimentalGoalLoop: enabledByExperimental("DEEPAGENT_CODE_EXPERIMENTAL_GOAL_LOOP"),
   experimentalIconDiscovery: enabledByExperimental("DEEPAGENT_CODE_EXPERIMENTAL_ICON_DISCOVERY"),
   outputTokenMax: positiveInteger("DEEPAGENT_CODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX"),
   // T3 (S1-v3.4): how many narrowing attempts a 🟡 stall is given before it escalates to 🔴.

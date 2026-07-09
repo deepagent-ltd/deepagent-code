@@ -1,0 +1,160 @@
+import { Effect } from "effect"
+import type { DurableKnowledgeStore } from "@deepagent-code/core/deepagent/durable-knowledge-store"
+import {
+  buildExecutionArchive,
+  GateRejectedError,
+  WikiNotFoundError,
+  WikiService,
+  type ExecutionArchive,
+  type HumanRef,
+  type WikiEditGate,
+  type WikiGraph,
+  type WikiPage,
+} from "./wiki-service"
+
+/**
+ * V3.9 §B.6 — ExecutionArchiver (session-internal form).
+ *
+ * archiveSession aggregates one session's Document-Graph trajectory (plan + worklog + diagnosis +
+ * decision + validation, scope run:<sessionId>) into a read-only archive page. In V3.9 it is
+ * triggered from the existing session-completion path (persistSuggestion / onMacroRound), NOT an
+ * event bus — V4.0 upgrades it to a `session.completed` event with the SAME output shape.
+ *
+ * promoteToWiki is the human "pin → governed knowledge page" step (§B.2 / §B.6): the archive is
+ * read-only by default; a human promotes it into a governed KNOWLEDGE page through the evidence-gate.
+ * We reuse the EXISTING knowledge governance pipeline (DurableKnowledgeStore.stageCandidate → human
+ * approve), which is exactly the promote/reject path the Review UI already drives — knowledge is
+ * ALWAYS staged as a candidate first (DAP-8) and only a human flips it active. The injected
+ * `WikiEditGate` is the evidence-gate check applied before staging; a rejection surfaces as
+ * `GateRejectedError`, never a silent write.
+ *
+ * archiveId == sessionId: the archive is a PURE projection of the run:<sessionId> subgraph (no
+ * independent storage, §B.1), so it is fully rebuildable and needs no separate id space.
+ */
+
+export interface ExecutionArchiverPorts {
+  readonly graph: WikiGraph
+  // The governed durable store a promoted archive lands in (user-global knowledge store in prod).
+  readonly promotionStore: DurableKnowledgeStore
+  // The WikiService used to render the resulting governed page (shares the same graph union).
+  readonly wiki: WikiService
+  // The evidence-gate applied before a promote. Defaults to the WikiService's default gate.
+  readonly gate?: WikiEditGate
+}
+
+export class ExecutionArchiver {
+  constructor(private readonly ports: ExecutionArchiverPorts) {}
+
+  // §B.6 archiveSession: aggregate the session trajectory into a read-only archive. Never fails.
+  archiveSession(sessionId: string): Effect.Effect<ExecutionArchive, never> {
+    return Effect.sync(() => buildExecutionArchive(this.ports.graph, sessionId))
+  }
+
+  // §B.6 promoteToWiki: human pins an archive → STAGES it as a knowledge CANDIDATE (evidence-gate
+  // applied here). Per DAP-8 this does NOT flip it active — a candidate sits in the review queue and a
+  // SEPARATE human step (`approvePromotion`) flips it active. `archiveId` is the sessionId. Fails with
+  // GateRejectedError if the gate rejects or the session has no trajectory to promote. Returns the
+  // staged candidate id (NOT a rendered page — it is not active/projectable yet).
+  promoteToWiki(input: {
+    archiveId: string
+    editor: HumanRef
+  }): Effect.Effect<{ readonly candidateId: string }, GateRejectedError> {
+    return Effect.suspend(() => {
+      const archive = buildExecutionArchive(this.ports.graph, input.archiveId)
+      if (archive.entries.length === 0)
+        return Effect.fail(
+          new GateRejectedError({
+            docId: input.archiveId,
+            reason: "no trajectory documents to promote for this session",
+          }),
+        )
+      const body = archive.markdown
+      const gate = this.ports.gate
+      if (gate) {
+        // No prior doc exists yet (this is a fresh promotion), so gate against a synthetic current
+        // whose body is empty — the default gate rejects a blanked-out body / missing editor, which a
+        // non-empty archive with a real editor never is; a stricter injected gate can inspect content.
+        const verdict = gate({
+          current: {
+            id: input.archiveId,
+            type: "knowledge",
+            scope: "durable",
+            status: "candidate",
+            version: 0,
+            superseded_by: null,
+            hash: "",
+            created_round: null,
+            domain: null,
+            tags: [],
+            description: archive.title,
+            provenance: { source: "human" },
+            links: [],
+            body: "",
+          },
+          body,
+          editor: input.editor,
+        })
+        if (!verdict.pass)
+          return Effect.fail(new GateRejectedError({ docId: input.archiveId, reason: verdict.reason ?? "rejected" }))
+      }
+      return Effect.try({
+        try: () => {
+          // Stage as a knowledge candidate ONLY (DAP-8: never written directly active). The candidate
+          // sits pending until a human explicitly approves it via `approvePromotion` — a separate,
+          // auditable governance step, not folded into staging.
+          const staged = this.ports.promotionStore.stageCandidate({
+            type: "knowledge",
+            description: archive.title,
+            body,
+            domain: null,
+            tags: ["wiki", "execution-archive", `session:${input.archiveId}`],
+            scope: "user-global",
+            sensitivity: "source_code",
+            risk: "low",
+            confidence: { evidence_strength: "medium", support_count: 1 },
+            provenance: {
+              source: "human",
+              evidence_refs: [`human:${input.editor.id}${input.editor.name ? `:${input.editor.name}` : ""}`],
+            },
+            idSlug: `execution-archive-${input.archiveId}`,
+          })
+          return { candidateId: staged.id }
+        },
+        catch: (error) =>
+          new GateRejectedError({
+            docId: input.archiveId,
+            reason: `promotion failed: ${error instanceof Error ? error.message : String(error)}`,
+          }),
+      })
+    })
+  }
+
+  // §B.6 approvePromotion: the SEPARATE human approval step (DAP-8). Flips a staged execution-archive
+  // candidate active → it becomes a governed, projectable knowledge page. Kept distinct from
+  // promoteToWiki so staging and approval are two auditable actions, not one auto-approve.
+  approvePromotion(input: {
+    candidateId: string
+  }): Effect.Effect<WikiPage, GateRejectedError | WikiNotFoundError> {
+    return Effect.try({
+      try: () => {
+        this.ports.promotionStore.approve(input.candidateId)
+        return input.candidateId
+      },
+      catch: (error) =>
+        new GateRejectedError({
+          docId: input.candidateId,
+          reason: `approval failed: ${error instanceof Error ? error.message : String(error)}`,
+        }),
+    }).pipe(
+      Effect.flatMap((docId) =>
+        this.ports.wiki
+          .renderPage({ docId, scope: "durable" })
+          .pipe(
+            Effect.catchTag("WikiNotFoundError", (e) =>
+              Effect.fail(new GateRejectedError({ docId, reason: e.message })),
+            ),
+          ),
+      ),
+    )
+  }
+}
