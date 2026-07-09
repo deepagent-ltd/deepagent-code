@@ -27,6 +27,8 @@ export const dict = {
 
   "command.sidebar.toggle": "切换侧边栏",
 
+  "command.chat.new": "新对话",
+
   "command.project.open": "打开项目",
 
   "command.provider.connect": "连接提供商",
@@ -1011,6 +1013,11 @@ export const dict = {
   "session.delete.title": "删除会话",
   "session.delete.confirm": '删除会话 "{{name}}"？',
   "session.delete.button": "删除会话",
+  "project.delete.title": "删除项目",
+  "project.delete.confirm": '删除项目 "{{name}}"？',
+  "project.delete.warning": "将永久删除该项目的所有会话与消息。磁盘上的文件不会被改动。",
+  "project.delete.button": "删除项目",
+  "project.delete.failed.title": "删除项目失败",
 
   "workspace.new": "新建工作区",
   "workspace.type.local": "本地",
