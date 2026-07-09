@@ -212,7 +212,8 @@ export const layer = Layer.effect(
       const headers: Record<string, string> = {}
       const active = yield* account.active()
       if (Option.isNone(active) || !active.value.active_org_id) {
-        const baseUrl = (yield* cfg.get()).enterprise?.url ?? "https://opncd.ai"
+        const config = yield* cfg.get()
+        const baseUrl = config.share_url ?? config.enterprise?.url ?? "https://opncd.ai"
         return { headers, api: legacyApi, baseUrl } satisfies Req
       }
 

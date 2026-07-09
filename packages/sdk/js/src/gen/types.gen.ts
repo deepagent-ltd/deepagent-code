@@ -2043,6 +2043,10 @@ export type Config = {
   share?: "manual" | "auto" | "disabled"
   autoshare?: boolean
   /**
+   * Base URL of the server used for session sharing. When set, overrides the default share endpoint. Falls back to the enterprise URL and then the built-in default when unset.
+   */
+  share_url?: string
+  /**
    * Automatically update to the latest version. Set to true to auto-update, false to disable, or 'notify' to show update notifications
    */
   autoupdate?: boolean | "notify"
