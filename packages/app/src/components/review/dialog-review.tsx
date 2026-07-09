@@ -37,7 +37,6 @@ export const DialogReview: Component<{ client: ReviewClient }> = (props) => {
   const language = useLanguage()
   const [selected, setSelected] = createSignal<ReadonlySet<string>>(new Set())
   const [busy, setBusy] = createSignal(false)
-  const [showApproved, setShowApproved] = createSignal(false)
   const [items, { refetch }] = createResource(async () => listPending(props.client))
   const [envFacts, { refetch: refetchEnv }] = createResource(async () => listEnvFacts(props.client))
   const [envBusy, setEnvBusy] = createSignal<string | null>(null)
@@ -135,11 +134,57 @@ export const DialogReview: Component<{ client: ReviewClient }> = (props) => {
     }
   }
 
-  // Rejected (and superseded, which the backend already excludes) are noise —
-  // hide them. Approved collapses into a single expandable row so the list is
-  // dominated by what actually needs attention (pending).
-  const pending = createMemo(() => (items() ?? []).filter((i) => i.approval_status === "pending"))
-  const approved = createMemo(() => (items() ?? []).filter((i) => i.approval_status === "approved"))
+  // Free-text filter across summary + type + evidence refs. Empty query = show everything.
+  const [query, setQuery] = createSignal("")
+  const matchesQuery = (item: KnowledgeItem) => {
+    const q = query().trim().toLowerCase()
+    if (!q) return true
+    if (item.summary.toLowerCase().includes(q)) return true
+    if (item.type.toLowerCase().includes(q)) return true
+    if (language.t(`review.type.${item.type}`).toLowerCase().includes(q)) return true
+    return item.evidence_refs.some((ref) => ref.toLowerCase().includes(q))
+  }
+
+  // Rejected (and superseded, which the backend already excludes) are noise — hide them.
+  // Pending is grouped by knowledge type (one collapsible box per type); approved gets its own box.
+  const pending = createMemo(() => (items() ?? []).filter((i) => i.approval_status === "pending" && matchesQuery(i)))
+  const approved = createMemo(() => (items() ?? []).filter((i) => i.approval_status === "approved" && matchesQuery(i)))
+
+  // Stable display order for the type boxes. Any unknown type falls back into "other".
+  const TYPE_ORDER = ["memory", "failure_dossier", "knowledge", "strategy", "methodology", "skill"] as const
+  const typeLabel = (type: string) =>
+    (TYPE_ORDER as readonly string[]).includes(type)
+      ? language.t(`review.type.${type}`)
+      : language.t("review.type.other")
+
+  // Group pending items by type, preserving TYPE_ORDER; trailing "other" bucket for unknown types.
+  const pendingGroups = createMemo(() => {
+    const byType = new Map<string, KnowledgeItem[]>()
+    for (const item of pending()) {
+      const key = (TYPE_ORDER as readonly string[]).includes(item.type) ? item.type : "other"
+      const list = byType.get(key)
+      if (list) list.push(item)
+      else byType.set(key, [item])
+    }
+    const ordered: Array<{ type: string; items: KnowledgeItem[] }> = []
+    for (const type of TYPE_ORDER) {
+      const list = byType.get(type)
+      if (list?.length) ordered.push({ type, items: list })
+    }
+    const other = byType.get("other")
+    if (other?.length) ordered.push({ type: "other", items: other })
+    return ordered
+  })
+
+  // Which boxes are expanded. Default: all pending type boxes open, approved collapsed.
+  const [collapsed, setCollapsed] = createSignal<ReadonlySet<string>>(new Set(["approved"]))
+  const isOpen = (key: string) => !collapsed().has(key)
+  const toggleGroup = (key: string) => {
+    const next = new Set(collapsed())
+    if (next.has(key)) next.delete(key)
+    else next.add(key)
+    setCollapsed(next)
+  }
 
   const toggle = (id: string) => {
     const next = new Set<string>(selected())
@@ -372,59 +417,50 @@ export const DialogReview: Component<{ client: ReviewClient }> = (props) => {
     )
   }
 
+  // One collapsible box: a header (chevron + label + count) that toggles a body of Rows.
+  // One collapsible box. Height hugs its content — the single scroll container is the wrapper below,
+  // so a collapsed box is just its header row (no empty filler).
+  const GroupBox = (input: { boxKey: string; label: string; items: KnowledgeItem[] }) => (
+    <div class="shrink-0 overflow-hidden rounded-lg border border-v2-border-border-muted">
+      <button
+        type="button"
+        data-action="review-group-toggle"
+        data-group={input.boxKey}
+        class="flex w-full items-center gap-2 bg-v2-background-bg-layer-01 px-3 py-2.5 text-left hover:bg-v2-background-bg-layer-02"
+        onClick={() => toggleGroup(input.boxKey)}
+      >
+        <Icon name={isOpen(input.boxKey) ? "chevron-down" : "chevron-right"} size="small" />
+        <span class="flex-1 text-13-medium text-v2-text-text-base">{input.label}</span>
+        <span class="text-11-regular text-v2-text-text-faint">{input.items.length}</span>
+      </button>
+      <Show when={isOpen(input.boxKey)}>
+        <div class="border-t border-v2-border-border-muted">
+          <For each={input.items}>{(item) => Row(item)}</For>
+        </div>
+      </Show>
+    </div>
+  )
+
   return (
     <Dialog size="x-large" variant="settings" title={language.t("review.title")}>
       <div class="settings-v2-panel" data-component="review-dialog">
         <div class="settings-v2-tab-body deepagent-dialog-body">
           <p class="text-12-regular text-v2-text-text-faint">{language.t("review.description")}</p>
 
-          {/* §G use-gate: provisional environment facts awaiting this project's decision. Only shown
-              when there is something pending or already adopted, so it stays out of the way. */}
-          <Show when={(envFacts()?.pending.length ?? 0) > 0 || (envFacts()?.adopted.length ?? 0) > 0}>
-            <div class="flex flex-col gap-1">
-              <span class="text-12-medium text-v2-text-text-base">{language.t("review.envFacts.title")}</span>
-              <span class="text-11-regular text-v2-text-text-faint">{language.t("review.envFacts.description")}</span>
+          {/* Top bar: search on the left, batch actions on the right. */}
+          <div class="flex flex-wrap items-center justify-between gap-2">
+            <div class="flex min-w-0 flex-1 items-center gap-2 rounded-lg border border-v2-border-border-muted px-3 py-2">
+              <Icon name="magnifying-glass" size="small" class="text-v2-text-text-faint" />
+              <input
+                type="text"
+                data-action="review-search"
+                value={query()}
+                onInput={(e) => setQuery(e.currentTarget.value)}
+                placeholder={language.t("review.search")}
+                aria-label={language.t("review.search")}
+                class="min-w-0 flex-1 bg-transparent text-13-regular text-v2-text-text-base outline-none placeholder:text-v2-text-text-faint"
+              />
             </div>
-            <div class="deepagent-dialog-scroll rounded-lg border border-v2-border-border-muted">
-              <For each={envFacts()?.pending ?? []}>{(fact) => EnvFactCard(fact, "pending")}</For>
-              <For each={envFacts()?.adopted ?? []}>{(fact) => EnvFactCard(fact, "adopted")}</For>
-            </div>
-          </Show>
-
-          <div class="deepagent-dialog-scroll rounded-lg border border-v2-border-border-muted">
-            <Show
-              when={!items.loading}
-              fallback={<div class="p-4 text-13-regular text-v2-text-text-faint">{language.t("review.loading")}</div>}
-            >
-              <Show
-                when={pending().length > 0 || approved().length > 0}
-                fallback={<div class="p-4 text-13-regular text-v2-text-text-faint">{language.t("review.empty")}</div>}
-              >
-                {/* Pending: laid out flat — this is what needs attention. */}
-                <For each={pending()}>{(item) => Row(item)}</For>
-
-                {/* Approved: collapsed into one expandable row. */}
-                <Show when={approved().length > 0}>
-                  <button
-                    type="button"
-                    data-action="review-approved-toggle"
-                    class="flex w-full items-center gap-2 border-b border-v2-border-border-muted bg-v2-background-bg-layer-01 px-3 py-2.5 text-left hover:bg-v2-background-bg-layer-02"
-                    onClick={() => setShowApproved(!showApproved())}
-                  >
-                    <Icon name={showApproved() ? "chevron-down" : "chevron-right"} size="small" />
-                    <span class="text-13-medium text-v2-text-text-base">
-                      {language.t("review.status.approved")} ({approved().length})
-                    </span>
-                  </button>
-                  <Show when={showApproved()}>
-                    <For each={approved()}>{(item) => Row(item)}</For>
-                  </Show>
-                </Show>
-              </Show>
-            </Show>
-          </div>
-
-          <div class="deepagent-dialog-actions flex items-center justify-between">
             <div class="flex flex-wrap items-center gap-2">
               <Button variant="secondary" size="small" onClick={selectAll} disabled={pending().length === 0}>
                 {language.t("review.selectAll")}
@@ -437,8 +473,6 @@ export const DialogReview: Component<{ client: ReviewClient }> = (props) => {
                   {language.t("review.selected", { count: selected().size })}
                 </span>
               </Show>
-            </div>
-            <div class="flex flex-wrap items-center gap-2">
               <Button
                 variant="secondary"
                 size="small"
@@ -458,6 +492,47 @@ export const DialogReview: Component<{ client: ReviewClient }> = (props) => {
                 {language.t("review.approve")}
               </Button>
             </div>
+          </div>
+
+          {/* §G use-gate: provisional environment facts awaiting this project's decision. Only shown
+              when there is something pending or already adopted, so it stays out of the way. */}
+          <Show when={(envFacts()?.pending.length ?? 0) > 0 || (envFacts()?.adopted.length ?? 0) > 0}>
+            <div class="flex flex-col gap-1">
+              <span class="text-12-medium text-v2-text-text-base">{language.t("review.envFacts.title")}</span>
+              <span class="text-11-regular text-v2-text-text-faint">{language.t("review.envFacts.description")}</span>
+            </div>
+            <div class="deepagent-dialog-scroll rounded-lg border border-v2-border-border-muted">
+              <For each={envFacts()?.pending ?? []}>{(fact) => EnvFactCard(fact, "pending")}</For>
+              <For each={envFacts()?.adopted ?? []}>{(fact) => EnvFactCard(fact, "adopted")}</For>
+            </div>
+          </Show>
+
+          {/* Single scroll container holds the type boxes; each box hugs its own content. */}
+          <div class="deepagent-dialog-scroll flex flex-col gap-2">
+            <Show
+              when={!items.loading}
+              fallback={
+                <div class="rounded-lg border border-v2-border-border-muted p-4 text-13-regular text-v2-text-text-faint">
+                  {language.t("review.loading")}
+                </div>
+              }
+            >
+              <Show
+                when={pendingGroups().length > 0 || approved().length > 0}
+                fallback={
+                  <div class="rounded-lg border border-v2-border-border-muted p-4 text-13-regular text-v2-text-text-faint">
+                    {query().trim() ? language.t("review.searchEmpty") : language.t("review.empty")}
+                  </div>
+                }
+              >
+                <For each={pendingGroups()}>
+                  {(group) => GroupBox({ boxKey: group.type, label: typeLabel(group.type), items: group.items })}
+                </For>
+                <Show when={approved().length > 0}>
+                  {GroupBox({ boxKey: "approved", label: language.t("review.status.approved"), items: approved() })}
+                </Show>
+              </Show>
+            </Show>
           </div>
         </div>
       </div>

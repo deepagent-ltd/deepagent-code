@@ -136,6 +136,9 @@ export function applyDirectoryEvent(input: {
       const trimmed = trimSessions(next, { limit, permission: input.store.permission })
       input.setStore("session", reconcile(trimmed, { key: "id" }))
       cleanupDroppedSessionCaches(input.store, input.setStore, trimmed)
+      // Genuinely new (re)insert — e.g. unarchive re-adds a row that was removed on archive.
+      // Mirror session.created so archive→restore cycles don't permanently drift the counter down.
+      if (!info.parentID) input.setStore("sessionTotal", (value) => value + 1)
       break
     }
     case "session.deleted": {
