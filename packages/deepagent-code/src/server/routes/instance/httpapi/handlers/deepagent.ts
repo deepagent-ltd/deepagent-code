@@ -352,6 +352,56 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
       })
     })
 
+    // V3.8.1 §G environment-fact use-gate handlers. The adoption service roots at the same gateway
+    // baseDir the retriever reads (workspaceDir() calls configureGateway first), keyed by the active
+    // workspace path — so a project's adopt/reject decisions are isolated per project (§G.8).
+    const now = () => new Date().toISOString()
+
+    const envFacts = Effect.fn("DeepAgentHttpApi.envFacts")(function* () {
+      const dir = yield* workspaceDir()
+      return yield* Effect.try({
+        try: () => AgentGateway.DeepAgentKnowledgeSource.environmentFactAdoptionFor(dir).resolve(),
+        catch: (error) =>
+          new DeepAgentPromotionError({ message: error instanceof Error ? error.message : String(error) }),
+      })
+    })
+
+    const envFactsDecide = Effect.fn("DeepAgentHttpApi.envFactsDecide")(function* (ctx) {
+      const dir = yield* workspaceDir()
+      return yield* Effect.try({
+        try: () => {
+          const adoption = AgentGateway.DeepAgentKnowledgeSource.environmentFactAdoptionFor(dir)
+          if (ctx.payload.decision === "adopt") adoption.adopt(ctx.payload.factId, now())
+          else adoption.reject(ctx.payload.factId, now())
+          AgentGateway.DeepAgentKnowledgeRetriever.invalidateCache()
+          return { ok: true, factId: ctx.payload.factId }
+        },
+        catch: (error) =>
+          new DeepAgentPromotionError({ message: error instanceof Error ? error.message : String(error) }),
+      })
+    })
+
+    const envFactsModify = Effect.fn("DeepAgentHttpApi.envFactsModify")(function* (ctx) {
+      const dir = yield* workspaceDir()
+      return yield* Effect.try({
+        try: () => {
+          const adoption = AgentGateway.DeepAgentKnowledgeSource.environmentFactAdoptionFor(dir)
+          const { updatedId } = adoption.modify({
+            factId: ctx.payload.factId,
+            description: ctx.payload.description,
+            body: ctx.payload.body,
+            ...(ctx.payload.domain !== undefined ? { domain: ctx.payload.domain } : {}),
+            mode: ctx.payload.mode,
+            now: now(),
+          })
+          AgentGateway.DeepAgentKnowledgeRetriever.invalidateCache()
+          return { ok: true, factId: updatedId }
+        },
+        catch: (error) =>
+          new DeepAgentPromotionError({ message: error instanceof Error ? error.message : String(error) }),
+      })
+    })
+
     return handlers
       .handle("reviews", reviews)
       .handle("promote", promote)
@@ -364,5 +414,8 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
       .handle("packsAll", packsAll)
       .handle("packsPin", packsPin)
       .handle("packsUnpin", packsUnpin)
+      .handle("envFacts", envFacts)
+      .handle("envFactsDecide", envFactsDecide)
+      .handle("envFactsModify", envFactsModify)
   }),
 )
