@@ -114,6 +114,7 @@ export const dict: Record<Keys, string> = {
   "ui.tool.questions": "Spørsmål",
   "ui.tool.agent": "{{type}}-agent",
   "ui.tool.agent.default": "Agent",
+  "ui.tool.agent.tokens": "{{count}} tokens",
 
   "ui.common.file.one": "fil",
   "ui.common.file.other": "filer",
@@ -168,4 +169,5 @@ export const dict: Record<Keys, string> = {
   "ui.toolErrorCard.copyError": "Kopier feil",
   "ui.message.duration.seconds": "{{count}}s",
   "ui.message.duration.minutesSeconds": "{{minutes}}m {{seconds}}s",
+  "ui.message.duration.hoursMinutes": "{{hours}}t {{minutes}}m",
 }

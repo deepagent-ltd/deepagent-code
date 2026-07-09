@@ -1,4 +1,4 @@
-import type { AssistantMessage, Message } from "@deepagent-code/sdk/v2/client"
+import type { AssistantMessage, Message, Session } from "@deepagent-code/sdk/v2/client"
 
 type Provider = {
   id: string
@@ -34,8 +34,12 @@ type Metrics = {
   context: Context | undefined
 }
 
+// Real retained-context occupancy: the tokens the model's window actually holds going into the next
+// turn = non-cached input + cache read + cache write. Output and reasoning are GENERATED, not retained
+// (reasoning is explicitly never carried forward), so they must not count toward context usage. This
+// mirrors the backend overflow/compaction budget in overflow.ts.
 const tokenTotal = (msg: AssistantMessage) => {
-  return msg.tokens.input + msg.tokens.output + msg.tokens.reasoning + msg.tokens.cache.read + msg.tokens.cache.write
+  return msg.tokens.input + msg.tokens.cache.read + msg.tokens.cache.write
 }
 
 const lastAssistantWithTokens = (messages: Message[]) => {
@@ -79,4 +83,48 @@ const build = (messages: Message[] = [], providers: Provider[] = []): Metrics =>
 
 export function getSessionContextMetrics(messages: Message[] = [], providers: Provider[] = []) {
   return build(messages, providers)
+}
+
+// All tokens a session's persisted running total accounts for (input + output + reasoning + cache).
+// This is the CONSUMED total, distinct from retained-context occupancy (tokenTotal above).
+const sessionTokensUsed = (session: Session): number => {
+  const t = session.tokens
+  if (!t) return 0
+  return t.input + t.output + t.reasoning + t.cache.read + t.cache.write
+}
+
+// Cumulative token usage for the whole conversation: the root session's persisted total plus every
+// descendant subagent (child) session's total. Walks the parent-child tree (subagents can nest), so a
+// multi-agent run reports the true aggregate. Deduped by id via the visited set. This is the number
+// the top-right "conversation total tokens" surfaces — NOT the retained-context gauge.
+export function getConversationTokens(sessions: Session[] = [], rootSessionID?: string): number {
+  if (!rootSessionID) return 0
+  const childrenByParent = new Map<string, Session[]>()
+  const byId = new Map<string, Session>()
+  for (const s of sessions) {
+    byId.set(s.id, s)
+    if (!s.parentID) continue
+    const list = childrenByParent.get(s.parentID)
+    if (list) list.push(s)
+    else childrenByParent.set(s.parentID, [s])
+  }
+
+  let total = 0
+  const visited = new Set<string>()
+  const stack = [rootSessionID]
+  while (stack.length > 0) {
+    const id = stack.pop()!
+    if (visited.has(id)) continue
+    visited.add(id)
+    const session = byId.get(id)
+    if (session) total += sessionTokensUsed(session)
+    for (const child of childrenByParent.get(id) ?? []) stack.push(child.id)
+  }
+  return total
+}
+
+// Tokens USED by a single subagent (child) session, from its persisted running total. Used to show a
+// per-box figure on the right of the task tool-call and to roll subagent usage into the parent turn.
+export function getSubagentTokens(session: Session | undefined): number {
+  return session ? sessionTokensUsed(session) : 0
 }

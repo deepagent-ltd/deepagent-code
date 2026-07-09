@@ -111,6 +111,7 @@ export const dict = {
   "ui.tool.questions": "Perguntas",
   "ui.tool.agent": "Agente {{type}}",
   "ui.tool.agent.default": "Agente",
+  "ui.tool.agent.tokens": "{{count}} tokens",
 
   "ui.common.file.one": "arquivo",
   "ui.common.file.other": "arquivos",
@@ -165,4 +166,5 @@ export const dict = {
   "ui.toolErrorCard.copyError": "Copiar erro",
   "ui.message.duration.seconds": "{{count}}s",
   "ui.message.duration.minutesSeconds": "{{minutes}}m {{seconds}}s",
+  "ui.message.duration.hoursMinutes": "{{hours}}h {{minutes}}m",
 }
