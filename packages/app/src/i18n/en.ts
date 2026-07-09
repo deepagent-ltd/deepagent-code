@@ -22,6 +22,7 @@ export const dict = {
   "theme.scheme.dark": "Dark",
 
   "command.sidebar.toggle": "Toggle sidebar",
+  "command.chat.new": "New chat",
   "command.project.open": "Open project",
   "command.project.previous": "Previous project",
   "command.project.next": "Next project",
@@ -1270,6 +1271,11 @@ export const dict = {
   "session.delete.title": "Delete session",
   "session.delete.confirm": 'Delete session "{{name}}"?',
   "session.delete.button": "Delete session",
+  "project.delete.title": "Delete project",
+  "project.delete.confirm": 'Delete project "{{name}}"?',
+  "project.delete.warning": "This permanently deletes all of its sessions and messages. Files on disk are not touched.",
+  "project.delete.button": "Delete project",
+  "project.delete.failed.title": "Failed to delete project",
 
   "workspace.new": "New workspace",
   "workspace.type.local": "local",
