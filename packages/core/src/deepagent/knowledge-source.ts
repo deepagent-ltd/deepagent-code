@@ -7,6 +7,8 @@ import {
   type ScoredDoc,
 } from "./durable-knowledge-store"
 import type { DocType } from "./document-store"
+import { DeepAgentCodeHome } from "./workspace"
+import { EnvironmentFactAdoption } from "./environment-fact-adoption"
 
 // V3.2.1 decision B (docs/34 §8): the read-side adapter between the knowledge retriever and the
 // durable DocumentStore. Durable knowledge lives in TWO roots under the single injected base
@@ -123,6 +125,17 @@ export const queryKnowledge = (query: SourceQuery): readonly ScoredDoc[] => {
 
 // Open the user-global store for direct writes (e.g. persistPromoted). Throws if not configured.
 export const userGlobalStoreFor = (): DurableKnowledgeStore => userGlobalStore()
+
+// --- V3.8.1 §G environment-fact use-gate adapter ----------------------------------------------
+// Build the per-project use-gate service for a workspace, rooted at the same injected baseDir the
+// retriever reads. Kept here (the single configured durable adapter) so the HTTP handler never
+// self-resolves a home. Throws if not configured (callers guard with isConfigured()).
+export const environmentFactAdoptionFor = (workspacePath: string): EnvironmentFactAdoption => {
+  const base = ensureBase()
+  const home = new DeepAgentCodeHome(base)
+  const paths = home.ensureProject(projectIdForWorkspace(workspacePath), workspacePath)
+  return new EnvironmentFactAdoption(base, paths, workspacePath)
+}
 
 // Open the project store for a workspace path. Throws if not configured.
 export const projectStoreFor = (workspacePath: string): DurableKnowledgeStore => projectStore(workspacePath)

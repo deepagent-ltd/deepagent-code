@@ -66,8 +66,21 @@ export type DocType =
   // NEW member: no existing type models a durable cross-session handoff (context_snapshot is
   // within-session). Persisted project-scoped ("durable:project:<id>") reusing existing storage.
   | "bridge"
+  // environment_fact (v3.8.1 §G): a verifiable, non-directive operational fact about a shared runtime
+  // environment — a test/staging server, a container, an endpoint (host/port/container/purpose). NOT
+  // knowledge-class: excluded from KNOWLEDGE_TYPES + KNOWLEDGE_DOC_TYPES so it never requires
+  // confidence and never passes the retrieve() whitelist (it must NOT be silently injected — it is
+  // adopted per-project through the use-gate). Credentials are NEVER stored in the body; only a
+  // secret_ref pointer. This is the ONLY doc type on the "write-cheap, ask-at-use" fast path (§G.2):
+  // it auto-admits to user-global `provisional` without gate-7 human review, then each project decides
+  // at first use whether to adopt it. strategy/methodology/anti_pattern deliberately do NOT get this
+  // path (they steer the agent; cross-project auto-share would mislead — §G.2).
+  | "environment_fact"
 
-export type DocStatus = "draft" | "candidate" | "active" | "superseded" | "rejected" | "quarantined"
+// provisional (v3.8.1 §G.3): a user-global environment_fact that was auto-admitted WITHOUT human
+// review. It is never returned by retrieve() (whose status whitelist is "active" only), so it is never
+// silently injected; it becomes usable to a project only after that project adopts it at the use-gate.
+export type DocStatus = "draft" | "candidate" | "active" | "superseded" | "rejected" | "quarantined" | "provisional"
 export type LinkRel =
   | "supports"
   | "blocks"
