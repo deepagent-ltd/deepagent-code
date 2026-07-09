@@ -1041,6 +1041,8 @@ export const dict = {
   "dialog.releaseNotes.action.hideFuture": "不再显示",
   "dialog.releaseNotes.media.alt": "发布预览",
   "toast.project.reloadFailed.title": "无法重新加载 {{project}}",
+  "toast.project.rootRefused.title": "无法打开文件系统根目录",
+  "toast.project.rootRefused.description": "该对话指向文件系统根目录（“/”），出于安全考虑无法打开。这多半是遗留数据，请删除或改指到具体目录。",
   "error.server.invalidConfiguration": "配置无效",
   "common.moreCountSuffix": " (还有 {{count}} 个)",
   "common.time.justNow": "刚刚",
