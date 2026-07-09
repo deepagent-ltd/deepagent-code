@@ -117,6 +117,7 @@ export const dict = {
   "ui.tool.questions": "Sorular",
   "ui.tool.agent": "{{type}} Ajan",
   "ui.tool.agent.default": "Ajan",
+  "ui.tool.agent.tokens": "{{count}} tokens",
 
   "ui.common.file.one": "dosya",
   "ui.common.file.other": "dosya",
@@ -171,4 +172,5 @@ export const dict = {
   "ui.toolErrorCard.copyError": "Hatayı kopyala",
   "ui.message.duration.seconds": "{{count}}sn",
   "ui.message.duration.minutesSeconds": "{{minutes}}dk {{seconds}}sn",
+  "ui.message.duration.hoursMinutes": "{{hours}}sa {{minutes}}dk",
 } satisfies Partial<Record<Keys, string>>

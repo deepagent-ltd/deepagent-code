@@ -208,6 +208,12 @@
     }
   }
 
+  [data-component="task-tool-tokens"] {
+    flex-shrink: 0;
+    margin-left: auto;
+    white-space: nowrap;
+  }
+
   [data-component="task-tool-action"] {
     display: inline-flex;
     align-items: center;

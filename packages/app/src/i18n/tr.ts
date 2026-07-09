@@ -372,12 +372,14 @@ export const dict = {
   "context.stats.userMessages": "Kullanıcı Mesajları",
   "context.stats.assistantMessages": "Asistan Mesajları",
   "context.stats.totalCost": "Toplam Maliyet",
+  "context.stats.conversationTokens": "Konuşma tokenları",
   "context.stats.sessionCreated": "Oturum Oluşturulma",
   "context.stats.lastActivity": "Son Etkinlik",
 
   "context.usage.tokens": "Tokenler",
   "context.usage.usage": "Kullanım",
   "context.usage.cost": "Maliyet",
+  "context.usage.totalTokens": "Konuşma tokenları",
   "context.usage.clickToView": "Bağlamı görüntüle",
   "context.usage.view": "Bağlam kullanımını görüntüle",
 
