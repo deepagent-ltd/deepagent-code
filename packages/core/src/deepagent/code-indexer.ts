@@ -342,13 +342,33 @@ const symbolBodyFor = (path: string, sym: ExtractedSymbol): string => {
 // parent node's symbols_sha), so putting content_sha on every symbol would churn every symbol's version
 // on any unrelated edit elsewhere in the file. A symbol node bumps only when its own kind/range/
 // signature actually changes.
+// Disambiguate the node key for symbols that share a symbolPath within ONE file (function overloads,
+// `interface Foo` + `namespace Foo`, etc.). Without this they collide on `path#symbolPath` and the
+// later occurrence silently OVERWRITES the earlier one (data loss for every overload but the last).
+// The FIRST occurrence keeps the clean `path#symbolPath` key — so the overwhelmingly common
+// non-overloaded case is unchanged (stable keys, call edges resolve as before) — and each subsequent
+// same-path occurrence gets a deterministic `~N` suffix (N = 2,3,… in document order, which
+// LSP documentSymbol + flattenSymbols preserve). Deterministic per file content; the content-sha gate
+// means any re-numbering only happens on a genuine content change (the whole file rebuilds anyway).
+const assignSymbolKeys = (path: string, symbols: readonly ExtractedSymbol[]): string[] => {
+  const seen = new Map<string, number>()
+  return symbols.map((sym) => {
+    const base = symbolNodeKey(path, sym.symbolPath)
+    const n = (seen.get(sym.symbolPath) ?? 0) + 1
+    seen.set(sym.symbolPath, n)
+    return n === 1 ? base : `${base}~${n}`
+  })
+}
+
 const registerSymbol = (
   store: DurableKnowledgeStore,
   path: string,
   sym: ExtractedSymbol,
+  // The (possibly disambiguated) node key — see assignSymbolKeys. Defaults to the plain key for the
+  // non-colliding case and direct callers.
+  key: string = symbolNodeKey(path, sym.symbolPath),
 ): { readonly id: string; readonly outcome: "created" | "updated" | "unchanged" } => {
   const ds = store.documentStore
-  const key = symbolNodeKey(path, sym.symbolPath)
   const existing = findSymbolNode(store, key)
 
   const next = ds.upsert({
@@ -440,15 +460,17 @@ export const indexSymbols = (
   let importsSkipped = 0
   let callsSkipped = 0
 
-  // 1. Symbol child nodes + file→symbol contains edges.
-  for (const sym of extraction.symbols) {
-    const { id, outcome } = registerSymbol(store, extraction.path, sym)
+  // 1. Symbol child nodes + file→symbol contains edges. Keys are disambiguated so same-symbolPath
+  // occurrences (overloads / declaration merging) each get a distinct node instead of overwriting.
+  const keys = assignSymbolKeys(extraction.path, extraction.symbols)
+  extraction.symbols.forEach((sym, i) => {
+    const { id, outcome } = registerSymbol(store, extraction.path, sym, keys[i])
     symbolNodeIds.push(id)
     if (outcome === "created") symbolsCreated++
     else if (outcome === "updated") symbolsUpdated++
     else symbolsUnchanged++
     containsEdges += ensureEdge(store, fileNode.id, "contains", id)
-  }
+  })
 
   // 2. file→file imports edges — only when the target file node already exists in this store.
   for (const importPath of extraction.imports ?? []) {

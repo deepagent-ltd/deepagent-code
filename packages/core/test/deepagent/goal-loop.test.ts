@@ -510,6 +510,54 @@ describe("V3.9 §D — adversarial-review hardening (2026-07-09)", () => {
     expect(outcomes).toEqual(["continue", "continue", "needs_human"]) // stalls despite flapping
   })
 
+  test("a hard step accruing EVIDENCE across ticks is NOT falsely stalled (evidence = forward progress)", async () => {
+    const clock = new FakeClock()
+    const planDocId = putPlan([step("a", "active")])
+    // A single active step that never finishes within the window, but records NEW evidence each tick
+    // (a command run / test passed) — honest incremental progress on a hard task. It must NOT stall.
+    const executor: StepExecutor = ({ planDocId }) =>
+      Effect.sync(() => {
+        updatePlan(planDocId, (p) => ({
+          ...p,
+          steps: [{ ...p.steps[0], evidence: [...(p.steps[0].evidence ?? []), `ran check ${(p.steps[0].evidence?.length ?? 0) + 1}`] }],
+        }))
+        return { tokensUsed: 1 }
+      })
+    const loop = makeGoalLoop(deps({ executor }, clock))
+    // stallThreshold 2, but run 5 ticks: with evidence-progress the stall counter never accrues.
+    const handle = await Effect.runPromise(loop.start(spec(planDocId, { stallThreshold: 2 })))
+    const outcomes: string[] = []
+    for (let i = 0; i < 5; i++) outcomes.push(await Effect.runPromise(loop.tick(handle)))
+    expect(outcomes).toEqual(["continue", "continue", "continue", "continue", "continue"]) // never stalled
+    const status = await Effect.runPromise(loop.status(handle))
+    expect(status.stallCount).toBe(0)
+  })
+
+  test("a step that stops accruing evidence DOES eventually stall (evidence must keep GROWING)", async () => {
+    const clock = new FakeClock()
+    const planDocId = putPlan([step("a", "active")])
+    // Evidence is added ONCE (tick 1) then never again — statuses unchanged, no new evidence, no new
+    // criterion. After the one-time progress, the stall counter must accrue and eventually escalate.
+    let seeded = false
+    const executor: StepExecutor = ({ planDocId }) =>
+      Effect.sync(() => {
+        updatePlan(planDocId, (p) => {
+          const evidence = seeded ? (p.steps[0].evidence ?? []) : [...(p.steps[0].evidence ?? []), "one-time"]
+          seeded = true
+          // Always bump the version (touch goal) so dedup never masks the tick — isolates stall logic.
+          return { ...p, goal: `${p.goal}.`, steps: [{ ...p.steps[0], evidence }] }
+        })
+        return { tokensUsed: 1 }
+      })
+    const loop = makeGoalLoop(deps({ executor }, clock))
+    const handle = await Effect.runPromise(loop.start(spec(planDocId, { stallThreshold: 2 })))
+    const outcomes: string[] = []
+    for (let i = 0; i < 4; i++) outcomes.push(await Effect.runPromise(loop.tick(handle)))
+    // tick1 progress (evidence added) → stall 0; tick2 no progress → stall 1; tick3 no progress →
+    // stall 2 == threshold → needs_human.
+    expect(outcomes).toEqual(["continue", "continue", "needs_human", "needs_human"])
+  })
+
   test("done writes a completion report doc (decision type, report_kind:completion)", async () => {
     const clock = new FakeClock()
     const planDocId = putPlan([step("a", "done")])

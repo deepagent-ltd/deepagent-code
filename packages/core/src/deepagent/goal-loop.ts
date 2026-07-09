@@ -354,6 +354,7 @@ type GoalRuntimeState = {
   readonly stallCount: number
   readonly lastFingerprint: string | null
   readonly lastDoneCount: number
+  readonly lastEvidenceCount: number
   readonly lastMetCount: number
   readonly lastProcessedVersion: number | null
   readonly lastOutcome: TickOutcome | null
@@ -386,6 +387,15 @@ const planFingerprint = (plan: PlanDoc | null): string =>
 const doneStepCount = (plan: PlanDoc | null): number =>
   plan == null ? 0 : plan.steps.filter((s) => s.status === "done").length
 
+// Total evidence entries accumulated across all plan steps. Evidence is runtime-supplied ground truth
+// (a command run, a test that passed — attached by the plan tool, never the model's prose), so a
+// GROWING evidence count is honest forward progress even when NO step has flipped to `done` yet. This
+// is what prevents a stall FALSE-POSITIVE on a legitimately hard step that spans several ticks (a big
+// refactor): each tick that records new evidence counts as progress. Because evidence is ground-truth
+// (not a status the worker can flip at will), it cannot be gamed the way a raw status flap could.
+const evidenceCount = (plan: PlanDoc | null): number =>
+  plan == null ? 0 : plan.steps.reduce((n, s) => n + (s.evidence?.length ?? 0), 0)
+
 const persistState = (deps: ControllerDeps, state: GoalRuntimeState): void => {
   deps.store.upsert({
     type: "run_context",
@@ -412,7 +422,12 @@ const loadState = (deps: ControllerDeps, handle: GoalHandle): GoalRuntimeState |
     if (!doc) continue
     if (doc.extensions?.goal_id !== handle.goalId) continue
     try {
-      return JSON.parse(doc.body) as GoalRuntimeState
+      const parsed = JSON.parse(doc.body) as GoalRuntimeState
+      // Backfill fields added after a goal may have been persisted (restart-across-upgrade safety):
+      // a state written before lastEvidenceCount existed reads as undefined; default it to 0 so the
+      // first post-upgrade tick treats any existing evidence as the baseline (never a spurious stall
+      // reset, never a crash on the arithmetic comparison).
+      return { ...parsed, lastEvidenceCount: parsed.lastEvidenceCount ?? 0 }
     } catch {
       return null
     }
@@ -591,6 +606,7 @@ export const makeGoalLoop = (deps: ControllerDeps): GoalLoop => {
         stallCount: 0,
         lastFingerprint: planFingerprint(initial.plan),
         lastDoneCount: doneStepCount(initial.plan),
+        lastEvidenceCount: evidenceCount(initial.plan),
         lastMetCount: 0,
         lastProcessedVersion: null,
         lastOutcome: null,
@@ -669,14 +685,19 @@ export const makeGoalLoop = (deps: ControllerDeps): GoalLoop => {
         startedAtMs: state.ledger.startedAtMs,
       }
 
-      // Progress = FORWARD movement only: more steps resolved to `done`, OR a new criterion became met
-      // since last tick. A status regression / flap changes the raw fingerprint but is NOT progress, so
-      // a worker cannot evade the stall guard by churning statuses. (We keep the fingerprint in state
-      // for observability/diagnosis but no longer treat any change to it as progress.)
+      // Progress = FORWARD movement only, by any of three ground-truth signals since last tick:
+      //   (a) more steps resolved to `done`, (b) new EVIDENCE recorded on the plan (a command run / test
+      //   passed — honest incremental progress on a hard multi-tick step that hasn't finished yet), or
+      //   (c) a new completion criterion became met. A status regression / flap changes the raw
+      //   fingerprint but is NOT progress (so a thrashing worker can't evade the stall guard), while a
+      //   legitimately hard step that spans several ticks is NOT falsely stalled as long as it keeps
+      //   producing evidence. (The fingerprint is kept in state for observability only.)
       const fingerprint = planFingerprint(after.plan)
       const doneCount = doneStepCount(after.plan)
+      const evidence = evidenceCount(after.plan)
       const metCount = state.spec.criteria.length - grader.gaps.length
-      const madeProgress = doneCount > state.lastDoneCount || metCount > state.lastMetCount
+      const madeProgress =
+        doneCount > state.lastDoneCount || evidence > state.lastEvidenceCount || metCount > state.lastMetCount
       const stallCount = madeProgress ? 0 : state.stallCount + 1
 
       // §D.3 step 6 — stop decision, in safety precedence order:
@@ -707,6 +728,7 @@ export const makeGoalLoop = (deps: ControllerDeps): GoalLoop => {
         stallCount,
         lastFingerprint: fingerprint,
         lastDoneCount: doneCount,
+        lastEvidenceCount: evidence,
         lastMetCount: metCount,
         // Dedup key = the version we ENTERED this tick at. If a subsequent tick still sees this version
         // (executor made no plan change), it replays; a normal tick advanced it, so it proceeds.

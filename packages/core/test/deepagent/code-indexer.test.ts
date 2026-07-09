@@ -338,6 +338,56 @@ describe("code-indexer §A symbol index (indexSymbols)", () => {
     })
   })
 
+  it("same-symbolPath occurrences (overloads / decl-merge) get DISTINCT nodes, no overwrite (adversarial 2026-07-09)", () => {
+    const proj = openProjectStore(base, WORK)
+    const content = "export function f(a: number): void\nexport function f(a: string): void\nexport function f(a: any) {}"
+    const file = { path: "src/ov.ts", content }
+    indexFiles(proj, [file], { buildDocEdges: false })
+    const result = indexSymbols(proj, {
+      path: "src/ov.ts",
+      contentSha: sha256(content),
+      symbols: [
+        { symbolPath: "f", kind: "function", range: { start: 0, end: 0 }, signature: "f(a: number): void" },
+        { symbolPath: "f", kind: "function", range: { start: 1, end: 1 }, signature: "f(a: string): void" },
+        { symbolPath: "f", kind: "function", range: { start: 2, end: 2 }, signature: "f(a: any): void" },
+      ],
+    })
+    // All three overloads are preserved as distinct nodes (was: last-write-wins → only 1 survived).
+    expect(result.symbolsCreated).toBe(3)
+    expect(result.containsEdges).toBe(3)
+    expect(new Set(result.symbolNodeIds).size).toBe(3) // three distinct node ids
+    // The FIRST occurrence keeps the clean key; the rest get deterministic ~N suffixes.
+    const descs = result.symbolNodeIds.map((id) => proj.documentStore.get(id)!.description).sort()
+    expect(descs).toEqual(["src/ov.ts#f", "src/ov.ts#f~2", "src/ov.ts#f~3"])
+    // Every node keeps the ORIGINAL symbol_path (the ~N is only in the node key/description).
+    for (const id of result.symbolNodeIds) {
+      expect(proj.documentStore.get(id)!.extensions?.symbol_path).toBe("f")
+    }
+    // The three signatures are all retained (no data loss).
+    const sigs = result.symbolNodeIds.map((id) => proj.documentStore.get(id)!.extensions?.signature).sort()
+    expect(sigs).toEqual(["f(a: any): void", "f(a: number): void", "f(a: string): void"])
+  })
+
+  it("overload key disambiguation is idempotent under the content-sha gate (zero new versions on re-run)", () => {
+    const proj = openProjectStore(base, WORK)
+    const content = "interface Foo {}\nnamespace Foo {}"
+    indexFiles(proj, [{ path: "src/m.ts", content }], { buildDocEdges: false })
+    const extraction: SymbolExtraction = {
+      path: "src/m.ts",
+      contentSha: sha256(content),
+      symbols: [
+        { symbolPath: "Foo", kind: "interface", range: { start: 0, end: 0 } },
+        { symbolPath: "Foo", kind: "module", range: { start: 1, end: 1 } },
+      ],
+    }
+    const first = indexSymbols(proj, extraction)
+    expect(first.symbolsCreated).toBe(2)
+    const versions = first.symbolNodeIds.map((id) => proj.documentStore.get(id)!.version)
+    const again = indexSymbols(proj, extraction)
+    expect(again.skipped).toBe(true) // gate short-circuits
+    first.symbolNodeIds.forEach((id, i) => expect(proj.documentStore.get(id)!.version).toBe(versions[i]))
+  })
+
   it("a genuine content change re-runs the symbol pass (gate does not skip)", () => {
     const proj = openProjectStore(base, WORK)
     const v1Content = "export function f() {}"
