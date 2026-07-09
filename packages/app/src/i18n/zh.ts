@@ -1019,6 +1019,15 @@ export const dict = {
   "project.delete.button": "删除项目",
   "project.delete.failed.title": "删除项目失败",
 
+  "command.session.archived": "查看已归档会话",
+  "session.archived.title": "已归档会话",
+  "session.archived.search": "搜索已归档会话",
+  "session.archived.empty": "暂无已归档会话。",
+  "session.archived.error": "无法加载已归档会话。",
+  "session.archived.restore": "恢复",
+  "session.archived.restored": '已恢复 "{{name}}"',
+  "session.archived.restore.failed": "恢复会话失败",
+
   "workspace.new": "新建工作区",
   "workspace.type.local": "本地",
   "workspace.type.sandbox": "沙盒",

@@ -222,6 +222,7 @@ export type Session = {
     snapshot?: string
     diff?: string
   }
+  preview?: string
 }
 
 export type OutputFormatText = {
@@ -2155,6 +2156,12 @@ export type Config = {
   }
 }
 
+export type ProjectListItem = {
+  id: string
+  worktree: string
+  name?: string
+}
+
 export type Model = {
   id: string
   providerID: string
@@ -2541,6 +2548,7 @@ export type GlobalSession = {
     snapshot?: string
     diff?: string
   }
+  preview?: string
   project: ProjectSummary | null
 }
 
@@ -6116,6 +6124,56 @@ export type GlobalUpgradeResponses = {
 
 export type GlobalUpgradeResponse = GlobalUpgradeResponses[keyof GlobalUpgradeResponses]
 
+export type GlobalImportData = {
+  body?: never
+  path?: never
+  query?: never
+  url: "/global/import"
+}
+
+export type GlobalImportErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+}
+
+export type GlobalImportError = GlobalImportErrors[keyof GlobalImportErrors]
+
+export type GlobalImportResponses = {
+  /**
+   * Success
+   */
+  200: string
+}
+
+export type GlobalImportResponse = GlobalImportResponses[keyof GlobalImportResponses]
+
+export type GlobalProjectsData = {
+  body?: never
+  path?: never
+  query?: never
+  url: "/global/projects"
+}
+
+export type GlobalProjectsErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type GlobalProjectsError = GlobalProjectsErrors[keyof GlobalProjectsErrors]
+
+export type GlobalProjectsResponses = {
+  /**
+   * Success
+   */
+  200: Array<ProjectListItem>
+}
+
+export type GlobalProjectsResponse = GlobalProjectsResponses[keyof GlobalProjectsResponses]
+
 export type EventSubscribeData = {
   body?: never
   path?: never
@@ -7101,6 +7159,144 @@ export type DeepagentPacksUnpinResponses = {
 }
 
 export type DeepagentPacksUnpinResponse = DeepagentPacksUnpinResponses[keyof DeepagentPacksUnpinResponses]
+
+export type DeepagentEnvFactsListData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/deepagent/env-facts"
+}
+
+export type DeepagentEnvFactsListErrors = {
+  /**
+   * DeepAgentPromotionError | InvalidRequestError
+   */
+  400: DeepAgentPromotionError | InvalidRequestError
+}
+
+export type DeepagentEnvFactsListError = DeepagentEnvFactsListErrors[keyof DeepagentEnvFactsListErrors]
+
+export type DeepagentEnvFactsListResponses = {
+  /**
+   * Provisional environment facts: adopted + pending for this project
+   */
+  200: {
+    adopted: Array<{
+      fact_id: string
+      version: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      description: string
+      body: {
+        host?: string
+        port?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        container?: string
+        purpose?: string
+        secret_refs?: Array<string>
+        last_confirmed_at: string
+        notes?: string
+      }
+      degraded: boolean
+    }>
+    pending: Array<{
+      fact_id: string
+      version: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      description: string
+      body: {
+        host?: string
+        port?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        container?: string
+        purpose?: string
+        secret_refs?: Array<string>
+        last_confirmed_at: string
+        notes?: string
+      }
+      degraded: boolean
+    }>
+  }
+}
+
+export type DeepagentEnvFactsListResponse = DeepagentEnvFactsListResponses[keyof DeepagentEnvFactsListResponses]
+
+export type DeepagentEnvFactsDecideData = {
+  body?: {
+    factId: string
+    decision: "adopt" | "reject"
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/deepagent/env-facts/decide"
+}
+
+export type DeepagentEnvFactsDecideErrors = {
+  /**
+   * DeepAgentPromotionError | InvalidRequestError
+   */
+  400: DeepAgentPromotionError | InvalidRequestError
+}
+
+export type DeepagentEnvFactsDecideError = DeepagentEnvFactsDecideErrors[keyof DeepagentEnvFactsDecideErrors]
+
+export type DeepagentEnvFactsDecideResponses = {
+  /**
+   * Adopt or reject a provisional environment fact for this project
+   */
+  200: {
+    ok: boolean
+    factId: string
+  }
+}
+
+export type DeepagentEnvFactsDecideResponse = DeepagentEnvFactsDecideResponses[keyof DeepagentEnvFactsDecideResponses]
+
+export type DeepagentEnvFactsModifyData = {
+  body?: {
+    factId: string
+    description: string
+    body: {
+      host?: string
+      port?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      container?: string
+      purpose?: string
+      secret_refs?: Array<string>
+      last_confirmed_at: string
+      notes?: string
+    }
+    domain?: string
+    mode: "global" | "project"
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/deepagent/env-facts/modify"
+}
+
+export type DeepagentEnvFactsModifyErrors = {
+  /**
+   * DeepAgentPromotionError | InvalidRequestError
+   */
+  400: DeepAgentPromotionError | InvalidRequestError
+}
+
+export type DeepagentEnvFactsModifyError = DeepagentEnvFactsModifyErrors[keyof DeepagentEnvFactsModifyErrors]
+
+export type DeepagentEnvFactsModifyResponses = {
+  /**
+   * Modified environment fact (global correction or project override)
+   */
+  200: {
+    ok: boolean
+    factId: string
+  }
+}
+
+export type DeepagentEnvFactsModifyResponse = DeepagentEnvFactsModifyResponses[keyof DeepagentEnvFactsModifyResponses]
 
 export type ExperimentalConsoleGetData = {
   body?: never
@@ -10398,7 +10594,7 @@ export type SessionUpdateData = {
     }
     permission?: PermissionRuleset
     time?: {
-      archived?: number
+      archived?: number | null
     }
   }
   path: {

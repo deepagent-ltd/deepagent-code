@@ -1282,6 +1282,15 @@ export const dict = {
   "project.delete.button": "Delete project",
   "project.delete.failed.title": "Failed to delete project",
 
+  "command.session.archived": "View archived sessions",
+  "session.archived.title": "Archived sessions",
+  "session.archived.search": "Search archived sessions",
+  "session.archived.empty": "No archived sessions.",
+  "session.archived.error": "Couldn't load archived sessions.",
+  "session.archived.restore": "Restore",
+  "session.archived.restored": 'Restored "{{name}}"',
+  "session.archived.restore.failed": "Failed to restore session",
+
   "workspace.new": "New workspace",
   "workspace.type.local": "local",
   "workspace.type.sandbox": "sandbox",

@@ -332,6 +332,39 @@ export const layer = Layer.effect(
         .pipe(Effect.catchCause((cause) => elog.error("failed to generate title", { error: Cause.squash(cause) })))
     })
 
+    // Snapshot the first user message text into the session `preview` column so an archived-session
+    // list can show a content snippet without loading the conversation. Piggy-backs on the same
+    // first-turn hook as title generation. setPreview is write-once (server-side guard), so re-runs
+    // and later prompts are no-ops. Cheap + local: no LLM call, just the persisted user parts.
+    const PREVIEW_MAX = 200
+    const preview = Effect.fn("SessionPrompt.ensurePreview")(function* (input: {
+      session: Session.Info
+      history: SessionV1.WithParts[]
+    }) {
+      if (input.session.parentID) return
+      if (input.session.preview) return
+
+      const real = (m: SessionV1.WithParts) =>
+        m.info.role === "user" && !m.parts.every((p) => "synthetic" in p && p.synthetic)
+      const firstUser = input.history.find(real)
+      if (!firstUser) return
+
+      const text = firstUser.parts
+        .filter((p): p is Extract<typeof p, { type: "text" }> => p.type === "text" && !p.synthetic && !p.ignored)
+        .map((p) => p.text)
+        .join(" ")
+      const subtasks = firstUser.parts.filter((p): p is SessionV1.SubtaskPart => p.type === "subtask")
+      const source = text.trim() ? text : subtasks.map((p) => p.prompt).join(" ")
+
+      const snippet = source.replace(/\s+/g, " ").trim()
+      if (!snippet) return
+      const truncated = snippet.length > PREVIEW_MAX ? snippet.substring(0, PREVIEW_MAX - 1) + "…" : snippet
+
+      yield* sessions
+        .setPreview({ sessionID: input.session.id, preview: truncated })
+        .pipe(Effect.catchCause((cause) => elog.error("failed to set session preview", { error: Cause.squash(cause) })))
+    })
+
     const handleSubtask = Effect.fn("SessionPrompt.handleSubtask")(function* (input: {
       task: SessionV1.SubtaskPart
       model: Provider.Model
@@ -1840,13 +1873,15 @@ export const layer = Layer.effect(
           }
 
           step++
-          if (step === 1)
+          if (step === 1) {
             yield* title({
               session,
               modelID: lastUser.model.modelID,
               providerID: lastUser.model.providerID,
               history: msgs,
             }).pipe(Effect.ignore, Effect.forkIn(scope))
+            yield* preview({ session, history: msgs }).pipe(Effect.ignore, Effect.forkIn(scope))
+          }
 
           const model = yield* getModel(lastUser.model.providerID, lastUser.model.modelID, sessionID)
           const task = tasks.pop()

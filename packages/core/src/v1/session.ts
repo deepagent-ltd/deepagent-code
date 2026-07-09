@@ -560,10 +560,17 @@ export const SessionInfo = Schema.Struct({
     created: NonNegativeInt,
     updated: NonNegativeInt,
     compacting: optionalOmitUndefined(NonNegativeInt),
-    archived: optionalOmitUndefined(Schema.Finite),
+    // `null` clears the archived flag (session unarchive). `optionalOmitUndefined`
+    // still omits the key when the value is `undefined`, so absence and explicit
+    // clear stay distinct across the sync-event encode boundary.
+    archived: optionalOmitUndefined(Schema.NullOr(Schema.Finite)),
   }),
   permission: optionalOmitUndefined(PermissionV1.Ruleset),
   revert: optionalOmitUndefined(SessionRevert),
+  // Truncated, single-lined snapshot of the first user message. Must live on the event payload
+  // schema so it survives the encode/decode sync boundary into the projector; otherwise every
+  // session.updated would strip it and null the stored column.
+  preview: optionalOmitUndefined(Schema.String),
 }).annotate({ identifier: "Session" })
 export type SessionInfo = typeof SessionInfo.Type
 
