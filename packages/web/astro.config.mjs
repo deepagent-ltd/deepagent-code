@@ -2,8 +2,7 @@
 import { defineConfig } from "astro/config"
 import starlight from "@astrojs/starlight"
 import solidJs from "@astrojs/solid-js"
-import cloudflare from "@astrojs/cloudflare"
-import theme from "toolbeam-docs-theme"
+import node from "@astrojs/node"
 import config from "./config.mjs"
 import { rehypeHeadingIds } from "@astrojs/markdown-remark"
 import rehypeAutolinkHeadings from "rehype-autolink-headings"
@@ -13,10 +12,15 @@ import { spawnSync } from "child_process"
 export default defineConfig({
   site: config.url,
   base: "/docs",
+  // Local/self-hosted deployment via the Node adapter (we do not deploy to Cloudflare). The whole web
+  // app — docs pages and the SSR session-share route (/s/[id]) — runs under one standalone Node
+  // server. Replaces @astrojs/cloudflare, removing that dependency and its advisory.
   output: "server",
-  adapter: cloudflare({
-    imageService: "passthrough",
-  }),
+  adapter: node({ mode: "standalone" }),
+  // Keep image optimization off (the Cloudflare adapter previously used imageService: "passthrough").
+  // The Node adapter otherwise defaults to Sharp, which is not installed; passthrough preserves the
+  // prior no-optimization behavior and avoids a new native dependency.
+  image: { service: { entrypoint: "astro/assets/services/noop" } },
   devToolbar: {
     enabled: false,
   },
@@ -300,11 +304,6 @@ export default defineConfig({
         Footer: "./src/components/Footer.astro",
         SiteTitle: "./src/components/SiteTitle.astro",
       },
-      plugins: [
-        theme({
-          headerLinks: config.headerLinks,
-        }),
-      ],
     }),
   ],
 })
