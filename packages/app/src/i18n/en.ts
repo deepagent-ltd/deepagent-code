@@ -589,6 +589,9 @@ export const dict = {
 
   "toast.session.listFailed.title": "Failed to load sessions for {{project}}",
   "toast.project.reloadFailed.title": "Failed to reload {{project}}",
+  "toast.project.rootRefused.title": "Can't open the filesystem root",
+  "toast.project.rootRefused.description":
+    "This conversation points at the filesystem root (\"/\"), which can't be opened for safety. It's likely leftover data — remove or re-target it.",
 
   "toast.update.title": "Update available",
   "toast.update.description": "A new version of DeepAgent Code ({{version}}) is now available to install.",
