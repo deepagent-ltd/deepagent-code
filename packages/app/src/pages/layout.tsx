@@ -1013,6 +1013,12 @@ export default function Layout(props: ParentProps) {
         onSelect: () => layout.sidebar.toggle(),
       },
       {
+        id: "chat.new",
+        title: language.t("command.chat.new"),
+        category: language.t("command.category.project"),
+        onSelect: () => navigate("/"),
+      },
+      {
         id: "project.open",
         title: language.t("command.project.open"),
         category: language.t("command.category.project"),
@@ -1264,6 +1270,7 @@ export default function Layout(props: ParentProps) {
           client={serverSDK.client as never}
           activeWorktrees={activeWorktrees}
           onOpen={(directory: string) => openProject(directory)}
+          onDeleted={(directory: string) => layout.projects.close(directory)}
         />
       ))
     })
@@ -2204,6 +2211,18 @@ export default function Layout(props: ParentProps) {
                     />
                     <DropdownMenu.Portal>
                       <DropdownMenu.Content class="mt-1">
+                        <DropdownMenu.Item
+                          data-action="project-new-chat"
+                          data-project={slug()}
+                          onSelect={() => {
+                            // Return to the home picker to start a chat in another project or
+                            // a folder-less (project-less) chat. Mirrors Codex's new-chat flow.
+                            navigate("/")
+                          }}
+                        >
+                          <DropdownMenu.ItemLabel>{language.t("command.chat.new")}</DropdownMenu.ItemLabel>
+                        </DropdownMenu.Item>
+                        <DropdownMenu.Separator />
                         <DropdownMenu.Item
                           onSelect={() => {
                             showEditProjectDialog(server.current!, project)
