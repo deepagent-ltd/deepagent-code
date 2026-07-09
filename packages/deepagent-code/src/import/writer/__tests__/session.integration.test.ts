@@ -111,4 +111,30 @@ describe("import writer/session (integration)", () => {
       }),
     )
   })
+
+  it("refuses a session whose cwd resolves to the filesystem root", async () => {
+    // A "/"-rooted session can never be opened later (the instance boot guard rejects it), so the
+    // importer must fail this session rather than persist a permanently-unopenable conversation.
+    const dbPath = join(tmpdir(), `imp-root-${Date.now()}.sqlite`)
+    const rootSession: SourceSession = { ...sample(), sourceId: "integ-root", cwd: "/" }
+    let threw = false
+    try {
+      await withRuntime(dbPath, importSession(rootSession))
+    } catch (err) {
+      threw = true
+      expect(String(err)).toContain("filesystem root")
+    }
+    expect(threw).toBe(true)
+
+    // Nothing was persisted for the refused session.
+    await withRuntime(
+      dbPath,
+      Effect.gen(function* () {
+        const { db } = yield* Database.Service
+        const target = SessionSchema.ID.make(sessionID("codex", "integ-root"))
+        const rows = yield* db.select({ id: SessionTable.id }).from(SessionTable).where(eq(SessionTable.id, target)).all().pipe(Effect.orDie)
+        expect(rows.length).toBe(0)
+      }),
+    )
+  })
 })
