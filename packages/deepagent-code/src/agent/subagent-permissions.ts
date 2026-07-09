@@ -53,12 +53,26 @@ export function deriveSubagentSessionPermission(input: {
   parentSessionPermission: PermissionV1.Ruleset
   parentAgent: Agent.Info | undefined
   subagent: Agent.Info
+  /**
+   * V3.9 §E / §F.3 — whether this call site is allowed to honor the
+   * `PLAN_WRITE_OWN_GOAL` capability. Defaults to FALSE: the plan-write
+   * relaxation is granted ONLY when the caller explicitly opts in. The single
+   * opt-in caller is the Goal-Loop wiring (`goal-loop-wiring.ts`), which is
+   * itself constructed ONLY when `flags.experimentalGoalLoop` is on — so the
+   * flag is the structural gate. The generic `task` tool passes false, so a
+   * goal-worker spawned directly via `task` (or ANY subagent) gets NO plan
+   * grant, and with the flag OFF the relaxation is entirely unreachable
+   * (all-flags-off === V3.8 behaviour, §F.3 #3 / §H.6).
+   */
+  allowPlanWriteCapability?: boolean
 }): PermissionV1.Ruleset {
   const canTask = input.subagent.permission.some((rule) => rule.permission === "task")
   const canTodo = input.subagent.permission.some((rule) => rule.permission === "todowrite")
-  // V3.9 §E: controlled relaxation — ONLY a Goal Loop worker that declares this
-  // capability in its Registry entry gets plan-write. Ordinary subagents do not.
-  const canPlanOwnGoal = input.subagent.capabilities?.includes(PLAN_WRITE_OWN_GOAL) ?? false
+  // V3.9 §E: controlled relaxation — a Goal Loop worker gets plan-write ONLY when it BOTH declares the
+  // capability in its Registry entry AND the call site opted in (the flag-gated goal-loop wiring). Both
+  // conditions are required, so ordinary subagents — and any caller with the flag off — never get it.
+  const canPlanOwnGoal =
+    (input.allowPlanWriteCapability ?? false) && (input.subagent.capabilities?.includes(PLAN_WRITE_OWN_GOAL) ?? false)
   const parentAgentDenies =
     input.parentAgent?.permission.filter((rule) => rule.action === "deny" && rule.permission === "edit") ?? []
   return [
@@ -69,17 +83,10 @@ export function deriveSubagentSessionPermission(input: {
     // V3.9 §E: a Goal Loop worker may write its OWN goal's plan (bounded by
     // run:<sessionId> scope isolation). `plan: allow` is the real gate for the
     // plan tool (id/permission "plan"); merged after — and thus overriding — the
-    // worker agent's own `*: deny`. `todowrite: allow` is granted alongside for
-    // forward-compat and to skip the default todowrite deny below.
-    ...(canPlanOwnGoal
-      ? [
-          { permission: "plan" as const, pattern: "*" as const, action: "allow" as const },
-          { permission: "todowrite" as const, pattern: "*" as const, action: "allow" as const },
-        ]
-      : []),
-    ...(canTodo || canPlanOwnGoal
-      ? []
-      : [{ permission: "todowrite" as const, pattern: "*" as const, action: "deny" as const }]),
+    // worker agent's own `*: deny`. Scoped to `plan` ONLY (§E authorizes plan
+    // step status, not general task tracking) — `todowrite` is NOT widened here.
+    ...(canPlanOwnGoal ? [{ permission: "plan" as const, pattern: "*" as const, action: "allow" as const }] : []),
+    ...(canTodo ? [] : [{ permission: "todowrite" as const, pattern: "*" as const, action: "deny" as const }]),
     ...(canTask ? [] : [{ permission: "task" as const, pattern: "*" as const, action: "deny" as const }]),
   ]
 }

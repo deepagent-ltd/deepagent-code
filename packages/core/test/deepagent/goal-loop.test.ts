@@ -8,6 +8,7 @@ import { createPlanDoc, planScope, type PlanDoc, type PlanStep } from "../../src
 import {
   makeGoalLoop,
   evaluateCriteria,
+  evaluateForController,
   InvalidGoalError,
   type ControllerDeps,
   type GraderPorts,
@@ -375,6 +376,176 @@ describe("V3.9 §D — Controller tick semantics", () => {
     await Effect.runPromise(loop.tick(handle))
     const worklogs = store.list({ type: "worklog", scope: planScope(SESSION) })
     expect(worklogs.length).toBe(2)
+  })
+})
+
+describe("V3.9 §D — adversarial-review hardening (2026-07-09)", () => {
+  const openPlanDoc = (): PlanDoc => createPlanDoc(SESSION, "g", [step("a", "pending")])
+
+  test("start rejects a tests_pass criterion with an empty command set", async () => {
+    const clock = new FakeClock()
+    const planDocId = putPlan([step("a", "pending")])
+    const loop = makeGoalLoop(deps({}, clock))
+    const err = await Effect.runPromise(
+      loop.start(spec(planDocId, { criteria: [{ kind: "tests_pass", commands: [] }] })).pipe(Effect.flip),
+    )
+    expect(err).toBeInstanceOf(InvalidGoalError)
+    expect(err.reason).toMatch(/at least one command/)
+  })
+
+  test("有界性 pre-execution CEILING: executor does NOT run once maxTicks is reached (no +1 turn)", async () => {
+    const clock = new FakeClock()
+    const planDocId = putPlan([step("a", "pending")])
+    let execCount = 0
+    const executor: StepExecutor = ({ planDocId }) =>
+      Effect.sync(() => {
+        execCount++
+        updatePlan(planDocId, (p) => ({ ...p, steps: [{ ...p.steps[0], title: `${p.steps[0].title}.` }] }))
+        return { tokensUsed: 1 }
+      })
+    // maxTicks=1: the ceiling must let exactly ONE executor run happen, then stop WITHOUT a 2nd run.
+    const loop = makeGoalLoop(deps({ executor }, clock))
+    const handle = await Effect.runPromise(
+      loop.start(spec(planDocId, { limits: { maxTicks: 1, maxTokens: 1_000, maxWallclockMs: 1_000 }, stallThreshold: 99 })),
+    )
+    expect(await Effect.runPromise(loop.tick(handle))).toBe("continue") // tick1 runs, ticks=1
+    expect(await Effect.runPromise(loop.tick(handle))).toBe("needs_human") // ceiling: NO 2nd executor run
+    expect(execCount).toBe(1) // the fix: executor never ran a (maxTicks+1)th time
+  })
+
+  test("token cap is NOT poisoned by a non-finite tokensUsed (NaN → treated as 0)", async () => {
+    const clock = new FakeClock()
+    const planDocId = putPlan([step("a", "pending")])
+    const executor: StepExecutor = ({ planDocId }) =>
+      Effect.sync(() => {
+        updatePlan(planDocId, (p) => ({ ...p, steps: [{ ...p.steps[0], title: `${p.steps[0].title}.` }] }))
+        return { tokensUsed: NaN } // a misbehaving port
+      })
+    const loop = makeGoalLoop(deps({ executor }, clock))
+    const handle = await Effect.runPromise(loop.start(spec(planDocId, { stallThreshold: 99 })))
+    await Effect.runPromise(loop.tick(handle))
+    const status = await Effect.runPromise(loop.status(handle))
+    expect(Number.isFinite(status.ledger.tokens)).toBe(true) // NOT NaN
+    expect(status.ledger.tokens).toBe(0)
+  })
+
+  test("panel block ESCALATES on the first verdict (not re-run every tick until stall)", async () => {
+    const clock = new FakeClock()
+    const planDocId = putPlan([step("a", "pending")])
+    let panelCalls = 0
+    const ports: GraderPorts = {
+      ...passingPorts(),
+      panelApproves: () =>
+        Effect.sync(() => {
+          panelCalls++
+          return { decision: "block" }
+        }),
+    }
+    const executor: StepExecutor = ({ planDocId }) =>
+      Effect.sync(() => {
+        updatePlan(planDocId, (p) => ({ ...p, steps: [{ ...p.steps[0], status: "done" }] }))
+        return { tokensUsed: 1 }
+      })
+    const loop = makeGoalLoop(deps({ ports, executor }, clock))
+    const handle = await Effect.runPromise(
+      loop.start(spec(planDocId, { criteria: [{ kind: "panel_approves" }], stallThreshold: 5 })),
+    )
+    const outcome = await Effect.runPromise(loop.tick(handle))
+    expect(outcome).toBe("needs_human") // escalates immediately, does not "continue" until stall
+    expect(panelCalls).toBe(1)
+  })
+
+  test("§D.7 非每轮: deferExpensive skips the panel gate when a cheaper criterion is already unmet", async () => {
+    let panelCalls = 0
+    const ports: GraderPorts = {
+      ...passingPorts(),
+      runTests: () => Effect.succeed({ pass: false }), // cheap gate fails
+      panelApproves: () =>
+        Effect.sync(() => {
+          panelCalls++
+          return { decision: "approve" }
+        }),
+    }
+    const criteria: CompletionCriterion[] = [{ kind: "panel_approves" }, { kind: "tests_pass", commands: ["x"] }]
+    // deferExpensive OFF (default) → panel IS called.
+    await Effect.runPromise(evaluateCriteria(criteria, ports, openPlanDoc()))
+    expect(panelCalls).toBe(1)
+    // deferExpensive ON → cheap tests_pass fails first, panel is NOT convened.
+    panelCalls = 0
+    const res = await Effect.runPromise(evaluateCriteria(criteria, ports, openPlanDoc(), { deferExpensive: true }))
+    expect(panelCalls).toBe(0)
+    expect(res.met).toBe(false) // verdict unchanged: still unmet
+  })
+
+  test("evaluateForController flags panel block as escalate but revise as a soft gap", async () => {
+    const blockPorts: GraderPorts = { ...passingPorts(), panelApproves: () => Effect.succeed({ decision: "block" }) }
+    const blocked = await Effect.runPromise(
+      evaluateForController([{ kind: "panel_approves" }], blockPorts, openPlanDoc()),
+    )
+    expect(blocked.escalate).toBe(true)
+    const revisePorts: GraderPorts = { ...passingPorts(), panelApproves: () => Effect.succeed({ decision: "revise" }) }
+    const revised = await Effect.runPromise(
+      evaluateForController([{ kind: "panel_approves" }], revisePorts, openPlanDoc()),
+    )
+    expect(revised.escalate).toBe(false)
+    expect(revised.result.met).toBe(false) // still a gap, keep iterating
+  })
+
+  test("stall guard is NOT evaded by status flapping (regression is not forward progress)", async () => {
+    const clock = new FakeClock()
+    const planDocId = putPlan([step("a", "pending")])
+    // Executor flaps the step status pending↔active each tick (raw fingerprint changes) but never
+    // resolves anything to done → must still stall despite the churn.
+    let toggle = false
+    const executor: StepExecutor = ({ planDocId }) =>
+      Effect.sync(() => {
+        toggle = !toggle
+        updatePlan(planDocId, (p) => ({ ...p, steps: [{ ...p.steps[0], status: toggle ? "active" : "pending" }] }))
+        return { tokensUsed: 1 }
+      })
+    const loop = makeGoalLoop(deps({ executor }, clock))
+    const handle = await Effect.runPromise(loop.start(spec(planDocId, { stallThreshold: 3 })))
+    const outcomes: string[] = []
+    for (let i = 0; i < 3; i++) outcomes.push(await Effect.runPromise(loop.tick(handle)))
+    expect(outcomes).toEqual(["continue", "continue", "needs_human"]) // stalls despite flapping
+  })
+
+  test("done writes a completion report doc (decision type, report_kind:completion)", async () => {
+    const clock = new FakeClock()
+    const planDocId = putPlan([step("a", "done")])
+    const loop = makeGoalLoop(deps({}, clock))
+    const handle = await Effect.runPromise(loop.start(spec(planDocId)))
+    expect(await Effect.runPromise(loop.tick(handle))).toBe("done")
+    const decisions = store.list({ type: "decision", scope: planScope(SESSION) })
+    const report = decisions.map((r) => store.get(r.id)!).find((d) => d.extensions?.report_kind === "completion")
+    expect(report).toBeDefined()
+  })
+
+  test("a DEFECT in the executor degrades to a critical rollback, not a thrown tick", async () => {
+    const clock = new FakeClock()
+    const planDocId = putPlan([step("a", "pending")])
+    let rolledBack = false
+    const executor: StepExecutor = () => Effect.die(new Error("boom")) as ReturnType<StepExecutor>
+    const rollback: RollbackPort = () =>
+      Effect.sync(() => {
+        rolledBack = true
+      })
+    const loop = makeGoalLoop(deps({ executor, rollback }, clock))
+    const handle = await Effect.runPromise(loop.start(spec(planDocId)))
+    const outcome = await Effect.runPromise(loop.tick(handle)) // must NOT reject
+    expect(outcome).toBe("rolled_back")
+    expect(rolledBack).toBe(true)
+  })
+
+  test("a DEFECT in the rollback port does not escape tick's never-fail contract", async () => {
+    const clock = new FakeClock()
+    const planDocId = putPlan([step("a", "pending")])
+    const executor: StepExecutor = () => Effect.succeed({ tokensUsed: 1, critical: true })
+    const rollback: RollbackPort = () => Effect.die(new Error("rollback boom")) as ReturnType<RollbackPort>
+    const loop = makeGoalLoop(deps({ executor, rollback }, clock))
+    const handle = await Effect.runPromise(loop.start(spec(planDocId)))
+    const outcome = await Effect.runPromise(loop.tick(handle)) // must NOT reject despite rollback defect
+    expect(outcome).toBe("rolled_back")
   })
 })
 

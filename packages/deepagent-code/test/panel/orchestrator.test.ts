@@ -180,13 +180,14 @@ describe("runPanel — convergence early-stop (§C.4)", () => {
 
 describe("runPanel — isolation / anonymized debate (§C.8)", () => {
   test("Round 1 panelists receive NO peer opinions; debate rounds receive anonymized peers minus self", async () => {
-    const seen: { round: number; lens: PanelLens; peerLenses: PanelLens[]; peerCount: number }[] = []
+    const seen: { round: number; lens: PanelLens; peerKeys: string[]; peerCount: number }[] = []
     const runPanelist = (input: PanelistRunInput): Effect.Effect<PanelOpinion | null, unknown> =>
       Effect.sync(() => {
         seen.push({
           round: input.round,
           lens: input.spec.lens,
-          peerLenses: input.peers.map((p) => p.lens),
+          // Capture the KEYS present on each anonymized peer — used to prove no seat identity leaks.
+          peerKeys: [...new Set(input.peers.flatMap((p) => Object.keys(p)))].sort(),
           peerCount: input.peers.length,
         })
         // Flip verdicts across rounds so debate does not converge on round 2.
@@ -206,9 +207,12 @@ describe("runPanel — isolation / anonymized debate (§C.8)", () => {
     const round2 = seen.filter((s) => s.round === 2)
     expect(round2.length).toBe(3)
     for (const r of round2) {
-      // Each debate panelist sees the OTHER two lenses, never itself.
-      expect(r.peerLenses).not.toContain(r.lens)
+      // Each debate panelist sees exactly the OTHER two seats (count==2 proves self was excluded)…
       expect(r.peerCount).toBe(2)
+      // …and the anonymized peer carries NO `lens` (seat identity) — only the de-identified fields.
+      // Since each seat id is `panel-<lens>`, exposing `lens` would fully re-identify the author (§C.8).
+      expect(r.peerKeys).not.toContain("lens")
+      expect(r.peerKeys).toEqual(["confidence", "findings", "verdict"])
     }
   })
 })

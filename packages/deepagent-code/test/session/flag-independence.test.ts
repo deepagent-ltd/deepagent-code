@@ -108,16 +108,21 @@ describe("V3.9 §F.3 — feature-flag independence", () => {
     }
   })
 
-  test("expert_panel OFF: wiki + goal_loop wiring still construct (panel core is not flag-gated)", async () => {
+  test("expert_panel OFF: wiki + goal_loop wiring still construct; panel gate fail-closes independently", async () => {
     const store = fresh()
     try {
-      // goal-loop wiring still builds — its flag is independent of the panel flag.
+      // goal-loop wiring still builds — its flag is independent of the panel flag (construction-level
+      // independence). The RUNTIME coupling is severed too: with the panel flag off, the goal loop's
+      // panel_approves gate fail-closes to needs_human instead of convening the (disabled) panel — see
+      // goal-loop-wiring.test.ts "§F.3 panel flag OFF". The arbiter itself remains a pure function.
       const deps = await Effect.runPromise(
         makeGoalLoopWiring(goalWiringInput(store)).pipe(
           Effect.provide(flagLayer({ experimentalExpertPanel: false, experimentalGoalLoop: true, experimentalWiki: true })),
         ),
       )
       expect(deps).not.toBeNull()
+      // The panel gate, with the panel flag off, escalates rather than approving (flag independence).
+      expect(await Effect.runPromise(deps!.ports.panelApproves())).toEqual({ decision: "needs_human" })
 
       // Wiki still projects.
       const design = store.upsert({

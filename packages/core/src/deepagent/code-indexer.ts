@@ -219,6 +219,11 @@ export type ExtractedSymbol = {
   // 0-based inclusive line range, for file:line cross-linking (§A.3 range).
   readonly range?: { readonly start: number; readonly end: number }
   readonly signature?: string
+  // 0-based position of the symbol's NAME/identifier (LSP selectionRange start), when known. Used ONLY
+  // by the caller's callHierarchy probe (`prepareCallHierarchy` must point at the identifier, not at
+  // column 0 of the declaration line which is usually indentation) — it is NOT persisted on the node.
+  readonly nameLine?: number
+  readonly nameChar?: number
 }
 
 // One call edge: the calling symbol (in the host file) → the called symbol (possibly in another file).
@@ -287,6 +292,42 @@ const findSymbolNode = (store: DurableKnowledgeStore, key: string): Doc | null =
     return doc
   }
   return null
+}
+
+// The leaf segment of a dotted symbol path ("Foo.bar" → "bar", "bar" → "bar").
+const leafOf = (symbolPath: string): string => {
+  const dot = symbolPath.lastIndexOf(".")
+  return dot >= 0 ? symbolPath.slice(dot + 1) : symbolPath
+}
+
+/**
+ * Resolve a call TARGET symbol node. LSP callHierarchy reports a target by its LEAF name (e.g. "bar"),
+ * but symbol nodes are keyed by the DOTTED path ("<file>#Foo.bar"). So:
+ *   1. exact match on "<toPath>#<toSymbolPath>" (works when the extractor already had the dotted path);
+ *   2. FALLBACK — among the symbol nodes hosted by `toPath`, the UNIQUE one whose dotted symbol_path has
+ *      a leaf equal to `toSymbolPath` (resolves a leaf-only target like "bar" → node "…#Foo.bar").
+ * The fallback is deliberately conservative: if it is AMBIGUOUS (two hosted symbols share the leaf,
+ * e.g. `Foo.bar` and `Baz.bar`), it returns null and the caller skips the edge — guessing would be
+ * non-deterministic and could draw a wrong call edge. `toSymbolPath` given as a dotted path still hits
+ * case 1 first, so the fallback only ever fires for leaf-only targets.
+ */
+const resolveCallTarget = (store: DurableKnowledgeStore, toPath: string, toSymbolPath: string): Doc | null => {
+  const exact = findSymbolNode(store, symbolNodeKey(toPath, toSymbolPath))
+  if (exact) return exact
+  // Leaf-name fallback, scoped to the target file's symbol nodes.
+  const ds = store.documentStore
+  const leaf = leafOf(toSymbolPath)
+  let match: Doc | null = null
+  for (const ref of ds.list({ type: CODE_SYMBOL })) {
+    const doc = ds.get(ref.id)
+    if (!doc || doc.status === "rejected") continue
+    if (doc.extensions?.host_path !== toPath) continue // only symbol children of the target file
+    const sp = doc.extensions?.symbol_path
+    if (typeof sp !== "string" || leafOf(sp) !== leaf) continue
+    if (match) return null // ambiguous leaf → skip rather than guess (determinism)
+    match = doc
+  }
+  return match
 }
 
 const symbolBodyFor = (path: string, sym: ExtractedSymbol): string => {
@@ -419,11 +460,13 @@ export const indexSymbols = (
     importsEdges += ensureEdge(store, fileNode.id, "imports", target.id)
   }
 
-  // 3. symbol→symbol calls edges — only when BOTH endpoints resolve to existing symbol nodes.
+  // 3. symbol→symbol calls edges — only when BOTH endpoints resolve to existing symbol nodes. The
+  // caller side is exact (we own the dotted path); the target side uses the leaf-name fallback because
+  // callHierarchy reports a target by its leaf name.
   if (buildCallEdges) {
     for (const call of extraction.calls ?? []) {
       const fromNode = findSymbolNode(store, symbolNodeKey(extraction.path, call.fromSymbolPath))
-      const toNode = findSymbolNode(store, symbolNodeKey(call.toPath, call.toSymbolPath))
+      const toNode = resolveCallTarget(store, call.toPath, call.toSymbolPath)
       if (!fromNode || !toNode) {
         callsSkipped++
         continue
@@ -464,7 +507,7 @@ export const linkCallEdges = (
   let callsSkipped = 0
   for (const call of calls) {
     const fromNode = findSymbolNode(store, symbolNodeKey(fromPath, call.fromSymbolPath))
-    const toNode = findSymbolNode(store, symbolNodeKey(call.toPath, call.toSymbolPath))
+    const toNode = resolveCallTarget(store, call.toPath, call.toSymbolPath)
     if (!fromNode || !toNode) {
       callsSkipped++
       continue

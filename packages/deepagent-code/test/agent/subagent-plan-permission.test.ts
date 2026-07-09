@@ -31,20 +31,22 @@ function workerAgent(capabilities: string[] | undefined): Agent.Info {
 }
 
 describe("V3.9 §E — subagent plan-write capability", () => {
-  // §E.3 (1): a subagent WITH capability plan_write:own_goal gets plan-write.
-  test("capability present → plan:allow granted, no todowrite deny", () => {
+  // §E.3 (1): a subagent WITH capability plan_write:own_goal, at the FLAG-GATED opt-in call site, gets
+  // plan-write. (allowPlanWriteCapability:true mirrors the goal-loop wiring, the only opt-in caller.)
+  test("capability present + opt-in → plan:allow granted, scoped to plan only", () => {
     const subagent = workerAgent([PLAN_WRITE_OWN_GOAL])
     const ruleset = deriveSubagentSessionPermission({
       parentSessionPermission: [],
       parentAgent: undefined,
       subagent,
+      allowPlanWriteCapability: true,
     })
 
     // The real gate for the plan tool is the "plan" permission (tool id/permission "plan").
     expect(hasRule(ruleset, "plan", "allow")).toBe(true)
-    // Forward-compat: todowrite is allowed, and the default todowrite deny is skipped.
-    expect(hasRule(ruleset, "todowrite", "allow")).toBe(true)
-    expect(hasRule(ruleset, "todowrite", "deny")).toBe(false)
+    // §E F6: the grant is scoped to `plan` ONLY — todowrite is NOT widened (it stays denied by default).
+    expect(hasRule(ruleset, "todowrite", "allow")).toBe(false)
+    expect(hasRule(ruleset, "todowrite", "deny")).toBe(true)
 
     // Merged effective evaluation: session plan:allow overrides the worker's own `*: deny`.
     const effective = Permission.merge(subagent.permission, ruleset)
@@ -54,13 +56,31 @@ describe("V3.9 §E — subagent plan-write capability", () => {
     expect(Permission.evaluate("plan_exit", "*", effective).action).toBe("deny")
   })
 
-  // §E.3 (2): a subagent WITHOUT the capability keeps todowrite:deny, no plan grant.
-  test("capability absent → todowrite deny present, no plan:allow", () => {
+  // §E / §F.3: the capability is IGNORED unless the call site opts in. This is the structural flag
+  // gate — the generic `task` tool does NOT opt in, so even a capability-bearing worker spawned there
+  // (or ANY caller with experimentalGoalLoop off) gets NO plan grant. All-flags-off === V3.8.
+  test("capability present but NO opt-in → capability ignored, no plan grant", () => {
+    const subagent = workerAgent([PLAN_WRITE_OWN_GOAL])
+    const ruleset = deriveSubagentSessionPermission({
+      parentSessionPermission: [],
+      parentAgent: undefined,
+      subagent,
+      // allowPlanWriteCapability omitted → defaults to false (the task-tool / flag-off path).
+    })
+    expect(hasRule(ruleset, "plan", "allow")).toBe(false)
+    expect(hasRule(ruleset, "todowrite", "deny")).toBe(true)
+    const effective = Permission.merge(subagent.permission, ruleset)
+    expect(Permission.evaluate("plan", "*", effective).action).toBe("deny")
+  })
+
+  // §E.3 (2): a subagent WITHOUT the capability keeps todowrite:deny, no plan grant — even WITH opt-in.
+  test("capability absent → todowrite deny present, no plan:allow (even with opt-in)", () => {
     const subagent = workerAgent(undefined)
     const ruleset = deriveSubagentSessionPermission({
       parentSessionPermission: [],
       parentAgent: undefined,
       subagent,
+      allowPlanWriteCapability: true,
     })
 
     expect(hasRule(ruleset, "todowrite", "deny")).toBe(true)
@@ -78,6 +98,7 @@ describe("V3.9 §E — subagent plan-write capability", () => {
       parentSessionPermission: [],
       parentAgent: undefined,
       subagent,
+      allowPlanWriteCapability: true,
     })
     expect(hasRule(ruleset, "todowrite", "deny")).toBe(true)
     expect(hasRule(ruleset, "plan", "allow")).toBe(false)
@@ -114,10 +135,12 @@ describe("V3.9 §E — subagent plan-write capability", () => {
       expect(worker!.native).toBe(true)
       expect(worker!.capabilities?.includes(PLAN_WRITE_OWN_GOAL) ?? false).toBe(true)
 
+      // At the flag-gated opt-in call site the registered worker derives a session-level plan:allow…
       const ruleset = deriveSubagentSessionPermission({
         parentSessionPermission: [],
         parentAgent: undefined,
         subagent: worker!,
+        allowPlanWriteCapability: true,
       })
       expect(hasRule(ruleset, "plan", "allow")).toBe(true)
       // Merged effective evaluation: the worker can write its own goal's plan.
@@ -126,6 +149,16 @@ describe("V3.9 §E — subagent plan-write capability", () => {
       // But the grant is scoped — it does not widen plan_enter/plan_exit (denied by defaults).
       expect(Permission.evaluate("plan_enter", "*", effective).action).toBe("deny")
       expect(Permission.evaluate("plan_exit", "*", effective).action).toBe("deny")
+
+      // …and WITHOUT the opt-in (e.g. spawned via the generic task tool, or flag off) it does NOT.
+      const noOptIn = deriveSubagentSessionPermission({
+        parentSessionPermission: [],
+        parentAgent: undefined,
+        subagent: worker!,
+      })
+      expect(hasRule(noOptIn, "plan", "allow")).toBe(false)
+      // §E F4: the worker is HIDDEN so the task tool won't surface it as a spawnable subagent_type.
+      expect(worker!.hidden).toBe(true)
     }),
   )
 })

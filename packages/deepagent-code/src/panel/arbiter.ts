@@ -18,18 +18,21 @@ import {
  * order (the fixed `PANEL_LENSES` order, then arrival order within a lens). Same opinions + same
  * policy → byte-identical verdict, every time.
  *
- * The §C.6 rule table, implemented in this exact precedence:
+ * The §C.6 rule table, implemented in this exact precedence (the ORDER below matches the code):
  *   1. fail-closed / 阻断优先 : any `block` with confidence ≥ policy.blockThreshold ⇒ final `block`.
  *   2. quorum floor           : surviving opinions < policy.minQuorum ⇒ `needs_human`.
- *   3. critical dissent       : any overruled opinion carrying a `critical` finding ⇒ `needs_human`.
- *   4. weighted majority      : tally weight = confidence × lens-relevance, block/revise votes with
- *                               no reproducible evidence are down-weighted (证据要求).
- *   5. tie (revise vs approve): resolve to the more conservative side (`revise`) + `needs_human`.
+ *   3. weighted majority      : tally weight = confidence × lens-relevance, block/revise votes with
+ *                               no reproducible evidence are down-weighted (证据要求); an all-zero
+ *                               tally escalates rather than manufacturing a conservative block.
+ *   4. tie (revise vs approve): resolve to the more conservative side (`revise`) + `needs_human`.
+ *   5. critical dissent       : any OVERRULED opinion carrying a `critical` finding ⇒ `needs_human`.
  *
- * Note: rules 2 and 3 are evaluated AFTER the fail-closed check because a high-confidence block is an
- * unambiguous, decidable outcome that never needs a human — but they are evaluated BEFORE the
- * majority tally because a sub-quorum panel or an unresolved critical concern must escalate rather
- * than let a thin majority decide.
+ * Note on ordering: the fail-closed check and quorum floor run FIRST — a high-confidence block is an
+ * unambiguous, decidable outcome that never needs a human, and a sub-quorum panel must escalate rather
+ * than let a thin majority decide. Critical-dissent is evaluated LAST (after the tally + tie), not
+ * before: "dissent" is only defined once a winning decision exists, so it can only escalate an
+ * already-computed decision. Because escalation is a monotonic OR onto `needs_human`, evaluating it
+ * last is both the only implementable order and outcome-equivalent to any earlier placement.
  */
 
 /** Clamp a possibly-malformed confidence into [0,1] so one bad opinion cannot distort the tally. */
@@ -181,6 +184,21 @@ export const arbitrate = (
   const approve = tally.approve
   const revise = tally.revise
   const block = tally.block
+
+  // Degenerate all-zero tally (every surviving opinion has effective weight 0 — e.g. all confidence 0,
+  // or all lens weights 0). There is NO real signal to decide on, so escalate rather than let the
+  // conservative tie-break manufacture a `block` from a set that contains no meaningful block vote.
+  // (Without this, three zero-confidence `approve`s could resolve to `block` under a custom policy with
+  // tieToConservativeNeedsHuman:false — a unanimous, if weak, approval becoming a hard block.)
+  if (approve <= 0 && revise <= 0 && block <= 0) {
+    return {
+      decision: "needs_human",
+      dissent: ordered,
+      evidence: collectEvidence(ordered),
+      confidence: aggregateConfidence(ordered),
+      rounds,
+    }
+  }
 
   // Determine the winner among the three real verdicts. Ties are handled explicitly below;
   // conservative ordering (block > revise > approve) is the deterministic tie-break WITHIN the

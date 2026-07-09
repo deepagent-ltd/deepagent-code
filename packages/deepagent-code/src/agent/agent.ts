@@ -327,6 +327,12 @@ export const layer = Layer.effect(
             options: {},
             mode: "subagent",
             native: true,
+            // §E F4: HIDDEN so the `task` tool's describeTask does NOT surface goal-worker as a directly
+            // spawnable subagent_type. It is driven ONLY by the Goal-Loop controller (makeTaskSubagentRunner,
+            // which fetches it by name). Hiding it prevents a primary agent from spawning a plan-write-capable
+            // worker outside a governed goal loop; combined with allowPlanWriteCapability gating, even if it
+            // WERE spawned via task it would get no plan grant.
+            hidden: true,
           },
           compaction: {
             name: "compaction",

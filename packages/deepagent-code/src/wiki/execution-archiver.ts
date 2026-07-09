@@ -50,13 +50,15 @@ export class ExecutionArchiver {
     return Effect.sync(() => buildExecutionArchive(this.ports.graph, sessionId))
   }
 
-  // §B.6 promoteToWiki: human pins an archive → governed knowledge page (evidence-gate + human
-  // approve). `archiveId` is the sessionId. Fails with GateRejectedError if the gate rejects or the
-  // session has no trajectory to promote.
+  // §B.6 promoteToWiki: human pins an archive → STAGES it as a knowledge CANDIDATE (evidence-gate
+  // applied here). Per DAP-8 this does NOT flip it active — a candidate sits in the review queue and a
+  // SEPARATE human step (`approvePromotion`) flips it active. `archiveId` is the sessionId. Fails with
+  // GateRejectedError if the gate rejects or the session has no trajectory to promote. Returns the
+  // staged candidate id (NOT a rendered page — it is not active/projectable yet).
   promoteToWiki(input: {
     archiveId: string
     editor: HumanRef
-  }): Effect.Effect<WikiPage, GateRejectedError | WikiNotFoundError> {
+  }): Effect.Effect<{ readonly candidateId: string }, GateRejectedError> {
     return Effect.suspend(() => {
       const archive = buildExecutionArchive(this.ports.graph, input.archiveId)
       if (archive.entries.length === 0)
@@ -70,8 +72,8 @@ export class ExecutionArchiver {
       const gate = this.ports.gate
       if (gate) {
         // No prior doc exists yet (this is a fresh promotion), so gate against a synthetic current
-        // whose body is empty — the default gate only rejects a blanked-out body, which a non-empty
-        // archive never is; a stricter injected gate can inspect archive content.
+        // whose body is empty — the default gate rejects a blanked-out body / missing editor, which a
+        // non-empty archive with a real editor never is; a stricter injected gate can inspect content.
         const verdict = gate({
           current: {
             id: input.archiveId,
@@ -97,8 +99,9 @@ export class ExecutionArchiver {
       }
       return Effect.try({
         try: () => {
-          // Stage as a knowledge candidate (DAP-8: never written directly active), then the human
-          // editor's pin approves it → active. This IS the evidence-gate governance path.
+          // Stage as a knowledge candidate ONLY (DAP-8: never written directly active). The candidate
+          // sits pending until a human explicitly approves it via `approvePromotion` — a separate,
+          // auditable governance step, not folded into staging.
           const staged = this.ports.promotionStore.stageCandidate({
             type: "knowledge",
             description: archive.title,
@@ -115,25 +118,43 @@ export class ExecutionArchiver {
             },
             idSlug: `execution-archive-${input.archiveId}`,
           })
-          this.ports.promotionStore.approve(staged.id)
-          return staged.id
+          return { candidateId: staged.id }
         },
         catch: (error) =>
           new GateRejectedError({
             docId: input.archiveId,
             reason: `promotion failed: ${error instanceof Error ? error.message : String(error)}`,
           }),
-      }).pipe(
-        Effect.flatMap((docId) =>
-          this.ports.wiki
-            .renderPage({ docId, scope: "durable" })
-            .pipe(
-              Effect.catchTag("WikiNotFoundError", (e) =>
-                Effect.fail(new GateRejectedError({ docId, reason: e.message })),
-              ),
-            ),
-        ),
-      )
+      })
     })
+  }
+
+  // §B.6 approvePromotion: the SEPARATE human approval step (DAP-8). Flips a staged execution-archive
+  // candidate active → it becomes a governed, projectable knowledge page. Kept distinct from
+  // promoteToWiki so staging and approval are two auditable actions, not one auto-approve.
+  approvePromotion(input: {
+    candidateId: string
+  }): Effect.Effect<WikiPage, GateRejectedError | WikiNotFoundError> {
+    return Effect.try({
+      try: () => {
+        this.ports.promotionStore.approve(input.candidateId)
+        return input.candidateId
+      },
+      catch: (error) =>
+        new GateRejectedError({
+          docId: input.candidateId,
+          reason: `approval failed: ${error instanceof Error ? error.message : String(error)}`,
+        }),
+    }).pipe(
+      Effect.flatMap((docId) =>
+        this.ports.wiki
+          .renderPage({ docId, scope: "durable" })
+          .pipe(
+            Effect.catchTag("WikiNotFoundError", (e) =>
+              Effect.fail(new GateRejectedError({ docId, reason: e.message })),
+            ),
+          ),
+      ),
+    )
   }
 }

@@ -64,6 +64,26 @@ describe("ExecutionArchiver — §B.6 archiveSession", () => {
     expect(archive.entries.some((e) => e.type === "knowledge")).toBe(false)
   })
 
+  test("collects run-graph docs scoped run:<runId> (≠ sessionId), not just run:<sessionId> (adversarial 2026-07-09)", () => {
+    // The prod scope model: the goal loop writes under run:<sessionId>, but the per-run graph
+    // materializer writes under run:<runId> (a distinct UUID). The old exact run:<sessionId> filter
+    // dropped the run-graph trajectory. byScopePrefix("run:") now collects BOTH (the store union is
+    // already scoped to one session upstream).
+    const { store, root } = freshStore()
+    roots.push(root)
+    const runProv = { source: "runner" as const, run_ref: "run:run-uuid-xyz" }
+    // A worklog + diagnosis under a run:<runId> scope that is NOT the sessionId.
+    store.create({ type: "worklog", scope: "run:run-uuid-xyz", body: "run-graph worklog", description: "wl", provenance: runProv })
+    store.create({ type: "diagnosis", scope: "run:run-uuid-xyz", body: "run-graph diag", description: "dg", provenance: runProv })
+    // And a plan under run:<sessionId>.
+    store.create({ type: "plan", scope: "run:sess-1", body: "the plan", description: "plan", provenance: { source: "runner", run_ref: "run:sess-1" } })
+    const arch = archiver(store, freshDurable())
+    const archive = run(arch.archiveSession("sess-1"))
+    const types = archive.entries.map((e) => e.type).sort()
+    expect(types).toEqual(["diagnosis", "plan", "worklog"]) // run:<runId> docs now included
+    expect(archive.markdown).toContain("run-graph diag")
+  })
+
   test("empty session → archive with no entries", () => {
     const { store, root } = freshStore()
     roots.push(root)
@@ -75,18 +95,25 @@ describe("ExecutionArchiver — §B.6 archiveSession", () => {
 })
 
 describe("ExecutionArchiver — §B.6 promoteToWiki (evidence-gate governance)", () => {
-  test("promotes an archive into a governed active knowledge page", () => {
+  test("DAP-8 stage→approve: promoteToWiki only STAGES a candidate (not active); approvePromotion flips it", () => {
     const { store, sessionId } = seedSession()
     const promotionStore = freshDurable()
     const arch = archiver(store, promotionStore)
-    const page = run(arch.promoteToWiki({ archiveId: sessionId, editor: { id: "bob", name: "Bob" } }))
+
+    // Step 1 — promoteToWiki stages a CANDIDATE only; it must NOT be active/projectable yet.
+    const { candidateId } = run(arch.promoteToWiki({ archiveId: sessionId, editor: { id: "bob", name: "Bob" } }))
+    const staged = promotionStore.documentStore.get(candidateId)!
+    expect(staged.status).toBe("candidate") // NOT active — auto-approve is gone
+    expect(promotionStore.listByStatus("active").length).toBe(0)
+    expect(staged.provenance.source).toBe("human")
+    expect(staged.tags).toContain("execution-archive")
+
+    // Step 2 — a SEPARATE human approval flips it active → a governed, projectable knowledge page.
+    const page = run(arch.approvePromotion({ candidateId }))
     expect(page.type).toBe("knowledge")
     expect(page.editable).toBe(true)
-    // landed active in the durable store via stage→approve (DAP-8 governance path)
     const doc = promotionStore.documentStore.get(page.docId)!
     expect(doc.status).toBe("active")
-    expect(doc.provenance.source).toBe("human")
-    expect(doc.tags).toContain("execution-archive")
   })
 
   test("empty session → GateRejectedError (nothing to promote)", () => {

@@ -125,6 +125,15 @@ export type GraderPortsDeps = {
   readonly panelQuestion: () => PanelQuestionInput
   /** Parent session id for the panel's concurrency semaphore. */
   readonly parentSessionID: string
+  /**
+   * §F.3 — whether the Expert Panel (§C) is enabled (`flags.experimentalExpertPanel`). The Goal Loop
+   * MAY convene a panel at a decision point, but the panel is an INDEPENDENTLY-gated capability: when
+   * it is off, a `panel_approves` criterion must NOT silently run the panel under the goal-loop flag —
+   * it fail-closes to `needs_human` (never a silent approve). This is what makes the two flags
+   * independently rollback-safe: goal_loop can run with panel_approves criteria while the panel is off,
+   * and it degrades to human escalation rather than coupling the two flags.
+   */
+  readonly expertPanelEnabled: boolean
 }
 
 /** A minimal panel question the goal loop convenes at a decision point (§D.7 ×C). */
@@ -190,7 +199,12 @@ export const buildGraderPorts = (deps: GraderPortsDeps): GraderPorts => ({
       { pass: false },
     ),
   panelApproves: () =>
-    safe(
+    // §F.3: the panel is independently gated. When experimentalExpertPanel is OFF, do NOT convene a
+    // panel (that would couple the flags) — fail-closed to needs_human so the goal loop escalates to a
+    // human instead of silently approving or silently running a disabled capability.
+    !deps.expertPanelEnabled
+      ? Effect.succeed({ decision: "needs_human" })
+      : safe(
       buildPanelistRunner(deps.runTurn).pipe(
         Effect.flatMap((runPanelist) => {
           const q = deps.panelQuestion()
@@ -324,6 +338,11 @@ export const makeTaskSubagentRunner = (deps: TaskSubagentRunnerDeps): SubagentTu
           parentSessionPermission: parent.permission ?? [],
           parentAgent,
           subagent: next,
+          // §E/§F.3: this is the flag-gated opt-in call site (makeTaskSubagentRunner is only reached
+          // through makeGoalLoopWiring, which returns null unless experimentalGoalLoop is on). Honoring
+          // the PLAN_WRITE_OWN_GOAL capability HERE — and nowhere else — makes the flag the structural
+          // gate for the §E relaxation.
+          allowPlanWriteCapability: true,
         }),
       })
 
@@ -408,6 +427,9 @@ export const makeGoalLoopWiring = (
       runTurn: input.runTurn,
       panelQuestion: input.panelQuestion,
       parentSessionID: input.parentSessionID,
+      // §F.3: the panel is independently gated — pass its own flag through so panel_approves fail-closes
+      // to needs_human when the Expert Panel is disabled, instead of coupling to experimentalGoalLoop.
+      expertPanelEnabled: flags.experimentalExpertPanel,
     })
 
     return {

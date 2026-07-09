@@ -200,25 +200,104 @@ const evaluateOne = (
     }
   })
 
+// §D.7 关键决策点召集 panel，非每轮: the two gates that SPAWN subagents (a reviewer turn, a whole panel
+// fan-out) are expensive; the rest are cheap local checks. Ordering criteria cheap-first and skipping
+// the expensive ones once a cheaper gate has already failed means the panel/reviewer run ONLY at the
+// key decision point — when everything cheap already passes — instead of on every tick. Lower rank =
+// evaluated earlier.
+const CRITERION_COST_RANK: Record<CompletionCriterion["kind"], number> = {
+  plan_complete: 0,
+  no_diagnostics: 1,
+  tests_pass: 2,
+  reviewer_clean: 3, // spawns a reviewer subagent turn
+  panel_approves: 4, // spawns a full Expert Panel fan-out
+}
+const isExpensiveCriterion = (kind: CompletionCriterion["kind"]): boolean =>
+  kind === "reviewer_clean" || kind === "panel_approves"
+
 /**
  * §D.3 Grader.evaluate — ALL criteria must be met (AND). `gaps` lists every unmet criterion. Pure with
  * respect to its ports: same ports + same plan → same result.
+ *
+ * With `{ deferExpensive: true }` (the Controller default) the criteria are evaluated cheap-first and
+ * the SUBAGENT-SPAWNING gates (reviewer_clean, panel_approves) are SKIPPED once any cheaper criterion is
+ * already unmet — the goal cannot be `met` this tick regardless, so spending a panel/reviewer turn to
+ * enumerate a gap we will not act on is pure waste (§D.7 非每轮). This never changes the met/unmet
+ * verdict (a cheap gap already forces met=false); it only avoids convening the panel except at the key
+ * decision point when everything cheaper passes. Direct callers (tests) default to the full evaluation.
  */
 export const evaluateCriteria = (
   criteria: readonly CompletionCriterion[],
   ports: GraderPorts,
   plan: PlanDoc | null,
+  options: { readonly deferExpensive?: boolean } = {},
 ): Effect.Effect<GraderResult> =>
   Effect.gen(function* () {
+    const deferExpensive = options.deferExpensive ?? false
+    const ordered = deferExpensive
+      ? [...criteria].sort((a, b) => CRITERION_COST_RANK[a.kind] - CRITERION_COST_RANK[b.kind])
+      : criteria
     const gaps: string[] = []
-    for (const c of criteria) {
+    for (const c of ordered) {
+      // Defer the expensive, subagent-spawning gates until every cheaper criterion has passed.
+      if (deferExpensive && gaps.length > 0 && isExpensiveCriterion(c.kind)) {
+        gaps.push(`${c.kind}: deferred — a cheaper criterion is unmet (panel/reviewer not convened this tick)`)
+        continue
+      }
       const gap = yield* evaluateOne(c, ports, plan)
       if (gap != null) gaps.push(gap)
     }
     return { met: gaps.length === 0, gaps }
   })
 
-export const Grader = { evaluate: evaluateCriteria }
+// The Controller's view of grading: the spec GraderResult PLUS whether a gate ACTIVELY rejected (as
+// opposed to merely being unmet). A panel `block` / `needs_human` verdict is an active rejection — the
+// panel is telling us to stop and get a human, not "try again" — so the loop escalates on the FIRST
+// such verdict rather than re-convening the panel every tick until the stall threshold. `revise` stays
+// a soft gap (keep iterating). This extended shape is internal to the loop; the persisted/spec
+// GraderResult remains exactly { met, gaps }.
+export type GraderDecision = {
+  readonly result: GraderResult
+  readonly escalate: boolean
+  readonly escalateReason: string | null
+}
+
+// Evaluate for the Controller: same AND-gate + cheap-first deferral as evaluateCriteria, but also flags
+// an active panel rejection for immediate escalation. Only `panel_approves` can escalate (the panel is
+// the human-in-the-loop decision point, §D.7); a `revise` verdict is a soft gap.
+export const evaluateForController = (
+  criteria: readonly CompletionCriterion[],
+  ports: GraderPorts,
+  plan: PlanDoc | null,
+): Effect.Effect<GraderDecision> =>
+  Effect.gen(function* () {
+    const ordered = [...criteria].sort((a, b) => CRITERION_COST_RANK[a.kind] - CRITERION_COST_RANK[b.kind])
+    const gaps: string[] = []
+    let escalate = false
+    let escalateReason: string | null = null
+    for (const c of ordered) {
+      if (gaps.length > 0 && isExpensiveCriterion(c.kind)) {
+        gaps.push(`${c.kind}: deferred — a cheaper criterion is unmet (panel/reviewer not convened this tick)`)
+        continue
+      }
+      if (c.kind === "panel_approves") {
+        const { decision } = yield* ports.panelApproves()
+        if (decision === "approve") continue
+        gaps.push(`panel_approves: panel decision was ${decision}, not approve`)
+        // block / needs_human = active rejection → escalate; revise = soft (keep iterating).
+        if (decision === "block" || decision === "needs_human") {
+          escalate = true
+          escalateReason = `panel returned ${decision}`
+        }
+        continue
+      }
+      const gap = yield* evaluateOne(c, ports, plan)
+      if (gap != null) gaps.push(gap)
+    }
+    return { result: { met: gaps.length === 0, gaps }, escalate, escalateReason }
+  })
+
+export const Grader = { evaluate: evaluateCriteria, evaluateForController }
 
 // ---------------------------------------------------------------------------------------------------
 // Controller — the tick state machine. State lives entirely in a run_context doc so a restart recovers.
@@ -274,6 +353,7 @@ type GoalRuntimeState = {
   readonly ledger: BudgetLedger
   readonly stallCount: number
   readonly lastFingerprint: string | null
+  readonly lastDoneCount: number
   readonly lastMetCount: number
   readonly lastProcessedVersion: number | null
   readonly lastOutcome: TickOutcome | null
@@ -298,6 +378,13 @@ const readPlan = (store: DocumentStore, planDocId: string): { plan: PlanDoc | nu
 // for idempotency dedup). A plan whose step statuses are unchanged AND no new criterion met = stall.
 const planFingerprint = (plan: PlanDoc | null): string =>
   plan == null ? "∅" : plan.steps.map((s) => `${s.step_id}:${s.status}`).join("|")
+
+// The count of steps that have reached a resolved (done) state. Forward progress is measured as this
+// count INCREASING — a status regression (done→active) or a flap (active↔pending) is NOT progress, so
+// a thrashing worker cannot evade the stall guard by merely churning statuses (which would bump the raw
+// fingerprint). Combined with the fingerprint, "progress" = fingerprint changed in the FORWARD direction.
+const doneStepCount = (plan: PlanDoc | null): number =>
+  plan == null ? 0 : plan.steps.filter((s) => s.status === "done").length
 
 const persistState = (deps: ControllerDeps, state: GoalRuntimeState): void => {
   deps.store.upsert({
@@ -369,11 +456,56 @@ const writeDiagnosis = (deps: ControllerDeps, state: GoalRuntimeState, detail: s
   })
 }
 
+// Post-execution breach: did THIS tick's own spend push the ledger PAST a cap? Uses strict `>` because
+// the ledger here already includes the just-finished tick — a run configured for maxTicks=N is allowed
+// to COMPLETE its Nth tick (ticks==N is fine), and only tick N+1 would be over. The pre-execution gate
+// (atOrOverLimit) prevents that N+1 tick from ever executing.
+// §D.3 可观测: on a `done` outcome write a completion_report doc summarizing the finished goal (reusing
+// U9's buildCompletionReport for the plan-side summary). Idempotent via idSlug; best-effort.
+const writeCompletionReport = (deps: ControllerDeps, state: GoalRuntimeState, plan: PlanDoc | null): void => {
+  const report = plan ? buildCompletionReport(plan) : null
+  // Reuses the existing `decision` DocType (a terminal, non-knowledge audit record — no confidence
+  // required) rather than expanding the core DocType union; the `report_kind: "completion"` extension
+  // marks it as the goal completion report so a projector can surface it distinctly.
+  deps.store.upsert({
+    type: "decision",
+    scope: planScope(state.sessionId),
+    description: `goal ${state.goalId} completion report`,
+    idSlug: `goal-completion-${state.goalId}`,
+    body: JSON.stringify(
+      {
+        goalId: state.goalId,
+        planDocId: state.planDocId,
+        ticks: state.ledger.ticks,
+        ledger: state.ledger,
+        criteriaMet: true,
+        plan: report,
+      },
+      null,
+      2,
+    ),
+    provenance: { source: "runner", run_ref: planScope(state.sessionId) },
+    extensions: { goal_id: state.goalId, tick: state.ledger.ticks, outcome: "done", report_kind: "completion" },
+  })
+}
+
 const overLimit = (ledger: BudgetLedger, limits: GoalLimits): string | null => {
   if (ledger.ticks > limits.maxTicks) return `maxTicks (${limits.maxTicks}) exceeded`
   if (ledger.tokens > limits.maxTokens) return `maxTokens (${limits.maxTokens}) exceeded`
   if (ledger.wallclockMs > limits.maxWallclockMs) return `maxWallclockMs (${limits.maxWallclockMs}) exceeded`
   if (limits.maxCost != null && ledger.cost > limits.maxCost) return `maxCost (${limits.maxCost}) exceeded`
+  return null
+}
+
+// Pre-execution ceiling: has the ledger ALREADY reached a cap, such that running one more step turn
+// would exceed it? Uses `>=` on ticks (already ran maxTicks turns → do not run another) and on the
+// resource caps (already at/over budget → do not spend more). This is the guard that makes the limit a
+// TRUE ceiling: it runs BEFORE the executor, so no unbounded turn is spent past the declared maximum.
+const atOrOverLimit = (ledger: BudgetLedger, limits: GoalLimits): string | null => {
+  if (ledger.ticks >= limits.maxTicks) return `maxTicks (${limits.maxTicks}) reached`
+  if (ledger.tokens >= limits.maxTokens) return `maxTokens (${limits.maxTokens}) reached`
+  if (ledger.wallclockMs >= limits.maxWallclockMs) return `maxWallclockMs (${limits.maxWallclockMs}) reached`
+  if (limits.maxCost != null && ledger.cost >= limits.maxCost) return `maxCost (${limits.maxCost}) reached`
   return null
 }
 
@@ -418,6 +550,12 @@ export interface GoalLoop {
 // any missing/non-positive limit → not bounded; non-positive stallThreshold → no stall guard.
 const validateSpec = (spec: GoalSpec): string | null => {
   if (spec.criteria.length === 0) return "goal has no completion criteria — not objectively decidable"
+  // A tests_pass criterion with no commands is not objectively decidable (nothing to run) — reject it
+  // at start rather than let it pass/fail vacuously at grade time.
+  for (const c of spec.criteria) {
+    if (c.kind === "tests_pass" && c.commands.length === 0)
+      return "tests_pass criterion must list at least one command — an empty command set is not decidable"
+  }
   const { maxTicks, maxTokens, maxWallclockMs } = spec.limits
   if (!Number.isFinite(maxTicks) || maxTicks <= 0) return "limits.maxTicks must be a positive integer"
   if (!Number.isFinite(maxTokens) || maxTokens <= 0) return "limits.maxTokens must be a positive integer"
@@ -452,6 +590,7 @@ export const makeGoalLoop = (deps: ControllerDeps): GoalLoop => {
         ledger: { ticks: 0, tokens: 0, cost: 0, wallclockMs: 0, startedAtMs: deps.now() },
         stallCount: 0,
         lastFingerprint: planFingerprint(initial.plan),
+        lastDoneCount: doneStepCount(initial.plan),
         lastMetCount: 0,
         lastProcessedVersion: null,
         lastOutcome: null,
@@ -471,50 +610,88 @@ export const makeGoalLoop = (deps: ControllerDeps): GoalLoop => {
       // 可接管: once terminal, replay the recorded terminal outcome. Never re-executes.
       if (isTerminalPhase(state.phase)) return (state.lastOutcome ?? "needs_human") as TickOutcome
 
+      // 有界性 (pre-execution ceiling): if a HARD limit is ALREADY reached, STOP before running the
+      // executor — never spend one more (unbounded) step turn past the cap. This makes the limit a true
+      // ceiling at tick granularity: a single tick maps to at most one agent turn, and no turn runs once
+      // the budget is exhausted. (The post-execution check below still catches a limit crossed BY this
+      // tick's own spend.) Persist the terminal state so a re-tick replays rather than re-checks.
+      const preBreach = atOrOverLimit(state.ledger, state.spec.limits)
+      if (preBreach != null) {
+        state = { ...state, phase: "needs_human", lastOutcome: "needs_human", gaps: [preBreach, ...state.gaps] }
+        persistState(deps, state)
+        return "needs_human"
+      }
+
       const { plan, version } = readPlan(deps.store, state.planDocId)
 
       // 幂等: dedup on the ENTRY plan version. A repeated tick that finds the plan STILL at the version
       // we last processed replays the last outcome with NO side effects (no double execute / double
-      // budget). A real loop advances the plan during the tick (the executor bumps the version), so the
-      // next tick enters at a NEW version and proceeds — only a true no-progress replay is deduped.
+      // budget). This makes a NO-PROGRESS replay idempotent. IMPORTANT (honesty about the guarantee): a
+      // tick that DID advance the plan (bumped the version) and then crashes BEFORE persistState is NOT
+      // covered — the re-tick sees the new version and executes again. Full crash-mid-tick idempotency
+      // requires an idempotencyKey checkpoint, reserved for the V4.0 `goal.tick` event; within V3.9 the
+      // dedup guarantees "a repeated no-progress tick has no side effects", not "every tick is exactly-
+      // once under a mid-tick crash". The driver must therefore treat tick as at-least-once.
       if (state.lastProcessedVersion === version && state.lastOutcome != null) {
         return state.lastOutcome
       }
 
       // 不越权: execute the active step via the injected executor (normal perms; Loop never elevates).
-      const execResult = yield* deps.executor({
-        goalId: state.goalId,
-        sessionId: state.sessionId,
-        planDocId: state.planDocId,
-        activeStepId: plan?.active_step_id ?? null,
-      })
+      // A DEFECT in the injected executor (it lives on `never`, but a wired port could still die) must
+      // not escape tick's never-fail contract — degrade a defect to a critical result so the loop rolls
+      // back rather than crashing the driver.
+      const execResult = yield* deps
+        .executor({
+          goalId: state.goalId,
+          sessionId: state.sessionId,
+          planDocId: state.planDocId,
+          activeStepId: plan?.active_step_id ?? null,
+        })
+        .pipe(Effect.catchCause(() => Effect.succeed({ tokensUsed: 0, critical: true } as StepExecutorResult)))
 
       // Re-read the plan AFTER execution (the executor may have advanced steps / bumped the version).
       const after = readPlan(deps.store, state.planDocId)
-      const grader = yield* evaluateCriteria(state.spec.criteria, deps.ports, after.plan)
+      // Controller grading: cheap-first + defer the subagent-spawning gates (§D.7 非每轮), and surface an
+      // active panel rejection (block/needs_human) for immediate escalation.
+      const decision = yield* evaluateForController(state.spec.criteria, deps.ports, after.plan)
+      const grader = decision.result
 
       // Budget Ledger accumulation (injected clock for wallclock → deterministic + restart-exact).
+      // Guard BOTH tokens and cost against a non-finite port result: `Math.max(0, Math.trunc(NaN))`
+      // is NaN, which would poison the ledger permanently and silently disable the token cap forever
+      // (`NaN > maxTokens` is always false). Coerce a non-finite / negative token count to 0.
+      const addTokens = Number.isFinite(execResult.tokensUsed) ? Math.max(0, Math.trunc(execResult.tokensUsed)) : 0
       const ledger: BudgetLedger = {
         ticks: state.ledger.ticks + 1,
-        tokens: state.ledger.tokens + Math.max(0, Math.trunc(execResult.tokensUsed)),
+        tokens: state.ledger.tokens + addTokens,
         cost: state.ledger.cost + (Number.isFinite(execResult.cost) ? (execResult.cost as number) : 0),
         wallclockMs: Math.max(0, deps.now() - state.ledger.startedAtMs),
         startedAtMs: state.ledger.startedAtMs,
       }
 
-      // Progress = step-status fingerprint changed OR a new criterion became met since last tick.
+      // Progress = FORWARD movement only: more steps resolved to `done`, OR a new criterion became met
+      // since last tick. A status regression / flap changes the raw fingerprint but is NOT progress, so
+      // a worker cannot evade the stall guard by churning statuses. (We keep the fingerprint in state
+      // for observability/diagnosis but no longer treat any change to it as progress.)
       const fingerprint = planFingerprint(after.plan)
+      const doneCount = doneStepCount(after.plan)
       const metCount = state.spec.criteria.length - grader.gaps.length
-      const madeProgress = fingerprint !== state.lastFingerprint || metCount > state.lastMetCount
+      const madeProgress = doneCount > state.lastDoneCount || metCount > state.lastMetCount
       const stallCount = madeProgress ? 0 : state.stallCount + 1
 
-      // §D.3 step 6 — stop decision, in safety precedence order.
+      // §D.3 step 6 — stop decision, in safety precedence order:
+      //   critical → done → panel-rejection escalation → limit → stall → continue.
+      // The panel-rejection escalation sits just below `done` (an approve can't co-occur with a block)
+      // and above limit/stall: when the panel actively says block/needs_human, get a human on the FIRST
+      // such verdict instead of re-convening the panel each tick until the stall threshold.
       let outcome: TickOutcome
       const limitBreach = overLimit(ledger, state.spec.limits)
       if (execResult.critical === true) {
         outcome = "rolled_back"
       } else if (grader.met) {
         outcome = "done"
+      } else if (decision.escalate) {
+        outcome = "needs_human"
       } else if (limitBreach != null) {
         outcome = "needs_human"
       } else if (stallCount >= state.spec.stallThreshold) {
@@ -529,6 +706,7 @@ export const makeGoalLoop = (deps: ControllerDeps): GoalLoop => {
         ledger,
         stallCount,
         lastFingerprint: fingerprint,
+        lastDoneCount: doneCount,
         lastMetCount: metCount,
         // Dedup key = the version we ENTERED this tick at. If a subsequent tick still sees this version
         // (executor made no plan change), it replays; a normal tick advanced it, so it proceeds.
@@ -542,17 +720,27 @@ export const makeGoalLoop = (deps: ControllerDeps): GoalLoop => {
       persistState(deps, state)
       writeWorklog(deps, state, grader)
 
+      // §D.3 step 6 — on `done`, emit a completion_report doc (reuse U9 buildCompletionReport) so a
+      // completed goal leaves an auditable summary in the Document Graph, not just a worklog.
+      if (outcome === "done") {
+        writeCompletionReport(deps, state, after.plan)
+      }
+
       if (outcome === "rolled_back") {
         writeDiagnosis(
           deps,
           state,
           `critical failure at tick ${ledger.ticks}; rolling back. gaps: ${grader.gaps.join("; ") || "none"}`,
         )
-        yield* deps.rollback({
-          goalId: state.goalId,
-          sessionId: state.sessionId,
-          reason: `critical failure at tick ${ledger.ticks}`,
-        })
+        // A DEFECT in the injected rollback port must not escape tick's never-fail contract — the audit
+        // trail above is already durable, so swallow a rollback defect (best-effort / never fatal).
+        yield* deps
+          .rollback({
+            goalId: state.goalId,
+            sessionId: state.sessionId,
+            reason: `critical failure at tick ${ledger.ticks}`,
+          })
+          .pipe(Effect.catchCause(() => Effect.void))
       }
 
       return outcome

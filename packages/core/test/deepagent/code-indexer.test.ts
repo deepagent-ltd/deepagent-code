@@ -227,6 +227,64 @@ describe("code-indexer §A symbol index (indexSymbols)", () => {
     expect(caller.links.some((l) => l.rel === "calls" && l.to === calleeRef.id)).toBe(true)
   })
 
+  it("resolves a call target by LEAF name when the extractor only had the leaf (adversarial 2026-07-09)", () => {
+    const proj = openProjectStore(base, WORK)
+    const a = { path: "src/a.ts", content: "export function caller() { return o.bar() }" }
+    const b = { path: "src/b.ts", content: "export class Foo { bar() { return 1 } }" }
+    indexFiles(proj, [a, b], { buildDocEdges: false })
+
+    // The callee is registered with its DOTTED path "Foo.bar" (a method of class Foo)…
+    indexSymbols(proj, {
+      path: "src/a.ts",
+      contentSha: sha256(a.content),
+      symbols: [{ symbolPath: "caller", kind: "function" }],
+    })
+    indexSymbols(proj, {
+      path: "src/b.ts",
+      contentSha: sha256(b.content),
+      symbols: [{ symbolPath: "Foo.bar", kind: "method" }],
+    })
+
+    // …but callHierarchy reports the target by its LEAF name "bar". Before the fix this exact-matched
+    // "src/b.ts#bar", missed the "src/b.ts#Foo.bar" node, and silently dropped the edge. The leaf
+    // fallback now resolves it.
+    const linked = linkCallEdges(proj, "src/a.ts", [
+      { fromSymbolPath: "caller", toPath: "src/b.ts", toSymbolPath: "bar" },
+    ])
+    expect(linked.callsEdges).toBe(1)
+    expect(linked.callsSkipped).toBe(0)
+
+    const calleeKey = symbolNodeKey("src/b.ts", "Foo.bar")
+    const calleeRef = proj.documentStore.list({ type: "code_symbol" }).find((r) => r.description === calleeKey)!
+    const callerRef = proj.documentStore
+      .list({ type: "code_symbol" })
+      .find((r) => r.description === symbolNodeKey("src/a.ts", "caller"))!
+    const caller = proj.documentStore.get(callerRef.id)!
+    expect(caller.links.some((l) => l.rel === "calls" && l.to === calleeRef.id)).toBe(true)
+  })
+
+  it("leaf-name fallback is SKIPPED (not guessed) when the leaf is ambiguous", () => {
+    const proj = openProjectStore(base, WORK)
+    const a = { path: "src/a.ts", content: "caller" }
+    const b = { path: "src/b.ts", content: "two bars" }
+    indexFiles(proj, [a, b], { buildDocEdges: false })
+    indexSymbols(proj, { path: "src/a.ts", contentSha: sha256(a.content), symbols: [{ symbolPath: "caller", kind: "function" }] })
+    // Two hosted symbols share the leaf "bar" (Foo.bar and Baz.bar) → ambiguous.
+    indexSymbols(proj, {
+      path: "src/b.ts",
+      contentSha: sha256(b.content),
+      symbols: [
+        { symbolPath: "Foo.bar", kind: "method" },
+        { symbolPath: "Baz.bar", kind: "method" },
+      ],
+    })
+    const linked = linkCallEdges(proj, "src/a.ts", [
+      { fromSymbolPath: "caller", toPath: "src/b.ts", toSymbolPath: "bar" }, // ambiguous leaf
+    ])
+    expect(linked.callsEdges).toBe(0) // NOT guessed
+    expect(linked.callsSkipped).toBe(1)
+  })
+
   it("indexSymbols on the same file also builds calls when both endpoints already exist", () => {
     const proj = openProjectStore(base, WORK)
     const a = { path: "src/a.ts", content: "function helper(){}\nfunction main(){ helper() }" }

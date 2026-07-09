@@ -136,7 +136,8 @@ const KIND_MAP: Record<number, DeepAgentCodeIndexer.CodeSymbolKind> = {
   26: "type", // TypeParameter
 }
 
-type RangeLike = { start: { line: number }; end: { line: number } }
+type Pos = { line: number; character?: number }
+type RangeLike = { start: Pos; end: Pos }
 type AnySymbol = {
   name: string
   kind: number
@@ -157,12 +158,19 @@ const flattenSymbols = (items: readonly AnySymbol[], prefix: string): DeepAgentC
     const kind = KIND_MAP[sym.kind]
     // DocumentSymbol carries `range`/`selectionRange`; flat Symbol carries `location.range`.
     const rangeSrc = sym.range ?? sym.location?.range ?? sym.selectionRange
+    // The identifier position for the callHierarchy probe: prefer `selectionRange` (points AT the name),
+    // falling back to the flat-symbol location. Column 0 of the declaration line is usually indentation,
+    // so `prepareCallHierarchy` there often resolves nothing — the name position is far more reliable.
+    const nameSrc = sym.selectionRange ?? sym.location?.range ?? sym.range
     if (kind) {
       out.push({
         symbolPath,
         kind,
         ...(rangeSrc ? { range: { start: rangeSrc.start.line, end: rangeSrc.end.line } } : {}),
         ...(sym.detail ? { signature: sym.detail } : {}),
+        ...(nameSrc
+          ? { nameLine: nameSrc.start.line, ...(typeof nameSrc.start.character === "number" ? { nameChar: nameSrc.start.character } : {}) }
+          : {}),
       })
     }
     // Recurse into children regardless of whether THIS node was a mapped kind (a namespace may hold
@@ -226,8 +234,12 @@ const extractCalls = (
       if (budget.remaining <= 0) break
       if (!sym.range) continue
       budget.remaining--
+      // Probe at the identifier position (selectionRange) when known — column 0 of the declaration line
+      // is usually indentation, where prepareCallHierarchy resolves nothing. Fall back to the range start.
+      const probeLine = sym.nameLine ?? sym.range.start
+      const probeChar = sym.nameChar ?? 0
       const outgoing = yield* lsp
-        .outgoingCalls({ file: absFile, line: sym.range.start, character: 0 })
+        .outgoingCalls({ file: absFile, line: probeLine, character: probeChar })
         .pipe(Effect.catchCause(() => Effect.succeed([] as any[])))
       for (const call of outgoing as any[]) {
         // outgoingCalls returns CallHierarchyOutgoingCall { to: CallHierarchyItem, fromRanges }.
@@ -243,6 +255,8 @@ const extractCalls = (
     }
     return calls
   }).pipe(Effect.catchCause(() => Effect.succeed([] as DeepAgentCodeIndexer.ExtractedCall[])))
+
+const uriFor = (abs: string): string => pathToFileURL(abs).href
 
 const fileUriToPath = (uri: string): string => {
   try {
@@ -287,16 +301,22 @@ const runSymbolPass = (input: {
       (file) =>
         Effect.gen(function* () {
           const abs = path.join(input.root, file.path.split("/").join(path.sep))
-          const has = yield* input.lsp.hasClients(abs).pipe(Effect.catchCause(() => Effect.succeed(false)))
-          if (!has) return undefined // no LSP for this language → file-level only (degrade)
-          const uri = pathToFileURL(abs).href
-          const raw = yield* input.lsp
-            .documentSymbol(uri)
-            .pipe(Effect.catchCause(() => Effect.succeed([] as any[])))
-          const symbols = flattenSymbols(raw as AnySymbol[], "")
-          if (symbols.length === 0) return undefined // empty documentSymbol → degrade to file-level
+          // Imports are pure regex — they need NO language server, so compute them FIRST and always.
+          // A language without an LSP client (or with an empty documentSymbol) still gets its file→file
+          // `imports` edges; only the symbol/call subtree degrades when LSP is unavailable (§A.5).
           const imports = resolveImports(file.path, file.content, input.indexedPaths)
-          const calls = yield* extractCalls(input.lsp, abs, file.path, input.root, symbols, callBudget)
+          const has = yield* input.lsp.hasClients(abs).pipe(Effect.catchCause(() => Effect.succeed(false)))
+          const raw = has
+            ? yield* input.lsp.documentSymbol(uriFor(abs)).pipe(Effect.catchCause(() => Effect.succeed([] as any[])))
+            : []
+          const symbols = flattenSymbols(raw as AnySymbol[], "")
+          // Nothing to write at all (no symbols AND no resolvable imports) → skip cleanly.
+          if (symbols.length === 0 && imports.length === 0) return undefined
+          // Calls only make sense when there are symbols to hang them off; skip the LSP call pass otherwise.
+          const calls =
+            symbols.length > 0
+              ? yield* extractCalls(input.lsp, abs, file.path, input.root, symbols, callBudget)
+              : []
           const extraction: DeepAgentCodeIndexer.SymbolExtraction = {
             path: file.path,
             contentSha: DeepAgentCodeIndexer.contentShaOf(file.content),

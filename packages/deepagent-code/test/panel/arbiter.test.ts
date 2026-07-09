@@ -147,6 +147,20 @@ describe("Panel Arbiter — 平票 → conservative + needs_human (§C.6)", () =
     const v = arbitrate(opinions, DEFAULT_QUORUM_POLICY)
     expect(v.decision).toBe("needs_human")
   })
+
+  test("all-zero-weight tally escalates, never manufactures a phantom block (adversarial 2026-07-09)", () => {
+    // Three unanimous approves, all with confidence 0 → every effective weight is 0. A custom policy
+    // with tieToConservativeNeedsHuman:false previously resolved this to `block` (approve tied with the
+    // conservative side at weight 0). The fix escalates instead — a weightless panel decides nothing.
+    const policy: QuorumPolicy = { ...DEFAULT_QUORUM_POLICY, tieToConservativeNeedsHuman: false }
+    const opinions: PanelOpinion[] = [
+      opinion({ lens: "correctness", verdict: "approve", confidence: 0 }),
+      opinion({ lens: "security", verdict: "approve", confidence: 0 }),
+      opinion({ lens: "performance", verdict: "approve", confidence: 0 }),
+    ]
+    const v = arbitrate(opinions, policy)
+    expect(v.decision).toBe("needs_human") // NOT "block"
+  })
 })
 
 describe("Panel Arbiter — critical dissent escalation (§C.6)", () => {

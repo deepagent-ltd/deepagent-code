@@ -50,6 +50,7 @@ const baseDeps = (over: Partial<Parameters<typeof buildGraderPorts>[0]> = {}) =>
   runTurn: (() => Effect.succeed(turnFrom())) as SubagentTurnRunner,
   panelQuestion,
   parentSessionID: "parent-1",
+  expertPanelEnabled: true, // default ON so the panel-path tests exercise the real runPanel
   ...over,
 })
 
@@ -146,6 +147,18 @@ describe("V3.9 §D wiring — GraderPorts.panelApproves (real runPanel + arbiter
   test("all panelists absent → needs_human (never a silent approve)", async () => {
     const ports = buildGraderPorts(baseDeps({ runTurn: () => Effect.succeed(turnFrom({ ok: false })) }))
     expect(await Effect.runPromise(ports.panelApproves())).toEqual({ decision: "needs_human" })
+  })
+  test("§F.3 panel flag OFF → needs_human WITHOUT convening the panel (flag independence)", async () => {
+    let ran = false
+    const runTurn: SubagentTurnRunner = () => {
+      ran = true
+      return Effect.succeed(turnFrom({ structured: { findings: [], verdict: "approve" } as ReviewResult }))
+    }
+    const ports = buildGraderPorts(baseDeps({ runTurn, expertPanelEnabled: false }))
+    // With the Expert Panel disabled the goal loop must NOT run the panel (would couple the two flags);
+    // it fail-closes to needs_human — never silently approving, never silently running a disabled cap.
+    expect(await Effect.runPromise(ports.panelApproves())).toEqual({ decision: "needs_human" })
+    expect(ran).toBe(false) // the panel was NOT convened
   })
 })
 

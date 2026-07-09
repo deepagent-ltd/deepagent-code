@@ -155,21 +155,28 @@ describe("WikiService — §B.5 docs↔code cross-links", () => {
     expect(ref!.symbolPath).toBe("Foo.bar")
   })
 
-  test("unresolvable code target → stale:true, NOT dropped (§B.5 link integrity)", () => {
+  test("§B.5 / INV-7: a SEALED code target is OMITTED entirely, never surfaced (not even as a stale id)", () => {
     const { store, service } = svc()
-    // A sealed code_symbol is still in the store's doc index (so link() satisfies INV-3), but the
-    // human projection never resolves it (WikiGraph.get filters sealed, INV-7). So a link pointing at
-    // it is a target that "no longer resolves" — the exact §B.5 stale case. It must be marked
-    // stale:true and NOT silently dropped.
+    // A sealed code_symbol is still in the store's index (so link() satisfies INV-3), but the human
+    // projection must NEVER surface it (INV-7). Its id is slug-derived from its description, so exposing
+    // it even as a `stale` ref would leak the sealed doc's title. The fix OMITS it entirely.
     const sealedSym = store.create(codeSymbolInput("src/gone.ts", "Gone.fn", 3, { scope: "sealed" }))
     const design = store.create(designInput())
     store.link(design.id, "references", sealedSym.id) // link created (target exists in index)
     const links = run(service.crossLinks(design.id))
-    const ref = links.toCode.find((c) => c.docId === sealedSym.id)
-    expect(ref).toBeDefined() // NOT dropped
-    expect(ref!.stale).toBe(true)
-    expect(ref!.path).toBeNull()
-    expect(ref!.line).toBeNull()
+    // The sealed target must NOT appear at all — not resolved, not stale.
+    expect(links.toCode.find((c) => c.docId === sealedSym.id)).toBeUndefined()
+  })
+
+  test("WikiGraph.isSealed distinguishes a sealed target from a genuinely-absent one (INV-7 basis)", () => {
+    // This is the disambiguation crossLinks relies on to OMIT sealed vs mark-stale absent.
+    const { store, root } = freshStore()
+    roots.push(root)
+    const sealedSym = store.create(codeSymbolInput("src/s.ts", "S.fn", 1, { scope: "sealed" }))
+    const graph = new WikiGraph([store])
+    expect(graph.get(sealedSym.id)).toBeNull() // sealed → not projected
+    expect(graph.isSealed(sealedSym.id)).toBe(true) // …but recognizably SEALED (→ omit)
+    expect(graph.isSealed("doc:code_symbol:never-created")).toBe(false) // truly absent → not sealed (→ stale)
   })
 
   test("inbound code→doc reference surfaces on the doc's cross-links", () => {

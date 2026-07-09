@@ -142,10 +142,18 @@ export type WikiEditGate = (input: {
   readonly editor: HumanRef
 }) => { readonly pass: boolean; readonly reason?: string }
 
-export const DEFAULT_WIKI_EDIT_GATE: WikiEditGate = ({ body }) =>
-  body.trim().length === 0
-    ? { pass: false, reason: "empty body: a governed knowledge page cannot be blanked out" }
-    : { pass: true }
+// §B.2 default evidence-gate. It encodes the minimum universal governance rules for a human knowledge
+// edit: (1) the page must not be blanked out; (2) a human editor identity MUST be present (the edit is
+// stamped with human provenance keyed on this id, so an anonymous/empty editor makes the audit trail
+// meaningless). A deployment/test can inject a STRICTER gate (e.g. wire the real promotion evidence
+// validator that inspects supporting refs) — this default is the floor, not the ceiling.
+export const DEFAULT_WIKI_EDIT_GATE: WikiEditGate = ({ body, editor }) => {
+  if (body.trim().length === 0)
+    return { pass: false, reason: "empty body: a governed knowledge page cannot be blanked out" }
+  if (!editor || editor.id.trim().length === 0)
+    return { pass: false, reason: "missing editor identity: a governed edit must record who made it" }
+  return { pass: true }
+}
 
 /**
  * A read/write port over the ordered union of DocumentStores. `get`/`getRefsIn`/`neighbors` union
@@ -169,6 +177,22 @@ export class WikiGraph {
   // Does the id resolve to a live, non-sealed doc anywhere in the union?
   resolves(id: string): boolean {
     return this.get(id) !== null
+  }
+
+  // INV-7 disambiguation: does this id exist in some store but resolve to a SEALED doc (so `get`
+  // returns null)? Used by crossLinks to tell a sealed target (must be INVISIBLE — omitted entirely,
+  // never surfaced even as a stale id, because the id is slug-derived from the doc's description and
+  // would leak its title) apart from a genuinely-absent/deleted target (kept as a stale link for
+  // integrity). Checks the RAW store, bypassing the sealed filter `get` applies.
+  isSealed(id: string): boolean {
+    for (const store of this.stores) {
+      const doc = store.get(id)
+      if (!doc) continue
+      // Found the id in this store: it is sealed iff its latest version is sealed-scoped. (get() would
+      // have returned it already if it were non-sealed, so reaching here with a sealed doc = sealed.)
+      return doc.scope === "sealed"
+    }
+    return false // id not present in any store → not sealed, just absent
   }
 
   // The store that owns a doc id (for write-back). Skips sealed so an edit can never target a sealed
@@ -221,6 +245,28 @@ export class WikiGraph {
     for (const store of this.stores) {
       for (const ref of store.list({ scope })) {
         if (seen.has(ref.id)) continue
+        seen.add(ref.id)
+        const doc = this.get(ref.id)
+        if (doc) out.push(doc)
+      }
+    }
+    return out
+  }
+
+  // All live, non-sealed docs whose scope STARTS WITH `prefix` (for the execution archive). The goal
+  // loop writes trajectory docs under `run:<sessionId>` but the per-run graph materializer writes under
+  // `run:<runId>` (a different UUID) — so filtering the single exact `run:<sessionId>` scope silently
+  // dropped the run-graph trajectory in production. `openWikiGraph` already scopes the store union to
+  // ONE session (its context store + that session's own run graphs), so every `run:`-prefixed doc in
+  // the union belongs to this session; a prefix match is therefore correct and cannot pull in another
+  // session's runs. Durable/sealed scopes never start with `run:`, so they are excluded.
+  byScopePrefix(prefix: string): readonly Doc[] {
+    const seen = new Set<string>()
+    const out: Doc[] = []
+    for (const store of this.stores) {
+      for (const ref of store.list()) {
+        if (seen.has(ref.id)) continue
+        if (!ref.scope.startsWith(prefix)) continue
         seen.add(ref.id)
         const doc = this.get(ref.id)
         if (doc) out.push(doc)
@@ -366,7 +412,10 @@ export class WikiService {
           const loc = codeLocation(target)
           toCode.push({ docId: target.id, rel: link.rel, path: loc.path, line: loc.line, symbolPath: loc.symbolPath, stale: false })
         } else if (!target) {
-          // link points at a code_symbol id that no longer resolves — stale, keep it visible.
+          // Target did not resolve. INV-7: if it's SEALED, OMIT it entirely — surfacing even the id
+          // would leak the sealed doc's title (ids are slug-derived from the description). Only a
+          // genuinely-absent/deleted target is kept as a stale link (link integrity).
+          if (this.graph.isSealed(link.to)) continue
           toCode.push({ docId: link.to, rel: link.rel, path: null, line: null, symbolPath: null, stale: true })
         } else {
           toDocs.push({ docId: target.id, rel: link.rel, type: target.type, title: titleFor(target), stale: false })
@@ -429,12 +478,16 @@ export const EXECUTION_ARCHIVE_TYPES: readonly DocType[] = [
 ]
 const ARCHIVE_ORDER: Record<string, number> = { plan: 0, worklog: 1, diagnosis: 2, decision: 3, eval: 4 }
 
-// Pure builder (shared with the archiver). Reads run:<sessionId>-scoped docs from the graph union.
+// Pure builder (shared with the archiver). Collects the session's run-scoped trajectory. NOTE the scope
+// model: the goal loop writes under `run:<sessionId>` while the per-run graph materializer writes under
+// `run:<runId>` (a distinct UUID). A single exact `run:<sessionId>` filter dropped the latter in prod;
+// we therefore collect ALL `run:`-prefixed docs. `openWikiGraph` has already scoped the store union to
+// THIS session (its context store + only that session's run graphs), so every `run:` doc belongs here.
+// The `sessionId` arg still labels the archive and pins that scoping upstream.
 export const buildExecutionArchive = (graph: WikiGraph, sessionId: string): ExecutionArchive => {
-  const scope = `run:${sessionId}`
   const wanted = new Set<DocType>(EXECUTION_ARCHIVE_TYPES)
   const docs = graph
-    .byScope(scope)
+    .byScopePrefix("run:")
     .filter((d) => wanted.has(d.type))
     .sort(
       (a, b) => (ARCHIVE_ORDER[a.type] ?? 99) - (ARCHIVE_ORDER[b.type] ?? 99) || a.id.localeCompare(b.id),

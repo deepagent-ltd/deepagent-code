@@ -55,9 +55,16 @@ export type PanelQuestion = {
   readonly policy: QuorumPolicy
 }
 
-/** A peer opinion as seen by a panelist during debate — ANONYMIZED (no seat identity). */
+/**
+ * A peer opinion as seen by a panelist during debate — ANONYMIZED (no seat identity).
+ *
+ * §C.8 去相关化: the `lens` is DELIBERATELY omitted. Every seat's id is `panel-<lens>` (one seat per
+ * lens), so the lens label IS the seat identity — surfacing it to peers would fully re-identify each
+ * opinion's author and defeat the anonymized-debate invariant (a panelist could anchor on "the security
+ * expert said…"). Only the de-identified verdict / findings / confidence cross the debate boundary; the
+ * Arbiter still sees the full per-lens opinions (it runs on `currentOpinions`, not this shape).
+ */
 export type AnonymizedOpinion = {
-  readonly lens: PanelLens
   readonly verdict: PanelOpinion["verdict"]
   readonly findings: PanelOpinion["findings"]
   readonly confidence: number
@@ -120,9 +127,9 @@ export const selectPanelists = (
   return specs
 }
 
-/** Strip a peer opinion down to its anonymized, de-identified form for debate rounds (§C.4 匿名). */
+/** Strip a peer opinion down to its anonymized, de-identified form for debate rounds (§C.4 匿名). The
+ * lens is dropped here (see AnonymizedOpinion) so peers cannot re-identify the author by seat. */
 const anonymize = (op: PanelOpinion): AnonymizedOpinion => ({
-  lens: op.lens,
   verdict: op.verdict,
   findings: op.findings,
   confidence: op.confidence,
