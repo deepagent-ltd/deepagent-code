@@ -8,7 +8,7 @@ import { useLayout } from "@/context/layout"
 import { useSync } from "@/context/sync"
 import { useLanguage } from "@/context/language"
 import { useProviders } from "@/hooks/use-providers"
-import { getSessionContextMetrics } from "@/components/session/session-context-metrics"
+import { getSessionContextMetrics, getConversationTokens } from "@/components/session/session-context-metrics"
 import { useSessionLayout } from "@/pages/session/session-layout"
 import { createSessionTabs } from "@/pages/session/helpers"
 
@@ -44,19 +44,12 @@ export function SessionContextUsage(props: SessionContextUsageProps) {
   })
   const messages = createMemo(() => (params.id ? (sync.data.message[params.id] ?? []) : []))
 
-  const usd = createMemo(
-    () =>
-      new Intl.NumberFormat(language.intl(), {
-        style: "currency",
-        currency: "USD",
-      }),
-  )
-
   const metrics = createMemo(() => getSessionContextMetrics(messages(), [...providers.all().values()]))
   const context = createMemo(() => metrics().context)
-  const cost = createMemo(() => {
-    return usd().format(metrics().totalCost)
-  })
+  // Cumulative tokens across the whole conversation (all turns + subagent child sessions). Distinct
+  // from `context()` which is the current retained-window occupancy. Cost is intentionally not shown
+  // yet — the billing figure is not aligned with our agent system, so it is hidden until it is.
+  const conversationTokens = createMemo(() => getConversationTokens(sync.data.session ?? [], params.id))
 
   const openContext = () => {
     if (!params.id) return
@@ -95,8 +88,8 @@ export function SessionContextUsage(props: SessionContextUsageProps) {
         )}
       </Show>
       <div class="flex items-center gap-2">
-        <span class="text-text-invert-strong">{cost()}</span>
-        <span class="text-text-invert-base">{language.t("context.usage.cost")}</span>
+        <span class="text-text-invert-strong">{conversationTokens().toLocaleString(language.intl())}</span>
+        <span class="text-text-invert-base">{language.t("context.usage.totalTokens")}</span>
       </div>
     </div>
   )
