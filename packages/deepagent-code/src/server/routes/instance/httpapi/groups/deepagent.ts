@@ -186,6 +186,43 @@ export const DeepAgentShipGateResult = Schema.Struct({
   per_group: Schema.Struct({ gen: Schema.Number, high: Schema.Number, max: Schema.Number }),
 })
 
+// V3.8.1 §G environment-fact use-gate. Provisional user-global environment facts (verifiable,
+// non-directive, desensitized operational facts — test servers/containers/endpoints) surface here so
+// each project decides, at first use, whether to adopt them. Credentials are NEVER carried in the
+// body: only secret_ref pointers. `degraded` = the last connection attempt failed (§G.6).
+export const DeepAgentEnvFactBody = Schema.Struct({
+  host: Schema.optional(Schema.String),
+  port: Schema.optional(Schema.Number),
+  container: Schema.optional(Schema.String),
+  purpose: Schema.optional(Schema.String),
+  secret_refs: Schema.optional(Schema.Array(Schema.String)),
+  last_confirmed_at: Schema.String,
+  notes: Schema.optional(Schema.String),
+})
+export const DeepAgentEnvFactItem = Schema.Struct({
+  fact_id: Schema.String,
+  version: Schema.Number,
+  description: Schema.String,
+  body: Schema.NullOr(DeepAgentEnvFactBody),
+  degraded: Schema.Boolean,
+})
+export const DeepAgentEnvFactList = Schema.Struct({
+  adopted: Schema.Array(DeepAgentEnvFactItem),
+  pending: Schema.Array(DeepAgentEnvFactItem),
+})
+export const DeepAgentEnvFactDecisionInput = Schema.Struct({
+  factId: Schema.String,
+  decision: Schema.Literals(["adopt", "reject"]),
+})
+export const DeepAgentEnvFactModifyInput = Schema.Struct({
+  factId: Schema.String,
+  description: Schema.String,
+  body: DeepAgentEnvFactBody,
+  domain: Schema.optional(Schema.NullOr(Schema.String)),
+  mode: Schema.Literals(["global", "project"]),
+})
+export const DeepAgentEnvFactResult = Schema.Struct({ ok: Schema.Boolean, factId: Schema.String })
+
 export const DeepAgentApi = HttpApi.make("deepagent").add(
   HttpApiGroup.make("deepagent")
     .add(
@@ -317,6 +354,50 @@ export const DeepAgentApi = HttpApi.make("deepagent").add(
         success: described(DeepAgentPackPinResult, "Unpin a domain pack for this workspace"),
         error: DeepAgentPromotionError,
       }),
+    )
+    .add(
+      HttpApiEndpoint.get("envFacts", `${root}/env-facts`, {
+        query: WorkspaceRoutingQuery,
+        success: described(DeepAgentEnvFactList, "Provisional environment facts: adopted + pending for this project"),
+        error: DeepAgentPromotionError,
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "deepagent.envFacts.list",
+          summary: "List environment facts for the use-gate",
+          description:
+            "V3.8.1 §G: provisional user-global environment facts, partitioned into adopted (silently used) and pending (needs a decision) for the active project.",
+        }),
+      ),
+    )
+    .add(
+      HttpApiEndpoint.post("envFactsDecide", `${root}/env-facts/decide`, {
+        query: WorkspaceRoutingQuery,
+        payload: DeepAgentEnvFactDecisionInput,
+        success: described(DeepAgentEnvFactResult, "Adopt or reject a provisional environment fact for this project"),
+        error: DeepAgentPromotionError,
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "deepagent.envFacts.decide",
+          summary: "Adopt or reject an environment fact",
+          description:
+            "V3.8.1 §G.5: adopt (silently use in this project, never ask again) or reject (never ask again here; other projects unaffected).",
+        }),
+      ),
+    )
+    .add(
+      HttpApiEndpoint.post("envFactsModify", `${root}/env-facts/modify`, {
+        query: WorkspaceRoutingQuery,
+        payload: DeepAgentEnvFactModifyInput,
+        success: described(DeepAgentEnvFactResult, "Modified environment fact (global correction or project override)"),
+        error: DeepAgentPromotionError,
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "deepagent.envFacts.modify",
+          summary: "Modify an environment fact and adopt it",
+          description:
+            "V3.8.1 §G.5: edit a fact then adopt it. mode=global corrects the shared fact for all projects; mode=project writes a project-local override, leaving the global fact untouched.",
+        }),
+      ),
     )
     .annotateMerge(OpenApi.annotations({ title: "deepagent", description: "DeepAgent setup routes." }))
     .middleware(InstanceContextMiddleware)
