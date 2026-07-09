@@ -261,6 +261,101 @@ describe("Session", () => {
     }),
   )
 
+  // Archival is a soft flag on session.time_archived (nullable column). Unarchive sends
+  // `time: { archived: null }` which must flow through patch → Updated event → projector,
+  // where drizzle writes NULL (undefined would be skipped, leaving the column stale).
+  it.instance("setArchived({ time }) sets the column, and setArchived({ time: null }) clears it to NULL", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionNs.Service
+      const created = yield* Effect.acquireRelease(session.create({ title: "archive-roundtrip" }), (info) =>
+        session.remove(info.id).pipe(Effect.ignore),
+      )
+      // session.get reads the projected SessionTable row; fromRow maps a NULL
+      // time_archived column to `undefined`, so `time.archived` reflects the
+      // column state after the patch → Updated event → projector round-trip.
+
+      // Fresh session is not archived.
+      expect((yield* session.get(created.id)).time.archived).toBeUndefined()
+
+      // Archive: a numeric timestamp lands in the column.
+      yield* session.setArchived({ sessionID: created.id, time: 1700000000000 })
+      expect((yield* session.get(created.id)).time.archived).toBe(1700000000000)
+
+      // Unarchive: null must clear the column back to NULL. If null were dropped to
+      // undefined anywhere in the chain, drizzle would skip the key and the column
+      // would keep 1700000000000 — this assertion would then fail.
+      yield* session.setArchived({ sessionID: created.id, time: null })
+      expect((yield* session.get(created.id)).time.archived).toBeUndefined()
+    }),
+  )
+
+  // listGlobal({ archived: true }) must return ONLY archived sessions — the archived-sessions drawer
+  // relies on this. Regression guard for the bug where dropping the isNull filter leaked active
+  // sessions into the archived list.
+  it.instance("listGlobal({ archived: true }) returns only archived sessions", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionNs.Service
+      const active = yield* Effect.acquireRelease(session.create({ title: "active-session" }), (info) =>
+        session.remove(info.id).pipe(Effect.ignore),
+      )
+      const archived = yield* Effect.acquireRelease(session.create({ title: "archived-session" }), (info) =>
+        session.remove(info.id).pipe(Effect.ignore),
+      )
+
+      yield* session.setArchived({ sessionID: archived.id, time: Date.now() })
+
+      const archivedList = yield* session.listGlobal({ limit: 200, archived: true })
+      const archivedIds = archivedList.map((s) => s.id)
+
+      expect(archivedIds).toContain(archived.id)
+      expect(archivedIds).not.toContain(active.id)
+
+      const defaultList = yield* session.listGlobal({ limit: 200 })
+      const defaultIds = defaultList.map((s) => s.id)
+
+      expect(defaultIds).toContain(active.id)
+      expect(defaultIds).not.toContain(archived.id)
+    }),
+  )
+
+  // preview mirrors Codex's threads.preview: a snapshot of the FIRST user message, set once so an
+  // archived-session list can render a content snippet. It must survive the create→event→projector
+  // round-trip (it lives on the SessionV1.SessionInfo event schema) and never be overwritten.
+  it.instance("preview is empty on create, set once, and never overwritten by a later message", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionNs.Service
+      const created = yield* Effect.acquireRelease(session.create({ title: "preview-writeonce" }), (info) =>
+        session.remove(info.id).pipe(Effect.ignore),
+      )
+      // Fresh session has no preview.
+      expect(created.preview).toBeUndefined()
+      expect((yield* session.get(created.id)).preview).toBeUndefined()
+
+      // First user message populates it (round-trips through the event + projector into the column).
+      yield* session.setPreview({ sessionID: created.id, preview: "first user message" })
+      expect((yield* session.get(created.id)).preview).toBe("first user message")
+
+      // A second (later) message must NOT change it — write-once.
+      yield* session.setPreview({ sessionID: created.id, preview: "second user message" })
+      expect((yield* session.get(created.id)).preview).toBe("first user message")
+    }),
+  )
+
+  it.instance("setPreview ignores empty / whitespace-only text (no preview written)", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionNs.Service
+      const created = yield* Effect.acquireRelease(session.create({ title: "preview-empty" }), (info) =>
+        session.remove(info.id).pipe(Effect.ignore),
+      )
+      yield* session.setPreview({ sessionID: created.id, preview: "   \n  " })
+      expect((yield* session.get(created.id)).preview).toBeUndefined()
+
+      // A subsequent real message still lands, since the empty one was a no-op.
+      yield* session.setPreview({ sessionID: created.id, preview: "real content" })
+      expect((yield* session.get(created.id)).preview).toBe("real content")
+    }),
+  )
+
   // 附-D 阶段3: fork without a directory keeps today's behavior — the fork inherits the source
   // session's (instance) directory and worktree-relative path. This is the backward-compat guard.
   it.instance("fork without a directory inherits the source directory (backward compat)", () =>
