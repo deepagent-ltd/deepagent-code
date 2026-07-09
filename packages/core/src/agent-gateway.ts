@@ -394,6 +394,8 @@ import * as DeepAgentDocumentStore from "./deepagent/document-store"
 import * as DeepAgentRunGraph from "./deepagent/run-graph"
 import * as DeepAgentWorkspace from "./deepagent/workspace"
 import * as DeepAgentBackgroundLearning from "./deepagent/background-learning"
+import * as DeepAgentEnvironmentFact from "./deepagent/environment-fact"
+import * as DeepAgentEnvironmentFactAdoption from "./deepagent/environment-fact-adoption"
 import * as DeepAgentPromptPipeline from "./deepagent/prompt-pipeline"
 import * as DeepAgentRoundReport from "./deepagent/round-report"
 import * as DeepAgentMode from "./deepagent/mode"
@@ -416,6 +418,8 @@ export {
   DeepAgentRunGraph,
   DeepAgentWorkspace,
   DeepAgentBackgroundLearning,
+  DeepAgentEnvironmentFact,
+  DeepAgentEnvironmentFactAdoption,
   DeepAgentPromptPipeline,
   DeepAgentRoundReport,
   DeepAgentMode,
@@ -432,6 +436,7 @@ export type { EnvironmentContext, McpServerRef, PreviousResults, ToolContext, To
 export type { OrchestratorInput, PostTurnDecision } from "./deepagent/orchestrator"
 export type { SessionRunState } from "./deepagent/session-state"
 export type { ValidationResult } from "./deepagent/round-state"
+import type { RoundState as DeepAgentRoundState } from "./deepagent/round-state"
 
 // Global runtime: the DeepAgent system prompt is injected for every provider whenever the
 // runtime is active (high/max). `general` (and disabled/kill-switched) returns [] so the
@@ -723,6 +728,47 @@ const runBackgroundLearning = (run: RunRecord, finalStatus: "completed" | "faile
       }
     },
   })
+  // V3.8.1 §G.6: if this run hit a connection failure against an endpoint this project adopted from a
+  // provisional environment fact, degrade that fact (mark stale) so the next project's use-gate warns.
+  // Best-effort and non-blocking: any error here must never affect run finalization.
+  try {
+    markStaleEnvironmentFactsFromRun(workspacePath, projectID, roundState)
+  } catch {
+    /* environment-fact staleness is advisory; never let it break the close() path */
+  }
+}
+
+// §G.6 connection-failure hook. Scans this run's validation outputs for a connection-shaped failure
+// that names an endpoint the project adopted, and marks the matching user-global fact stale. Pure
+// matching lives in environment-fact.ts (matchStaleFacts); this only gathers the failure text +
+// adopted endpoints and performs the durable write.
+const markStaleEnvironmentFactsFromRun = (
+  workspacePath: string,
+  projectID: string,
+  roundState: DeepAgentRoundState,
+): void => {
+  const failureText = collectValidationFailureText(roundState)
+  if (!failureText) return
+  const baseDir = current.baseDir ?? resolveDeepAgentCodeHome()
+  const home = new DeepAgentWorkspace.DeepAgentCodeHome(baseDir)
+  const project = home.ensureProject(projectID, workspacePath)
+  const adoption = new DeepAgentEnvironmentFactAdoption.EnvironmentFactAdoption(baseDir, project, workspacePath)
+  const endpoints = adoption.adoptedEndpoints()
+  if (endpoints.length === 0) return
+  const stale = DeepAgentEnvironmentFact.matchStaleFacts(failureText, endpoints)
+  if (stale.length === 0) return
+  const userGlobal = DeepAgentKnowledgeSource.userGlobalStoreFor()
+  for (const id of stale) userGlobal.markEnvironmentFactStale(id)
+  DeepAgentKnowledgeSource.invalidateCache()
+}
+
+// Concatenate the output of every FAILED validation this run recorded — that's where a tool's
+// "ECONNREFUSED ... 10.0.0.4:19530" surfaces. Returns "" when nothing failed.
+const collectValidationFailureText = (roundState: DeepAgentRoundState): string => {
+  const parts: string[] = []
+  for (const c of roundState.candidates ?? [])
+    for (const v of c.validations ?? []) if (!v.passed && v.output) parts.push(v.output)
+  return parts.join("\n")
 }
 
 const blockProviderExecutedTool = (run: RunRecord, event: LLMEventType) =>
