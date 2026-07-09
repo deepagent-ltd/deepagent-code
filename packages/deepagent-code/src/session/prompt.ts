@@ -59,6 +59,7 @@ import { InstanceState } from "@/effect/instance-state"
 import { TaskTool, type TaskPromptOps } from "@/tool/task"
 import { SessionRunState } from "./run-state"
 import { RuntimeFlags } from "@/effect/runtime-flags"
+import { archiveSessionOnCompletion } from "@/wiki/session-archive"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { Database } from "@deepagent-code/core/database/database"
 import { SessionEvent } from "@deepagent-code/core/session/event"
@@ -1643,6 +1644,20 @@ export const layer = Layer.effect(
                 }),
               ),
             ),
+            // V3.9 §B.6: on a terminal round (done / needs_human), aggregate this session's Document
+            // Graph trajectory (plan + worklog + diagnosis + decision) into a read-only execution
+            // archive page. Session-INTERNAL (not event-driven — that is V4.0). Gated by
+            // flags.experimentalWiki and fully default-safe (archiveSessionOnCompletion never throws
+            // and is a pure read-projection — it never mutates the graph), so a failure here can never
+            // affect the round. Non-terminal `continue` rounds are skipped — the trajectory is not yet
+            // complete.
+            Effect.tap(() =>
+              flags.experimentalWiki && suggestion.status !== "continue"
+                ? archiveSessionOnCompletion({ workspacePath: ctx.directory, sessionID: input.sessionID }).pipe(
+                    Effect.asVoid,
+                  )
+                : Effect.void,
+            ),
           )
 
         let result = first
@@ -1765,10 +1780,12 @@ export const layer = Layer.effect(
         // trigger that finally puts code_symbol nodes on the graph (indexFiles had zero prod callers).
         // Gated to once-per-session-per-process (indexedSessions) so re-prompts don't re-walk; forked
         // into the run scope so it never blocks the turn; fully default-safe inside indexWorkspace.
-        // SEAM: incremental fs-walking + AST symbol extraction are the follow-up (see code-index-trigger.ts).
+        // V3.9 §A: `lsp` enables the AST symbol pass (symbol nodes + imports/calls edges) over the
+        // content-sha-changed files; a language with no LSP client degrades to the file-level view.
+        // SEAM: incremental mtime-gated fs-walking is the remaining follow-up (see code-index-trigger.ts).
         if (!indexedSessions.has(sessionID)) {
           indexedSessions.add(sessionID)
-          yield* CodeIndexTrigger.indexWorkspace({ workspacePath: ctx.directory, fsys }).pipe(
+          yield* CodeIndexTrigger.indexWorkspace({ workspacePath: ctx.directory, fsys, lsp }).pipe(
             Effect.asVoid,
             Effect.forkIn(scope),
           )

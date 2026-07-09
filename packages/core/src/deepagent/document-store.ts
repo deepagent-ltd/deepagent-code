@@ -97,11 +97,15 @@ export type LinkRel =
   // --- V3.8 Phase 0 (roadmap C2): code-graph edge relations (v3.8.1 §B.2). code↔doc cross-type links.
   | "references" // code_symbol -> doc (design/knowledge): the code references/uses that document
   | "implements" // code_symbol -> requirements: the code implements that requirement
-  // Optional code_symbol -> code_symbol internal-dependency edges. The plan (roadmap Phase 0) says
-  // these can be deferred — added here trivially so the Phase 3 indexer needn't re-touch this union,
-  // but nothing produces or consumes them yet.
-  | "imports" // code_symbol -> code_symbol: module/file import edge (optional, deferred use)
-  | "calls" // code_symbol -> code_symbol: call edge (optional, deferred use)
+  // V3.9 §A (code-graph deepening) consumes these two + `contains` (below). imports = file-node ->
+  // file-node module edge; calls = symbol-node -> symbol-node call edge. Produced by
+  // code-indexer.indexSymbols from LSP-extracted data, consumed by graph-query BFS.
+  | "imports" // code_symbol(file) -> code_symbol(file): module/file import edge
+  | "calls" // code_symbol(symbol) -> code_symbol(symbol): call edge (callHierarchy-derived)
+  // V3.9 §A.2 containment edge: an AST-level symbol child node (identity `path#symbolPath`) hangs off
+  // its file-level code_symbol parent via `contains`, so a query can drill from a file into its
+  // functions/classes/methods without breaking the V3.8.1 file-level view.
+  | "contains" // code_symbol(file) -> code_symbol(symbol): AST containment edge
 // NOTE (App-A ledger/bridge edges): no new relations added for Session Ledger / Project Bridge edges.
 // Ledger entries link to their sources with the existing `derived_from`; a bridge distilled/refined
 // from a session's ledger reuses `refines`; a superseding handoff reuses `supersedes`. Revisit only if
@@ -316,6 +320,36 @@ export class DocumentStore {
       hash: "",
     }
     if (fingerprint(next) === fingerprint(cur)) return cur // INV-4 no-op
+    this.assertLinkTargets(next.links)
+    next = { ...next, hash: computeHash(next) }
+    this.persist(next)
+    this.replace({ ...cur, status: "superseded", superseded_by: `${id}@v${next.version}` })
+    return next
+  }
+
+  // Append-only edit that ALSO restamps provenance — the human-governance edit path (V3.9 §B.2/B.3).
+  // Mirrors update() (preserves status, bumps version+1, writes the supersede link, INV-4) but takes an
+  // explicit provenance so a human edit through the Wiki lands with provenance.source="human" instead
+  // of silently copying the model/runner provenance of the prior version. update() deliberately copies
+  // cur.provenance (a link()-driven body rewrite must not rewrite authorship); a genuine human content
+  // edit is the ONE case that must record new authorship, so it gets its own method rather than a flag.
+  // confidence and every other field are preserved from cur (…cur), so a knowledge-class doc keeps its
+  // required confidence (assertKnowledgeConfidence stays satisfied).
+  updateWithProvenance(id: string, body: string, provenance: Provenance, links?: readonly DocLink[]): Doc {
+    const cur = this.get(id)
+    if (!cur) throw new Error(`updateWithProvenance: unknown doc ${id}`)
+    let next: Doc = {
+      ...cur,
+      body,
+      links: links ?? cur.links,
+      provenance,
+      version: cur.version + 1,
+      status: cur.status,
+      superseded_by: null,
+      hash: "",
+    }
+    if (fingerprint(next) === fingerprint(cur)) return cur // INV-4 no-op (provenance is in the fingerprint)
+    this.assertKnowledgeConfidence(next)
     this.assertLinkTargets(next.links)
     next = { ...next, hash: computeHash(next) }
     this.persist(next)

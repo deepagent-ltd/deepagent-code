@@ -13,6 +13,8 @@ import PROMPT_COMPACTION from "./prompt/compaction.txt"
 import PROMPT_EXPLORE from "./prompt/explore.txt"
 import PROMPT_RESEARCHER from "./prompt/researcher.txt"
 import PROMPT_REVIEWER from "./prompt/reviewer.txt"
+import PROMPT_GOAL_WORKER from "./prompt/goal-worker.txt"
+import { PLAN_WRITE_OWN_GOAL } from "./subagent-permissions"
 import PROMPT_SUMMARY from "./prompt/summary.txt"
 import PROMPT_TITLE from "./prompt/title.txt"
 import { Permission } from "@/permission"
@@ -286,6 +288,42 @@ export const layer = Layer.effect(
             ),
             description: `Independent, adversarial review agent. Use this to critique a plan or a set of changes from a skeptical, outside perspective — its default stance is that the change has problems. It hunts for correctness bugs, security issues, edge cases, convention conflicts, and missing tests, and reports reproducible failure scenarios. Read-only. Returns structured findings with an overall verdict.`,
             prompt: PROMPT_REVIEWER,
+            options: {},
+            mode: "subagent",
+            native: true,
+          },
+          // V3.9 §D/§E: Goal Loop worker. Unlike explore/researcher/reviewer (read-only, no side
+          // effects), a Goal Loop worker CARRIES OUT the active plan step — so it gets read + edit +
+          // bash (a working ruleset), while `task: deny` prevents recursive fan-out. The load-bearing
+          // bit is `capabilities: [PLAN_WRITE_OWN_GOAL]`: deriveSubagentSessionPermission grants this
+          // worker a session-level `plan: allow` so it can maintain its OWN goal's plan step status
+          // (§E.2 controlled relaxation), bounded to its own goal by run:<sessionId> scope isolation.
+          // Ordinary subagents declare no capability and stay plan-write denied. Edits still flow
+          // through the normal tool-permission gate — the Loop never elevates privilege (§D.6 不越权).
+          "goal-worker": {
+            name: "goal-worker",
+            permission: Permission.merge(
+              defaults,
+              Permission.fromConfig({
+                "*": "deny",
+                read: "allow",
+                grep: "allow",
+                glob: "allow",
+                list: "allow",
+                edit: "allow",
+                write: "allow",
+                patch: "allow",
+                bash: "allow",
+                webfetch: "allow",
+                plan: "allow",
+                task: "deny",
+                external_directory: readonlyExternalDirectory,
+              }),
+              user,
+            ),
+            description: `Goal Loop worker (V3.9 §D). A long-running, supervised worker that executes ONE plan step per tick against an objectively-graded goal and maintains its own goal's plan (step status). Read + edit capable; delegates nothing (task denied). Used by the Goal Loop controller, not invoked directly for one-off tasks.`,
+            prompt: PROMPT_GOAL_WORKER,
+            capabilities: [PLAN_WRITE_OWN_GOAL],
             options: {},
             mode: "subagent",
             native: true,

@@ -80,7 +80,7 @@ describe("CodeIndexTrigger (Phase 3 trigger)", () => {
     const empty = mkdtempSync(path.join(tmpdir(), "deepagent-idx-empty-"))
     try {
       const result = await withFs((fsys) => CodeIndexTrigger.indexWorkspace({ workspacePath: empty, fsys }))
-      expect(result).toEqual({ nodeIds: [], created: 0, updated: 0, unchanged: 0, edgesCreated: 0 })
+      expect(result).toEqual({ nodeIds: [], created: 0, updated: 0, unchanged: 0, edgesCreated: 0, outcomes: [] })
     } finally {
       rmSync(empty, { recursive: true, force: true })
     }
