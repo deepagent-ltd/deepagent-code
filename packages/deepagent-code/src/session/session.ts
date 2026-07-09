@@ -19,6 +19,7 @@ import { eq } from "drizzle-orm"
 import { and } from "drizzle-orm"
 import { gte } from "drizzle-orm"
 import { isNull } from "drizzle-orm"
+import { isNotNull } from "drizzle-orm"
 import { desc } from "drizzle-orm"
 import { like } from "drizzle-orm"
 import { sql } from "drizzle-orm"
@@ -114,6 +115,7 @@ export function fromRow(row: SessionRow): Info {
       compacting: row.time_compacting ?? undefined,
       archived: row.time_archived ?? undefined,
     },
+    preview: row.preview ?? undefined,
   }
 }
 
@@ -148,6 +150,7 @@ export function toRow(info: Info) {
     time_updated: info.time.updated,
     time_compacting: info.time.compacting,
     time_archived: info.time.archived,
+    preview: info.preview,
   }
 }
 
@@ -200,7 +203,8 @@ const Time = Schema.Struct({
   created: NonNegativeInt,
   updated: NonNegativeInt,
   compacting: optionalOmitUndefined(NonNegativeInt),
-  archived: optionalOmitUndefined(ArchivedTimestamp),
+  // `null` clears the archived flag (unarchive); `undefined` still omits the key.
+  archived: optionalOmitUndefined(Schema.NullOr(ArchivedTimestamp)),
 })
 
 const Revert = Schema.Struct({
@@ -238,6 +242,9 @@ export const Info = Schema.Struct({
   time: Time,
   permission: optionalOmitUndefined(PermissionV1.Ruleset),
   revert: optionalOmitUndefined(Revert),
+  // Truncated, single-lined snapshot of the first user message, for archived-session list previews.
+  // Set once from the first user message; never overwritten. GlobalInfo inherits it via Info.fields.
+  preview: optionalOmitUndefined(Schema.String),
 }).annotate({ identifier: "Session" })
 export type Info = Types.DeepMutable<Schema.Schema.Type<typeof Info>>
 
@@ -498,7 +505,8 @@ export interface Interface {
   readonly touch: (sessionID: SessionID) => Effect.Effect<void>
   readonly get: (id: SessionID) => Effect.Effect<Info, NotFound>
   readonly setTitle: (input: { sessionID: SessionID; title: string }) => Effect.Effect<void>
-  readonly setArchived: (input: { sessionID: SessionID; time?: number }) => Effect.Effect<void>
+  readonly setPreview: (input: { sessionID: SessionID; preview: string }) => Effect.Effect<void>
+  readonly setArchived: (input: { sessionID: SessionID; time?: number | null }) => Effect.Effect<void>
   readonly setMetadata: (input: typeof SetMetadataInput.Type) => Effect.Effect<void>
   readonly setPermission: (input: { sessionID: SessionID; permission: PermissionV1.Ruleset }) => Effect.Effect<void>
   readonly setRevert: (input: {
@@ -625,7 +633,8 @@ export const layer: Layer.Layer<
       if (input?.start) conditions.push(gte(SessionTable.time_updated, input.start))
       if (input?.cursor) conditions.push(lt(SessionTable.time_updated, input.cursor))
       if (input?.search) conditions.push(like(SessionTable.title, `%${input.search}%`))
-      if (!input?.archived) conditions.push(isNull(SessionTable.time_archived))
+      if (input?.archived) conditions.push(isNotNull(SessionTable.time_archived))
+      else conditions.push(isNull(SessionTable.time_archived))
 
       const query =
         conditions.length > 0
@@ -929,7 +938,20 @@ export const layer: Layer.Layer<
       yield* patch(input.sessionID, { title: input.title }).pipe(Effect.orDie)
     })
 
-    const setArchived = Effect.fn("Session.setArchived")(function* (input: { sessionID: SessionID; time?: number }) {
+    // Write-once: the preview snapshots the FIRST user message only. Later prompts must not overwrite
+    // it, so we skip if the session already has a preview (or the incoming text is empty/whitespace).
+    const setPreview = Effect.fn("Session.setPreview")(function* (input: { sessionID: SessionID; preview: string }) {
+      const trimmed = input.preview.trim()
+      if (!trimmed) return
+      const current = yield* get(input.sessionID).pipe(Effect.orDie)
+      if (current.preview) return
+      yield* patch(input.sessionID, { preview: trimmed }).pipe(Effect.orDie)
+    })
+
+    const setArchived = Effect.fn("Session.setArchived")(function* (input: {
+      sessionID: SessionID
+      time?: number | null
+    }) {
       yield* patch(input.sessionID, { time: { archived: input.time } }).pipe(Effect.orDie)
     })
 
@@ -1073,6 +1095,7 @@ export const layer: Layer.Layer<
       touch,
       get,
       setTitle,
+      setPreview,
       setArchived,
       setMetadata,
       setPermission,
@@ -1203,7 +1226,9 @@ export function* listGlobal(input?: {
   if (input?.search) {
     conditions.push(like(SessionTable.title, `%${input.search}%`))
   }
-  if (!input?.archived) {
+  if (input?.archived) {
+    conditions.push(isNotNull(SessionTable.time_archived))
+  } else {
     conditions.push(isNull(SessionTable.time_archived))
   }
 
