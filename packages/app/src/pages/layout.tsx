@@ -1114,6 +1114,12 @@ export default function Layout(props: ParentProps) {
         },
       },
       {
+        id: "session.archived",
+        title: language.t("command.session.archived"),
+        category: language.t("command.category.session"),
+        onSelect: () => openArchivedSessions(),
+      },
+      {
         id: "workspace.new",
         title: language.t("workspace.new"),
         category: language.t("command.category.workspace"),
@@ -1283,6 +1289,17 @@ export default function Layout(props: ParentProps) {
     void import("@/components/packs/dialog-packs").then((x) => {
       if (dialogDead || dialogRun !== run) return
       dialog.show(() => <x.DialogPacks client={sdk.client as never} />)
+    })
+  }
+
+  function openArchivedSessions() {
+    const run = ++dialogRun
+    void import("@/components/history/dialog-archived-sessions").then((x) => {
+      if (dialogDead || dialogRun !== run) return
+      // Cross-project list: use the global serverSDK client (not a per-directory one) so the
+      // archived fetch spans every project. Restore fires the live `session.updated` event with
+      // `archived` cleared, which event-reducer re-inserts into the sidebar automatically.
+      dialog.show(() => <x.DialogArchivedSessions client={serverSDK.client} />)
     })
   }
 
@@ -2420,6 +2437,8 @@ export default function Layout(props: ParentProps) {
       onOpenHistory={openHistoryProjects}
       packsLabel={() => language.t("packs.title")}
       onOpenPacks={openPacks}
+      archivedLabel={() => language.t("session.archived.title")}
+      onOpenArchived={openArchivedSessions}
       helpLabel={() => language.t("sidebar.help")}
       onOpenHelp={() => platform.openLink("https://deepagent-code.ai/desktop-feedback")}
       renderPanel={() =>

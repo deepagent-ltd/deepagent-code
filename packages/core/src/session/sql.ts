@@ -56,6 +56,10 @@ export const SessionTable = sqliteTable(
     ...Timestamps,
     time_compacting: integer(),
     time_archived: integer(),
+    // Snapshot of the session's first user message (truncated, single-lined). Lets an archived-sessions
+    // list render a content preview per row without loading the full conversation. Set once, never
+    // overwritten. Mirrors Codex's `threads.preview`.
+    preview: text(),
   },
   (table) => [
     index("session_project_idx").on(table.project_id),

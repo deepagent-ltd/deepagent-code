@@ -225,6 +225,62 @@ describe("applyDirectoryEvent", () => {
     expect(store.session_status.ses_1).toBeUndefined()
   })
 
+  test("archive then restore returns sessionTotal to its original value", () => {
+    const [store, setStore] = createStore(
+      baseState({
+        session: [rootSession({ id: "ses_1" }), rootSession({ id: "ses_2" })],
+        sessionTotal: 2,
+      }),
+    )
+
+    // Archive ses_1: removed from the list, sessionTotal drops.
+    applyDirectoryEvent({
+      event: { type: "session.updated", properties: { info: rootSession({ id: "ses_1", archived: 10 }) } },
+      store,
+      setStore,
+      push() {},
+      directory: "/tmp",
+      loadLsp() {},
+    })
+
+    expect(store.session.map((x) => x.id)).toEqual(["ses_2"])
+    expect(store.sessionTotal).toBe(1)
+
+    // Restore ses_1 (archived cleared): re-inserted, sessionTotal returns to the original value.
+    applyDirectoryEvent({
+      event: { type: "session.updated", properties: { info: rootSession({ id: "ses_1" }) } },
+      store,
+      setStore,
+      push() {},
+      directory: "/tmp",
+      loadLsp() {},
+    })
+
+    expect(store.session.map((x) => x.id)).toEqual(["ses_1", "ses_2"])
+    expect(store.sessionTotal).toBe(2)
+  })
+
+  test("restoring a child session does not increment sessionTotal", () => {
+    const [store, setStore] = createStore(
+      baseState({
+        session: [rootSession({ id: "ses_1" })],
+        sessionTotal: 1,
+      }),
+    )
+
+    // A child session (parentID set) re-appearing via session.updated must not touch the counter.
+    applyDirectoryEvent({
+      event: { type: "session.updated", properties: { info: rootSession({ id: "ses_2", parentID: "ses_1" }) } },
+      store,
+      setStore,
+      push() {},
+      directory: "/tmp",
+      loadLsp() {},
+    })
+
+    expect(store.sessionTotal).toBe(1)
+  })
+
   test("cleans session caches when deleted and decrements only root totals", () => {
     const cases = [
       { info: rootSession({ id: "ses_1" }), expectedTotal: 1 },
