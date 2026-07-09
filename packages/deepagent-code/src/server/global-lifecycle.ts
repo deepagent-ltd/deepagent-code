@@ -34,4 +34,26 @@ export const disposeAllInstancesAndEmitGlobalDisposed = Effect.fn("Server.dispos
   },
 )
 
+// Dispose any running instances rooted at the given directories, swallowing per-directory
+// failures. Used before deleting a project so a live instance does not keep writing to a
+// row that is about to disappear. disposeDirectory is a no-op for directories with no
+// booted instance, so passing every known project directory is safe.
+export const disposeInstancesForDirectories = Effect.fn("Server.disposeInstancesForDirectories")(
+  function* (directories: readonly string[]) {
+    const store = yield* InstanceStore.Service
+    yield* Effect.forEach(
+      directories,
+      (directory) =>
+        store.disposeDirectory(directory).pipe(
+          Effect.catchCause((cause) =>
+            Effect.sync(() => {
+              log.warn("instance disposal failed", { directory, cause })
+            }),
+          ),
+        ),
+      { discard: true },
+    )
+  },
+)
+
 export * as GlobalLifecycle from "./global-lifecycle"
