@@ -251,9 +251,10 @@ describe("layout workspace helpers", () => {
     expect(roots(store).map((s) => s.id)).toEqual(["root"])
   })
 
-  test("directChildSessions groups subagents and forks under their origin, newest first", () => {
+  test("directChildSessions nests ONLY human forks, never agent-spawned subagents", () => {
     const list = [
       session({ id: "root", directory: "/w" }),
+      // A subagent (parentID) must NOT be nested — agent-spawned conversations stay out of the sidebar.
       session({ id: "sub", directory: "/w", parentID: "root", time: { created: 1, updated: 10, archived: undefined } }),
       session({
         id: "fork",
@@ -262,13 +263,26 @@ describe("layout workspace helpers", () => {
         time: { created: 2, updated: 20, archived: undefined },
       }),
       session({
-        id: "archived",
+        id: "fork2",
         directory: "/w",
-        parentID: "root",
-        time: { created: 3, updated: 30, archived: 99 },
+        metadata: { forkedFrom: { parentSessionID: "root" } },
+        time: { created: 3, updated: 25, archived: undefined },
+      }),
+      session({
+        id: "archived-fork",
+        directory: "/w",
+        metadata: { forkedFrom: { parentSessionID: "root" } },
+        time: { created: 4, updated: 30, archived: 99 },
       }),
     ]
-    expect(directChildSessions(list, "root").map((s) => s.id)).toEqual(["fork", "sub"])
+    // Only forks, newest first; subagent "sub" and the archived fork are excluded.
+    expect(directChildSessions(list, "root").map((s) => s.id)).toEqual(["fork2", "fork"])
+  })
+
+  test("roots still excludes subagents so hidden subagents don't leak in as top-level rows", () => {
+    const list = [session({ id: "root", directory: "/w" }), session({ id: "sub", directory: "/w", parentID: "root" })]
+    const store = { session: list, path: { directory: "/w" } }
+    expect(roots(store).map((s) => s.id)).toEqual(["root"])
   })
 
   test("formats fallback project display name", () => {

@@ -179,6 +179,38 @@ describe("structured-output.encode (sync-event serialization)", () => {
     const decoded = Schema.decodeUnknownSync(SessionV1.Format)({ type: "text" })
     expect(Exit.isSuccess(encodeInfo(userWith(decoded)))).toBe(true)
   })
+
+  // Read-path repair: rows persisted BEFORE the d6c325e write fix still hold a plain-object format on
+  // disk. MessageV2.normalizeFormat coerces them to instances when hydrating, so the messages endpoint
+  // can encode the response instead of throwing "Expected OutputFormatJsonSchema" and crashing the
+  // renderer (the app "restart" on clicking such a subagent session).
+  describe("normalizeFormat (legacy stored-row repair)", () => {
+    test("coerces a stored plain-object json_schema format so the Info encodes", () => {
+      const repaired = MessageV2.normalizeFormat(userWith(jsonSchemaFormat))
+      expect(Exit.isSuccess(encodeInfo(repaired))).toBe(true)
+      expect((repaired.format as { retryCount?: number }).retryCount).toBe(2) // decoding default filled
+    })
+
+    test("coerces a stored plain-object text format so the Info encodes", () => {
+      const repaired = MessageV2.normalizeFormat(userWith({ type: "text" }))
+      expect(Exit.isSuccess(encodeInfo(repaired))).toBe(true)
+    })
+
+    test("is idempotent on an already-constructed instance", () => {
+      const instance = new SessionV1.OutputFormatJsonSchema({ ...jsonSchemaFormat, retryCount: 5 })
+      const repaired = MessageV2.normalizeFormat(userWith(instance))
+      expect(repaired.format).toBe(instance) // untouched
+      expect(Exit.isSuccess(encodeInfo(repaired))).toBe(true)
+    })
+
+    test("leaves a message with no format untouched", () => {
+      const noFormat = { ...userWith(undefined) }
+      delete (noFormat as { format?: unknown }).format
+      const repaired = MessageV2.normalizeFormat(noFormat)
+      expect((repaired as { format?: unknown }).format).toBeUndefined()
+      expect(Exit.isSuccess(encodeInfo(repaired))).toBe(true)
+    })
+  })
 })
 
 describe("structured-output.AssistantMessage", () => {
