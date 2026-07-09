@@ -35,6 +35,8 @@ export const SidebarContent = (props: {
   reviewPending?: Accessor<boolean>
   packsLabel?: Accessor<string>
   onOpenPacks?: () => void
+  archivedLabel: Accessor<string>
+  onOpenArchived: () => void
   helpLabel: Accessor<string>
   onOpenHelp: () => void
   renderPanel: () => JSX.Element
@@ -104,6 +106,15 @@ export const SidebarContent = (props: {
               size="large"
               onClick={props.onOpenHistory}
               aria-label={props.historyLabel()}
+            />
+          </Tooltip>
+          <Tooltip placement={placement()} value={props.archivedLabel()}>
+            <IconButton
+              icon="arrow-undo-down"
+              variant="ghost"
+              size="large"
+              onClick={props.onOpenArchived}
+              aria-label={props.archivedLabel()}
             />
           </Tooltip>
           <Tooltip placement={placement()} value={props.reviewLabel()}>
