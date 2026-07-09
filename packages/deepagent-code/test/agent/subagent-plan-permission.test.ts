@@ -2,7 +2,11 @@ import { PermissionV1 } from "@deepagent-code/core/v1/permission"
 import { describe, expect, test } from "bun:test"
 import { Effect } from "effect"
 import { Agent } from "../../src/agent/agent"
-import { deriveSubagentSessionPermission, PLAN_WRITE_OWN_GOAL } from "../../src/agent/subagent-permissions"
+import {
+  deriveSubagentSessionPermission,
+  filterPrimaryToolsForSubagent,
+  PLAN_WRITE_OWN_GOAL,
+} from "../../src/agent/subagent-permissions"
 import { Permission } from "../../src/permission"
 import { testEffect } from "../lib/effect"
 
@@ -90,6 +94,15 @@ describe("V3.9 §E — subagent plan-write capability", () => {
     // The plan tool stays denied by the worker's own `*: deny` (no session override).
     const effective = Permission.merge(subagent.permission, ruleset)
     expect(Permission.evaluate("plan", "*", effective).action).toBe("deny")
+  })
+
+  // §E F5: the experimental.primary_tools passthrough must NOT be able to re-grant the capability-
+  // governed permissions to a subagent (that would bypass the plan-write gate).
+  test("filterPrimaryToolsForSubagent strips plan/todowrite but keeps other primary_tools", () => {
+    expect(filterPrimaryToolsForSubagent(["plan", "todowrite", "bash", "webfetch"])).toEqual(["bash", "webfetch"])
+    expect(filterPrimaryToolsForSubagent(["plan"])).toEqual([])
+    expect(filterPrimaryToolsForSubagent(undefined)).toEqual([])
+    expect(filterPrimaryToolsForSubagent([])).toEqual([])
   })
 
   test("empty capabilities array behaves like absent (no relaxation)", () => {

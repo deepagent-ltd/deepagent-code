@@ -97,6 +97,12 @@ export type SubagentTurnResult = {
   readonly tokensUsed: number
   /** dollar cost for this turn (0 when unknown). */
   readonly cost: number
+  /**
+   * §D/§E F3 — the id of the session the turn actually ran in (the created child session for the real
+   * runner). The goal-worker StepExecutor uses it to MIRROR the worker's plan-state back into the goal
+   * plan doc after the turn. Undefined when the runner does not create/expose a session (stubs).
+   */
+  readonly sessionID?: string
 }
 
 export type SubagentTurnInput = {
@@ -104,6 +110,13 @@ export type SubagentTurnInput = {
   readonly prompt: string
   /** Optional JSON Schema forcing a structured final turn (reviewer / panelist). */
   readonly outputSchema?: Record<string, unknown>
+  /**
+   * §D/§E F3 — optional hook invoked with the child session id AFTER the session is created but BEFORE
+   * the prompt turn runs. The goal-worker StepExecutor uses it to SEED the child session's plan-state
+   * from the goal plan doc, so the worker's `plan` tool edits build on (and stay bound to) the goal's
+   * plan. Reviewer/panelist turns do not pass it. Never throws (best-effort).
+   */
+  readonly prepareSession?: (sessionID: string) => void
 }
 
 export type SubagentTurnRunner = (input: SubagentTurnInput) => Effect.Effect<SubagentTurnResult>
@@ -262,24 +275,103 @@ const renderPanelistPrompt = (input: PanelistRunInput): string => {
 // StepExecutor + RollbackPort builders.
 // ---------------------------------------------------------------------------------------------------
 
-/** Build a StepExecutor that drives ONE goal-worker turn per tick (§D.6 一 tick = 一 SessionPrompt turn). */
-export const buildStepExecutor = (runTurn: SubagentTurnRunner): StepExecutor =>
-  (input) =>
-    runTurn({
+/**
+ * §D/§E F3 — the PLAN BRIDGE. The goal-worker runs in an isolated CHILD session (for permission
+ * derivation), but its `plan` tool reads/writes plan-state keyed by THAT child session id, while the
+ * Controller's grader reads the goal PLAN DOC from the store. Without a bridge the worker's plan edits
+ * never reach the graded plan (the §E F3 defect). This port makes the goal plan doc the single source
+ * of truth around each turn:
+ *   - `seedChildPlan(childId)`  : before the turn, copy the goal plan doc INTO the child's plan-state so
+ *                                 the worker's plan tool builds on the real plan (getPlan/setPlan hit it).
+ *   - `mirrorChildPlan(childId)`: after the turn, copy the child's resulting plan-state BACK into the
+ *                                 goal plan doc (a new version), so the grader + version-idempotency see
+ *                                 the worker's progress. Returns true iff the goal plan doc changed.
+ * Both are best-effort and pure w.r.t. the store; production wires them to AgentGateway + the store.
+ */
+export type PlanBridge = {
+  readonly seedChildPlan: (childSessionID: string) => void
+  readonly mirrorChildPlan: (childSessionID: string) => void
+}
+
+/**
+ * Build a StepExecutor that drives ONE goal-worker turn per tick (§D.6 一 tick = 一 SessionPrompt turn).
+ * When `planBridgeFor` is supplied (production), it is called PER TICK with that tick's goal plan doc id
+ * to obtain a PlanBridge bound to the right goal (the Controller reuses one executor across goals, and
+ * each tick carries its own `planDocId`). The bridge seeds the child session from the goal plan before
+ * the turn and mirrors the worker's edits back after — so the worker maintains its OWN goal's plan
+ * (§E.3 acceptance) even though it runs in an isolated, permission-derived child session.
+ */
+export const buildStepExecutor = (
+  runTurn: SubagentTurnRunner,
+  planBridgeFor?: (planDocId: string) => PlanBridge,
+): StepExecutor =>
+  (input) => {
+    const planBridge = planBridgeFor?.(input.planDocId)
+    return runTurn({
       agentType: "goal-worker",
       prompt: renderStepPrompt(input),
+      ...(planBridge ? { prepareSession: (childId: string) => planBridge.seedChildPlan(childId) } : {}),
     }).pipe(
-      Effect.map(
-        (turn): StepExecutorResult => ({
+      Effect.map((turn): StepExecutorResult => {
+        // Mirror the worker's plan-state back into the goal plan doc AFTER the turn (best-effort; a
+        // bridge defect must not fail the tick — the grader simply sees no plan advance and the loop
+        // treats it as no-progress, which stall detection ultimately catches).
+        if (planBridge && turn.sessionID) {
+          try {
+            planBridge.mirrorChildPlan(turn.sessionID)
+          } catch {
+            /* best-effort mirror */
+          }
+        }
+        return {
           tokensUsed: turn.tokensUsed,
           cost: turn.cost,
           // A turn that could not run at all is a critical failure for THIS tick → the loop rolls back.
           ...(turn.ok ? {} : { critical: true }),
-        }),
-      ),
+        }
+      }),
       // A defect never propagates: report it as a critical failure (the loop rolls back, not throws).
       Effect.catchCause(() => Effect.succeed({ tokensUsed: 0, cost: 0, critical: true })),
     )
+  }
+
+/**
+ * §D/§E F3 — the production PlanBridge over the goal plan doc + session-state. `store` holds the goal
+ * plan doc (`planDocId`, body = JSON PlanDoc, the grader's source of truth). `agentMode` seeds the
+ * child's session-state row. Both directions are defensive: a malformed/absent plan doc, a missing
+ * child plan, or an unchanged mirror are all safe no-ops (they never throw and never write a spurious
+ * version — DocumentStore.update is a no-op when the body is unchanged, INV-4).
+ */
+export const makePlanBridge = (input: {
+  readonly store: DocumentStore
+  readonly planDocId: string
+  readonly agentMode: string
+}): PlanBridge => ({
+  seedChildPlan: (childSessionID) => {
+    const doc = input.store.get(input.planDocId)
+    if (!doc) return
+    let plan: unknown
+    try {
+      plan = JSON.parse(doc.body)
+    } catch {
+      return // malformed goal plan → nothing to seed; the worker will just start fresh
+    }
+    // Ensure the child has a session-state row, then bind its plan to the goal plan so the worker's
+    // `plan` tool (getPlan/setPlan keyed on the child id) reads and extends the REAL goal plan.
+    AgentGateway.DeepAgentSessionState.getOrCreate(childSessionID, input.agentMode as never)
+    AgentGateway.DeepAgentSessionState.setPlan(childSessionID, plan as never)
+  },
+  mirrorChildPlan: (childSessionID) => {
+    const childPlan = AgentGateway.DeepAgentSessionState.getPlan(childSessionID)
+    if (childPlan == null) return // the worker never touched the plan this turn → nothing to mirror
+    const doc = input.store.get(input.planDocId)
+    if (!doc) return
+    // Write the worker's plan back into the goal plan doc. DocumentStore.update is a content-addressed
+    // no-op when the body is unchanged (INV-4), so a turn that changed nothing bumps NO version — which
+    // is exactly what the Controller's version-based idempotency + stall detection expect.
+    input.store.update(input.planDocId, JSON.stringify(childPlan))
+  },
+})
 
 const renderStepPrompt = (input: {
   readonly goalId: string
@@ -346,6 +438,16 @@ export const makeTaskSubagentRunner = (deps: TaskSubagentRunnerDeps): SubagentTu
         }),
       })
 
+      // §D/§E F3: seed the child session BEFORE the turn (the goal-worker executor uses this to bind
+      // the child's plan-state to the goal plan doc). Best-effort — a defect here must not fail the turn.
+      if (input.prepareSession) {
+        try {
+          input.prepareSession(child.id)
+        } catch {
+          /* best-effort seed; the turn still runs */
+        }
+      }
+
       const parts = yield* deps.sessionPrompt.resolvePromptParts(input.prompt)
       const result = yield* deps.sessionPrompt.prompt({
         messageID: MessageID.ascending(),
@@ -370,7 +472,7 @@ export const makeTaskSubagentRunner = (deps: TaskSubagentRunnerDeps): SubagentTu
           ? Math.max(0, (info.tokens.input ?? 0) + (info.tokens.output ?? 0) + (info.tokens.reasoning ?? 0))
           : 0
       const cost = info.role === "assistant" && Number.isFinite(info.cost) ? info.cost : 0
-      return { ok: true, structured, text, tokensUsed: tokens, cost } satisfies SubagentTurnResult
+      return { ok: true, structured, text, tokensUsed: tokens, cost, sessionID: child.id } satisfies SubagentTurnResult
     }).pipe(Effect.catchCause(() => Effect.succeed(failedTurn("subagent turn failed"))))
 
 const failedTurn = (_reason: string): SubagentTurnResult => ({
@@ -403,6 +505,12 @@ export type GoalLoopWiringInput = {
   readonly diagnostics: () => Effect.Effect<Record<string, readonly LSPClient.Diagnostic[]>>
   /** Best-effort rollback (production: SessionRevert). */
   readonly rollback: RollbackPort
+  /**
+   * §D/§E F3 — the AgentMode used to seed a goal-worker child session's state row when bridging the
+   * plan. Defaults to "general". Only affects the child's budget defaults; the plan itself is copied
+   * verbatim from the goal plan doc.
+   */
+  readonly agentMode?: string
   readonly now?: () => number
 }
 
@@ -432,10 +540,15 @@ export const makeGoalLoopWiring = (
       expertPanelEnabled: flags.experimentalExpertPanel,
     })
 
+    // §D/§E F3: bind a PlanBridge to each tick's goal plan doc so the isolated worker's plan edits are
+    // mirrored into the graded plan doc (and seeded from it). Shares the SAME store the Controller reads.
+    const planBridgeFor = (planDocId: string): PlanBridge =>
+      makePlanBridge({ store: input.store, planDocId, agentMode: input.agentMode ?? "general" })
+
     return {
       store: input.store,
       ports,
-      executor: buildStepExecutor(input.runTurn),
+      executor: buildStepExecutor(input.runTurn, planBridgeFor),
       rollback: input.rollback,
       now: input.now ?? (() => Date.now()),
     } satisfies ControllerDeps

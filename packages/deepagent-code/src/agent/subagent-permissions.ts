@@ -8,7 +8,11 @@ import type { Agent } from "./agent"
  * status). Ordinary subagents (explore/researcher/reviewer/panelist) do NOT
  * carry this capability and remain plan-write denied. A worker is registered
  * (P2/§D) with `capabilities: [PLAN_WRITE_OWN_GOAL]`; this derivation is the
- * only mechanism that acts on it.
+ * only mechanism that GRANTS plan-write from the capability. The one other path
+ * that could otherwise hand a subagent `plan`/`todowrite: allow` — a user's
+ * `experimental.primary_tools` passthrough in the `task` tool — is fenced off by
+ * `filterPrimaryToolsForSubagent` (see below), so the capability gate remains the
+ * sole route to those permissions for a subagent.
  *
  * Gate mapping (verified): the plan-write tool (`tool/plan-write.ts`) has tool
  * id `"plan"` and asks `ctx.ask({ permission: "plan" })`. The legacy
@@ -31,6 +35,29 @@ import type { Agent } from "./agent"
  * (exact), so it does not widen `plan_enter`/`plan_exit` or any other permission.
  */
 export const PLAN_WRITE_OWN_GOAL = "plan_write:own_goal"
+
+/**
+ * V3.9 §E — permissions that are GOVERNED by the capability gate (deriveSubagentSessionPermission)
+ * and must therefore NOT be re-grantable to a subagent through a side channel. The `task` tool appends
+ * a user's `experimental.primary_tools` as blanket `*: allow` rules AFTER the derived ruleset (and
+ * last-match-wins), which would let e.g. `primary_tools: ["plan"]` hand `plan: allow` to
+ * explore/researcher/reviewer — bypassing the §E capability gate entirely. These names are filtered
+ * out of that passthrough by `filterPrimaryToolsForSubagent`, so the capability gate stays the ONLY
+ * path to them for a subagent. (This does not affect the PRIMARY agent, which is where primary_tools is
+ * meant to apply.)
+ */
+export const CAPABILITY_GOVERNED_PERMISSIONS: readonly string[] = ["plan", "todowrite"]
+
+/**
+ * Filter a user's `experimental.primary_tools` list down to what may be safely force-allowed on a
+ * SUBAGENT session. Drops the §E capability-governed permissions (see CAPABILITY_GOVERNED_PERMISSIONS)
+ * so the primary_tools escape hatch cannot bypass the plan-write capability gate. Any other
+ * primary_tool passes through unchanged.
+ */
+export function filterPrimaryToolsForSubagent(primaryTools: readonly string[] | undefined): string[] {
+  if (!primaryTools) return []
+  return primaryTools.filter((tool) => !CAPABILITY_GOVERNED_PERMISSIONS.includes(tool))
+}
 
 /**
  * Build the `permission` ruleset for a subagent's session when it's spawned

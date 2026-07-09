@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test"
+import { describe, expect, test, afterEach } from "bun:test"
 import { Effect } from "effect"
 import type { Diagnostic } from "../../src/lsp/client"
 import {
@@ -6,12 +6,19 @@ import {
   buildStepExecutor,
   highestDiagnosticSeverity,
   makeGoalLoopWiring,
+  makePlanBridge,
   type PanelQuestionInput,
   type SubagentTurnResult,
   type SubagentTurnRunner,
 } from "../../src/session/goal-loop-wiring"
 import { RuntimeFlags } from "../../src/effect/runtime-flags"
 import type { ReviewResult } from "../../src/agent/schema/orchestration"
+import { mkdtempSync, rmSync } from "node:fs"
+import { tmpdir } from "node:os"
+import path from "node:path"
+import { DocumentStore } from "@deepagent-code/core/deepagent/document-store"
+import { AgentGateway } from "@deepagent-code/core/agent-gateway"
+import { createPlanDoc, planScope, type PlanDoc, type PlanStep } from "@deepagent-code/core/deepagent/plan-controller"
 
 /**
  * V3.9 §D wiring unit tests. Every leaf (LSP diagnostics, validation runner, subagent turn) is
@@ -183,6 +190,119 @@ describe("V3.9 §D wiring — buildStepExecutor", () => {
     const exec = buildStepExecutor(() => Effect.die("boom"))
     const res = await Effect.runPromise(exec({ goalId: "g", sessionId: "s", planDocId: "p", activeStepId: null }))
     expect(res.critical).toBe(true)
+  })
+})
+
+describe("V3.9 §E F3 wiring — plan bridge (worker plan edits reach the goal plan doc)", () => {
+  const roots: string[] = []
+  const step = (id: string, status: PlanStep["status"]): PlanStep => ({
+    step_id: id,
+    title: id,
+    status,
+    acceptance: null,
+    assigned_agent: null,
+    evidence: [],
+    note: null,
+  })
+  // Persist a plan doc exactly as the plan tool does (body = JSON PlanDoc, scope run:<sessionId>).
+  const putGoalPlan = (store: DocumentStore, sessionId: string, steps: PlanStep[]): string => {
+    const plan = createPlanDoc(sessionId, "reach goal", steps)
+    return store.upsert({
+      type: "plan",
+      scope: planScope(sessionId),
+      description: `plan ${sessionId}`,
+      idSlug: `plan-${sessionId}`,
+      body: JSON.stringify(plan),
+      provenance: { source: "model", run_ref: planScope(sessionId) },
+    }).id
+  }
+  const freshStore = () => {
+    const root = mkdtempSync(path.join(tmpdir(), "deepagent-f3-"))
+    roots.push(root)
+    return new DocumentStore(root)
+  }
+  afterEach(() => {
+    for (const r of roots.splice(0)) rmSync(r, { recursive: true, force: true })
+  })
+
+  test("seedChildPlan copies the goal plan into the child session's plan-state", () => {
+    const store = freshStore()
+    const goalSession = "goal-sess-1"
+    const planDocId = putGoalPlan(store, goalSession, [step("a", "active"), step("b", "pending")])
+    const bridge = makePlanBridge({ store, planDocId, agentMode: "general" })
+    const childId = "child-sess-1"
+    bridge.seedChildPlan(childId)
+    const seeded = AgentGateway.DeepAgentSessionState.getPlan(childId)
+    expect(seeded).not.toBeNull()
+    expect(seeded!.steps.map((s) => s.step_id)).toEqual(["a", "b"])
+    expect(seeded!.steps[0].status).toBe("active")
+  })
+
+  test("mirrorChildPlan writes the worker's edited plan BACK into the goal plan doc (new version)", () => {
+    const store = freshStore()
+    const goalSession = "goal-sess-2"
+    const planDocId = putGoalPlan(store, goalSession, [step("a", "active"), step("b", "pending")])
+    const bridge = makePlanBridge({ store, planDocId, agentMode: "general" })
+    const childId = "child-sess-2"
+    bridge.seedChildPlan(childId)
+    const before = store.get(planDocId)!.version
+
+    // Worker advances step a→done, b→active (as the plan tool would, via setPlan on the child session).
+    const seeded = AgentGateway.DeepAgentSessionState.getPlan(childId)!
+    const advanced: PlanDoc = {
+      ...seeded,
+      steps: [
+        { ...seeded.steps[0], status: "done" },
+        { ...seeded.steps[1], status: "active" },
+      ],
+      active_step_id: "b",
+    }
+    AgentGateway.DeepAgentSessionState.setPlan(childId, advanced)
+    bridge.mirrorChildPlan(childId)
+
+    const goalDoc = store.get(planDocId)!
+    expect(goalDoc.version).toBeGreaterThan(before) // a new version was written
+    const goalPlan = JSON.parse(goalDoc.body) as PlanDoc
+    expect(goalPlan.steps.find((s) => s.step_id === "a")!.status).toBe("done")
+    expect(goalPlan.active_step_id).toBe("b")
+  })
+
+  test("mirrorChildPlan is a no-op version-wise when the worker changed nothing (idempotency-safe)", () => {
+    const store = freshStore()
+    const planDocId = putGoalPlan(store, "goal-sess-3", [step("a", "active")])
+    const bridge = makePlanBridge({ store, planDocId, agentMode: "general" })
+    const childId = "child-sess-3"
+    bridge.seedChildPlan(childId)
+    const before = store.get(planDocId)!.version
+    // Re-set the identical plan (no status change) then mirror — must NOT bump the version (INV-4).
+    AgentGateway.DeepAgentSessionState.setPlan(childId, AgentGateway.DeepAgentSessionState.getPlan(childId)!)
+    bridge.mirrorChildPlan(childId)
+    expect(store.get(planDocId)!.version).toBe(before)
+  })
+
+  test("buildStepExecutor with a bridge factory seeds before and mirrors after the turn", async () => {
+    const store = freshStore()
+    const goalSession = "goal-sess-4"
+    const planDocId = putGoalPlan(store, goalSession, [step("a", "active")])
+    const bridgeFor = (id: string) => makePlanBridge({ store, planDocId: id, agentMode: "general" })
+
+    // A stub runTurn that behaves like the worker: on its turn it advances the (seeded) child plan,
+    // and it reports the child session id so the executor can mirror it back.
+    const childId = "child-sess-4"
+    const runTurn: SubagentTurnRunner = (input) => {
+      input.prepareSession?.(childId) // the real runner calls this after creating the child session
+      const p = AgentGateway.DeepAgentSessionState.getPlan(childId)!
+      AgentGateway.DeepAgentSessionState.setPlan(childId, { ...p, steps: [{ ...p.steps[0], status: "done" }] })
+      return Effect.succeed(turnFrom({ ok: true, tokensUsed: 5, sessionID: childId }))
+    }
+    const exec = buildStepExecutor(runTurn, bridgeFor)
+    const res = await Effect.runPromise(
+      exec({ goalId: "g", sessionId: goalSession, planDocId, activeStepId: "a" }),
+    )
+    expect(res.critical).toBeUndefined()
+    // The worker's advance is now visible in the GOAL plan doc (what the grader reads).
+    const goalPlan = JSON.parse(store.get(planDocId)!.body) as PlanDoc
+    expect(goalPlan.steps[0].status).toBe("done")
   })
 })
 
