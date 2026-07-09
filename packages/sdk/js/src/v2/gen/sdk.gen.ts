@@ -52,6 +52,12 @@ import type {
   DebugTerminateResponses,
   DebugVariablesErrors,
   DebugVariablesResponses,
+  DeepagentEnvFactsDecideErrors,
+  DeepagentEnvFactsDecideResponses,
+  DeepagentEnvFactsListErrors,
+  DeepagentEnvFactsListResponses,
+  DeepagentEnvFactsModifyErrors,
+  DeepagentEnvFactsModifyResponses,
   DeepagentKnowledgeApproveErrors,
   DeepagentKnowledgeApproveResponses,
   DeepagentKnowledgePendingErrors,
@@ -163,6 +169,10 @@ import type {
   GlobalEventResponses,
   GlobalHealthErrors,
   GlobalHealthResponses,
+  GlobalImportErrors,
+  GlobalImportResponses,
+  GlobalProjectsErrors,
+  GlobalProjectsResponses,
   GlobalUpgradeErrors,
   GlobalUpgradeResponses,
   ImAgentsListErrors,
@@ -1493,6 +1503,30 @@ export class Global extends HeyApiClient {
     })
   }
 
+  /**
+   * Import history from Codex / Claude Code
+   *
+   * Hot-import chat history, memory, and skills from a Codex or Claude Code installation. The body is an ImportRequest JSON object; progress is streamed back as server-sent events (text/event-stream), one JSON ImportProgress object per event, ending with a `done` event carrying the ImportReport.
+   */
+  public import<ThrowOnError extends boolean = false>(options?: Options<never, ThrowOnError>) {
+    return (options?.client ?? this.client).post<GlobalImportResponses, GlobalImportErrors, ThrowOnError>({
+      url: "/global/import",
+      ...options,
+    })
+  }
+
+  /**
+   * List all known projects
+   *
+   * List every project row in the database (including imported / not-yet-opened projects), so the History Projects view can surface sessions that do not belong to a currently-active project.
+   */
+  public projects<ThrowOnError extends boolean = false>(options?: Options<never, ThrowOnError>) {
+    return (options?.client ?? this.client).get<GlobalProjectsResponses, GlobalProjectsErrors, ThrowOnError>({
+      url: "/global/projects",
+      ...options,
+    })
+  }
+
   private _config?: Config
   get config(): Config {
     return (this._config ??= new Config({ client: this.client }))
@@ -2347,6 +2381,142 @@ export class Knowledge extends HeyApiClient {
   }
 }
 
+export class EnvFacts extends HeyApiClient {
+  /**
+   * List environment facts for the use-gate
+   *
+   * V3.8.1 §G: provisional user-global environment facts, partitioned into adopted (silently used) and pending (needs a decision) for the active project.
+   */
+  public list<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<
+      DeepagentEnvFactsListResponses,
+      DeepagentEnvFactsListErrors,
+      ThrowOnError
+    >({
+      url: "/deepagent/env-facts",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Adopt or reject an environment fact
+   *
+   * V3.8.1 §G.5: adopt (silently use in this project, never ask again) or reject (never ask again here; other projects unaffected).
+   */
+  public decide<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      factId?: string
+      decision?: "adopt" | "reject"
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "factId" },
+            { in: "body", key: "decision" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      DeepagentEnvFactsDecideResponses,
+      DeepagentEnvFactsDecideErrors,
+      ThrowOnError
+    >({
+      url: "/deepagent/env-facts/decide",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Modify an environment fact and adopt it
+   *
+   * V3.8.1 §G.5: edit a fact then adopt it. mode=global corrects the shared fact for all projects; mode=project writes a project-local override, leaving the global fact untouched.
+   */
+  public modify<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      factId?: string
+      description?: string
+      body?: {
+        host?: string
+        port?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        container?: string
+        purpose?: string
+        secret_refs?: Array<string>
+        last_confirmed_at: string
+        notes?: string
+      }
+      domain?: string
+      mode?: "global" | "project"
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "factId" },
+            { in: "body", key: "description" },
+            { in: "body", key: "body" },
+            { in: "body", key: "domain" },
+            { in: "body", key: "mode" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      DeepagentEnvFactsModifyResponses,
+      DeepagentEnvFactsModifyErrors,
+      ThrowOnError
+    >({
+      url: "/deepagent/env-facts/modify",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+}
+
 export class Deepagent extends HeyApiClient {
   /**
    * List recent DeepAgent run reviews
@@ -2501,6 +2671,11 @@ export class Deepagent extends HeyApiClient {
   private _knowledge?: Knowledge
   get knowledge(): Knowledge {
     return (this._knowledge ??= new Knowledge({ client: this.client }))
+  }
+
+  private _envFacts?: EnvFacts
+  get envFacts(): EnvFacts {
+    return (this._envFacts ??= new EnvFacts({ client: this.client }))
   }
 }
 
@@ -5660,7 +5835,7 @@ export class Session2 extends HeyApiClient {
       }
       permission?: PermissionRuleset
       time?: {
-        archived?: number
+        archived?: number | null
       }
     },
     options?: Options<never, ThrowOnError>,

@@ -72,6 +72,7 @@ function sessionRow(info: SessionV1.SessionInfo): typeof SessionTable.$inferInse
     time_updated: info.time.updated,
     time_compacting: info.time.compacting,
     time_archived: info.time.archived,
+    preview: info.preview,
   }
 }
 
