@@ -49,6 +49,18 @@ import type { SessionPlan, SessionPlanStep } from "./global-sync/types"
 
 export type { SessionPlan, SessionPlanStep }
 
+// True when `dir` is a filesystem root: posix "/" or a Windows drive/UNC root ("C:\", "C:/", "\\").
+// Rooting an instance here is refused server-side (assertSafeInstanceRoot); we check on the client
+// too so we never fire the doomed boot. Kept dependency-free (no node:path in the renderer).
+function isFilesystemRootDir(dir: string): boolean {
+  const trimmed = dir.trim()
+  if (!trimmed) return false
+  const normalized = trimmed.replace(/\\/g, "/").replace(/\/+$/, "")
+  if (normalized === "") return true // was "/" or "\" (all separators)
+  if (/^[A-Za-z]:$/.test(normalized)) return true // "C:" (drive root after trailing-slash strip)
+  return false
+}
+
 type GlobalStore = {
   ready: boolean
   error?: InitError
@@ -388,6 +400,20 @@ export function createServerSyncContextInner(_serverSDK?: ServerSDK) {
   async function bootstrapInstance(directory: string) {
     const key = directoryKey(directory)
     if (!key) return
+    // Fail-closed against a filesystem-root directory. The server refuses to boot an instance
+    // rooted at "/" (assertSafeInstanceRoot — it would make the file-tool permission boundary the
+    // whole disk), so a stored session/route pointing at "/" would otherwise trigger an endless
+    // boot→fail→retry storm surfacing only as "unexpected server error". Mirror the guard here so
+    // the doomed request is never sent and the user gets a clear reason instead. Legacy "/" data
+    // (pre-guard) is the only way to reach this now that the boot path rejects it.
+    if (isFilesystemRootDir(directory)) {
+      showToast({
+        variant: "error",
+        title: language.t("toast.project.rootRefused.title"),
+        description: language.t("toast.project.rootRefused.description"),
+      })
+      return
+    }
     const pending = booting.get(key)
     if (pending) return pending
 
