@@ -2,18 +2,27 @@ import type { Session } from "@deepagent-code/sdk/v2/client"
 import { Avatar } from "@deepagent-code/ui/avatar"
 import { Icon } from "@deepagent-code/ui/icon"
 import { IconButton } from "@deepagent-code/ui/icon-button"
+import { InlineInput } from "@deepagent-code/ui/inline-input"
+import { ContextMenu } from "@deepagent-code/ui/context-menu"
 import { Spinner } from "@deepagent-code/ui/spinner"
 import { Tooltip } from "@deepagent-code/ui/tooltip"
+import { useDialog } from "@deepagent-code/ui/context/dialog"
 import { getFilename } from "@deepagent-code/core/util/path"
-import { A, useParams } from "@solidjs/router"
-import { type Accessor, createMemo, For, type JSX, Match, Show, Switch } from "solid-js"
+import { Binary } from "@deepagent-code/core/util/binary"
+import { A } from "@solidjs/router"
+import { type Accessor, createMemo, createSignal, For, type JSX, Match, Show, Switch } from "solid-js"
+import { produce } from "solid-js/store"
 import { useServerSync } from "@/context/server-sync"
+import { useServerSDK } from "@/context/server-sdk"
 import { useLanguage } from "@/context/language"
 import { getAvatarColors, type LocalProject, useLayout } from "@/context/layout"
 import { useNotification } from "@/context/notification"
 import { usePermission } from "@/context/permission"
 import { messageAgentColor } from "@/utils/agent"
 import { sessionTitle } from "@/utils/session-title"
+import { formatSessionTime } from "@/utils/session-time"
+import { showToast } from "@/utils/toast"
+import { DialogDeleteSession } from "./sidebar-delete-session"
 import { sessionPermissionRequest } from "../session/composer/session-request-tree"
 import {
   directChildSessions,
@@ -105,8 +114,29 @@ const SessionRow = (props: {
   sidebarOpened: Accessor<boolean>
   warmPress: () => void
   warmFocus: () => void
+  editing: Accessor<boolean>
+  onStartRename: () => void
+  onSaveRename: (next: string) => void
+  onCancelRename: () => void
 }): JSX.Element => {
+  const language = useLanguage()
   const title = () => sessionTitle(props.session.title)
+  const time = createMemo(() => {
+    const t = props.session.time
+    const at = t.updated ?? t.created
+    if (typeof at !== "number") return ""
+    return formatSessionTime(at, language.intl())
+  })
+
+  const [draft, setDraft] = createSignal("")
+  const beginRename = (event: MouseEvent) => {
+    // Double-click the title to rename in place; suppress the link navigation the dblclick would fire.
+    event.preventDefault()
+    event.stopPropagation()
+    setDraft(title() ?? "")
+    props.onStartRename()
+  }
+  const commit = () => props.onSaveRename(draft().trim())
 
   return (
     <A
@@ -114,7 +144,11 @@ const SessionRow = (props: {
       class={`flex items-center gap-2 min-w-0 w-full text-left focus:outline-none ${props.dense ? "py-0.5" : "py-1"}`}
       onPointerDown={props.warmPress}
       onFocus={props.warmFocus}
-      onClick={() => {
+      onClick={(event) => {
+        if (props.editing()) {
+          event.preventDefault()
+          return
+        }
         if (props.sidebarOpened()) return
         props.clearHoverProjectSoon()
       }}
@@ -140,21 +174,103 @@ const SessionRow = (props: {
           </Switch>
         </div>
       </Show>
-      <span class="text-14-regular text-text-strong min-w-0 flex-1 truncate">{title()}</span>
+      <Show
+        when={props.editing()}
+        fallback={
+          <span class="text-14-regular text-text-strong min-w-0 flex-1 truncate" onDblClick={beginRename}>
+            {title()}
+          </span>
+        }
+      >
+        <InlineInput
+          ref={(el) => {
+            requestAnimationFrame(() => {
+              if (!el.isConnected) return
+              el.focus()
+              el.select()
+            })
+          }}
+          value={draft()}
+          class="text-14-regular text-text-strong min-w-0 flex-1 rounded-[6px] pl-1 -ml-1"
+          style={{ "--inline-input-shadow": "var(--shadow-xs-border-select)" }}
+          onInput={(event) => setDraft(event.currentTarget.value)}
+          onClick={(event) => event.preventDefault()}
+          onPointerDown={(event) => event.stopPropagation()}
+          onMouseDown={(event) => event.stopPropagation()}
+          onKeyDown={(event) => {
+            event.stopPropagation()
+            if (event.key === "Enter") {
+              event.preventDefault()
+              commit()
+              return
+            }
+            if (event.key === "Escape") {
+              event.preventDefault()
+              props.onCancelRename()
+            }
+          }}
+          onBlur={commit}
+        />
+      </Show>
+      <Show when={time() && !props.editing()}>
+        <span
+          class="shrink-0 text-12-regular text-text-weaker tabular-nums transition-opacity group-hover/session:opacity-0 group-focus-within/session:opacity-0"
+          aria-hidden="true"
+        >
+          {time()}
+        </span>
+      </Show>
     </A>
   )
 }
 
 export const SessionItem = (props: SessionItemProps): JSX.Element => {
-  const params = useParams()
   const layout = useLayout()
   const language = useLanguage()
   const notification = useNotification()
   const permission = usePermission()
   const serverSync = useServerSync()
+  const serverSDK = useServerSDK()
+  const dialog = useDialog()
   const unseenCount = createMemo(() => notification.session.unseenCount(props.session.id))
   const hasError = createMemo(() => notification.session.unseenHasError(props.session.id))
-  const [sessionStore] = serverSync.child(props.session.directory)
+  const [sessionStore, setSessionStore] = serverSync.child(props.session.directory)
+
+  const [editing, setEditing] = createSignal(false)
+  // The context menu defers opening the rename editor until it has closed (via onCloseAutoFocus), so
+  // focus lands on the input rather than being stolen back by the menu teardown.
+  let pendingRename = false
+
+  const startRename = () => setEditing(true)
+  const cancelRename = () => setEditing(false)
+  const saveRename = (next: string) => {
+    setEditing(false)
+    const current = sessionTitle(props.session.title) ?? ""
+    if (!next || next === current) return
+    // Optimistic: patch the per-directory store immediately, then persist. Roll back on failure.
+    const previous = props.session.title
+    setSessionStore(
+      produce((draft) => {
+        const match = Binary.search(draft.session, props.session.id, (s) => s.id)
+        if (match.found) draft.session[match.index].title = next
+      }),
+    )
+    void serverSDK.client.session
+      .update({ directory: props.session.directory, sessionID: props.session.id, title: next })
+      .catch((err: unknown) => {
+        setSessionStore(
+          produce((draft) => {
+            const match = Binary.search(draft.session, props.session.id, (s) => s.id)
+            if (match.found) draft.session[match.index].title = previous
+          }),
+        )
+        showToast({
+          title: language.t("common.requestFailed"),
+          description: err instanceof Error ? err.message : String(err),
+        })
+      })
+  }
+  const deleteSession = () => dialog.show(() => <DialogDeleteSession session={props.session} />)
   const hasPermissions = createMemo(() => {
     return !!sessionPermissionRequest(sessionStore.session, sessionStore.permission, props.session.id, (item) => {
       return !permission.autoResponds(item, props.session.directory)
@@ -212,62 +328,98 @@ export const SessionItem = (props: SessionItemProps): JSX.Element => {
       sidebarOpened={layout.sidebar.opened}
       warmPress={() => warm(2, "high")}
       warmFocus={() => warm(2, "high")}
+      editing={editing}
+      onStartRename={startRename}
+      onSaveRename={saveRename}
+      onCancelRename={cancelRename}
     />
   )
 
   return (
     <>
-      <div
-        data-session-id={props.session.id}
-        class="group/session relative w-full min-w-0 rounded-md cursor-default pr-3 transition-colors hover:bg-surface-raised-base-hover [&:has(:focus-visible)]:bg-surface-raised-base-hover has-[[data-expanded]]:bg-surface-raised-base-hover has-[.active]:bg-surface-base-active"
-        style={{ "padding-left": `${8 + (props.level ?? 0) * 16}px` }}
+      <ContextMenu
+        onOpenChange={(open) => {
+          // When the context menu closes and a rename was requested from the menu item, open the
+          // inline editor after the menu's focus-return animation finishes (onCloseAutoFocus fires).
+          if (!open && pendingRename) {
+            pendingRename = false
+            // Small rAF so the focus truly leaves the closed menu before we set editing state.
+            requestAnimationFrame(startRename)
+          }
+        }}
       >
-        <div class="flex min-w-0 items-center gap-1">
-          <div class="min-w-0 flex-1">
-            <Show
-              when={!tooltip()}
-              fallback={
-                <Tooltip
-                  placement={props.mobile ? "bottom" : "right"}
-                  value={sessionTitle(props.session.title)}
-                  gutter={10}
-                  class="min-w-0 w-full"
-                >
-                  {item}
+        <ContextMenu.Trigger
+          as="div"
+          data-session-id={props.session.id}
+          class="group/session relative w-full min-w-0 rounded-md cursor-default pr-3 transition-colors hover:bg-surface-raised-base-hover [&:has(:focus-visible)]:bg-surface-raised-base-hover has-[[data-expanded]]:bg-surface-raised-base-hover has-[.active]:bg-surface-base-active"
+          style={{ "padding-left": `${8 + (props.level ?? 0) * 16}px` }}
+        >
+          <div class="flex min-w-0 items-center gap-1">
+            <div class="min-w-0 flex-1">
+              <Show
+                when={!tooltip()}
+                fallback={
+                  <Tooltip
+                    placement={props.mobile ? "bottom" : "right"}
+                    value={sessionTitle(props.session.title)}
+                    gutter={10}
+                    class="min-w-0 w-full"
+                  >
+                    {item}
+                  </Tooltip>
+                }
+              >
+                {item}
+              </Show>
+            </div>
+
+            <Show when={!props.level}>
+              <div
+                class="shrink-0 overflow-hidden transition-[width,opacity]"
+                classList={{
+                  "w-6 opacity-100 pointer-events-auto": !!props.mobile,
+                  "w-0 opacity-0 pointer-events-none": !props.mobile,
+                  "group-hover/session:w-6 group-hover/session:opacity-100 group-hover/session:pointer-events-auto": true,
+                  "group-focus-within/session:w-6 group-focus-within/session:opacity-100 group-focus-within/session:pointer-events-auto": true,
+                }}
+              >
+                <Tooltip value={language.t("common.archive")} placement="top">
+                  <IconButton
+                    icon="archive"
+                    variant="ghost"
+                    class="size-6 rounded-md"
+                    aria-label={language.t("common.archive")}
+                    onClick={(event) => {
+                      event.preventDefault()
+                      event.stopPropagation()
+                      void props.archiveSession(props.session)
+                    }}
+                  />
                 </Tooltip>
-              }
-            >
-              {item}
+              </div>
             </Show>
           </div>
-
-          <Show when={!props.level}>
-            <div
-              class="shrink-0 overflow-hidden transition-[width,opacity]"
-              classList={{
-                "w-6 opacity-100 pointer-events-auto": !!props.mobile,
-                "w-0 opacity-0 pointer-events-none": !props.mobile,
-                "group-hover/session:w-6 group-hover/session:opacity-100 group-hover/session:pointer-events-auto": true,
-                "group-focus-within/session:w-6 group-focus-within/session:opacity-100 group-focus-within/session:pointer-events-auto": true,
+        </ContextMenu.Trigger>
+        <ContextMenu.Portal>
+          <ContextMenu.Content>
+            <ContextMenu.Item
+              onSelect={() => {
+                // Defer rename to onCloseAutoFocus so focus isn't stolen back by menu teardown.
+                pendingRename = true
               }}
             >
-              <Tooltip value={language.t("common.archive")} placement="top">
-                <IconButton
-                  icon="archive"
-                  variant="ghost"
-                  class="size-6 rounded-md"
-                  aria-label={language.t("common.archive")}
-                  onClick={(event) => {
-                    event.preventDefault()
-                    event.stopPropagation()
-                    void props.archiveSession(props.session)
-                  }}
-                />
-              </Tooltip>
-            </div>
-          </Show>
-        </div>
-      </div>
+              <ContextMenu.ItemLabel>{language.t("common.rename")}</ContextMenu.ItemLabel>
+            </ContextMenu.Item>
+            <ContextMenu.Item onSelect={() => void props.archiveSession(props.session)}>
+              <ContextMenu.ItemLabel>{language.t("common.archive")}</ContextMenu.ItemLabel>
+            </ContextMenu.Item>
+            <ContextMenu.Separator />
+            <ContextMenu.Item onSelect={deleteSession}>
+              <ContextMenu.ItemLabel>{language.t("common.delete")}</ContextMenu.ItemLabel>
+            </ContextMenu.Item>
+          </ContextMenu.Content>
+        </ContextMenu.Portal>
+      </ContextMenu>
       <Show when={childSessions().length > 0}>
         <div class="w-full">
           <For each={childSessions()}>
