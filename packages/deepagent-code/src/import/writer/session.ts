@@ -30,12 +30,37 @@ import type { SessionImportResult } from "../types"
  * Because steps 2+3 run for the same stable aggregate id every time, re-running
  * an import fully replaces that session's history without duplicates.
  */
+// True when `dir` is a filesystem root ("/" or a Windows drive/UNC root). Mirrors
+// project/instance-context.isFilesystemRoot without pulling node:path into this module's
+// dependency surface; the check is the same (strip trailing separators → empty or bare drive).
+function isFilesystemRootPath(dir: string): boolean {
+  const trimmed = dir.trim()
+  if (!trimmed) return false
+  const normalized = trimmed.replace(/\\/g, "/").replace(/\/+$/, "")
+  return normalized === "" || /^[A-Za-z]:$/.test(normalized)
+}
+
 export const importSession = Effect.fn("Import.session")(function* (session: SourceSession) {
   const { db } = yield* Database.Service
   const events = yield* EventV2.Service
   const projectService = yield* ProjectV2.Service
 
   const aggregateID = sessionID(session.source, session.sourceId)
+
+  // Fail-closed: never import a session whose OWN cwd is a filesystem root ("/"). The session's
+  // directory becomes its route/instance directory, and the boot guard (assertSafeInstanceRoot)
+  // rejects a root-rooted directory — so such a session could never be opened and would surface as
+  // a permanent "unexpected server error". Note we check the SOURCE cwd, not the resolved project
+  // directory: a non-git session legitimately maps to the `global` project whose worktree sentinel
+  // is "/" (handled safely by containsPath), and that must still import. Per-session imports are
+  // isolated (Effect.either upstream), so failing here skips just this one and records a warning.
+  if (isFilesystemRootPath(session.cwd)) {
+    return yield* Effect.fail(
+      new Error(
+        `refusing to import session ${session.sourceId}: its cwd is the filesystem root (${JSON.stringify(session.cwd)})`,
+      ),
+    )
+  }
 
   // 1. resolve the REAL project id (matches native deepagent-code projects)
   const resolved = yield* projectService.resolve(AbsolutePath.make(session.cwd))
