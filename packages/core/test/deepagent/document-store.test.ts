@@ -98,6 +98,34 @@ describe("V3 DocumentStore", () => {
     })
     expect(store.list({ type: "memory" }).length).toBe(0)
   })
+
+  // V3.9 §B.2/B.3: the human-governance edit path. Append-only new version whose provenance is the
+  // supplied human authorship — NOT the model/runner provenance copied by update().
+  test("updateWithProvenance stamps human provenance + is append-only", () => {
+    const k = store.create({
+      type: "knowledge",
+      scope: "durable",
+      body: "v1 body",
+      description: "a fact",
+      confidence: { evidence_strength: "weak", support_count: 1 },
+      provenance: { source: "model", run_ref: "run:t1" },
+    })
+    expect(k.version).toBe(1)
+    expect(k.provenance.source).toBe("model")
+    const edited = store.updateWithProvenance(k.id, "v2 body edited by human", { source: "human" })
+    expect(edited.version).toBe(2)
+    expect(edited.provenance.source).toBe("human")
+    expect(edited.body).toBe("v2 body edited by human")
+    // knowledge confidence preserved (assertKnowledgeConfidence satisfied)
+    expect(edited.confidence?.evidence_strength).toBe("weak")
+    // append-only: old version superseded, latest resolves to v2
+    const old = store.get(k.id, 1)!
+    expect(old.status).toBe("superseded")
+    expect(old.superseded_by).toBe(`${k.id}@v2`)
+    expect(store.get(k.id)!.version).toBe(2)
+    // provenance is part of the fingerprint → identical body+provenance is an INV-4 no-op
+    expect(store.updateWithProvenance(k.id, "v2 body edited by human", { source: "human" }).version).toBe(2)
+  })
 })
 
 // V3.8 Phase 0: the new NON-knowledge derived-data node/edge types must round-trip through the graph

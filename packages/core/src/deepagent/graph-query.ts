@@ -29,6 +29,11 @@ import * as knowledgeSource from "./knowledge-source"
 // implements) plus the knowledge-derivation edges (derived_from/validated_by/refines/depends_on) so
 // a code_symbol seed can pull the design/knowledge it references and a doc seed can pull what it was
 // derived from. Callers may override via GraphQueryInput.rels.
+//
+// V3.9 §A.5: contains/imports/calls added so a query drills from a file node into its symbol children
+// (contains) and traverses the code→code dependency topology (imports between files, calls between
+// symbols) by default — the acceptance requires "UnifiedContextGraph.query can drill into symbol nodes
+// and traverse imports/calls" without every caller re-specifying rels.
 export const DEFAULT_RELS: readonly LinkRel[] = [
   "references",
   "implements",
@@ -38,6 +43,9 @@ export const DEFAULT_RELS: readonly LinkRel[] = [
   "depends_on",
   "supports",
   "requires",
+  "contains",
+  "imports",
+  "calls",
 ]
 
 export const DEFAULT_DEPTH = 2
