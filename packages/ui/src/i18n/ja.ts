@@ -110,6 +110,7 @@ export const dict = {
   "ui.tool.questions": "質問",
   "ui.tool.agent": "{{type}}エージェント",
   "ui.tool.agent.default": "エージェント",
+  "ui.tool.agent.tokens": "{{count}} tokens",
 
   "ui.common.file.one": "ファイル",
   "ui.common.file.other": "ファイル",
@@ -164,4 +165,5 @@ export const dict = {
   "ui.toolErrorCard.copyError": "エラーをコピー",
   "ui.message.duration.seconds": "{{count}}秒",
   "ui.message.duration.minutesSeconds": "{{minutes}}分 {{seconds}}秒",
+  "ui.message.duration.hoursMinutes": "{{hours}}時間 {{minutes}}分",
 }

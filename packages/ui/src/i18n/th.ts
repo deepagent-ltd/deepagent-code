@@ -112,6 +112,7 @@ export const dict = {
   "ui.tool.questions": "คำถาม",
   "ui.tool.agent": "เอเจนต์ {{type}}",
   "ui.tool.agent.default": "เอเจนต์",
+  "ui.tool.agent.tokens": "{{count}} tokens",
 
   "ui.common.file.one": "ไฟล์",
   "ui.common.file.other": "ไฟล์",
@@ -166,4 +167,5 @@ export const dict = {
   "ui.toolErrorCard.copyError": "คัดลอกข้อผิดพลาด",
   "ui.message.duration.seconds": "{{count}}วิ",
   "ui.message.duration.minutesSeconds": "{{minutes}}นาที {{seconds}}วิ",
+  "ui.message.duration.hoursMinutes": "{{hours}}ชม {{minutes}}นาที",
 }

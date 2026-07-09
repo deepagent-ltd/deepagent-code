@@ -367,12 +367,14 @@ export const dict = {
   "context.stats.userMessages": "Brugerbeskeder",
   "context.stats.assistantMessages": "Assistentbeskeder",
   "context.stats.totalCost": "Samlede omkostninger",
+  "context.stats.conversationTokens": "Samtale-tokens",
   "context.stats.sessionCreated": "Session oprettet",
   "context.stats.lastActivity": "Seneste aktivitet",
 
   "context.usage.tokens": "Tokens",
   "context.usage.usage": "Forbrug",
   "context.usage.cost": "Omkostning",
+  "context.usage.totalTokens": "Samtale-tokens",
   "context.usage.clickToView": "Klik for at se kontekst",
   "context.usage.view": "Se kontekstforbrug",
 

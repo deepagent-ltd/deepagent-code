@@ -114,6 +114,7 @@ export const dict = {
   "ui.tool.questions": "问题",
   "ui.tool.agent": "{{type}} 智能体",
   "ui.tool.agent.default": "智能体",
+  "ui.tool.agent.tokens": "{{count}} tokens",
 
   "ui.common.file.one": "个文件",
   "ui.common.file.other": "个文件",
@@ -168,4 +169,5 @@ export const dict = {
   "ui.toolErrorCard.copyError": "复制错误",
   "ui.message.duration.seconds": "{{count}}秒",
   "ui.message.duration.minutesSeconds": "{{minutes}}分 {{seconds}}秒",
+  "ui.message.duration.hoursMinutes": "{{hours}}时 {{minutes}}分",
 } satisfies Partial<Record<Keys, string>>

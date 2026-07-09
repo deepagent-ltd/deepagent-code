@@ -111,6 +111,7 @@ export const dict = {
   "ui.tool.questions": "질문",
   "ui.tool.agent": "{{type}} 에이전트",
   "ui.tool.agent.default": "에이전트",
+  "ui.tool.agent.tokens": "{{count}} tokens",
 
   "ui.common.file.one": "파일",
   "ui.common.file.other": "파일",
@@ -165,4 +166,5 @@ export const dict = {
   "ui.toolErrorCard.copyError": "오류 복사",
   "ui.message.duration.seconds": "{{count}}초",
   "ui.message.duration.minutesSeconds": "{{minutes}}분 {{seconds}}초",
+  "ui.message.duration.hoursMinutes": "{{hours}}시간 {{minutes}}분",
 }

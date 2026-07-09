@@ -115,6 +115,7 @@ export const dict: Record<string, string> = {
   "ui.tool.questions": "Питання",
   "ui.tool.agent": "Агент {{type}}",
   "ui.tool.agent.default": "Агент",
+  "ui.tool.agent.tokens": "{{count}} tokens",
   "ui.tool.skill": "Навичка",
 
   "ui.basicTool.called": "Викликано `{{tool}}`",
@@ -149,6 +150,7 @@ export const dict: Record<string, string> = {
   "ui.message.copied": "Скопійовано",
   "ui.message.duration.seconds": "{{count}}с",
   "ui.message.duration.minutesSeconds": "{{minutes}}хв {{seconds}}с",
+  "ui.message.duration.hoursMinutes": "{{hours}}год {{minutes}}хв",
   "ui.message.interrupted": "Перервано",
   "ui.message.queued": "У черзі",
   "ui.message.attachment.alt": "вкладення",

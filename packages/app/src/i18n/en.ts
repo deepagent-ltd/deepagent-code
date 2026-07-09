@@ -514,7 +514,7 @@ export const dict = {
   "context.stats.provider": "Provider",
   "context.stats.model": "Model",
   "context.stats.limit": "Context Limit",
-  "context.stats.totalTokens": "Total Tokens",
+  "context.stats.totalTokens": "Context Tokens",
   "context.stats.usage": "Usage",
   "context.stats.inputTokens": "Input Tokens",
   "context.stats.outputTokens": "Output Tokens",
@@ -523,12 +523,14 @@ export const dict = {
   "context.stats.userMessages": "User Messages",
   "context.stats.assistantMessages": "Assistant Messages",
   "context.stats.totalCost": "Total Cost",
+  "context.stats.conversationTokens": "Conversation Tokens",
   "context.stats.sessionCreated": "Session Created",
   "context.stats.lastActivity": "Last Activity",
 
   "context.usage.tokens": "Tokens",
   "context.usage.usage": "Usage",
   "context.usage.cost": "Cost",
+  "context.usage.totalTokens": "Conversation Tokens",
   "context.usage.clickToView": "Click to view context",
   "context.usage.view": "View context usage",
 
