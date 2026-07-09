@@ -1,6 +1,7 @@
 import { Config } from "@/config/config"
 import { ConfigV1 } from "@deepagent-code/core/v1/config/config"
 import { EventV2 } from "@deepagent-code/core/event"
+import { ProjectV2 } from "@deepagent-code/core/project"
 import { InstanceDisposed } from "@/server/event"
 import "@deepagent-code/core/account"
 import "@/server/event"
@@ -105,6 +106,7 @@ export const GlobalPaths = {
   upgrade: "/global/upgrade",
   import: "/global/import",
   projects: "/global/projects",
+  projectDelete: "/global/projects/:projectID",
 } as const
 
 export const GlobalApi = HttpApi.make("global").add(
@@ -197,6 +199,17 @@ export const GlobalApi = HttpApi.make("global").add(
           summary: "List all known projects",
           description:
             "List every project row in the database (including imported / not-yet-opened projects), so the History Projects view can surface sessions that do not belong to a currently-active project.",
+        }),
+      ),
+      HttpApiEndpoint.delete("projectDelete", GlobalPaths.projectDelete, {
+        params: { projectID: ProjectV2.ID },
+        success: HttpApiSchema.NoContent,
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "global.projectDelete",
+          summary: "Delete a project",
+          description:
+            "Permanently delete a project row and, by database cascade, all of its sessions, messages, and parts. Any running instances rooted at the project's known directories are disposed first. Idempotent: deleting an unknown project succeeds. Does NOT touch files on disk — only the DeepAgent Code database record.",
         }),
       ),
     )
