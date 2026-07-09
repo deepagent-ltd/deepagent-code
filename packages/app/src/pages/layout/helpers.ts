@@ -57,23 +57,35 @@ export const childSessionOnPath = (sessions: Session[] | undefined, rootID: stri
   }
 }
 
-// The id of the session a child hangs off in the sidebar tree. Two lineage kinds are unified:
+// The id of the session a child hangs off in the sidebar tree. Two lineage kinds exist:
 //   • subagents — `parentID` (background workers spawned by the task tool)
 //   • forks — `metadata.forkedFrom.parentSessionID` (foreground "derived from" sessions; forks
 //     deliberately do NOT set parentID, which would give them subagent semantics)
-// Roots (`roots()` above) are sessions with neither link, so a fork/subagent never also shows as a
-// top-level row.
+// This accessor recognizes BOTH so `roots()` can exclude either kind from the top-level list (a
+// subagent/fork must never also appear as a root row). NOTE: this is intentionally NOT the accessor
+// the sidebar uses to NEST children — see forkParentID / directChildSessions below.
 export const sessionOriginID = (session: Session): string | undefined => {
   if (session.parentID) return session.parentID
   const forkedFrom = (session.metadata as { forkedFrom?: { parentSessionID?: string } } | undefined)?.forkedFrom
   return forkedFrom?.parentSessionID
 }
 
-// Direct children (subagents + forks) of a session, newest first. Used to nest sessions folder-style
-// under their origin in the sidebar.
+// The id of the session a FORK hangs off. Forks are the only lineage the sidebar nests: they are
+// human-initiated "derived from" conversations. Subagents (background task-tool workers) are
+// deliberately excluded — they carry `parentID`, which this accessor ignores — so agent-spawned
+// subagent conversations never surface in the sidebar (they remain reachable via the subagent panel).
+// `roots()` still excludes subagents via sessionOriginID, so a hidden subagent does not leak in as a
+// top-level row either — it simply does not appear in the session tree.
+export const forkParentID = (session: Session): string | undefined => {
+  const forkedFrom = (session.metadata as { forkedFrom?: { parentSessionID?: string } } | undefined)?.forkedFrom
+  return forkedFrom?.parentSessionID
+}
+
+// Direct fork children of a session, newest first. Used to nest human forks folder-style under their
+// origin in the sidebar. Subagents are NOT nested here (see forkParentID) — only forks.
 export const directChildSessions = (sessions: Session[] | undefined, originID: string): Session[] =>
   (sessions ?? [])
-    .filter((s) => !s.time?.archived && sessionOriginID(s) === originID)
+    .filter((s) => !s.time?.archived && forkParentID(s) === originID)
     .sort((a, b) => (b.time?.updated ?? b.time?.created ?? 0) - (a.time?.updated ?? a.time?.created ?? 0))
 
 // Max nesting depth mirrored from the backend fork cap (root → fork → fork-of-fork = 3 levels, i.e.

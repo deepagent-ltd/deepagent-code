@@ -36,7 +36,7 @@ import { errorMessage } from "@/util/error"
 import { isMedia } from "@/util/media"
 import type { SystemError } from "bun"
 import type { Provider } from "@/provider/provider"
-import { Effect, Schema } from "effect"
+import { Effect, Exit, Schema } from "effect"
 import * as EffectLogger from "@deepagent-code/core/effect/logger"
 
 /** Error shape thrown by Bun's fetch() when gzip/br decompression fails mid-stream */
@@ -89,9 +89,30 @@ export const cursor = {
   },
 }
 
+// Legacy-data repair: OutputFormatText/OutputFormatJsonSchema are Schema.Class, so their ENCODERS
+// are instanceof-gated. Subagent (researcher/reviewer) messages persisted BEFORE the d6c325e fix
+// stored `format` as a PLAIN OBJECT literal. On read, the messages endpoint encodes the Info through
+// the schema; a plain-object format then throws "Expected OutputFormatJsonSchema, got {...}" at
+// ["info"]["format"], which rejects fetchMessages and crashes the renderer (the app "restart" the
+// user sees on clicking such a session). d6c325e fixed the WRITE path but not already-persisted rows,
+// so we coerce here — the single choke point every stored message flows through on read. Idempotent:
+// a value that is already an instance (or absent, or unrecognized) is returned untouched.
+const decodeFormat = Schema.decodeUnknownExit(SessionV1.Format)
+export const normalizeFormat = (data: Record<string, unknown>): Record<string, unknown> => {
+  const format = (data as { format?: unknown }).format
+  if (!format || typeof format !== "object") return data
+  if (format instanceof SessionV1.OutputFormatText || format instanceof SessionV1.OutputFormatJsonSchema) return data
+  // Coerce a legacy plain-object format to an instance through the SAME decode path the write-side
+  // fix (d6c325e prompt()) uses — idempotent, fills retryCount's decoding default, handles both
+  // variants. If it doesn't decode (unrecognized shape), leave it: the encoder will surface a clear
+  // error rather than us silently dropping a field.
+  const decoded = decodeFormat(format)
+  return Exit.isSuccess(decoded) ? { ...data, format: decoded.value } : data
+}
+
 const info = (row: typeof MessageTable.$inferSelect) =>
   ({
-    ...row.data,
+    ...normalizeFormat(row.data as Record<string, unknown>),
     id: row.id,
     sessionID: row.session_id,
   }) as Info
