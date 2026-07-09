@@ -25,6 +25,11 @@ export type TimelineRowMap = {
     userMessageID: string
     label: "compaction" | "interrupted"
   }
+  // Per-turn meta line shown above the assistant reply: a live-ticking elapsed timer + token count
+  // while the agent works, frozen once the turn completes.
+  TurnMeta: {
+    userMessageID: string
+  }
   AssistantPart: {
     userMessageID: string
     group: PartGroup
@@ -55,6 +60,9 @@ export namespace TimelineRow {
     userMessageID: string
     label: "compaction" | "interrupted"
   }> {}
+  export class TurnMeta extends Data.TaggedClass("TurnMeta")<{
+    userMessageID: string
+  }> {}
   export class AssistantPart extends Data.TaggedClass("AssistantPart")<{
     userMessageID: string
     group: PartGroup
@@ -82,6 +90,7 @@ export namespace TimelineRow {
     | CommentStrip
     | UserMessage
     | TurnDivider
+    | TurnMeta
     | AssistantPart
     | Thinking
     | DiffSummary
@@ -99,6 +108,8 @@ export namespace TimelineRow {
         return `user-message:${row.userMessageID}`
       case "TurnDivider":
         return `turn-divider:${row.userMessageID}:${row.label}`
+      case "TurnMeta":
+        return `turn-meta:${row.userMessageID}`
       case "AssistantPart":
         return `assistant-part:${row.userMessageID}:${row.group.key}`
       case "Thinking":
@@ -185,6 +196,12 @@ export namespace Timeline {
           label: "compaction",
         }),
       )
+    }
+
+    // Meta line (live elapsed + tokens) once per turn, above the assistant reply. Present whenever the
+    // turn has produced (or is producing) an assistant response.
+    if (assistantMessages.length > 0 || (isActive && status !== "idle")) {
+      rows.push(new TimelineRow.TurnMeta({ userMessageID: userMessage.id }))
     }
 
     let assistantGroupIndex = 0
