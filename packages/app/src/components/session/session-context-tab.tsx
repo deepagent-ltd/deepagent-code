@@ -14,7 +14,7 @@ import type { Message, Part, UserMessage } from "@deepagent-code/sdk/v2/client"
 import { useLanguage } from "@/context/language"
 import { useProviders } from "@/hooks/use-providers"
 import { useSessionLayout } from "@/pages/session/session-layout"
-import { getSessionContextMetrics } from "./session-context-metrics"
+import { getSessionContextMetrics, getConversationTokens } from "./session-context-metrics"
 import { estimateSessionContextBreakdown, type SessionContextBreakdownKey } from "./session-context-breakdown"
 import { createSessionContextFormatter } from "./session-context-format"
 
@@ -124,21 +124,13 @@ export function SessionContextTab() {
     { equals: same },
   )
 
-  const usd = createMemo(
-    () =>
-      new Intl.NumberFormat(language.intl(), {
-        style: "currency",
-        currency: "USD",
-      }),
-  )
-
   const metrics = createMemo(() => getSessionContextMetrics(messages(), [...providers.all().values()]))
   const ctx = createMemo(() => metrics().context)
   const formatter = createMemo(() => createSessionContextFormatter(language.intl()))
 
-  const cost = createMemo(() => {
-    return usd().format(metrics().totalCost)
-  })
+  // Cumulative tokens across the whole conversation (all turns + subagent child sessions). Cost is
+  // hidden until the billing figure is aligned with our agent system.
+  const conversationTokens = createMemo(() => getConversationTokens(sync.data.session ?? [], params.id))
 
   const counts = createMemo(() => {
     const all = messages()
@@ -213,7 +205,7 @@ export function SessionContextTab() {
     },
     { label: "context.stats.userMessages", value: () => counts().user.toLocaleString(language.intl()) },
     { label: "context.stats.assistantMessages", value: () => counts().assistant.toLocaleString(language.intl()) },
-    { label: "context.stats.totalCost", value: cost },
+    { label: "context.stats.conversationTokens", value: () => formatter().number(conversationTokens()) },
     { label: "context.stats.sessionCreated", value: () => formatter().time(info()?.time.created) },
     { label: "context.stats.lastActivity", value: () => formatter().time(ctx()?.message.time.created) },
   ] satisfies { label: string; value: () => JSX.Element }[]

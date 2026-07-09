@@ -369,12 +369,14 @@ export const dict = {
   "context.stats.userMessages": "Сообщения пользователя",
   "context.stats.assistantMessages": "Сообщения ассистента",
   "context.stats.totalCost": "Общая стоимость",
+  "context.stats.conversationTokens": "Токены беседы",
   "context.stats.sessionCreated": "Сессия создана",
   "context.stats.lastActivity": "Последняя активность",
 
   "context.usage.tokens": "Токены",
   "context.usage.usage": "Использование",
   "context.usage.cost": "Стоимость",
+  "context.usage.totalTokens": "Токены беседы",
   "context.usage.clickToView": "Нажмите для просмотра контекста",
   "context.usage.view": "Показать использование контекста",
 

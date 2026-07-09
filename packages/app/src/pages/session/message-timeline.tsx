@@ -56,6 +56,7 @@ import { normalize } from "@deepagent-code/ui/session-diff"
 import { useFileComponent } from "@deepagent-code/ui/context/file"
 import { shouldMarkBoundaryGesture, normalizeWheelDelta } from "@/pages/session/message-gesture"
 import { SessionContextUsage } from "@/components/session-context-usage"
+import { getSubagentTokens } from "@/components/session/session-context-metrics"
 import { useDialog } from "@deepagent-code/ui/context/dialog"
 import { createResizeObserver } from "@solid-primitives/resize-observer"
 import { useLanguage } from "@/context/language"
@@ -68,6 +69,7 @@ import { useSync } from "@/context/sync"
 import { notifySessionTabsRemoved } from "@/components/titlebar-session-events"
 import { messageAgentColor } from "@/utils/agent"
 import { sessionTitle } from "@/utils/session-title"
+import { formatDuration } from "@/utils/format-duration"
 import { makeTimer } from "@solid-primitives/timer"
 import { MessageComment, SummaryDiff, Timeline, TimelineRow, TimelineRowMap } from "./message-timeline.data"
 import { TurnRail } from "./turn-rail"
@@ -314,6 +316,7 @@ export function MessageTimeline(props: {
     return sync.data.message[id] ?? emptyMessages
   })
   const messageByID = createMemo(() => new Map(sessionMessages().map((message) => [message.id, message] as const)))
+  const sessionByID = createMemo(() => new Map((sync.data.session ?? []).map((session) => [session.id, session] as const)))
   const assistantMessagesByParent = createMemo(() => {
     const result = new Map<string, AssistantMessage[]>()
     for (const message of sessionMessages()) {
@@ -339,6 +342,16 @@ export function MessageTimeline(props: {
   })
   const working = createMemo(() => sessionStatus().type !== "idle")
   const tint = createMemo(() => messageAgentColor(sessionMessages(), sync.data.agent))
+
+  // Live wall-clock tick (1s) that only runs while the session is working, so the top-left turn timer
+  // advances in real time from thinking-start until the reply completes, then stops (no idle churn).
+  const [nowMs, setNowMs] = createSignal(Date.now())
+  createEffect(() => {
+    if (!working()) return
+    setNowMs(Date.now())
+    const dispose = makeTimer(() => setNowMs(Date.now()), 1000, setInterval)
+    onCleanup(dispose)
+  })
 
   const [timeoutDone, setTimeoutDone] = createSignal(true)
 
@@ -1017,6 +1030,41 @@ export function MessageTimeline(props: {
     return end - message.time.created
   }
 
+  // Elapsed time for a turn: live (now - user.time.created, driven by nowMs) while the turn is
+  // working, otherwise the frozen completed duration.
+  const turnElapsedMs = (userMessageID: string) => {
+    if (workingTurn(userMessageID)) {
+      const message = messageByID().get(userMessageID)
+      if (!message || message.role !== "user") return
+      return Math.max(0, nowMs() - message.time.created)
+    }
+    return turnDurationMs(userMessageID)
+  }
+
+  // Total tokens USED by a turn (input + output + reasoning + cache), summed across the turn's
+  // assistant messages. Distinct from the top-right retained-context number. Advances as each
+  // tool-loop step finishes (providers report usage per step, not per token).
+  const turnTokens = (userMessageID: string) => {
+    let total = 0
+    const childIds = new Set<string>()
+    for (const message of assistantMessagesByParent().get(userMessageID) ?? emptyAssistantMessages) {
+      const t = message.tokens
+      total += t.input + t.output + t.reasoning + t.cache.read + t.cache.write
+      // Roll in subagent usage: each `task` tool-call in this turn spawns a child session whose
+      // persisted total we add. Dedupe by child sessionId so a resumed/multi-call child isn't
+      // double-counted.
+      for (const part of getMsgParts(message.id)) {
+        if (part.type !== "tool" || part.tool !== "task") continue
+        const state = (part as ToolPart).state
+        const meta = "metadata" in state ? (state.metadata as { sessionId?: unknown } | undefined) : undefined
+        const childId = typeof meta?.sessionId === "string" ? meta.sessionId : undefined
+        if (childId) childIds.add(childId)
+      }
+    }
+    for (const childId of childIds) total += getSubagentTokens(sessionByID().get(childId))
+    return total
+  }
+
   const assistantCopyPartID = (userMessageID: string) => {
     if (workingTurn(userMessageID)) return null
     const messages = assistantMessagesByParent().get(userMessageID) ?? emptyAssistantMessages
@@ -1240,6 +1288,41 @@ export function MessageTimeline(props: {
                   )}
                 />
               </div>
+            </div>
+          </TimelineRowFrame>
+        )
+      }
+      case "TurnMeta": {
+        const turnMetaRow = row as Accessor<TimelineRowByTag<"TurnMeta">>
+        const id = () => turnMetaRow().userMessageID
+        const live = () => workingTurn(id())
+        const elapsed = () => {
+          const ms = turnElapsedMs(id())
+          if (typeof ms !== "number") return ""
+          return formatDuration(ms, language.t, (n) => n.toLocaleString(language.intl()))
+        }
+        const tokens = () => turnTokens(id())
+        return (
+          <TimelineRowFrame row={turnMetaRow}>
+            <div data-slot="session-turn-message-container" class="w-full px-4 md:px-5">
+              <Show when={elapsed() || tokens() > 0}>
+                <div class="flex items-center gap-1.5 text-12-regular text-text-weak cursor-default pb-1">
+                  <Show when={live()}>
+                    <Spinner class="size-3.5 shrink-0" style={{ color: tint() ?? "var(--icon-interactive-base)" }} />
+                  </Show>
+                  <Show when={elapsed()}>
+                    <span>{elapsed()}</span>
+                  </Show>
+                  <Show when={tokens() > 0}>
+                    <Show when={elapsed()}>
+                      <span aria-hidden="true">·</span>
+                    </Show>
+                    <span>
+                      {tokens().toLocaleString(language.intl())} {language.t("context.usage.tokens")}
+                    </span>
+                  </Show>
+                </div>
+              </Show>
             </div>
           </TimelineRowFrame>
         )

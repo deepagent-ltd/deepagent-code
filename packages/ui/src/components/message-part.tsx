@@ -1472,7 +1472,6 @@ PART_MAPPING["compaction"] = function CompactionPartDisplay() {
 PART_MAPPING["text"] = function TextPartDisplay(props) {
   const data = useData()
   const i18n = useI18n()
-  const numfmt = createMemo(() => new Intl.NumberFormat(i18n.locale()))
   const part = () => props.part as TextPart
   const interrupted = createMemo(
     () =>
@@ -1486,25 +1485,15 @@ PART_MAPPING["text"] = function TextPartDisplay(props) {
     return match?.models?.[message.modelID]?.name ?? message.modelID
   })
 
-  const duration = createMemo(() => {
+  // Footer timestamp: the wall-clock date + time the reply completed (falls back to when it was
+  // created while still streaming). Follows the active locale / system clock. This replaces the old
+  // "elapsed duration" footer \u2014 the live elapsed timer now lives at the top-left of the turn.
+  const completedAt = createMemo(() => {
     if (props.message.role !== "assistant") return ""
     const message = props.message as AssistantMessage
-    const completed = message.time.completed
-    const ms =
-      typeof props.turnDurationMs === "number"
-        ? props.turnDurationMs
-        : typeof completed === "number"
-          ? completed - message.time.created
-          : -1
-    if (!(ms >= 0)) return ""
-    const total = Math.round(ms / 1000)
-    if (total < 60) return i18n.t("ui.message.duration.seconds", { count: numfmt().format(total) })
-    const minutes = Math.floor(total / 60)
-    const seconds = total % 60
-    return i18n.t("ui.message.duration.minutesSeconds", {
-      minutes: numfmt().format(minutes),
-      seconds: numfmt().format(seconds),
-    })
+    const at = message.time.completed ?? message.time.created
+    if (typeof at !== "number") return ""
+    return new Intl.DateTimeFormat(i18n.locale(), { dateStyle: "short", timeStyle: "short" }).format(at)
   })
 
   const meta = createMemo(() => {
@@ -1513,7 +1502,7 @@ PART_MAPPING["text"] = function TextPartDisplay(props) {
     const items = [
       agent ? agent[0]?.toUpperCase() + agent.slice(1) : "",
       model(),
-      duration(),
+      completedAt(),
       interrupted() ? i18n.t("ui.message.interrupted") : "",
     ]
     return items.filter((x) => !!x).join(" \u00B7 ")
@@ -1836,6 +1825,27 @@ ToolRegistry.register({
     })
     const running = createMemo(() => props.status === "pending" || props.status === "running")
 
+    // Subagent token usage: the child session's persisted running total (input+output+reasoning+cache),
+    // shown on the right of the task box. Reads the child Session row already present in the store.
+    const childSession = createMemo(() => {
+      const id = childSessionId()
+      if (!id) return
+      return data.store.session?.find((s) => s.id === id)
+    })
+    const childTokens = createMemo(() => {
+      const t = childSession()?.tokens
+      if (!t) return 0
+      return t.input + t.output + t.reasoning + t.cache.read + t.cache.write
+    })
+    const childTokensLabel = createMemo(() => {
+      const value = childTokens()
+      if (value <= 0) return ""
+      const formatted = new Intl.NumberFormat(i18n.locale(), { notation: "compact", maximumFractionDigits: 1 }).format(
+        value,
+      )
+      return i18n.t("ui.tool.agent.tokens", { count: formatted })
+    })
+
     const href = createMemo(() => sessionLink(childSessionId(), location.pathname, data.sessionHref))
     const clickable = createMemo(() => !!(childSessionId() && (data.navigateToSession || href())))
 
@@ -1874,6 +1884,11 @@ ToolRegistry.register({
             </Show>
           </div>
         </div>
+        <Show when={childTokensLabel()}>
+          <span data-component="task-tool-tokens" class="text-12-regular text-text-weak tabular-nums shrink-0">
+            {childTokensLabel()}
+          </span>
+        </Show>
         <Show when={clickable()}>
           <div data-component="task-tool-action">
             <Icon name="square-arrow-top-right" size="small" />
