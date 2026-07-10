@@ -30,6 +30,17 @@
         };
       });
 
+      apps = forEachSystem (pkgs: {
+        update-hashes = {
+          type = "app";
+          program = let
+            script = pkgs.writeShellScriptBin "update-hashes" ''
+              exec ${pkgs.python3}/bin/python3 ${./nix/scripts/update-hashes.py} "$@"
+            '';
+          in "${script}/bin/update-hashes";
+        };
+      });
+
       overlays = {
         default =
           final: _prev:
@@ -63,7 +74,8 @@
           deepagent-code-desktop = pkgs.callPackage ./nix/desktop.nix {
             inherit deepagent-code;
           };
-          # Updater derivation with fakeHash - build fails and reveals correct hash
+          # Build with fakeHash to reveal the correct hash.
+          # Used by: nix run .#update-hashes
           node_modules_updater = node_modules.override {
             hash = pkgs.lib.fakeHash;
           };
