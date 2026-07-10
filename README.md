@@ -13,6 +13,8 @@
   <a href="README.zh.md">简体中文</a>
 </p>
 
+<p align="center"><sub>Desktop v1.3</sub></p>
+
 ---
 
 DeepAgent Code is an AI coding agent built on persistent document memory. It keeps [opencode](https://github.com/sst/opencode)'s runtime foundations and adds a control plane so the agent behaves less like a one-shot chat and more like a teammate that remembers your project, sharpens vague asks, and goes deep on hard problems.
@@ -44,6 +46,24 @@ The features below start from a real need — something a plain coding agent, op
 **The need:** A half-formed prompt gets a half-useful answer, and you don't always know how to phrase what you want.
 
 **What DeepAgent does:** Two scenario modes on the composer. **Direct** sends your prompt as-is — you own the wording. **Intelligence** refines a rough ask into a sharper prompt, surfaces a draft plan and decision suggestions, and waits for your confirmation before it automates anything. You decide how much the agent shapes the request.
+
+### Choose how much the agent drives — and who writes the plan
+
+**The need:** Sometimes you want the agent to just take a request and run; sometimes you want to steer it with a plan you control; sometimes you've already written the plan and just want it executed faithfully.
+
+**What DeepAgent does:** Three collaboration modes on the composer, picked from a single selector. **Auto** — the agent sets the objective, designs and plans as needed, and executes to completion. **Loop** — you describe the goal, the agent writes a `goal+plan.md` you can edit, then a supervised loop drives it to completion (plan → execute → verify per tick, with hard budget/step ceilings and objective completion checks). **Design** — you author `goal+plan.md` yourself and the agent executes your plan faithfully without redefining the goal. Orthogonal to mode, a permission control offers three presets — **Read-only**, **Request approval** (default), **Full access** — so autonomy and approval are separate, explicit choices.
+
+### Get a second opinion before high-risk decisions
+
+**The need:** Some decisions — a breaking migration, a security-sensitive change, an architecture call — deserve more than one confident pass agreeing with itself.
+
+**What DeepAgent does:** Convene an **Expert Panel** from the composer. Differentiated expert lenses (correctness, security, performance, architecture, repro) review the same frozen question independently, debate anonymously, and a deterministic (non-LLM) arbiter aggregates a verdict — with minority opinions preserved and a fail-closed bias toward escalating to you when the panel can't safely agree.
+
+### Read and govern what the agent knows
+
+**The need:** Persistent memory is only trustworthy if you can see it and correct it.
+
+**What DeepAgent does:** A **Repo & Wiki** view projects the four graphs into human-readable pages — browse and full-text-search the agent's knowledge, follow docs↔code cross-links, and edit governable Knowledge/Memory pages through the same evidence-gate the agent uses (Documents and Code stay read-only). A separate governance view lists learned facts grouped by project and global scope, so you approve what becomes durable.
 
 ### Go deep on genuinely hard problems
 
