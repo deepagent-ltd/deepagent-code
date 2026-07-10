@@ -320,6 +320,68 @@ export const DeepAgentGoalSnapshot = Schema.Struct({
 export const DeepAgentGoalStatusResult = Schema.Struct({ goal: Schema.NullOr(DeepAgentGoalSnapshot) })
 export const DeepAgentGoalMutateResult = Schema.Struct({ ok: Schema.Boolean })
 
+// ── V3.9 §B Repo & Wiki ────────────────────────────────────────────────────
+// The human-facing projection of the four graphs. Read-only browse + governed knowledge edit +
+// full-text search. All gated by the wiki flag (the handler fail-closes). sealed docs NEVER surface.
+
+/** GET /deepagent/wiki/pages — list projectable page summaries (optionally filtered by type). */
+export const DeepAgentWikiPageSummary = Schema.Struct({
+  docId: Schema.String,
+  type: Schema.String,
+  title: Schema.String,
+  scope: Schema.String,
+  editable: Schema.Boolean,
+  version: Schema.Number,
+})
+export const DeepAgentWikiPageList = Schema.Struct({ pages: Schema.Array(DeepAgentWikiPageSummary) })
+
+export const DeepAgentWikiCodeRef = Schema.Struct({
+  docId: Schema.String,
+  rel: Schema.String,
+  path: Schema.NullOr(Schema.String),
+  line: Schema.NullOr(Schema.Number),
+  symbolPath: Schema.NullOr(Schema.String),
+  stale: Schema.Boolean,
+})
+export const DeepAgentWikiDocRef = Schema.Struct({
+  docId: Schema.String,
+  rel: Schema.String,
+  type: Schema.NullOr(Schema.String),
+  title: Schema.String,
+  stale: Schema.Boolean,
+})
+/** GET /deepagent/wiki/page — render one page (markdown + cross-links). */
+export const DeepAgentWikiPage = Schema.Struct({
+  docId: Schema.String,
+  type: Schema.String,
+  title: Schema.String,
+  markdown: Schema.String,
+  editable: Schema.Boolean,
+  version: Schema.Number,
+  crossLinks: Schema.Struct({
+    toCode: Schema.Array(DeepAgentWikiCodeRef),
+    toDocs: Schema.Array(DeepAgentWikiDocRef),
+  }),
+})
+
+/** GET /deepagent/wiki/search — full-text search over the projection. */
+export const DeepAgentWikiSearchHit = Schema.Struct({
+  docId: Schema.String,
+  type: Schema.String,
+  scope: Schema.String,
+  title: Schema.String,
+  score: Schema.Number,
+})
+export const DeepAgentWikiSearchResult = Schema.Struct({ hits: Schema.Array(DeepAgentWikiSearchHit) })
+
+/** POST /deepagent/wiki/edit — governed edit of a Knowledge/Memory page (real evidence-gate). */
+export const DeepAgentWikiEditInput = Schema.Struct({
+  docId: Schema.String,
+  scope: Schema.String,
+  body: Schema.String,
+  editor: Schema.Struct({ id: Schema.String, name: Schema.optional(Schema.String) }),
+})
+
 export const DeepAgentApi = HttpApi.make("deepagent").add(
   HttpApiGroup.make("deepagent")
     .add(
@@ -584,6 +646,53 @@ export const DeepAgentApi = HttpApi.make("deepagent").add(
         success: described(DeepAgentGoalStatusResult, "The active goal for the session, or null"),
         error: DeepAgentPromotionError,
       }),
+    )
+    .add(
+      HttpApiEndpoint.get("wikiPages", `${root}/wiki/pages`, {
+        query: Schema.Struct({ ...WorkspaceRoutingQueryFields, type: Schema.optional(Schema.String) }),
+        success: described(DeepAgentWikiPageList, "Projectable Wiki page summaries (sealed excluded)"),
+        error: DeepAgentPromotionError,
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "deepagent.wiki.pages",
+          summary: "List Repo & Wiki pages",
+          description: "V3.9 §B: the human-facing projection of the four graphs. Gated by the wiki flag.",
+        }),
+      ),
+    )
+    .add(
+      HttpApiEndpoint.get("wikiPage", `${root}/wiki/page`, {
+        query: Schema.Struct({ ...WorkspaceRoutingQueryFields, docId: Schema.String, scope: Schema.String }),
+        success: described(DeepAgentWikiPage, "One rendered Wiki page (markdown + cross-links)"),
+        error: DeepAgentPromotionError,
+      }),
+    )
+    .add(
+      HttpApiEndpoint.get("wikiSearch", `${root}/wiki/search`, {
+        query: Schema.Struct({
+          ...WorkspaceRoutingQueryFields,
+          text: Schema.String,
+          type: Schema.optional(Schema.String),
+          scope: Schema.optional(Schema.String),
+        }),
+        success: described(DeepAgentWikiSearchResult, "Full-text search hits over the Wiki projection"),
+        error: DeepAgentPromotionError,
+      }),
+    )
+    .add(
+      HttpApiEndpoint.post("wikiEdit", `${root}/wiki/edit`, {
+        query: WorkspaceRoutingQuery,
+        payload: DeepAgentWikiEditInput,
+        success: described(DeepAgentWikiPage, "The edited page (new version, human provenance)"),
+        error: DeepAgentPromotionError,
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "deepagent.wiki.edit",
+          summary: "Governed edit of a Knowledge/Memory Wiki page",
+          description:
+            "V3.9 §B.3: append-only new version through the real promotion evidence-gate + human provenance. Non-editable type ⇒ read-only error.",
+        }),
+      ),
     )
     .annotateMerge(OpenApi.annotations({ title: "deepagent", description: "DeepAgent setup routes." }))
     .middleware(InstanceContextMiddleware)
