@@ -377,7 +377,12 @@ export const isActiveDeepAgentRuntime = () => current.enabled && !current.killSw
 const isManagedDeepAgentRuntimeWith = (config: CurrentConfig) =>
   config.enabled && !config.killSwitch && config.agentMode !== "general"
 
-import { buildSystemPrompt, type KnowledgeRefProjection, type PromptContext } from "./deepagent/prompt-policy"
+import {
+  buildSystemPrompt,
+  buildVolatileRoundContext,
+  type KnowledgeRefProjection,
+  type PromptContext,
+} from "./deepagent/prompt-policy"
 import * as DeepAgentOrchestrator from "./deepagent/orchestrator"
 import * as DeepAgentSessionState from "./deepagent/session-state"
 import * as DeepAgentPlanController from "./deepagent/plan-controller"
@@ -444,6 +449,14 @@ import type { RoundState as DeepAgentRoundState } from "./deepagent/round-state"
 // signature stability but no longer gates injection.
 export const systemPrompt = (_providerID: string, context?: PromptContext) =>
   isActiveDeepAgentRuntime() ? [context ? buildSystemPrompt(context) : bootMessage(current.agentMode)] : []
+
+// Prompt-cache split (see docs/deepagent-cache-hit-fix-plan.md): the per-turn volatile state that must
+// NOT ride the cached system prefix. The caller appends this to the tail of the message array (after
+// the cache breakpoint) so the model still sees round/stage/previous-results/budget without churning
+// the prefix. Returns "" when there is nothing round-specific (⇒ caller skips injection). Only emitted
+// when the DeepAgent runtime is active, matching systemPrompt().
+export const volatileRoundContext = (context: PromptContext): string =>
+  isActiveDeepAgentRuntime() ? buildVolatileRoundContext(context) : ""
 
 export const preflight = (input: RunInput): Effect.Effect<void, LLMError> => preflightWith(input, current)
 

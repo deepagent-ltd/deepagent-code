@@ -12,18 +12,16 @@ import { SystemPrompt } from "../system"
 import { InstallationVersion } from "@deepagent-code/core/installation/version"
 import { AgentGateway } from "@deepagent-code/core/agent-gateway"
 import { modeRank } from "@deepagent-code/core/deepagent/mode"
-import {
-  buildOrchestrationSection,
-  decideFanout,
-  estimateSignalsFromText,
-  type OrchestrationCaps,
-} from "@deepagent-code/core/deepagent/orchestration"
+import { buildOrchestrationSection, type OrchestrationCaps } from "@deepagent-code/core/deepagent/orchestration"
 import { Effect, Exit, Record } from "effect"
 import os from "node:os"
 import { writeFile, mkdir } from "node:fs/promises"
+import { createHash } from "node:crypto"
 import path from "node:path"
+import { Log } from "@deepagent-code/core/util/log"
 import { DeepAgentWorkspace } from "@/deepagent/workspace-context"
 import { ToolProvenance } from "@/tool/provenance"
+import { SessionReminders } from "../reminders"
 
 type PromptContext = AgentGateway.PromptContext
 type EnvironmentContext = AgentGateway.EnvironmentContext
@@ -91,11 +89,27 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
   const agentMode = deepAgentAgentModeOverride(input.user.metadata) ?? AgentGateway.snapshot().agentMode
   const isDeepAgentActive = AgentGateway.snapshot().mode === "enabled" && agentMode !== "general"
   let system: string[]
+  // Prompt-cache split (docs/deepagent-cache-hit-fix-plan.md): the DeepAgent system prompt is now
+  // byte-stable across a session. All per-turn volatile state (round, stage, previous-round results,
+  // token budget, fan-out verdict) is rendered separately here and appended to the TAIL of the
+  // message array below, so it lands after the Anthropic cache breakpoint and never churns the
+  // cached prefix. Empty on the non-DeepAgent path and on first turns with nothing round-specific.
+  let volatileRoundContext = ""
 
   if (isDeepAgentActive) {
     const promptContext = yield* buildDeepAgentPromptContext(input, agentMode)
     const deepagentSystem = AgentGateway.systemPrompt(input.model.providerID, promptContext)
     system = [deepagentSystem.filter((x) => x).join("\n")]
+    // Fold the volatile round-context AND the plan-status snapshot into ONE trailing message. Both
+    // carry live per-turn state (round/stage/results/budget, and plan progress/mutation-count/nudge)
+    // and MUST ride the tail after the cache breakpoint — never the cached prefix. Keeping them in a
+    // SINGLE trailing message is deliberate: appending a second trailing message would shift the
+    // `slice(-2)` breakpoint (transform.ts applyCaching) off the last stable history message and stop
+    // the growing history from being cached. `renderPlanStatus` returns null in lightweight mode / no
+    // plan; join with a blank line only when both are present.
+    const roundCtx = AgentGateway.volatileRoundContext(promptContext)
+    const planStatus = SessionReminders.renderPlanStatus(input.sessionID)
+    volatileRoundContext = [roundCtx, planStatus].filter((x) => x && x.length > 0).join("\n\n")
     logPrompt(input.sessionID, promptContext.round, system[0]).catch(() => {})
   } else {
     const baseAgentSystem = input.agent.prompt ? [input.agent.prompt] : SystemPrompt.provider(input.model)
@@ -110,10 +124,10 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
     // turns the generic guidance into a concrete, task-specific recommendation. This is ADVISORY —
     // the model still issues the `task` calls; the HARD concurrency cap is the §5a semaphore. We only
     // compute a decision at tier >= 1 (buildOrchestrationSection ignores it at tier 0 anyway).
-    const orchestration =
-      input.agent.mode !== "subagent"
-        ? buildOrchestrationSection(agentMode, buildFanoutDecision(input, agentMode))
-        : null
+    // Prompt-cache: only the STABLE generic guidance goes in the system prefix now. The per-turn
+    // fan-out verdict (buildFanoutDecision) is not injected on this non-DeepAgent path — it would
+    // bust the prefix and general/plain sessions do not drive the multi-round scheduler anyway.
+    const orchestration = input.agent.mode !== "subagent" ? buildOrchestrationSection(agentMode) : null
     system = [
       [
         ...baseAgentSystem,
@@ -138,6 +152,10 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
     system.push(header, rest.join("\n"))
   }
 
+  // P2-b: tripwire for accidental prefix churn. The system block is the cached Anthropic prefix and
+  // must stay byte-stable across a session; warn if it changed since this session's last turn.
+  detectSystemPromptCacheBreak(input.sessionID, system.join("\n"))
+
   const variant =
     !input.small && input.model.variants && input.user.model.variant
       ? input.model.variants[input.user.model.variant]
@@ -161,7 +179,7 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
   }
   if (isOpenaiOauth) options.instructions = system.join("\n")
 
-  const messages =
+  const baseMessages =
     isOpenaiOauth || input.isWorkflow
       ? input.messages
       : [
@@ -173,6 +191,26 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
           ),
           ...input.messages,
         ]
+
+  // Prompt-cache split (docs/deepagent-cache-hit-fix-plan.md): append the per-turn volatile context as
+  // a fresh TRAILING user message. It is ephemeral (rebuilt every turn from the current round state,
+  // never persisted), so it does not accumulate. Placing it last keeps the entire preceding prefix
+  // (system + history) byte-stable turn-to-turn — Anthropic reads the cached prefix up to the previous
+  // turn's last message and only this small tail is a cache write. Skipped on the workflow path, which
+  // owns its own message contract. Empty string ⇒ no injection (non-DeepAgent / nothing round-specific).
+  //
+  // ALWAYS RESEND (do NOT add a "skip when unchanged from last turn" optimization here): this message
+  // is ephemeral and NOT persisted into the append-only history, so each stateless API call only sees
+  // the round/plan context if we (re)send it. Skipping a turn whose content happened to match the
+  // previous one would leave the model with NO round/plan context on that call. The tail sits after
+  // the cache breakpoint (uncached input either way), so resending it costs ~a few hundred tokens and
+  // never touches the cached history prefix — the saving from skipping would be negligible and the
+  // information-loss risk real. This mirrors claude-code's <system-reminder>s, which are re-emitted
+  // every turn precisely because they are ephemeral.
+  const messages =
+    volatileRoundContext && !input.isWorkflow
+      ? [...baseMessages, { role: "user", content: volatileRoundContext } satisfies ModelMessage]
+      : baseMessages
 
   const params = yield* input.plugin.trigger(
     "chat.params",
@@ -260,19 +298,10 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
   }
 })
 
-/**
- * §5b: compute the runtime fan-out decision for the CURRENT turn from a lightweight complexity
- * heuristic over the latest user request, clamped by the configured (lenient) orchestration caps.
- * Returns `undefined` when there is no user text to read (⇒ buildOrchestrationSection falls back to
- * its generic guidance). Pure aside from reading `input.messages`; the numbers it yields are ADVISORY
- * — the hard concurrency ceiling is the §5a semaphore in task.ts.
- */
-const buildFanoutDecision = (input: PrepareInput, mode: AgentGateway.AgentMode) => {
-  const userRequest = extractLatestUserContent(input.messages)
-  if (!userRequest) return undefined
-  const signals = estimateSignalsFromText({ userRequest })
-  return decideFanout({ mode, signals, caps: input.orchestrationCaps })
-}
+// §5b fan-out decision: the DeepAgent path computes this inside orchestrator.buildPromptContext and
+// renders it into the volatile round context (appended to the message tail, not the cached prefix).
+// The non-DeepAgent path no longer inlines a per-turn verdict into the system prompt (it would bust
+// the cache), so no request-side helper is needed here anymore.
 
 const prepareMetadata = (input: PrepareInput, tools: Record<string, Tool>): Record<string, unknown> => {
   const agentMode = deepAgentAgentModeOverride(input.user.metadata)
@@ -332,6 +361,72 @@ async function logPrompt(sessionId: string, round: number, prompt: string) {
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-")
   const filename = `${timestamp}_${sessionId.slice(0, 12)}_r${round}.md`
   await writeFile(path.join(dir, filename), prompt, "utf8")
+}
+
+// P2-b prompt-cache break detection (docs/deepagent-cache-hit-fix-plan.md). The cached Anthropic
+// prefix is the system block; it MUST stay byte-stable across a session's turns. This hashes the
+// system string per session and warns the first time it changes — an early-warning tripwire for
+// accidental prefix churn (a future edit sneaking volatile content back into buildSystemPrompt). It
+// is diagnostic only: it never blocks a turn and the map is a bounded per-process cache keyed by
+// session (last hash + char length wins). Inspired by claude-code's promptCacheBreakDetection.ts.
+const breakLog = Log.create({ service: "prompt-cache" })
+const lastSystemHashBySession = new Map<string, { hash: string; length: number }>()
+
+function detectSystemPromptCacheBreak(sessionId: string, system: string): void {
+  const hash = createHash("sha256").update(system).digest("hex")
+  const prev = lastSystemHashBySession.get(sessionId)
+  lastSystemHashBySession.set(sessionId, { hash, length: system.length })
+  if (prev && prev.hash !== hash) {
+    breakLog.warn("system prompt changed mid-session — prompt cache prefix busted", {
+      sessionId,
+      charDelta: system.length - prev.length,
+    })
+  }
+}
+
+// Response-side prompt-cache-hit monitor (docs/deepagent-cache-hit-fix-plan.md). The system-hash
+// tripwire above catches PREFIX churn we author; this catches the real billing outcome — Anthropic's
+// reported cache_read tokens. Inspired by claude-code's promptCacheBreakDetection.ts phase 2, which
+// watches cache_read_input_tokens drop across calls. We compare each step's cache-read ratio
+// (cache.read / prompt-input) to the previous step of the SAME session and warn when it collapses
+// while the prompt did NOT shrink — the signature of an unintended prefix bust that the static hash
+// can't see (e.g. history-region churn, a provider-side TTL expiry, tool-list reorder). Diagnostic
+// only: never blocks a turn; bounded per-process map keyed by session. The FIRST step of a session
+// has nothing to compare against and only records a baseline (cache writes with zero reads are normal
+// on turn 1). `promptInputTokens` = the non-cached input the model actually read this step.
+type CacheHitSample = { readonly cacheRead: number; readonly promptInput: number }
+const lastCacheSampleBySession = new Map<string, CacheHitSample>()
+
+// A drop of more than this fraction in the cache-read RATIO between two consecutive steps, with a
+// non-shrinking prompt, is treated as a suspected cache break. 0.05 mirrors claude-code's >5% rule.
+const CACHE_HIT_DROP_THRESHOLD = 0.05
+
+export function recordCacheHitOutcome(
+  sessionId: string,
+  tokens: { readonly input: number; readonly cache: { readonly read: number; readonly write: number } },
+): void {
+  // promptInput = everything the model was billed to read this step (fresh input + cache read). The
+  // AI-SDK/opencode token shape already subtracts cache read/write out of `input` (session.ts
+  // adjustedInputTokens), so reconstruct the true prompt size by adding them back.
+  const promptInput = Math.max(0, tokens.input) + Math.max(0, tokens.cache.read) + Math.max(0, tokens.cache.write)
+  const cacheRead = Math.max(0, tokens.cache.read)
+  const sample: CacheHitSample = { cacheRead, promptInput }
+  const prev = lastCacheSampleBySession.get(sessionId)
+  lastCacheSampleBySession.set(sessionId, sample)
+  if (!prev || prev.promptInput === 0 || promptInput === 0) return
+  const prevRatio = prev.cacheRead / prev.promptInput
+  const ratio = cacheRead / promptInput
+  // Only flag when the prompt did NOT shrink (a smaller prompt legitimately reads less cache) and the
+  // ratio fell materially. A growing/steady prompt with a collapsing hit ratio is the real symptom.
+  if (promptInput >= prev.promptInput && prevRatio - ratio > CACHE_HIT_DROP_THRESHOLD) {
+    breakLog.warn("prompt cache hit ratio dropped mid-session — suspected cache break", {
+      sessionId,
+      prevHitRatio: Number(prevRatio.toFixed(3)),
+      hitRatio: Number(ratio.toFixed(3)),
+      cacheRead,
+      promptInput,
+    })
+  }
 }
 
 const buildDeepAgentPromptContext = Effect.fn("LLMRequestPrep.buildDeepAgentPromptContext")(function* (

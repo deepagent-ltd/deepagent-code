@@ -7,25 +7,31 @@ import { FSUtil } from "@deepagent-code/core/fs-util"
 import { InstanceState } from "@/effect/instance-state"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { PartID } from "./schema"
-import { MessageV2 } from "./message-v2"
 import { Session } from "./session"
 import PROMPT_PLAN from "./prompt/plan.txt"
 import BUILD_SWITCH from "./prompt/build-switch.txt"
 import PLAN_MODE from "./prompt/plan-mode.txt"
 
-// U10 step-reporting: re-inject the model's own structured plan as an ephemeral synthetic reminder
-// each turn (high+ only), so it can SEE its checklist and report against it — and, when it has made
-// several edits without a status change, nudge it (soft) to report progress. Pushed as an ephemeral
-// part (NOT persisted via updatePart), mirroring the plan-mode reminders, so it is constant-cost and
-// does not accumulate across turns. The runtime never infers step completion; this only prompts the
-// model to report, and the plan tool applies the report.
-const applyPlanReport = (userMessage: SessionV1.WithParts): void => {
-  const sessionID = userMessage.info.sessionID
+// U10 step-reporting: render the model's own structured plan as an ephemeral reminder each turn
+// (high+ only), so it can SEE its checklist and report against it — and, when it has made several
+// edits without a status change, nudge it (soft) to report progress.
+//
+// PROMPT-CACHE CONTRACT (docs/deepagent-cache-hit-fix-plan.md): the plan snapshot embeds live
+// per-step state (done/total, mutation count, nudge) that changes EVERY model call within a turn.
+// It MUST NOT be pushed onto a message that sits inside the cached prefix. Historically this pushed
+// a synthetic part onto the LAST USER message — but in a tool loop a turn has exactly one user
+// message at the FRONT, followed by the accumulated assistant/tool history, so that anchor is NOT
+// the tail. Mutating it busted the cache from the user message through the entire tool-loop history,
+// every step. So this is now a PURE RENDERER: the caller (session/llm/request.ts) folds the returned
+// string into the SAME trailing `<deepagent-round-context>` message that carries the other volatile
+// round state, which lands AFTER the Anthropic cache breakpoint. Returns null when there is nothing
+// to surface (lightweight mode, or no plan) so the caller can skip it.
+export const renderPlanStatus = (sessionID: string): string | null => {
   const agentMode = AgentGateway.snapshot().agentMode ?? "high"
   // Lightweight modes (general/direct) never carry the plan machinery — no snapshot, no nudge.
-  if (AgentGateway.DeepAgentPlanController.isLightweightMode(agentMode)) return
+  if (AgentGateway.DeepAgentPlanController.isLightweightMode(agentMode)) return null
   const plan = AgentGateway.DeepAgentSessionState.getPlan(sessionID)
-  if (!plan) return
+  if (!plan) return null
 
   const snapshot = AgentGateway.DeepAgentPlanController.renderPlanSnapshot(plan)
   const mutations = AgentGateway.DeepAgentSessionState.mutationsSinceReport(sessionID)
@@ -38,14 +44,7 @@ const applyPlanReport = (userMessage: SessionV1.WithParts): void => {
     mode: agentMode,
   })
   const nudge = trigger ? `\n\n${AgentGateway.DeepAgentPlanController.PROGRESS_NUDGE(trigger, mutations)}` : ""
-  userMessage.parts.push({
-    id: PartID.ascending(),
-    messageID: userMessage.info.id,
-    sessionID,
-    type: "text",
-    text: `<plan-status>\n${snapshot}${nudge}\n</plan-status>`,
-    synthetic: true,
-  })
+  return `<plan-status>\n${snapshot}${nudge}\n</plan-status>`
 }
 
 export const apply = Effect.fn("SessionReminders.apply")(function* (input: {
@@ -59,8 +58,10 @@ export const apply = Effect.fn("SessionReminders.apply")(function* (input: {
   const userMessage = input.messages.findLast((msg) => msg.info.role === "user")
   if (!userMessage) return input.messages
 
-  // U10: PlanController snapshot + progress nudge, independent of experimental plan mode.
-  applyPlanReport(userMessage)
+  // U10 plan-status snapshot is NO LONGER injected here. It embeds live per-turn state and used to be
+  // pushed onto this user message, which sits inside the cached prefix during a tool loop and busted
+  // the cache every step. It is now rendered by `renderPlanStatus` and folded into the trailing
+  // volatile round-context message (after the cache breakpoint) in session/llm/request.ts.
 
   if (!flags.experimentalPlanMode) {
     if (input.agent.name === "plan") {
@@ -74,7 +75,7 @@ export const apply = Effect.fn("SessionReminders.apply")(function* (input: {
       })
     }
     const wasPlan = input.messages.some((msg) => msg.info.role === "assistant" && msg.info.agent === "plan")
-    if (wasPlan && input.agent.name === "build") {
+    if (wasPlan && (input.agent.name === "auto" || input.agent.name === "build")) {
       userMessage.parts.push({
         id: PartID.ascending(),
         messageID: userMessage.info.id,
