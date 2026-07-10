@@ -18,6 +18,19 @@ import { fetchCapabilities, startGoal, type PanelGoalClient } from "./panel-goal
  * Visibility: only when goalLoop is enabled (capability), a plan exists for this session, and no goal
  * is already active (once a goal starts, GoalStatusBar takes over via the goal.updated event).
  */
+// The raw SDK client THROWS the parsed error BODY on a non-2xx response — which is a plain object,
+// not an Error. So `String(err)` yields "[object Object]". Extract a human-readable message from the
+// shapes the server returns: a 400 DeepAgentPromotionError `{message}`, or a 500 `{data:{message}}`.
+function errorMessage(err: unknown): string {
+  if (err instanceof Error) return err.message
+  if (err && typeof err === "object") {
+    const o = err as { message?: unknown; data?: { message?: unknown } }
+    if (typeof o.message === "string") return o.message
+    if (o.data && typeof o.data.message === "string") return o.data.message
+  }
+  return String(err)
+}
+
 export function GoalStartButton(props: { sessionID: string }) {
   const sdk = useSDK()
   const serverSync = useServerSync()
@@ -51,8 +64,7 @@ export function GoalStartButton(props: { sessionID: string }) {
       }
       // On success the goal.updated event drives GoalStatusBar to appear; nothing to do here.
     } catch (err) {
-      const description = err instanceof Error ? err.message : String(err)
-      showToast({ title: language.t("goal.start.failed"), description })
+      showToast({ title: language.t("goal.start.failed"), description: errorMessage(err) })
     } finally {
       setBusy(false)
     }
