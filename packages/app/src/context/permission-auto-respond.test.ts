@@ -1,7 +1,12 @@
 import { describe, expect, test } from "bun:test"
 import type { PermissionRequest, Session } from "@deepagent-code/sdk/v2/client"
 import { base64Encode } from "@deepagent-code/core/util/encode"
-import { autoRespondsPermission, isDirectoryAutoAccepting } from "./permission-auto-respond"
+import {
+  autoRespondsPermission,
+  isDirectoryAutoAccepting,
+  isDirectoryReadOnly,
+  isMutatingPermission,
+} from "./permission-auto-respond"
 
 const session = (input: { id: string; parentID?: string }) =>
   ({
@@ -98,5 +103,33 @@ describe("isDirectoryAutoAccepting", () => {
     const directory = "/tmp/project"
     const autoAccept = { [`${base64Encode(directory)}/*`]: false }
     expect(isDirectoryAutoAccepting(autoAccept, directory)).toBe(false)
+  })
+})
+
+describe("isDirectoryReadOnly", () => {
+  test("returns true when the directory read-only key is set", () => {
+    const directory = "/tmp/project"
+    const readOnly = { [`${base64Encode(directory)}/*`]: true }
+    expect(isDirectoryReadOnly(readOnly, directory)).toBe(true)
+  })
+
+  test("returns false when unset or explicitly false", () => {
+    const directory = "/tmp/project"
+    expect(isDirectoryReadOnly({}, directory)).toBe(false)
+    expect(isDirectoryReadOnly({ [`${base64Encode(directory)}/*`]: false }, directory)).toBe(false)
+  })
+})
+
+describe("isMutatingPermission", () => {
+  test("treats write/execute tools as mutating", () => {
+    for (const tool of ["edit", "write", "patch", "bash", "task", "external_directory"]) {
+      expect(isMutatingPermission(tool)).toBe(true)
+    }
+  })
+
+  test("treats read-style tools as non-mutating", () => {
+    for (const tool of ["read", "glob", "grep", "list", "lsp", "webfetch", "websearch", "todowrite"]) {
+      expect(isMutatingPermission(tool)).toBe(false)
+    }
   })
 })

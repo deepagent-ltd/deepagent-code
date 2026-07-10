@@ -1,9 +1,11 @@
 import { Effect, Layer, Context, SynchronizedRef } from "effect"
 import path from "node:path"
+import fs from "node:fs"
 import { Global } from "@deepagent-code/core/global"
 import { AgentGateway } from "@deepagent-code/core/agent-gateway"
 import { DocumentStore } from "@deepagent-code/core/deepagent/document-store"
 import { createPlanDoc, type PlanDoc } from "@deepagent-code/core/deepagent/plan-controller"
+import { parseGoalPlanFile, GOAL_PLAN_FILE, type ParsedGoalPlan } from "@deepagent-code/core/deepagent/goal-plan-file"
 import type { GoalStatus, GoalLimits, CompletionCriterion } from "@deepagent-code/core/deepagent/goal-loop"
 import { InvalidGoalError } from "@deepagent-code/core/deepagent/goal-loop"
 import { RuntimeFlags } from "../effect/runtime-flags"
@@ -46,6 +48,21 @@ import { GoalDriver, type GoalDriverPorts } from "./goal-driver"
 // root, keyed by session id, so a restart re-opens the same store (the loop state is restart-recoverable).
 const goalStoreRoot = (sessionID: string): string =>
   path.join(Global.Path.agent.data, "state", "goal", sessionID, "graph")
+
+// DESIGN mode's plan source: read the human-authored `.deepagent-code/plans/goal+plan.md` from the
+// session's working directory and parse it into a PlanDoc (+ any declared criteria). Default-safe — a
+// missing/unreadable/malformed file returns null so `start` falls through to the next plan source and
+// never throws. The parser (core) is pure; the fs read lives here at the wiring seam.
+const readGoalPlanFile = (cwd: string, sessionID: string): ParsedGoalPlan | null => {
+  try {
+    const file = path.join(cwd, GOAL_PLAN_FILE)
+    if (!fs.existsSync(file)) return null
+    const contents = fs.readFileSync(file, "utf8")
+    return parseGoalPlanFile(sessionID, contents)
+  } catch {
+    return null
+  }
+}
 
 // Per-session control state the driver ports read. Held in a SynchronizedRef so pause/stop from a route
 // are observed by the running background driver without a lock.
@@ -174,13 +191,24 @@ export const layer = Layer.effect(
     const start: Interface["start"] = (input) =>
       Effect.gen(function* () {
         const sessionID = input.sessionID
-        // The plan the user produced in plan mode lives in in-memory session-state — snapshot it into
-        // the graded store doc (the goal carrier). When there is no plan yet but the caller supplied a
-        // free-text objective (CLI `/goal <objective>`), seed a minimal single-step plan from it so the
-        // goal can start; the goal-worker refines the plan on its first tick. With neither a plan nor an
-        // objective, the core rejects the start (a goal must be objectively decidable).
+        const session = yield* sessions.get(SessionID.make(sessionID)).pipe(Effect.orDie)
+        const cwd = session.directory ?? process.cwd()
+
+        // Resolve the goal's plan from the FIRST available source, in precedence order:
+        //   1. session-state plan  — LOOP mode: the agent just produced the plan via the `plan` tool.
+        //   2. repo goal+plan.md   — DESIGN mode: the HUMAN authored `.deepagent-code/plans/goal+plan.md`;
+        //                            we parse it into a PlanDoc so the loop executes the user's plan as-is
+        //                            (the agent does NOT regenerate it). Criteria declared in the file are
+        //                            adopted unless the caller supplied explicit criteria.
+        //   3. free-text objective — CLI `/goal <objective>`: seed a minimal single-step plan the worker
+        //                            refines on the first tick.
+        // With none of these, the plan stays null and the core rejects the start (a goal must be decidable).
         const existing = AgentGateway.DeepAgentSessionState.getPlan(sessionID) as PlanDoc | null
         const objective = input.objective?.trim()
+        // Only fall back to the repo goal+plan.md (design mode) when there is NEITHER a session-state
+        // plan (loop mode) NOR an explicit free-text objective. An explicit objective is a direct user
+        // intent for THIS start and must win over a stale/leftover file in the workspace.
+        const fromFile = existing == null && !objective ? readGoalPlanFile(cwd, sessionID) : null
         const plan =
           existing ??
           (objective
@@ -195,14 +223,13 @@ export const layer = Layer.effect(
                   note: null,
                 },
               ])
-            : null)
+            : (fromFile?.plan ?? null))
         const store = new DocumentStore(goalStoreRoot(sessionID))
         const planDocId =
           plan != null
             ? GoalDriver.materializePlanDoc({ store, sessionId: sessionID, plan })
             : GoalDriver.goalPlanScope(sessionID) // no plan + no objective → startGoal rejects (no doc)
 
-        const session = yield* sessions.get(SessionID.make(sessionID)).pipe(Effect.orDie)
         const model = yield* provider.defaultModel().pipe(Effect.orDie)
 
         const runTurn = makeTaskSubagentRunner({
@@ -216,7 +243,7 @@ export const layer = Layer.effect(
         const deps = yield* GoalLoopWiring.makeGoalLoopWiring({
           store,
           parentSessionID: sessionID,
-          cwd: session.directory ?? process.cwd(),
+          cwd,
           runTurn,
           panelQuestion: () => input.panelQuestion ?? defaultPanelQuestion(),
           diagnostics,
@@ -229,10 +256,16 @@ export const layer = Layer.effect(
           )
         }
 
+        // Criteria precedence mirrors the plan: explicit caller criteria win; else a design-mode file's
+        // own criteria (when it declared any); else the built-in default (plan_complete + no_diagnostics).
+        const criteria =
+          input.criteria ??
+          (fromFile && fromFile.criteria.length > 0 ? fromFile.criteria : DEFAULT_CRITERIA)
+
         const { handle } = yield* GoalDriver.startGoal({
           deps,
           planDocId,
-          criteria: input.criteria ?? DEFAULT_CRITERIA,
+          criteria,
           limits: { ...DEFAULT_LIMITS, ...input.limits },
           stallThreshold: input.stallThreshold,
         })
