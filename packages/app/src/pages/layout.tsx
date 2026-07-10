@@ -70,6 +70,7 @@ import { ServerConnection, useServer } from "@/context/server"
 import { useLanguage, type Locale } from "@/context/language"
 import type { UpdaterState } from "@/updater"
 import { pathKey } from "@/utils/path-key"
+import { isFilesystemRootDir } from "@/utils/filesystem-root"
 import {
   displayName,
   effectiveWorkspaceOrder,
@@ -140,6 +141,7 @@ export default function Layout(props: ParentProps) {
     if (!slug) return { slug, dir: "" }
     const dir = decode64(slug)
     if (!dir) return { slug, dir: "" }
+    if (isFilesystemRootDir(dir)) return { slug, dir: "" }
     const store = serverSync.peek(dir, { bootstrap: false })
     return {
       slug,
