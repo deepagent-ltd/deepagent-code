@@ -464,7 +464,12 @@ export default function Layout(props: ParentProps) {
         const icon = e.details.type === "permission.asked" ? ("checklist" as const) : ("bubble-5" as const)
         const directory = e.name
         const props = e.details.properties
-        if (e.details.type === "permission.asked" && permission.autoResponds(e.details.properties, directory)) return
+        if (
+          e.details.type === "permission.asked" &&
+          (permission.autoResponds(e.details.properties, directory) ||
+            permission.autoRejects(e.details.properties, directory))
+        )
+          return
 
         const [store] = serverSync.child(directory, { bootstrap: false })
         const session = store.session.find((s) => s.id === props.sessionID)

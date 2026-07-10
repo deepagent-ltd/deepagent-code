@@ -2065,7 +2065,7 @@ noLLMServer.instance(
         source: { type: "file", path: "docs", text: { value: "@docs" } },
       })
       expect(fileURLToPath(files[0].url)).toBe(docs)
-      expect(agents.map((agent) => agent.name)).toEqual(["build"])
+      expect(agents.map((agent) => agent.name)).toEqual(["auto"])
     }),
   {
     config: {
@@ -2350,7 +2350,7 @@ noLLMServer.instance(
         const err = Cause.squash(exit.cause)
         expect(NamedError.Unknown.isInstance(err)).toBe(true)
         if (NamedError.Unknown.isInstance(err)) {
-          expect(err.data.message).toContain("build")
+          expect(err.data.message).toContain("auto")
         }
       }
     }),

@@ -125,6 +125,9 @@ export const DeepAgentKnowledgeItem = Schema.Struct({
   evidence_strength: Schema.Literals(["strong", "medium", "weak", "none"]),
   evidence_refs: Schema.Array(Schema.String),
   approval_status: Schema.Literals(["pending", "approved", "rejected"]),
+  // Storage scope for project-vs-global grouping in the Review UI: "durable" (global) or
+  // "durable:project:<project_id>". Optional so an older server without the field still decodes.
+  scope: Schema.optional(Schema.String),
 })
 
 export const DeepAgentKnowledgeList = Schema.Struct({ items: Schema.Array(DeepAgentKnowledgeItem) })

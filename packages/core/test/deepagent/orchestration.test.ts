@@ -199,44 +199,28 @@ describe("§5b estimateSignalsFromText (lightweight heuristic)", () => {
   })
 })
 
-// §5b: the runtime decision is injected into the prompt as concrete, task-specific numbers.
-describe("§5b decision injection into the prompt section", () => {
-  test("single-file typo at high (trivial) ⇒ section says NOT to fan out", () => {
+// Prompt-cache split (docs/deepagent-cache-hit-fix-plan.md): buildOrchestrationSection now returns
+// ONLY the stable, mode-derived generic guidance — the per-turn fan-out verdict (concrete numbers)
+// moved to prompt-policy's buildVolatileRoundContext so it never enters the cached system prefix.
+// The verdict rendering itself is covered in prompt-policy.test.ts.
+describe("§5b orchestration section is stable (no per-turn verdict inlined)", () => {
+  test("section is a pure function of mode — identical regardless of task", () => {
+    const a = buildOrchestrationSection("max")!
+    const b = buildOrchestrationSection("max")!
+    expect(a).toBe(b)
+    expect(a).toContain("扇出判据")
+    // The task-specific verdict must NOT be inlined into the cached prefix section anymore.
+    expect(a).not.toContain("本轮调度判定")
+    expect(a).not.toContain("建议扇出约")
+  })
+
+  test("decideFanout remains available to drive the volatile verdict", () => {
     const signals = estimateSignalsFromText({ userRequest: "fix the typo in foo.ts" })
-    const decision = decideFanout({ mode: "high", signals })
-    expect(decision.orchestrate).toBe(false)
-    const section = buildOrchestrationSection("high", decision)!
-    expect(section).toContain("不建议扇出")
+    expect(decideFanout({ mode: "high", signals }).orchestrate).toBe(false)
   })
 
-  test("cross ≥3-module safety task at max ⇒ section recommends researchers + reviewers with numbers", () => {
-    const signals = estimateSignalsFromText({
-      userRequest: "migrate the auth interface across subsystems and review it thoroughly",
-      fileOrModuleCount: 4,
-    })
-    const decision = decideFanout({ mode: "max", signals })
-    expect(decision.orchestrate).toBe(true)
-    expect(decision.researchers).toBeGreaterThanOrEqual(2)
-    const section = buildOrchestrationSection("max", decision)!
-    expect(section).toContain("本轮调度判定")
-    expect(section).toContain(`建议扇出约 ${decision.researchers} 个 researcher`)
-    // the per-round concurrency number reflects the decision's cap
-    expect(section).toContain(`单轮并行上限 ${decision.maxConcurrency}`)
-  })
-
-  test("decision maxConcurrency drives the section's self-limit number (configurable)", () => {
-    const signals = estimateSignalsFromText({
-      userRequest: "review multiple approaches across subsystems",
-      fileOrModuleCount: 5,
-    })
-    const decision = decideFanout({ mode: "ultra", signals, caps: { maxConcurrency: 2 } })
-    const section = buildOrchestrationSection("ultra", decision)!
-    expect(section).toContain("单轮并行不超过 2 个")
-  })
-
-  test("omitting the decision keeps the generic guidance (backward-compatible)", () => {
+  test("section points the model to the tail-appended round context", () => {
     const section = buildOrchestrationSection("high")!
-    expect(section).toContain("扇出判据")
-    expect(section).not.toContain("本轮调度判定")
+    expect(section).toContain("deepagent-round-context")
   })
 })
