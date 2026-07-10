@@ -13,10 +13,10 @@ import { ModelV2 } from "@deepagent-code/core/model"
 import { ProviderV2 } from "@deepagent-code/core/provider"
 import type * as LSPClient from "../lsp/client"
 import { LSP } from "../lsp/lsp"
-import { runPanel, type PanelistRunInput, type PanelistRunner } from "../panel/orchestrator"
-import { DEFAULT_QUORUM_POLICY, type PanelLens, type PanelOpinion, type PanelVerdict } from "../agent/schema/panel"
+import { runPanel } from "../panel/orchestrator"
+import { buildPanelistRunner, parseReviewResult, REVIEWER_SCHEMA } from "../panel/panelist-runner"
+import { DEFAULT_QUORUM_POLICY, type PanelLens, type PanelVerdict } from "../agent/schema/panel"
 import { ReviewResult } from "../agent/schema/orchestration"
-import { ToolJsonSchema } from "../tool/json-schema"
 import { RuntimeFlags } from "../effect/runtime-flags"
 import { SessionPrompt } from "./prompt"
 import { SessionRevert } from "./revert"
@@ -157,32 +157,9 @@ export type PanelQuestionInput = {
   readonly maxRounds?: number
 }
 
-// Parse a reviewer subagent's structured ReviewResult; a malformed / absent result is treated as
-// "findings unknown" → the gate cannot confirm clean → NOT clean (fail-closed, never a silent pass).
-const parseReviewResult = (structured: unknown): ReviewResult | null => {
-  if (structured == null) return null
-  try {
-    return ReviewResult.make(structured as ReviewResult)
-  } catch {
-    // structured may already be a decoded object from a prior JSON round-trip; accept a shape-check.
-    const anyVal = structured as { findings?: unknown; verdict?: unknown }
-    if (Array.isArray(anyVal.findings) && typeof anyVal.verdict === "string") return anyVal as ReviewResult
-    return null
-  }
-}
-
-/** Map a reviewer turn output → the panel's PanelOpinion shape (for the panelist runner). */
-const opinionFromReview = (lens: PanelLens, review: ReviewResult | null): PanelOpinion | null => {
-  if (review == null) return null
-  // Confidence = max finding confidence (approve with no findings ⇒ full confidence in "approve").
-  const confidence =
-    review.findings.length === 0
-      ? 1
-      : review.findings.reduce((m, f) => Math.max(m, Number.isFinite(f.confidence) ? f.confidence : 0), 0)
-  return { lens, verdict: review.verdict, findings: review.findings, confidence }
-}
-
-const REVIEWER_SCHEMA = ToolJsonSchema.fromSchema(ReviewResult) as unknown as Record<string, unknown>
+// §C: parseReviewResult / REVIEWER_SCHEMA / the panelist runner are shared with the standalone Expert
+// Panel entry via `panel/panelist-runner.ts` (single source of truth for how a lens panelist is driven
+// and how its ReviewResult maps to a PanelOpinion). This module keeps only the goal-loop-specific glue.
 
 // Catch BOTH typed failures AND defects (die) so a port always resolves to a concrete result and
 // never crashes the loop (the ports live on the `never` channel — see goal-loop.ts). `orElseSucceed`
@@ -218,58 +195,27 @@ export const buildGraderPorts = (deps: GraderPortsDeps): GraderPorts => ({
     !deps.expertPanelEnabled
       ? Effect.succeed({ decision: "needs_human" })
       : safe(
-      buildPanelistRunner(deps.runTurn).pipe(
-        Effect.flatMap((runPanelist) => {
-          const q = deps.panelQuestion()
-          return runPanel({
-            question: {
-              question: q.question,
-              codeRefs: q.codeRefs,
-              lenses: q.lenses,
-              maxRounds: q.maxRounds ?? 1,
-              policy: DEFAULT_QUORUM_POLICY,
-            },
-            runPanelist,
-            parentSessionID: deps.parentSessionID,
-          })
-        }),
-        Effect.map((verdict: PanelVerdict) => ({ decision: verdict.decision })),
-      ),
-      // A panel that cannot run at all ⇒ escalate to a human, never a silent approve.
-      { decision: "needs_human" },
-    ),
+          Effect.suspend(() => {
+            const q = deps.panelQuestion()
+            // The panelist runner is SHARED with the standalone Expert Panel entry (panelist-runner.ts):
+            // both convene identically-prompted lens panelists. deps.runTurn matches the PanelTurnRunner
+            // shape (agentType/prompt/outputSchema → { structured }).
+            return runPanel({
+              question: {
+                question: q.question,
+                codeRefs: q.codeRefs,
+                lenses: q.lenses,
+                maxRounds: q.maxRounds ?? 1,
+                policy: DEFAULT_QUORUM_POLICY,
+              },
+              runPanelist: buildPanelistRunner(deps.runTurn),
+              parentSessionID: deps.parentSessionID,
+            })
+          }).pipe(Effect.map((verdict: PanelVerdict) => ({ decision: verdict.decision }))),
+          // A panel that cannot run at all ⇒ escalate to a human, never a silent approve.
+          { decision: "needs_human" },
+        ),
 })
-
-// A panelist runner over the turn runner: each seat is a lens-prompted reviewer subagent whose
-// structured ReviewResult becomes a PanelOpinion. Absent/failed ⇒ null (§C.8 缺席).
-const buildPanelistRunner = (runTurn: SubagentTurnRunner): Effect.Effect<PanelistRunner> =>
-  Effect.sync(
-    () => (input: PanelistRunInput) =>
-      runTurn({
-        agentType: "reviewer",
-        prompt: renderPanelistPrompt(input),
-        outputSchema: REVIEWER_SCHEMA,
-      }).pipe(
-        Effect.map((turn) => opinionFromReview(input.spec.lens, parseReviewResult(turn.structured))),
-        Effect.catchCause(() => Effect.succeed(null as PanelOpinion | null)),
-      ),
-  )
-
-const renderPanelistPrompt = (input: PanelistRunInput): string => {
-  const base = [
-    `You are the ${input.spec.lens} expert on a review panel (round ${input.round}).`,
-    `Question (frozen): ${input.question.question}`,
-    input.question.codeRefs.length > 0 ? `Code references: ${input.question.codeRefs.join(", ")}` : "",
-  ].filter((s) => s.length > 0)
-  if (input.round > 1 && input.peers.length > 0) {
-    base.push(
-      `Anonymized peer opinions from the previous round: ${input.peers
-        .map((p) => `${p.verdict}(${p.confidence.toFixed(2)})`)
-        .join(", ")}. You may revise, but justify with reproducible evidence.`,
-    )
-  }
-  return base.join("\n")
-}
 
 // ---------------------------------------------------------------------------------------------------
 // StepExecutor + RollbackPort builders.

@@ -47,6 +47,14 @@ export const Flag = {
   DEEPAGENT_CODE_WORKSPACE_ID: process.env["DEEPAGENT_CODE_WORKSPACE_ID"],
   DEEPAGENT_CODE_EXPERIMENTAL_WORKSPACES: enabledByExperimental("DEEPAGENT_CODE_EXPERIMENTAL_WORKSPACES"),
   DEEPAGENT_CODE_EXPERIMENTAL_SESSION_SWITCHER: enabledByExperimental("DEEPAGENT_CODE_EXPERIMENTAL_SESSION_SWITCHER"),
+  // V3.9 §C/§D — mirror the server RuntimeFlags so the TUI can gate the /panel and /goal slash
+  // commands (evaluated at access time so the CLI/tests can set the env at runtime).
+  get DEEPAGENT_CODE_EXPERIMENTAL_EXPERT_PANEL() {
+    return enabledByExperimental("DEEPAGENT_CODE_EXPERIMENTAL_EXPERT_PANEL")
+  },
+  get DEEPAGENT_CODE_EXPERIMENTAL_GOAL_LOOP() {
+    return enabledByExperimental("DEEPAGENT_CODE_EXPERIMENTAL_GOAL_LOOP")
+  },
 
   // Evaluated at access time (not module load) because tests, the CLI, and
   // external tooling set these env vars at runtime.

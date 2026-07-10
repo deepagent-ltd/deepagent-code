@@ -579,6 +579,18 @@ export const SettingsGeneralV2: Component = () => {
             />
           </div>
         </SettingsRowV2>
+
+        <SettingsRowV2
+          title={language.t("settings.general.row.expertPanelDefault.title")}
+          description={language.t("settings.general.row.expertPanelDefault.description")}
+        >
+          <div data-action="settings-expert-panel-default">
+            <Switch
+              checked={settings.general.expertPanelDefault()}
+              onChange={(checked) => settings.general.setExpertPanelDefault(checked)}
+            />
+          </div>
+        </SettingsRowV2>
       </SettingsListV2>
     </div>
   )

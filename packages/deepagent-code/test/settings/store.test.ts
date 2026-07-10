@@ -98,6 +98,25 @@ describe("SettingsStore", () => {
     expect((await SettingsStore.read()).deepagent).toEqual({ agentMode: "high" })
   })
 
+  // V3.9 §C: the global Expert Panel default seeds each new conversation's armed state.
+  test("expertPanelDefault round-trips (write → read back)", async () => {
+    const w = await SettingsStore.update({ deepagent: { expertPanelDefault: true } })
+    expect(w.changed).toBe(true)
+    expect(w.settings.deepagent).toEqual({ expertPanelDefault: true })
+
+    SettingsStore.invalidate()
+    expect((await SettingsStore.read()).deepagent).toEqual({ expertPanelDefault: true })
+  })
+
+  test("non-boolean expertPanelDefault is dropped on read", async () => {
+    await fs.writeFile(
+      settingsFile(),
+      JSON.stringify({ deepagent: { expertPanelDefault: "yes", agentMode: "high" } }),
+    )
+    SettingsStore.invalidate()
+    expect((await SettingsStore.read()).deepagent).toEqual({ agentMode: "high" })
+  })
+
   test("keeps transport only for official providers", async () => {
     const result = await SettingsStore.update({
       providers: {
