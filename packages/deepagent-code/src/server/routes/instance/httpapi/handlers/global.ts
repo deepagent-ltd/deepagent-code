@@ -100,6 +100,7 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
           // env-backed RuntimeFlags the routes fail-close on, so UI availability == route availability.
           expertPanel: flags.experimentalExpertPanel,
           goalLoop: flags.experimentalGoalLoop,
+          wiki: flags.experimentalWiki,
         },
       }
     })

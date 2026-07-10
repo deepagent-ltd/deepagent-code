@@ -21,6 +21,8 @@ import { GoalManager } from "@/session/goal-manager"
 import { SessionID } from "@/session/schema"
 import { consultPanel } from "@/panel/consult"
 import { makeTaskSubagentRunner } from "@/session/goal-loop-wiring"
+import { openWikiGraph, openWikiService, openWikiSearchIndex, buildWikiEditGate } from "@/wiki/session-archive"
+import { WIKI_EDITABLE_TYPES, type WikiPage } from "@/wiki/wiki-service"
 import type { PanelTurnRunner } from "@/panel/panelist-runner"
 import type { PanelVerdict } from "@/agent/schema/panel"
 import type { CompletionCriterion } from "@deepagent-code/core/deepagent/goal-loop"
@@ -174,6 +176,10 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
           const asReviewType = (t: string): ReviewType =>
             REVIEW_TYPES.includes(t as ReviewType) ? (t as ReviewType) : "knowledge"
           const items = [...AgentGateway.DeepAgentKnowledgeSource.listAllForWorkspace(dir)]
+            // Skills are agent-executable procedures, not human-readable facts — the governance UI
+            // only surfaces learned facts (knowledge/memory/strategy/methodology/failure_dossier).
+            // (Domain-pack seed docs are already excluded upstream by knowledge-source.)
+            .filter((e) => e.type !== "skill")
             .map((e) => ({
               id: e.id,
               type: asReviewType(e.type),
@@ -181,6 +187,7 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
               evidence_strength: e.evidence_strength,
               evidence_refs: e.evidence_refs,
               approval_status: e.approval_status,
+              scope: e.scope,
             }))
             .sort((a, b) => a.id.localeCompare(b.id))
           return { items }
@@ -499,7 +506,7 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
     })
 
     const panelStatus = Effect.fn("DeepAgentHttpApi.panelStatus")(function* (ctx) {
-      const sessionID = ctx.urlParams.sessionID
+      const sessionID = ctx.query.sessionID
       const globalDefault = yield* expertPanelDefault()
       const choice = AgentGateway.DeepAgentSessionState.panelArmedChoice(sessionID)
       return {
@@ -550,7 +557,103 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
       return { ok: yield* goals.stop(ctx.payload.sessionID) }
     })
     const goalStatus = Effect.fn("DeepAgentHttpApi.goalStatus")(function* (ctx) {
-      return { goal: yield* goals.status(ctx.urlParams.sessionID) }
+      return { goal: yield* goals.status(ctx.query.sessionID) }
+    })
+
+    // ── V3.9 §B Repo & Wiki ─────────────────────────────────────────────────
+    // Read-only projection + governed knowledge edit + full-text search. All fail-closed on the wiki
+    // flag. The graph union / search index / edit gate are all built from the active workspace dir.
+    const requireWiki = Effect.fn("DeepAgentHttpApi.requireWiki")(function* () {
+      if (!flags.experimentalWiki)
+        return yield* Effect.fail(new DeepAgentPromotionError({ message: "wiki is disabled" }))
+    })
+
+    // Flatten a rendered WikiPage into the wire shape (crossLinks lists → plain arrays).
+    const toWikiPageResult = (page: WikiPage) => ({
+      docId: page.docId,
+      type: page.type,
+      title: page.title,
+      markdown: page.markdown,
+      editable: page.editable,
+      version: page.version,
+      crossLinks: {
+        toCode: page.crossLinks.toCode.map((r) => ({
+          docId: r.docId,
+          rel: r.rel,
+          path: r.path,
+          line: r.line,
+          symbolPath: r.symbolPath,
+          stale: r.stale,
+        })),
+        toDocs: page.crossLinks.toDocs.map((r) => ({
+          docId: r.docId,
+          rel: r.rel,
+          type: r.type,
+          title: r.title,
+          stale: r.stale,
+        })),
+      },
+    })
+
+    const wikiPages = Effect.fn("DeepAgentHttpApi.wikiPages")(function* (ctx) {
+      yield* requireWiki()
+      const workspacePath = yield* workspaceDir()
+      const typeFilter = ctx.query.type
+      const graph = openWikiGraph({ workspacePath })
+      const pages = graph
+        .allDocs()
+        .filter((doc) => (typeFilter ? doc.type === typeFilter : true))
+        .map((doc) => ({
+          docId: doc.id,
+          type: doc.type,
+          title: doc.description,
+          scope: doc.scope,
+          editable: WIKI_EDITABLE_TYPES.has(doc.type),
+          version: doc.version,
+        }))
+      return { pages }
+    })
+
+    const wikiPage = Effect.fn("DeepAgentHttpApi.wikiPage")(function* (ctx) {
+      yield* requireWiki()
+      const workspacePath = yield* workspaceDir()
+      const service = openWikiService({ workspacePath })
+      const page = yield* service
+        .renderPage({ docId: ctx.query.docId, scope: ctx.query.scope })
+        .pipe(Effect.mapError((e) => new DeepAgentPromotionError({ message: e.reason ?? "page not found" })))
+      return toWikiPageResult(page)
+    })
+
+    const wikiSearch = Effect.fn("DeepAgentHttpApi.wikiSearch")(function* (ctx) {
+      yield* requireWiki()
+      const workspacePath = yield* workspaceDir()
+      const index = openWikiSearchIndex({ workspacePath })
+      // The index is a rebuildable projection with no auto-refresh — rebuild from the graph before the
+      // query, then close the sqlite handle. Both are default-safe (never fail).
+      yield* index.rebuild()
+      const hits = yield* index.search({
+        text: ctx.query.text,
+        ...(ctx.query.type ? { type: ctx.query.type as WikiPage["type"] } : {}),
+        ...(ctx.query.scope ? { scope: ctx.query.scope } : {}),
+      })
+      index.close()
+      return { hits: hits.map((h) => ({ docId: h.docId, type: h.type, scope: h.scope, title: h.title, score: h.score })) }
+    })
+
+    const wikiEdit = Effect.fn("DeepAgentHttpApi.wikiEdit")(function* (ctx) {
+      yield* requireWiki()
+      const workspacePath = yield* workspaceDir()
+      const memoryDir = yield* workspaceMemoryDir()
+      // Inject the REAL evidence-gate (same validate() promotion uses) — not the trivial default.
+      const service = openWikiService({ workspacePath, gate: buildWikiEditGate(memoryDir) })
+      const page = yield* service
+        .editKnowledge({
+          docId: ctx.payload.docId,
+          body: ctx.payload.body,
+          editor: { id: ctx.payload.editor.id, ...(ctx.payload.editor.name ? { name: ctx.payload.editor.name } : {}) },
+        })
+        .pipe(Effect.mapError((e) => new DeepAgentPromotionError({ message: e.message })))
+      return toWikiPageResult(page)
     })
 
     return handlers
@@ -576,5 +679,9 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
       .handle("goalResume", goalResume)
       .handle("goalStop", goalStop)
       .handle("goalStatus", goalStatus)
+      .handle("wikiPages", wikiPages)
+      .handle("wikiPage", wikiPage)
+      .handle("wikiSearch", wikiSearch)
+      .handle("wikiEdit", wikiEdit)
   }),
 )
