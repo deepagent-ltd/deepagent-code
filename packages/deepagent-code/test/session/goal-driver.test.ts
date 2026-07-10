@@ -1,0 +1,171 @@
+import { describe, expect, test, beforeEach, afterEach } from "bun:test"
+import { mkdtempSync, rmSync } from "node:fs"
+import { tmpdir } from "node:os"
+import path from "node:path"
+import { Effect } from "effect"
+import { DocumentStore } from "@deepagent-code/core/deepagent/document-store"
+import { createPlanDoc, type PlanDoc, type PlanStep } from "@deepagent-code/core/deepagent/plan-controller"
+import type {
+  ControllerDeps,
+  GraderPorts,
+  StepExecutor,
+  RollbackPort,
+  GoalStatus,
+} from "@deepagent-code/core/deepagent/goal-loop"
+import {
+  materializePlanDoc,
+  startGoal,
+  runToCompletion,
+  noopPorts,
+  type GoalDriverPorts,
+} from "../../src/session/goal-driver"
+
+/**
+ * V3.9 §D — the Goal Driver. Verifies the production seam that goal-loop.ts + goal-loop-wiring.ts left
+ * open: materialize the plan into a store doc, start the loop, drive ticks to a terminal outcome, and
+ * observe status + cooperative pause/stop through the ports. The loop mechanics themselves are covered
+ * by core/goal-loop.test.ts; here we assert the DRIVER wraps them correctly.
+ */
+
+let root: string
+let store: DocumentStore
+const SESSION = "drv-session-1"
+
+beforeEach(() => {
+  root = mkdtempSync(path.join(tmpdir(), "goal-driver-"))
+  store = new DocumentStore(root)
+})
+afterEach(() => rmSync(root, { recursive: true, force: true }))
+
+const clock = () => {
+  let t = 1_000
+  return { now: () => t, advance: (ms: number) => (t += ms) }
+}
+
+const step = (id: string, status: PlanStep["status"]): PlanStep => ({
+  step_id: id,
+  title: id,
+  status,
+  acceptance: null,
+  assigned_agent: null,
+  evidence: [],
+  note: null,
+})
+
+const plan = (steps: PlanStep[]): PlanDoc => createPlanDoc(SESSION, "reach the goal", steps)
+
+const passingPorts = (): GraderPorts => ({
+  runTests: () => Effect.succeed({ pass: true }),
+  diagnostics: () => Effect.succeed({ maxSeverity: null }),
+  reviewerClean: () => Effect.succeed({ pass: true }),
+  panelApproves: () => Effect.succeed({ decision: "approve" }),
+})
+
+const noopExecutor: StepExecutor = () => Effect.succeed({ tokensUsed: 10 })
+const noopRollback: RollbackPort = () => Effect.void
+
+const controllerDeps = (over: Partial<ControllerDeps> = {}): ControllerDeps => ({
+  store,
+  ports: passingPorts(),
+  executor: noopExecutor,
+  rollback: noopRollback,
+  now: clock().now,
+  ...over,
+})
+
+describe("materializePlanDoc", () => {
+  test("snapshots an in-memory plan into a type:plan store doc", () => {
+    const id = materializePlanDoc({ store, sessionId: SESSION, plan: plan([step("a", "pending")]) })
+    const doc = store.get(id)
+    expect(doc?.type).toBe("plan")
+    expect(doc?.scope).toBe(`run:${SESSION}`)
+    const parsed = JSON.parse(doc!.body) as PlanDoc
+    expect(parsed.steps[0].step_id).toBe("a")
+  })
+
+  test("is idempotent: re-materializing the SAME plan does not bump the version (INV-4)", () => {
+    const p = plan([step("a", "pending")])
+    const id1 = materializePlanDoc({ store, sessionId: SESSION, plan: p })
+    const v1 = store.get(id1)!.version
+    const id2 = materializePlanDoc({ store, sessionId: SESSION, plan: p })
+    expect(id2).toBe(id1)
+    expect(store.get(id2)!.version).toBe(v1)
+  })
+})
+
+describe("startGoal + runToCompletion", () => {
+  test("a plan already complete + all criteria met ⇒ done", async () => {
+    const planDocId = materializePlanDoc({ store, sessionId: SESSION, plan: plan([step("a", "done")]) })
+    const deps = controllerDeps()
+    const { handle } = await Effect.runPromise(
+      startGoal({
+        deps,
+        planDocId,
+        criteria: [{ kind: "plan_complete" }],
+        limits: { maxTicks: 10, maxTokens: 10_000, maxWallclockMs: 10_000 },
+      }),
+    )
+    const outcome = await Effect.runPromise(runToCompletion({ deps, handle }))
+    expect(outcome).toBe("done")
+  })
+
+  test("onStatus port is called with the loop status after a tick", async () => {
+    const planDocId = materializePlanDoc({ store, sessionId: SESSION, plan: plan([step("a", "done")]) })
+    const deps = controllerDeps()
+    const seen: GoalStatus[] = []
+    const ports: GoalDriverPorts = {
+      ...noopPorts,
+      onStatus: (s) => Effect.sync(() => void seen.push(s)),
+    }
+    const { handle } = await Effect.runPromise(
+      startGoal({
+        deps,
+        planDocId,
+        criteria: [{ kind: "plan_complete" }],
+        limits: { maxTicks: 10, maxTokens: 10_000, maxWallclockMs: 10_000 },
+      }),
+    )
+    await Effect.runPromise(runToCompletion({ deps, handle, ports }))
+    expect(seen.length).toBeGreaterThan(0)
+    expect(seen[seen.length - 1].phase).toBe("done")
+  })
+
+  test("shouldStop halts the driver before ticking ⇒ needs_human", async () => {
+    const planDocId = materializePlanDoc({ store, sessionId: SESSION, plan: plan([step("a", "pending")]) })
+    const deps = controllerDeps()
+    const ports: GoalDriverPorts = { ...noopPorts, shouldStop: () => Effect.succeed(true) }
+    const { handle } = await Effect.runPromise(
+      startGoal({
+        deps,
+        planDocId,
+        criteria: [{ kind: "plan_complete" }],
+        limits: { maxTicks: 10, maxTokens: 10_000, maxWallclockMs: 10_000 },
+      }),
+    )
+    const outcome = await Effect.runPromise(runToCompletion({ deps, handle, ports }))
+    expect(outcome).toBe("needs_human")
+  })
+
+  test("shouldPause suspends without a terminal outcome (resumes on next run)", async () => {
+    const planDocId = materializePlanDoc({ store, sessionId: SESSION, plan: plan([step("a", "pending")]) })
+    const deps = controllerDeps()
+    let paused = true
+    const ports: GoalDriverPorts = { ...noopPorts, shouldPause: () => Effect.succeed(paused) }
+    const { handle } = await Effect.runPromise(
+      startGoal({
+        deps,
+        planDocId,
+        criteria: [{ kind: "plan_complete" }],
+        limits: { maxTicks: 10, maxTokens: 10_000, maxWallclockMs: 10_000 },
+      }),
+    )
+    // Paused ⇒ the driver returns "continue" without marking terminal.
+    const first = await Effect.runPromise(runToCompletion({ deps, handle, ports }))
+    expect(first).toBe("continue")
+    // Unpause + complete the plan ⇒ resuming drives to done.
+    paused = false
+    store.update(planDocId, JSON.stringify(plan([step("a", "done")])))
+    const second = await Effect.runPromise(runToCompletion({ deps, handle, ports }))
+    expect(second).toBe("done")
+  })
+})
