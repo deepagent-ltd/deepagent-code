@@ -65,10 +65,10 @@ const sseTypesPatched = sseTypesSource.replace(
   "=> Promise<ServerSentEventsResult<TData, TError>>",
   "=> Promise<ServerSentEventsResult<TData>>",
 )
-if (sseTypesPatched === sseTypesSource) {
+if (sseTypesPatched === sseTypesSource && !sseTypesSource.includes("=> Promise<ServerSentEventsResult<TData>>")) {
   throw new Error(`SseFn patch did not apply; @hey-api/openapi-ts output may have changed (${sseTypesPath})`)
 }
-await Bun.write(sseTypesPath, sseTypesPatched)
+if (sseTypesPatched !== sseTypesSource) await Bun.write(sseTypesPath, sseTypesPatched)
 
 await $`bun prettier --write src/gen`
 await $`bun prettier --write src/v2`

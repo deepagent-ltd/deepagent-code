@@ -207,8 +207,7 @@ const stubRuntimeBaseLayer = Layer.succeed(
 // Fully-inert DebugService (D1) stub. The real DebugService.layer runs InstanceState.make
 // + registers a scope finalizer at registry-build time, perturbing the instance-context
 // lifecycle these prompt tests rely on. The debug tool is never invoked here.
-const debugStubDie = <A>(): Effect.Effect<A, never, never> =>
-  Effect.die("DebugService stub (not used in prompt tests)")
+const debugStubDie = <A>(): Effect.Effect<A, never, never> => Effect.die("DebugService stub (not used in prompt tests)")
 const stubDebugServiceLayer = Layer.succeed(
   DebugService.Service,
   DebugService.Service.of({
@@ -2512,6 +2511,7 @@ it.instance(
       const prompt = yield* SessionPrompt.Service
       const sessions = yield* Session.Service
       const session = yield* sessions.create({})
+      const progress: string[] = []
 
       yield* llm.text(
         JSON.stringify({
@@ -2530,6 +2530,7 @@ it.instance(
           sessionID: session.id,
           rawInput: "修复登录测试",
           outputLanguage: "chinese",
+          onProgress: (preview) => progress.push(preview),
         })
         .pipe(Effect.exit)
 
@@ -2542,6 +2543,7 @@ it.instance(
       expect(JSON.stringify((yield* llm.hits)[0]?.body)).toContain("in Chinese")
       expect((yield* llm.hits)[0]?.headers.authorization).toBe("Bearer upstream-test-key")
       expect(yield* llm.misses).toEqual([])
+      expect(progress.at(-1)).toContain("登录测试")
     }),
   30_000,
 )

@@ -1821,38 +1821,7 @@ export type AgentConfig = {
     writablePaths?: Array<string>
     toolWhitelist?: Array<string>
   }
-  [key: string]:
-    | unknown
-    | string
-    | number
-    | {
-        [key: string]: boolean
-      }
-    | boolean
-    | "subagent"
-    | "primary"
-    | "all"
-    | {
-        [key: string]: unknown
-      }
-    | string
-    | "primary"
-    | "secondary"
-    | "accent"
-    | "success"
-    | "warning"
-    | "error"
-    | "info"
-    | number
-    | PermissionConfig
-    | {
-        maxConcurrency?: number
-        maxTokensPerTurn?: number
-        maxTurnDurationMs?: number
-        writablePaths?: Array<string>
-        toolWhitelist?: Array<string>
-      }
-    | undefined
+  [key: string]: unknown
 }
 
 export type ProviderConfig = {
@@ -1877,7 +1846,7 @@ export type ProviderConfig = {
      */
     headerTimeout?: number | false
     chunkTimeout?: number
-    [key: string]: unknown | string | boolean | number | false | number | false | number | undefined
+    [key: string]: unknown
   }
   models?: {
     [key: string]: {
@@ -1933,7 +1902,7 @@ export type ProviderConfig = {
       variants?: {
         [key: string]: {
           disabled?: boolean
-          [key: string]: unknown | boolean | undefined
+          [key: string]: unknown
         }
       }
     }
@@ -2043,9 +2012,6 @@ export type Config = {
   >
   share?: "manual" | "auto" | "disabled"
   autoshare?: boolean
-  /**
-   * Base URL of the server used for session sharing. When set, overrides the default share endpoint. Falls back to the enterprise URL and then the built-in default when unset.
-   */
   share_url?: string
   /**
    * Automatically update to the latest version. Set to true to auto-update, false to disable, or 'notify' to show update notifications
@@ -6173,6 +6139,33 @@ export type GlobalProjectsResponses = {
 }
 
 export type GlobalProjectsResponse = GlobalProjectsResponses[keyof GlobalProjectsResponses]
+
+export type GlobalProjectDeleteData = {
+  body?: never
+  path: {
+    projectID: string
+  }
+  query?: never
+  url: "/global/projects/{projectID}"
+}
+
+export type GlobalProjectDeleteErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type GlobalProjectDeleteError = GlobalProjectDeleteErrors[keyof GlobalProjectDeleteErrors]
+
+export type GlobalProjectDeleteResponses = {
+  /**
+   * <No Content>
+   */
+  204: void
+}
+
+export type GlobalProjectDeleteResponse = GlobalProjectDeleteResponses[keyof GlobalProjectDeleteResponses]
 
 export type EventSubscribeData = {
   body?: never
@@ -11164,6 +11157,45 @@ export type SessionPromptPrepareResponses = {
 }
 
 export type SessionPromptPrepareResponse = SessionPromptPrepareResponses[keyof SessionPromptPrepareResponses]
+
+export type SessionPromptPrepareStreamData = {
+  body?: {
+    mode: "wish" | "intelligence"
+    output_language?: "chinese" | "english"
+    parts: Array<TextPartInput | FilePartInput | AgentPartInput | SubtaskPartInput>
+  }
+  path: {
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/session/{sessionID}/prompt_prepare_stream"
+}
+
+export type SessionPromptPrepareStreamErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+}
+
+export type SessionPromptPrepareStreamError = SessionPromptPrepareStreamErrors[keyof SessionPromptPrepareStreamErrors]
+
+export type SessionPromptPrepareStreamResponses = {
+  /**
+   * Success
+   */
+  200: string
+}
+
+export type SessionPromptPrepareStreamResponse =
+  SessionPromptPrepareStreamResponses[keyof SessionPromptPrepareStreamResponses]
 
 export type SessionPromptSuggestionData = {
   body?: never

@@ -6,18 +6,20 @@ function wishConfig(llmUrl: string) {
   return {
     formatter: false,
     lsp: false,
-    model: "deepseek/deepseek-v4-flash",
+    model: "deepagent/deepseek-v4-flash",
     provider: {
-      deepseek: {
-        name: "DeepSeek",
-        options: { baseURL: llmUrl },
+      deepagent: {
+        name: "DeepAgent",
         models: {
           "deepseek-v4-flash": {
             id: "deepseek-v4-flash",
             name: "DeepSeek V4 Flash",
             reasoning: true,
             provider: { npm: "@ai-sdk/openai-compatible", api: llmUrl },
-            options: {},
+            options: {
+              authProviderID: "deepseek",
+              upstreamProviderID: "deepseek",
+            },
             tool_call: true,
             limit: { context: 100_000, output: 10_000 },
           },
@@ -33,6 +35,18 @@ function requestJson<T>(url: string, init: RequestInit) {
     const text = await response.text()
     if (!response.ok) throw new Error(`${init.method ?? "GET"} ${url} failed ${response.status}: ${text}`)
     return JSON.parse(text) as T
+  })
+}
+
+function requestEvents<T>(url: string, init: RequestInit) {
+  return Effect.tryPromise(async () => {
+    const response = await fetch(url, init)
+    const text = await response.text()
+    if (!response.ok) throw new Error(`${init.method ?? "GET"} ${url} failed ${response.status}: ${text}`)
+    return text
+      .split("\n\n")
+      .flatMap((block) => block.split("\n").filter((line) => line.startsWith("data:")))
+      .map((line) => JSON.parse(line.slice(5).trim()) as T)
   })
 }
 
@@ -81,7 +95,31 @@ cliIt.live(
       expect(prepared.route).toBe("code")
       expect(prepared.goal).toContain("登录测试")
       expect(prepared.preview).toContain("登录测试")
-      expect(yield* llm.calls).toBe(1)
+      yield* llm.text(
+        JSON.stringify({
+          route: "code",
+          refined_prompt: "请流式定位登录测试失败原因，修复实现，并运行对应测试验证。",
+          assumptions: [],
+        }),
+      )
+
+      const streamed = yield* requestEvents<
+        | { type: "progress"; preview: string }
+        | { type: "result"; result: { route: string; goal: string; preview: string } }
+      >(`${server.url}/session/${session.id}/prompt_prepare_stream`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          mode: "intelligence",
+          output_language: "chinese",
+          parts: [{ type: "text", text: "流式修复登录测试" }],
+        }),
+      })
+
+      expect(streamed.some((event) => event.type === "progress" && event.preview.includes("登录测试"))).toBe(true)
+      const result = streamed.find((event) => event.type === "result")
+      expect(result?.type === "result" && result.result.preview.includes("登录测试")).toBe(true)
+      expect(yield* llm.calls).toBe(2)
       expect(JSON.stringify((yield* llm.hits)[0]?.body)).toContain("in Chinese")
       expect((yield* llm.hits)[0]?.headers.authorization).toBe("Bearer upstream-test-key")
     }),

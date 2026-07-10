@@ -2,7 +2,7 @@
   "ref_id": "failure:architecture:shared-everything",
   "type": "failure_dossier",
   "description": "Putting domain policy in generic helpers creates broad coupling.",
-  "body": "Keep domain rules near owners.\n\nDerived from local skill survey outputs under /Users/xiuranli/code/agent/skill, especially reviewed canonical rules, coverage reports, and trusted local skill notes. Paraphrased into domain-pack seed form.\n\nDiagnostic use only: keep this out of index.json and use it only as a blocked/do-not-use signal.",
+  "body": "Keep domain rules near owners.\n\nDerived from reviewed skill survey outputs, including canonical rules, coverage reports, and trusted skill notes. Paraphrased into domain-pack seed form.\n\nDiagnostic use only: keep this out of index.json and use it only as a blocked/do-not-use signal.",
   "domain": "architecture",
   "scope_hint": "code.architecture:failure_dossiers",
   "evidence_strength": "medium",

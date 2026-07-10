@@ -10,7 +10,7 @@ Does not bypass runtime permission gates or import external tool servers blindly
 
 ## Source Basis
 
-Derived from local skill survey outputs under /Users/xiuranli/code/agent/skill, especially reviewed canonical rules, coverage reports, and trusted local skill notes. Paraphrased into domain-pack seed form.
+Derived from reviewed skill survey outputs, including canonical rules, coverage reports, and trusted skill notes. Paraphrased into domain-pack seed form.
 
 ## Composition
 
