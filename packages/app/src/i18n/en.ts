@@ -1104,6 +1104,8 @@ export const dict = {
   "review.type.skill": "Skill",
   "review.type.failure_dossier": "Failure dossiers",
   "review.type.other": "Other",
+  "review.scope.project": "This project",
+  "review.scope.global": "Global",
   "review.groupCount": "{{count}}",
   "review.envFacts.title": "Shared environment facts",
   "review.envFacts.description":

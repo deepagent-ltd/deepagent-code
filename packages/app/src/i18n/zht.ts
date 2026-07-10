@@ -642,6 +642,8 @@ export const dict = {
   "sidebar.settings": "設定",
   "sidebar.help": "說明",
   "sidebar.wiki": "倉庫與百科",
+  "review.scope.project": "當前專案",
+  "review.scope.global": "全域",
   "goal.start.hint": "計劃已就緒 — 轉為受監督的長跑目標",
   "goal.start.button": "轉為 Goal",
   "goal.start.failed": "無法啟動目標",

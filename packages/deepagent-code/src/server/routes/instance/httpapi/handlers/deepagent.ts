@@ -176,6 +176,10 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
           const asReviewType = (t: string): ReviewType =>
             REVIEW_TYPES.includes(t as ReviewType) ? (t as ReviewType) : "knowledge"
           const items = [...AgentGateway.DeepAgentKnowledgeSource.listAllForWorkspace(dir)]
+            // Skills are agent-executable procedures, not human-readable facts — the governance UI
+            // only surfaces learned facts (knowledge/memory/strategy/methodology/failure_dossier).
+            // (Domain-pack seed docs are already excluded upstream by knowledge-source.)
+            .filter((e) => e.type !== "skill")
             .map((e) => ({
               id: e.id,
               type: asReviewType(e.type),
@@ -183,6 +187,7 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
               evidence_strength: e.evidence_strength,
               evidence_refs: e.evidence_refs,
               approval_status: e.approval_status,
+              scope: e.scope,
             }))
             .sort((a, b) => a.id.localeCompare(b.id))
           return { items }

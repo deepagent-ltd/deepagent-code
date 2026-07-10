@@ -904,6 +904,8 @@ export const dict = {
   "review.type.skill": "技能",
   "review.type.failure_dossier": "失败档案",
   "review.type.other": "其他",
+  "review.scope.project": "当前项目",
+  "review.scope.global": "全局",
   "review.groupCount": "{{count}}",
   "packs.title": "领域包",
   "packs.active": "自动检测",

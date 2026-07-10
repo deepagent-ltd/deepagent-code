@@ -105,7 +105,7 @@ export function ModeSelector(props: {
       </Kobalte.Trigger>
       <Kobalte.Portal>
         <Kobalte.Content
-          class="w-72 max-h-80 flex flex-col p-2 rounded-md border border-border-base bg-surface-raised-stronger-non-alpha shadow-md z-50 outline-none overflow-hidden"
+          class="w-80 max-h-96 flex flex-col p-2 rounded-md border border-border-base bg-surface-raised-stronger-non-alpha shadow-md z-50 outline-none overflow-hidden"
           onKeyDown={(event) => listRef?.onKeyDown(event)}
           onEscapeKeyDown={(event) => {
             close("escape")
@@ -139,9 +139,9 @@ export function ModeSelector(props: {
           >
             {(agent) => (
               <div class="flex w-full min-w-0 flex-col gap-0.5">
-                <span class="truncate text-13-medium text-text-base capitalize">{title(agent)}</span>
+                <span class="text-13-medium text-text-base capitalize">{title(agent)}</span>
                 <Show when={description(agent)}>
-                  <span class="truncate text-11-regular text-text-weaker">{description(agent)}</span>
+                  <span class="text-11-regular text-text-weaker whitespace-normal leading-snug">{description(agent)}</span>
                 </Show>
               </div>
             )}
