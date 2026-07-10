@@ -11,8 +11,12 @@ import {
   acceptKey,
   directoryAcceptKey,
   isDirectoryAutoAccepting,
+  isDirectoryReadOnly,
+  isMutatingPermission,
   autoRespondsPermission,
 } from "./permission-auto-respond"
+
+export type DirectoryApprovalMode = "read-only" | "request" | "full-access"
 
 type PermissionRespondFn = (input: {
   sessionID: string
@@ -59,6 +63,13 @@ export const { use: usePermission, provider: PermissionProvider } = createSimple
       return hasPermissionPromptRules(store.config.permission)
     })
 
+    // Tri-state Read-Only / Request / Full-Access: v4 adds a parallel `readOnly` directory map
+    // alongside the pre-existing `autoAccept` map (the two are mutually exclusive per directory).
+    // Back-compat: the live persisted key is "permission" (the "v3"/"v4" naming lives in the shape,
+    // not the storage key — the real key was never "permission.v3"). We keep the key unchanged so
+    // existing data is read in place, and version the shape additively: `migrate` back-fills the new
+    // `readOnly` map and `merge` supplies the default, so an existing auto-accepting directory keeps
+    // its `autoAccept` entry and reads back as "full-access" with no data loss.
     const [store, setStore, _, ready] = persisted(
       {
         ...Persist.serverGlobal(serverSDK.scope, "permission", ["permission.v3"]),
@@ -66,19 +77,31 @@ export const { use: usePermission, provider: PermissionProvider } = createSimple
           if (!value || typeof value !== "object" || Array.isArray(value)) return value
 
           const data = value as Record<string, unknown>
-          if (data.autoAccept) return value
+          const withAutoAccept = data.autoAccept
+            ? data
+            : {
+                ...data,
+                autoAccept:
+                  typeof data.autoAcceptEdits === "object" &&
+                  data.autoAcceptEdits &&
+                  !Array.isArray(data.autoAcceptEdits)
+                    ? data.autoAcceptEdits
+                    : {},
+              }
 
-          return {
-            ...data,
-            autoAccept:
-              typeof data.autoAcceptEdits === "object" && data.autoAcceptEdits && !Array.isArray(data.autoAcceptEdits)
-                ? data.autoAcceptEdits
-                : {},
+          if (
+            (withAutoAccept as Record<string, unknown>).readOnly &&
+            typeof (withAutoAccept as Record<string, unknown>).readOnly === "object"
+          ) {
+            return withAutoAccept
           }
+
+          return { ...withAutoAccept, readOnly: {} }
         },
       },
       createStore({
         autoAccept: {} as Record<string, boolean>,
+        readOnly: {} as Record<string, boolean>,
       }),
     )
 
@@ -148,9 +171,37 @@ export const { use: usePermission, provider: PermissionProvider } = createSimple
       return isDirectoryAutoAccepting(store.autoAccept, directory)
     }
 
+    function isDirectoryReadOnlyMode(directory: string) {
+      return isDirectoryReadOnly(store.readOnly, directory)
+    }
+
     function shouldAutoRespond(permission: PermissionRequest, directory?: string) {
       const session = directory ? serverSync.child(directory, { bootstrap: false })[0].session : []
       return autoRespondsPermission(store.autoAccept, session, permission, directory)
+    }
+
+    // Read-only is a directory-level guard: auto-REJECT any mutating tool (edit/write/bash/…)
+    // while leaving read-style tools to the normal flow. The mirror image of full-access
+    // auto-approve. Directory-scoped only (session-lineage overrides are auto-accept's concern).
+    function shouldAutoReject(permission: PermissionRequest, directory?: string) {
+      if (!directory) return false
+      if (!isDirectoryReadOnlyMode(directory)) return false
+      return isMutatingPermission(permission.permission)
+    }
+
+    function respondReject(permission: PermissionRequest, directory?: string) {
+      const now = Date.now()
+      const hit = responded.has(permission.id)
+      responded.delete(permission.id)
+      responded.set(permission.id, now)
+      pruneResponded(now)
+      if (hit) return
+      respond({
+        sessionID: permission.sessionID,
+        permissionID: permission.id,
+        response: "reject",
+        directory,
+      })
     }
 
     function bumpEnableVersion(sessionID: string, directory?: string) {
@@ -165,6 +216,10 @@ export const { use: usePermission, provider: PermissionProvider } = createSimple
       if (event?.type !== "permission.asked") return
 
       const perm = event.properties
+      if (shouldAutoReject(perm, e.name)) {
+        respondReject(perm, e.name)
+        return
+      }
       if (!shouldAutoRespond(perm, e.name)) return
 
       respondOnce(perm, e.name)
@@ -176,6 +231,8 @@ export const { use: usePermission, provider: PermissionProvider } = createSimple
       setStore(
         produce((draft) => {
           draft.autoAccept[key] = true
+          // full-access and read-only are mutually exclusive.
+          draft.readOnly[key] = false
         }),
       )
 
@@ -199,6 +256,63 @@ export const { use: usePermission, provider: PermissionProvider } = createSimple
           draft.autoAccept[key] = false
         }),
       )
+    }
+
+    // Read-only directory mode: mirror of enableDirectory, but eagerly REJECTS the pending
+    // mutating requests instead of approving them.
+    function enableReadOnlyDirectory(directory: string) {
+      const key = directoryAcceptKey(directory)
+      setStore(
+        produce((draft) => {
+          draft.readOnly[key] = true
+          // read-only and full-access are mutually exclusive.
+          draft.autoAccept[key] = false
+        }),
+      )
+
+      serverSDK.client.permission
+        .list({ directory })
+        .then((x) => {
+          if (!isDirectoryReadOnlyMode(directory)) return
+          for (const perm of x.data ?? []) {
+            if (!perm?.id) continue
+            if (!shouldAutoReject(perm, directory)) continue
+            respondReject(perm, directory)
+          }
+        })
+        .catch(() => undefined)
+    }
+
+    function disableReadOnlyDirectory(directory: string) {
+      const key = directoryAcceptKey(directory)
+      setStore(
+        produce((draft) => {
+          draft.readOnly[key] = false
+        }),
+      )
+    }
+
+    function directoryApprovalMode(directory: string): DirectoryApprovalMode {
+      if (isAutoAcceptingDirectory(directory)) return "full-access"
+      if (isDirectoryReadOnlyMode(directory)) return "read-only"
+      return "request"
+    }
+
+    function setDirectoryApprovalMode(directory: string, mode: DirectoryApprovalMode) {
+      if (directoryApprovalMode(directory) === mode) return
+      switch (mode) {
+        case "full-access":
+          disableReadOnlyDirectory(directory)
+          enableDirectory(directory)
+          return
+        case "read-only":
+          disableDirectory(directory)
+          enableReadOnlyDirectory(directory)
+          return
+        default:
+          disableDirectory(directory)
+          disableReadOnlyDirectory(directory)
+      }
     }
 
     function enable(sessionID: string, directory: string) {
@@ -243,8 +357,16 @@ export const { use: usePermission, provider: PermissionProvider } = createSimple
       autoResponds(permission: PermissionRequest, directory?: string) {
         return shouldAutoRespond(permission, directory)
       },
+      autoRejects(permission: PermissionRequest, directory?: string) {
+        return shouldAutoReject(permission, directory)
+      },
       isAutoAccepting,
       isAutoAcceptingDirectory,
+      // Tri-state directory approval mode (Read-Only / Request / Full-Access).
+      // isAutoAcceptingDirectory / toggleAutoAcceptDirectory remain valid: full-access == auto-accept.
+      directoryApprovalMode,
+      setDirectoryApprovalMode,
+      isDirectoryReadOnly: isDirectoryReadOnlyMode,
       toggleAutoAccept(sessionID: string, directory: string) {
         if (isAutoAccepting(sessionID, directory)) {
           disable(sessionID, directory)

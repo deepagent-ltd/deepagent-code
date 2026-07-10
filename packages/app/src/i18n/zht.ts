@@ -280,6 +280,11 @@ export const dict = {
   "prompt.action.stop": "停止",
   "composer.approval.request": "請求批准",
   "composer.approval.auto": "自動批准",
+  "composer.approval.readOnly": "唯讀",
+  "composer.approval.fullAccess": "完全存取",
+  "composer.approval.readOnly.desc": "允許讀取和搜尋，但拒絕編輯和執行命令",
+  "composer.approval.request.desc": "編輯檔案或執行命令前先請求批准",
+  "composer.approval.fullAccess.desc": "無需詢問即可編輯檔案和執行命令",
 
   "prompt.toast.pasteUnsupported.title": "不支援的附件",
   "prompt.toast.pasteUnsupported.description": "此處僅能附加圖片、PDF 或文字檔案。",
