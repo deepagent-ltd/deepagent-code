@@ -13,25 +13,9 @@ import { decode64 } from "@/utils/base64"
 import { EventSessionError } from "@deepagent-code/sdk/v2"
 import { Persist, persisted } from "@/utils/persist"
 import { playSoundById } from "@/utils/sound"
+import { pruneNotifications, type Notification } from "./notification-state"
 
-type NotificationBase = {
-  directory?: string
-  session?: string
-  metadata?: unknown
-  time: number
-  viewed: boolean
-}
-
-type TurnCompleteNotification = NotificationBase & {
-  type: "turn-complete"
-}
-
-type ErrorNotification = NotificationBase & {
-  type: "error"
-  error: EventSessionError["properties"]["error"]
-}
-
-export type Notification = TurnCompleteNotification | ErrorNotification
+export type { Notification } from "./notification-state"
 
 type NotificationIndex = {
   session: {
@@ -46,16 +30,6 @@ type NotificationIndex = {
     unseenCount: Record<string, number>
     unseenHasError: Record<string, boolean>
   }
-}
-
-const MAX_NOTIFICATIONS = 500
-const NOTIFICATION_TTL_MS = 1000 * 60 * 60 * 24 * 30
-
-function pruneNotifications(list: Notification[]) {
-  const cutoff = Date.now() - NOTIFICATION_TTL_MS
-  const pruned = list.filter((n) => n.time >= cutoff)
-  if (pruned.length <= MAX_NOTIFICATIONS) return pruned
-  return pruned.slice(pruned.length - MAX_NOTIFICATIONS)
 }
 
 function createNotificationIndex(): NotificationIndex {
