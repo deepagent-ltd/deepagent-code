@@ -54,9 +54,33 @@ export type SessionRunState = {
   // update. The SEMANTIC primary trigger for the progress nudge ("a step probably just finished").
   // Reset with the counter on a real status change.
   validationPassedSinceReport: boolean
+  // V3.9 §C: whether this conversation has EXPLICITLY toggled the Expert Panel "armed" state from the
+  // chat dialog. `null` = never toggled → the effective armed state falls back to the global
+  // `expertPanelDefault` setting (resolved server-side, so the UI reflects the server default without a
+  // client round-trip guess). Armed means the user may convene a panel (button press) and — when a goal
+  // loop is running — the loop may convene the panel at high-risk decision points (§C activation).
+  panelArmed: boolean | null
+  // V3.9 §D: a lightweight pointer to the goal currently driven for this session (the authoritative
+  // loop state lives in the DocumentStore run_context doc — this is only enough to find/resume it and
+  // reflect its phase in the UI). Null when no goal is running.
+  activeGoal: ActiveGoalPointer | null
   createdAt: string
   completedAt: string | null
 }
+
+// V3.9 §D: session-state pointer to a running goal. The GoalLoop's GoalStatus (persisted in the
+// DocumentStore) is the source of truth for ledger/gaps; this pointer just lets the server locate the
+// goal, drive its ticks, and lets the UI show a phase without re-reading the store on every render.
+export type ActiveGoalPointer = {
+  readonly goalId: string
+  readonly planDocId: string
+  readonly phase: GoalPointerPhase
+  readonly startedAt: string
+}
+
+// Mirrors goal-loop.ts GoalPhase plus "paused" (a UI/driver-level state that suspends ticking without
+// tearing down the loop — the core phase stays "running" and resumes on unpause).
+export type GoalPointerPhase = "running" | "paused" | "done" | "needs_human" | "rolled_back" | "stopped"
 
 let stateDir: string | null = null
 const sessions = new Map<string, SessionRunState>()
@@ -86,6 +110,8 @@ export const getOrCreate = (sessionId: string, mode: AgentMode): SessionRunState
     plan: null,
     mutationsSinceReport: 0,
     validationPassedSinceReport: false,
+    panelArmed: null,
+    activeGoal: null,
     createdAt: new Date().toISOString(),
     completedAt: null,
   }
@@ -170,6 +196,54 @@ export const setPlan = (sessionId: string, plan: PlanDoc): void => {
 }
 
 export const getPlan = (sessionId: string): PlanDoc | null => sessions.get(sessionId)?.plan ?? null
+
+// V3.9 §C — Expert Panel per-session arming.
+// The raw per-session toggle (null = never explicitly toggled). setPanelArmed writes an explicit
+// user choice; resolvePanelArmed resolves the EFFECTIVE state, falling back to the global default when
+// the session has no explicit choice. This keeps the global `expertPanelDefault` setting authoritative
+// for new conversations while an explicit toggle always wins.
+export const setPanelArmed = (sessionId: string, armed: boolean): void => {
+  const state = sessions.get(sessionId)
+  if (!state) return
+  state.panelArmed = armed
+  saveToDisk()
+}
+
+/** The raw explicit toggle, or null when the session has never toggled it. */
+export const panelArmedChoice = (sessionId: string): boolean | null => sessions.get(sessionId)?.panelArmed ?? null
+
+/**
+ * Effective armed state: the explicit per-session choice if set, else the supplied global default. Pass
+ * the resolved `expertPanelDefault` setting so the fallback reflects the server's configured default.
+ */
+export const resolvePanelArmed = (sessionId: string, globalDefault: boolean): boolean => {
+  const choice = sessions.get(sessionId)?.panelArmed
+  return choice ?? globalDefault
+}
+
+/** Back-compat: effective armed state with a hard `false` fallback (no global default available). */
+export const isPanelArmed = (sessionId: string): boolean => sessions.get(sessionId)?.panelArmed ?? false
+
+// V3.9 §D — active-goal pointer. The GoalLoop status doc in the DocumentStore is authoritative; this
+// pointer is the session-local index the server/UI use to find and reflect the running goal.
+export const setActiveGoal = (sessionId: string, pointer: ActiveGoalPointer | null): void => {
+  const state = sessions.get(sessionId)
+  if (!state) return
+  state.activeGoal = pointer
+  saveToDisk()
+}
+
+export const getActiveGoal = (sessionId: string): ActiveGoalPointer | null =>
+  sessions.get(sessionId)?.activeGoal ?? null
+
+// Patch just the phase of the active-goal pointer (driver transitions running↔paused, terminal states).
+// No-op when there is no active goal (a stale transition after stop must not resurrect a pointer).
+export const setActiveGoalPhase = (sessionId: string, phase: GoalPointerPhase): void => {
+  const state = sessions.get(sessionId)
+  if (!state || state.activeGoal == null) return
+  state.activeGoal = { ...state.activeGoal, phase }
+  saveToDisk()
+}
 
 // U10: count one mutating tool call toward the progress-nudge budget. Called after a mutating tool
 // executes. No-op when there is no plan (the nudge only applies once the model has a plan to report
@@ -290,6 +364,10 @@ function normalizeState(state: SessionRunState): SessionRunState {
     // Backfill: sessions persisted before U10 have no counter on disk.
     mutationsSinceReport: state.mutationsSinceReport ?? 0,
     validationPassedSinceReport: state.validationPassedSinceReport ?? false,
+    // Backfill: sessions persisted before V3.9 §C/§D have neither slot on disk. panelArmed backfills to
+    // null (= not explicitly toggled → follows the global default), NOT false.
+    panelArmed: state.panelArmed ?? null,
+    activeGoal: state.activeGoal ?? null,
   }
   sessions.set(state.sessionId, normalized)
   return normalized

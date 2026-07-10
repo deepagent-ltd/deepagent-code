@@ -1,5 +1,6 @@
 import { PermissionV1 } from "@deepagent-code/core/v1/permission"
 import { Config } from "@/config/config"
+import { RuntimeFlags } from "@/effect/runtime-flags"
 import { serviceUse } from "@deepagent-code/core/effect/service-use"
 import { Provider } from "@/provider/provider"
 
@@ -14,6 +15,7 @@ import PROMPT_EXPLORE from "./prompt/explore.txt"
 import PROMPT_RESEARCHER from "./prompt/researcher.txt"
 import PROMPT_REVIEWER from "./prompt/reviewer.txt"
 import PROMPT_GOAL_WORKER from "./prompt/goal-worker.txt"
+import PROMPT_GOAL_MODE from "./prompt/goal-mode.txt"
 import { PLAN_WRITE_OWN_GOAL } from "./subagent-permissions"
 import PROMPT_SUMMARY from "./prompt/summary.txt"
 import PROMPT_TITLE from "./prompt/title.txt"
@@ -128,6 +130,7 @@ export const layer = Layer.effect(
     const plugin = yield* Plugin.Service
     const skill = yield* Skill.Service
     const provider = yield* Provider.Service
+    const flags = yield* RuntimeFlags.Service
 
     const state = yield* InstanceState.make<State>(
       Effect.fn("Agent.state")(function* (ctx) {
@@ -203,6 +206,33 @@ export const layer = Layer.effect(
             mode: "primary",
             native: true,
           },
+          // V3.9 §D: GOAL mode — the third primary agent (alongside build/plan). Selecting it is the
+          // entry point for defining a bounded, objectively-decidable goal and producing the plan the
+          // Goal Loop drives autonomously. Same working permission ruleset as build (goal setup reads
+          // and plans; the actual autonomous execution runs in goal-worker child sessions). Only
+          // registered when experimentalGoalLoop is on, so the mode never appears without a backend
+          // that can start a goal (the goal.start route also fail-closes when the flag is off).
+          ...(flags.experimentalGoalLoop
+            ? {
+                goal: {
+                  name: "goal",
+                  description:
+                    "Goal mode (V3.9 §D). Define a bounded, objectively-decidable goal and produce a plan; the supervised Goal Loop then drives it to completion autonomously (plan→execute→verify per tick).",
+                  permission: Permission.merge(
+                    defaults,
+                    Permission.fromConfig({
+                      question: "allow",
+                      plan_enter: "allow",
+                    }),
+                    user,
+                  ),
+                  prompt: PROMPT_GOAL_MODE,
+                  options: {},
+                  mode: "primary" as const,
+                  native: true,
+                },
+              }
+            : {}),
           general: {
             name: "general",
             description: `General-purpose agent for researching complex questions and executing multi-step tasks. Use this agent to execute multiple units of work in parallel.`,
@@ -587,6 +617,7 @@ export const defaultLayer = layer.pipe(
   Layer.provide(Auth.defaultLayer),
   Layer.provide(Config.defaultLayer),
   Layer.provide(Skill.defaultLayer),
+  Layer.provide(RuntimeFlags.defaultLayer),
 )
 
 export * as Agent from "./agent"

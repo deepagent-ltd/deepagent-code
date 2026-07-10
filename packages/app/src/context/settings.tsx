@@ -27,6 +27,9 @@ export interface Settings {
     shellToolPartsExpanded: boolean
     editToolPartsExpanded: boolean
     showSessionProgressBar: boolean
+    // V3.9 §C: whether new conversations start with the Expert Panel armed. Client-side default that
+    // the panel button seeds from; the per-session armed state is tracked server-side.
+    expertPanelDefault: boolean
   }
   appearance: {
     fontSize: number
@@ -104,6 +107,7 @@ const defaultSettings: Settings = {
     shellToolPartsExpanded: false,
     editToolPartsExpanded: false,
     showSessionProgressBar: true,
+    expertPanelDefault: false,
   },
   appearance: {
     fontSize: 14,
@@ -200,6 +204,13 @@ export const { use: useSettings, provider: SettingsProvider } = createSimpleCont
         ),
         setShowSessionProgressBar(value: boolean) {
           setStore("general", "showSessionProgressBar", value)
+        },
+        expertPanelDefault: withFallback(
+          () => store.general?.expertPanelDefault,
+          defaultSettings.general.expertPanelDefault,
+        ),
+        setExpertPanelDefault(value: boolean) {
+          setStore("general", "expertPanelDefault", value)
         },
       },
       appearance: {
