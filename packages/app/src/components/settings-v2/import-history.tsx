@@ -305,18 +305,22 @@ export const ImportSection: Component = () => {
           </div>
         </SettingsRowV2>
 
-        <SettingsRowV2 title={t("settings.import.run.btn", "Import")} description={t("settings.import.run.hint", "Runs the import with the options above.")}>
-          <div class="flex gap-2" data-action="settings-import-run">
-            <ButtonV2 size="normal" variant="contrast" disabled={running() || scopes().length === 0} onClick={run}>
-              {running() ? t("settings.import.running", "Importing…") : t("settings.import.run.btn", "Import")}
+        <div class="settings-v2-import-actions" data-action="settings-import-run">
+          <ButtonV2
+            size="large"
+            variant="contrast"
+            class="settings-v2-import-run"
+            disabled={running() || scopes().length === 0}
+            onClick={run}
+          >
+            {running() ? t("settings.import.running", "Importing…") : t("settings.import.run.btn", "Import")}
+          </ButtonV2>
+          <Show when={running()}>
+            <ButtonV2 size="large" variant="ghost" onClick={cancel}>
+              {t("settings.import.cancel", "Cancel")}
             </ButtonV2>
-            <Show when={running()}>
-              <ButtonV2 size="normal" variant="ghost" onClick={cancel}>
-                {t("settings.import.cancel", "Cancel")}
-              </ButtonV2>
-            </Show>
-          </div>
-        </SettingsRowV2>
+          </Show>
+        </div>
 
         <Show when={summary()}>
           <SettingsRowV2 title={t("settings.import.result", "Result")} description="">
