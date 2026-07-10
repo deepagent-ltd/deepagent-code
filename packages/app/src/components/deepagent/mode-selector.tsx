@@ -105,7 +105,11 @@ export function ModeSelector(props: {
       </Kobalte.Trigger>
       <Kobalte.Portal>
         <Kobalte.Content
-          class="w-80 max-h-96 flex flex-col p-2 rounded-md border border-border-base bg-surface-raised-stronger-non-alpha shadow-md z-50 outline-none overflow-hidden"
+          class="w-80 max-h-96 flex flex-col p-2 rounded-md border border-border-base bg-surface-raised-stronger-non-alpha shadow-md z-50 outline-none overflow-hidden
+            [&_[data-slot=list-item][data-selected=true]]:!bg-surface-interactive-base
+            [&_[data-slot=list-item][data-selected=true]]:rounded-md
+            [&_[data-slot=list-item][data-selected=true]_span]:!text-on-interactive-base
+            [&_[data-slot=list-item][data-selected=true]_[data-slot=list-item-selected-icon]_[data-component=icon]]:!text-icon-on-interactive-base"
           onKeyDown={(event) => listRef?.onKeyDown(event)}
           onEscapeKeyDown={(event) => {
             close("escape")
@@ -138,7 +142,10 @@ export function ModeSelector(props: {
             }}
           >
             {(agent) => (
-              <div class="flex w-full min-w-0 flex-col gap-0.5">
+              // flex-1 + text-left so the content is left-aligned and the check (a sibling the List
+              // renders after this) keeps its own slot on the right instead of being pushed flush to
+              // the frame. pr-2 reserves breathing room before the check.
+              <div class="flex flex-1 min-w-0 flex-col gap-0.5 pr-2 text-left">
                 <span class="text-13-medium text-text-base capitalize">{title(agent)}</span>
                 <Show when={description(agent)}>
                   <span class="text-11-regular text-text-weaker whitespace-normal leading-snug">{description(agent)}</span>
