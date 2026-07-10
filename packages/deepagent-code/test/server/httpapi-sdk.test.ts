@@ -49,7 +49,10 @@ const original = {
 
 type ServerPath = "default" | "raw"
 type Sdk = ReturnType<typeof createOpencodeClient>
-type SdkResult = { response: Response; data?: unknown; error?: unknown }
+// The generated SDK now types `response`/`request` as optional (an error can originate from building
+// the request itself, before any response exists). These helpers only run against completed requests,
+// so response is present in practice — match the optional contract and assert it at the read site.
+type SdkResult = { response?: Response; data?: unknown; error?: unknown }
 type Captured = { status: number; data?: unknown; error?: unknown }
 type ProjectFixture = { sdk: Sdk; directory: string }
 type LlmProjectFixture = ProjectFixture & { llm: TestLLMServer["Service"] }
@@ -118,7 +121,7 @@ function call<T>(request: () => Promise<T>) {
 function capture(request: () => Promise<SdkResult>) {
   return call(request).pipe(
     Effect.map((result) => ({
-      status: result.response.status,
+      status: result.response?.status ?? 0,
       data: result.data,
       error: result.error,
     })),
@@ -135,9 +138,9 @@ function captureThrown(request: () => Promise<unknown>) {
   })
 }
 
-function expectStatus(request: () => Promise<{ response: Response }>, status: number) {
+function expectStatus(request: () => Promise<{ response?: Response }>, status: number) {
   return call(request).pipe(
-    Effect.tap((result) => Effect.sync(() => expect(result.response.status).toBe(status))),
+    Effect.tap((result) => Effect.sync(() => expect(result.response?.status).toBe(status))),
     Effect.asVoid,
   )
 }
@@ -375,12 +378,12 @@ describe("HttpApi SDK", () => {
       const health = yield* call(() => sdk.global.health())
       const log = yield* call(() => sdk.app.log({ service: "httpapi-sdk-test", level: "info", message: "hello" }))
 
-      expect(health.response.status).toBe(200)
+      expect(health.response?.status).toBe(200)
       expect(health.data).toMatchObject({ healthy: true })
       expect(yield* firstEvent((signal) => sdk.global.event({ signal }))).toMatchObject({
         payload: { type: "server.connected" },
       })
-      expect(log.response.status).toBe(200)
+      expect(log.response?.status).toBe(200)
       expect(log.data).toBe(true)
       yield* expectStatus(() => sdk.auth.set({ providerID: "test" }), 400)
     }),
@@ -395,11 +398,11 @@ describe("HttpApi SDK", () => {
         const session = yield* call(() => sdk.session.create({ title: "sdk" }))
         const listed = yield* call(() => sdk.session.list({ roots: true, limit: 10 }))
 
-        expect(file.response.status).toBe(200)
+        expect(file.response?.status).toBe(200)
         expect(file.data).toMatchObject({ content: "hello" })
-        expect(session.response.status).toBe(200)
+        expect(session.response?.status).toBe(200)
         expect(session.data).toMatchObject({ title: "sdk" })
-        expect(listed.response.status).toBe(200)
+        expect(listed.response?.status).toBe(200)
         expect(listed.data?.map((item) => item.id)).toContain(session.data?.id)
 
         yield* Effect.all([
@@ -417,7 +420,7 @@ describe("HttpApi SDK", () => {
     ({ sdk }) =>
       Effect.gen(function* () {
         const reviews = yield* call(() => sdk.deepagent.reviews())
-        expect(reviews.response.status).toBe(200)
+        expect(reviews.response?.status).toBe(200)
         expect(reviews.data).toMatchObject({ reviews: expect.any(Array) })
 
         const candidate = {
@@ -438,7 +441,7 @@ describe("HttpApi SDK", () => {
             approval: { approver: "sdk-test", approved: true, note: "generated client route" },
           }),
         )
-        expect(promoted.response.status).toBe(200)
+        expect(promoted.response?.status).toBe(200)
         expect(promoted.data).toMatchObject({
           promoted: expect.objectContaining({ source_candidate_id: candidate.candidate_id }),
         })
@@ -449,7 +452,7 @@ describe("HttpApi SDK", () => {
             reason: "sdk reject test",
           }),
         )
-        expect(rejected.response.status).toBe(200)
+        expect(rejected.response?.status).toBe(200)
         expect(rejected.data).toMatchObject({ rejected: expect.objectContaining({ reason: "sdk reject test" }) })
       }),
   )
@@ -467,7 +470,7 @@ describe("HttpApi SDK", () => {
 
           const reviews = yield* call(() => sdk.deepagent.reviews({ directory }))
 
-          expect(reviews.response.status).toBe(200)
+          expect(reviews.response?.status).toBe(200)
           expect(reviews.data).toMatchObject({
             reviews: [
               expect.objectContaining({
@@ -500,7 +503,7 @@ describe("HttpApi SDK", () => {
         const file = yield* call(() => sdk.v2.fs.read({ path: "hello.txt" }))
         const url = new URL(request!.url)
 
-        expect(file.response.status).toBe(200)
+        expect(file.response?.status).toBe(200)
         expect(file.data).toMatchObject({ data: { content: "hello" } })
         expect(url.searchParams.get("directory")).toBe(directory)
         expect(url.searchParams.get("workspace")).toBe(workspaceID)

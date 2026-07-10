@@ -2,7 +2,7 @@
   "ref_id": "failure:frontend_performance:bundle-only-claim",
   "type": "failure_dossier",
   "description": "Claiming performance improvement from bundle size alone can miss runtime regressions.",
-  "body": "Measure user path too.\n\nDerived from local skill survey outputs under /Users/xiuranli/code/agent/skill, especially reviewed canonical rules, coverage reports, and trusted local skill notes. Paraphrased into domain-pack seed form.\n\nDiagnostic use only: keep this out of index.json and use it only as a blocked/do-not-use signal.",
+  "body": "Measure user path too.\n\nDerived from reviewed skill survey outputs, including canonical rules, coverage reports, and trusted skill notes. Paraphrased into domain-pack seed form.\n\nDiagnostic use only: keep this out of index.json and use it only as a blocked/do-not-use signal.",
   "domain": "performance",
   "scope_hint": "code.frontend.performance:failure_dossiers",
   "evidence_strength": "medium",
