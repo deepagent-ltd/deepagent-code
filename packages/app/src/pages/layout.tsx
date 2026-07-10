@@ -70,6 +70,7 @@ import { ServerConnection, useServer } from "@/context/server"
 import { useLanguage, type Locale } from "@/context/language"
 import type { UpdaterState } from "@/updater"
 import { pathKey } from "@/utils/path-key"
+import { isFilesystemRootDir } from "@/utils/filesystem-root"
 import {
   displayName,
   effectiveWorkspaceOrder,
@@ -140,6 +141,7 @@ export default function Layout(props: ParentProps) {
     if (!slug) return { slug, dir: "" }
     const dir = decode64(slug)
     if (!dir) return { slug, dir: "" }
+    if (isFilesystemRootDir(dir)) return { slug, dir: "" }
     const store = serverSync.peek(dir, { bootstrap: false })
     return {
       slug,
@@ -762,7 +764,7 @@ export default function Layout(props: ParentProps) {
             const next = items.map((x) => x.info).filter((m): m is Message => !!m?.id)
             const sorted = mergeByID([], next)
             const stale = markPrefetched(directory, sessionID)
-            const cursor = messages.response.headers.get("x-next-cursor") ?? undefined
+            const cursor = messages.response?.headers.get("x-next-cursor") ?? undefined
             const meta = {
               limit: sorted.length,
               cursor,
