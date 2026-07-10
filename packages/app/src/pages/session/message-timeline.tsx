@@ -56,8 +56,14 @@ import { normalize } from "@deepagent-code/ui/session-diff"
 import { useFileComponent } from "@deepagent-code/ui/context/file"
 import { shouldMarkBoundaryGesture, normalizeWheelDelta } from "@/pages/session/message-gesture"
 import { SessionContextUsage } from "@/components/session-context-usage"
-import { getSubagentTokens } from "@/components/session/session-context-metrics"
+import {
+  getSubagentTokenBreakdown,
+  addTokenBreakdown,
+  emptyTokenBreakdown,
+  type TokenBreakdown,
+} from "@/components/session/session-context-metrics"
 import { useDialog } from "@deepagent-code/ui/context/dialog"
+import { Tooltip } from "@deepagent-code/ui/tooltip"
 import { createResizeObserver } from "@solid-primitives/resize-observer"
 import { useLanguage } from "@/context/language"
 import { useSessionKey } from "@/pages/session/session-layout"
@@ -1041,15 +1047,16 @@ export function MessageTimeline(props: {
     return turnDurationMs(userMessageID)
   }
 
-  // Total tokens USED by a turn (input + output + reasoning + cache), summed across the turn's
-  // assistant messages. Distinct from the top-right retained-context number. Advances as each
-  // tool-loop step finishes (providers report usage per step, not per token).
-  const turnTokens = (userMessageID: string) => {
-    let total = 0
+  // Token usage for a turn, split by category (see TokenBreakdown). The footer surfaces `spend`
+  // (newly-consumed = non-cached input + output + reasoning) as its primary figure, with the full
+  // split — including cache read/write — in a tooltip. This keeps a short prompt over a large cached
+  // context from reading as if it "spent" 120K when nearly all of that is a cache re-read. Advances as
+  // each tool-loop step finishes (providers report usage per step, not per token).
+  const turnTokenBreakdown = (userMessageID: string): TokenBreakdown => {
+    const acc = emptyTokenBreakdown()
     const childIds = new Set<string>()
     for (const message of assistantMessagesByParent().get(userMessageID) ?? emptyAssistantMessages) {
-      const t = message.tokens
-      total += t.input + t.output + t.reasoning + t.cache.read + t.cache.write
+      addTokenBreakdown(acc, message.tokens)
       // Roll in subagent usage: each `task` tool-call in this turn spawns a child session whose
       // persisted total we add. Dedupe by child sessionId so a resumed/multi-call child isn't
       // double-counted.
@@ -1061,8 +1068,8 @@ export function MessageTimeline(props: {
         if (childId) childIds.add(childId)
       }
     }
-    for (const childId of childIds) total += getSubagentTokens(sessionByID().get(childId))
-    return total
+    for (const childId of childIds) getSubagentTokenBreakdown(acc, sessionByID().get(childId))
+    return acc
   }
 
   const assistantCopyPartID = (userMessageID: string) => {
@@ -1301,11 +1308,39 @@ export function MessageTimeline(props: {
           if (typeof ms !== "number") return ""
           return formatDuration(ms, language.t, (n) => n.toLocaleString(language.intl()))
         }
-        const tokens = () => turnTokens(id())
+        const breakdown = () => turnTokenBreakdown(id())
+        // Primary footer figure = tokens newly consumed this turn. The provider's full total (which
+        // includes the re-read cached context) lives in the tooltip so a short prompt over a large
+        // cached window doesn't read as if it "spent" the whole context.
+        const spend = () => breakdown().spend
+        const fmt = (n: number) => n.toLocaleString(language.intl())
+        const tokenTooltip = () => {
+          const b = breakdown()
+          const row = (labelKey: string, value: number) => (
+            <div class="flex items-center justify-between gap-4">
+              <span class="text-text-invert-base">{language.t(labelKey)}</span>
+              <span class="text-text-invert-strong">{fmt(value)}</span>
+            </div>
+          )
+          return (
+            <div class="flex flex-col gap-0.5">
+              {row("session.turn.tokens.spend", b.spend)}
+              {row("context.usage.input", b.input)}
+              {row("context.usage.output", b.output)}
+              <Show when={b.reasoning > 0}>{row("context.usage.reasoning", b.reasoning)}</Show>
+              <Show when={b.cacheRead > 0}>{row("context.usage.cacheRead", b.cacheRead)}</Show>
+              <Show when={b.cacheWrite > 0}>{row("context.usage.cacheWrite", b.cacheWrite)}</Show>
+              <div class="mt-1 pt-1 border-t border-white/15 flex items-center justify-between gap-4">
+                <span class="text-text-invert-base">{language.t("session.turn.tokens.total")}</span>
+                <span class="text-text-invert-strong">{fmt(b.total)}</span>
+              </div>
+            </div>
+          )
+        }
         return (
           <TimelineRowFrame row={turnMetaRow}>
             <div data-slot="session-turn-message-container" class="w-full px-4 md:px-5">
-              <Show when={elapsed() || tokens() > 0}>
+              <Show when={elapsed() || breakdown().total > 0}>
                 <div class="flex items-center gap-1.5 text-12-regular text-text-weak cursor-default pb-1">
                   <Show when={live()}>
                     <Spinner class="size-3.5 shrink-0" style={{ color: tint() ?? "var(--icon-interactive-base)" }} />
@@ -1313,13 +1348,15 @@ export function MessageTimeline(props: {
                   <Show when={elapsed()}>
                     <span>{elapsed()}</span>
                   </Show>
-                  <Show when={tokens() > 0}>
+                  <Show when={breakdown().total > 0}>
                     <Show when={elapsed()}>
                       <span aria-hidden="true">·</span>
                     </Show>
-                    <span>
-                      {tokens().toLocaleString(language.intl())} {language.t("context.usage.tokens")}
-                    </span>
+                    <Tooltip value={tokenTooltip()} placement="top">
+                      <span class="border-b border-dashed border-border-weak-base">
+                        {fmt(spend())} {language.t("context.usage.tokens")}
+                      </span>
+                    </Tooltip>
                   </Show>
                 </div>
               </Show>

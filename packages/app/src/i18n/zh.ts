@@ -483,6 +483,14 @@ export const dict = {
   "context.usage.totalTokens": "对话总 token",
   "context.usage.clickToView": "点击查看上下文",
   "context.usage.view": "查看上下文用量",
+  "context.usage.input": "输入",
+  "context.usage.output": "输出",
+  "context.usage.reasoning": "推理",
+  "context.usage.cacheRead": "缓存读取",
+  "context.usage.cacheWrite": "缓存写入",
+
+  "session.turn.tokens.spend": "本轮消耗",
+  "session.turn.tokens.total": "总计（含缓存）",
 
   "language.en": "English",
   "language.zh": "简体中文",
@@ -1071,6 +1079,7 @@ export const dict = {
   "toast.project.reloadFailed.title": "无法重新加载 {{project}}",
   "toast.project.rootRefused.title": "无法打开文件系统根目录",
   "toast.project.rootRefused.description": "该对话指向文件系统根目录（“/”），出于安全考虑无法打开。这多半是遗留数据，请删除或改指到具体目录。",
+  "toast.project.rootRecoveryFailed.title": "无法恢复该无项目对话",
   "error.server.invalidConfiguration": "配置无效",
   "common.moreCountSuffix": " (还有 {{count}} 个)",
   "common.time.justNow": "刚刚",
