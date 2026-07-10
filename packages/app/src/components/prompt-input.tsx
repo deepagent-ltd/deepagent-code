@@ -57,6 +57,7 @@ import { useSessionLayout } from "@/pages/session/session-layout"
 import { createSessionTabs } from "@/pages/session/helpers"
 import { PanelButton } from "@/components/deepagent/panel-button"
 import { fetchCapabilities } from "@/components/deepagent/panel-goal.api"
+import { ApprovalControl } from "@/components/deepagent/approval-control"
 import { createTextFragment, getCursorPosition, setCursorPosition, setRangeEdge } from "./prompt-input/editor-dom"
 import { createPromptAttachments } from "./prompt-input/attachments"
 import { ACCEPTED_FILE_TYPES, pickAttachmentFiles } from "./prompt-input/files"
@@ -1991,6 +1992,11 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                         variant="ghost"
                       />
                     </TooltipKeybind>
+                  </div>
+                </Show>
+                <Show when={store.mode !== "shell" && sdk.directory}>
+                  <div data-component="prompt-approval-wrap">
+                    <ApprovalControl directory={sdk.directory} triggerStyle={control()} onAfter={restoreFocus} />
                   </div>
                 </Show>
                 <Show when={panelAvailable() && store.mode !== "shell" && params.id}>
