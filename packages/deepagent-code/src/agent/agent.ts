@@ -15,7 +15,8 @@ import PROMPT_EXPLORE from "./prompt/explore.txt"
 import PROMPT_RESEARCHER from "./prompt/researcher.txt"
 import PROMPT_REVIEWER from "./prompt/reviewer.txt"
 import PROMPT_GOAL_WORKER from "./prompt/goal-worker.txt"
-import PROMPT_GOAL_MODE from "./prompt/goal-mode.txt"
+import PROMPT_LOOP_MODE from "./prompt/loop-mode.txt"
+import PROMPT_DESIGN_MODE from "./prompt/design-mode.txt"
 import { PLAN_WRITE_OWN_GOAL } from "./subagent-permissions"
 import PROMPT_SUMMARY from "./prompt/summary.txt"
 import PROMPT_TITLE from "./prompt/title.txt"
@@ -168,9 +169,11 @@ export const layer = Layer.effect(
         const user = Permission.fromConfig(cfg.permission ?? {})
 
         const agents: Record<string, Info> = {
-          build: {
-            name: "build",
-            description: "The default agent. Executes tools based on configured permissions.",
+          // AUTO mode (mode redesign; renamed from "build"). The default collaboration mode: the agent
+          // autonomously sets the objective, produces design/plan as needed, and executes it end-to-end.
+          auto: {
+            name: "auto",
+            description: "Autonomous mode. The agent sets the objective, designs and plans as needed, then executes to completion.",
             options: {},
             permission: Permission.merge(
               defaults,
@@ -183,10 +186,15 @@ export const layer = Layer.effect(
             mode: "primary",
             native: true,
           },
+          // PLAN — hidden from the mode switcher in the redesign (auto/loop/design are the visible
+          // collaboration modes). Retained as the read-only "produce a plan, don't edit" permission
+          // set, reused internally by loop mode's plan-generation phase and still selectable via config
+          // / API for callers that want a pure planning turn.
           plan: {
             name: "plan",
             description: "Plan mode. Disallows all edit tools.",
             options: {},
+            hidden: true,
             permission: Permission.merge(
               defaults,
               Permission.fromConfig({
@@ -206,27 +214,39 @@ export const layer = Layer.effect(
             mode: "primary",
             native: true,
           },
-          // V3.9 §D: GOAL mode — the third primary agent (alongside build/plan). Selecting it is the
-          // entry point for defining a bounded, objectively-decidable goal and producing the plan the
-          // Goal Loop drives autonomously. Same working permission ruleset as build (goal setup reads
-          // and plans; the actual autonomous execution runs in goal-worker child sessions). Only
-          // registered when experimentalGoalLoop is on, so the mode never appears without a backend
-          // that can start a goal (the goal.start route also fail-closes when the flag is off).
+          // LOOP + DESIGN modes (mode redesign) — the two supervised-autonomous collaboration modes,
+          // both powered by the Goal Loop engine. They differ only in WHO authors the goal+plan:
+          //   - loop:   the agent turns the user's request into `.deepagent-code/plans/goal+plan.md`,
+          //             then the loop drives it. (This replaces the old "goal" mode.)
+          //   - design: the USER authored goal+plan.md; the agent reads it and executes faithfully.
+          // Same working permission ruleset as auto. Registered unless the goal-loop kill-switch is off
+          // (default ON) — the goal.start route also fail-closes when the flag is off.
           ...(flags.experimentalGoalLoop
             ? {
-                goal: {
-                  name: "goal",
+                loop: {
+                  name: "loop",
                   description:
-                    "Goal mode (V3.9 §D). Define a bounded, objectively-decidable goal and produce a plan; the supervised Goal Loop then drives it to completion autonomously (plan→execute→verify per tick).",
+                    "Goal loop. Describe what you want; the agent writes goal+plan.md, then a supervised loop drives it to completion (plan→execute→verify per tick). You can edit the plan before it runs.",
                   permission: Permission.merge(
                     defaults,
-                    Permission.fromConfig({
-                      question: "allow",
-                      plan_enter: "allow",
-                    }),
+                    Permission.fromConfig({ question: "allow", plan_enter: "allow" }),
                     user,
                   ),
-                  prompt: PROMPT_GOAL_MODE,
+                  prompt: PROMPT_LOOP_MODE,
+                  options: {},
+                  mode: "primary" as const,
+                  native: true,
+                },
+                design: {
+                  name: "design",
+                  description:
+                    "Design-driven. You author goal+plan.md yourself; the agent reads it and executes your plan faithfully under the supervised loop, without redefining the goal.",
+                  permission: Permission.merge(
+                    defaults,
+                    Permission.fromConfig({ question: "allow", plan_enter: "allow" }),
+                    user,
+                  ),
+                  prompt: PROMPT_DESIGN_MODE,
                   options: {},
                   mode: "primary" as const,
                   native: true,
@@ -464,6 +484,10 @@ export const layer = Layer.effect(
         }
 
         const get = Effect.fnUntraced(function* (agent: string) {
+          // Back-compat alias: "build" was renamed to "auto" in the mode redesign. Older sessions,
+          // saved configs, and API callers may still pass "build" — resolve it to auto when there is
+          // no explicitly-defined agent literally named "build".
+          if (agent === "build" && !agents["build"] && agents["auto"]) return agents["auto"]
           return agents[agent]
         })
 
@@ -473,7 +497,7 @@ export const layer = Layer.effect(
             agents,
             values(),
             sortBy(
-              [(x) => (cfg.default_agent ? x.name === cfg.default_agent : x.name === "build"), "desc"],
+              [(x) => (cfg.default_agent ? x.name === cfg.default_agent : x.name === "auto"), "desc"],
               [(x) => x.name, "asc"],
             ),
           )
