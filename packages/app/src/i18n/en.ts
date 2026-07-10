@@ -309,8 +309,14 @@ export const dict = {
   "prompt.action.attachFile": "Add files",
   "prompt.attachment.remove": "Remove attachment",
   "prompt.generating": "Generating prompt...",
+  "prompt.draft.preview.streaming": "Preparing prompt draft",
+  "prompt.draft.preview.paused": "Draft paused",
+  "prompt.draft.preview.dismiss": "Dismiss",
+  "prompt.draft.preview.use": "Use this draft",
   "prompt.action.send": "Send",
   "prompt.action.stop": "Stop",
+  "composer.approval.request": "Request approval",
+  "composer.approval.auto": "Auto-approve",
   "prompt.scenario.label": "Scenario mode",
   "prompt.scenario.direct": "Direct",
   "prompt.scenario.intelligence": "Intelligence",
@@ -405,6 +411,7 @@ export const dict = {
   "dialog.server.add.error": "Could not connect to server",
   "dialog.server.add.checking": "Checking...",
   "dialog.server.add.button": "Add server",
+  "dialog.server.add.menu.http": "Add HTTP server",
   "dialog.server.connect.button": "Connect to server",
   "dialog.server.add.name": "Server name (optional)",
   "dialog.server.add.namePlaceholder": "Localhost",
@@ -534,6 +541,14 @@ export const dict = {
   "context.usage.totalTokens": "Conversation Tokens",
   "context.usage.clickToView": "Click to view context",
   "context.usage.view": "View context usage",
+  "context.usage.input": "Input",
+  "context.usage.output": "Output",
+  "context.usage.reasoning": "Reasoning",
+  "context.usage.cacheRead": "Cache read",
+  "context.usage.cacheWrite": "Cache write",
+
+  "session.turn.tokens.spend": "Spent this turn",
+  "session.turn.tokens.total": "Total (incl. cache)",
 
   "language.en": "English",
   "language.zh": "简体中文",
@@ -595,6 +610,7 @@ export const dict = {
   "toast.project.rootRefused.title": "Can't open the filesystem root",
   "toast.project.rootRefused.description":
     "This conversation points at the filesystem root (\"/\"), which can't be opened for safety. It's likely leftover data — remove or re-target it.",
+  "toast.project.rootRecoveryFailed.title": "Couldn't recover this folder-less conversation",
 
   "toast.update.title": "Update available",
   "toast.update.description": "A new version of DeepAgent Code ({{version}}) is now available to install.",
@@ -1115,6 +1131,9 @@ export const dict = {
   "settings.general.row.showSessionProgressBar.title": "Show session progress bar",
   "settings.general.row.showSessionProgressBar.description":
     "Display the animated progress bar at the top of the session when the agent is working",
+  "settings.general.row.expertPanelDefault.title": "Arm expert panel by default",
+  "settings.general.row.expertPanelDefault.description":
+    "Start new conversations with the expert panel armed, so its button convenes a review of the current context on demand",
   "settings.general.row.newLayoutDesigns.title": "New layout and designs",
   "settings.general.row.newLayoutDesigns.description": "Enable the redesigned layout, home, composer, and session UI",
   "settings.general.row.pinchZoom.title": "Pinch to zoom",

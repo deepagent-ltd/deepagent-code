@@ -3,6 +3,7 @@ import { type Accessor, batch, createMemo } from "solid-js"
 import { createStore, type SetStoreFunction, type Store } from "solid-js/store"
 import { Persist, persisted } from "@/utils/persist"
 import { ServerScope } from "@/utils/server-scope"
+import { isFilesystemRootDir } from "@/utils/filesystem-root"
 
 type StoredProject = { worktree: string; expanded: boolean }
 type StoredServer = string | ServerConnection.HttpBase | ServerConnection.Http | ServerConnection.Server
@@ -32,6 +33,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 export function migrateCanonicalLocalServerState(value: unknown, canonicalLocalServer?: ServerConnection.Key) {
+  return removeFilesystemRootServerState(migrateCanonicalServerScope(value, canonicalLocalServer))
+}
+
+function migrateCanonicalServerScope(value: unknown, canonicalLocalServer?: ServerConnection.Key) {
   if (!canonicalLocalServer || canonicalLocalServer === "local") return value
   if (!isRecord(value)) return value
   const projects = isRecord(value.projects) ? value.projects : undefined
@@ -63,6 +68,31 @@ export function migrateCanonicalLocalServerState(value: unknown, canonicalLocalS
     next.lastProject = nextLastProject
   }
   return next
+}
+
+function removeFilesystemRootServerState(value: unknown) {
+  if (!isRecord(value)) return value
+  const projects = isRecord(value.projects)
+    ? Object.fromEntries(
+        Object.entries(value.projects).map(([scope, entries]) => [
+          scope,
+          Array.isArray(entries)
+            ? entries.filter(
+                (project) =>
+                  !isRecord(project) || typeof project.worktree !== "string" || !isFilesystemRootDir(project.worktree),
+              )
+            : entries,
+        ]),
+      )
+    : value.projects
+  const lastProject = isRecord(value.lastProject)
+    ? Object.fromEntries(
+        Object.entries(value.lastProject).filter(
+          ([, directory]) => typeof directory !== "string" || !isFilesystemRootDir(directory),
+        ),
+      )
+    : value.lastProject
+  return { ...value, projects, lastProject }
 }
 
 export function createServerProjects<T extends ServerProjectState>(input: {
@@ -271,11 +301,7 @@ export const { use: useServer, provider: ServerProvider } = createSimpleContext(
     // Normalize a stored entry to a typed connection so we can key it uniformly
     // (Http keys by url, Server keys by `server:<gatewayUrl>`).
     const toConnection = (x: StoredServer): ServerConnection.Any =>
-      typeof x === "string"
-        ? { type: "http", http: { url: x } }
-        : "type" in x
-          ? x
-          : { type: "http", http: x }
+      typeof x === "string" ? { type: "http", http: { url: x } } : "type" in x ? x : { type: "http", http: x }
 
     const allServers = createMemo((): Array<ServerConnection.Any> => {
       return resolveServerList({ stored: store.list, props: props.servers })

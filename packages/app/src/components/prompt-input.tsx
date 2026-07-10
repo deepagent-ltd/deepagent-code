@@ -37,6 +37,7 @@ import { useServer } from "@/context/server"
 import { useSync } from "@/context/sync"
 import { useComments } from "@/context/comments"
 import { Button } from "@deepagent-code/ui/button"
+import { Spinner } from "@deepagent-code/ui/spinner"
 import { DockShellForm, DockTray } from "@deepagent-code/ui/dock-surface"
 import { Icon, type IconProps } from "@deepagent-code/ui/icon"
 import { ProviderIcon } from "@deepagent-code/ui/provider-icon"
@@ -54,6 +55,9 @@ import { usePlatform } from "@/context/platform"
 import { serverAttachmentFile } from "./prompt-input/server-attachment"
 import { useSessionLayout } from "@/pages/session/session-layout"
 import { createSessionTabs } from "@/pages/session/helpers"
+import { PanelButton } from "@/components/deepagent/panel-button"
+import { fetchCapabilities } from "@/components/deepagent/panel-goal.api"
+import { ApprovalControl } from "@/components/deepagent/approval-control"
 import { createTextFragment, getCursorPosition, setCursorPosition, setRangeEdge } from "./prompt-input/editor-dom"
 import { createPromptAttachments } from "./prompt-input/attachments"
 import { ACCEPTED_FILE_TYPES, pickAttachmentFiles } from "./prompt-input/files"
@@ -153,6 +157,10 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
   let draftPreparePrompt: { prompt: Prompt; cursor: number } | undefined
 
   const [draftPreparing, setDraftPreparing] = createSignal(false)
+  // Live text streamed from intelligence refinement. Shown in a panel BELOW the editor while the raw
+  // user input stays untouched in the editor above. Preserved on cancel so the user keeps both their
+  // input and whatever draft was generated so far; cleared only on approved submit or explicit dismiss.
+  const [draftPreview, setDraftPreview] = createSignal<string>("")
   const [draftReview, setDraftReview] = createSignal<
     | {
         draft: DeepAgentPromptPrepareResult
@@ -238,10 +246,11 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
       draftPreparePrompt = { prompt: current, cursor: prompt.cursor() ?? promptLength(current) }
     }
     setDraftPreparing(true)
+    // Reset any leftover preview so the panel starts clean, then show a generating placeholder until
+    // the first delta arrives. The raw user input stays in the editor above — we do NOT overwrite it.
+    setDraftPreview("")
     setStore("mode", "normal")
     setStore("popover", null)
-    const text = language.t("prompt.generating")
-    prompt.set(makeTextPrompt(text), text.length)
     requestAnimationFrame(() => {
       editorRef.blur()
       queueScroll()
@@ -250,9 +259,38 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
 
   const stopDraftPrepare = () => {
     setDraftPreparing(false)
+    // Keep the raw input reference around while a draft (partial or reviewable) is still on screen so
+    // the user can restore it; only drop it once nothing references the original prompt anymore.
     requestAnimationFrame(() => {
-      if (draftReview()) return
+      if (draftReview() || draftPreview()) return
       draftPreparePrompt = undefined
+    })
+  }
+
+  const updateDraftPrepare = (preview: string) => {
+    if (!draftPreparing() || !preview) return
+    setDraftPreview(preview)
+    queueScroll()
+  }
+
+  // Dismiss a preserved partial draft (from a canceled preparation) without touching the editor input.
+  const dismissDraftPreview = () => {
+    setDraftPreview("")
+    if (!draftReview() && !draftPreparing()) draftPreparePrompt = undefined
+  }
+
+  // Copy the preserved partial draft into the editor so the user can edit and resubmit it. A canceled
+  // stream has no server-persisted draft id, so it can't be submitted as an intelligence draft directly.
+  const useDraftPreview = () => {
+    const preview = draftPreview().trim()
+    if (!preview) return
+    prompt.set(makeTextPrompt(preview), preview.length)
+    setDraftPreview("")
+    draftPreparePrompt = undefined
+    requestAnimationFrame(() => {
+      editorRef.focus()
+      setCursorPosition(editorRef, preview.length)
+      queueScroll()
     })
   }
 
@@ -387,7 +425,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
       .join("")
     return text.trim().length === 0 && imageAttachments().length === 0 && commentCount() === 0
   })
-  const stopping = createMemo(() => working() && blank())
+  const stopping = createMemo(() => draftPreparing() || (working() && blank()))
   const tip = () => {
     if (stopping()) {
       return (
@@ -691,6 +729,15 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
       .map((agent): AtOption => ({ type: "agent", name: agent.name, display: agent.name })),
   )
   const agentNames = createMemo(() => local.agent.list().map((agent) => agent.name))
+  // V3.9 §C/§D: gate the panel button on the server's advertised capabilities (/global/capabilities),
+  // so the Expert Panel (§C) and Goal Loop (§D) flags are honoured INDEPENDENTLY — the panel button
+  // appears iff expertPanel is enabled, regardless of goal mode. (goal mode gates itself: the `goal`
+  // primary agent is only registered when goalLoop is on, so it self-appears in the switcher.)
+  const [capabilities] = createResource(
+    () => (params.id ? "capabilities" : undefined),
+    () => fetchCapabilities(sdk.client as never),
+  )
+  const panelAvailable = createMemo(() => capabilities()?.expertPanel === true)
 
   const handleAtSelect = (option: AtOption | undefined) => {
     if (!option) return
@@ -1232,6 +1279,9 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
       const editable = draft.preview.trim() || draft.goal.trim()
       draftReviewResolve = resolve
       setDraftPreparing(false)
+      // Preparation succeeded and produced a persisted, submittable draft: transition from the live
+      // preview panel to the editable review. The editor now holds the draft for the user to approve.
+      setDraftPreview("")
       setDraftReview({ draft, originalPrompt: original.prompt, originalCursor: original.cursor })
       setStore("mode", "normal")
       setStore("popover", null)
@@ -1266,6 +1316,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     onAbort: props.onAbort,
     onSubmit: props.onSubmit,
     onPromptPrepareStart: startDraftPrepare,
+    onPromptPrepareProgress: updateDraftPrepare,
     onPromptPrepareEnd: stopDraftPrepare,
     confirmPromptDraft,
   })
@@ -1276,7 +1327,12 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
       event.preventDefault()
       return
     }
-    if (draftPreparing() || composing()) {
+    if (draftPreparing()) {
+      event.preventDefault()
+      void abort()
+      return
+    }
+    if (composing()) {
       event.preventDefault()
       return
     }
@@ -1285,11 +1341,14 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
       confirmCurrentDraft()
       return
     }
+    // A fresh submission supersedes any paused draft from a prior canceled preparation.
+    if (draftPreview()) setDraftPreview("")
     handleSubmit(event)
   }
 
   const handleKeyDown = (event: KeyboardEvent) => {
     if (draftPreparing()) {
+      if (event.key === "Escape" || (event.ctrlKey && event.code === "KeyG")) void abort()
       event.preventDefault()
       event.stopPropagation()
       return
@@ -1605,6 +1664,53 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     onPress: () => void addProject(),
   }))
 
+  // Live/paused draft panel shown BELOW the editor. While preparing it streams the refined prompt;
+  // after a cancel it stays as a preserved partial draft the user can adopt (→ editor) or dismiss.
+  const draftPreviewPanel = () => (
+    <Show when={draftPreparing() || draftPreview().trim().length > 0}>
+      <div
+        data-component="prompt-draft-preview"
+        class="mx-2 mt-2 flex min-w-0 flex-col gap-2 rounded-md border border-border-weak-base bg-background-base px-3 py-2"
+      >
+        <div class="flex items-center gap-2">
+          <Show when={draftPreparing()}>
+            <Spinner class="size-3.5 shrink-0 text-text-weak" />
+          </Show>
+          <span class="text-12-medium text-text-weak">
+            {draftPreparing()
+              ? language.t("prompt.draft.preview.streaming")
+              : language.t("prompt.draft.preview.paused")}
+          </span>
+        </div>
+        <div class="max-h-[160px] overflow-y-auto no-scrollbar whitespace-pre-wrap text-13-regular text-text-base">
+          {draftPreview().trim() || language.t("prompt.generating")}
+        </div>
+        <Show when={!draftPreparing() && draftPreview().trim().length > 0}>
+          <div class="flex items-center justify-end gap-2">
+            <Button
+              data-action="prompt-draft-preview-dismiss"
+              type="button"
+              size="small"
+              variant="ghost"
+              onClick={dismissDraftPreview}
+            >
+              {language.t("prompt.draft.preview.dismiss")}
+            </Button>
+            <Button
+              data-action="prompt-draft-preview-use"
+              type="button"
+              size="small"
+              variant="secondary"
+              onClick={useDraftPreview}
+            >
+              {language.t("prompt.draft.preview.use")}
+            </Button>
+          </div>
+        </Show>
+      </div>
+    </Show>
+  )
+
   const draftReviewBar = () => (
     <Show when={draftReview()} keyed>
       {(_review) => (
@@ -1747,7 +1853,9 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                 "[&_[data-type=file]]:text-syntax-property": true,
                 "[&_[data-type=agent]]:text-syntax-type": true,
                 "font-mono!": store.mode === "shell",
-                "cursor-wait text-text-weak": draftPreparing(),
+                // Editor keeps the raw user input during preparation (the streamed draft shows in the
+                // panel below), so it reads normally — locked to edits, not greyed as a placeholder.
+                "cursor-wait": draftPreparing(),
               }}
               style={{ "padding-bottom": space }}
             />
@@ -1786,11 +1894,11 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
 
             <div class="flex items-center gap-1 pointer-events-auto">
               <ScenarioToggle />
-              <Tooltip placement="top" inactive={!working() && blank()} value={tip()}>
+              <Tooltip placement="top" inactive={!draftPreparing() && !working() && blank()} value={tip()}>
                 <IconButton
                   data-action="prompt-submit"
                   type="submit"
-                  disabled={subagentFinished() || draftPreparing() || (!working() && blank())}
+                  disabled={subagentFinished() || (!draftPreparing() && !working() && blank())}
                   tabIndex={store.mode === "normal" ? undefined : -1}
                   icon={stopping() ? "stop" : store.mode === "shell" ? "arrow-undo-down" : "arrow-up"}
                   variant="primary"
@@ -1831,6 +1939,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
             </div>
           </div>
         </div>
+        {draftPreviewPanel()}
       </DockShellForm>
       <Show when={store.mode === "normal" || store.mode === "shell"}>
         <DockTray attach="top">
@@ -1884,6 +1993,14 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                       />
                     </TooltipKeybind>
                   </div>
+                </Show>
+                <Show when={store.mode !== "shell" && sdk.directory}>
+                  <div data-component="prompt-approval-wrap">
+                    <ApprovalControl directory={sdk.directory} triggerStyle={control()} onAfter={restoreFocus} />
+                  </div>
+                </Show>
+                <Show when={panelAvailable() && store.mode !== "shell" && params.id}>
+                  <PanelButton sessionID={params.id!} />
                 </Show>
                 <Show when={!providersLoading()}>
                   <Show when={store.mode !== "shell"}>

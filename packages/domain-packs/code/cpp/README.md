@@ -10,7 +10,7 @@ Framework, platform, database, and security-specific behavior belongs to more sp
 
 ## Source Basis
 
-Derived from local skill survey outputs under /Users/xiuranli/code/agent/skill, especially reviewed canonical rules, coverage reports, and trusted local skill notes. Paraphrased into domain-pack seed form.
+Derived from reviewed skill survey outputs, including canonical rules, coverage reports, and trusted skill notes. Paraphrased into domain-pack seed form.
 
 ## Composition
 

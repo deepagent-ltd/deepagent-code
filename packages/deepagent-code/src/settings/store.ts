@@ -36,6 +36,10 @@ export namespace SettingsStore {
     runsDir?: string
     allowProviderExecutedTools?: boolean
     allowProviderExecutedToolNames?: string[]
+    // V3.9 §C: the GLOBAL default for whether a new conversation starts with the Expert Panel
+    // "armed". A per-session toggle in the chat dialog overrides this per conversation; this only
+    // seeds the initial armed state. Undefined ≡ false (opt-in, grey rollout).
+    expertPanelDefault?: boolean
   }
 
   /** Transport tuning for a single official provider. Mirrors the transport keys the provider
@@ -103,6 +107,8 @@ export namespace SettingsStore {
     if (apet !== undefined) out.allowProviderExecutedTools = apet
     const names = strArray(input.allowProviderExecutedToolNames)
     if (names) out.allowProviderExecutedToolNames = names
+    const epd = bool(input.expertPanelDefault)
+    if (epd !== undefined) out.expertPanelDefault = epd
     return Object.keys(out).length > 0 ? out : undefined
   }
 
