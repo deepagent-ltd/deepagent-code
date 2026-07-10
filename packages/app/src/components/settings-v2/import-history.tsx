@@ -228,7 +228,7 @@ export const ImportSection: Component = () => {
                 value={customPath()}
                 onInput={(e) => setCustomPath(e.currentTarget.value)}
                 disabled={running()}
-                placeholder="/Users/you/.codex_backup"
+                placeholder="~/.codex_backup"
                 spellcheck={false}
                 autocorrect="off"
                 autocomplete="off"
@@ -296,7 +296,7 @@ export const ImportSection: Component = () => {
               value={cwdFilter()}
               onInput={(e) => setCwdFilter(e.currentTarget.value)}
               disabled={running()}
-              placeholder="/Users/you/projects/..."
+              placeholder="~/projects/..."
               spellcheck={false}
               autocorrect="off"
               autocomplete="off"

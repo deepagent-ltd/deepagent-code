@@ -15,7 +15,7 @@ import { ProviderTransform } from "@/provider/transform"
 import { Auth } from "@/auth"
 import { configureGateway } from "@/deepagent/config"
 
-import { type Tool as AITool, tool, jsonSchema, generateText, streamText, type ModelMessage } from "ai"
+import { type Tool as AITool, tool, jsonSchema, streamText, type ModelMessage } from "ai"
 import type { JSONSchema7 } from "@ai-sdk/provider"
 import { SessionCompaction } from "./compaction"
 import { SystemPrompt } from "./system"
@@ -122,6 +122,7 @@ export interface Interface {
     sessionID: SessionID
     rawInput: string
     outputLanguage?: AgentGateway.DeepAgentPromptPipeline.IntelligenceRefinementOutputLanguage
+    onProgress?: (preview: string) => void
   }) => Effect.Effect<
     {
       prompt_draft_id: string
@@ -813,10 +814,47 @@ export const layer = Layer.effect(
       return undefined
     }
 
+    const partialIntelligencePrompt = (text: string) => {
+      const match = /"refined_prompt"\s*:\s*"/.exec(text)
+      if (!match) return
+      const escapes: Record<string, string> = {
+        '"': '"',
+        "\\": "\\",
+        "/": "/",
+        b: "\b",
+        f: "\f",
+        n: "\n",
+        r: "\r",
+        t: "\t",
+      }
+      let preview = ""
+      for (let index = match.index + match[0].length; index < text.length; index++) {
+        const character = text[index]!
+        if (character === '"') return preview
+        if (character !== "\\") {
+          preview += character
+          continue
+        }
+        const escaped = text[index + 1]
+        if (!escaped) return preview
+        if (escaped !== "u") {
+          preview += escapes[escaped] ?? escaped
+          index++
+          continue
+        }
+        const code = text.slice(index + 2, index + 6)
+        if (!/^[0-9a-f]{4}$/i.test(code)) return preview
+        preview += String.fromCharCode(Number.parseInt(code, 16))
+        index += 5
+      }
+      return preview
+    }
+
     const generateIntelligenceRefinement = Effect.fnUntraced(function* (input: {
       sessionID: SessionID
       rawInput: string
       outputLanguage?: AgentGateway.DeepAgentPromptPipeline.IntelligenceRefinementOutputLanguage
+      onProgress?: (preview: string) => void
     }) {
       const cfg = yield* config.get()
       const model = yield* intelligenceRefinementModel(input.sessionID)
@@ -827,7 +865,9 @@ export const layer = Layer.effect(
       const modelAuth = modelAuthID ? yield* auth.get(modelAuthID).pipe(Effect.orDie) : undefined
       const authInfo = model.providerID === "deepagent" ? (modelAuth ?? providerAuth) : providerAuth
       const isOpenaiOauth = (model.providerID === "openai" || modelAuthID === "openai") && authInfo?.type === "oauth"
-      const system = AgentGateway.DeepAgentPromptPipeline.intelligenceRefinementSystemPrompt(input.outputLanguage ?? "english")
+      const system = AgentGateway.DeepAgentPromptPipeline.intelligenceRefinementSystemPrompt(
+        input.outputLanguage ?? "english",
+      )
 
       // Feed the refiner the recent conversation so it reuses already-stated facts (target
       // directory, paths, prior decisions) instead of guessing them and emitting misleading
@@ -859,7 +899,7 @@ export const layer = Layer.effect(
           { role: "user", content: input.rawInput },
         ],
         model: language,
-      } satisfies Parameters<typeof generateText>[0]
+      } satisfies Parameters<typeof streamText>[0]
       const run = {
         callKind: "auxiliary_ai_call" as const,
         feature: "intelligence_prompt_prepare",
@@ -874,29 +914,33 @@ export const layer = Layer.effect(
         },
       }
 
-      if (isOpenaiOauth) {
-        return yield* AgentGateway.runAuxiliary(
-          run,
-          Effect.tryPromise(async () => {
-            const result = streamText({
-              ...params,
-              providerOptions: ProviderTransform.providerOptions(resolved, { instructions: system, store: false }),
-              onError: () => {},
-            })
-            let text = ""
-            for await (const part of result.fullStream) {
-              if (part.type === "error") throw part.error
-              if (part.type === "text-delta") text += part.text
-            }
-            return extractIntelligenceJson(text)
-          }),
-        )
-      }
-
-      configureGateway(cfg)
+      if (!isOpenaiOauth) configureGateway(cfg)
       return yield* AgentGateway.runAuxiliary(
         run,
-        Effect.tryPromise(() => generateText(params).then((r) => extractIntelligenceJson(r.text))),
+        Effect.tryPromise(async (signal) => {
+          const result = streamText({
+            ...params,
+            ...(isOpenaiOauth
+              ? {
+                  providerOptions: ProviderTransform.providerOptions(resolved, { instructions: system, store: false }),
+                  onError: () => {},
+                }
+              : {}),
+            abortSignal: signal,
+          })
+          let text = ""
+          let preview = ""
+          for await (const part of result.fullStream) {
+            if (part.type === "error") throw part.error
+            if (part.type !== "text-delta") continue
+            text += part.text
+            const next = partialIntelligencePrompt(text)
+            if (!next || next === preview) continue
+            preview = next
+            input.onProgress?.(preview)
+          }
+          return extractIntelligenceJson(text)
+        }),
       )
     })
 
@@ -910,6 +954,7 @@ export const layer = Layer.effect(
       sessionID: SessionID
       rawInput: string
       outputLanguage?: AgentGateway.DeepAgentPromptPipeline.IntelligenceRefinementOutputLanguage
+      onProgress?: (preview: string) => void
     }) {
       const ctx = yield* InstanceState.context
       const home = new AgentGateway.DeepAgentWorkspace.DeepAgentCodeHome(Global.Path.agent.data)
