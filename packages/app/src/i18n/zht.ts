@@ -285,6 +285,12 @@ export const dict = {
   "composer.approval.readOnly.desc": "允許讀取和搜尋，但拒絕編輯和執行命令",
   "composer.approval.request.desc": "編輯檔案或執行命令前先請求批准",
   "composer.approval.fullAccess.desc": "無需詢問即可編輯檔案和執行命令",
+  "composer.mode.auto": "自動",
+  "composer.mode.loop": "循環",
+  "composer.mode.design": "設計",
+  "composer.mode.auto.desc": "代理自行決定如何規劃並執行你的請求",
+  "composer.mode.loop.desc": "代理自主朝目標推進，反覆迭代直到完成",
+  "composer.mode.design.desc": "代理先探索問題並提出設計，再開始建構",
 
   "prompt.toast.pasteUnsupported.title": "不支援的附件",
   "prompt.toast.pasteUnsupported.description": "此處僅能附加圖片、PDF 或文字檔案。",
