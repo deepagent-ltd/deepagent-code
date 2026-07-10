@@ -10,7 +10,10 @@ import { State } from "./state"
 
 export const ID = Schema.String.pipe(Schema.brand("AgentV2.ID"))
 export type ID = typeof ID.Type
-export const defaultID = ID.make("build")
+// The default primary agent. Renamed build→auto in the mode redesign (auto/loop/design collaboration
+// modes). "build" is kept as a back-compat alias in the default-resolution fallback below so older
+// sessions/configs that reference "build" still resolve.
+export const defaultID = ID.make("auto")
 
 export const Color = Schema.Union([
   Schema.String.check(Schema.isPattern(/^#[0-9a-fA-F]{6}$/)),
@@ -124,8 +127,9 @@ export const layer = Layer.effect(
       const data = state.get()
       const configured = data.default ? selectable(data.agents.get(data.default)) : undefined
       if (configured) return configured
-      const build = selectable(data.agents.get(ID.make("build")))
-      if (build) return build
+      // Prefer the renamed default "auto"; fall back to the legacy "build" name for older configs.
+      const auto = selectable(data.agents.get(ID.make("auto"))) ?? selectable(data.agents.get(ID.make("build")))
+      if (auto) return auto
       for (const agent of data.agents.values()) {
         const fallback = selectable(agent)
         if (fallback) return fallback
