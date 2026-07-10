@@ -37,6 +37,7 @@ import { useServer } from "@/context/server"
 import { useSync } from "@/context/sync"
 import { useComments } from "@/context/comments"
 import { Button } from "@deepagent-code/ui/button"
+import { Spinner } from "@deepagent-code/ui/spinner"
 import { DockShellForm, DockTray } from "@deepagent-code/ui/dock-surface"
 import { Icon, type IconProps } from "@deepagent-code/ui/icon"
 import { ProviderIcon } from "@deepagent-code/ui/provider-icon"
@@ -155,6 +156,10 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
   let draftPreparePrompt: { prompt: Prompt; cursor: number } | undefined
 
   const [draftPreparing, setDraftPreparing] = createSignal(false)
+  // Live text streamed from intelligence refinement. Shown in a panel BELOW the editor while the raw
+  // user input stays untouched in the editor above. Preserved on cancel so the user keeps both their
+  // input and whatever draft was generated so far; cleared only on approved submit or explicit dismiss.
+  const [draftPreview, setDraftPreview] = createSignal<string>("")
   const [draftReview, setDraftReview] = createSignal<
     | {
         draft: DeepAgentPromptPrepareResult
@@ -240,10 +245,11 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
       draftPreparePrompt = { prompt: current, cursor: prompt.cursor() ?? promptLength(current) }
     }
     setDraftPreparing(true)
+    // Reset any leftover preview so the panel starts clean, then show a generating placeholder until
+    // the first delta arrives. The raw user input stays in the editor above — we do NOT overwrite it.
+    setDraftPreview("")
     setStore("mode", "normal")
     setStore("popover", null)
-    const text = language.t("prompt.generating")
-    prompt.set(makeTextPrompt(text), text.length)
     requestAnimationFrame(() => {
       editorRef.blur()
       queueScroll()
@@ -252,16 +258,39 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
 
   const stopDraftPrepare = () => {
     setDraftPreparing(false)
+    // Keep the raw input reference around while a draft (partial or reviewable) is still on screen so
+    // the user can restore it; only drop it once nothing references the original prompt anymore.
     requestAnimationFrame(() => {
-      if (draftReview()) return
+      if (draftReview() || draftPreview()) return
       draftPreparePrompt = undefined
     })
   }
 
   const updateDraftPrepare = (preview: string) => {
     if (!draftPreparing() || !preview) return
-    prompt.set(makeTextPrompt(preview), preview.length)
+    setDraftPreview(preview)
     queueScroll()
+  }
+
+  // Dismiss a preserved partial draft (from a canceled preparation) without touching the editor input.
+  const dismissDraftPreview = () => {
+    setDraftPreview("")
+    if (!draftReview() && !draftPreparing()) draftPreparePrompt = undefined
+  }
+
+  // Copy the preserved partial draft into the editor so the user can edit and resubmit it. A canceled
+  // stream has no server-persisted draft id, so it can't be submitted as an intelligence draft directly.
+  const useDraftPreview = () => {
+    const preview = draftPreview().trim()
+    if (!preview) return
+    prompt.set(makeTextPrompt(preview), preview.length)
+    setDraftPreview("")
+    draftPreparePrompt = undefined
+    requestAnimationFrame(() => {
+      editorRef.focus()
+      setCursorPosition(editorRef, preview.length)
+      queueScroll()
+    })
   }
 
   const activeFileTab = createSessionTabs({
@@ -1249,6 +1278,9 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
       const editable = draft.preview.trim() || draft.goal.trim()
       draftReviewResolve = resolve
       setDraftPreparing(false)
+      // Preparation succeeded and produced a persisted, submittable draft: transition from the live
+      // preview panel to the editable review. The editor now holds the draft for the user to approve.
+      setDraftPreview("")
       setDraftReview({ draft, originalPrompt: original.prompt, originalCursor: original.cursor })
       setStore("mode", "normal")
       setStore("popover", null)
@@ -1308,6 +1340,8 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
       confirmCurrentDraft()
       return
     }
+    // A fresh submission supersedes any paused draft from a prior canceled preparation.
+    if (draftPreview()) setDraftPreview("")
     handleSubmit(event)
   }
 
@@ -1629,6 +1663,53 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     onPress: () => void addProject(),
   }))
 
+  // Live/paused draft panel shown BELOW the editor. While preparing it streams the refined prompt;
+  // after a cancel it stays as a preserved partial draft the user can adopt (→ editor) or dismiss.
+  const draftPreviewPanel = () => (
+    <Show when={draftPreparing() || draftPreview().trim().length > 0}>
+      <div
+        data-component="prompt-draft-preview"
+        class="mx-2 mt-2 flex min-w-0 flex-col gap-2 rounded-md border border-border-weak-base bg-background-base px-3 py-2"
+      >
+        <div class="flex items-center gap-2">
+          <Show when={draftPreparing()}>
+            <Spinner class="size-3.5 shrink-0 text-text-weak" />
+          </Show>
+          <span class="text-12-medium text-text-weak">
+            {draftPreparing()
+              ? language.t("prompt.draft.preview.streaming")
+              : language.t("prompt.draft.preview.paused")}
+          </span>
+        </div>
+        <div class="max-h-[160px] overflow-y-auto no-scrollbar whitespace-pre-wrap text-13-regular text-text-base">
+          {draftPreview().trim() || language.t("prompt.generating")}
+        </div>
+        <Show when={!draftPreparing() && draftPreview().trim().length > 0}>
+          <div class="flex items-center justify-end gap-2">
+            <Button
+              data-action="prompt-draft-preview-dismiss"
+              type="button"
+              size="small"
+              variant="ghost"
+              onClick={dismissDraftPreview}
+            >
+              {language.t("prompt.draft.preview.dismiss")}
+            </Button>
+            <Button
+              data-action="prompt-draft-preview-use"
+              type="button"
+              size="small"
+              variant="secondary"
+              onClick={useDraftPreview}
+            >
+              {language.t("prompt.draft.preview.use")}
+            </Button>
+          </div>
+        </Show>
+      </div>
+    </Show>
+  )
+
   const draftReviewBar = () => (
     <Show when={draftReview()} keyed>
       {(_review) => (
@@ -1771,7 +1852,9 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                 "[&_[data-type=file]]:text-syntax-property": true,
                 "[&_[data-type=agent]]:text-syntax-type": true,
                 "font-mono!": store.mode === "shell",
-                "cursor-wait text-text-weak": draftPreparing(),
+                // Editor keeps the raw user input during preparation (the streamed draft shows in the
+                // panel below), so it reads normally — locked to edits, not greyed as a placeholder.
+                "cursor-wait": draftPreparing(),
               }}
               style={{ "padding-bottom": space }}
             />
@@ -1855,6 +1938,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
             </div>
           </div>
         </div>
+        {draftPreviewPanel()}
       </DockShellForm>
       <Show when={store.mode === "normal" || store.mode === "shell"}>
         <DockTray attach="top">
