@@ -128,3 +128,49 @@ export function getConversationTokens(sessions: Session[] = [], rootSessionID?: 
 export function getSubagentTokens(session: Session | undefined): number {
   return session ? sessionTokensUsed(session) : 0
 }
+
+// Per-category token breakdown. `spend` is the tokens NEWLY consumed this turn (non-cached input +
+// output + reasoning); `cacheRead`/`cacheWrite` are the cached context re-read/written for the same
+// request (billed at a fraction of full price). `total` is the sum of all five — the raw figure the
+// provider reports. Surfacing the split stops a short prompt over a large cached context from looking
+// like it "spent" 120K when almost all of that is a cache hit.
+export type TokenBreakdown = {
+  input: number
+  output: number
+  reasoning: number
+  cacheRead: number
+  cacheWrite: number
+  spend: number
+  total: number
+}
+
+export const emptyTokenBreakdown = (): TokenBreakdown => ({
+  input: 0,
+  output: 0,
+  reasoning: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+  spend: 0,
+  total: 0,
+})
+
+export function addTokenBreakdown(
+  acc: TokenBreakdown,
+  t: { input: number; output: number; reasoning: number; cache: { read: number; write: number } },
+): TokenBreakdown {
+  acc.input += t.input
+  acc.output += t.output
+  acc.reasoning += t.reasoning
+  acc.cacheRead += t.cache.read
+  acc.cacheWrite += t.cache.write
+  acc.spend += t.input + t.output + t.reasoning
+  acc.total += t.input + t.output + t.reasoning + t.cache.read + t.cache.write
+  return acc
+}
+
+// Breakdown of a single subagent (child) session's persisted running total, mirroring
+// {@link getSubagentTokens} but split by category so it can roll into a parent turn's tooltip.
+export function getSubagentTokenBreakdown(acc: TokenBreakdown, session: Session | undefined): TokenBreakdown {
+  if (!session?.tokens) return acc
+  return addTokenBreakdown(acc, session.tokens)
+}

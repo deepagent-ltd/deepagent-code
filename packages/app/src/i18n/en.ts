@@ -534,6 +534,14 @@ export const dict = {
   "context.usage.totalTokens": "Conversation Tokens",
   "context.usage.clickToView": "Click to view context",
   "context.usage.view": "View context usage",
+  "context.usage.input": "Input",
+  "context.usage.output": "Output",
+  "context.usage.reasoning": "Reasoning",
+  "context.usage.cacheRead": "Cache read",
+  "context.usage.cacheWrite": "Cache write",
+
+  "session.turn.tokens.spend": "Spent this turn",
+  "session.turn.tokens.total": "Total (incl. cache)",
 
   "language.en": "English",
   "language.zh": "简体中文",
@@ -595,6 +603,7 @@ export const dict = {
   "toast.project.rootRefused.title": "Can't open the filesystem root",
   "toast.project.rootRefused.description":
     "This conversation points at the filesystem root (\"/\"), which can't be opened for safety. It's likely leftover data — remove or re-target it.",
+  "toast.project.rootRecoveryFailed.title": "Couldn't recover this folder-less conversation",
 
   "toast.update.title": "Update available",
   "toast.update.description": "A new version of DeepAgent Code ({{version}}) is now available to install.",
