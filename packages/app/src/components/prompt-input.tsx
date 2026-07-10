@@ -58,7 +58,7 @@ import { createSessionTabs } from "@/pages/session/helpers"
 import { PanelButton } from "@/components/deepagent/panel-button"
 import { fetchCapabilities } from "@/components/deepagent/panel-goal.api"
 import { ApprovalControl } from "@/components/deepagent/approval-control"
-import { ModeSelector } from "@/components/deepagent/mode-selector"
+import { ModeSelector, useModeLabel } from "@/components/deepagent/mode-selector"
 import { createTextFragment, getCursorPosition, setCursorPosition, setRangeEdge } from "./prompt-input/editor-dom"
 import { createPromptAttachments } from "./prompt-input/attachments"
 import { ACCEPTED_FILE_TYPES, pickAttachmentFiles } from "./prompt-input/files"
@@ -146,6 +146,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
   const command = useCommand()
   const permission = usePermission()
   const language = useLanguage()
+  const modeLabel = useModeLabel()
   const platform = usePlatform()
   const pickDirectory = useDirectoryPicker()
   const { params, tabs, view } = useSessionLayout()
@@ -1989,7 +1990,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                         }}
                         onClose={restoreFocus}
                       >
-                        <span class="truncate">{local.agent.current()?.name ?? language.t("command.agent.cycle")}</span>
+                        <span class="truncate">{modeLabel(local.agent.current()?.name)}</span>
                         <Icon name="chevron-down" size="small" class="shrink-0" />
                       </ModeSelector>
                     </TooltipKeybind>

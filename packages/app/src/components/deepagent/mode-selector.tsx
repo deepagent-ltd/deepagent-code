@@ -36,6 +36,23 @@ const MODE_DESC_KEY = {
 
 const isModeName = (name: string): name is ModeName => name in MODE_LABEL_KEY
 
+/**
+ * The localized display label for a mode name — used both by the popup rows and the composer trigger
+ * (so the closed trigger shows "自动/目标/设计", not the raw agent name). Falls back to the raw name
+ * for custom primary agents that have no composer.mode.* key.
+ */
+export const useModeLabel = () => {
+  const language = useLanguage()
+  return (name: string | undefined): string => {
+    if (!name) return language.t("command.agent.cycle")
+    if (isModeName(name)) {
+      const label = language.t(MODE_LABEL_KEY[name])
+      if (label) return label
+    }
+    return name
+  }
+}
+
 type ModeSelectorTriggerProps = Omit<ComponentProps<typeof Kobalte.Trigger>, "as" | "ref">
 
 export function ModeSelector(props: {
@@ -59,13 +76,8 @@ export function ModeSelector(props: {
 
   const modes = createMemo(() => local.agent.list())
 
-  const title = (agent: Agent) => {
-    if (isModeName(agent.name)) {
-      const label = language.t(MODE_LABEL_KEY[agent.name])
-      if (label) return label
-    }
-    return agent.name
-  }
+  const modeLabel = useModeLabel()
+  const title = (agent: Agent) => modeLabel(agent.name)
 
   const description = (agent: Agent) => {
     if (isModeName(agent.name)) {
