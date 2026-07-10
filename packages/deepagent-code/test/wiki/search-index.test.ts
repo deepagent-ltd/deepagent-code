@@ -93,3 +93,18 @@ describe("WikiSearchIndex — §B.4 FTS over the graph projection", () => {
     expect(hits.some((h) => h.docId === k.id)).toBe(true)
   })
 })
+
+// REGRESSION GUARD: search-index must NOT statically import a runtime-specific sqlite builtin. Doing
+// so pulls `bun:sqlite` into the Node/Electron server module graph (prompt.ts → session-archive →
+// search-index), which crashes the desktop app at module-eval ("protocol 'bun:' not supported").
+// The driver must be selected via the #wiki-fts-db imports condition instead.
+describe("WikiSearchIndex — runtime-portability guard", () => {
+  test("search-index.ts does not hardcode bun:sqlite / node:sqlite", async () => {
+    const src = await Bun.file(new URL("../../src/wiki/search-index.ts", import.meta.url)).text()
+    // strip line comments so the explanatory prose mentioning the modules doesn't false-positive.
+    const code = src.replace(/\/\/.*$/gm, "").replace(/\/\*[\s\S]*?\*\//g, "")
+    expect(code).not.toContain('from "bun:sqlite"')
+    expect(code).not.toContain('from "node:sqlite"')
+    expect(code).toContain('from "#wiki-fts-db"')
+  })
+})
