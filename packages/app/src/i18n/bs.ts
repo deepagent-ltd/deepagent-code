@@ -625,6 +625,12 @@ export const dict = {
   "settings.general.section.updates": "Ažuriranja",
   "settings.general.section.sounds": "Zvučni efekti",
   "settings.general.section.feed": "Feed",
+  "settings.general.section.sharing": "Dijeljenje",
+  "settings.general.row.shareUrl.title": "URL servera za dijeljenje",
+  "settings.general.row.shareUrl.description": "Osnovni URL servera koji se koristi pri dijeljenju sesija. Ostavite prazno za zadano.",
+  "settings.general.row.shareUrl.placeholder": "https://opncd.ai",
+  "settings.general.row.expertPanelDefault.title": "Zadano uključi ekspertni panel",
+  "settings.general.row.expertPanelDefault.description": "Pokreni nove razgovore s uključenim ekspertnim panelom, tako da njegovo dugme po potrebi pokreće pregled trenutnog konteksta.",
   "settings.general.section.display": "Prikaz",
 
   "settings.general.row.language.title": "Jezik",
