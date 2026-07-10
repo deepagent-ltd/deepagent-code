@@ -204,11 +204,13 @@ export const layer = Layer.effect(
         //                            refines on the first tick.
         // With none of these, the plan stays null and the core rejects the start (a goal must be decidable).
         const existing = AgentGateway.DeepAgentSessionState.getPlan(sessionID) as PlanDoc | null
-        const fromFile = existing == null ? readGoalPlanFile(cwd, sessionID) : null
         const objective = input.objective?.trim()
+        // Only fall back to the repo goal+plan.md (design mode) when there is NEITHER a session-state
+        // plan (loop mode) NOR an explicit free-text objective. An explicit objective is a direct user
+        // intent for THIS start and must win over a stale/leftover file in the workspace.
+        const fromFile = existing == null && !objective ? readGoalPlanFile(cwd, sessionID) : null
         const plan =
           existing ??
-          fromFile?.plan ??
           (objective
             ? createPlanDoc(sessionID, objective, [
                 {
@@ -221,7 +223,7 @@ export const layer = Layer.effect(
                   note: null,
                 },
               ])
-            : null)
+            : (fromFile?.plan ?? null))
         const store = new DocumentStore(goalStoreRoot(sessionID))
         const planDocId =
           plan != null

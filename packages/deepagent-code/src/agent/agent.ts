@@ -483,21 +483,26 @@ export const layer = Layer.effect(
           )
         }
 
+        // Back-compat alias: the default primary agent "build" was renamed to "auto" in the mode
+        // redesign. Older sessions, saved configs (incl. `default_agent: "build"`), and API callers may
+        // still reference "build" — normalize it to "auto" unless an agent literally named "build"
+        // exists (a user could still define one). Applied at EVERY resolution path (get / defaultInfo /
+        // list sort) so no lookup misses the alias.
+        const canonicalAgentName = (name: string) =>
+          name === "build" && !agents["build"] && agents["auto"] ? "auto" : name
+
         const get = Effect.fnUntraced(function* (agent: string) {
-          // Back-compat alias: "build" was renamed to "auto" in the mode redesign. Older sessions,
-          // saved configs, and API callers may still pass "build" — resolve it to auto when there is
-          // no explicitly-defined agent literally named "build".
-          if (agent === "build" && !agents["build"] && agents["auto"]) return agents["auto"]
-          return agents[agent]
+          return agents[canonicalAgentName(agent)]
         })
 
         const list = Effect.fnUntraced(function* () {
           const cfg = yield* config.get()
+          const preferred = cfg.default_agent ? canonicalAgentName(cfg.default_agent) : "auto"
           return pipe(
             agents,
             values(),
             sortBy(
-              [(x) => (cfg.default_agent ? x.name === cfg.default_agent : x.name === "auto"), "desc"],
+              [(x) => x.name === preferred, "desc"],
               [(x) => x.name, "asc"],
             ),
           )
@@ -506,7 +511,8 @@ export const layer = Layer.effect(
         const defaultInfo = Effect.fnUntraced(function* () {
           const c = yield* config.get()
           if (c.default_agent) {
-            const agent = agents[c.default_agent]
+            const resolved = canonicalAgentName(c.default_agent)
+            const agent = agents[resolved]
             if (!agent) throw new Error(`default agent "${c.default_agent}" not found`)
             if (agent.mode === "subagent") throw new Error(`default agent "${c.default_agent}" is a subagent`)
             if (agent.hidden === true) throw new Error(`default agent "${c.default_agent}" is hidden`)

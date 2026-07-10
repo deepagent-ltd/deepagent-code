@@ -675,6 +675,25 @@ it.instance(
   },
 )
 
+// Back-compat: build was renamed to auto. A legacy config with `default_agent: "build"` must resolve
+// to auto through the alias (NOT throw "default agent build not found") — the alias applies at the
+// defaultInfo/defaultAgent path, not just Agent.get.
+it.instance(
+  "defaultAgent resolves legacy default_agent \"build\" to auto",
+  () =>
+    Effect.gen(function* () {
+      const agent = yield* load((svc) => svc.defaultAgent())
+      expect(agent).toBe("auto")
+      const info = yield* load((svc) => svc.defaultInfo())
+      expect(info.name).toBe("auto")
+    }),
+  {
+    config: {
+      default_agent: "build",
+    },
+  },
+)
+
 it.instance(
   "defaultAgent respects default_agent config set to custom agent with mode all",
   () =>
