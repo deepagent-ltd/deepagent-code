@@ -59,8 +59,8 @@ export type AgentExecutionResult = Schema.Schema.Type<typeof AgentExecutionResul
 
 /**
  * Agent context builder interface.
- * Builds context by querying code/knowledge/memory/documents separately.
- * Does NOT use queryUnifiedGraph.
+ * Builds context across code/knowledge/memory/documents. The live implementation routes through
+ * UnifiedContextGraph (four-graph unification, V3.8.1 §B) with defect-safe degradation to empty.
  */
 export interface AgentContextBuilder {
   build(input: {

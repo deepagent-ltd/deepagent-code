@@ -33,6 +33,9 @@ export const SidebarContent = (props: {
   reviewLabel: Accessor<string>
   onOpenReview: () => void
   reviewPending?: Accessor<boolean>
+  wikiLabel?: Accessor<string>
+  onOpenWiki?: () => void
+  wikiAvailable?: Accessor<boolean>
   packsLabel?: Accessor<string>
   onOpenPacks?: () => void
   archivedLabel: Accessor<string>
@@ -131,6 +134,17 @@ export const SidebarContent = (props: {
               </Show>
             </div>
           </Tooltip>
+          <Show when={props.wikiAvailable?.() && !!props.onOpenWiki}>
+            <Tooltip placement={placement()} value={props.wikiLabel?.() ?? ""}>
+              <IconButton
+                icon="file-tree"
+                variant="ghost"
+                size="large"
+                onClick={props.onOpenWiki}
+                aria-label={props.wikiLabel?.() ?? ""}
+              />
+            </Tooltip>
+          </Show>
           <TooltipKeybind placement={placement()} title={props.settingsLabel()} keybind={props.settingsKeybind() ?? ""}>
             <IconButton
               icon="settings-gear"

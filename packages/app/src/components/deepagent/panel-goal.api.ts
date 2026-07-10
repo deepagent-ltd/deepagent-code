@@ -51,6 +51,7 @@ export type PanelGoalClient = RawSdkClient
 export type DeepAgentCapabilities = {
   expertPanel: boolean
   goalLoop: boolean
+  wiki: boolean
 }
 
 /**
@@ -66,6 +67,7 @@ export const fetchCapabilities = async (client: PanelGoalClient): Promise<DeepAg
   return {
     expertPanel: response.data?.features?.expertPanel ?? false,
     goalLoop: response.data?.features?.goalLoop ?? false,
+    wiki: response.data?.features?.wiki ?? false,
   }
 }
 
