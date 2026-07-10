@@ -58,6 +58,7 @@ import { createSessionTabs } from "@/pages/session/helpers"
 import { PanelButton } from "@/components/deepagent/panel-button"
 import { fetchCapabilities } from "@/components/deepagent/panel-goal.api"
 import { ApprovalControl } from "@/components/deepagent/approval-control"
+import { ModeSelector, useModeLabel } from "@/components/deepagent/mode-selector"
 import { createTextFragment, getCursorPosition, setCursorPosition, setRangeEdge } from "./prompt-input/editor-dom"
 import { createPromptAttachments } from "./prompt-input/attachments"
 import { ACCEPTED_FILE_TYPES, pickAttachmentFiles } from "./prompt-input/files"
@@ -145,6 +146,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
   const command = useCommand()
   const permission = usePermission()
   const language = useLanguage()
+  const modeLabel = useModeLabel()
   const platform = usePlatform()
   const pickDirectory = useDirectoryPicker()
   const { params, tabs, view } = useSessionLayout()
@@ -1977,20 +1979,20 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                       title={language.t("command.agent.cycle")}
                       keybind={command.keybind("agent.cycle")}
                     >
-                      <Select
-                        size="normal"
-                        options={agentNames()}
-                        current={local.agent.current()?.name ?? ""}
-                        onSelect={(value) => {
-                          local.agent.set(value)
-                          restoreFocus()
+                      <ModeSelector
+                        triggerAs={Button}
+                        triggerProps={{
+                          variant: "ghost",
+                          size: "normal",
+                          style: control(),
+                          class: "capitalize max-w-[160px] text-13-regular text-text-base group",
+                          "data-action": "prompt-agent",
                         }}
-                        class="capitalize max-w-[160px] text-text-base"
-                        valueClass="truncate text-13-regular text-text-base"
-                        triggerStyle={control()}
-                        triggerProps={{ "data-action": "prompt-agent" }}
-                        variant="ghost"
-                      />
+                        onClose={restoreFocus}
+                      >
+                        <span class="truncate">{modeLabel(local.agent.current()?.name)}</span>
+                        <Icon name="chevron-down" size="small" class="shrink-0" />
+                      </ModeSelector>
                     </TooltipKeybind>
                   </div>
                 </Show>
