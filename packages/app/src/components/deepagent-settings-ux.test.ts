@@ -23,9 +23,21 @@ describe("DeepAgent settings UX", () => {
     expect(v2.indexOf('data-action="settings-deepagent-prompt-mode"')).toBeLessThan(
       v2.indexOf('data-action="settings-deepagent-intelligence-model"'),
     )
-    expect(v2.indexOf('data-action="settings-deepagent-intelligence-model"')).toBeLessThan(
-      v2.indexOf('data-action="settings-auto-accept-permissions"'),
-    )
+  })
+
+  test("moves the permission approval control out of settings into the composer toolbar", async () => {
+    const v2 = await readFile(path.join(here, "settings-v2/general.tsx"), "utf8")
+    const composer = await readFile(path.join(here, "prompt-input.tsx"), "utf8")
+    const control = await readFile(path.join(here, "deepagent/approval-control.tsx"), "utf8")
+
+    // The auto-accept toggle no longer lives in settings…
+    expect(v2).not.toContain('data-action="settings-auto-accept-permissions"')
+    // …it is a composer control next to the agent selector, backed by directory-level auto-accept.
+    expect(composer).toContain("ApprovalControl")
+    expect(control).toContain('"data-action": "prompt-approval"')
+    expect(control).toContain("toggleAutoAcceptDirectory")
+    expect(control).toContain("composer.approval.request")
+    expect(control).toContain("composer.approval.auto")
   })
 
   test("routes the legacy settings dialog import to the unified settings page", async () => {
