@@ -45,9 +45,9 @@ import { retry } from "@deepagent-code/core/util/retry"
 import type { ServerScope } from "@/utils/server-scope"
 import { persisted } from "@/utils/persist"
 import { toggleMcp } from "./global-sync/mcp"
-import type { SessionPlan, SessionPlanStep } from "./global-sync/types"
+import type { SessionPlan, SessionPlanStep, SessionGoal } from "./global-sync/types"
 
-export type { SessionPlan, SessionPlanStep }
+export type { SessionPlan, SessionPlanStep, SessionGoal }
 
 // True when `dir` is a filesystem root: posix "/" or a Windows drive/UNC root ("C:\", "C:/", "\\").
 // Rooting an instance here is refused server-side (assertSafeInstanceRoot); we check on the client
@@ -71,6 +71,11 @@ type GlobalStore = {
   // the legacy `session_todo` cache was removed when task tracking unified onto the plan system.
   session_plan: {
     [sessionID: string]: SessionPlan
+  }
+  // V3.9 §D: the live Goal Loop status per session, pushed by the goal.updated event. Persistent like
+  // session_plan so the status bar survives the session going idle between background ticks.
+  session_goal: {
+    [sessionID: string]: SessionGoal
   }
   provider: NormalizedProviderListResponse
   provider_auth: ProviderAuthResponse
@@ -145,6 +150,7 @@ export function createServerSyncContextInner(_serverSDK?: ServerSDK) {
     },
     project: [],
     session_plan: {},
+    session_goal: {},
     provider_auth: {},
     get path() {
       const EMPTY: Path = {
@@ -268,6 +274,22 @@ export function createServerSyncContextInner(_serverSDK?: ServerSDK) {
     // consumed by the render. Keying by `step_id` is the correct, minimal-diff choice (field-level
     // updates, stable identity) and is future-proof if the render ever switches to a keyed <For>.
     setGlobalStore("session_plan", sessionID, reconcile(plan, { key: "step_id" }))
+  }
+
+  // V3.9 §D: set/clear the live goal status for a session (mirrors setSessionPlan). The goal object is
+  // a single record per session; reconcile keeps field-level updates minimal-diff.
+  const setSessionGoal = (sessionID: string, goal: SessionGoal | undefined) => {
+    if (!sessionID) return
+    if (!goal) {
+      setGlobalStore(
+        "session_goal",
+        produce((draft) => {
+          delete draft[sessionID]
+        }),
+      )
+      return
+    }
+    setGlobalStore("session_goal", sessionID, reconcile(goal))
   }
 
   const paused = () => untrack(() => globalStore.reload) !== undefined
@@ -487,6 +509,7 @@ export function createServerSyncContextInner(_serverSDK?: ServerSDK) {
       setStore,
       push: queue.push,
       setSessionPlan,
+      setSessionGoal,
       retainedLimit: sessionMeta.get(key)?.limit,
       vcsCache: children.vcsCache.get(key),
       loadLsp: () => {
@@ -636,6 +659,9 @@ export function createServerSyncContextInner(_serverSDK?: ServerSDK) {
     project: projectApi,
     plan: {
       set: setSessionPlan,
+    },
+    goal: {
+      set: setSessionGoal,
     },
     mcp: {
       toggle: async (directory: string, name: string) => {

@@ -9,6 +9,7 @@ import { Database } from "@deepagent-code/core/database/database"
 import { Installation } from "../../src/installation"
 import { MoveSession } from "@deepagent-code/core/control-plane/move-session"
 import { ServerAuth } from "../../src/server/auth"
+import { RuntimeFlags } from "../../src/effect/runtime-flags"
 import { RootHttpApi } from "../../src/server/routes/instance/httpapi/api"
 import { GlobalPaths } from "../../src/server/routes/instance/httpapi/groups/global"
 import { controlHandlers } from "../../src/server/routes/instance/httpapi/handlers/control"
@@ -41,6 +42,7 @@ const apiLayer = HttpRouter.serve(
   ),
   Layer.provide(ServerAuth.Config.layer({ password: Option.none(), username: "deepagent-code" })),
   Layer.provide(Database.layerFromPath(":memory:")),
+  Layer.provide(RuntimeFlags.layer({ experimentalExpertPanel: true, experimentalGoalLoop: true })),
 )
 const it = testEffect(apiLayer)
 
@@ -63,6 +65,18 @@ describe("global HttpApi", () => {
 
       expect(response.status).toBe(400)
       expect(yield* response.json).toEqual({ success: false, error: "Invalid request body" })
+    }),
+  )
+
+  // V3.9 §C/§D: capabilities advertise the independently-gated experimental subsystems from
+  // RuntimeFlags (both true in this harness), so the client can gate the panel button + goal mode.
+  it.live("capabilities advertise expertPanel + goalLoop from RuntimeFlags", () =>
+    Effect.gen(function* () {
+      const response = yield* HttpClient.get(GlobalPaths.capabilities)
+      expect(response.status).toBe(200)
+      const body = (yield* response.json) as { features: Record<string, boolean> }
+      expect(body.features.expertPanel).toBe(true)
+      expect(body.features.goalLoop).toBe(true)
     }),
   )
 })
