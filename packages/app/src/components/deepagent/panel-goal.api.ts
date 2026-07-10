@@ -47,6 +47,28 @@ type RawSdkClient = {
 
 export type PanelGoalClient = RawSdkClient
 
+/** Which V3.9 experimental subsystems this server has enabled (from /global/capabilities.features). */
+export type DeepAgentCapabilities = {
+  expertPanel: boolean
+  goalLoop: boolean
+}
+
+/**
+ * Read the server's experimental capabilities so the UI can independently gate the panel button and
+ * goal mode. Fetched via the raw path (no SDK regen); tolerant of an older server that omits the
+ * fields (treated as disabled).
+ */
+export const fetchCapabilities = async (client: PanelGoalClient): Promise<DeepAgentCapabilities> => {
+  const response = await client.client.request<{ features?: Partial<DeepAgentCapabilities> }>({
+    method: "GET",
+    url: "/global/capabilities",
+  })
+  return {
+    expertPanel: response.data?.features?.expertPanel ?? false,
+    goalLoop: response.data?.features?.goalLoop ?? false,
+  }
+}
+
 const JSON_HEADERS = { "Content-Type": "application/json" }
 
 // ── Expert Panel (§C) ────────────────────────────────────────────────────────
@@ -72,7 +94,7 @@ export const consultPanel = async (
   return response.data
 }
 
-/** Set the per-session panel armed flag (the button toggle). */
+/** Set the per-session panel armed flag (the button toggle). Returns the effective armed state. */
 export const armPanel = async (
   client: PanelGoalClient,
   sessionID: string,
@@ -85,6 +107,22 @@ export const armPanel = async (
     headers: JSON_HEADERS,
   })
   return response.data?.armed ?? armed
+}
+
+/**
+ * Resolve the EFFECTIVE armed state for a session: the explicit per-session toggle if set, else the
+ * server's global expertPanelDefault. Lets the button seed from the server default without the client
+ * guessing (the client setting is only a hint; the server is authoritative).
+ */
+export const fetchPanelStatus = async (
+  client: PanelGoalClient,
+  sessionID: string,
+): Promise<{ armed: boolean; explicit: boolean }> => {
+  const response = await client.client.request<{ armed: boolean; explicit: boolean }>({
+    method: "GET",
+    url: `/deepagent/panel/status?sessionID=${encodeURIComponent(sessionID)}`,
+  })
+  return { armed: response.data?.armed ?? false, explicit: response.data?.explicit ?? false }
 }
 
 // ── Goal Loop (§D) ───────────────────────────────────────────────────────────

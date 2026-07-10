@@ -55,6 +55,7 @@ import { serverAttachmentFile } from "./prompt-input/server-attachment"
 import { useSessionLayout } from "@/pages/session/session-layout"
 import { createSessionTabs } from "@/pages/session/helpers"
 import { PanelButton } from "@/components/deepagent/panel-button"
+import { fetchCapabilities } from "@/components/deepagent/panel-goal.api"
 import { createTextFragment, getCursorPosition, setCursorPosition, setRangeEdge } from "./prompt-input/editor-dom"
 import { createPromptAttachments } from "./prompt-input/attachments"
 import { ACCEPTED_FILE_TYPES, pickAttachmentFiles } from "./prompt-input/files"
@@ -692,11 +693,15 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
       .map((agent): AtOption => ({ type: "agent", name: agent.name, display: agent.name })),
   )
   const agentNames = createMemo(() => local.agent.list().map((agent) => agent.name))
-  // V3.9 §C/§D: the `goal` primary agent is registered only when the goal-loop flag is on. Use its
-  // presence as the client-side signal that the DeepAgent experimental surface (panel + goal) is
-  // enabled, so the panel button only appears on servers that can actually convene a panel. (A future
-  // dedicated capability endpoint would let the two flags be gated independently in the UI.)
-  const deepagentExperimentalOn = createMemo(() => agentNames().includes("goal"))
+  // V3.9 §C/§D: gate the panel button on the server's advertised capabilities (/global/capabilities),
+  // so the Expert Panel (§C) and Goal Loop (§D) flags are honoured INDEPENDENTLY — the panel button
+  // appears iff expertPanel is enabled, regardless of goal mode. (goal mode gates itself: the `goal`
+  // primary agent is only registered when goalLoop is on, so it self-appears in the switcher.)
+  const [capabilities] = createResource(
+    () => (params.id ? "capabilities" : undefined),
+    () => fetchCapabilities(sdk.client as never),
+  )
+  const panelAvailable = createMemo(() => capabilities()?.expertPanel === true)
 
   const handleAtSelect = (option: AtOption | undefined) => {
     if (!option) return
@@ -1891,7 +1896,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                     </TooltipKeybind>
                   </div>
                 </Show>
-                <Show when={deepagentExperimentalOn() && store.mode !== "shell" && params.id}>
+                <Show when={panelAvailable() && store.mode !== "shell" && params.id}>
                   <PanelButton sessionID={params.id!} />
                 </Show>
                 <Show when={!providersLoading()}>

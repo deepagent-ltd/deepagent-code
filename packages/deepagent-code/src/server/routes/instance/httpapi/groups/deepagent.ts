@@ -274,9 +274,19 @@ export const DeepAgentPanelArmInput = Schema.Struct({
 })
 export const DeepAgentPanelArmResult = Schema.Struct({ sessionID: Schema.String, armed: Schema.Boolean })
 
+/** GET /deepagent/panel/status — the EFFECTIVE armed state (explicit toggle, else global default). */
+export const DeepAgentPanelStatusResult = Schema.Struct({
+  sessionID: Schema.String,
+  armed: Schema.Boolean,
+  // Whether `armed` came from an explicit per-session toggle (true) or the global default (false).
+  explicit: Schema.Boolean,
+})
+
 /** POST /deepagent/goal/start */
 export const DeepAgentGoalStartInput = Schema.Struct({
   sessionID: Schema.String,
+  // Optional free-text objective (CLI `/goal <objective>`); seeds a plan when the session has none.
+  objective: Schema.optional(Schema.String),
   criteria: Schema.optional(
     Schema.Array(
       Schema.Struct({
@@ -512,6 +522,20 @@ export const DeepAgentApi = HttpApi.make("deepagent").add(
           identifier: "deepagent.panel.arm",
           summary: "Arm or disarm the Expert Panel for a session",
           description: "V3.9 §C: per-conversation toggle for the panel button; seeded from the global default.",
+        }),
+      ),
+    )
+    .add(
+      HttpApiEndpoint.get("panelStatus", `${root}/panel/status`, {
+        query: Schema.Struct({ ...WorkspaceRoutingQueryFields, sessionID: Schema.String }),
+        success: described(DeepAgentPanelStatusResult, "Effective panel armed state (explicit toggle or global default)"),
+        error: DeepAgentPromotionError,
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "deepagent.panel.status",
+          summary: "Resolve the effective Expert Panel armed state",
+          description:
+            "V3.9 §C: returns the explicit per-session toggle if set, else the global expertPanelDefault — so the UI seeds the button from the server's default without guessing.",
         }),
       ),
     )

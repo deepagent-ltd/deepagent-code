@@ -1,4 +1,5 @@
 import { Config } from "@/config/config"
+import { RuntimeFlags } from "@/effect/runtime-flags"
 import { GlobalBus, type GlobalEvent as GlobalBusEvent } from "@/bus/global"
 import { EffectBridge } from "@/effect/bridge"
 import { EventV2 } from "@deepagent-code/core/event"
@@ -79,6 +80,7 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
     const installation = yield* Installation.Service
     const bridge = yield* EffectBridge.make()
     const { db } = yield* Database.Service
+    const flags = yield* RuntimeFlags.Service
 
     const health = Effect.fn("GlobalHttpApi.health")(function* () {
       return { healthy: true as const, version: InstallationVersion }
@@ -93,6 +95,11 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
           sessions: true,
           pty: true,
           workspaces: true,
+          // V3.9 §C/§D: advertise the independently-gated experimental subsystems so the client can
+          // gate their UI (panel button / goal mode) WITHOUT a proxy signal. Sourced from the same
+          // env-backed RuntimeFlags the routes fail-close on, so UI availability == route availability.
+          expertPanel: flags.experimentalExpertPanel,
+          goalLoop: flags.experimentalGoalLoop,
         },
       }
     })

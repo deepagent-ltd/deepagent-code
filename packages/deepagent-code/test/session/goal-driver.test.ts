@@ -91,6 +91,43 @@ describe("materializePlanDoc", () => {
     expect(id2).toBe(id1)
     expect(store.get(id2)!.version).toBe(v1)
   })
+
+  test("an objective-seeded single-step plan is a valid goal carrier (CLI /goal <objective>)", async () => {
+    // Mirrors GoalManager's seed path: no prior plan + a free-text objective → one active step.
+    const seeded = createPlanDoc(SESSION, "migrate the payment module", [
+      {
+        step_id: "step_1",
+        title: "migrate the payment module",
+        status: "active",
+        acceptance: null,
+        assigned_agent: null,
+        evidence: [],
+        note: null,
+      },
+    ])
+    const planDocId = materializePlanDoc({ store, sessionId: SESSION, plan: seeded })
+    const parsed = JSON.parse(store.get(planDocId)!.body) as PlanDoc
+    expect(parsed.goal).toBe("migrate the payment module")
+    expect(parsed.active_step_id).toBe("step_1")
+
+    // The goal starts from it and drives to done once the (stub) executor marks the step done.
+    const deps = controllerDeps({
+      executor: () =>
+        Effect.sync(() => {
+          store.update(planDocId, JSON.stringify(plan([step("step_1", "done")])))
+          return { tokensUsed: 5 }
+        }),
+    })
+    const { handle } = await Effect.runPromise(
+      startGoal({
+        deps,
+        planDocId,
+        criteria: [{ kind: "plan_complete" }],
+        limits: { maxTicks: 10, maxTokens: 10_000, maxWallclockMs: 10_000 },
+      }),
+    )
+    expect(await Effect.runPromise(runToCompletion({ deps, handle }))).toBe("done")
+  })
 })
 
 describe("startGoal + runToCompletion", () => {

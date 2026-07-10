@@ -2,11 +2,13 @@ import { describe, expect, test } from "bun:test"
 import {
   consultPanel,
   armPanel,
+  fetchPanelStatus,
   startGoal,
   pauseGoal,
   resumeGoal,
   stopGoal,
   goalStatus,
+  fetchCapabilities,
 } from "./panel-goal.api"
 
 // V3.9 §C/§D route contract: the Expert Panel + Goal Loop UI talks to the raw-request escape-hatch
@@ -57,6 +59,18 @@ describe("Expert Panel route contract (§C)", () => {
     ])
     expect(armed).toBe(true)
   })
+
+  test("fetchPanelStatus GETs /deepagent/panel/status and reports armed + explicit", async () => {
+    const calls: Recorded[] = []
+    const status = await fetchPanelStatus(client(calls, { armed: true, explicit: false }), "ses 1")
+    expect(calls).toEqual([{ method: "GET", url: "/deepagent/panel/status?sessionID=ses%201" }])
+    expect(status).toEqual({ armed: true, explicit: false })
+  })
+
+  test("fetchPanelStatus tolerates a missing body (disarmed, not explicit)", async () => {
+    const calls: Recorded[] = []
+    expect(await fetchPanelStatus(client(calls, {}), "ses_1")).toEqual({ armed: false, explicit: false })
+  })
 })
 
 describe("Goal Loop route contract (§D)", () => {
@@ -96,5 +110,24 @@ describe("Goal Loop route contract (§D)", () => {
   test("goalStatus tolerates a null goal", async () => {
     const calls: Recorded[] = []
     expect(await goalStatus(client(calls, { goal: null }), "ses_1")).toBeNull()
+  })
+})
+
+describe("capabilities gating", () => {
+  test("fetchCapabilities GETs /global/capabilities and reads the feature flags", async () => {
+    const calls: Recorded[] = []
+    const caps = await fetchCapabilities(client(calls, { features: { expertPanel: true, goalLoop: false } }))
+    expect(calls).toEqual([{ method: "GET", url: "/global/capabilities" }])
+    expect(caps).toEqual({ expertPanel: true, goalLoop: false })
+  })
+
+  test("fetchCapabilities treats a server that omits the fields as disabled", async () => {
+    const calls: Recorded[] = []
+    expect(await fetchCapabilities(client(calls, { features: {} }))).toEqual({
+      expertPanel: false,
+      goalLoop: false,
+    })
+    // and a server with no features object at all
+    expect(await fetchCapabilities(client(calls, {}))).toEqual({ expertPanel: false, goalLoop: false })
   })
 })

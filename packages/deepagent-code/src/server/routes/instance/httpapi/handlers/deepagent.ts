@@ -12,6 +12,7 @@ import { InstanceHttpApi } from "../api"
 import { DeepAgentPromotionError } from "../groups/deepagent"
 import { WorkspaceRouteContext } from "../middleware/workspace-routing"
 import { RuntimeFlags } from "@/effect/runtime-flags"
+import { SettingsStore } from "@/settings/store"
 import { Session } from "@/session/session"
 import { Agent } from "@/agent/agent"
 import { SessionPrompt } from "@/session/prompt"
@@ -483,10 +484,29 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
       return toVerdictResult(verdict)
     })
 
+    // The global Expert Panel default (§C): the effective armed state falls back to this when a session
+    // has never explicitly toggled. Read from the first-party SettingsStore (expertPanelDefault).
+    const expertPanelDefault = () =>
+      Effect.promise(() => SettingsStore.read()).pipe(
+        Effect.map((s) => s.deepagent?.expertPanelDefault ?? false),
+      )
+
     const panelArm = Effect.fn("DeepAgentHttpApi.panelArm")(function* (ctx) {
       const { sessionID, armed } = ctx.payload
       AgentGateway.DeepAgentSessionState.setPanelArmed(sessionID, armed)
-      return { sessionID, armed: AgentGateway.DeepAgentSessionState.isPanelArmed(sessionID) }
+      const globalDefault = yield* expertPanelDefault()
+      return { sessionID, armed: AgentGateway.DeepAgentSessionState.resolvePanelArmed(sessionID, globalDefault) }
+    })
+
+    const panelStatus = Effect.fn("DeepAgentHttpApi.panelStatus")(function* (ctx) {
+      const sessionID = ctx.urlParams.sessionID
+      const globalDefault = yield* expertPanelDefault()
+      const choice = AgentGateway.DeepAgentSessionState.panelArmedChoice(sessionID)
+      return {
+        sessionID,
+        armed: choice ?? globalDefault,
+        explicit: choice != null,
+      }
     })
 
     // ── V3.9 §D Goal Loop lifecycle ─────────────────────────────────────────
@@ -511,6 +531,7 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
       const snapshot = yield* goals
         .start({
           sessionID: ctx.payload.sessionID,
+          ...(ctx.payload.objective != null ? { objective: ctx.payload.objective } : {}),
           ...(criteria ? { criteria } : {}),
           ...(ctx.payload.limits ? { limits: ctx.payload.limits } : {}),
           ...(ctx.payload.stallThreshold != null ? { stallThreshold: ctx.payload.stallThreshold } : {}),
@@ -549,6 +570,7 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
       .handle("envFactsModify", envFactsModify)
       .handle("panelConsult", panelConsult)
       .handle("panelArm", panelArm)
+      .handle("panelStatus", panelStatus)
       .handle("goalStart", goalStart)
       .handle("goalPause", goalPause)
       .handle("goalResume", goalResume)

@@ -54,11 +54,12 @@ export type SessionRunState = {
   // update. The SEMANTIC primary trigger for the progress nudge ("a step probably just finished").
   // Reset with the counter on a real status change.
   validationPassedSinceReport: boolean
-  // V3.9 §C: whether this conversation has the Expert Panel "armed". Seeded from the global
-  // `expertPanelDefault` setting when the session is created; toggled per-conversation from the chat
-  // dialog. Armed means the user may convene a panel (button press) and — when a goal loop is running
-  // — the loop may convene the panel at high-risk decision points. Quiet until woken (§C activation).
-  panelArmed: boolean
+  // V3.9 §C: whether this conversation has EXPLICITLY toggled the Expert Panel "armed" state from the
+  // chat dialog. `null` = never toggled → the effective armed state falls back to the global
+  // `expertPanelDefault` setting (resolved server-side, so the UI reflects the server default without a
+  // client round-trip guess). Armed means the user may convene a panel (button press) and — when a goal
+  // loop is running — the loop may convene the panel at high-risk decision points (§C activation).
+  panelArmed: boolean | null
   // V3.9 §D: a lightweight pointer to the goal currently driven for this session (the authoritative
   // loop state lives in the DocumentStore run_context doc — this is only enough to find/resume it and
   // reflect its phase in the UI). Null when no goal is running.
@@ -109,7 +110,7 @@ export const getOrCreate = (sessionId: string, mode: AgentMode): SessionRunState
     plan: null,
     mutationsSinceReport: 0,
     validationPassedSinceReport: false,
-    panelArmed: false,
+    panelArmed: null,
     activeGoal: null,
     createdAt: new Date().toISOString(),
     completedAt: null,
@@ -197,16 +198,10 @@ export const setPlan = (sessionId: string, plan: PlanDoc): void => {
 export const getPlan = (sessionId: string): PlanDoc | null => sessions.get(sessionId)?.plan ?? null
 
 // V3.9 §C — Expert Panel per-session arming.
-// Seed the armed flag once at session creation from the global default (only if the session exists and
-// has not been explicitly toggled). Returns the effective armed state.
-export const seedPanelArmed = (sessionId: string, globalDefault: boolean): boolean => {
-  const state = sessions.get(sessionId)
-  if (!state) return globalDefault
-  state.panelArmed = globalDefault
-  saveToDisk()
-  return state.panelArmed
-}
-
+// The raw per-session toggle (null = never explicitly toggled). setPanelArmed writes an explicit
+// user choice; resolvePanelArmed resolves the EFFECTIVE state, falling back to the global default when
+// the session has no explicit choice. This keeps the global `expertPanelDefault` setting authoritative
+// for new conversations while an explicit toggle always wins.
 export const setPanelArmed = (sessionId: string, armed: boolean): void => {
   const state = sessions.get(sessionId)
   if (!state) return
@@ -214,6 +209,19 @@ export const setPanelArmed = (sessionId: string, armed: boolean): void => {
   saveToDisk()
 }
 
+/** The raw explicit toggle, or null when the session has never toggled it. */
+export const panelArmedChoice = (sessionId: string): boolean | null => sessions.get(sessionId)?.panelArmed ?? null
+
+/**
+ * Effective armed state: the explicit per-session choice if set, else the supplied global default. Pass
+ * the resolved `expertPanelDefault` setting so the fallback reflects the server's configured default.
+ */
+export const resolvePanelArmed = (sessionId: string, globalDefault: boolean): boolean => {
+  const choice = sessions.get(sessionId)?.panelArmed
+  return choice ?? globalDefault
+}
+
+/** Back-compat: effective armed state with a hard `false` fallback (no global default available). */
 export const isPanelArmed = (sessionId: string): boolean => sessions.get(sessionId)?.panelArmed ?? false
 
 // V3.9 §D — active-goal pointer. The GoalLoop status doc in the DocumentStore is authoritative; this
@@ -356,8 +364,9 @@ function normalizeState(state: SessionRunState): SessionRunState {
     // Backfill: sessions persisted before U10 have no counter on disk.
     mutationsSinceReport: state.mutationsSinceReport ?? 0,
     validationPassedSinceReport: state.validationPassedSinceReport ?? false,
-    // Backfill: sessions persisted before V3.9 §C/§D have neither slot on disk.
-    panelArmed: state.panelArmed ?? false,
+    // Backfill: sessions persisted before V3.9 §C/§D have neither slot on disk. panelArmed backfills to
+    // null (= not explicitly toggled → follows the global default), NOT false.
+    panelArmed: state.panelArmed ?? null,
     activeGoal: state.activeGoal ?? null,
   }
   sessions.set(state.sessionId, normalized)

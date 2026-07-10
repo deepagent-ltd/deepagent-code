@@ -13,28 +13,30 @@ describe("session-state panel arming (§C)", () => {
     SessionState.configure(mkdtempSync(path.join(tmpdir(), "panel-arm-")))
   })
 
-  test("a new session starts disarmed", () => {
+  test("a new session has no explicit choice → follows the global default", () => {
     SessionState.getOrCreate("panel-s1", "high")
-    expect(SessionState.isPanelArmed("panel-s1")).toBe(false)
+    expect(SessionState.panelArmedChoice("panel-s1")).toBeNull()
+    // effective state falls back to the supplied global default (both directions)
+    expect(SessionState.resolvePanelArmed("panel-s1", false)).toBe(false)
+    expect(SessionState.resolvePanelArmed("panel-s1", true)).toBe(true)
   })
 
-  test("seedPanelArmed applies the global default", () => {
+  test("an explicit toggle overrides the global default", () => {
     SessionState.getOrCreate("panel-s2", "high")
-    expect(SessionState.seedPanelArmed("panel-s2", true)).toBe(true)
-    expect(SessionState.isPanelArmed("panel-s2")).toBe(true)
+    SessionState.setPanelArmed("panel-s2", false)
+    // explicit false wins even when the global default is true
+    expect(SessionState.panelArmedChoice("panel-s2")).toBe(false)
+    expect(SessionState.resolvePanelArmed("panel-s2", true)).toBe(false)
+
+    SessionState.setPanelArmed("panel-s2", true)
+    expect(SessionState.resolvePanelArmed("panel-s2", false)).toBe(true)
   })
 
-  test("setPanelArmed overrides the seeded default per conversation", () => {
-    SessionState.getOrCreate("panel-s3", "high")
-    SessionState.seedPanelArmed("panel-s3", true)
-    SessionState.setPanelArmed("panel-s3", false)
-    expect(SessionState.isPanelArmed("panel-s3")).toBe(false)
-  })
-
-  test("arming an unknown session is a no-op, isPanelArmed reads false", () => {
-    expect(SessionState.isPanelArmed("panel-missing")).toBe(false)
+  test("arming an unknown session is a no-op", () => {
+    expect(SessionState.panelArmedChoice("panel-missing")).toBeNull()
     SessionState.setPanelArmed("panel-missing", true) // must not throw / create state
-    expect(SessionState.isPanelArmed("panel-missing")).toBe(false)
+    expect(SessionState.panelArmedChoice("panel-missing")).toBeNull()
+    expect(SessionState.resolvePanelArmed("panel-missing", false)).toBe(false)
   })
 })
 
@@ -99,7 +101,7 @@ describe("session-state active-goal pointer (§D)", () => {
     })
     // getOrCreate on an existing session runs normalizeState — the slots must be preserved.
     SessionState.getOrCreate("goal-s5", "high")
-    expect(SessionState.isPanelArmed("goal-s5")).toBe(true)
+    expect(SessionState.panelArmedChoice("goal-s5")).toBe(true)
     expect(SessionState.getActiveGoal("goal-s5")?.goalId).toBe("goal_x")
   })
 })

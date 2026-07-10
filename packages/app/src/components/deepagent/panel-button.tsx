@@ -1,11 +1,10 @@
-import { Show, createSignal } from "solid-js"
+import { Show, createSignal, createResource } from "solid-js"
 import { Button } from "@deepagent-code/ui/button"
 import { Icon } from "@deepagent-code/ui/icon"
 import { Tooltip } from "@deepagent-code/ui/tooltip"
 import { useDialog } from "@deepagent-code/ui/context/dialog"
 import { useSDK } from "@/context/sdk"
-import { useSettings } from "@/context/settings"
-import { armPanel, consultPanel, type PanelGoalClient } from "./panel-goal.api"
+import { armPanel, consultPanel, fetchPanelStatus, type PanelGoalClient } from "./panel-goal.api"
 import { PanelVerdictDialog } from "./panel-verdict-dialog"
 
 /**
@@ -21,13 +20,20 @@ import { PanelVerdictDialog } from "./panel-verdict-dialog"
  */
 export function PanelButton(props: { sessionID: string }) {
   const sdk = useSDK()
-  const settings = useSettings()
   const dialog = useDialog()
-  // Seed from the global default; per-conversation toggle overrides it locally + server-side.
-  const [armed, setArmed] = createSignal(settings.general.expertPanelDefault())
   const [busy, setBusy] = createSignal(false)
+  const [armedOverride, setArmedOverride] = createSignal<boolean | undefined>(undefined)
 
   const client = () => sdk.client as unknown as PanelGoalClient
+
+  // Seed the armed state from the SERVER's effective status (explicit toggle, else global default),
+  // so the button reflects the server-configured default rather than a client-side guess. A local
+  // override wins once the user toggles this session.
+  const [status] = createResource(
+    () => props.sessionID || undefined,
+    (sessionID) => fetchPanelStatus(client(), sessionID),
+  )
+  const armed = () => armedOverride() ?? status()?.armed ?? false
 
   const consultNow = async () => {
     const verdict = await consultPanel(client(), { sessionID: props.sessionID })
@@ -41,7 +47,7 @@ export function PanelButton(props: { sessionID: string }) {
       if (!armed()) {
         // OFF → ON: arm, then convene once on the current context.
         await armPanel(client(), props.sessionID, true)
-        setArmed(true)
+        setArmedOverride(true)
         await consultNow()
       } else {
         // Already armed: a press re-convenes on demand (stays armed).
@@ -58,7 +64,7 @@ export function PanelButton(props: { sessionID: string }) {
     setBusy(true)
     try {
       await armPanel(client(), props.sessionID, false)
-      setArmed(false)
+      setArmedOverride(false)
     } finally {
       setBusy(false)
     }

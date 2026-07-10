@@ -3,7 +3,7 @@ import path from "node:path"
 import { Global } from "@deepagent-code/core/global"
 import { AgentGateway } from "@deepagent-code/core/agent-gateway"
 import { DocumentStore } from "@deepagent-code/core/deepagent/document-store"
-import type { PlanDoc } from "@deepagent-code/core/deepagent/plan-controller"
+import { createPlanDoc, type PlanDoc } from "@deepagent-code/core/deepagent/plan-controller"
 import type { GoalStatus, GoalLimits, CompletionCriterion } from "@deepagent-code/core/deepagent/goal-loop"
 import { InvalidGoalError } from "@deepagent-code/core/deepagent/goal-loop"
 import { RuntimeFlags } from "../effect/runtime-flags"
@@ -59,6 +59,12 @@ type GoalControl = {
 
 export type StartGoalInput = {
   readonly sessionID: string
+  /**
+   * An optional free-text objective (e.g. from the CLI `/goal <objective>`). When the session has no
+   * plan yet, this seeds a minimal single-step plan so the goal can start; the goal-worker refines it
+   * on the first tick. Ignored when a plan already exists (the existing plan is the goal carrier).
+   */
+  readonly objective?: string
   /** Objective completion criteria (AND). Defaults to plan_complete + no_diagnostics when omitted. */
   readonly criteria?: readonly CompletionCriterion[]
   /** Hard bounds; a goal with no bounds is rejected by the core (InvalidGoalError). */
@@ -169,13 +175,32 @@ export const layer = Layer.effect(
       Effect.gen(function* () {
         const sessionID = input.sessionID
         // The plan the user produced in plan mode lives in in-memory session-state — snapshot it into
-        // the graded store doc. A goal with no plan cannot be decided → the core rejects it at start.
-        const plan = AgentGateway.DeepAgentSessionState.getPlan(sessionID) as PlanDoc | null
+        // the graded store doc (the goal carrier). When there is no plan yet but the caller supplied a
+        // free-text objective (CLI `/goal <objective>`), seed a minimal single-step plan from it so the
+        // goal can start; the goal-worker refines the plan on its first tick. With neither a plan nor an
+        // objective, the core rejects the start (a goal must be objectively decidable).
+        const existing = AgentGateway.DeepAgentSessionState.getPlan(sessionID) as PlanDoc | null
+        const objective = input.objective?.trim()
+        const plan =
+          existing ??
+          (objective
+            ? createPlanDoc(sessionID, objective, [
+                {
+                  step_id: "step_1",
+                  title: objective,
+                  status: "active",
+                  acceptance: null,
+                  assigned_agent: null,
+                  evidence: [],
+                  note: null,
+                },
+              ])
+            : null)
         const store = new DocumentStore(goalStoreRoot(sessionID))
         const planDocId =
           plan != null
             ? GoalDriver.materializePlanDoc({ store, sessionId: sessionID, plan })
-            : GoalDriver.goalPlanScope(sessionID) // no plan → a scope string; startGoal will reject (no doc)
+            : GoalDriver.goalPlanScope(sessionID) // no plan + no objective → startGoal rejects (no doc)
 
         const session = yield* sessions.get(SessionID.make(sessionID)).pipe(Effect.orDie)
         const model = yield* provider.defaultModel().pipe(Effect.orDie)
