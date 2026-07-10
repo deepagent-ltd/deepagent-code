@@ -11,12 +11,50 @@ import { AgentGateway } from "@deepagent-code/core/agent-gateway"
 import { InstanceHttpApi } from "../api"
 import { DeepAgentPromotionError } from "../groups/deepagent"
 import { WorkspaceRouteContext } from "../middleware/workspace-routing"
+import { RuntimeFlags } from "@/effect/runtime-flags"
+import { Session } from "@/session/session"
+import { Agent } from "@/agent/agent"
+import { SessionPrompt } from "@/session/prompt"
+import { Provider } from "@/provider/provider"
+import { GoalManager } from "@/session/goal-manager"
+import { SessionID } from "@/session/schema"
+import { consultPanel } from "@/panel/consult"
+import { makeTaskSubagentRunner } from "@/session/goal-loop-wiring"
+import type { PanelTurnRunner } from "@/panel/panelist-runner"
+import type { PanelVerdict } from "@/agent/schema/panel"
+import type { CompletionCriterion } from "@deepagent-code/core/deepagent/goal-loop"
 
 const dbgLog = Log.create({ service: "deepagent.packs.debug" })
 
 export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagent", (handlers) =>
   Effect.gen(function* () {
     const config = yield* Config.Service
+    // V3.9 §C/§D services — provided by the app runtime the server executes in.
+    const flags = yield* RuntimeFlags.Service
+    const sessions = yield* Session.Service
+    const agents = yield* Agent.Service
+    const sessionPrompt = yield* SessionPrompt.Service
+    const provider = yield* Provider.Service
+    const goals = yield* GoalManager.Service
+
+    // Build a reviewer-subagent turn runner scoped to a session — the panelist seam consultPanel needs.
+    // Reuses makeTaskSubagentRunner (the same child-session + permission-derivation path the goal loop
+    // and the task tool use) and adapts its SubagentTurnResult to the PanelTurnRunner shape.
+    const panelTurnRunnerFor = (sessionID: string): Effect.Effect<PanelTurnRunner> =>
+      Effect.gen(function* () {
+        const model = yield* provider.defaultModel().pipe(Effect.orDie)
+        const runTurn = makeTaskSubagentRunner({
+          sessions,
+          agents,
+          sessionPrompt,
+          parentSessionID: SessionID.make(sessionID),
+          model: { providerID: model.providerID, modelID: model.modelID },
+        })
+        return (turnInput) =>
+          runTurn({ agentType: turnInput.agentType, prompt: turnInput.prompt, outputSchema: turnInput.outputSchema }).pipe(
+            Effect.map((r) => ({ structured: r.structured })),
+          )
+      })
 
     const resolveReviewRunsDir = Effect.fn("DeepAgentHttpApi.resolveReviewRunsDir")(function* () {
       const route = yield* WorkspaceRouteContext
@@ -402,6 +440,98 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
       })
     })
 
+    // ── V3.9 §C Expert Panel ────────────────────────────────────────────────
+    const toVerdictResult = (v: PanelVerdict) => ({
+      decision: v.decision,
+      confidence: v.confidence,
+      rounds: v.rounds,
+      evidence: [...v.evidence],
+      dissent: v.dissent.map((d) => ({
+        lens: d.lens,
+        verdict: d.verdict,
+        confidence: d.confidence,
+        findings: d.findings.map((f) => ({
+          severity: f.severity,
+          category: f.category,
+          file: f.file ?? null,
+          line: f.line ?? null,
+          summary: f.summary,
+          failureScenario: f.failureScenario,
+          confidence: f.confidence,
+        })),
+      })),
+    })
+
+    const panelConsult = Effect.fn("DeepAgentHttpApi.panelConsult")(function* (ctx) {
+      // §C: the panel is independently gated. Flag off ⇒ 400 (never silently run a disabled capability).
+      if (!flags.experimentalExpertPanel)
+        return yield* Effect.fail(new DeepAgentPromotionError({ message: "expert panel is disabled" }))
+      const { sessionID } = ctx.payload
+      const runTurn = yield* panelTurnRunnerFor(sessionID)
+      const verdict = yield* consultPanel(
+        {
+          question:
+            ctx.payload.question ?? "Review the current changes in this conversation for correctness, security, and design.",
+          codeRefs: ctx.payload.codeRefs ? [...ctx.payload.codeRefs] : [],
+          parentSessionID: sessionID,
+          ...(ctx.payload.lenses ? { lenses: [...ctx.payload.lenses] } : {}),
+          ...(ctx.payload.maxRounds != null ? { maxRounds: ctx.payload.maxRounds } : {}),
+          ...(ctx.payload.policy ? { policy: ctx.payload.policy } : {}),
+        },
+        { runTurn },
+      )
+      return toVerdictResult(verdict)
+    })
+
+    const panelArm = Effect.fn("DeepAgentHttpApi.panelArm")(function* (ctx) {
+      const { sessionID, armed } = ctx.payload
+      AgentGateway.DeepAgentSessionState.setPanelArmed(sessionID, armed)
+      return { sessionID, armed: AgentGateway.DeepAgentSessionState.isPanelArmed(sessionID) }
+    })
+
+    // ── V3.9 §D Goal Loop lifecycle ─────────────────────────────────────────
+    const goalStart = Effect.fn("DeepAgentHttpApi.goalStart")(function* (ctx) {
+      if (!flags.experimentalGoalLoop)
+        return yield* Effect.fail(new DeepAgentPromotionError({ message: "goal loop is disabled" }))
+      type CriterionPayload = {
+        kind: CompletionCriterion["kind"]
+        commands?: readonly string[]
+        maxSeverity?: string
+        severityAtMost?: string
+      }
+      const criteria = ctx.payload.criteria?.map(
+        (c: CriterionPayload) =>
+          ({
+            kind: c.kind,
+            ...(c.commands ? { commands: [...c.commands] } : {}),
+            ...(c.maxSeverity != null ? { maxSeverity: c.maxSeverity } : {}),
+            ...(c.severityAtMost != null ? { severityAtMost: c.severityAtMost } : {}),
+          }) as CompletionCriterion,
+      )
+      const snapshot = yield* goals
+        .start({
+          sessionID: ctx.payload.sessionID,
+          ...(criteria ? { criteria } : {}),
+          ...(ctx.payload.limits ? { limits: ctx.payload.limits } : {}),
+          ...(ctx.payload.stallThreshold != null ? { stallThreshold: ctx.payload.stallThreshold } : {}),
+        })
+        .pipe(Effect.mapError((e) => new DeepAgentPromotionError({ message: e.reason })))
+      return snapshot
+    })
+
+    const goalPause = Effect.fn("DeepAgentHttpApi.goalPause")(function* (ctx) {
+      return { ok: yield* goals.pause(ctx.payload.sessionID) }
+    })
+    const goalResume = Effect.fn("DeepAgentHttpApi.goalResume")(function* (ctx) {
+      return { ok: yield* goals.resume(ctx.payload.sessionID) }
+    })
+    const goalStop = Effect.fn("DeepAgentHttpApi.goalStop")(function* (ctx) {
+      return { ok: yield* goals.stop(ctx.payload.sessionID) }
+    })
+    const goalStatus = Effect.fn("DeepAgentHttpApi.goalStatus")(function* (ctx) {
+      return { goal: yield* goals.status(ctx.urlParams.sessionID) }
+    })
+
     return handlers
       .handle("reviews", reviews)
       .handle("promote", promote)
@@ -417,5 +547,12 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
       .handle("envFacts", envFacts)
       .handle("envFactsDecide", envFactsDecide)
       .handle("envFactsModify", envFactsModify)
+      .handle("panelConsult", panelConsult)
+      .handle("panelArm", panelArm)
+      .handle("goalStart", goalStart)
+      .handle("goalPause", goalPause)
+      .handle("goalResume", goalResume)
+      .handle("goalStop", goalStop)
+      .handle("goalStatus", goalStatus)
   }),
 )

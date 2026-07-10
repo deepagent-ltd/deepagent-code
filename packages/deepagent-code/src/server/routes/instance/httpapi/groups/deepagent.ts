@@ -2,7 +2,11 @@ import { Schema } from "effect"
 import { HttpApi, HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/unstable/httpapi"
 import { Authorization } from "../middleware/authorization"
 import { InstanceContextMiddleware } from "../middleware/instance-context"
-import { WorkspaceRoutingMiddleware, WorkspaceRoutingQuery } from "../middleware/workspace-routing"
+import {
+  WorkspaceRoutingMiddleware,
+  WorkspaceRoutingQuery,
+  WorkspaceRoutingQueryFields,
+} from "../middleware/workspace-routing"
 import { described } from "./metadata"
 
 const root = "/deepagent"
@@ -223,6 +227,89 @@ export const DeepAgentEnvFactModifyInput = Schema.Struct({
 })
 export const DeepAgentEnvFactResult = Schema.Struct({ ok: Schema.Boolean, factId: Schema.String })
 
+// ── V3.9 §C Expert Panel + §D Goal Loop ─────────────────────────────────────
+// Panel consult (会诊) is convened on demand for a session; the goal lifecycle drives the autonomous
+// loop. Both are gated by their independent experimental flags server-side (the handler fail-closes).
+
+const PanelLensSchema = Schema.Literals(["correctness", "security", "performance", "architecture", "repro"])
+
+/** POST /deepagent/panel/consult — convene the Expert Panel on the current session context. */
+export const DeepAgentPanelConsultInput = Schema.Struct({
+  sessionID: Schema.String,
+  /** The frozen question. When omitted the handler builds one from the session's recent context. */
+  question: Schema.optional(Schema.String),
+  codeRefs: Schema.optional(Schema.Array(Schema.String)),
+  lenses: Schema.optional(Schema.Array(PanelLensSchema)),
+  maxRounds: Schema.optional(Schema.Number),
+  policy: Schema.optional(Schema.Literals(["default", "security"])),
+})
+
+export const DeepAgentPanelFinding = Schema.Struct({
+  severity: Schema.String,
+  category: Schema.String,
+  file: Schema.optional(Schema.NullOr(Schema.String)),
+  line: Schema.optional(Schema.NullOr(Schema.Number)),
+  summary: Schema.String,
+  failureScenario: Schema.String,
+  confidence: Schema.Number,
+})
+export const DeepAgentPanelDissent = Schema.Struct({
+  lens: Schema.String,
+  verdict: Schema.String,
+  confidence: Schema.Number,
+  findings: Schema.Array(DeepAgentPanelFinding),
+})
+export const DeepAgentPanelVerdict = Schema.Struct({
+  decision: Schema.Literals(["approve", "revise", "block", "needs_human"]),
+  confidence: Schema.Number,
+  rounds: Schema.Number,
+  evidence: Schema.Array(Schema.String),
+  dissent: Schema.Array(DeepAgentPanelDissent),
+})
+
+/** POST /deepagent/panel/arm — set the per-session armed flag (button toggle). */
+export const DeepAgentPanelArmInput = Schema.Struct({
+  sessionID: Schema.String,
+  armed: Schema.Boolean,
+})
+export const DeepAgentPanelArmResult = Schema.Struct({ sessionID: Schema.String, armed: Schema.Boolean })
+
+/** POST /deepagent/goal/start */
+export const DeepAgentGoalStartInput = Schema.Struct({
+  sessionID: Schema.String,
+  criteria: Schema.optional(
+    Schema.Array(
+      Schema.Struct({
+        kind: Schema.Literals(["tests_pass", "no_diagnostics", "reviewer_clean", "panel_approves", "plan_complete"]),
+        commands: Schema.optional(Schema.Array(Schema.String)),
+        maxSeverity: Schema.optional(Schema.String),
+        severityAtMost: Schema.optional(Schema.String),
+      }),
+    ),
+  ),
+  limits: Schema.optional(
+    Schema.Struct({
+      maxTicks: Schema.optional(Schema.Number),
+      maxTokens: Schema.optional(Schema.Number),
+      maxWallclockMs: Schema.optional(Schema.Number),
+      maxCost: Schema.optional(Schema.Number),
+    }),
+  ),
+  stallThreshold: Schema.optional(Schema.Number),
+})
+
+/** Goal lifecycle mutations that only need the session id. */
+export const DeepAgentGoalSessionInput = Schema.Struct({ sessionID: Schema.String })
+
+export const DeepAgentGoalSnapshot = Schema.Struct({
+  goalId: Schema.String,
+  planDocId: Schema.String,
+  phase: Schema.String,
+  running: Schema.Boolean,
+})
+export const DeepAgentGoalStatusResult = Schema.Struct({ goal: Schema.NullOr(DeepAgentGoalSnapshot) })
+export const DeepAgentGoalMutateResult = Schema.Struct({ ok: Schema.Boolean })
+
 export const DeepAgentApi = HttpApi.make("deepagent").add(
   HttpApiGroup.make("deepagent")
     .add(
@@ -398,6 +485,81 @@ export const DeepAgentApi = HttpApi.make("deepagent").add(
             "V3.8.1 §G.5: edit a fact then adopt it. mode=global corrects the shared fact for all projects; mode=project writes a project-local override, leaving the global fact untouched.",
         }),
       ),
+    )
+    .add(
+      HttpApiEndpoint.post("panelConsult", `${root}/panel/consult`, {
+        query: WorkspaceRoutingQuery,
+        payload: DeepAgentPanelConsultInput,
+        success: described(DeepAgentPanelVerdict, "Expert Panel verdict for the convened question"),
+        error: DeepAgentPromotionError,
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "deepagent.panel.consult",
+          summary: "Convene the Expert Panel (会诊)",
+          description:
+            "V3.9 §C: freeze the question, fan out the lens panelists (equal-footing debate), and return the deterministic arbiter verdict. Gated by the expert-panel flag.",
+        }),
+      ),
+    )
+    .add(
+      HttpApiEndpoint.post("panelArm", `${root}/panel/arm`, {
+        query: WorkspaceRoutingQuery,
+        payload: DeepAgentPanelArmInput,
+        success: described(DeepAgentPanelArmResult, "The session's new panel armed state"),
+        error: DeepAgentPromotionError,
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "deepagent.panel.arm",
+          summary: "Arm or disarm the Expert Panel for a session",
+          description: "V3.9 §C: per-conversation toggle for the panel button; seeded from the global default.",
+        }),
+      ),
+    )
+    .add(
+      HttpApiEndpoint.post("goalStart", `${root}/goal/start`, {
+        query: WorkspaceRoutingQuery,
+        payload: DeepAgentGoalStartInput,
+        success: described(DeepAgentGoalSnapshot, "The started goal (goalId + initial phase)"),
+        error: DeepAgentPromotionError,
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "deepagent.goal.start",
+          summary: "Start a Goal Loop from the session's plan",
+          description:
+            "V3.9 §D: materialize the session plan into the graded doc and drive the autonomous loop as a resident background task. Gated by the goal-loop flag.",
+        }),
+      ),
+    )
+    .add(
+      HttpApiEndpoint.post("goalPause", `${root}/goal/pause`, {
+        query: WorkspaceRoutingQuery,
+        payload: DeepAgentGoalSessionInput,
+        success: described(DeepAgentGoalMutateResult, "Whether the goal was paused"),
+        error: DeepAgentPromotionError,
+      }),
+    )
+    .add(
+      HttpApiEndpoint.post("goalResume", `${root}/goal/resume`, {
+        query: WorkspaceRoutingQuery,
+        payload: DeepAgentGoalSessionInput,
+        success: described(DeepAgentGoalMutateResult, "Whether the goal was resumed"),
+        error: DeepAgentPromotionError,
+      }),
+    )
+    .add(
+      HttpApiEndpoint.post("goalStop", `${root}/goal/stop`, {
+        query: WorkspaceRoutingQuery,
+        payload: DeepAgentGoalSessionInput,
+        success: described(DeepAgentGoalMutateResult, "Whether the goal was stopped"),
+        error: DeepAgentPromotionError,
+      }),
+    )
+    .add(
+      HttpApiEndpoint.get("goalStatus", `${root}/goal/status`, {
+        query: Schema.Struct({ ...WorkspaceRoutingQueryFields, sessionID: Schema.String }),
+        success: described(DeepAgentGoalStatusResult, "The active goal for the session, or null"),
+        error: DeepAgentPromotionError,
+      }),
     )
     .annotateMerge(OpenApi.annotations({ title: "deepagent", description: "DeepAgent setup routes." }))
     .middleware(InstanceContextMiddleware)
