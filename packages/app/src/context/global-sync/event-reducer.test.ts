@@ -3,7 +3,7 @@ import type { Message, Part, PermissionRequest, Project, QuestionRequest, Sessio
 import { createRoot } from "solid-js"
 import { isServer } from "solid-js/web"
 import { createStore, reconcile, unwrap } from "solid-js/store"
-import type { SessionPlan, State } from "./types"
+import type { SessionGoal, SessionPlan, State } from "./types"
 import { applyDirectoryEvent, applyGlobalEvent, cleanupDroppedSessionCaches } from "./event-reducer"
 
 const rootSession = (input: { id: string; parentID?: string; archived?: number }) =>
@@ -748,3 +748,57 @@ describe("plan.updated reconcile (session_plan)", () => {
 // the plan system: the backend no longer emits `todo.updated` (both todowrite tool writers were
 // removed) and the reducer no longer handles it. The plan panel's live-update coverage lives in the
 // `plan.updated reconcile (session_plan)` describe block below.
+
+// V3.9 §D: the goal.updated event feeds the live Goal status bar via a session_goal store (analogous
+// to session_plan). Verifies the reducer routes the payload to setSessionGoal and that consecutive
+// ticks advance the phase + ledger.
+describe("goal.updated reducer (session_goal)", () => {
+  const goalEvent = (sessionID: string, phase: string, tokens: number) => ({
+    type: "goal.updated",
+    properties: {
+      sessionID,
+      goalId: "goal_1",
+      planDocId: "plan_1",
+      phase,
+      ledger: { ticks: tokens / 10, tokens, cost: 0, wallclockMs: 1000 },
+      stallCount: 0,
+      gaps: phase === "needs_human" ? ["reviewer_clean unmet"] : [],
+    },
+  })
+
+  const dispatch = (setSessionGoal: (sid: string, g: SessionGoal | undefined) => void, event: unknown) => {
+    const [store, setStore] = createStore(baseState())
+    applyDirectoryEvent({
+      event: event as never,
+      store,
+      setStore,
+      push() {},
+      directory: "/tmp",
+      loadLsp() {},
+      setSessionGoal,
+    })
+  }
+
+  test("routes goal.updated to setSessionGoal and advances phase + ledger", () => {
+    createRoot((dispose) => {
+      const [goalStore, setGoalStore] = createStore<{ g: Record<string, SessionGoal> }>({ g: {} })
+      const setSessionGoal = (sid: string, goal: SessionGoal | undefined) => {
+        if (!goal) return
+        setGoalStore("g", sid, reconcile(goal) as never)
+      }
+
+      dispatch(setSessionGoal, goalEvent("ses_1", "running", 10))
+      expect(goalStore.g.ses_1.phase).toBe("running")
+      expect(goalStore.g.ses_1.ledger.tokens).toBe(10)
+
+      dispatch(setSessionGoal, goalEvent("ses_1", "running", 120))
+      expect(goalStore.g.ses_1.ledger.tokens).toBe(120)
+
+      dispatch(setSessionGoal, goalEvent("ses_1", "needs_human", 200))
+      expect(goalStore.g.ses_1.phase).toBe("needs_human")
+      expect(goalStore.g.ses_1.gaps).toEqual(["reviewer_clean unmet"])
+
+      dispose()
+    })
+  })
+})
