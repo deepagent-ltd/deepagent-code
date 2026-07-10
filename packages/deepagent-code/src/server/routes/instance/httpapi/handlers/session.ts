@@ -16,10 +16,11 @@ import { SessionSummary } from "@/session/summary"
 import { Todo } from "@/session/todo"
 import { MessageID, PartID, SessionID } from "@/session/schema"
 import { NamedError } from "@deepagent-code/core/util/error"
-import { Cause, Effect, Option, Schema, Scope } from "effect"
+import { Cause, Effect, Option, Queue, Schema, Scope } from "effect"
 import * as Stream from "effect/Stream"
 import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
 import { HttpApiBuilder, HttpApiError, HttpApiSchema } from "effect/unstable/httpapi"
+import * as Sse from "effect/unstable/encoding/Sse"
 import { InstanceHttpApi } from "../api"
 import {
   CommandPayload,
@@ -49,6 +50,16 @@ type PromptPreparePart = (typeof SessionPrompt.PromptInput.Type)["parts"][number
 
 const promptText = (parts: readonly PromptPreparePart[]) =>
   parts.map((part) => (part.type === "text" ? part.text : "")).join("")
+
+const promptPrepareEvent = (data: unknown): Sse.Event => ({
+  _tag: "Event",
+  event: "message",
+  id: undefined,
+  data: JSON.stringify(data),
+})
+
+const isPromptPrepareTerminal = (event: unknown) =>
+  typeof event === "object" && event !== null && "type" in event && (event.type === "result" || event.type === "error")
 
 export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", (handlers) =>
   Effect.gen(function* () {
@@ -314,18 +325,19 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       })
     })
 
-    const promptPrepare = Effect.fn("SessionHttpApi.promptPrepare")(function* (ctx: {
-      params: { sessionID: SessionID }
-      payload: typeof PromptPreparePayload.Type
+    const preparePromptDraft = Effect.fn("SessionHttpApi.preparePromptDraft")(function* (input: {
+      ctx: { params: { sessionID: SessionID }; payload: typeof PromptPreparePayload.Type }
+      onProgress?: (preview: string) => void
     }) {
-      yield* requireSession(ctx.params.sessionID)
-      const rawInput = promptText(ctx.payload.parts)
+      yield* requireSession(input.ctx.params.sessionID)
+      const rawInput = promptText(input.ctx.payload.parts)
       if (!rawInput.trim()) return yield* new HttpApiError.BadRequest({})
       return yield* promptSvc
         .refineIntelligenceDraft({
-          sessionID: ctx.params.sessionID,
+          sessionID: input.ctx.params.sessionID,
           rawInput,
-          outputLanguage: ctx.payload.output_language ?? "english",
+          outputLanguage: input.ctx.payload.output_language ?? "english",
+          onProgress: input.onProgress,
         })
         .pipe(
           // Fail soft: refinement is an enhancement, not a gate. If the model can't produce a
@@ -340,7 +352,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
           Effect.catch((error: unknown) =>
             Effect.logWarning("intelligence prompt prepare degraded to direct").pipe(
               Effect.annotateLogs({
-                sessionID: ctx.params.sessionID,
+                sessionID: input.ctx.params.sessionID,
                 reason: error instanceof Error ? error.message : String(error),
               }),
               Effect.as({
@@ -355,6 +367,47 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
             ),
           ),
         )
+    })
+
+    const promptPrepare = Effect.fn("SessionHttpApi.promptPrepare")(function* (ctx: {
+      params: { sessionID: SessionID }
+      payload: typeof PromptPreparePayload.Type
+    }) {
+      return yield* preparePromptDraft({ ctx })
+    })
+
+    const promptPrepareStream = Effect.fn("SessionHttpApi.promptPrepareStream")(function* (ctx: {
+      params: { sessionID: SessionID }
+      payload: typeof PromptPreparePayload.Type
+    }) {
+      const queue = yield* Queue.unbounded<unknown>()
+      yield* preparePromptDraft({
+        ctx,
+        onProgress: (preview) => Queue.offerUnsafe(queue, { type: "progress", preview }),
+      }).pipe(
+        Effect.tap((result) => Effect.sync(() => Queue.offerUnsafe(queue, { type: "result", result }))),
+        Effect.catchCause((cause) =>
+          Effect.sync(() => Queue.offerUnsafe(queue, { type: "error", message: Cause.pretty(cause) })),
+        ),
+        Effect.forkScoped({ startImmediately: true }),
+      )
+      return HttpServerResponse.stream(
+        Stream.fromQueue(queue).pipe(
+          Stream.takeUntil(isPromptPrepareTerminal),
+          Stream.map(promptPrepareEvent),
+          Stream.pipeThroughChannel(Sse.encode()),
+          Stream.encodeText,
+          Stream.ensuring(Queue.shutdown(queue)),
+        ),
+        {
+          contentType: "text/event-stream",
+          headers: {
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+            "X-Content-Type-Options": "nosniff",
+          },
+        },
+      )
     })
 
     const promptSuggestion = Effect.fn("SessionHttpApi.promptSuggestion")(function* (ctx: {
@@ -489,6 +542,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       .handle("summarize", summarize)
       .handle("prompt", prompt)
       .handle("promptPrepare", promptPrepare)
+      .handle("promptPrepareStream", promptPrepareStream)
       .handle("promptSuggestion", promptSuggestion)
       .handle("promptAsync", promptAsync)
       .handle("command", command)

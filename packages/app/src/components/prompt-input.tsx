@@ -258,6 +258,12 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     })
   }
 
+  const updateDraftPrepare = (preview: string) => {
+    if (!draftPreparing() || !preview) return
+    prompt.set(makeTextPrompt(preview), preview.length)
+    queueScroll()
+  }
+
   const activeFileTab = createSessionTabs({
     tabs,
     pathFromTab: files.pathFromTab,
@@ -389,7 +395,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
       .join("")
     return text.trim().length === 0 && imageAttachments().length === 0 && commentCount() === 0
   })
-  const stopping = createMemo(() => working() && blank())
+  const stopping = createMemo(() => draftPreparing() || (working() && blank()))
   const tip = () => {
     if (stopping()) {
       return (
@@ -1277,6 +1283,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     onAbort: props.onAbort,
     onSubmit: props.onSubmit,
     onPromptPrepareStart: startDraftPrepare,
+    onPromptPrepareProgress: updateDraftPrepare,
     onPromptPrepareEnd: stopDraftPrepare,
     confirmPromptDraft,
   })
@@ -1287,7 +1294,12 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
       event.preventDefault()
       return
     }
-    if (draftPreparing() || composing()) {
+    if (draftPreparing()) {
+      event.preventDefault()
+      void abort()
+      return
+    }
+    if (composing()) {
       event.preventDefault()
       return
     }
@@ -1301,6 +1313,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
 
   const handleKeyDown = (event: KeyboardEvent) => {
     if (draftPreparing()) {
+      if (event.key === "Escape" || (event.ctrlKey && event.code === "KeyG")) void abort()
       event.preventDefault()
       event.stopPropagation()
       return
@@ -1797,11 +1810,11 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
 
             <div class="flex items-center gap-1 pointer-events-auto">
               <ScenarioToggle />
-              <Tooltip placement="top" inactive={!working() && blank()} value={tip()}>
+              <Tooltip placement="top" inactive={!draftPreparing() && !working() && blank()} value={tip()}>
                 <IconButton
                   data-action="prompt-submit"
                   type="submit"
-                  disabled={subagentFinished() || draftPreparing() || (!working() && blank())}
+                  disabled={subagentFinished() || (!draftPreparing() && !working() && blank())}
                   tabIndex={store.mode === "normal" ? undefined : -1}
                   icon={stopping() ? "stop" : store.mode === "shell" ? "arrow-undo-down" : "arrow-up"}
                   variant="primary"
