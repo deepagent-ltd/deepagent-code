@@ -155,6 +155,14 @@ export function Prompt(props: PromptProps) {
   const terminalEnvironment = useTuiTerminalEnvironment()
   const clipboard = useClipboard()
   const sdk = useSDK()
+  // V3.9 §C/§D: raw-path request escape hatch for the /panel and /goal slash commands. These routes
+  // (/deepagent/panel/*, /deepagent/goal/*) are served by path and are NOT in the typed generated SDK,
+  // so we reach the low-level HTTP client (sdk.client.client) that exposes request(). Cast is scoped
+  // to this helper.
+  const rawRequest = <T,>(options: { method: string; url: string; body?: unknown; headers?: Record<string, string> }) =>
+    (sdk.client as unknown as { client: { request<D>(o: typeof options): Promise<{ data?: D }> } }).client.request<T>(
+      options,
+    )
   const editor = useEditorContext()
   const route = useRoute()
   const project = useProject()
@@ -541,6 +549,75 @@ export function Prompt(props: PromptProps) {
         slashName: "warp",
         run: () => {
           workspace.open()
+        },
+      },
+      {
+        title: "Expert panel",
+        desc: "Convene the expert panel (会诊) on the current conversation",
+        name: "deepagent.panel",
+        category: "Session",
+        slashName: "panel",
+        enabled: Flag.DEEPAGENT_CODE_EXPERIMENTAL_EXPERT_PANEL,
+        run: async () => {
+          const sessionID = props.sessionID
+          if (!sessionID) return
+          toast.show({ variant: "info", message: "Convening expert panel…", duration: 3000 })
+          try {
+            const res = await rawRequest<{ decision: string; confidence: number; rounds: number }>({
+              method: "POST",
+              url: "/deepagent/panel/consult",
+              body: { sessionID },
+              headers: { "Content-Type": "application/json" },
+            })
+            const v = res.data
+            toast.show({
+              variant: v?.decision === "block" ? "warning" : "success",
+              message: v ? `Panel verdict: ${v.decision} (${Math.round(v.confidence * 100)}%, ${v.rounds}r)` : "Panel returned no verdict",
+              duration: 6000,
+            })
+          } catch {
+            toast.show({ variant: "warning", message: "Expert panel failed", duration: 3000 })
+          }
+        },
+      },
+      {
+        title: "Start goal",
+        desc: "Drive the current plan to completion as an autonomous goal",
+        name: "deepagent.goal",
+        category: "Session",
+        slashName: "goal",
+        enabled: Flag.DEEPAGENT_CODE_EXPERIMENTAL_GOAL_LOOP,
+        run: async () => {
+          const sessionID = props.sessionID
+          if (!sessionID) return
+          // `/goal <objective>` — the text after the command word is the objective. When present it
+          // seeds a plan server-side (used when the session has no plan yet); otherwise the goal loop
+          // drives the session's existing plan.
+          const objective = store.prompt.input.replace(/^\/goal\b\s*/, "").trim()
+          try {
+            const res = await rawRequest<{ goalId: string; phase: string }>({
+              method: "POST",
+              url: "/deepagent/goal/start",
+              body: { sessionID, ...(objective ? { objective } : {}) },
+              headers: { "Content-Type": "application/json" },
+            })
+            // Clear the composer once the objective has been consumed by the goal.
+            if (objective) {
+              input.setText("")
+              setStore("prompt", { input: "", parts: [] })
+            }
+            toast.show({
+              variant: "success",
+              message: res.data ? `Goal started (${res.data.phase})` : "Goal started",
+              duration: 4000,
+            })
+          } catch {
+            toast.show({
+              variant: "warning",
+              message: "Could not start goal — describe an objective (/goal ...) or make a plan first",
+              duration: 4000,
+            })
+          }
         },
       },
       {

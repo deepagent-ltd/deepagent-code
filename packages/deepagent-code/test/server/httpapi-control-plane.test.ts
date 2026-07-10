@@ -11,6 +11,7 @@ import { Config } from "../../src/config/config"
 import { Database } from "@deepagent-code/core/database/database"
 import { Installation } from "../../src/installation"
 import { ServerAuth } from "../../src/server/auth"
+import { RuntimeFlags } from "../../src/effect/runtime-flags"
 import { RootHttpApi } from "../../src/server/routes/instance/httpapi/api"
 import { controlHandlers } from "../../src/server/routes/instance/httpapi/handlers/control"
 import { controlPlaneHandlers } from "../../src/server/routes/instance/httpapi/handlers/control-plane"
@@ -47,6 +48,7 @@ const apiLayer = HttpRouter.serve(
   ),
   Layer.provide(ServerAuth.Config.layer({ password: Option.none(), username: "deepagent-code" })),
   Layer.provide(Database.layerFromPath(":memory:")),
+  Layer.provide(RuntimeFlags.layer({})),
 )
 const it = testEffect(apiLayer)
 
