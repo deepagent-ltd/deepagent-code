@@ -31,6 +31,7 @@ const GlobalCapabilities = Schema.Struct({
     // V3.9 §C/§D — independently-gated experimental subsystems the client gates UI on.
     expertPanel: Schema.Boolean,
     goalLoop: Schema.Boolean,
+    wiki: Schema.Boolean,
   }),
 })
 
