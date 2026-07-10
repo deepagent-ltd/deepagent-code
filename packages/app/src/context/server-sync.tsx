@@ -44,22 +44,11 @@ import { ServerConnection, useServer } from "./server"
 import { retry } from "@deepagent-code/core/util/retry"
 import type { ServerScope } from "@/utils/server-scope"
 import { persisted } from "@/utils/persist"
+import { isFilesystemRootDir } from "@/utils/filesystem-root"
 import { toggleMcp } from "./global-sync/mcp"
-import type { SessionPlan, SessionPlanStep } from "./global-sync/types"
+import type { SessionPlan, SessionPlanStep, SessionGoal } from "./global-sync/types"
 
-export type { SessionPlan, SessionPlanStep }
-
-// True when `dir` is a filesystem root: posix "/" or a Windows drive/UNC root ("C:\", "C:/", "\\").
-// Rooting an instance here is refused server-side (assertSafeInstanceRoot); we check on the client
-// too so we never fire the doomed boot. Kept dependency-free (no node:path in the renderer).
-function isFilesystemRootDir(dir: string): boolean {
-  const trimmed = dir.trim()
-  if (!trimmed) return false
-  const normalized = trimmed.replace(/\\/g, "/").replace(/\/+$/, "")
-  if (normalized === "") return true // was "/" or "\" (all separators)
-  if (/^[A-Za-z]:$/.test(normalized)) return true // "C:" (drive root after trailing-slash strip)
-  return false
-}
+export type { SessionPlan, SessionPlanStep, SessionGoal }
 
 type GlobalStore = {
   ready: boolean
@@ -71,6 +60,11 @@ type GlobalStore = {
   // the legacy `session_todo` cache was removed when task tracking unified onto the plan system.
   session_plan: {
     [sessionID: string]: SessionPlan
+  }
+  // V3.9 §D: the live Goal Loop status per session, pushed by the goal.updated event. Persistent like
+  // session_plan so the status bar survives the session going idle between background ticks.
+  session_goal: {
+    [sessionID: string]: SessionGoal
   }
   provider: NormalizedProviderListResponse
   provider_auth: ProviderAuthResponse
@@ -145,6 +139,7 @@ export function createServerSyncContextInner(_serverSDK?: ServerSDK) {
     },
     project: [],
     session_plan: {},
+    session_goal: {},
     provider_auth: {},
     get path() {
       const EMPTY: Path = {
@@ -270,11 +265,28 @@ export function createServerSyncContextInner(_serverSDK?: ServerSDK) {
     setGlobalStore("session_plan", sessionID, reconcile(plan, { key: "step_id" }))
   }
 
+  // V3.9 §D: set/clear the live goal status for a session (mirrors setSessionPlan). The goal object is
+  // a single record per session; reconcile keeps field-level updates minimal-diff.
+  const setSessionGoal = (sessionID: string, goal: SessionGoal | undefined) => {
+    if (!sessionID) return
+    if (!goal) {
+      setGlobalStore(
+        "session_goal",
+        produce((draft) => {
+          delete draft[sessionID]
+        }),
+      )
+      return
+    }
+    setGlobalStore("session_goal", sessionID, reconcile(goal))
+  }
+
   const paused = () => untrack(() => globalStore.reload) !== undefined
 
   const queue = createRefreshQueue({
     paused,
     key: directoryKey,
+    accept: (directory) => !isFilesystemRootDir(directory),
     bootstrap: () => queryClient.fetchQuery({ queryKey: [serverSDK.scope, "bootstrap"] }),
     bootstrapInstance,
   })
@@ -400,18 +412,8 @@ export function createServerSyncContextInner(_serverSDK?: ServerSDK) {
   async function bootstrapInstance(directory: string) {
     const key = directoryKey(directory)
     if (!key) return
-    // Fail-closed against a filesystem-root directory. The server refuses to boot an instance
-    // rooted at "/" (assertSafeInstanceRoot — it would make the file-tool permission boundary the
-    // whole disk), so a stored session/route pointing at "/" would otherwise trigger an endless
-    // boot→fail→retry storm surfacing only as "unexpected server error". Mirror the guard here so
-    // the doomed request is never sent and the user gets a clear reason instead. Legacy "/" data
-    // (pre-guard) is the only way to reach this now that the boot path rejects it.
     if (isFilesystemRootDir(directory)) {
-      showToast({
-        variant: "error",
-        title: language.t("toast.project.rootRefused.title"),
-        description: language.t("toast.project.rootRefused.description"),
-      })
+      children.disposeDirectory(key)
       return
     }
     const pending = booting.get(key)
@@ -487,6 +489,7 @@ export function createServerSyncContextInner(_serverSDK?: ServerSDK) {
       setStore,
       push: queue.push,
       setSessionPlan,
+      setSessionGoal,
       retainedLimit: sessionMeta.get(key)?.limit,
       vcsCache: children.vcsCache.get(key),
       loadLsp: () => {
@@ -636,6 +639,9 @@ export function createServerSyncContextInner(_serverSDK?: ServerSDK) {
     project: projectApi,
     plan: {
       set: setSessionPlan,
+    },
+    goal: {
+      set: setSessionGoal,
     },
     mcp: {
       toggle: async (directory: string, name: string) => {

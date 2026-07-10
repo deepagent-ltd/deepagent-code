@@ -246,4 +246,66 @@ describe("MoveSession", () => {
       expect(yield* Effect.promise(() => fs.readFile(path.join(source, "untracked.txt"), "utf8"))).toBe("unrelated\n")
     }),
   )
+
+  it.live("recovers a filesystem-root conversation tree without moving unrelated root sessions", () =>
+    Effect.gen(function* () {
+      const root = yield* Effect.acquireRelease(
+        Effect.promise(() => tmpdir()),
+        (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
+      )
+      const destination = abs(path.join(root.path, "workspaces", "recovered"))
+      yield* Effect.promise(() => fs.mkdir(destination, { recursive: true }))
+      const projectID = Project.ID.global
+      const parent = SessionV2.ID.make("ses_root_parent")
+      const child = SessionV2.ID.make("ses_root_child")
+      const sibling = SessionV2.ID.make("ses_root_sibling")
+      const unrelated = SessionV2.ID.make("ses_root_unrelated")
+      const { db } = yield* Database.Service
+      yield* db
+        .insert(ProjectTable)
+        .values({ id: projectID, worktree: abs("/"), sandboxes: [], time_created: 1, time_updated: 1 })
+        .onConflictDoNothing()
+        .run()
+        .pipe(Effect.orDie)
+      yield* db
+        .insert(SessionTable)
+        .values(
+          [
+            { id: parent, parent_id: null, title: "parent" },
+            { id: child, parent_id: parent, title: "child" },
+            { id: sibling, parent_id: parent, title: "sibling" },
+            { id: unrelated, parent_id: null, title: "unrelated" },
+          ].map((session) => ({
+            ...session,
+            project_id: projectID,
+            slug: session.id,
+            directory: abs("/"),
+            version: "test",
+            time_created: 1,
+            time_updated: 1,
+          })),
+        )
+        .run()
+        .pipe(Effect.orDie)
+
+      yield* MoveSession.Service.use((service) =>
+        service.moveSession({ sessionID: child, destination: { directory: destination } }),
+      )
+
+      expect(
+        yield* db
+          .select({ id: SessionTable.id, directory: SessionTable.directory })
+          .from(SessionTable)
+          .where(eq(SessionTable.project_id, projectID))
+          .all(),
+      ).toEqual(
+        expect.arrayContaining([
+          { id: parent, directory: destination },
+          { id: child, directory: destination },
+          { id: sibling, directory: destination },
+          { id: unrelated, directory: abs("/") },
+        ]),
+      )
+    }),
+  )
 })

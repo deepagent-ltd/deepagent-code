@@ -2,7 +2,7 @@
   "ref_id": "failure:mcp:tool-with-broad-shell",
   "type": "failure_dossier",
   "description": "A tool with unconstrained shell access can bypass runtime intent.",
-  "body": "Constrain commands and approvals.\n\nDerived from local skill survey outputs under /Users/xiuranli/code/agent/skill, especially reviewed canonical rules, coverage reports, and trusted local skill notes. Paraphrased into domain-pack seed form.\n\nDiagnostic use only: keep this out of index.json and use it only as a blocked/do-not-use signal.",
+  "body": "Constrain commands and approvals.\n\nDerived from reviewed skill survey outputs, including canonical rules, coverage reports, and trusted skill notes. Paraphrased into domain-pack seed form.\n\nDiagnostic use only: keep this out of index.json and use it only as a blocked/do-not-use signal.",
   "domain": "mcp",
   "scope_hint": "code.mcp:failure_dossiers",
   "evidence_strength": "medium",

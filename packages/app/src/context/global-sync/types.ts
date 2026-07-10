@@ -49,6 +49,19 @@ export type SessionPlan = {
   total: number
 }
 
+// V3.9 §D: live Goal Loop status mirrored from the backend goal.updated event. Declared here (not in
+// server-sync) so both the reducer and the sync context import it without a cycle. Mirrors the
+// GoalManager snapshot + budget ledger the status bar renders.
+export type SessionGoal = {
+  goalId: string
+  planDocId: string
+  // running | paused | done | needs_human | rolled_back | stopped
+  phase: string
+  ledger: { ticks: number; tokens: number; cost: number; wallclockMs: number }
+  stallCount: number
+  gaps: string[]
+}
+
 export type State = {
   status: "loading" | "partial" | "complete"
   agent: Agent[]

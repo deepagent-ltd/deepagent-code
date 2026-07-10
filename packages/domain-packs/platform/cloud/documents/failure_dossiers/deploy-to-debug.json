@@ -2,7 +2,7 @@
   "ref_id": "failure:cloud:deploy-to-debug",
   "type": "failure_dossier",
   "description": "Deploying repeatedly without classifying cloud failure burns cost and risk.",
-  "body": "Collect diagnostic evidence first.\n\nDerived from local skill survey outputs under /Users/xiuranli/code/agent/skill, especially reviewed canonical rules, coverage reports, and trusted local skill notes. Paraphrased into domain-pack seed form.\n\nDiagnostic use only: keep this out of index.json and use it only as a blocked/do-not-use signal.",
+  "body": "Collect diagnostic evidence first.\n\nDerived from reviewed skill survey outputs, including canonical rules, coverage reports, and trusted skill notes. Paraphrased into domain-pack seed form.\n\nDiagnostic use only: keep this out of index.json and use it only as a blocked/do-not-use signal.",
   "domain": "cloud",
   "scope_hint": "platform.cloud:failure_dossiers",
   "evidence_strength": "medium",
