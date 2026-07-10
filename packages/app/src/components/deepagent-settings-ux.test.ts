@@ -35,9 +35,11 @@ describe("DeepAgent settings UX", () => {
     // …it is a composer control next to the agent selector, backed by directory-level auto-accept.
     expect(composer).toContain("ApprovalControl")
     expect(control).toContain('"data-action": "prompt-approval"')
-    expect(control).toContain("toggleAutoAcceptDirectory")
+    // Tri-state Read-Only / Request / Full-Access selector backed by the permission context.
+    expect(control).toContain("setDirectoryApprovalMode")
     expect(control).toContain("composer.approval.request")
-    expect(control).toContain("composer.approval.auto")
+    expect(control).toContain("composer.approval.readOnly")
+    expect(control).toContain("composer.approval.fullAccess")
   })
 
   test("routes the legacy settings dialog import to the unified settings page", async () => {

@@ -173,6 +173,10 @@ export type ReviewItem = {
   readonly evidence_strength: import("./document-store").EvidenceStrength
   readonly evidence_refs: readonly string[]
   readonly approval_status: "pending" | "approved" | "rejected"
+  // The doc's storage scope, so the Review UI can group by project vs global:
+  //   "durable" (or legacy untagged)  → user-global bucket
+  //   "durable:project:<project_id>"  → that project's bucket
+  readonly scope: string
 }
 
 // A built-in seeded pack doc carries a pack id (extensions.pack_id or a "pack:" tag). These are the
@@ -209,6 +213,7 @@ export const listByStatusForWorkspace = (
         evidence_strength: doc.confidence?.evidence_strength ?? "none",
         evidence_refs: doc.provenance.evidence_refs ?? [],
         approval_status: statusToApproval(doc.status),
+        scope: doc.scope,
       })
     }
   }

@@ -176,6 +176,10 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
           const asReviewType = (t: string): ReviewType =>
             REVIEW_TYPES.includes(t as ReviewType) ? (t as ReviewType) : "knowledge"
           const items = [...AgentGateway.DeepAgentKnowledgeSource.listAllForWorkspace(dir)]
+            // Skills are agent-executable procedures, not human-readable facts — the governance UI
+            // only surfaces learned facts (knowledge/memory/strategy/methodology/failure_dossier).
+            // (Domain-pack seed docs are already excluded upstream by knowledge-source.)
+            .filter((e) => e.type !== "skill")
             .map((e) => ({
               id: e.id,
               type: asReviewType(e.type),
@@ -183,6 +187,7 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
               evidence_strength: e.evidence_strength,
               evidence_refs: e.evidence_refs,
               approval_status: e.approval_status,
+              scope: e.scope,
             }))
             .sort((a, b) => a.id.localeCompare(b.id))
           return { items }
@@ -501,7 +506,7 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
     })
 
     const panelStatus = Effect.fn("DeepAgentHttpApi.panelStatus")(function* (ctx) {
-      const sessionID = ctx.urlParams.sessionID
+      const sessionID = ctx.query.sessionID
       const globalDefault = yield* expertPanelDefault()
       const choice = AgentGateway.DeepAgentSessionState.panelArmedChoice(sessionID)
       return {
@@ -552,7 +557,7 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
       return { ok: yield* goals.stop(ctx.payload.sessionID) }
     })
     const goalStatus = Effect.fn("DeepAgentHttpApi.goalStatus")(function* (ctx) {
-      return { goal: yield* goals.status(ctx.urlParams.sessionID) }
+      return { goal: yield* goals.status(ctx.query.sessionID) }
     })
 
     // ── V3.9 §B Repo & Wiki ─────────────────────────────────────────────────
@@ -593,7 +598,7 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
     const wikiPages = Effect.fn("DeepAgentHttpApi.wikiPages")(function* (ctx) {
       yield* requireWiki()
       const workspacePath = yield* workspaceDir()
-      const typeFilter = ctx.urlParams.type
+      const typeFilter = ctx.query.type
       const graph = openWikiGraph({ workspacePath })
       const pages = graph
         .allDocs()
@@ -614,7 +619,7 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
       const workspacePath = yield* workspaceDir()
       const service = openWikiService({ workspacePath })
       const page = yield* service
-        .renderPage({ docId: ctx.urlParams.docId, scope: ctx.urlParams.scope })
+        .renderPage({ docId: ctx.query.docId, scope: ctx.query.scope })
         .pipe(Effect.mapError((e) => new DeepAgentPromotionError({ message: e.reason ?? "page not found" })))
       return toWikiPageResult(page)
     })
@@ -627,9 +632,9 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
       // query, then close the sqlite handle. Both are default-safe (never fail).
       yield* index.rebuild()
       const hits = yield* index.search({
-        text: ctx.urlParams.text,
-        ...(ctx.urlParams.type ? { type: ctx.urlParams.type as WikiPage["type"] } : {}),
-        ...(ctx.urlParams.scope ? { scope: ctx.urlParams.scope } : {}),
+        text: ctx.query.text,
+        ...(ctx.query.type ? { type: ctx.query.type as WikiPage["type"] } : {}),
+        ...(ctx.query.scope ? { scope: ctx.query.scope } : {}),
       })
       index.close()
       return { hits: hits.map((h) => ({ docId: h.docId, type: h.type, scope: h.scope, title: h.title, score: h.score })) }

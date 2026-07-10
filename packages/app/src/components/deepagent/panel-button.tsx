@@ -4,6 +4,7 @@ import { Icon } from "@deepagent-code/ui/icon"
 import { Tooltip } from "@deepagent-code/ui/tooltip"
 import { useDialog } from "@deepagent-code/ui/context/dialog"
 import { useSDK } from "@/context/sdk"
+import { useLanguage } from "@/context/language"
 import { armPanel, consultPanel, fetchPanelStatus, type PanelGoalClient } from "./panel-goal.api"
 import { PanelVerdictDialog } from "./panel-verdict-dialog"
 
@@ -21,6 +22,7 @@ import { PanelVerdictDialog } from "./panel-verdict-dialog"
 export function PanelButton(props: { sessionID: string }) {
   const sdk = useSDK()
   const dialog = useDialog()
+  const language = useLanguage()
   const [busy, setBusy] = createSignal(false)
   const [armedOverride, setArmedOverride] = createSignal<boolean | undefined>(undefined)
 
@@ -71,7 +73,11 @@ export function PanelButton(props: { sessionID: string }) {
   }
 
   return (
-    <Tooltip placement="top" gutter={4} value={armed() ? "Expert panel armed — click to consult now" : "Convene expert panel"}>
+    <Tooltip
+      placement="top"
+      gutter={4}
+      value={armed() ? language.t("composer.panel.armed") : language.t("composer.panel.convene")}
+    >
       <div class="flex items-center" data-component="prompt-panel-control">
         <Button
           data-action="prompt-panel"
@@ -82,10 +88,10 @@ export function PanelButton(props: { sessionID: string }) {
           disabled={busy() || !props.sessionID}
           onClick={onClick}
           aria-pressed={armed()}
-          aria-label="Expert panel"
+          aria-label={language.t("composer.panel.label")}
         >
           <Icon name="speech-bubble" class="size-4" />
-          <span>Panel</span>
+          <span>{language.t("composer.panel.label")}</span>
         </Button>
         <Show when={armed()}>
           <Button
@@ -94,7 +100,7 @@ export function PanelButton(props: { sessionID: string }) {
             class="size-6 p-0"
             disabled={busy()}
             onClick={onDisarm}
-            aria-label="Disarm expert panel"
+            aria-label={language.t("composer.panel.disarm")}
           >
             <Icon name="close-small" class="size-3.5" />
           </Button>
