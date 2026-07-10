@@ -619,6 +619,12 @@ export const dict = {
   "settings.general.section.updates": "การอัปเดต",
   "settings.general.section.sounds": "เสียงเอฟเฟกต์",
   "settings.general.section.feed": "ฟีด",
+  "settings.general.section.sharing": "การแชร์",
+  "settings.general.row.shareUrl.title": "URL เซิร์ฟเวอร์สำหรับแชร์",
+  "settings.general.row.shareUrl.description": "URL พื้นฐานของเซิร์ฟเวอร์ที่ใช้เมื่อแชร์เซสชัน เว้นว่างไว้เพื่อใช้ค่าเริ่มต้น",
+  "settings.general.row.shareUrl.placeholder": "https://opncd.ai",
+  "settings.general.row.expertPanelDefault.title": "เปิดใช้คณะผู้เชี่ยวชาญโดยค่าเริ่มต้น",
+  "settings.general.row.expertPanelDefault.description": "เริ่มการสนทนาใหม่โดยเปิดใช้คณะผู้เชี่ยวชาญ เพื่อให้ปุ่มสามารถตรวจทานบริบทปัจจุบันได้ตามต้องการ",
   "settings.general.section.display": "การแสดงผล",
 
   "settings.general.row.language.title": "ภาษา",
