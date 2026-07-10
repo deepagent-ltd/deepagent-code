@@ -1115,6 +1115,9 @@ export const dict = {
   "settings.general.row.showSessionProgressBar.title": "Show session progress bar",
   "settings.general.row.showSessionProgressBar.description":
     "Display the animated progress bar at the top of the session when the agent is working",
+  "settings.general.row.expertPanelDefault.title": "Arm expert panel by default",
+  "settings.general.row.expertPanelDefault.description":
+    "Start new conversations with the expert panel armed, so its button convenes a review of the current context on demand",
   "settings.general.row.newLayoutDesigns.title": "New layout and designs",
   "settings.general.row.newLayoutDesigns.description": "Enable the redesigned layout, home, composer, and session UI",
   "settings.general.row.pinchZoom.title": "Pinch to zoom",

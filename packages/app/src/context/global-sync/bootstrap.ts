@@ -28,6 +28,9 @@ type GlobalStore = {
   session_plan: {
     [sessionID: string]: import("./types").SessionPlan
   }
+  session_goal: {
+    [sessionID: string]: import("./types").SessionGoal
+  }
   provider: NormalizedProviderListResponse
   provider_auth: ProviderAuthResponse
   config: Config

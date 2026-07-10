@@ -10,7 +10,7 @@ import type {
   SessionStatus,
   SnapshotFileDiff,
 } from "@deepagent-code/sdk/v2/client"
-import type { State, VcsCache, SessionPlan } from "./types"
+import type { State, VcsCache, SessionPlan, SessionGoal } from "./types"
 import { trimSessions } from "./session-trim"
 import { dropSessionCaches } from "./session-cache"
 import { diffs as list, message as clean } from "@/utils/diffs"
@@ -85,6 +85,7 @@ export function applyDirectoryEvent(input: {
   loadLsp: () => void
   vcsCache?: VcsCache
   setSessionPlan?: (sessionID: string, plan: SessionPlan | undefined) => void
+  setSessionGoal?: (sessionID: string, goal: SessionGoal | undefined) => void
   retainedLimit?: number
 }) {
   const event = input.event
@@ -184,6 +185,29 @@ export function applyDirectoryEvent(input: {
         steps: props.steps,
         done: props.done,
         total: props.total,
+      })
+      break
+    }
+    case "goal.updated": {
+      // V3.9 §D: the live Goal Loop status from the driver. Stored under a distinct session_goal key
+      // (like session_plan) so the status bar persists while the session is idle between ticks. A
+      // terminal phase does NOT clear it — the UI shows the final state until the user dismisses/restarts.
+      const props = event.properties as {
+        sessionID: string
+        goalId: string
+        planDocId: string
+        phase: string
+        ledger: SessionGoal["ledger"]
+        stallCount: number
+        gaps: string[]
+      }
+      input.setSessionGoal?.(props.sessionID, {
+        goalId: props.goalId,
+        planDocId: props.planDocId,
+        phase: props.phase,
+        ledger: props.ledger,
+        stallCount: props.stallCount,
+        gaps: props.gaps,
       })
       break
     }
