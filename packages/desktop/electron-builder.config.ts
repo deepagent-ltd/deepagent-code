@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url"
 import { promisify } from "node:util"
 
 import type { Configuration } from "electron-builder"
+import { auditPackageInputs } from "./scripts/audit-package"
 
 const execFileAsync = promisify(execFile)
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..")
@@ -53,7 +54,15 @@ const getBase = (): Configuration => ({
     output: "dist",
     buildResources: "resources",
   },
-  files: ["out/**/*", "resources/**/*"],
+  files: [
+    "out/**/*",
+    "!out/**/*.map",
+    "resources/icons/**/*",
+    "resources/entitlements.plist",
+    "resources/*.metainfo.xml",
+    "resources/deepagent-code-cli*",
+  ],
+  beforePack: () => auditPackageInputs(path.dirname(fileURLToPath(import.meta.url))),
   extraResources: [
     {
       from: "native/",
