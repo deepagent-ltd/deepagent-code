@@ -1,6 +1,13 @@
 import { describe, expect, test } from "bun:test"
 import type { Message, Session } from "@deepagent-code/sdk/v2/client"
-import { getConversationTokens, getSessionContextMetrics, getSubagentTokens } from "./session-context-metrics"
+import {
+  getConversationTokens,
+  getSessionContextMetrics,
+  getSubagentTokens,
+  getSubagentTokenBreakdown,
+  addTokenBreakdown,
+  emptyTokenBreakdown,
+} from "./session-context-metrics"
 
 const assistant = (
   id: string,
@@ -125,6 +132,52 @@ describe("getSubagentTokens", () => {
 
   test("undefined session -> 0", () => {
     expect(getSubagentTokens(undefined)).toBe(0)
+  })
+})
+
+describe("token breakdown", () => {
+  test("spend excludes cache read/write; total includes everything", () => {
+    // Mirrors the reported case: a short prompt over a large cached context. spend is small even
+    // though total is dominated by the re-read cache.
+    const acc = addTokenBreakdown(emptyTokenBreakdown(), {
+      input: 800,
+      output: 400,
+      reasoning: 100,
+      cache: { read: 119_000, write: 367 },
+    })
+    expect(acc.spend).toBe(1300) // 800 + 400 + 100 — no cache
+    expect(acc.total).toBe(120_667) // + 119_000 read + 367 write
+    expect(acc.cacheRead).toBe(119_000)
+    expect(acc.cacheWrite).toBe(367)
+  })
+
+  test("addTokenBreakdown accumulates across multiple messages", () => {
+    const acc = emptyTokenBreakdown()
+    addTokenBreakdown(acc, { input: 10, output: 5, reasoning: 2, cache: { read: 3, write: 1 } })
+    addTokenBreakdown(acc, { input: 20, output: 10, reasoning: 0, cache: { read: 6, write: 0 } })
+    expect(acc.input).toBe(30)
+    expect(acc.output).toBe(15)
+    expect(acc.reasoning).toBe(2)
+    expect(acc.cacheRead).toBe(9)
+    expect(acc.cacheWrite).toBe(1)
+    expect(acc.spend).toBe(47) // (10+5+2) + (20+10+0)
+    expect(acc.total).toBe(57) // spend + 9 read + 1 write
+  })
+
+  test("getSubagentTokenBreakdown rolls a child session into the accumulator", () => {
+    const acc = emptyTokenBreakdown()
+    const s = session("s1", undefined, { input: 100, output: 40, reasoning: 10, read: 5, write: 5 })
+    getSubagentTokenBreakdown(acc, s)
+    expect(acc.spend).toBe(150) // 100 + 40 + 10
+    expect(acc.total).toBe(160) // + 5 + 5 — matches getSubagentTokens
+    expect(acc.total).toBe(getSubagentTokens(s))
+  })
+
+  test("getSubagentTokenBreakdown with undefined session is a no-op", () => {
+    const acc = emptyTokenBreakdown()
+    getSubagentTokenBreakdown(acc, undefined)
+    expect(acc.total).toBe(0)
+    expect(acc.spend).toBe(0)
   })
 })
 
