@@ -115,7 +115,9 @@ export const layerWith = (options?: LayerOptions) =>
                         eq(AgentPushLogTable.agent_id, request.agentID),
                         eq(AgentPushLogTable.group_id, request.groupID as IMID.GroupID),
                         gt(AgentPushLogTable.created_at, windowStart),
-                        sql`${AgentPushLogTable.decision} != 'blocked'`,
+                        // blocked pushes are stored as "blocked:<reason>" (never bare "blocked"), so
+                        // exclude the whole family — only delivered/digested pushes consume rate quota.
+                        sql`${AgentPushLogTable.decision} not like 'blocked:%'`,
                       ),
                     )
                     .get()
