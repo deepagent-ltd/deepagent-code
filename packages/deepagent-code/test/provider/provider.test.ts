@@ -11,6 +11,7 @@ import { disposeAllInstances, provideInstanceEffect, tmpdirScoped, TestInstance 
 import { markPluginDependenciesReady } from "../fixture/plugin"
 import { Auth } from "@/auth"
 import { Config } from "@/config/config"
+import { SettingsStore } from "@/settings/store"
 import { Env } from "../../src/env"
 import { Plugin } from "../../src/plugin/index"
 import { Provider } from "@/provider/provider"
@@ -60,6 +61,10 @@ afterEach(async () => {
     else process.env[key] = value
   }
   originalEnv.clear()
+  // Reset any SettingsStore official-transport override written by a test so it can't leak into the
+  // next (the store is backed by a shared global file + in-memory cache).
+  await SettingsStore.update({ providers: { openai: {}, anthropic: {} } }).catch(() => {})
+  SettingsStore.invalidate()
   await disposeAllInstances()
 })
 
@@ -209,6 +214,26 @@ it.instance(
       },
     },
   },
+)
+
+it.instance(
+  "official provider baseURL override comes from SettingsStore (the sanctioned channel)",
+  Effect.gen(function* () {
+    // Config baseURL is ignored for official providers (proven above). The ONE supported way to point
+    // an official provider at a proxy / self-hosted gateway / air-gapped mirror is SettingsStore
+    // (the connect dialog's advanced section). Written before the provider state materializes, it must
+    // land on the resolved provider's options so resolveSDK routes there.
+    yield* Effect.promise(() =>
+      SettingsStore.update({ providers: { openai: { baseURL: "https://proxy.corp.internal/openai/v1" } } }),
+    )
+    SettingsStore.invalidate()
+    yield* connect(ProviderV2.ID.openai, "test-openai-key")
+    const providers = yield* list
+    const provider = providers[ProviderV2.ID.openai]
+    expect(provider).toBeDefined()
+    expect(provider.source).toBe("api")
+    expect(provider.options.baseURL).toBe("https://proxy.corp.internal/openai/v1")
+  }),
 )
 
 it.instance(

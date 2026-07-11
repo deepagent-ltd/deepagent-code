@@ -152,11 +152,26 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
             // plan step. high warns + auto-replans; xhigh/max/ultra hard-block.
             const hardGate = !lightweight && AgentGateway.DeepAgentPlanController.hardGateEnabled(agentMode)
             const plan = AgentGateway.DeepAgentSessionState.getPlan(ctx.sessionID)
+            // Read-only shell commands (ls/cat/grep/git status/curl probe/…) are the agent's eyes and
+            // must never be gated — pass the command string so the classifier can exempt them. Any
+            // ambiguity is classified mutating (fail-safe). Non-shell tools ignore the command arg.
+            const command =
+              (item.id === "bash" || item.id === "shell") &&
+              typeof (args as { command?: unknown } | undefined)?.command === "string"
+                ? ((args as { command: string }).command)
+                : null
+            const isMutating = AgentGateway.DeepAgentPlanController.isMutatingTool(item.id, command)
+            // U1 anti-deadlock: runtime-driven grace release. When the gate has already blocked this
+            // stale plan too many times with no forward progress, release (with a strong reminder)
+            // rather than deadlock a model that will not repair the plan.
+            const graceRelease = latch != null && AgentGateway.DeepAgentPlanController.shouldGraceRelease(latch)
             const gateDecision = PlanHook.evaluate({
               name: "before_tool_use",
               payload: {
                 planStale,
-                isMutating: AgentGateway.DeepAgentPlanController.isMutatingTool(item.id),
+                staleReason: latch?.stale_reason ?? null,
+                graceRelease,
+                isMutating,
                 lightweight,
                 hardGate,
                 hasActiveStep: AgentGateway.DeepAgentPlanController.hasActiveStep(plan),
@@ -164,21 +179,36 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
               },
             })
             if (gateDecision.decision === "block") {
+              // U1 anti-deadlock: count this block on the runtime counter so shouldGraceRelease can
+              // eventually fire even if the model never calls the plan tool.
+              AgentGateway.DeepAgentSessionState.recordPlanGateBlock(ctx.sessionID)
               const reason =
                 latch?.stale_reason != null
                   ? `The plan is stale (${latch.stale_reason}). ${gateDecision.blockReason}. Call the \`plan\` tool to update your plan, then retry this edit.`
                   : `${gateDecision.blockReason}. Call the \`plan\` tool first.`
               return { title: "Plan update required", output: reason, metadata: {} }
             }
+            // A gate WARN (grace release, user_appended, or a high-mode hard-gate binding miss) lets
+            // the tool run but must surface the reminder to the model. Suppressed for lightweight
+            // modes (general/direct), which are intentionally never slowed by the plan machinery.
+            const gateWarnReason =
+              gateDecision.decision === "warn" && !lightweight ? gateDecision.blockReason : undefined
             const result = yield* item.execute(args, ctx)
             // U10: count a successful mutating tool call toward the progress-nudge budget. Only
-            // mutating tools (edit/write/patch/shell) count; the counter resets when the model next
-            // changes a plan step's status. No-op when there is no plan.
-            if (AgentGateway.DeepAgentPlanController.isMutatingTool(item.id)) {
+            // mutating tools (edit/write/patch/shell-mutation) count; the counter resets when the model
+            // next changes a plan step's status. No-op when there is no plan.
+            if (isMutating) {
               AgentGateway.DeepAgentSessionState.recordMutation(ctx.sessionID)
+              // U1 anti-deadlock: a mutating tool actually executed → forward progress happened, so
+              // reset the consecutive-block counter (block cadence restarts from zero).
+              AgentGateway.DeepAgentSessionState.resetPlanGateBlocks(ctx.sessionID)
             }
+            const withReminder =
+              gateWarnReason && typeof result.output === "string"
+                ? { ...result, output: `⚠️ Plan gate: ${gateWarnReason}.\n\n${result.output}` }
+                : result
             const output = {
-              ...result,
+              ...withReminder,
               attachments: result.attachments?.map((attachment) => ({
                 ...attachment,
                 id: PartID.ascending(),
