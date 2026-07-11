@@ -1,0 +1,129 @@
+export * as EventRouter from "./event-router"
+
+import { DeepAgentEvent } from "./deepagent-event"
+import type { AgentDescriptor } from "../im/mention-parser"
+
+// V4.0 §A4 — the Event Router POLICY. This is a PURE, deterministic decision function: given an event,
+// the candidate agent registry projection, the current queue pressure, and the recent same-type events
+// (the §A4 去重窗口 primitive from the Event Bus), it decides whether the event dispatches (and to
+// which agents, at what priority) or is dropped (and why).
+//
+// LAYERING: lives in `core` and imports NOTHING runtime. Feature-flag state and per-agent permission
+// are NOT read here — they are resolved by the deepagent-code wiring and passed in as `flagEnabled` /
+// pre-filtered `agents`, so this module stays a pure, unit-testable policy with no Effect, no DB, no
+// RuntimeFlags import. The wiring subscribes to the bus, computes the gates, calls `route`, and
+// dispatches the decision to sessions/agents.
+//
+// §A4 Router responsibilities, mapped to this function:
+//   事件类型匹配   : match candidate agents by their `triggers[].event` (glob-ish, see `matches`).
+//   权限/flag 检查 : `flagEnabled` gate (resolved upstream) + `agents` already permission-filtered.
+//   去重           : within `dedupeWindowMs`, a duplicate LOW-priority same-type event is merged.
+//   优先级         : the decision carries the event's priority so the scheduler can preempt low queues.
+//   回压           : when the queue is at/over capacity, low/normal events are dropped (event_dropped);
+//                    high/critical always admitted (critical 抢占低优队列).
+
+// Priority ordering for preemption + admission decisions. Higher = more urgent.
+export const PRIORITY_RANK: Record<DeepAgentEvent.EventPriority, number> = {
+  low: 0,
+  normal: 1,
+  high: 2,
+  critical: 3,
+}
+
+// Why an event was dropped rather than dispatched — surfaced as an `event_dropped` observability signal.
+export type DropReason = "flag_disabled" | "no_match" | "deduped" | "backpressure"
+
+export type RouteDecision =
+  | {
+      readonly type: "dispatch"
+      readonly priority: DeepAgentEvent.EventPriority
+      // the agents whose triggers matched the event, in registry order.
+      readonly targets: ReadonlyArray<AgentDescriptor>
+    }
+  | {
+      readonly type: "dropped"
+      readonly reason: DropReason
+      // for `deduped`: the id of the recent event this one merged into (for the trace).
+      readonly mergedInto?: DeepAgentEvent.ID
+    }
+
+export interface RouteInput {
+  readonly event: DeepAgentEvent.Event
+  // registry projection, ALREADY permission-filtered by the caller (only agents allowed to see this
+  // workspace/project/event). The router matches on `triggers` within this set.
+  readonly agents: ReadonlyArray<AgentDescriptor>
+  // resolved feature-flag gate for this event's path (e.g. v4EventDrivenIm for im.*). A disabled flag
+  // drops the event fail-closed — the legacy synchronous path stays authoritative.
+  readonly flagEnabled: boolean
+  // current depth of the dispatch queue and its capacity (回压). Omit `maxQueueDepth` for no limit.
+  readonly queueDepth?: number
+  readonly maxQueueDepth?: number
+  // recent same-type events (bus.recentByType, ordered most-recent-first) for the §A4 去重窗口 merge.
+  // MUST already be scoped to this event's workspace by the caller (the router does NOT re-check
+  // workspace — an unscoped set risks a cross-tenant merge). Since routing runs post-persist this set
+  // typically INCLUDES the event itself; `route` filters it out defensively.
+  readonly recentSameType?: ReadonlyArray<DeepAgentEvent.Event>
+}
+
+// Does an agent trigger match an event type? Supports an exact match and a trailing `*` wildcard
+// (e.g. `agent.*` matches `agent.task.started`). Kept intentionally small; richer `match` conditions
+// on the Trigger are a forward-compat declaration (mention-parser.ts) and not evaluated here yet.
+export const matches = (triggerEvent: string, eventType: string): boolean => {
+  if (triggerEvent === eventType) return true
+  if (triggerEvent === "*") return true
+  if (triggerEvent.endsWith(".*")) {
+    const prefix = triggerEvent.slice(0, -1) // keep the trailing dot: "agent." matches "agent.x"
+    return eventType.startsWith(prefix)
+  }
+  return false
+}
+
+// The candidate agents whose triggers match this event, preserving registry order and de-duplicating.
+const matchingAgents = (
+  agents: ReadonlyArray<AgentDescriptor>,
+  eventType: string,
+): ReadonlyArray<AgentDescriptor> =>
+  agents.filter((agent) => (agent.triggers ?? []).some((t) => matches(t.event, eventType)))
+
+/**
+ * §A4 — the pure routing decision. Order of checks (fail-closed first):
+ *   1. flag gate      → `flag_disabled` if the event path's flag is off.
+ *   2. type match     → `no_match` if no permitted agent subscribes to this type.
+ *   3. dedup (低优)   → `deduped` if a low-priority same-type event already exists in the window.
+ *   4. backpressure   → `backpressure` if the queue is full and this event is low/normal.
+ *   5. otherwise      → `dispatch` to the matched agents at the event's priority.
+ *
+ * Dedup only merges LOW priority (the §A4 contract: "同类重复低优事件合并") — normal/high/critical are
+ * never silently merged. Backpressure never drops high/critical (critical 抢占低优队列).
+ */
+export const route = (input: RouteInput): RouteDecision => {
+  if (!input.flagEnabled) return { type: "dropped", reason: "flag_disabled" }
+
+  const targets = matchingAgents(input.agents, input.event.type)
+  if (targets.length === 0) return { type: "dropped", reason: "no_match" }
+
+  const priority = input.event.priority
+
+  // §A4 去重窗口: only LOW-priority duplicates merge. `recentSameType` is caller-scoped to the same
+  // type + workspace + window; the first recent event (most recent) is the merge target.
+  if (priority === "low") {
+    const recent = input.recentSameType ?? []
+    const target = recent.find((e) => e.id !== input.event.id)
+    if (target) return { type: "dropped", reason: "deduped", mergedInto: target.id }
+  }
+
+  // §A4 回压: reject low/normal when the queue is at/over capacity; high/critical always pass. A
+  // non-positive `maxQueueDepth` is treated as "no limit" (not "always full") — a 0/negative capacity
+  // that silently dropped every low/normal event would be a footgun; omit the field or pass a positive
+  // cap to enable backpressure.
+  if (
+    input.maxQueueDepth != null &&
+    input.maxQueueDepth > 0 &&
+    (input.queueDepth ?? 0) >= input.maxQueueDepth &&
+    PRIORITY_RANK[priority] < PRIORITY_RANK.high
+  ) {
+    return { type: "dropped", reason: "backpressure" }
+  }
+
+  return { type: "dispatch", priority, targets }
+}
