@@ -140,6 +140,26 @@ describe("plugin.codex", () => {
     await enabled.dispose?.()
   })
 
+  test("skips the websocket transport when a custom baseURL is set (proxy/gateway routing)", async () => {
+    // Even with WS enabled, a custom baseURL means OpenAI is routed through a proxy / self-hosted
+    // gateway that speaks plain HTTP — the ChatGPT-backend WS protocol would not work there, so the
+    // loader must fall back to HTTP and not install a ws fetch.
+    const enabled = await CodexAuthPlugin({} as never, { experimentalWebSockets: true })
+
+    const withBaseURL = await enabled.auth!.loader!(
+      async () => ({ type: "api", key: "sk-test" }) as never,
+      { options: { baseURL: "https://proxy.corp.internal/openai/v1" } } as never,
+    )
+    const withoutBaseURL = await enabled.auth!.loader!(
+      async () => ({ type: "api", key: "sk-test" }) as never,
+      { options: {} } as never,
+    )
+
+    expect(withBaseURL.fetch).toBeUndefined()
+    expect(withoutBaseURL.fetch).toBeFunction()
+    await enabled.dispose?.()
+  })
+
   test("deduplicates concurrent Codex token refreshes", async () => {
     let auth = {
       type: "oauth" as const,
