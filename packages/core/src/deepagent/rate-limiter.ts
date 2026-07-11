@@ -44,13 +44,26 @@ export class Service {
     return true
   }
 
-  /** Drop buckets whose window has elapsed as of `now`, bounding memory for idle keys. */
-  sweep(now: number = Date.now()): void {
+  /**
+   * Drop buckets whose window has elapsed as of `now`, bounding memory for idle keys. Returns the
+   * number of buckets pruned (0 when nothing was stale). A still-live bucket (window not yet elapsed)
+   * is preserved untouched, so this is a selective prune, never a blanket reset. The count is a cheap
+   * observability signal for the periodic sweep daemon and makes the prune deterministically testable.
+   */
+  sweep(now: number = Date.now()): number {
+    let pruned = 0
     for (const [key, bucket] of this.buckets.entries()) {
       if (now >= bucket.resetAt) {
         this.buckets.delete(key)
+        pruned++
       }
     }
+    return pruned
+  }
+
+  /** Number of live buckets currently held — a memory-footprint probe for the sweep daemon + tests. */
+  size(): number {
+    return this.buckets.size
   }
 }
 

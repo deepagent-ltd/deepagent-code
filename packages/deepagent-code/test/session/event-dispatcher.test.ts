@@ -34,6 +34,21 @@ const fakeAgentList = Layer.succeed(AgentListProviderService, {
   findByCapability: () => Effect.succeed([]),
 })
 
+// §C4 re-entrancy scenario: an agent with a WILDCARD trigger that WOULD match every event type —
+// including the coordination/derivative family. Used to prove the router's guard severs the loop.
+const wildcardAgent: AgentDescriptor = {
+  id: "agt_star",
+  name: "OmniAgent",
+  displayName: "Omni Agent",
+  visible: true,
+  triggers: [{ event: "*" }],
+}
+const wildcardAgentList = Layer.succeed(AgentListProviderService, {
+  listAgents: () => Effect.succeed([wildcardAgent]),
+  findByTrigger: () => Effect.succeed([wildcardAgent]),
+  findByCapability: () => Effect.succeed([]),
+})
+
 // A module-level recorder the DispatchPort writes to (reset per test). Simpler than a context slot and
 // keeps the layer construction static so `testEffect` can memoize it.
 let recorded: EventDispatcher.DispatchRequest[] = []
@@ -50,7 +65,10 @@ const recordingPort: EventDispatcher.DispatchPort = {
     }),
 }
 
-const makeLayer = (flags?: Partial<RuntimeFlags.Info>) => {
+const makeLayer = (
+  flags?: Partial<RuntimeFlags.Info>,
+  agentListLayer: Layer.Layer<AgentListProviderService> = fakeAgentList,
+) => {
   const database = Database.layerFromPath(":memory:")
   const flagsLayer = RuntimeFlags.layer({
     v4EventDrivenIm: true,
@@ -63,7 +81,7 @@ const makeLayer = (flags?: Partial<RuntimeFlags.Info>) => {
   )
   const dispatcher = EventDispatcher.layerWith({ dispatchPort: recordingPort, runLoops: false, now }).pipe(
     Layer.provide(core),
-    Layer.provide(fakeAgentList),
+    Layer.provide(agentListLayer),
     Layer.provide(flagsLayer),
   )
   return Layer.mergeAll(dispatcher, core, flagsLayer)
@@ -230,6 +248,50 @@ describe("EventDispatcher.flagForEventType", () => {
       expect(EventDispatcher.flagForEventType(flags, "agent.push.requested")).toBe(flags.v4AgentPushEnabled)
       expect(EventDispatcher.flagForEventType(flags, "ci.failure")).toBe(flags.v4MultiAgentRuntime)
       expect(EventDispatcher.flagForEventType(flags, "git.push")).toBe(flags.v4MultiAgentRuntime)
+    }),
+  )
+})
+
+// §C4 RE-ENTRANCY GUARD (end-to-end) — even with a wildcard-trigger agent registered (which WOULD match
+// a coordination event), handling an agent.task.* / agent.handoff.* event must NOT reach the DispatchPort
+// (no fresh coordinate() pass), while a normal event through the SAME wildcard agent still dispatches.
+// This proves the loop that would otherwise cascade unbounded past the §E2 ceiling is closed.
+describe("EventDispatcher §C4 coordination re-entrancy guard", () => {
+  const it = testEffect(makeLayer(undefined, wildcardAgentList))
+
+  it.effect("a coordination event does NOT dispatch (no coordinate() re-entry), still acked", () =>
+    Effect.gen(function* () {
+      resetRecorder()
+      setNow(2_000)
+      const bus = yield* DeepAgentEventBus.Service
+      const dispatcher = yield* EventDispatcher.Service
+      // publish a coordination event exactly as the Multi-Agent Runtime would (system source, high).
+      const coord = yield* bus.publish({
+        type: "agent.task.completed",
+        source: "system",
+        workspaceID: "wrk_1",
+        priority: "high",
+        idempotencyKey: "coord-1",
+        payload: { taskID: "t1", artifacts: [] },
+      })
+      const decision = yield* dispatcher.handle(coord)
+      expect(decision).toEqual({ type: "dropped", reason: "coordination" })
+      expect(recorded.length).toBe(0) // the DispatchPort was never invoked → no new coordinate() pass
+      // terminal drop is acked (kept in the durable log for the trace, not retry-eligible).
+      expect((yield* bus.dueRetries(Number.MAX_SAFE_INTEGER)).length).toBe(0)
+    }),
+  )
+
+  it.effect("the SAME wildcard agent still dispatches a normal (non-coordination) event", () =>
+    Effect.gen(function* () {
+      resetRecorder()
+      setNow(2_500)
+      const bus = yield* DeepAgentEventBus.Service
+      const dispatcher = yield* EventDispatcher.Service
+      const event = yield* bus.publish(input({ idempotencyKey: "wc-ok" }))
+      const decision = yield* dispatcher.handle(event)
+      expect(decision.type).toBe("dispatch")
+      expect(recorded.map((r) => r.event.type)).toEqual(["ci.failure"]) // guard is scoped, not blanket
     }),
   )
 })
