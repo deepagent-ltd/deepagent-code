@@ -183,4 +183,67 @@ describe("Scheduler", () => {
       expect((yield* s.list("wrk_1", "fired")).length).toBe(0)
     }),
   )
+
+  it.effect("scheduleKey: a duplicate insert of the same key is a DB-level no-op (idempotent registration)", () =>
+    Effect.gen(function* () {
+      setNow(0)
+      const s = yield* Scheduler.Service
+      const first = yield* s.schedulePeriodic({
+        workspaceID: "wrk_1",
+        intervalMs: 1_000,
+        firstFireAt: 1_000,
+        scheduleKey: "boot:key-1",
+        eventTemplate: template,
+      })
+      // a second registration with the SAME key (different fireAt) collides → onConflictDoNothing → the
+      // WINNER's row is returned, not a duplicate. This holds even with NO list() between them (TOCTOU).
+      const second = yield* s.schedulePeriodic({
+        workspaceID: "wrk_1",
+        intervalMs: 1_000,
+        firstFireAt: 9_000,
+        scheduleKey: "boot:key-1",
+        eventTemplate: template,
+      })
+      expect(second.id).toBe(first.id)
+      expect(second.fireAt).toBe(1_000) // winner's value, not the loser's 9_000
+      expect(second.scheduleKey).toBe("boot:key-1")
+      const active = yield* s.list("wrk_1")
+      expect(active.length).toBe(1) // exactly one row
+    }),
+  )
+
+  it.effect("scheduleKey: distinct keys AND unkeyed schedules coexist (NULLs are distinct in the unique index)", () =>
+    Effect.gen(function* () {
+      setNow(0)
+      const s = yield* Scheduler.Service
+      yield* s.schedulePeriodic({ workspaceID: "wrk_1", intervalMs: 1_000, firstFireAt: 1_000, scheduleKey: "k-a", eventTemplate: template })
+      yield* s.schedulePeriodic({ workspaceID: "wrk_1", intervalMs: 1_000, firstFireAt: 1_000, scheduleKey: "k-b", eventTemplate: template })
+      // two UNKEYED schedules must both persist — NULL schedule_key is not constrained by the unique index.
+      yield* s.scheduleDelay({ workspaceID: "wrk_1", fireAt: 2_000, eventTemplate: template })
+      yield* s.scheduleDelay({ workspaceID: "wrk_1", fireAt: 3_000, eventTemplate: template })
+      expect((yield* s.list("wrk_1")).length).toBe(4)
+    }),
+  )
+
+  it.effect("ConditionSpec.crossWorkspace round-trips through storage", () =>
+    Effect.gen(function* () {
+      setNow(0)
+      const s = yield* Scheduler.Service
+      const spec: Scheduler.ConditionSpec = {
+        eventType: "ci.failure",
+        threshold: 3,
+        windowMs: 60_000,
+        crossWorkspace: true,
+      }
+      const sched = yield* s.scheduleCondition({
+        workspaceID: "wrk_system",
+        condition: spec,
+        firstCheckAt: 0,
+        recheckEveryMs: 10_000,
+        eventTemplate: template,
+      })
+      const reread = (yield* s.list("wrk_system")).find((d) => d.id === sched.id)
+      expect(reread?.condition).toEqual(spec)
+    }),
+  )
 })

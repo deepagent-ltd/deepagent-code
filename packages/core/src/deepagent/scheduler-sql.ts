@@ -1,4 +1,4 @@
-import { sqliteTable, text, integer, index } from "drizzle-orm/sqlite-core"
+import { sqliteTable, text, integer, index, uniqueIndex } from "drizzle-orm/sqlite-core"
 
 // V4.0 §A4 — durable persistence for the Scheduler. Unlike `BackgroundJob` (core/src/background-job.ts,
 // EXPLICITLY non-durable — a restart loses live jobs), the V4.0 Scheduler must survive process restarts:
@@ -33,6 +33,12 @@ export const DeepAgentScheduleTable = sqliteTable(
     condition: text({ mode: "json" }).$type<unknown>(),
     // last time this schedule actually fired (for periodic drift accounting + observability).
     last_fired_at: integer(),
+    // OPTIONAL stable dedupe key for schedules that must be registered idempotently across restarts
+    // (e.g. the boot-time §A4 bootstrap schedules). NULL for ordinary ad-hoc schedules — and since
+    // SQLite treats NULLs as distinct in a UNIQUE index, the uniqueness below constrains ONLY keyed
+    // rows, leaving every unkeyed schedule free. This closes the multi-process TOCTOU on a list-then-
+    // insert bootstrap: a concurrent second insert of the same key is rejected at the DB layer.
+    schedule_key: text(),
     created_at: integer().notNull(),
     updated_at: integer().notNull(),
   },
@@ -41,6 +47,9 @@ export const DeepAgentScheduleTable = sqliteTable(
     index("deepagent_schedule_due_idx").on(table.status, table.fire_at),
     // per-workspace listing + retention.
     index("deepagent_schedule_workspace_idx").on(table.workspace_id, table.status),
+    // idempotent bootstrap: at most one row per non-null schedule_key. Unkeyed rows (schedule_key NULL)
+    // are unconstrained (NULLs distinct in SQLite unique indexes) — a natural partial-unique semantics.
+    uniqueIndex("deepagent_schedule_key_uidx").on(table.schedule_key),
   ],
 )
 
