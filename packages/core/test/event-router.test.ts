@@ -137,4 +137,40 @@ describe("EventRouter.route", () => {
     })
     expect(d.type).toBe("dispatch")
   })
+
+  // §C4 RE-ENTRANCY GUARD — coordination/derivative events never re-trigger a fresh dispatch, even with
+  // a wildcard-trigger agent that WOULD match them. This is the loop-closer for the coordination cascade.
+  test("§C4 coordination events do NOT dispatch even with a wildcard-trigger agent (re-entrancy guard)", () => {
+    const wildcard = agent({ id: "agt_star", triggers: [{ event: "*" }] })
+    for (const type of [
+      "agent.task.started",
+      "agent.task.blocked",
+      "agent.task.completed",
+      "agent.task.needs_human",
+      "agent.handoff.requested",
+    ]) {
+      const d = EventRouter.route({
+        event: event({ type, source: "system", priority: "high" }), // high can't sneak past via bypass
+        agents: [wildcard],
+        flagEnabled: true,
+      })
+      expect(d).toEqual({ type: "dropped", reason: "coordination" })
+    }
+  })
+
+  test("§C4 guard is scoped: agent.push.* and non-coordination agent.* still route normally", () => {
+    const wildcard = agent({ id: "agt_star", triggers: [{ event: "agent.*" }] })
+    // agent.push.* is a DIFFERENT family (proactive push) — must still dispatch.
+    const push = EventRouter.route({
+      event: event({ type: "agent.push.suggestion", source: "system" }),
+      agents: [wildcard],
+      flagEnabled: true,
+    })
+    expect(push.type).toBe("dispatch")
+    // isCoordinationEvent membership is exactly the task/handoff families.
+    expect(EventRouter.isCoordinationEvent("agent.task.completed")).toBe(true)
+    expect(EventRouter.isCoordinationEvent("agent.handoff.requested")).toBe(true)
+    expect(EventRouter.isCoordinationEvent("agent.push.suggestion")).toBe(false)
+    expect(EventRouter.isCoordinationEvent("ci.failure")).toBe(false)
+  })
 })
