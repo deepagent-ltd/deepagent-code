@@ -91,6 +91,7 @@ import { DeepAgentEventBus } from "@deepagent-code/core/deepagent/deepagent-even
 import { Scheduler } from "@deepagent-code/core/deepagent/scheduler"
 import { WorkspaceConfig } from "@deepagent-code/core/deepagent/workspace-config"
 import { WorkspaceConcurrency } from "@deepagent-code/core/deepagent/workspace-concurrency"
+import { SecurityResolvers } from "@deepagent-code/core/deepagent/security-resolvers"
 import { V4EventRuntime } from "@/session/v4-event-runtime"
 import { experimentalHandlers } from "./handlers/experimental"
 import { debugHandlers } from "./handlers/debug"
@@ -177,12 +178,20 @@ const imRuntimeLayer = Layer.mergeAll(
 // below. Daemon startup is gated on the V4 flags inside V4EventRuntime.layer, so with flags off (the
 // default) it is inert — nothing subscribes, ticks, or prunes.
 const v4EventRuntimeLayer = V4EventRuntime.layer.pipe(
+  // §E1 — the PRODUCTION four-layer security resolvers. Providing this makes the MultiAgentRuntime gate
+  // evaluate REAL facts (L1 event-source trust per workspace, L2 actor workspace membership, L4 runtime
+  // pre-gate) and FAIL CLOSED, instead of the default-open lenient stubs. Its deps (WorkspaceConfig +
+  // AgentListProvider + IMRepository) are satisfied by the same provide stack below, so it shares the ONE
+  // instance the runtime + IM double-write use — no split-brain.
+  Layer.provide(SecurityResolvers.layer),
   Layer.provide(DeepAgentEventBus.defaultLayer),
   Layer.provide(ApprovalQueue.layer.pipe(Layer.provide(Database.defaultLayer))),
   Layer.provide(Scheduler.defaultLayer),
   Layer.provide(WorkspaceConfig.defaultLayer),
   Layer.provide(WorkspaceConcurrency.defaultLayer),
   Layer.provide(ServerAgentListProviderLive),
+  // §E1 layer-2 needs IM group membership; imRepositoryLayer self-provides the Database.
+  Layer.provide(imRepositoryLayer),
 )
 
 const rootApiRoutes = HttpApiBuilder.layer(RootHttpApi).pipe(
