@@ -314,6 +314,68 @@ describe("DeepAgentEventBus.tryPublish (§A4/§E2 rate gate)", () => {
       expect("published" in after).toBe(true)
     }),
   )
+
+  // §E2 END-TO-END: the ceiling that is enforced for real producer traffic. Proves in ONE test the full
+  // contract the production wiring relies on — under the ceiling low/normal publish + persist; over it
+  // they are dropped + NOT persisted; high/critical always pass even while the window is exhausted.
+  it.effect("enforced ceiling: under it low/normal persist; over it dropped (not persisted); high/critical pass", () =>
+    Effect.gen(function* () {
+      setNow(0)
+      const bus = yield* DeepAgentEventBus.Service
+      const wrk = "wrk_enforced"
+      // (1) under the ceiling (limit=3): three normal publishes admitted + persisted.
+      for (const k of ["e-1", "e-2", "e-3"]) {
+        const r = yield* bus.tryPublish(input({ idempotencyKey: k, workspaceID: wrk }), { limit: 3 })
+        expect("published" in r).toBe(true)
+      }
+      // (2) over the ceiling within the window: normal is dropped and NOT persisted.
+      const over = yield* bus.tryPublish(input({ idempotencyKey: "e-over", workspaceID: wrk }), { limit: 3 })
+      expect(over).toEqual({ dropped: "rate_limited" })
+      // (3) high + critical STILL pass while the window is exhausted (priority bypass).
+      const hi = yield* bus.tryPublish(input({ idempotencyKey: "e-hi", workspaceID: wrk, priority: "high" }), {
+        limit: 3,
+      })
+      const crit = yield* bus.tryPublish(
+        input({ idempotencyKey: "e-crit", workspaceID: wrk, priority: "critical" }),
+        { limit: 3 },
+      )
+      expect("published" in hi).toBe(true)
+      expect("published" in crit).toBe(true)
+      // durable log holds exactly the admitted five — the dropped "e-over" left NO row.
+      const persisted = yield* Stream.runCollect(bus.replay({ workspaceID: wrk, from: 0 })).pipe(
+        Effect.map((c) => Array.from(c)),
+      )
+      expect(persisted.map((e) => e.idempotencyKey).sort()).toEqual(["e-1", "e-2", "e-3", "e-crit", "e-hi"])
+    }),
+  )
+})
+
+describe("DeepAgentEventBus.sweepPublishLimiter (§E2 bucket prune)", () => {
+  it.effect("prunes only elapsed-window buckets and re-admits after the prune", () =>
+    Effect.gen(function* () {
+      setNow(0)
+      const bus = yield* DeepAgentEventBus.Service
+      // exhaust wrk_a's window (limit=1) — its bucket resetAt = 0 + 60_000.
+      yield* bus.tryPublish(input({ idempotencyKey: "sw-a1", workspaceID: "wrk_a" }), { limit: 1 })
+      const aDrop = yield* bus.tryPublish(input({ idempotencyKey: "sw-a2", workspaceID: "wrk_a" }), { limit: 1 })
+      expect(aDrop).toEqual({ dropped: "rate_limited" })
+
+      // BEFORE the window elapses a sweep prunes nothing (the bucket is still live).
+      const early = yield* bus.sweepPublishLimiter(59_999)
+      expect(early.prunedBuckets).toBe(0)
+      // and the ceiling is still enforced at that instant.
+      const stillDrop = yield* bus.tryPublish(input({ idempotencyKey: "sw-a3", workspaceID: "wrk_a" }), { limit: 1 })
+      expect(stillDrop).toEqual({ dropped: "rate_limited" })
+
+      // AFTER the window elapses the stale bucket is pruned (bounding memory for the idle workspace).
+      const pruned = yield* bus.sweepPublishLimiter(60_001)
+      expect(pruned.prunedBuckets).toBe(1)
+      // a fresh window re-admits (the pruned bucket is recreated on the next hit).
+      setNow(60_002)
+      const after = yield* bus.tryPublish(input({ idempotencyKey: "sw-a4", workspaceID: "wrk_a" }), { limit: 1 })
+      expect("published" in after).toBe(true)
+    }),
+  )
 })
 
 describe("DeepAgentEventBus publish latency (§F1)", () => {

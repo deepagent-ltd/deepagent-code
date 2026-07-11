@@ -7,6 +7,7 @@ import { DeepAgentEventBus } from "@deepagent-code/core/deepagent/deepagent-even
 import { Scheduler } from "@deepagent-code/core/deepagent/scheduler"
 import { Observability } from "@deepagent-code/core/deepagent/observability"
 import { ApprovalQueue } from "@deepagent-code/core/deepagent/approval-queue"
+import { LMNEvents } from "@deepagent-code/core/deepagent/lmn-events"
 import { DeepAgentEvent } from "@deepagent-code/core/deepagent/deepagent-event"
 import { Database } from "@deepagent-code/core/database/database"
 import { AgentListProviderService } from "@deepagent-code/core/im/agent-list-provider"
@@ -234,6 +235,113 @@ describe("V4.0 §H2 rollback safety — every flag OFF disables the feature", ()
       // durability: the event is still replayable (retained, not dropped) — §H2 keeps persisted events.
       const replayed = yield* bus.recentByType({ type: "ci.failure", windowMs: Number.MAX_SAFE_INTEGER, now: 1_000 })
       expect(replayed.length).toBe(1)
+    }),
+  )
+})
+
+// §E2 + §D2 no-silent-loss — the goal-manager emit sequence must NOT lose an approval-queue event to a
+// shared-workspace publish flood. This replicates goal-manager.emitGoalLifecycleEvent's exact logic
+// (priority via LMNEvents.isApprovalQueueCandidate → tryPublish → offer on published) against the REAL
+// bus + ApprovalQueue, with the per-workspace window exhausted by UNRELATED normal traffic.
+describe("V4.0 §E2/§D2 goal.rolled_back survives a shared-workspace publish flood", () => {
+  const it = testEffect(fullLayer)
+
+  // faithful mirror of goal-manager.emitGoalLifecycleEvent's publish+offer (the code under test).
+  const emitGoalLifecycle = (
+    bus: DeepAgentEventBus.Interface,
+    approvalQueue: ApprovalQueue.Interface,
+    args: { workspaceID: string; eventType: string; goalId: string; idempotencyKey: string; limit: number },
+  ) =>
+    Effect.gen(function* () {
+      const priority = LMNEvents.isApprovalQueueCandidate(args.eventType) ? "high" : "normal"
+      const outcome = yield* bus.tryPublish(
+        {
+          type: args.eventType,
+          source: "system",
+          workspaceID: args.workspaceID,
+          correlationID: args.goalId,
+          idempotencyKey: args.idempotencyKey,
+          priority,
+          payload: { goalId: args.goalId, phase: "rolled_back" },
+        },
+        { limit: args.limit },
+      )
+      if ("dropped" in outcome) return { queued: null, dropped: true as const }
+      const queued = yield* approvalQueue.offer(outcome.published)
+      return { queued, dropped: false as const }
+    })
+
+  it.effect("with the publish window exhausted, goal.rolled_back still persists AND reaches the queue", () =>
+    Effect.gen(function* () {
+      setNow(3_000)
+      const bus = yield* DeepAgentEventBus.Service
+      const approvalQueue = yield* ApprovalQueue.Service
+      const wrk = "wrk_flood"
+      // 1. exhaust the per-workspace publish window with UNRELATED normal im.message.created traffic
+      //    (limit=2 for the test) — the shared limiter is now saturated for this minute.
+      for (const k of ["im-a", "im-b"]) {
+        const r = yield* bus.tryPublish(
+          { type: LMNEvents.IM_MESSAGE_CREATED, source: "im", workspaceID: wrk, priority: "normal", idempotencyKey: k, payload: {} },
+          { limit: 2 },
+        )
+        expect("published" in r).toBe(true)
+      }
+      // sanity: a further NORMAL publish is now shed by the exhausted window.
+      const shed = yield* bus.tryPublish(
+        { type: LMNEvents.IM_MESSAGE_CREATED, source: "im", workspaceID: wrk, priority: "normal", idempotencyKey: "im-c", payload: {} },
+        { limit: 2 },
+      )
+      expect(shed).toEqual({ dropped: "rate_limited" })
+
+      // 2. a goal.rolled_back arrives in the SAME saturated minute. Pre-fix it was "normal" → shed →
+      //    never offered (silent loss). Post-fix it is elevated to "high" → bypasses the gate.
+      const result = yield* emitGoalLifecycle(bus, approvalQueue, {
+        workspaceID: wrk,
+        eventType: LMNEvents.GOAL_ROLLED_BACK,
+        goalId: "g-rollback",
+        idempotencyKey: "goal:g-rollback:rolled_back:1",
+        limit: 2,
+      })
+      expect(result.dropped).toBe(false) // NOT shed despite the exhausted window
+      // persisted on the durable log …
+      const persisted = yield* bus.recentByType({
+        type: LMNEvents.GOAL_ROLLED_BACK,
+        workspaceID: wrk,
+        windowMs: Number.MAX_SAFE_INTEGER,
+        now: 3_000,
+      })
+      expect(persisted.length).toBe(1)
+      // … AND it reached the Approval Queue for human review (the whole point of no-silent-loss).
+      expect(result.queued).not.toBeNull()
+      expect(result.queued?.eventID).toBe(persisted[0].id) // the queued item is exactly this event
+      const pending = yield* approvalQueue.listPending(wrk)
+      expect(pending.map((p) => p.eventID)).toContain(persisted[0].id)
+      expect(pending.some((p) => p.summary.startsWith("Goal rolled back"))).toBe(true)
+    }),
+  )
+
+  it.effect("goal.tick / goal.completed stay normal and remain correctly sheddable under load", () =>
+    Effect.gen(function* () {
+      // membership check is the exact predicate the production priority ternary uses.
+      expect(LMNEvents.isApprovalQueueCandidate(LMNEvents.GOAL_ROLLED_BACK)).toBe(true)
+      expect(LMNEvents.isApprovalQueueCandidate(LMNEvents.GOAL_NEEDS_HUMAN)).toBe(true)
+      expect(LMNEvents.isApprovalQueueCandidate(LMNEvents.GOAL_TICK)).toBe(false)
+      expect(LMNEvents.isApprovalQueueCandidate(LMNEvents.GOAL_COMPLETED)).toBe(false)
+
+      setNow(4_000)
+      const bus = yield* DeepAgentEventBus.Service
+      const wrk = "wrk_tick"
+      // exhaust the window, then a goal.tick (normal) is correctly shed — ticks are load-shed by design.
+      yield* bus.tryPublish(
+        { type: LMNEvents.IM_MESSAGE_CREATED, source: "im", workspaceID: wrk, priority: "normal", idempotencyKey: "t-fill", payload: {} },
+        { limit: 1 },
+      )
+      const tickPriority = LMNEvents.isApprovalQueueCandidate(LMNEvents.GOAL_TICK) ? "high" : "normal"
+      const tick = yield* bus.tryPublish(
+        { type: LMNEvents.GOAL_TICK, source: "system", workspaceID: wrk, priority: tickPriority, idempotencyKey: "goal:g:tick:1", payload: {} },
+        { limit: 1 },
+      )
+      expect(tick).toEqual({ dropped: "rate_limited" })
     }),
   )
 })

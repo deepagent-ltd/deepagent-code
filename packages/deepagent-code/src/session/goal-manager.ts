@@ -266,18 +266,43 @@ export const layer = Layer.effect(
         // idempotencyKey reuses the V3.9 plan-version idempotency intent: one event per (goal, phase,
         // tick) so a re-published status doesn't double-emit.
         const idempotencyKey = `goal:${status.goalId}:${phase}:${status.ledger.ticks}`
-        const event = yield* eventBus.publish({
+        // §E2 RATE GATE + §D2 no-silent-loss: any event that must reach the Approval Queue MUST publish
+        // at "high" so it BYPASSES the per-workspace ceiling and always persists + offers. This is NOT
+        // just goal.needs_human — goal.rolled_back is also a terminal APPROVAL_QUEUE_TYPES member, and
+        // because the publish limiter is shared per-workspace it could otherwise be shed by an unrelated
+        // im.message.created flood in the same minute → a rollback needing human review silently lost.
+        // `isApprovalQueueCandidate` folds the full APPROVAL_QUEUE_TYPES set; goal.tick / goal.completed
+        // are NOT candidates, stay "normal", and remain correctly sheddable under load.
+        const priority = LMNEvents.isApprovalQueueCandidate(eventType) ? "high" : "normal"
+        // §E2 RATE GATE (live): the goal driver is a workspace-facing publisher (one event per tick),
+        // so it goes through `tryPublish` under the 1000/min per-workspace ceiling. A `goal.tick` /
+        // `goal.completed` is `normal` and CAN be shed under a flood; an approval-queue candidate
+        // (needs_human / rolled_back) is `high` and ALWAYS bypasses the gate — never dropped. On a drop
+        // we skip the approval offer (there is no persisted event to queue) and record §A4 event_dropped.
+        const outcome = yield* eventBus.tryPublish({
           type: eventType,
           source: "system",
           workspaceID,
           actorID: sessionID,
           correlationID: status.goalId,
           idempotencyKey,
-          priority: eventType === LMNEvents.GOAL_NEEDS_HUMAN ? "high" : "normal",
+          priority,
           payload: { goalId: status.goalId, planDocId: status.planDocId, phase, gaps: status.gaps },
         })
+        if ("dropped" in outcome) {
+          yield* Effect.logWarning("goal lifecycle event dropped by publish rate gate").pipe(
+            Effect.annotateLogs({
+              reason: "event_dropped",
+              cause: "rate_limited",
+              workspaceID,
+              goalId: status.goalId,
+              phase,
+            }),
+          )
+          return
+        }
         // terminal escalations queue for human review (§D2). shouldQueueForApproval gates it.
-        yield* approvalQueue.offer(event)
+        yield* approvalQueue.offer(outcome.published)
       })
 
     // Publish an IMMEDIATE goal.updated for a control transition (pause/resume/stop). Reuses the control's

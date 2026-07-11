@@ -32,12 +32,15 @@ describe("RateLimiter.check", () => {
     expect(rl.check("a", 1, 60_000, t0)).toBe(false)
   })
 
-  test("sweep drops only expired buckets", () => {
+  test("sweep drops only expired buckets and reports the prune count", () => {
     const rl = new RateLimiter.Service()
     const t0 = 1_000_000
     rl.check("stale", 1, 10_000, t0)
     rl.check("fresh", 1, 60_000, t0)
-    rl.sweep(t0 + 20_000) // stale window (10s) elapsed; fresh (60s) not.
+    expect(rl.size()).toBe(2)
+    const pruned = rl.sweep(t0 + 20_000) // stale window (10s) elapsed; fresh (60s) not.
+    expect(pruned).toBe(1) // exactly the one elapsed bucket dropped
+    expect(rl.size()).toBe(1) // the live "fresh" bucket survived
     // stale key got swept → a fresh check starts a new window (allowed).
     expect(rl.check("stale", 1, 10_000, t0 + 20_000)).toBe(true)
     // fresh key survived → still over its limit within its window.

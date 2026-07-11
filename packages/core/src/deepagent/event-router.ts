@@ -31,7 +31,21 @@ export const PRIORITY_RANK: Record<DeepAgentEvent.EventPriority, number> = {
 }
 
 // Why an event was dropped rather than dispatched — surfaced as an `event_dropped` observability signal.
-export type DropReason = "flag_disabled" | "no_match" | "deduped" | "backpressure"
+// `coordination`: the event is a §C4 inter-agent coordination/derivative signal (agent.task.* /
+// agent.handoff.*) — it exists for observation/oversight/trace, NOT to trigger a fresh agent dispatch.
+export type DropReason = "flag_disabled" | "no_match" | "deduped" | "backpressure" | "coordination"
+
+// §C4 RE-ENTRANCY GUARD — the coordination/derivative event-type family. The Multi-Agent Runtime emits
+// these BACK onto the bus (agent.task.started/blocked/completed/needs_human, agent.handoff.*) as a
+// side effect of a `coordinate()` pass, so a broad-glob agent trigger (`agent.*` / `*`) subscribed to
+// them would re-enter the dispatcher → a new `coordinate()` → fresh coordination events (new ids, so the
+// alreadyCompleted guard never fires) → an unbounded, ceiling-bypassing cascade. Per §C4 these events
+// are for observation/oversight/trace only; they must NEVER re-trigger agent dispatch. They are still
+// persisted and delivered to the trace/oversight consumers (separate subscribers) — this only closes
+// the AGENT-DISPATCH loop. NOTE: `agent.push.*` (proactive push) is a DIFFERENT family and still routes.
+export const COORDINATION_EVENT_PREFIXES = ["agent.task.", "agent.handoff."] as const
+export const isCoordinationEvent = (eventType: string): boolean =>
+  COORDINATION_EVENT_PREFIXES.some((prefix) => eventType.startsWith(prefix))
 
 export type RouteDecision =
   | {
@@ -87,6 +101,7 @@ const matchingAgents = (
 
 /**
  * §A4 — the pure routing decision. Order of checks (fail-closed first):
+ *   0. coordination   → `coordination` if the event is a §C4 derivative signal (never re-dispatches).
  *   1. flag gate      → `flag_disabled` if the event path's flag is off.
  *   2. type match     → `no_match` if no permitted agent subscribes to this type.
  *   3. dedup (低优)   → `deduped` if a low-priority same-type event already exists in the window.
@@ -97,6 +112,14 @@ const matchingAgents = (
  * never silently merged. Backpressure never drops high/critical (critical 抢占低优队列).
  */
 export const route = (input: RouteInput): RouteDecision => {
+  // §C4 RE-ENTRANCY GUARD (first, before agent matching): coordination/derivative events NEVER trigger a
+  // fresh agent dispatch, even if a wildcard-trigger agent (`agent.*` / `*`) would otherwise match them.
+  // This is the loop-closer — without it, coordinate()'s own emitted events (new ids each pass) would
+  // re-enter and cascade unbounded, bypassing the §E2 ceiling. Checked before the flag gate so it holds
+  // regardless of which flag governs the event path. The event is still persisted + observable by the
+  // trace/oversight consumers; only the agent-dispatch path is severed here.
+  if (isCoordinationEvent(input.event.type)) return { type: "dropped", reason: "coordination" }
+
   if (!input.flagEnabled) return { type: "dropped", reason: "flag_disabled" }
 
   const targets = matchingAgents(input.agents, input.event.type)
