@@ -201,18 +201,22 @@ export const layerWith = (options: LayerOptions) =>
               continue
             }
 
-            // idempotency: if a prior (retried) coordination already started this subtask, don't run it
-            // again — the stable id makes `coord:<id>:started` a durable marker in the event log.
-            const alreadyStarted = yield* bus
-              .recentByType({ type: "agent.task.started", workspaceID: event.workspaceID, windowMs: Number.MAX_SAFE_INTEGER, now: event.createdAt })
+            // idempotency: if a prior coordination already COMPLETED this subtask, don't re-run it.
+            // We check the `completed` marker, NOT `started`: a subtask emits `started` before running,
+            // so guarding on `started` would treat a subtask that started-then-FAILED (runner_failed →
+            // nacked → retried) as done and ack the retry away without ever redoing the work. Guarding on
+            // `completed` means only genuinely-finished subtasks short-circuit; a failed one re-runs on
+            // retry (the stable id keeps the started/completed idempotency keys stable across retries).
+            const alreadyCompleted = yield* bus
+              .recentByType({ type: "agent.task.completed", workspaceID: event.workspaceID, windowMs: Number.MAX_SAFE_INTEGER, now: event.createdAt })
               .pipe(
                 Effect.map((events) =>
                   events.some((e) => (e.payload as { taskID?: string } | undefined)?.taskID === subtask.id),
                 ),
                 Effect.orElseSucceed(() => false),
               )
-            if (alreadyStarted) {
-              outcomes.push({ taskID: subtask.id, capability: subtask.capability, status: "completed", reason: "already_started" })
+            if (alreadyCompleted) {
+              outcomes.push({ taskID: subtask.id, capability: subtask.capability, status: "completed", reason: "already_completed" })
               completed.add(subtask.id) // treat as done so dependents can proceed
               continue
             }
@@ -289,8 +293,6 @@ export const layerWith = (options: LayerOptions) =>
                 continue
               }
             }
-            admittedClaims.push(claim)
-
             // §E2 concurrency cap — acquire a per-workspace execution slot. Over cap ⇒ DEFER (retryable
             // via the bus, not dropped), so a burst never runs more than the workspace's cap at once.
             const slot = concurrency ? yield* concurrency.acquire(event.workspaceID) : undefined
@@ -299,6 +301,9 @@ export const layerWith = (options: LayerOptions) =>
               hasUnfinished = true
               continue
             }
+            // record the claim only for a subtask that WILL run this pass — a concurrency-deferred task
+            // must not leave a phantom claim that later subtasks would needlessly arbitrate against.
+            admittedClaims.push(claim)
 
             // §C4 started → run one turn → completed/blocked. Release the concurrency slot when the turn
             // settles (ensuring runs on success, failure, and interruption).

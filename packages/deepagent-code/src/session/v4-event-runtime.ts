@@ -14,6 +14,9 @@ import { Session } from "./session"
 import { SessionPrompt } from "./prompt"
 import { Agent } from "../agent/agent"
 import { Provider } from "../provider/provider"
+import { InstanceStore } from "@/project/instance-store"
+import { InstanceRef, WorkspaceRef } from "@/effect/instance-ref"
+import { WorkspaceV2 } from "@deepagent-code/core/workspace"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { MultiAgentRuntime } from "./multi-agent-runtime"
 import { EventDispatcher } from "./event-dispatcher"
@@ -39,6 +42,10 @@ import * as Log from "@deepagent-code/core/util/log"
 
 const log = Log.create({ service: "v4-event-runtime" })
 
+// §G — a per-turn wall-clock ceiling for event-driven agent runs. Generous (event work can be
+// substantial) but finite, so a blocked tool can't stall the sequential dispatch loop forever.
+const EVENT_TURN_TIMEOUT_MS = 10 * 60 * 1000
+
 const failedTurn = (): SubagentTurnResult => ({ ok: false, structured: undefined, text: "", tokensUsed: 0, cost: 0 })
 
 // The production SubagentTurnRunner for event-driven dispatch. Unlike the goal-loop runner (which
@@ -50,27 +57,44 @@ const makeEventTurnRunner = (deps: {
   readonly sessions: Session.Interface
   readonly agents: Agent.Interface
   readonly sessionPrompt: SessionPrompt.Interface
+  readonly instanceStore: InstanceStore.Interface
   readonly defaultModel: () => Effect.Effect<{ providerID: ProviderV2.ID; modelID: ModelV2.ID }>
 }): SubagentTurnRunner =>
   (input) =>
     Effect.gen(function* () {
       const next = yield* deps.agents.get(input.agentType).pipe(Effect.orElseSucceed(() => undefined))
       if (!next) return failedTurn()
-      // §C — IM's workspaceID is a grouping key that may be a genuine "wrk"-id OR a directory fallback;
-      // only forward a genuine workspace id to the session, otherwise locate purely by directory.
+      // §C — the event's workspaceID is a grouping key that may be a genuine "wrk"-id OR a directory
+      // fallback (single-user / directory-routed). Only forward a genuine workspace id to the session.
       const workspaceID =
-        input.workspaceID && input.workspaceID.startsWith("wrk") ? input.workspaceID : undefined
-      const directory = input.directory ?? input.workspaceID
+        input.workspaceID && input.workspaceID.startsWith("wrk")
+          ? WorkspaceV2.ID.make(input.workspaceID)
+          : undefined
+      // The turn must run in a REAL working directory. Prefer an explicit event directory; else, only a
+      // NON-"wrk" workspaceID doubles as a directory. A bare "wrk_"-id is NOT a path → no directory.
+      const directory =
+        input.directory ?? (input.workspaceID && !input.workspaceID.startsWith("wrk") ? input.workspaceID : undefined)
       if (!directory) return failedTurn()
 
-      const child = yield* deps.sessions
-        .create({
+      // CRITICAL: this runs on a background daemon fiber, which carries NO InstanceRef (that is only set
+      // per-request by the instance-context middleware). sessions.create → InstanceState.context reads
+      // InstanceRef and dies without it. So we must ESTABLISH the instance context here — load it for the
+      // event's directory and provide InstanceRef/WorkspaceRef around create + prompt (mirrors the
+      // instance-context middleware + the IM executor, which inherit it from the request fiber).
+      const ctx = yield* deps.instanceStore.load({ directory }).pipe(Effect.orElseSucceed(() => undefined))
+      if (!ctx) return failedTurn()
+
+      const withContext = <A, E, R>(eff: Effect.Effect<A, E, R>) =>
+        eff.pipe(Effect.provideService(InstanceRef, ctx), Effect.provideService(WorkspaceRef, workspaceID))
+
+      const child = yield* withContext(
+        deps.sessions.create({
           agent: next.name,
           title: `${input.agentType} (event)`,
           directory,
           ...(workspaceID ? { workspaceID } : {}),
-        } as Parameters<Session.Interface["create"]>[0])
-        .pipe(Effect.orElseSucceed(() => undefined))
+        } as Parameters<Session.Interface["create"]>[0]),
+      ).pipe(Effect.orElseSucceed(() => undefined))
       if (!child) return failedTurn()
 
       if (input.prepareSession) {
@@ -82,9 +106,9 @@ const makeEventTurnRunner = (deps: {
       }
 
       const model = yield* deps.defaultModel()
-      const parts = yield* deps.sessionPrompt.resolvePromptParts(input.prompt)
-      const result = yield* deps.sessionPrompt
-        .prompt({
+      const parts = yield* withContext(deps.sessionPrompt.resolvePromptParts(input.prompt))
+      const result = yield* withContext(
+        deps.sessionPrompt.prompt({
           messageID: MessageID.ascending(),
           sessionID: child.id,
           model,
@@ -93,8 +117,14 @@ const makeEventTurnRunner = (deps: {
             ? { format: { type: "json_schema" as const, schema: input.outputSchema } as never }
             : {}),
           parts,
-        })
-        .pipe(Effect.map((r) => r as { text?: string }), Effect.orElseSucceed(() => undefined))
+        }),
+      ).pipe(
+        // §G — bound the turn: an event-triggered session has no interactive client, so a tool that
+        // blocks on approval would otherwise hang the whole (sequential) dispatch loop indefinitely.
+        Effect.timeout(EVENT_TURN_TIMEOUT_MS),
+        Effect.map((r) => r as { text?: string }),
+        Effect.orElseSucceed(() => undefined),
+      )
       if (!result) return failedTurn()
 
       return {
@@ -115,11 +145,13 @@ const runtimeLayer = Layer.unwrap(
     const agents = yield* Agent.Service
     const sessionPrompt = yield* SessionPrompt.Service
     const provider = yield* Provider.Service
+    const instanceStore = yield* InstanceStore.Service
     const concurrency = yield* WorkspaceConcurrency.Service
     const runner = makeEventTurnRunner({
       sessions,
       agents,
       sessionPrompt,
+      instanceStore,
       // provider default model, resolved per turn; falls back to failedTurn on error via the runner.
       defaultModel: () => provider.defaultModel().pipe(Effect.orDie),
     })
@@ -155,8 +187,11 @@ const dispatcherLayer = Layer.unwrap(
   }),
 )
 
-// The retention sweeper daemon — started only when a V4 daemon is enabled, so no events are pruned in
-// the default (flags-off) configuration.
+// The retention sweeper daemon — started only when a V4 daemon is enabled. This coupling is
+// self-consistent, not a surprise: the durable event/audit tables are written ONLY by V4 publishers
+// (the flag-gated IM double-write, goal-manager, agent-push), so with all V4 flags off nothing is
+// written and there is nothing to prune. Turning any V4 flag on both starts writing those rows AND
+// starts the 30-day sweep that bounds them — they activate together by design.
 const retentionLayer = Layer.unwrap(
   Effect.gen(function* () {
     const flags = yield* RuntimeFlags.Service
