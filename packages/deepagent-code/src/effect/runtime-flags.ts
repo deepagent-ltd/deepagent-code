@@ -136,6 +136,13 @@ export class Service extends ConfigService.Service<Service>()("@deepagent-code/R
   // V4.0 §B: inbound file/attachment upload on the IM surface (attachment events + storage). Default
   // OFF until storage + scanning are wired. Enable with DEEPAGENT_CODE_V4_FILE_UPLOAD_ENABLED.
   v4FileUploadEnabled: bool("DEEPAGENT_CODE_V4_FILE_UPLOAD_ENABLED"),
+  // V4.0 §M: the Expert Panel AUTO-CONVENE consumer. When on, the PanelConveneConsumer subscribes to
+  // the bus and auto-summons an Expert Panel for high-risk events (destructive migrations, security
+  // alerts, architecture changes) per the pure PanelConvenePolicy, publishing a panel.verdict and
+  // routing a needs_human verdict to the §D2 Approval Queue. Default OFF: auto-convening is high-cost
+  // (fans out reviewer subagents) and high-blast-radius, so it must be explicitly opted into — an
+  // explicit V3.9 in-session Convener call is unaffected. Enable with DEEPAGENT_CODE_V4_PANEL_AUTO_CONVENE.
+  v4PanelAutoConvene: bool("DEEPAGENT_CODE_V4_PANEL_AUTO_CONVENE"),
   client: Config.string("DEEPAGENT_CODE_CLIENT").pipe(Config.withDefault("cli")),
 }) {}
 

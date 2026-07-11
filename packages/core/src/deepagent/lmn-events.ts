@@ -28,11 +28,18 @@ export const GOAL_ROLLED_BACK = "goal.rolled_back"
 export const PANEL_CONVENE_REQUESTED = "panel.convene.requested"
 export const PANEL_VERDICT = "panel.verdict"
 
+// §C/§D — a multi-agent subtask that could NOT auto-execute and needs a human: it exceeded the agent's
+// autonomy ceiling, or it is a level_5 suggestion_only action (never auto-runs). The Multi-Agent
+// Runtime publishes this so the §D2 Approval Queue surfaces it for a human decision (rather than the
+// action being silently dropped).
+export const AGENT_TASK_NEEDS_HUMAN = "agent.task.needs_human"
+
 // The set of event types that represent a TERMINAL outcome requiring human attention — the Oversight
 // Approval Queue (§D2) is populated from these. Kept as a set so the wiring can test membership.
 export const APPROVAL_QUEUE_TYPES: ReadonlySet<string> = new Set([
   GOAL_NEEDS_HUMAN,
   GOAL_ROLLED_BACK,
+  AGENT_TASK_NEEDS_HUMAN,
   PANEL_VERDICT, // only when the verdict is needs_human — the wiring checks the payload
 ])
 
