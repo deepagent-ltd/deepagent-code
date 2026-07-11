@@ -29,6 +29,10 @@ export const AgentPushLogTable = sqliteTable(
     // too for the audit trail.
     content: text(),
     created_at: integer().notNull(),
+    // §E4 digest flush marker: a `decision='digest'` push is held during quiet hours (no message
+    // written). NULL ⇒ still held (awaiting the quiet-hours-end digest); set to the flush epoch ms once
+    // the DigestBuilder has batched + delivered it, so a flushed row is never re-delivered (idempotent).
+    digest_flushed_at: integer(),
   },
   (table) => [
     // §B2 去重: storage-enforced one-delivery-per-key.
@@ -38,6 +42,13 @@ export const AgentPushLogTable = sqliteTable(
     index("idx_im_agent_push_logs_agent_time").on(table.agent_id, table.group_id, table.created_at),
     // per-workspace audit sweep.
     index("idx_im_agent_push_logs_workspace").on(table.workspace_id, table.created_at),
+    // §E4 digest scan: unflushed held-digest rows per workspace (decision='digest' AND
+    // digest_flushed_at IS NULL) so the DigestBuilder finds pending digests without a full-table scan.
+    index("idx_im_agent_push_logs_digest_pending").on(
+      table.workspace_id,
+      table.decision,
+      table.digest_flushed_at,
+    ),
   ],
 )
 
