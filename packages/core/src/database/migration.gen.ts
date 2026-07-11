@@ -46,5 +46,6 @@ export const migrations = (
     import("./migration/20260711080000_im_attachments"),
     import("./migration/20260711090000_im_agent_push_digest_flushed"),
     import("./migration/20260711100000_deepagent_event_publish_latency"),
+    import("./migration/20260712000000_deepagent_schedule_key"),
   ])
 ).map((module) => module.default) satisfies DatabaseMigration.Migration[]
