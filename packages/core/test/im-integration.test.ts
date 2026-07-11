@@ -68,6 +68,8 @@ describe("IM Integration Tests", () => {
         mentions TEXT,
         metadata TEXT,
         reply_to_id TEXT,
+        event_id TEXT,
+        delivery_status TEXT,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL,
         deleted_at INTEGER,

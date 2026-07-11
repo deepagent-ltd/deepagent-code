@@ -140,6 +140,13 @@ export const MessageTable = sqliteTable(
     mentions: text({ mode: "json" }).$type<string[]>(),
     metadata: text({ mode: "json" }).$type<MessageMetadata>(),
     reply_to_id: text().$type<IMID.MessageID>(),
+    // V4.0 §B4 — the DeepAgent Event Bus event this message was produced from (agent replies / proactive
+    // pushes carry it; user messages that publish im.message.created link back via it). NULL for legacy
+    // V3.8 messages — nullable so the V3.8 write path is unchanged (§H compatibility).
+    event_id: text(),
+    // V4.0 §B4 — delivery lifecycle for event-driven messages: pending | delivered | failed. NULL ⇒
+    // the legacy synchronous path (no delivery tracking). Nullable for V3.8 compatibility.
+    delivery_status: text().$type<"pending" | "delivered" | "failed">(),
     created_at: integer().notNull().$default(() => Date.now()),
     updated_at: integer().notNull().$onUpdate(() => Date.now()),
     deleted_at: integer(),
@@ -149,5 +156,8 @@ export const MessageTable = sqliteTable(
     // migration. Drizzle's sqlite-core types in this repo version do not expose
     // `.where()` on indexes, so the partial predicate lives in the migration.
     index("idx_im_messages_active").on(table.group_id, table.created_at, table.id),
+    // V4.0 §B4 — thread pagination (reply_to_id chains) + event linkage lookups.
+    index("idx_im_messages_thread").on(table.group_id, table.reply_to_id, table.created_at),
+    index("idx_im_messages_event").on(table.event_id),
   ],
 )

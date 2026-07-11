@@ -56,9 +56,24 @@ describe("V4.0 migration integrity (§H/§I)", () => {
         "deepagent_schedule_due_idx", // §A4 tick scan
         "idx_im_agent_push_logs_idempotency", // §B2 push dedup (the reviewed BLOCKER fix)
         "idx_im_agent_push_logs_agent_time", // §B2 rate-limit window
+        "idx_im_messages_thread", // §B4 thread pagination
+        "idx_im_messages_event", // §B4 event linkage
       ]) {
         expect(yield* indexExists(idx)).toBe(true)
       }
+    }),
+  )
+
+  it.effect("§B4 im_messages has the V4 columns (event_id, delivery_status) — additive, V3.8-compatible", () =>
+    Effect.gen(function* () {
+      const { db } = yield* Database.Service
+      const cols = (yield* db.all(`PRAGMA table_info('im_messages')`)) as Array<{ name: string; notnull: number }>
+      const byName = new Map(cols.map((c) => [c.name, c]))
+      expect(byName.has("event_id")).toBe(true)
+      expect(byName.has("delivery_status")).toBe(true)
+      // both MUST be nullable (notnull=0) so the V3.8 write path (which omits them) still works.
+      expect(byName.get("event_id")?.notnull).toBe(0)
+      expect(byName.get("delivery_status")?.notnull).toBe(0)
     }),
   )
 
