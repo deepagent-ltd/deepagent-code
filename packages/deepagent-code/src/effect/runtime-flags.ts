@@ -110,37 +110,42 @@ export class Service extends ConfigService.Service<Service>()("@deepagent-code/R
   bashDefaultTimeoutMs: positiveInteger("DEEPAGENT_CODE_EXPERIMENTAL_BASH_DEFAULT_TIMEOUT_MS"),
   experimentalNativeLlm: bool("DEEPAGENT_CODE_EXPERIMENTAL_NATIVE_LLM"),
   experimentalWebSockets: bool("DEEPAGENT_CODE_EXPERIMENTAL_WEBSOCKETS"),
-  // ── V4.0 event-driven Agent-OS — DEFAULT ON in the v4.0-beta internal test build ─────────────────
-  // This is the internal beta: every V4 capability ships ON so the full event-driven Agent-OS is
-  // exercised end-to-end during testing (not a grey rollout). Each remains an independent KILL-SWITCH —
-  // set the env var `=false` to disable one capability for isolation/rollback (mirrors the V3.9
-  // stableOn convention for wiki/panel/goalLoop). Before cutting the v4.0 GA release, these defaults
-  // stay ON (proven in beta); a deployment that wants the pre-V4 behavior sets the flags to false.
+  // ── V4.0 event-driven Agent-OS — DEFAULT OFF (production-safe, operator opt-in) ──────────────────
+  // Per §H3 (Feature Flags: all six ship OFF) and §H1 (staged rollout: shadow → low-risk → push
+  // manual-confirm → multi-agent gradually), every V4 CAPABILITY defaults OFF in production. This is the
+  // pre-V4 (V3.8-equivalent) behavior by default; a deployment turns capabilities on deliberately as it
+  // advances the rollout. IMPORTANT: the always-on SAFETY GATES (security-gate, rate-limit) are NOT
+  // gated by these flags — they run regardless once wired; these flags gate only the V4 capabilities
+  // themselves, never the safety checks. Each flag is an independent OPT-IN: set the env var `=true` to
+  // enable one capability for verification or a staged rollout. `bool(name)` = default false, override
+  // on with `=true`; the `RuntimeFlags.layer({...})` test helper can also force any flag on
+  // programmatically (tests opt into the behavior they exercise).
   //
   // §A/§B: route inbound IM messages through the DeepAgent Event Bus (im.message.created → Router →
-  // Scheduler) alongside the legacy path (double-write). Disable with DEEPAGENT_CODE_V4_EVENT_DRIVEN_IM=false.
-  v4EventDrivenIm: stableOn("DEEPAGENT_CODE_V4_EVENT_DRIVEN_IM"),
+  // Scheduler) alongside the legacy path (double-write). Enable with DEEPAGENT_CODE_V4_EVENT_DRIVEN_IM=true.
+  v4EventDrivenIm: bool("DEEPAGENT_CODE_V4_EVENT_DRIVEN_IM"),
   // §A4: allow the agent to PUSH proactively (monitor/schedule/ci-driven outbound), through the §B2
-  // policy gate. Disable with DEEPAGENT_CODE_V4_AGENT_PUSH_ENABLED=false.
-  v4AgentPushEnabled: stableOn("DEEPAGENT_CODE_V4_AGENT_PUSH_ENABLED"),
+  // policy gate. HIGH-RISK (side-effecting outbound) — operator opt-in. Enable with DEEPAGENT_CODE_V4_AGENT_PUSH_ENABLED=true.
+  v4AgentPushEnabled: bool("DEEPAGENT_CODE_V4_AGENT_PUSH_ENABLED"),
   // §C: the Multi-Agent Runtime (coordinated multi-agent execution over the bus + agent.task.*
-  // coordination). This is the master switch that starts the event-runtime daemons. Disable with
-  // DEEPAGENT_CODE_V4_MULTI_AGENT_RUNTIME=false.
-  v4MultiAgentRuntime: stableOn("DEEPAGENT_CODE_V4_MULTI_AGENT_RUNTIME"),
+  // coordination). This is the master switch that starts the event-runtime daemons. HIGH-RISK —
+  // operator opt-in. Enable with DEEPAGENT_CODE_V4_MULTI_AGENT_RUNTIME=true.
+  v4MultiAgentRuntime: bool("DEEPAGENT_CODE_V4_MULTI_AGENT_RUNTIME"),
   // §D: permit autonomy level 2 (act-then-report on reversible actions, subject to the Oversight
-  // ceiling + Approval Queue). Disable with DEEPAGENT_CODE_V4_AGENT_AUTONOMY_LEVEL_2=false.
-  v4AgentAutonomyLevel2: stableOn("DEEPAGENT_CODE_V4_AGENT_AUTONOMY_LEVEL_2"),
-  // §B: threaded conversations (thread query + reply grouping on the IM surface). Disable with
-  // DEEPAGENT_CODE_V4_THREAD_ENABLED=false.
-  v4ThreadEnabled: stableOn("DEEPAGENT_CODE_V4_THREAD_ENABLED"),
-  // §B: inbound file/attachment upload on the IM surface (im_attachments + local-disk storage). Disable
-  // with DEEPAGENT_CODE_V4_FILE_UPLOAD_ENABLED=false.
-  v4FileUploadEnabled: stableOn("DEEPAGENT_CODE_V4_FILE_UPLOAD_ENABLED"),
+  // ceiling + Approval Queue). HIGH-RISK (autonomous side effects) — operator opt-in. Enable with
+  // DEEPAGENT_CODE_V4_AGENT_AUTONOMY_LEVEL_2=true.
+  v4AgentAutonomyLevel2: bool("DEEPAGENT_CODE_V4_AGENT_AUTONOMY_LEVEL_2"),
+  // §B: threaded conversations (thread query + reply grouping on the IM surface). Default OFF (known
+  // correctness bugs pending). Enable with DEEPAGENT_CODE_V4_THREAD_ENABLED=true.
+  v4ThreadEnabled: bool("DEEPAGENT_CODE_V4_THREAD_ENABLED"),
+  // §B: inbound file/attachment upload on the IM surface (im_attachments + local-disk storage). Enable
+  // with DEEPAGENT_CODE_V4_FILE_UPLOAD_ENABLED=true.
+  v4FileUploadEnabled: bool("DEEPAGENT_CODE_V4_FILE_UPLOAD_ENABLED"),
   // §M: the Expert Panel AUTO-CONVENE consumer — auto-summons an Expert Panel for high-risk events
   // (destructive migrations, security alerts, architecture changes) per PanelConvenePolicy, routing a
-  // needs_human verdict to the §D2 Approval Queue. High-cost (fans out reviewer subagents) but ON in
-  // beta to test the path. Disable with DEEPAGENT_CODE_V4_PANEL_AUTO_CONVENE=false.
-  v4PanelAutoConvene: stableOn("DEEPAGENT_CODE_V4_PANEL_AUTO_CONVENE"),
+  // needs_human verdict to the §D2 Approval Queue. HIGH-COST (fans out reviewer subagents) + autonomous
+  // — operator opt-in. Enable with DEEPAGENT_CODE_V4_PANEL_AUTO_CONVENE=true.
+  v4PanelAutoConvene: bool("DEEPAGENT_CODE_V4_PANEL_AUTO_CONVENE"),
   client: Config.string("DEEPAGENT_CODE_CLIENT").pipe(Config.withDefault("cli")),
 }) {}
 
