@@ -84,6 +84,9 @@ import { configHandlers } from "./handlers/config"
 import { controlHandlers } from "./handlers/control"
 import { controlPlaneHandlers } from "./handlers/control-plane"
 import { deepagentHandlers } from "./handlers/deepagent"
+import { oversightHandlers } from "./handlers/oversight"
+import { Observability as OversightObservability } from "@deepagent-code/core/deepagent/observability"
+import { ApprovalQueue } from "@deepagent-code/core/deepagent/approval-queue"
 import { experimentalHandlers } from "./handlers/experimental"
 import { debugHandlers } from "./handlers/debug"
 import { fileHandlers } from "./handlers/file"
@@ -139,6 +142,11 @@ const ptyConnectHttpApiAuthLayer = ptyConnectAuthorizationLayer.pipe(Layer.provi
 const serverHttpApiAuthLayer = serverAuthorizationLayer.pipe(Layer.provide(ServerAuth.Config.defaultLayer))
 const workspaceRoutingLive = workspaceRoutingLayer.pipe(Layer.provide(Socket.layerWebSocketConstructorGlobal))
 const imRepositoryLayer = IMRepositoryLive.pipe(Layer.provide(Database.defaultLayer))
+// V4.0 §D2/§F — Oversight services (read-only projection of the durable V4 substrate). Both need only
+// the Database layer; provided independently to the oversight handler.
+const oversightServicesLayer = Layer.mergeAll(OversightObservability.layer, ApprovalQueue.layer).pipe(
+  Layer.provide(Database.defaultLayer),
+)
 // IM agent execution is driven by the deepagent-code session stack (Session +
 // SessionPrompt), NOT core SessionV2 (which binds a no-op execution layer and
 // never runs an agent). ServerAgentExecutorLive / ServerAgentListProviderLive
@@ -179,6 +187,7 @@ const instanceApiRoutes = HttpApiBuilder.layer(InstanceHttpApi).pipe(
     debugHandlers,
     profileHandlers,
     deepagentHandlers,
+    oversightHandlers,
     experimentalHandlers,
     fileHandlers,
     imHandlers,
@@ -201,6 +210,7 @@ const instanceApiRoutes = HttpApiBuilder.layer(InstanceHttpApi).pipe(
 const instanceRoutes = instanceApiRoutes.pipe(
   Layer.provide([httpApiAuthLayer, workspaceRoutingLive, instanceContextLayer, schemaErrorLayer]),
   Layer.provide(imRuntimeLayer),
+  Layer.provide(oversightServicesLayer),
 )
 const serverRoutes = HttpApiBuilder.layer(Api).pipe(
   Layer.provide(handlers),

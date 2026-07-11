@@ -1,0 +1,125 @@
+import { Schema } from "effect"
+import { HttpApi, HttpApiEndpoint, HttpApiError, HttpApiGroup, OpenApi } from "effect/unstable/httpapi"
+import { Authorization } from "../middleware/authorization"
+import { InstanceContextMiddleware } from "../middleware/instance-context"
+import { WorkspaceRoutingMiddleware, WorkspaceRoutingQuery, WorkspaceRoutingQueryFields } from "../middleware/workspace-routing"
+import { described } from "./metadata"
+
+// V4.0 §D2/§F — Oversight HTTP surface. Read-only observability (metrics + trace) + the Approval
+// Queue (list pending + resolve) backing the Oversight Dashboard. All workspace-scoped via the same
+// WorkspaceRoutingQuery the rest of the instance API uses. These project the durable V4 substrate
+// (deepagent_event / delivery / approval_queue) — no new source of truth.
+
+const root = "/oversight"
+
+// ── §F metrics ──────────────────────────────────────────────────────────────────────────────────
+export const OversightMetrics = Schema.Struct({
+  windowFrom: Schema.Number,
+  windowTo: Schema.Number,
+  dlqEventsTotal: Schema.Number,
+  agentPushRejectedTotal: Schema.Number,
+  agentPushRejectedByReason: Schema.Record(Schema.String, Schema.Number),
+  agentTaskSuccessRate: Schema.NullOr(Schema.Number),
+  agentTaskCompleted: Schema.Number,
+  agentTaskFailed: Schema.Number,
+  agentConflictRate: Schema.NullOr(Schema.Number),
+  agentTaskBlockedTotal: Schema.Number,
+  agentPushTotal: Schema.Number,
+})
+
+// ── §F2 trace ───────────────────────────────────────────────────────────────────────────────────
+export const OversightTraceNode = Schema.Struct({
+  eventID: Schema.String,
+  type: Schema.String,
+  source: Schema.String,
+  causationID: Schema.optional(Schema.String),
+  createdAt: Schema.Number,
+})
+export const OversightTrace = Schema.Struct({ nodes: Schema.Array(OversightTraceNode) })
+
+// ── §D2 approval queue ──────────────────────────────────────────────────────────────────────────
+export const OversightApprovalItem = Schema.Struct({
+  id: Schema.String,
+  workspaceID: Schema.String,
+  eventID: Schema.String,
+  eventType: Schema.String,
+  correlationID: Schema.optional(Schema.String),
+  summary: Schema.String,
+  status: Schema.Literals(["pending", "resolved"]),
+  decision: Schema.optional(Schema.Literals(["approved", "rejected", "acknowledged"])),
+  resolvedBy: Schema.optional(Schema.String),
+  resolvedAt: Schema.optional(Schema.Number),
+  createdAt: Schema.Number,
+})
+export const OversightApprovalList = Schema.Struct({ items: Schema.Array(OversightApprovalItem) })
+export const OversightResolveInput = Schema.Struct({
+  id: Schema.String,
+  decision: Schema.Literals(["approved", "rejected", "acknowledged"]),
+})
+
+// metrics/trace query params extend the workspace routing query (spread the shared fields, matching
+// the debug group's idiom — this Schema build has no `Schema.extend`).
+const MetricsQuery = Schema.Struct({
+  ...WorkspaceRoutingQueryFields,
+  from: Schema.optional(Schema.NumberFromString),
+  to: Schema.optional(Schema.NumberFromString),
+})
+const TraceQuery = Schema.Struct({ ...WorkspaceRoutingQueryFields, correlationID: Schema.String })
+
+export const OversightApi = HttpApi.make("oversight").add(
+  HttpApiGroup.make("oversight")
+    .add(
+      HttpApiEndpoint.get("oversightMetrics", `${root}/metrics`, {
+        query: MetricsQuery,
+        success: described(OversightMetrics, "§F1 metric snapshot for the workspace over the window"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "oversight.metrics",
+          summary: "Agent Dashboard metrics",
+          description: "V4.0 §F1: DLQ total, push-rejected-by-reason, task success rate, conflict rate.",
+        }),
+      ),
+    )
+    .add(
+      HttpApiEndpoint.get("oversightTrace", `${root}/trace`, {
+        query: TraceQuery,
+        success: described(OversightTrace, "§F2 causal event chain for a correlationID"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "oversight.trace",
+          summary: "Event trace",
+          description: "V4.0 §F2: the causal event chain (event → route → agent → coordination) for a correlationID.",
+        }),
+      ),
+    )
+    .add(
+      HttpApiEndpoint.get("oversightApprovals", `${root}/approvals`, {
+        query: WorkspaceRoutingQuery,
+        success: described(OversightApprovalList, "§D2 pending Approval Queue items for the workspace"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "oversight.approvals",
+          summary: "Approval Queue (pending)",
+          description: "V4.0 §D2: pending human-decision items (goal escalations, rollbacks, panel verdicts).",
+        }),
+      ),
+    )
+    .add(
+      HttpApiEndpoint.post("oversightResolve", `${root}/approvals/resolve`, {
+        query: WorkspaceRoutingQuery,
+        payload: OversightResolveInput,
+        success: described(OversightApprovalItem, "The resolved Approval Queue item"),
+        error: HttpApiError.NotFound,
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "oversight.approvals.resolve",
+          summary: "Resolve an Approval Queue item",
+          description: "V4.0 §D2: a human approves / rejects / acknowledges a pending item (first resolution wins).",
+        }),
+      ),
+    )
+    .annotateMerge(OpenApi.annotations({ title: "oversight", description: "V4.0 Oversight: observability + approval queue." }))
+    .middleware(InstanceContextMiddleware)
+    .middleware(WorkspaceRoutingMiddleware)
+    .middleware(Authorization),
+)
