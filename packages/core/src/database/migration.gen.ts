@@ -36,5 +36,7 @@ export const migrations = (
     import("./migration/20260605042240_add_context_epoch_agent"),
     import("./migration/20260704000000_im_system_tables"),
     import("./migration/20260709000000_add_session_preview"),
+    import("./migration/20260711000000_deepagent_event_bus"),
+    import("./migration/20260711010000_deepagent_scheduler"),
   ])
 ).map((module) => module.default) satisfies DatabaseMigration.Migration[]
