@@ -21,6 +21,8 @@ import {
   initialPlanLatch,
   markStale,
   clearStale,
+  recordGateBlock,
+  resetGateBlocks,
   planStatusesChanged,
   type PlanLatchState,
   type StaleReason,
@@ -289,6 +291,26 @@ export const clearPlanStale = (sessionId: string): void => {
   saveToDisk()
 }
 
+// U1 anti-deadlock: record that the plan gate just blocked a mutating tool on a stale plan. Advances
+// the runtime grace counter so shouldGraceRelease can fire without the model cooperating.
+export const recordPlanGateBlock = (sessionId: string): void => {
+  const state = sessions.get(sessionId)
+  if (!state) return
+  state.planLatch = recordGateBlock(state.planLatch)
+  saveToDisk()
+}
+
+// U1 anti-deadlock: a mutating tool actually executed (forward progress), so reset the grace counter.
+// No-op when already zero to avoid churning disk writes on the hot path.
+export const resetPlanGateBlocks = (sessionId: string): void => {
+  const state = sessions.get(sessionId)
+  if (!state) return
+  const next = resetGateBlocks(state.planLatch)
+  if (next === state.planLatch) return
+  state.planLatch = next
+  saveToDisk()
+}
+
 export const planLatch = (sessionId: string): PlanLatchState | undefined => sessions.get(sessionId)?.planLatch
 
 export const complete = (sessionId: string): void => {
@@ -358,8 +380,13 @@ function normalizeState(state: SessionRunState): SessionRunState {
       maxTotalTokens: nextBudget.maxTotalTokens,
       maxRounds: nextBudget.maxRounds,
     },
-    // Backfill: sessions persisted before U1 have no planLatch/plan on disk.
-    planLatch: state.planLatch ?? initialPlanLatch(),
+    // Backfill: sessions persisted before U1 have no planLatch/plan on disk. Sessions persisted
+    // between U1 and the anti-deadlock change have a planLatch WITHOUT consecutive_blocks — backfill
+    // that field to 0 so shouldGraceRelease reads a defined counter (an undefined would make
+    // `>= limit` false forever, silently disabling the grace release for older sessions).
+    planLatch: state.planLatch
+      ? { ...state.planLatch, consecutive_blocks: state.planLatch.consecutive_blocks ?? 0 }
+      : initialPlanLatch(),
     plan: state.plan ?? null,
     // Backfill: sessions persisted before U10 have no counter on disk.
     mutationsSinceReport: state.mutationsSinceReport ?? 0,
