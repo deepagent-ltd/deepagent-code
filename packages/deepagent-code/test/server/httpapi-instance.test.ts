@@ -87,13 +87,13 @@ describe("instance HttpApi", () => {
           sessions: true,
           pty: true,
           workspaces: true,
-          // V4.0 §H3 — the event-driven flags are advertised and default OFF (rollback-safe).
-          v4EventDrivenIm: false,
-          v4AgentPushEnabled: false,
-          v4MultiAgentRuntime: false,
-          v4AgentAutonomyLevel2: false,
-          v4ThreadEnabled: false,
-          v4FileUploadEnabled: false,
+          // v4.0-beta — the event-driven flags are advertised and default ON (internal test build).
+          v4EventDrivenIm: true,
+          v4AgentPushEnabled: true,
+          v4MultiAgentRuntime: true,
+          v4AgentAutonomyLevel2: true,
+          v4ThreadEnabled: true,
+          v4FileUploadEnabled: true,
         },
       })
     }),

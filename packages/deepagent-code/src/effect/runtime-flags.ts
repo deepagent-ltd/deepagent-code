@@ -110,39 +110,37 @@ export class Service extends ConfigService.Service<Service>()("@deepagent-code/R
   bashDefaultTimeoutMs: positiveInteger("DEEPAGENT_CODE_EXPERIMENTAL_BASH_DEFAULT_TIMEOUT_MS"),
   experimentalNativeLlm: bool("DEEPAGENT_CODE_EXPERIMENTAL_NATIVE_LLM"),
   experimentalWebSockets: bool("DEEPAGENT_CODE_EXPERIMENTAL_WEBSOCKETS"),
-  // ── V4.0 event-driven Agent-OS (all default OFF — gated grey rollout) ──────────────────────────
-  // V4.0 §A/§B: route inbound IM messages through the DeepAgent Event Bus (im.message.created domain
-  // events → Router → Scheduler) instead of the direct synchronous session path. Default OFF: the
-  // double-write shim keeps the legacy path authoritative until the bus is proven. Enable with
-  // DEEPAGENT_CODE_V4_EVENT_DRIVEN_IM.
-  v4EventDrivenIm: bool("DEEPAGENT_CODE_V4_EVENT_DRIVEN_IM"),
-  // V4.0 §A4: allow the agent to PUSH proactively (agent-initiated outbound messages driven by
-  // monitor/schedule/ci events) rather than only replying to a human turn. Default OFF — proactive
-  // push is high-blast-radius and must be explicitly opted into. Enable with
-  // DEEPAGENT_CODE_V4_AGENT_PUSH_ENABLED.
-  v4AgentPushEnabled: bool("DEEPAGENT_CODE_V4_AGENT_PUSH_ENABLED"),
-  // V4.0 §C: the Multi-Agent Runtime (coordinated multi-agent execution over the bus with handoff +
-  // agent.task.* coordination events). Default OFF until the runtime + scheduler are integration-
-  // proven. Enable with DEEPAGENT_CODE_V4_MULTI_AGENT_RUNTIME.
-  v4MultiAgentRuntime: bool("DEEPAGENT_CODE_V4_MULTI_AGENT_RUNTIME"),
-  // V4.0 §D: permit autonomy level 2 (act-then-report — the agent executes reversible actions without
-  // a pre-approval turn, subject to the Oversight ceiling). Default OFF: levels 0/1 (ask-first) remain
-  // the ceiling until Oversight UI ships. Enable with DEEPAGENT_CODE_V4_AGENT_AUTONOMY_LEVEL_2.
-  v4AgentAutonomyLevel2: bool("DEEPAGENT_CODE_V4_AGENT_AUTONOMY_LEVEL_2"),
-  // V4.0 §B: threaded conversations (thread-scoped event correlation + reply grouping in the IM
-  // surface). Default OFF until the thread projection + UI land. Enable with
-  // DEEPAGENT_CODE_V4_THREAD_ENABLED.
-  v4ThreadEnabled: bool("DEEPAGENT_CODE_V4_THREAD_ENABLED"),
-  // V4.0 §B: inbound file/attachment upload on the IM surface (attachment events + storage). Default
-  // OFF until storage + scanning are wired. Enable with DEEPAGENT_CODE_V4_FILE_UPLOAD_ENABLED.
-  v4FileUploadEnabled: bool("DEEPAGENT_CODE_V4_FILE_UPLOAD_ENABLED"),
-  // V4.0 §M: the Expert Panel AUTO-CONVENE consumer. When on, the PanelConveneConsumer subscribes to
-  // the bus and auto-summons an Expert Panel for high-risk events (destructive migrations, security
-  // alerts, architecture changes) per the pure PanelConvenePolicy, publishing a panel.verdict and
-  // routing a needs_human verdict to the §D2 Approval Queue. Default OFF: auto-convening is high-cost
-  // (fans out reviewer subagents) and high-blast-radius, so it must be explicitly opted into — an
-  // explicit V3.9 in-session Convener call is unaffected. Enable with DEEPAGENT_CODE_V4_PANEL_AUTO_CONVENE.
-  v4PanelAutoConvene: bool("DEEPAGENT_CODE_V4_PANEL_AUTO_CONVENE"),
+  // ── V4.0 event-driven Agent-OS — DEFAULT ON in the v4.0-beta internal test build ─────────────────
+  // This is the internal beta: every V4 capability ships ON so the full event-driven Agent-OS is
+  // exercised end-to-end during testing (not a grey rollout). Each remains an independent KILL-SWITCH —
+  // set the env var `=false` to disable one capability for isolation/rollback (mirrors the V3.9
+  // stableOn convention for wiki/panel/goalLoop). Before cutting the v4.0 GA release, these defaults
+  // stay ON (proven in beta); a deployment that wants the pre-V4 behavior sets the flags to false.
+  //
+  // §A/§B: route inbound IM messages through the DeepAgent Event Bus (im.message.created → Router →
+  // Scheduler) alongside the legacy path (double-write). Disable with DEEPAGENT_CODE_V4_EVENT_DRIVEN_IM=false.
+  v4EventDrivenIm: stableOn("DEEPAGENT_CODE_V4_EVENT_DRIVEN_IM"),
+  // §A4: allow the agent to PUSH proactively (monitor/schedule/ci-driven outbound), through the §B2
+  // policy gate. Disable with DEEPAGENT_CODE_V4_AGENT_PUSH_ENABLED=false.
+  v4AgentPushEnabled: stableOn("DEEPAGENT_CODE_V4_AGENT_PUSH_ENABLED"),
+  // §C: the Multi-Agent Runtime (coordinated multi-agent execution over the bus + agent.task.*
+  // coordination). This is the master switch that starts the event-runtime daemons. Disable with
+  // DEEPAGENT_CODE_V4_MULTI_AGENT_RUNTIME=false.
+  v4MultiAgentRuntime: stableOn("DEEPAGENT_CODE_V4_MULTI_AGENT_RUNTIME"),
+  // §D: permit autonomy level 2 (act-then-report on reversible actions, subject to the Oversight
+  // ceiling + Approval Queue). Disable with DEEPAGENT_CODE_V4_AGENT_AUTONOMY_LEVEL_2=false.
+  v4AgentAutonomyLevel2: stableOn("DEEPAGENT_CODE_V4_AGENT_AUTONOMY_LEVEL_2"),
+  // §B: threaded conversations (thread query + reply grouping on the IM surface). Disable with
+  // DEEPAGENT_CODE_V4_THREAD_ENABLED=false.
+  v4ThreadEnabled: stableOn("DEEPAGENT_CODE_V4_THREAD_ENABLED"),
+  // §B: inbound file/attachment upload on the IM surface (im_attachments + local-disk storage). Disable
+  // with DEEPAGENT_CODE_V4_FILE_UPLOAD_ENABLED=false.
+  v4FileUploadEnabled: stableOn("DEEPAGENT_CODE_V4_FILE_UPLOAD_ENABLED"),
+  // §M: the Expert Panel AUTO-CONVENE consumer — auto-summons an Expert Panel for high-risk events
+  // (destructive migrations, security alerts, architecture changes) per PanelConvenePolicy, routing a
+  // needs_human verdict to the §D2 Approval Queue. High-cost (fans out reviewer subagents) but ON in
+  // beta to test the path. Disable with DEEPAGENT_CODE_V4_PANEL_AUTO_CONVENE=false.
+  v4PanelAutoConvene: stableOn("DEEPAGENT_CODE_V4_PANEL_AUTO_CONVENE"),
   client: Config.string("DEEPAGENT_CODE_CLIENT").pipe(Config.withDefault("cli")),
 }) {}
 
