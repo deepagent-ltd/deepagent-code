@@ -646,6 +646,7 @@ export const dict = {
   "review.scope.global": "全域",
   "goal.start.hint": "計劃已就緒 — 轉為受監督的長跑目標",
   "goal.start.button": "轉為 Goal",
+  "goal.start.success": "目標已啟動，正在背景執行",
   "goal.start.failed": "無法啟動目標",
   "wiki.title": "倉庫與百科",
   "wiki.description": "閱讀、檢索、治理四張圖。知識與記憶可編輯；文件與程式碼唯讀。",

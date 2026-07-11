@@ -3,9 +3,17 @@ import { Button } from "@deepagent-code/ui/button"
 import { Icon } from "@deepagent-code/ui/icon"
 import { useServerSync } from "@/context/server-sync"
 import { useSDK } from "@/context/sdk"
+import { useLocal } from "@/context/local"
 import { useLanguage } from "@/context/language"
 import { showToast } from "@/utils/toast"
-import { fetchCapabilities, startGoal, type PanelGoalClient } from "./panel-goal.api"
+import { fetchCapabilities, fetchGoalStartable, startGoal, type PanelGoalClient } from "./panel-goal.api"
+
+// The collaboration modes where "convert plan → supervised goal" makes sense. loop/design are BOTH
+// powered by the Goal Loop engine and are designed to have the human START the loop after the plan is
+// authored (loop: agent writes goal+plan.md; design: user writes it). auto is autonomous end-to-end in
+// the current turn — a supervised background goal would be a confusing, redundant second door there, so
+// the button must NOT appear in auto. plan is hidden and never the client-visible current mode.
+const GOAL_MODES = new Set(["loop", "design"])
 
 /**
  * V3.9 §D — "convert plan → goal" starter.
@@ -21,6 +29,7 @@ import { fetchCapabilities, startGoal, type PanelGoalClient } from "./panel-goal
 export function GoalStartButton(props: { sessionID: string }) {
   const sdk = useSDK()
   const serverSync = useServerSync()
+  const local = useLocal()
   const language = useLanguage()
   const [busy, setBusy] = createSignal(false)
 
@@ -32,14 +41,31 @@ export function GoalStartButton(props: { sessionID: string }) {
   )
   const goalAvailable = createMemo(() => capabilities()?.goalLoop === true)
 
-  const plan = createMemo(() => (props.sessionID ? serverSync.data.session_plan[props.sessionID] : undefined))
-  const hasPlan = createMemo(() => (plan()?.steps.length ?? 0) > 0)
+  // The current collaboration mode (auto/loop/design) — the button only applies to loop/design. Sourced
+  // from local.agent.current() (session-scoped mode selection), the same source the mode selector uses.
+  const currentMode = createMemo(() => local.agent.current()?.name)
+  const modeAllows = createMemo(() => GOAL_MODES.has(currentMode() ?? ""))
 
-  // A goal is "live" for this session iff the persistent session_goal pointer exists and is not in a
-  // terminal phase the user has dismissed — while present, GoalStatusBar owns the surface.
+  // A goal is "live" for this session iff the persistent session_goal pointer exists — while present,
+  // GoalStatusBar owns the surface. Checked FIRST so we don't probe startability for an already-running
+  // goal.
   const activeGoal = createMemo(() => (props.sessionID ? serverSync.data.session_goal[props.sessionID] : undefined))
 
-  const show = createMemo(() => goalAvailable() && hasPlan() && !activeGoal())
+  // Whether a plan actually exists to start, resolved server-side (session_plan OR repo goal+plan.md).
+  // Re-fetched when the session, mode-eligibility, active-goal, or the in-session plan changes — the last
+  // dependency makes the button appear promptly after the agent writes a plan mid-conversation. Only
+  // probed when the mode allows and no goal is live, to avoid needless requests.
+  const [startable] = createResource(
+    () =>
+      props.sessionID && goalAvailable() && modeAllows() && !activeGoal()
+        ? ([props.sessionID, serverSync.data.session_plan[props.sessionID]?.steps.length ?? 0] as const)
+        : undefined,
+    ([sessionID]) => fetchGoalStartable(client(), sessionID),
+  )
+
+  const show = createMemo(
+    () => goalAvailable() && modeAllows() && !activeGoal() && startable()?.startable === true,
+  )
 
   const onStart = async () => {
     if (busy() || !props.sessionID) return
@@ -48,8 +74,11 @@ export function GoalStartButton(props: { sessionID: string }) {
       const snapshot = await startGoal(client(), { sessionID: props.sessionID })
       if (!snapshot) {
         showToast({ title: language.t("goal.start.failed") })
+      } else {
+        // The server emits an immediate goal.updated (phase=running) on start, so GoalStatusBar takes
+        // over this surface right away. This toast is the belt-and-suspenders confirmation for the click.
+        showToast({ title: language.t("goal.start.success"), variant: "success" })
       }
-      // On success the goal.updated event drives GoalStatusBar to appear; nothing to do here.
     } catch (err) {
       const description = err instanceof Error ? err.message : String(err)
       showToast({ title: language.t("goal.start.failed"), description })
