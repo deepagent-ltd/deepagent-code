@@ -14,6 +14,10 @@ export const SESSION_COMPLETED = "session.completed"
 export const WIKI_PAGE_CHANGED = "wiki.page.changed"
 export const KNOWLEDGE_PROMOTED = "knowledge.promoted"
 
+// §B IM — a user message, after it persists, publishes this (the §B1 double-write). The Router/
+// MentionAgent consume it; the legacy synchronous @mention path stays authoritative until the flag is on.
+export const IM_MESSAGE_CREATED = "im.message.created"
+
 // §N Goal Loop — the tick is now an event (durable/retryable/dedup'd); terminal states go to Oversight.
 export const GOAL_TICK = "goal.tick"
 export const GOAL_COMPLETED = "goal.completed"
