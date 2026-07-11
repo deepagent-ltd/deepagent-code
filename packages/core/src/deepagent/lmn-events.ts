@@ -18,6 +18,22 @@ export const KNOWLEDGE_PROMOTED = "knowledge.promoted"
 // MentionAgent consume it; the legacy synchronous @mention path stays authoritative until the flag is on.
 export const IM_MESSAGE_CREATED = "im.message.created"
 
+// §A1 EXTERNAL INGRESS — the four external event sources (git hook/webhook, CI webhook, PR webhook,
+// observability/monitoring) named in the §A1 table. The webhook ingress (deepagent-code) authenticates
+// the caller and normalizes each delivery into a DeepAgentEvent carrying one of these exact `type`
+// strings — matching the tables the consumers already key on: EventRouter (agent `triggers[].event`),
+// TaskPartitioner.DEFAULT_RULES, and PanelConvenePolicy.DEFAULT_RULES. These are producer-side constants
+// so the ingress can never drift from the strings the router/partitioner/panel match on.
+//
+// §E1 TRUST: git/ci/pr/monitor are NOT in DEFAULT_TRUSTED_SOURCES (["im","system","schedule"]) — as of
+// P0.1 external sources are opt-in. The ingress still persists + traces these events, but the security
+// gate BLOCKS agent dispatch until an operator adds the source to the workspace's trustedSources. This
+// is intended (untrusted external input is fail-closed by default).
+export const GIT_PUSH = "git.push"
+export const CI_FAILURE = "ci.failure"
+export const PR_COMMENT = "pr.comment"
+export const MONITOR_ALERT = "monitor.alert"
+
 // §N Goal Loop — the tick is now an event (durable/retryable/dedup'd); terminal states go to Oversight.
 export const GOAL_TICK = "goal.tick"
 export const GOAL_COMPLETED = "goal.completed"
