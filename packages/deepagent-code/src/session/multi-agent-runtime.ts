@@ -10,6 +10,7 @@ import { SecurityGate } from "@deepagent-code/core/deepagent/security-gate"
 import type { AgentDescriptor } from "@deepagent-code/core/im/mention-parser"
 import { AgentListProviderService } from "@deepagent-code/core/im/agent-list-provider"
 import { ApprovalQueue } from "@deepagent-code/core/deepagent/approval-queue"
+import { WorkspaceConcurrency } from "@deepagent-code/core/deepagent/workspace-concurrency"
 import { LMNEvents } from "@deepagent-code/core/deepagent/lmn-events"
 import type { SubagentTurnRunner } from "./goal-loop-wiring"
 import type { EventDispatcher } from "./event-dispatcher"
@@ -75,6 +76,10 @@ export interface LayerOptions {
   //   whether the tool/session runtime allows the operation (§E1 layer 4). Default: allow (the child
   //   session's own permission path is the real enforcement; this is a coarse pre-gate).
   readonly runtimeAllowed?: (event: DeepAgentEvent.Event, agent: AgentDescriptor) => Effect.Effect<boolean>
+  //   §E2 per-workspace agent-execution concurrency cap. When provided, a subtask is admitted only if
+  //   the workspace is below its cap (default 5); over-cap subtasks defer (retryable), never drop.
+  //   Omitted ⇒ no cap (current behavior; tests don't need it).
+  readonly concurrency?: WorkspaceConcurrency.Interface
 }
 
 export const layerWith = (options: LayerOptions) =>
@@ -84,6 +89,7 @@ export const layerWith = (options: LayerOptions) =>
       const bus = yield* DeepAgentEventBus.Service
       const agentList = yield* AgentListProviderService
       const approvalQueue = yield* ApprovalQueue.Service
+      const concurrency = options.concurrency
       const runner = options.runner
       const trustedSources = options.trustedSources
       const actorHasPermission = options.actorHasPermission ?? (() => Effect.succeed(true))
@@ -285,7 +291,17 @@ export const layerWith = (options: LayerOptions) =>
             }
             admittedClaims.push(claim)
 
-            // §C4 started → run one turn → completed/blocked.
+            // §E2 concurrency cap — acquire a per-workspace execution slot. Over cap ⇒ DEFER (retryable
+            // via the bus, not dropped), so a burst never runs more than the workspace's cap at once.
+            const slot = concurrency ? yield* concurrency.acquire(event.workspaceID) : undefined
+            if (slot && !slot.admitted) {
+              outcomes.push({ taskID: subtask.id, capability: subtask.capability, status: "deferred", agentID: agent.id, reason: "concurrency_capped" })
+              hasUnfinished = true
+              continue
+            }
+
+            // §C4 started → run one turn → completed/blocked. Release the concurrency slot when the turn
+            // settles (ensuring runs on success, failure, and interruption).
             yield* emit(event, { type: "agent.task.started", taskID: subtask.id, agentID: agent.id }, `coord:${subtask.id}:started`)
             const result = yield* runner({
               agentType: agent.name,
@@ -302,6 +318,7 @@ export const layerWith = (options: LayerOptions) =>
                 log.error("subtask runner failed", { taskID: subtask.id, cause: Cause.pretty(cause) })
                 return Effect.succeed({ ok: false, structured: undefined, text: "", tokensUsed: 0, cost: 0 })
               }),
+              Effect.ensuring(Effect.sync(() => concurrency?.release(event.workspaceID))),
             )
             if (result.ok) {
               outcomes.push({ taskID: subtask.id, capability: subtask.capability, status: "completed", agentID: agent.id })
