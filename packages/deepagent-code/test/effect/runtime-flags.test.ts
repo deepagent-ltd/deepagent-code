@@ -75,28 +75,29 @@ describe("RuntimeFlags", () => {
     }),
   )
 
-  it.effect("§H3: all six V4.0 flags default OFF (rollback-safe — feature absent unless opted in)", () =>
+  it.effect("v4.0-beta: all seven V4.0 flags default ON (internal test build exercises the full stack)", () =>
     Effect.gen(function* () {
       const flags = yield* readFlags.pipe(Effect.provide(fromConfig({})))
-      expect(flags.v4EventDrivenIm).toBe(false)
-      expect(flags.v4AgentPushEnabled).toBe(false)
-      expect(flags.v4MultiAgentRuntime).toBe(false)
-      expect(flags.v4AgentAutonomyLevel2).toBe(false)
-      expect(flags.v4ThreadEnabled).toBe(false)
-      expect(flags.v4FileUploadEnabled).toBe(false)
+      expect(flags.v4EventDrivenIm).toBe(true)
+      expect(flags.v4AgentPushEnabled).toBe(true)
+      expect(flags.v4MultiAgentRuntime).toBe(true)
+      expect(flags.v4AgentAutonomyLevel2).toBe(true)
+      expect(flags.v4ThreadEnabled).toBe(true)
+      expect(flags.v4FileUploadEnabled).toBe(true)
+      expect(flags.v4PanelAutoConvene).toBe(true)
     }),
   )
 
-  it.effect("§H2: each V4.0 flag is individually toggleable (independent kill-switch)", () =>
+  it.effect("§H2: each V4.0 flag is an independent kill-switch (=false disables just that one)", () =>
     Effect.gen(function* () {
-      // turning ONE on must not turn the others on — each rolls back independently.
+      // turning ONE off must not turn the others off — each rolls back independently for isolation.
       const flags = yield* readFlags.pipe(
-        Effect.provide(fromConfig({ DEEPAGENT_CODE_V4_MULTI_AGENT_RUNTIME: "true" })),
+        Effect.provide(fromConfig({ DEEPAGENT_CODE_V4_MULTI_AGENT_RUNTIME: "false" })),
       )
-      expect(flags.v4MultiAgentRuntime).toBe(true)
-      expect(flags.v4EventDrivenIm).toBe(false)
-      expect(flags.v4AgentPushEnabled).toBe(false)
-      expect(flags.v4AgentAutonomyLevel2).toBe(false)
+      expect(flags.v4MultiAgentRuntime).toBe(false)
+      expect(flags.v4EventDrivenIm).toBe(true)
+      expect(flags.v4AgentPushEnabled).toBe(true)
+      expect(flags.v4PanelAutoConvene).toBe(true)
     }),
   )
 
