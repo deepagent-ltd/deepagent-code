@@ -139,6 +139,14 @@ export interface Interface {
     readonly workspaceID: string
     readonly olderThan: number
   }) => Effect.Effect<{ readonly deletedEvents: number }>
+  /**
+   * §E2 — prune the publish rate-limiter's per-workspace buckets whose fixed window has elapsed as of
+   * `now`, bounding the limiter's memory for idle workspaces. Returns how many buckets were dropped.
+   * The limiter lives inside this layer's closure; this exposes its `sweep` so a periodic daemon
+   * (v4-event-runtime) can drive it on a cadence without reaching into private state. `now` defaults to
+   * the injected clock (deterministic in tests). A no-op that never throws — safe to call any time.
+   */
+  readonly sweepPublishLimiter: (now?: number) => Effect.Effect<{ readonly prunedBuckets: number }>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@deepagent-code/DeepAgentEventBus") {}
@@ -630,6 +638,11 @@ export const layerWith = (options?: LayerOptions) =>
           )
           .pipe(Effect.orDie)
 
+      // §E2 — drive the in-memory rate-limiter's stale-window prune. Synchronous + total (never fails),
+      // wrapped in Effect.sync so the daemon can schedule it uniformly with the other bus effects.
+      const sweepPublishLimiter: Interface["sweepPublishLimiter"] = (nowArg) =>
+        Effect.sync(() => ({ prunedBuckets: publishLimiter.sweep(nowArg ?? now()) }))
+
       return Service.of({
         publish,
         tryPublish,
@@ -642,6 +655,7 @@ export const layerWith = (options?: LayerOptions) =>
         dueRetries,
         getByID,
         sweep,
+        sweepPublishLimiter,
       })
     }),
   )

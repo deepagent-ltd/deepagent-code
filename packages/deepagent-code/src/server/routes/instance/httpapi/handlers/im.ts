@@ -1,4 +1,4 @@
-import { Effect, Scope } from "effect"
+import { Cause, Effect, Scope } from "effect"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import nodeFs from "node:fs/promises"
 import { Global } from "@deepagent-code/core/global"
@@ -367,9 +367,17 @@ export const imHandlers = HttpApiBuilder.group(InstanceHttpApi, "im", (handlers)
                     // v4EventDrivenIm (default OFF ⇒ no publish, byte-identical to V3.8). Best-effort:
                     // idempotencyKey = the message id (one event per message), and a bus failure never
                     // fails the user's send (the message already persisted + broadcast).
+                    //
+                    // §E2 RATE GATE (live): this is the primary workspace-facing, user-driven publisher —
+                    // one event per IM message — so it goes through `tryPublish`, applying the 1000/min
+                    // per-workspace publish ceiling. `im.message.created` is `normal` priority, so a
+                    // workspace flooding messages sheds the excess (`{ dropped: "rate_limited" }` ⇒ NOT
+                    // persisted, NOT dispatched). The legacy IM message + broadcast already succeeded, so
+                    // shedding the derived bus event only pauses V4 event-driven reactions for the burst —
+                    // it never loses the user's message. We record the drop as the §A4 event_dropped signal.
                     if (flags.v4EventDrivenIm) {
-                      yield* eventBus
-                        .publish({
+                      const outcome = yield* eventBus
+                        .tryPublish({
                           type: LMNEvents.IM_MESSAGE_CREATED,
                           source: "im",
                           workspaceID: workspaceID ?? directory,
@@ -386,7 +394,32 @@ export const imHandlers = HttpApiBuilder.group(InstanceHttpApi, "im", (handlers)
                             replyToID: msg.replyToID,
                           },
                         })
-                        .pipe(Effect.catchCause(() => Effect.void))
+                        // Best-effort: a bus EXCEPTION must not fail the user's send (the message already
+                        // persisted + broadcast). Catch the cause into a DISTINCT sentinel so a real error
+                        // is logged as an error — never mislabeled as a rate-limit drop (the two are
+                        // different signals: a drop is expected shedding, an exception is a fault).
+                        .pipe(
+                          Effect.catchCause((cause) => Effect.succeed({ busError: cause } as const)),
+                        )
+                      if ("busError" in outcome) {
+                        yield* Effect.logError("im.message.created publish failed").pipe(
+                          Effect.annotateLogs({
+                            reason: "publish_error",
+                            workspaceID: workspaceID ?? directory,
+                            messageID: msg.id,
+                            cause: Cause.pretty(outcome.busError),
+                          }),
+                        )
+                      } else if ("dropped" in outcome) {
+                        yield* Effect.logWarning("im.message.created dropped by publish rate gate").pipe(
+                          Effect.annotateLogs({
+                            reason: "event_dropped",
+                            cause: "rate_limited",
+                            workspaceID: workspaceID ?? directory,
+                            messageID: msg.id,
+                          }),
+                        )
+                      }
                     }
                   }),
                 ),
