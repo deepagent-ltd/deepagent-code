@@ -87,6 +87,7 @@ import { deepagentHandlers } from "./handlers/deepagent"
 import { oversightHandlers } from "./handlers/oversight"
 import { Observability as OversightObservability } from "@deepagent-code/core/deepagent/observability"
 import { ApprovalQueue } from "@deepagent-code/core/deepagent/approval-queue"
+import { DeepAgentEventBus } from "@deepagent-code/core/deepagent/deepagent-event-bus"
 import { experimentalHandlers } from "./handlers/experimental"
 import { debugHandlers } from "./handlers/debug"
 import { fileHandlers } from "./handlers/file"
@@ -211,6 +212,9 @@ const instanceRoutes = instanceApiRoutes.pipe(
   Layer.provide([httpApiAuthLayer, workspaceRoutingLive, instanceContextLayer, schemaErrorLayer]),
   Layer.provide(imRuntimeLayer),
   Layer.provide(oversightServicesLayer),
+  // §B1 — the IM handler double-writes im.message.created onto the bus (flag-gated). Provide the bus
+  // service to the instance route graph.
+  Layer.provide(DeepAgentEventBus.defaultLayer),
 )
 const serverRoutes = HttpApiBuilder.layer(Api).pipe(
   Layer.provide(handlers),
