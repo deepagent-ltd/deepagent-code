@@ -1,0 +1,252 @@
+import { describe, expect } from "bun:test"
+import { Effect, Fiber, Layer, Stream } from "effect"
+import { DeepAgentEventBus } from "@deepagent-code/core/deepagent/deepagent-event-bus"
+import { DeepAgentEvent } from "@deepagent-code/core/deepagent/deepagent-event"
+import { Database } from "@deepagent-code/core/database/database"
+import { testEffect } from "./lib/effect"
+
+// A deterministic mutable clock so retry-backoff / dedupe-window assertions are exact.
+let clock = 0
+const setNow = (t: number) => {
+  clock = t
+}
+const now = () => clock
+
+const database = Database.layerFromPath(":memory:")
+const busLayer = DeepAgentEventBus.layerWith({ maxAttempts: 3, backoffBaseMs: 1000, now }).pipe(
+  Layer.provideMerge(database),
+)
+const it = testEffect(busLayer)
+
+const input = (over?: Partial<DeepAgentEvent.PublishInput>): DeepAgentEvent.PublishInput => ({
+  type: "ci.failure",
+  source: "ci",
+  workspaceID: "wrk_1",
+  payload: { failedTests: 2 },
+  ...over,
+})
+
+describe("DeepAgentEventBus", () => {
+  it.effect("§A3 持久化: publish returns a full normalized event and stores it", () =>
+    Effect.gen(function* () {
+      setNow(1_000)
+      const bus = yield* DeepAgentEventBus.Service
+      const event = yield* bus.publish(input())
+      expect(event.id.startsWith("dae_")).toBe(true)
+      expect(event.type).toBe("ci.failure")
+      expect(event.source).toBe("ci")
+      expect(event.priority).toBe("normal") // default filled by the bus
+      expect(event.createdAt).toBe(1_000)
+      expect(event.idempotencyKey).toBeString() // defaulted when omitted
+      // durable: it comes back from replay history
+      const replayed = yield* Stream.runCollect(bus.replay({ from: 0 })).pipe(Effect.map((c) => Array.from(c)))
+      expect(replayed.map((e) => e.id)).toEqual([event.id])
+    }),
+  )
+
+  it.effect("§A3 幂等: a re-publish with the same idempotency key is a no-op returning the original", () =>
+    Effect.gen(function* () {
+      const bus = yield* DeepAgentEventBus.Service
+      const first = yield* bus.publish(input({ idempotencyKey: "k-1" }))
+      const second = yield* bus.publish(input({ idempotencyKey: "k-1", payload: { changed: true } }))
+      expect(second.id).toBe(first.id) // same row, no second event
+      expect(second.payload).toEqual(first.payload) // original payload preserved
+      const all = yield* Stream.runCollect(bus.replay({ from: 0 })).pipe(Effect.map((c) => Array.from(c)))
+      expect(all.length).toBe(1)
+    }),
+  )
+
+  it.effect("§A2 subscribe: a live subscriber receives events published after subscription", () =>
+    Effect.gen(function* () {
+      const bus = yield* DeepAgentEventBus.Service
+      const fiber = yield* bus.subscribe({}).pipe(Stream.take(2), Stream.runCollect, Effect.forkScoped)
+      yield* Effect.yieldNow
+      yield* bus.publish(input({ idempotencyKey: "s-1" }))
+      yield* bus.publish(input({ idempotencyKey: "s-2", type: "git.push", source: "git" }))
+      const received = Array.from(yield* Fiber.join(fiber))
+      expect(received.map((e) => e.type)).toEqual(["ci.failure", "git.push"])
+    }),
+  )
+
+  it.effect("§A2 subscribe by type: filter delivers only the matching type", () =>
+    Effect.gen(function* () {
+      const bus = yield* DeepAgentEventBus.Service
+      const fiber = yield* bus
+        .subscribe({ type: "git.push" })
+        .pipe(Stream.take(1), Stream.runCollect, Effect.forkScoped)
+      yield* Effect.yieldNow
+      yield* bus.publish(input({ idempotencyKey: "f-1", type: "ci.failure", source: "ci" }))
+      yield* bus.publish(input({ idempotencyKey: "f-2", type: "git.push", source: "git" }))
+      const received = Array.from(yield* Fiber.join(fiber))
+      expect(received.map((e) => e.type)).toEqual(["git.push"])
+    }),
+  )
+
+  it.effect("§A2 replay: durable history is filtered by type and time window", () =>
+    Effect.gen(function* () {
+      const bus = yield* DeepAgentEventBus.Service
+      setNow(100)
+      yield* bus.publish(input({ idempotencyKey: "r-1", type: "ci.failure", source: "ci" }))
+      setNow(200)
+      yield* bus.publish(input({ idempotencyKey: "r-2", type: "git.push", source: "git" }))
+      setNow(300)
+      yield* bus.publish(input({ idempotencyKey: "r-3", type: "ci.failure", source: "ci" }))
+
+      const cis = yield* Stream.runCollect(bus.replay({ type: "ci.failure", from: 0 })).pipe(
+        Effect.map((c) => Array.from(c)),
+      )
+      expect(cis.map((e) => e.idempotencyKey)).toEqual(["r-1", "r-3"])
+
+      const windowed = yield* Stream.runCollect(bus.replay({ from: 150, to: 250 })).pipe(
+        Effect.map((c) => Array.from(c)),
+      )
+      expect(windowed.map((e) => e.idempotencyKey)).toEqual(["r-2"])
+    }),
+  )
+
+  it.effect("§A2 ack: marks a (event, group) delivery delivered (idempotent)", () =>
+    Effect.gen(function* () {
+      const bus = yield* DeepAgentEventBus.Service
+      const event = yield* bus.publish(input({ idempotencyKey: "a-1" }))
+      yield* bus.ack("router", event.id)
+      yield* bus.ack("router", event.id) // idempotent — no throw, no dup
+      const dead = yield* bus.deadLetters()
+      expect(dead.length).toBe(0)
+      const due = yield* bus.dueRetries()
+      expect(due.length).toBe(0) // delivered rows are not retry-eligible
+    }),
+  )
+
+  it.effect("§A3 重试: nack schedules exponential backoff (base × 2^(n-1))", () =>
+    Effect.gen(function* () {
+      const bus = yield* DeepAgentEventBus.Service
+      setNow(10_000)
+      const event = yield* bus.publish(input({ idempotencyKey: "n-1" }))
+      yield* bus.nack({ subscriptionGroup: "router", eventID: event.id, reason: "boom" })
+      // attempt 1 → next at now + 1000 * 2^0 = 11_000
+      let due = yield* bus.dueRetries(11_000)
+      expect(due.map((d) => d.eventID)).toEqual([event.id])
+      expect(due[0]?.attempts).toBe(1)
+      // not yet due just before the backoff elapses
+      const early = yield* bus.dueRetries(10_999)
+      expect(early.length).toBe(0)
+
+      yield* bus.nack({ subscriptionGroup: "router", eventID: event.id, reason: "boom again" })
+      // attempt 2 → next at now + 1000 * 2^1 = 12_000
+      due = yield* bus.dueRetries(11_999)
+      expect(due.length).toBe(0)
+      due = yield* bus.dueRetries(12_000)
+      expect(due[0]?.attempts).toBe(2)
+    }),
+  )
+
+  it.effect("§A Dead Letter: exceeding maxAttempts flips the delivery to the DLQ", () =>
+    Effect.gen(function* () {
+      const bus = yield* DeepAgentEventBus.Service
+      setNow(0)
+      const event = yield* bus.publish(input({ idempotencyKey: "d-1" }))
+      // maxAttempts = 3 → attempts 1,2 pending; attempt 3 is dead.
+      yield* bus.nack({ subscriptionGroup: "router", eventID: event.id, reason: "1" })
+      yield* bus.nack({ subscriptionGroup: "router", eventID: event.id, reason: "2" })
+      yield* bus.nack({ subscriptionGroup: "router", eventID: event.id, reason: "3" })
+      const dead = yield* bus.deadLetters()
+      expect(dead.map((d) => d.eventID)).toEqual([event.id])
+      expect(dead[0]?.status).toBe("dead")
+      expect(dead[0]?.attempts).toBe(3)
+      expect(dead[0]?.lastError).toBe("3")
+      // a dead delivery is not retry-eligible
+      const due = yield* bus.dueRetries(Number.MAX_SAFE_INTEGER)
+      expect(due.length).toBe(0)
+    }),
+  )
+
+  it.effect("§A4 去重窗口: recentByType returns same-type events inside the window only", () =>
+    Effect.gen(function* () {
+      const bus = yield* DeepAgentEventBus.Service
+      setNow(50_000)
+      yield* bus.publish(input({ idempotencyKey: "w-old", type: "monitor.alert", source: "monitor" }))
+      setNow(55_000)
+      yield* bus.publish(input({ idempotencyKey: "w-new", type: "monitor.alert", source: "monitor" }))
+      // window 10s at now=61_000: 50_000 is outside (11s old), 55_000 inside (6s old).
+      const recent = yield* bus.recentByType({ type: "monitor.alert", now: 61_000 })
+      expect(recent.map((e) => e.idempotencyKey)).toEqual(["w-new"])
+    }),
+  )
+
+  it.effect(
+    "§A3 at-least-once: a grouped subscriber gets a durable pending delivery on publish (recoverable without nack)",
+    () =>
+      Effect.gen(function* () {
+        setNow(0)
+        const bus = yield* DeepAgentEventBus.Service
+        // a durable consumer group goes live BEFORE the publish
+        const fiber = yield* bus
+          .subscribe({ group: "router" })
+          .pipe(Stream.take(1), Stream.runCollect, Effect.forkScoped)
+        yield* Effect.yieldNow
+        const event = yield* bus.publish(input({ idempotencyKey: "alo-1" }))
+        yield* Fiber.join(fiber)
+        // the subscriber received it but has NOT acked — at-least-once means a pending row exists,
+        // so a crash before ack is recoverable via dueRetries (not silently lost).
+        const due = yield* bus.dueRetries(0)
+        expect(due.map((d) => ({ id: d.eventID, group: d.subscriptionGroup, status: d.status }))).toEqual([
+          { id: event.id, group: "router", status: "pending" },
+        ])
+        expect(due[0]?.attempts).toBe(0) // no failed attempt yet — just owed
+        // once acked, it drops out of the retry-eligible set
+        yield* bus.ack("router", event.id)
+        const afterAck = yield* bus.dueRetries(0)
+        expect(afterAck.length).toBe(0)
+      }),
+  )
+
+  it.effect("§A3 at-least-once: an anonymous (group-less) subscriber creates NO delivery tracking", () =>
+    Effect.gen(function* () {
+      setNow(0)
+      const bus = yield* DeepAgentEventBus.Service
+      const fiber = yield* bus.subscribe({}).pipe(Stream.take(1), Stream.runCollect, Effect.forkScoped)
+      yield* Effect.yieldNow
+      yield* bus.publish(input({ idempotencyKey: "anon-1" }))
+      yield* Fiber.join(fiber)
+      const due = yield* bus.dueRetries(Number.MAX_SAFE_INTEGER)
+      expect(due.length).toBe(0) // observers are best-effort live-only, no durable delivery owed
+    }),
+  )
+
+  it.effect("getByID returns the durable event (and undefined for an unknown id)", () =>
+    Effect.gen(function* () {
+      const bus = yield* DeepAgentEventBus.Service
+      const event = yield* bus.publish(input({ idempotencyKey: "gid-1" }))
+      const found = yield* bus.getByID(event.id)
+      expect(found?.id).toBe(event.id)
+      expect(found?.idempotencyKey).toBe("gid-1")
+      const missing = yield* bus.getByID("dae_does_not_exist" as typeof event.id)
+      expect(missing).toBeUndefined()
+    }),
+  )
+
+  it.effect("§A4/多租户: recentByType scoped to a workspace never returns another tenant's events", () =>
+    Effect.gen(function* () {
+      const bus = yield* DeepAgentEventBus.Service
+      setNow(5_000)
+      yield* bus.publish(input({ idempotencyKey: "t-a", type: "monitor.alert", source: "monitor", workspaceID: "wrk_a" }))
+      yield* bus.publish(input({ idempotencyKey: "t-b", type: "monitor.alert", source: "monitor", workspaceID: "wrk_b" }))
+      const scoped = yield* bus.recentByType({ type: "monitor.alert", workspaceID: "wrk_a", now: 6_000 })
+      expect(scoped.map((e) => e.idempotencyKey)).toEqual(["t-a"])
+      const unscoped = yield* bus.recentByType({ type: "monitor.alert", now: 6_000 })
+      expect(unscoped.length).toBe(2) // cross-tenant scan still sees both
+    }),
+  )
+
+  it.effect("§A3 correlation: ack for one group leaves another group's delivery independent", () =>
+    Effect.gen(function* () {
+      const bus = yield* DeepAgentEventBus.Service
+      setNow(0)
+      const event = yield* bus.publish(input({ idempotencyKey: "g-1" }))
+      yield* bus.ack("group-a", event.id)
+      yield* bus.nack({ subscriptionGroup: "group-b", eventID: event.id, reason: "b failed" })
+      const due = yield* bus.dueRetries(Number.MAX_SAFE_INTEGER)
+      expect(due.map((d) => d.subscriptionGroup)).toEqual(["group-b"]) // only b pending
+    }),
+  )
+})
