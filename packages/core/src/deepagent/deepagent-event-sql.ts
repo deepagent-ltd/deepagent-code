@@ -24,6 +24,10 @@ export const DeepAgentEventTable = sqliteTable(
     priority: text().$type<DeepAgentEvent.EventPriority>().notNull(),
     payload: text({ mode: "json" }).$type<unknown>(),
     created_at: integer().notNull(),
+    // §F1 event_publish_latency_ms — wall-clock delta (injected clock) around the persist transaction,
+    // written by the bus on publish. Nullable/ADDITIVE (§H): pre-latency rows read null and are excluded
+    // from the Observability percentile samples.
+    publish_latency_ms: integer(),
   },
   (table) => [
     // §A3 幂等: storage-enforced dedupe. A re-publish with the same key hits this constraint → no-op.
