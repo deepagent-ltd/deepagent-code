@@ -72,6 +72,13 @@ type GoalControl = {
   jobId: string
   paused: boolean
   stopped: boolean
+  // Last-known observable status, cached so pause/resume/stop can publish an IMMEDIATE goal.updated that
+  // carries the real ledger (not zeros). Updated every tick by publishStatus. Without this, a control
+  // transition would either wait for the next tick (pause/resume — slow) or never publish at all (stop
+  // cancels the job, so no further tick fires), leaving the UI status bar stuck on the prior phase.
+  ledger: { ticks: number; tokens: number; cost: number; wallclockMs: number }
+  stallCount: number
+  gaps: readonly string[]
 }
 
 export type StartGoalInput = {
@@ -98,12 +105,23 @@ export type GoalSnapshot = {
   readonly running: boolean
 }
 
+// Whether a goal can be started for a session RIGHT NOW, and where its plan would come from. The client
+// gates the "convert plan → goal" affordance on this instead of guessing from session_plan alone —
+// session_plan is only populated by the plan TOOL, but loop/design modes author the plan as the repo
+// file `.deepagent-code/plans/goal+plan.md`, which start() also accepts. `source` lets the UI phrase
+// the action correctly (existing in-session plan vs the authored repo file).
+export type GoalStartable = {
+  readonly startable: boolean
+  readonly source: "plan" | "file" | "none"
+}
+
 export interface Interface {
   readonly start: (input: StartGoalInput) => Effect.Effect<GoalSnapshot, InvalidGoalError>
   readonly pause: (sessionID: string) => Effect.Effect<boolean>
   readonly resume: (sessionID: string) => Effect.Effect<boolean>
   readonly stop: (sessionID: string) => Effect.Effect<boolean>
   readonly status: (sessionID: string) => Effect.Effect<GoalSnapshot | null>
+  readonly startable: (sessionID: string) => Effect.Effect<GoalStartable>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@deepagent-code/GoalManager") {}
@@ -186,28 +204,85 @@ export const layer = Layer.effect(
         return m
       })
 
-    // Publish a status → both the goal.updated event and the session-state active-goal pointer.
+    // Low-level publisher: emit a goal.updated event over the SSE bridge. Best-effort (ignore) so a
+    // publish failure never crashes the caller (start route or background driver tick).
+    const publishGoalEvent = (
+      sessionID: string,
+      payload: {
+        goalId: string
+        planDocId: string
+        phase: string
+        ledger: { ticks: number; tokens: number; cost: number; wallclockMs: number }
+        stallCount: number
+        gaps: readonly string[]
+      },
+    ) =>
+      events
+        .publish(GoalEvent.Updated, {
+          sessionID: SessionID.make(sessionID),
+          goalId: payload.goalId,
+          planDocId: payload.planDocId,
+          phase: payload.phase,
+          ledger: payload.ledger,
+          stallCount: payload.stallCount,
+          gaps: [...payload.gaps],
+        })
+        .pipe(Effect.ignore)
+
+    // Publish a driver status → the goal.updated event, the session-state active-goal pointer, AND the
+    // cached last-known status on the control (so control transitions can publish the real ledger).
     const publishStatus = (sessionID: string, status: GoalStatus) =>
       Effect.gen(function* () {
         const phase = status.phase as string
         AgentGateway.DeepAgentSessionState.setActiveGoalPhase(sessionID, phase as never)
-        yield* events
-          .publish(GoalEvent.Updated, {
-            sessionID: SessionID.make(sessionID),
-            goalId: status.goalId,
-            planDocId: status.planDocId,
-            phase,
-            ledger: {
-              ticks: status.ledger.ticks,
-              tokens: status.ledger.tokens,
-              cost: status.ledger.cost,
-              wallclockMs: status.ledger.wallclockMs,
-            },
-            stallCount: status.stallCount,
-            gaps: status.gaps,
-          })
-          .pipe(Effect.ignore)
+        const ledger = {
+          ticks: status.ledger.ticks,
+          tokens: status.ledger.tokens,
+          cost: status.ledger.cost,
+          wallclockMs: status.ledger.wallclockMs,
+        }
+        yield* mutateControl(sessionID, (ctrl) => {
+          ctrl.ledger = ledger
+          ctrl.stallCount = status.stallCount
+          ctrl.gaps = status.gaps
+        })
+        yield* publishGoalEvent(sessionID, {
+          goalId: status.goalId,
+          planDocId: status.planDocId,
+          phase,
+          ledger,
+          stallCount: status.stallCount,
+          gaps: status.gaps,
+        })
       })
+
+    // Publish an IMMEDIATE goal.updated for a control transition (pause/resume/stop). Reuses the control's
+    // cached ledger/stall/gaps so the UI keeps its live budget readout while only the phase changes.
+    const publishControlPhase = (sessionID: string, control: GoalControl, phase: string) =>
+      publishGoalEvent(sessionID, {
+        goalId: control.goalId,
+        planDocId: control.planDocId,
+        phase,
+        ledger: control.ledger,
+        stallCount: control.stallCount,
+        gaps: control.gaps,
+      })
+
+    // Reflect a driver's terminal outcome into the active-goal pointer — but ONLY if the goal is still
+    // controlled. A user `stop()` clears the control (setControl null) and has already set the pointer to
+    // "stopped" and published it; the cancelled driver may still settle with its own outcome (e.g. it
+    // observed shouldStop and returned "needs_human") whose late tap would otherwise clobber "stopped".
+    // Guarding on a live control makes the explicit stop authoritative and drops the racing outcome.
+    const finalizeOutcome = (sessionID: string, outcome: string) =>
+      getControl(sessionID).pipe(
+        Effect.flatMap((c) =>
+          Effect.sync(() => {
+            if (outcome !== "continue" && c != null) {
+              AgentGateway.DeepAgentSessionState.setActiveGoalPhase(sessionID, outcome as never)
+            }
+          }),
+        ),
+      )
 
     const start: Interface["start"] = (input) =>
       Effect.gen(function* () {
@@ -299,6 +374,20 @@ export const layer = Layer.effect(
           startedAt: new Date().toISOString(),
         })
 
+        // Emit an IMMEDIATE goal.updated (phase=running, empty ledger) BEFORE the first tick. The first
+        // driver tick is a full subagent turn (tens of seconds), and onStatus only fires AFTER it — so
+        // without this, the client's session_goal store stays empty and the "convert plan → goal" hint
+        // never flips to the GoalStatusBar, leaving the user with no confirmation the goal started. This
+        // seeds the store the moment start returns, so the UI reflects the running goal instantly.
+        yield* publishGoalEvent(sessionID, {
+          goalId: handle.goalId,
+          planDocId: handle.planDocId,
+          phase: "running",
+          ledger: { ticks: 0, tokens: 0, cost: 0, wallclockMs: 0 },
+          stallCount: 0,
+          gaps: [],
+        })
+
         // The driver ports read the per-session control flags (pause/stop) live.
         const ports: GoalDriverPorts = {
           onStatus: (status) => publishStatus(sessionID, status),
@@ -312,15 +401,9 @@ export const layer = Layer.effect(
           title: `goal ${handle.goalId}`,
           metadata: { sessionID, goalId: handle.goalId },
           run: GoalDriver.runToCompletion({ deps, handle, ports }).pipe(
-            Effect.tap((outcome) =>
-              Effect.sync(() => {
-                // A terminal outcome clears the running pointer to its terminal phase; a paused exit
-                // leaves the pointer for a later resume.
-                if (outcome !== "continue") {
-                  AgentGateway.DeepAgentSessionState.setActiveGoalPhase(sessionID, outcome as never)
-                }
-              }),
-            ),
+            // A terminal outcome clears the running pointer to its terminal phase (unless the user already
+            // stopped it); a paused exit ("continue") leaves the pointer for a later resume.
+            Effect.tap((outcome) => finalizeOutcome(sessionID, outcome)),
             Effect.map((outcome) => `goal ${handle.goalId}: ${outcome}`),
             Effect.catchCause(() => Effect.succeed(`goal ${handle.goalId}: driver defect`)),
           ),
@@ -332,6 +415,9 @@ export const layer = Layer.effect(
           jobId: job.id,
           paused: false,
           stopped: false,
+          ledger: { ticks: 0, tokens: 0, cost: 0, wallclockMs: 0 },
+          stallCount: 0,
+          gaps: [],
         })
 
         return { goalId: handle.goalId, planDocId: handle.planDocId, phase: "running", running: true }
@@ -343,6 +429,8 @@ export const layer = Layer.effect(
         if (!c) return false
         yield* mutateControl(sessionID, (ctrl) => (ctrl.paused = true))
         AgentGateway.DeepAgentSessionState.setActiveGoalPhase(sessionID, "paused")
+        // Immediate goal.updated so the status bar flips to "paused" now, not after the in-flight tick.
+        yield* publishControlPhase(sessionID, c, "paused")
         return true
       })
 
@@ -388,17 +476,15 @@ export const layer = Layer.effect(
           title: `goal ${c.goalId} (resumed)`,
           metadata: { sessionID, goalId: c.goalId },
           run: GoalDriver.runToCompletion({ deps, handle, ports }).pipe(
-            Effect.tap((outcome) =>
-              Effect.sync(() => {
-                if (outcome !== "continue")
-                  AgentGateway.DeepAgentSessionState.setActiveGoalPhase(sessionID, outcome as never)
-              }),
-            ),
+            Effect.tap((outcome) => finalizeOutcome(sessionID, outcome)),
             Effect.map((outcome) => `goal ${c.goalId}: ${outcome}`),
             Effect.catchCause(() => Effect.succeed(`goal ${c.goalId}: driver defect`)),
           ),
         })
         yield* mutateControl(sessionID, (ctrl) => (ctrl.jobId = job.id))
+        // Immediate goal.updated so the status bar flips back to "running" now. The resumed driver's
+        // first tick may be tens of seconds away; without this the bar would stay stuck on "paused".
+        yield* publishControlPhase(sessionID, c, "running")
         return true
       })
 
@@ -410,6 +496,10 @@ export const layer = Layer.effect(
         yield* background.cancel(c.jobId).pipe(Effect.ignore)
         AgentGateway.DeepAgentSessionState.setActiveGoalPhase(sessionID, "stopped")
         yield* setControl(sessionID, null)
+        // Immediate goal.updated is MANDATORY here: cancelling the job means no further tick will ever
+        // fire onStatus, so this is the ONLY event that can move the status bar off its prior phase.
+        // Without it the UI is stuck showing "running" forever after the user hits stop.
+        yield* publishControlPhase(sessionID, c, "stopped")
         return true
       })
 
@@ -426,11 +516,23 @@ export const layer = Layer.effect(
         }
       })
 
-    // Reference `flags` so an unused-var lint stays quiet; the real gate is makeGoalLoopWiring returning
-    // null when experimentalGoalLoop is off (checked in start/resume).
-    void flags
+    // Whether start() would find a plan to run — mirrors its plan-resolution precedence WITHOUT side
+    // effects (no doc materialized, no driver started). Flag-gated: a disabled goal loop is never
+    // startable. session_plan (loop-tool authored) wins; else the repo goal+plan.md (loop/design file);
+    // else none. Used by the client to gate the convert-to-goal affordance in the modes where it applies.
+    const startable: Interface["startable"] = (sessionID) =>
+      Effect.gen(function* () {
+        if (!flags.experimentalGoalLoop) return { startable: false, source: "none" as const }
+        const existing = AgentGateway.DeepAgentSessionState.getPlan(sessionID) as PlanDoc | null
+        if (existing != null) return { startable: true, source: "plan" as const }
+        const session = yield* sessions.get(SessionID.make(sessionID)).pipe(Effect.orDie)
+        const cwd = session.directory ?? process.cwd()
+        const fromFile = readGoalPlanFile(cwd, sessionID)
+        if (fromFile?.plan != null) return { startable: true, source: "file" as const }
+        return { startable: false, source: "none" as const }
+      })
 
-    return Service.of({ start, pause, resume, stop, status })
+    return Service.of({ start, pause, resume, stop, status, startable })
   }),
 )
 

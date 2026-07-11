@@ -322,6 +322,10 @@ export const DeepAgentGoalSnapshot = Schema.Struct({
 })
 export const DeepAgentGoalStatusResult = Schema.Struct({ goal: Schema.NullOr(DeepAgentGoalSnapshot) })
 export const DeepAgentGoalMutateResult = Schema.Struct({ ok: Schema.Boolean })
+export const DeepAgentGoalStartableResult = Schema.Struct({
+  startable: Schema.Boolean,
+  source: Schema.Literals(["plan", "file", "none"]),
+})
 
 // ── V3.9 §B Repo & Wiki ────────────────────────────────────────────────────
 // The human-facing projection of the four graphs. Read-only browse + governed knowledge edit +
@@ -647,6 +651,13 @@ export const DeepAgentApi = HttpApi.make("deepagent").add(
       HttpApiEndpoint.get("goalStatus", `${root}/goal/status`, {
         query: Schema.Struct({ ...WorkspaceRoutingQueryFields, sessionID: Schema.String }),
         success: described(DeepAgentGoalStatusResult, "The active goal for the session, or null"),
+        error: DeepAgentPromotionError,
+      }),
+    )
+    .add(
+      HttpApiEndpoint.get("goalStartable", `${root}/goal/startable`, {
+        query: Schema.Struct({ ...WorkspaceRoutingQueryFields, sessionID: Schema.String }),
+        success: described(DeepAgentGoalStartableResult, "Whether a goal can be started + plan source"),
         error: DeepAgentPromotionError,
       }),
     )
