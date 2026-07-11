@@ -110,6 +110,32 @@ export class Service extends ConfigService.Service<Service>()("@deepagent-code/R
   bashDefaultTimeoutMs: positiveInteger("DEEPAGENT_CODE_EXPERIMENTAL_BASH_DEFAULT_TIMEOUT_MS"),
   experimentalNativeLlm: bool("DEEPAGENT_CODE_EXPERIMENTAL_NATIVE_LLM"),
   experimentalWebSockets: bool("DEEPAGENT_CODE_EXPERIMENTAL_WEBSOCKETS"),
+  // ── V4.0 event-driven Agent-OS (all default OFF — gated grey rollout) ──────────────────────────
+  // V4.0 §A/§B: route inbound IM messages through the DeepAgent Event Bus (im.message.created domain
+  // events → Router → Scheduler) instead of the direct synchronous session path. Default OFF: the
+  // double-write shim keeps the legacy path authoritative until the bus is proven. Enable with
+  // DEEPAGENT_CODE_V4_EVENT_DRIVEN_IM.
+  v4EventDrivenIm: bool("DEEPAGENT_CODE_V4_EVENT_DRIVEN_IM"),
+  // V4.0 §A4: allow the agent to PUSH proactively (agent-initiated outbound messages driven by
+  // monitor/schedule/ci events) rather than only replying to a human turn. Default OFF — proactive
+  // push is high-blast-radius and must be explicitly opted into. Enable with
+  // DEEPAGENT_CODE_V4_AGENT_PUSH_ENABLED.
+  v4AgentPushEnabled: bool("DEEPAGENT_CODE_V4_AGENT_PUSH_ENABLED"),
+  // V4.0 §C: the Multi-Agent Runtime (coordinated multi-agent execution over the bus with handoff +
+  // agent.task.* coordination events). Default OFF until the runtime + scheduler are integration-
+  // proven. Enable with DEEPAGENT_CODE_V4_MULTI_AGENT_RUNTIME.
+  v4MultiAgentRuntime: bool("DEEPAGENT_CODE_V4_MULTI_AGENT_RUNTIME"),
+  // V4.0 §D: permit autonomy level 2 (act-then-report — the agent executes reversible actions without
+  // a pre-approval turn, subject to the Oversight ceiling). Default OFF: levels 0/1 (ask-first) remain
+  // the ceiling until Oversight UI ships. Enable with DEEPAGENT_CODE_V4_AGENT_AUTONOMY_LEVEL_2.
+  v4AgentAutonomyLevel2: bool("DEEPAGENT_CODE_V4_AGENT_AUTONOMY_LEVEL_2"),
+  // V4.0 §B: threaded conversations (thread-scoped event correlation + reply grouping in the IM
+  // surface). Default OFF until the thread projection + UI land. Enable with
+  // DEEPAGENT_CODE_V4_THREAD_ENABLED.
+  v4ThreadEnabled: bool("DEEPAGENT_CODE_V4_THREAD_ENABLED"),
+  // V4.0 §B: inbound file/attachment upload on the IM surface (attachment events + storage). Default
+  // OFF until storage + scanning are wired. Enable with DEEPAGENT_CODE_V4_FILE_UPLOAD_ENABLED.
+  v4FileUploadEnabled: bool("DEEPAGENT_CODE_V4_FILE_UPLOAD_ENABLED"),
   client: Config.string("DEEPAGENT_CODE_CLIENT").pipe(Config.withDefault("cli")),
 }) {}
 
