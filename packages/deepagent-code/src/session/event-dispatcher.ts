@@ -254,9 +254,14 @@ export const layerWith = (options?: LayerOptions) =>
               // §A4 条件触发: fire ONLY when the threshold of trigger events is met in the window; else
               // reschedule the next re-check WITHOUT publishing (and without leaving it hot-looping).
               const spec = schedule.condition
+              // §A4 跨 workspace 计数: a crossWorkspace condition (e.g. the SYSTEM-level "3× CI failure →
+              // repair" trigger) counts trigger events across ALL workspaces — so it observes CI failures
+              // that land in per-project workspaces, not just its own. recentByType omits the workspaceID
+              // filter when it's undefined (bus counts cross-tenant). Non-crossWorkspace conditions keep
+              // the historical per-workspace scoping (pass the schedule's own workspaceID).
               const recent = yield* bus.recentByType({
                 type: spec.eventType,
-                workspaceID: schedule.workspaceID,
+                ...(spec.crossWorkspace ? {} : { workspaceID: schedule.workspaceID }),
                 windowMs: spec.windowMs,
                 now: at,
               })
