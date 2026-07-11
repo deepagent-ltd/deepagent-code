@@ -6,6 +6,7 @@ import { DeepAgentEventBus } from "@deepagent-code/core/deepagent/deepagent-even
 import { DeepAgentEvent } from "@deepagent-code/core/deepagent/deepagent-event"
 import { Database } from "@deepagent-code/core/database/database"
 import { AgentListProviderService } from "@deepagent-code/core/im/agent-list-provider"
+import { ApprovalQueue } from "@deepagent-code/core/deepagent/approval-queue"
 import type { AgentDescriptor } from "@deepagent-code/core/im/mention-parser"
 import { testEffect } from "../lib/effect"
 
@@ -53,7 +54,10 @@ const agent = (id: string, caps: string[], autonomy?: AgentDescriptor["autonomy"
 
 const makeLayer = (opts?: Partial<MultiAgentRuntime.LayerOptions>) => {
   const database = Database.layerFromPath(":memory:")
-  const core = DeepAgentEventBus.layerWith({ now }).pipe(Layer.provideMerge(database))
+  // bus + approval queue share the one in-memory DB so autonomy escalations MAR offers are queued.
+  const core = Layer.mergeAll(DeepAgentEventBus.layerWith({ now }), ApprovalQueue.layerWith({ now })).pipe(
+    Layer.provideMerge(database),
+  )
   const runtime = MultiAgentRuntime.layerWith({ runner: fakeRunner, ...opts }).pipe(
     Layer.provide(core),
     Layer.provide(fakeAgentList),
@@ -120,6 +124,21 @@ describe("MultiAgentRuntime.coordinate", () => {
       expect(summary.outcomes.every((o) => o.status === "blocked")).toBe(true)
       expect(summary.outcomes[0].reason).toContain("autonomy")
       expect(ran.length).toBe(0)
+    }),
+  )
+
+  it.effect("§D an autonomy-exceeds-ceiling block is ESCALATED to the human Approval Queue (not dropped)", () =>
+    Effect.gen(function* () {
+      resetRunner()
+      setNow(1_000)
+      setRegistry([agent("weak", ["code_edit", "test_run"], "level_1")]) // below the required level → blocked
+      const runtime = yield* MultiAgentRuntime.Service
+      yield* runtime.coordinate(event())
+      // the gated subtask must surface for a human, not silently vanish.
+      const queue = yield* ApprovalQueue.Service
+      const pending = yield* queue.listPending("wrk_1")
+      expect(pending.length).toBeGreaterThan(0)
+      expect(pending.some((p) => p.eventType === "agent.task.needs_human")).toBe(true)
     }),
   )
 
@@ -258,7 +277,9 @@ describe("MultiAgentRuntime registry failure", () => {
     findByCapability: () => Effect.succeed([]),
   })
   const database = Database.layerFromPath(":memory:")
-  const core = DeepAgentEventBus.layerWith({ now }).pipe(Layer.provideMerge(database))
+  const core = Layer.mergeAll(DeepAgentEventBus.layerWith({ now }), ApprovalQueue.layerWith({ now })).pipe(
+    Layer.provideMerge(database),
+  )
   const layer = Layer.mergeAll(
     MultiAgentRuntime.layerWith({ runner: fakeRunner }).pipe(Layer.provide(core), Layer.provide(failingAgentList)),
     core,

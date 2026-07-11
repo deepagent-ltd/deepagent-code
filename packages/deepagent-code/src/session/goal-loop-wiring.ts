@@ -111,6 +111,14 @@ export type SubagentTurnInput = {
   /** Optional JSON Schema forcing a structured final turn (reviewer / panelist). */
   readonly outputSchema?: Record<string, unknown>
   /**
+   * V4.0 §C — the workspace/directory the turn should be rooted in, for a runner that is NOT bound to a
+   * fixed parent session (the event-driven Multi-Agent Runtime creates a fresh root session per event
+   * in the triggering event's workspace). The goal-loop runner ignores these (it parents to the goal
+   * session). `workspaceID` is a genuine "wrk"-id or a directory-fallback; `directory` is the worktree.
+   */
+  readonly workspaceID?: string
+  readonly directory?: string
+  /**
    * §D/§E F3 — optional hook invoked with the child session id AFTER the session is created but BEFORE
    * the prompt turn runs. The goal-worker StepExecutor uses it to SEED the child session's plan-state
    * from the goal plan doc, so the worker's `plan` tool edits build on (and stay bound to) the goal's

@@ -70,6 +70,8 @@ const summarize = (event: DeepAgentEvent.Event): string => {
       return `Goal rolled back${p.reason ? `: ${String(p.reason)}` : ""}`
     case LMNEvents.PANEL_VERDICT:
       return `Expert panel needs human decision${p.question ? `: ${String(p.question)}` : ""}`
+    case LMNEvents.AGENT_TASK_NEEDS_HUMAN:
+      return `Agent task needs human approval${p.reason ? ` (${String(p.reason)})` : ""}${p.intent ? `: ${String(p.intent)}` : ""}`
     default:
       return `${event.type} requires approval`
   }

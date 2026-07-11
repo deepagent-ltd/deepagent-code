@@ -9,6 +9,8 @@ import { AutonomyPolicy } from "@deepagent-code/core/deepagent/autonomy-policy"
 import { SecurityGate } from "@deepagent-code/core/deepagent/security-gate"
 import type { AgentDescriptor } from "@deepagent-code/core/im/mention-parser"
 import { AgentListProviderService } from "@deepagent-code/core/im/agent-list-provider"
+import { ApprovalQueue } from "@deepagent-code/core/deepagent/approval-queue"
+import { LMNEvents } from "@deepagent-code/core/deepagent/lmn-events"
 import type { SubagentTurnRunner } from "./goal-loop-wiring"
 import type { EventDispatcher } from "./event-dispatcher"
 import * as Log from "@deepagent-code/core/util/log"
@@ -81,6 +83,7 @@ export const layerWith = (options: LayerOptions) =>
     Effect.gen(function* () {
       const bus = yield* DeepAgentEventBus.Service
       const agentList = yield* AgentListProviderService
+      const approvalQueue = yield* ApprovalQueue.Service
       const runner = options.runner
       const trustedSources = options.trustedSources
       const actorHasPermission = options.actorHasPermission ?? (() => Effect.succeed(true))
@@ -102,6 +105,35 @@ export const layerWith = (options: LayerOptions) =>
           .pipe(
             Effect.catchCause((cause) =>
               Effect.sync(() => log.error("coordination emit failed", { cause: Cause.pretty(cause) })),
+            ),
+            Effect.asVoid,
+          )
+
+      // §D — publish an agent.task.needs_human escalation and offer it to the §D2 Approval Queue, so a
+      // gated subtask (autonomy ceiling exceeded / suggestion_only) reaches a human instead of being
+      // silently dropped. Best-effort: a bus/queue failure must not break coordination.
+      const escalateForHuman = (
+        event: DeepAgentEvent.Event,
+        subtask: TaskPartitioner.Subtask,
+        agent: AgentDescriptor,
+        reason: string,
+      ) =>
+        bus
+          .publish({
+            type: LMNEvents.AGENT_TASK_NEEDS_HUMAN,
+            source: COORDINATION_SOURCE,
+            workspaceID: event.workspaceID,
+            ...(event.projectID != null ? { projectID: event.projectID } : {}),
+            correlationID: event.correlationID ?? event.id,
+            causationID: event.id,
+            idempotencyKey: `coord:${subtask.id}:needs_human`,
+            priority: "high",
+            payload: { taskID: subtask.id, agentID: agent.id, capability: subtask.capability, intent: subtask.intent, reason },
+          })
+          .pipe(
+            Effect.flatMap((escalation) => approvalQueue.offer(escalation)),
+            Effect.catchCause((cause) =>
+              Effect.sync(() => log.error("autonomy escalation failed", { cause: Cause.pretty(cause) })),
             ),
             Effect.asVoid,
           )
@@ -196,12 +228,17 @@ export const layerWith = (options: LayerOptions) =>
             if (!autonomy.allowed) {
               outcomes.push({ taskID: subtask.id, capability: subtask.capability, status: "blocked", agentID: agent.id, reason: `autonomy:${autonomy.reason}` })
               yield* emit(event, { type: "agent.task.blocked", taskID: subtask.id, reason: `autonomy_exceeds_ceiling` }, `coord:${subtask.id}:blocked`)
+              // §D — surface to the human Approval Queue rather than silently dropping: the action needs
+              // an autonomy level above this agent's ceiling.
+              yield* escalateForHuman(event, subtask, agent, "autonomy_exceeds_ceiling")
               continue
             }
             // suggestion_only (level_5) never auto-executes — record as blocked-for-human, no run.
             if (autonomy.gate === "suggestion_only") {
               outcomes.push({ taskID: subtask.id, capability: subtask.capability, status: "blocked", agentID: agent.id, reason: "suggestion_only" })
               yield* emit(event, { type: "agent.task.blocked", taskID: subtask.id, reason: "suggestion_only" }, `coord:${subtask.id}:blocked`)
+              // §D — a level_5 suggestion_only action is a human decision by design → Approval Queue.
+              yield* escalateForHuman(event, subtask, agent, "suggestion_only")
               continue
             }
 
@@ -253,6 +290,13 @@ export const layerWith = (options: LayerOptions) =>
             const result = yield* runner({
               agentType: agent.name,
               prompt: `${subtask.intent}\n\nTriggering event: ${event.type} (${event.id}).`,
+              // §C — root the turn in the triggering event's workspace (the event-driven runner has no
+              // parent session; it creates a fresh root session here). actorID-less events fall back to
+              // the workspaceID as the directory (single-user / directory-routed model).
+              workspaceID: event.workspaceID,
+              ...(typeof (event.payload as { directory?: unknown } | null)?.directory === "string"
+                ? { directory: (event.payload as { directory: string }).directory }
+                : {}),
             }).pipe(
               Effect.catchCause((cause) => {
                 log.error("subtask runner failed", { taskID: subtask.id, cause: Cause.pretty(cause) })
