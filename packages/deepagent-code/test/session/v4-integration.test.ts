@@ -159,7 +159,18 @@ describe("V4.0 end-to-end (§I/§J)", () => {
       const due = yield* bus.dueRetries(Number.MAX_SAFE_INTEGER)
       expect(due.map((d) => d.eventID)).toContain(event.id)
       expect(due.find((d) => d.eventID === event.id)?.attempts).toBe(1)
-      runnerOk = true // reset for other tests
+      const ranAfterFail = ran.length
+      expect(ranAfterFail).toBeGreaterThan(0) // the subtasks DID run (and failed)
+
+      // NOW the runner recovers and the retry pump re-drives the event. The failed subtask must ACTUALLY
+      // RE-RUN — the started-before-run guard must not short-circuit it as "already done" (the §D HIGH
+      // fix: the idempotency guard checks agent.task.completed, not started).
+      runnerOk = true
+      const redriven = yield* dispatcher.pumpRetries(Number.MAX_SAFE_INTEGER)
+      expect(redriven).toBeGreaterThan(0)
+      expect(ran.length).toBeGreaterThan(ranAfterFail) // re-ran on retry, not skipped
+      // the event is now fully handled → no longer pending.
+      expect((yield* bus.dueRetries(Number.MAX_SAFE_INTEGER)).map((d) => d.eventID)).not.toContain(event.id)
     }),
   )
 
