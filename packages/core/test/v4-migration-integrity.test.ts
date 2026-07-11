@@ -33,6 +33,7 @@ describe("V4.0 migration integrity (§H/§I)", () => {
         "deepagent_event_delivery",
         "deepagent_schedule",
         "im_agent_push_logs",
+        "deepagent_approval_queue",
       ]) {
         expect(yield* tableExists(t)).toBe(true)
       }
