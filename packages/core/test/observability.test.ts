@@ -3,6 +3,7 @@ import { Effect, Layer } from "effect"
 import { Observability } from "@deepagent-code/core/deepagent/observability"
 import { DeepAgentEventBus } from "@deepagent-code/core/deepagent/deepagent-event-bus"
 import { DeepAgentEvent } from "@deepagent-code/core/deepagent/deepagent-event"
+import { DeepAgentEventTable } from "@deepagent-code/core/deepagent/deepagent-event-sql"
 import { Database } from "@deepagent-code/core/database/database"
 import { AgentPushLogTable } from "@deepagent-code/core/im/push-log-sql"
 import { testEffect } from "./lib/effect"
@@ -163,6 +164,79 @@ describe("Observability.metrics (§F1)", () => {
       expect(dead.length).toBe(1) // sanity
       const m = yield* obs.metrics({ workspaceID: "wrk_1", from: 0, to: 10_000 })
       expect(m.dlqEventsTotal).toBe(1)
+    }),
+  )
+
+  it.effect("event_publish_latency_ms P50/P95 aggregates the per-row publish_latency_ms samples", () =>
+    Effect.gen(function* () {
+      const { db } = yield* Database.Service
+      const obs = yield* Observability.Service
+      // seed events directly with known publish_latency_ms so percentiles are exact (10..100 by 10s).
+      const rows = Array.from({ length: 10 }, (_, i) => ({
+        id: DeepAgentEvent.ID.create(6_000 + i),
+        type: "ci.failure",
+        source: "ci" as const,
+        workspace_id: "wrk_lat",
+        project_id: null,
+        actor_id: null,
+        correlation_id: null,
+        causation_id: null,
+        idempotency_key: `lat-${i}`,
+        priority: "normal" as const,
+        payload: null,
+        created_at: 6_000 + i,
+        publish_latency_ms: (i + 1) * 10, // 10,20,...,100
+      }))
+      yield* db.insert(DeepAgentEventTable).values(rows).run()
+      const m = yield* obs.metrics({ workspaceID: "wrk_lat", from: 0, to: 10_000 })
+      // nearest-rank: P50 rank = ceil(.5*10)=5 → 50ms; P95 rank = ceil(.95*10)=10 → 100ms.
+      expect(m.eventPublishLatencyMsP50).toBe(50)
+      expect(m.eventPublishLatencyMsP95).toBe(100)
+    }),
+  )
+
+  it.effect("latency percentiles are null when no samples exist in the window", () =>
+    Effect.gen(function* () {
+      const obs = yield* Observability.Service
+      const m = yield* obs.metrics({ workspaceID: "wrk_empty", from: 0, to: 1_000 })
+      expect(m.eventPublishLatencyMsP50).toBeNull()
+      expect(m.eventPublishLatencyMsP95).toBeNull()
+      expect(m.eventToAgentStartMsP50).toBeNull()
+      expect(m.eventToAgentStartMsP95).toBeNull()
+    }),
+  )
+
+  it.effect("event_to_agent_start_ms = started.createdAt − trigger.createdAt (joined by causationID)", () =>
+    Effect.gen(function* () {
+      const bus = yield* DeepAgentEventBus.Service
+      const obs = yield* Observability.Service
+      // a trigger event, then an agent.task.started whose causationID points at it 150ms later.
+      setNow(7_000)
+      const trigger = yield* bus.publish(pub({ idempotencyKey: "eas-trig", workspaceID: "wrk_eas", type: "ci.failure" }))
+      setNow(7_150)
+      yield* bus.publish(
+        pub({
+          idempotencyKey: "eas-start",
+          workspaceID: "wrk_eas",
+          type: "agent.task.started",
+          source: "system",
+          causationID: trigger.id,
+        }),
+      )
+      // a started event with a dangling causationID contributes no sample (trigger not in workspace).
+      setNow(7_200)
+      yield* bus.publish(
+        pub({
+          idempotencyKey: "eas-dangling",
+          workspaceID: "wrk_eas",
+          type: "agent.task.started",
+          source: "system",
+          causationID: "dae_nonexistent",
+        }),
+      )
+      const m = yield* obs.metrics({ workspaceID: "wrk_eas", from: 0, to: 10_000 })
+      expect(m.eventToAgentStartMsP50).toBe(150)
+      expect(m.eventToAgentStartMsP95).toBe(150)
     }),
   )
 })
