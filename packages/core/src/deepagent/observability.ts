@@ -1,7 +1,7 @@
 export * as Observability from "./observability"
 
 import { Context, Effect, Layer } from "effect"
-import { and, asc, eq, gt, gte, lte, sql } from "drizzle-orm"
+import { and, asc, eq, gt, gte, inArray, lte, sql } from "drizzle-orm"
 import { Database } from "../database/database"
 import { DeepAgentEventTable, DeepAgentEventDeliveryTable } from "./deepagent-event-sql"
 import { AgentPushLogTable } from "../im/push-log-sql"
@@ -15,9 +15,9 @@ import { DeepAgentEvent } from "./deepagent-event"
 //                 agent-task success rate, conflict rate) for the Agent Dashboard.
 //
 // LAYERING: `core`. Pure reads — no dispatch/session. The HTTP/Oversight layer (deepagent-code) calls
-// this and renders. Latency histograms (event_publish_latency_ms / event_to_agent_start_ms) need
-// emission-time instrumentation and are NOT computed here (documented gap — this service reports the
-// COUNT/RATE metrics derivable from the durable rows).
+// this and renders. Latency histograms (event_publish_latency_ms / event_to_agent_start_ms) ARE computed
+// here now that the bus records publish_latency_ms on each row and agent.task.started carries the
+// triggering event's id as causationID — nearest-rank percentiles over the window, workspace-scoped.
 
 // One node in a §F2 trace — a durable event on the correlation chain, with its causal parent.
 export interface TraceNode {
@@ -51,6 +51,23 @@ export interface Metrics {
   readonly agentTaskBlockedTotal: number
   // total pushes (delivered + digest + blocked) in the window.
   readonly agentPushTotal: number
+  // §F1 event_publish_latency_ms — P50/P95 of the per-event persist latency (bus writes publish_latency_ms
+  // on each row). Nearest-rank percentiles over the window, workspace-scoped. null ⇒ no samples.
+  readonly eventPublishLatencyMsP50: number | null
+  readonly eventPublishLatencyMsP95: number | null
+  // §F1 event_to_agent_start_ms — P50/P95 of (agent.task.started.created_at − triggering-event.created_at),
+  // joined by the started event's causationID = the trigger event's id, workspace-scoped. null ⇒ no samples.
+  readonly eventToAgentStartMsP50: number | null
+  readonly eventToAgentStartMsP95: number | null
+}
+
+// Nearest-rank percentile (§F1 histograms computed in-code, no SQL percentile fn). `p` in [0,1].
+// Returns null for an empty sample set. Sorts ascending; rank = ceil(p·n), clamped to [1,n].
+const percentile = (samples: ReadonlyArray<number>, p: number): number | null => {
+  if (samples.length === 0) return null
+  const sorted = [...samples].sort((a, b) => a - b)
+  const rank = Math.min(sorted.length, Math.max(1, Math.ceil(p * sorted.length)))
+  return sorted[rank - 1]
 }
 
 export interface Interface {
@@ -193,6 +210,72 @@ export const layerWith = (options?: LayerOptions) =>
           const agentTaskSuccessRate = denom === 0 ? null : agentTaskCompleted / denom
           const agentConflictRate = agentTaskBlockedTotal === 0 ? null : conflictBlocks / agentTaskBlockedTotal
 
+          // §F1 event_publish_latency_ms — the bus writes publish_latency_ms on each event row; read the
+          // non-null samples in the window (workspace-scoped) and compute nearest-rank P50/P95 in-code.
+          const latencyRows = yield* db
+            .select({ ms: DeepAgentEventTable.publish_latency_ms })
+            .from(DeepAgentEventTable)
+            .where(
+              and(
+                eq(DeepAgentEventTable.workspace_id, ws),
+                gte(DeepAgentEventTable.created_at, from),
+                lte(DeepAgentEventTable.created_at, to),
+                sql`${DeepAgentEventTable.publish_latency_ms} is not null`,
+              ),
+            )
+            .all()
+            .pipe(Effect.orDie)
+          const latencySamples = latencyRows.map((r) => r.ms as number)
+          const eventPublishLatencyMsP50 = percentile(latencySamples, 0.5)
+          const eventPublishLatencyMsP95 = percentile(latencySamples, 0.95)
+
+          // §F1 event_to_agent_start_ms — for each agent.task.started event in the window, the delay from
+          // its TRIGGER (the event whose id == the started event's causationID) to the start. We read the
+          // started rows, then resolve each causationID to its trigger's created_at via a workspace-scoped
+          // id→created_at map; sample = started.created_at − trigger.created_at. Joining in-code (rather
+          // than a correlated self-join on the same physical table) keeps the query unambiguous and
+          // mirrors the in-code percentile idiom.
+          const startedRows = yield* db
+            .select({ createdAt: DeepAgentEventTable.created_at, causationID: DeepAgentEventTable.causation_id })
+            .from(DeepAgentEventTable)
+            .where(
+              and(
+                eq(DeepAgentEventTable.workspace_id, ws),
+                eq(DeepAgentEventTable.type, "agent.task.started"),
+                gte(DeepAgentEventTable.created_at, from),
+                lte(DeepAgentEventTable.created_at, to),
+                sql`${DeepAgentEventTable.causation_id} is not null`,
+              ),
+            )
+            .all()
+            .pipe(Effect.orDie)
+
+          const startSamples: number[] = []
+          const triggerIDs = [...new Set(startedRows.map((r) => r.causationID).filter((c): c is string => c != null))]
+          if (triggerIDs.length > 0) {
+            // resolve trigger created_at, scoped to THIS workspace so a cross-tenant id collision can't
+            // pair a started event to another tenant's trigger.
+            const triggerRows = yield* db
+              .select({ id: DeepAgentEventTable.id, createdAt: DeepAgentEventTable.created_at })
+              .from(DeepAgentEventTable)
+              .where(
+                and(
+                  eq(DeepAgentEventTable.workspace_id, ws),
+                  inArray(DeepAgentEventTable.id, triggerIDs as DeepAgentEvent.ID[]),
+                ),
+              )
+              .all()
+              .pipe(Effect.orDie)
+            const triggerAt = new Map(triggerRows.map((r) => [r.id as string, r.createdAt]))
+            for (const r of startedRows) {
+              const t = r.causationID != null ? triggerAt.get(r.causationID) : undefined
+              // only pair to a trigger that exists in this workspace, and never emit a negative sample.
+              if (t != null && r.createdAt >= t) startSamples.push(r.createdAt - t)
+            }
+          }
+          const eventToAgentStartMsP50 = percentile(startSamples, 0.5)
+          const eventToAgentStartMsP95 = percentile(startSamples, 0.95)
+
           return {
             windowFrom: from,
             windowTo: to,
@@ -205,6 +288,10 @@ export const layerWith = (options?: LayerOptions) =>
             agentConflictRate,
             agentTaskBlockedTotal,
             agentPushTotal,
+            eventPublishLatencyMsP50,
+            eventPublishLatencyMsP95,
+            eventToAgentStartMsP50,
+            eventToAgentStartMsP95,
           }
         })
 

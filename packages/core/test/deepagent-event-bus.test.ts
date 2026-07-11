@@ -2,7 +2,9 @@ import { describe, expect } from "bun:test"
 import { Effect, Fiber, Layer, Stream } from "effect"
 import { DeepAgentEventBus } from "@deepagent-code/core/deepagent/deepagent-event-bus"
 import { DeepAgentEvent } from "@deepagent-code/core/deepagent/deepagent-event"
+import { DeepAgentEventTable } from "@deepagent-code/core/deepagent/deepagent-event-sql"
 import { Database } from "@deepagent-code/core/database/database"
+import { eq } from "drizzle-orm"
 import { testEffect } from "./lib/effect"
 
 // A deterministic mutable clock so retry-backoff / dedupe-window assertions are exact.
@@ -247,6 +249,88 @@ describe("DeepAgentEventBus", () => {
       yield* bus.nack({ subscriptionGroup: "group-b", eventID: event.id, reason: "b failed" })
       const due = yield* bus.dueRetries(Number.MAX_SAFE_INTEGER)
       expect(due.map((d) => d.subscriptionGroup)).toEqual(["group-b"]) // only b pending
+    }),
+  )
+})
+
+describe("DeepAgentEventBus.tryPublish (§A4/§E2 rate gate)", () => {
+  it.effect("low/normal over the limit is dropped (not persisted); under the limit publishes", () =>
+    Effect.gen(function* () {
+      setNow(0)
+      const bus = yield* DeepAgentEventBus.Service
+      // limit=2 for wrk_1: first two admitted, third dropped.
+      const r1 = yield* bus.tryPublish(input({ idempotencyKey: "tp-1" }), { limit: 2 })
+      const r2 = yield* bus.tryPublish(input({ idempotencyKey: "tp-2" }), { limit: 2 })
+      const r3 = yield* bus.tryPublish(input({ idempotencyKey: "tp-3" }), { limit: 2 })
+      expect("published" in r1).toBe(true)
+      expect("published" in r2).toBe(true)
+      expect(r3).toEqual({ dropped: "rate_limited" })
+      // the dropped event was NOT persisted — only the two admitted rows are in the log.
+      const all = yield* Stream.runCollect(bus.replay({ from: 0 })).pipe(Effect.map((c) => Array.from(c)))
+      expect(all.map((e) => e.idempotencyKey).sort()).toEqual(["tp-1", "tp-2"])
+    }),
+  )
+
+  it.effect("high/critical ALWAYS publish even over the limit (§A4 priority bypass)", () =>
+    Effect.gen(function* () {
+      setNow(0)
+      const bus = yield* DeepAgentEventBus.Service
+      // exhaust the limit=1 window with a normal event
+      yield* bus.tryPublish(input({ idempotencyKey: "pb-normal" }), { limit: 1 })
+      const dropped = yield* bus.tryPublish(input({ idempotencyKey: "pb-normal-2" }), { limit: 1 })
+      expect(dropped).toEqual({ dropped: "rate_limited" })
+      // high + critical bypass the exhausted ceiling
+      const hi = yield* bus.tryPublish(input({ idempotencyKey: "pb-high", priority: "high" }), { limit: 1 })
+      const crit = yield* bus.tryPublish(input({ idempotencyKey: "pb-crit", priority: "critical" }), { limit: 1 })
+      expect("published" in hi).toBe(true)
+      expect("published" in crit).toBe(true)
+    }),
+  )
+
+  it.effect("the ceiling is per-workspace (one tenant hitting the limit never sheds another's)", () =>
+    Effect.gen(function* () {
+      setNow(0)
+      const bus = yield* DeepAgentEventBus.Service
+      // wrk_a exhausts its limit=1
+      yield* bus.tryPublish(input({ idempotencyKey: "iso-a1", workspaceID: "wrk_a" }), { limit: 1 })
+      const aDrop = yield* bus.tryPublish(input({ idempotencyKey: "iso-a2", workspaceID: "wrk_a" }), { limit: 1 })
+      expect(aDrop).toEqual({ dropped: "rate_limited" })
+      // wrk_b has its own bucket — still admitted
+      const bOk = yield* bus.tryPublish(input({ idempotencyKey: "iso-b1", workspaceID: "wrk_b" }), { limit: 1 })
+      expect("published" in bOk).toBe(true)
+    }),
+  )
+
+  it.effect("the window resets on the injected clock (a fresh window re-admits)", () =>
+    Effect.gen(function* () {
+      setNow(0)
+      const bus = yield* DeepAgentEventBus.Service
+      yield* bus.tryPublish(input({ idempotencyKey: "win-1" }), { limit: 1 })
+      const dropped = yield* bus.tryPublish(input({ idempotencyKey: "win-2" }), { limit: 1 })
+      expect(dropped).toEqual({ dropped: "rate_limited" })
+      // cross the 60s fixed window → fresh bucket admits again
+      setNow(60_001)
+      const after = yield* bus.tryPublish(input({ idempotencyKey: "win-3" }), { limit: 1 })
+      expect("published" in after).toBe(true)
+    }),
+  )
+})
+
+describe("DeepAgentEventBus publish latency (§F1)", () => {
+  it.effect("publish records publish_latency_ms on the row (the clock delta around persist)", () =>
+    Effect.gen(function* () {
+      const { db } = yield* Database.Service
+      const bus = yield* DeepAgentEventBus.Service
+      // with a frozen clock the before/after reads are equal → latency is 0 (populated, NOT null).
+      setNow(1_000)
+      const ev = yield* bus.publish(input({ idempotencyKey: "lat-1" }))
+      const row = yield* db
+        .select({ ms: DeepAgentEventTable.publish_latency_ms })
+        .from(DeepAgentEventTable)
+        .where(eq(DeepAgentEventTable.id, ev.id))
+        .get()
+        .pipe(Effect.orDie)
+      expect(row?.ms).toBe(0)
     }),
   )
 })

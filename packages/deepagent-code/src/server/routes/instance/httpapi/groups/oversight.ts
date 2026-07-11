@@ -25,6 +25,12 @@ export const OversightMetrics = Schema.Struct({
   agentConflictRate: Schema.NullOr(Schema.Number),
   agentTaskBlockedTotal: Schema.Number,
   agentPushTotal: Schema.Number,
+  // §F1 latency histograms (P50/P95). Optional + nullable (null ⇒ no samples in the window) — ADDITIVE,
+  // so an older client that ignores them is unaffected.
+  eventPublishLatencyMsP50: Schema.optional(Schema.NullOr(Schema.Number)),
+  eventPublishLatencyMsP95: Schema.optional(Schema.NullOr(Schema.Number)),
+  eventToAgentStartMsP50: Schema.optional(Schema.NullOr(Schema.Number)),
+  eventToAgentStartMsP95: Schema.optional(Schema.NullOr(Schema.Number)),
 })
 
 // ── §F2 trace ───────────────────────────────────────────────────────────────────────────────────
