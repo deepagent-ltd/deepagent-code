@@ -146,6 +146,15 @@ export class Service extends ConfigService.Service<Service>()("@deepagent-code/R
   // needs_human verdict to the §D2 Approval Queue. HIGH-COST (fans out reviewer subagents) + autonomous
   // — operator opt-in. Enable with DEEPAGENT_CODE_V4_PANEL_AUTO_CONVENE=true.
   v4PanelAutoConvene: bool("DEEPAGENT_CODE_V4_PANEL_AUTO_CONVENE"),
+  // §L: the EVENT-DRIVEN execution archiver TRIGGER. When on, a completed ROOT session (its end-of-turn
+  // idle signal) is republished as a `session.completed` event onto the DeepAgent Event Bus, so the §L
+  // EventDrivenArchiver has a trigger and archives the execution trajectory as a Wiki page OFF the
+  // session loop. Independent of IM (§L is a Repo/Wiki capability, not an IM one — the archiver's own
+  // header says so), so it carries its OWN flag rather than riding v4EventDrivenIm. Default OFF (P0.3
+  // production posture): with it off the bridge is inert — nothing subscribes, nothing publishes, and
+  // the V3.9 inline archive (prompt.ts, gated by experimentalWiki) remains the only archival path.
+  // Enable with DEEPAGENT_CODE_V4_EVENT_DRIVEN_ARCHIVE=true.
+  v4EventDrivenArchive: bool("DEEPAGENT_CODE_V4_EVENT_DRIVEN_ARCHIVE"),
   client: Config.string("DEEPAGENT_CODE_CLIENT").pipe(Config.withDefault("cli")),
 }) {}
 
