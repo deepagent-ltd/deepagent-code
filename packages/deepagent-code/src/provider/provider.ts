@@ -1309,6 +1309,19 @@ export const layer = Layer.effect(
         // via `provider.<id>` in config (credentials from options.apiKey/env).
         const officialProviderIDs = OFFICIAL_PROVIDER_ID_SET
 
+        // Seed the official-provider baseURL override (SettingsStore, the sanctioned channel for
+        // official transport) onto the CATALOG entry up front — before the plugin auth loaders and
+        // custom loaders run. This makes the endpoint visible to (a) the OpenAI codex auth loader, so
+        // it can skip the WebSocket transport when a proxy/gateway baseURL is set (a proxy speaks
+        // HTTP, not the ChatGPT-backend WS protocol), and (b) resolveSDK, which reads
+        // `options.baseURL`. The timeout/retry transport keys are merged later (they don't affect the
+        // loader path); only baseURL needs to be early.
+        for (const [id, transport] of Object.entries(officialTransport)) {
+          const entry = database[id]
+          if (!entry || !transport?.baseURL) continue
+          entry.options = { ...entry.options, baseURL: transport.baseURL }
+        }
+
         const providers: Record<ProviderV2.ID, Info> = {} as Record<ProviderV2.ID, Info>
         const languages = new Map<string, LanguageModelV3>()
         const modelLoaders: {
