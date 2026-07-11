@@ -155,6 +155,37 @@ describe("MultiAgentRuntime.coordinate", () => {
     }),
   )
 
+  it.effect("§E2 concurrency cap: an over-cap subtask DEFERS (retryable), never runs", () =>
+    Effect.gen(function* () {
+      resetRunner()
+      setNow(1_000)
+      setRegistry([agent("fixer", ["code_edit", "test_run"], "level_2")])
+      // inject a concurrency gate that is always at cap → acquire is never admitted.
+      const cappedRuntime = MultiAgentRuntime.layerWith({
+        runner: fakeRunner,
+        concurrency: {
+          acquire: () => Effect.succeed({ admitted: false as boolean, depth: 5, cap: 5 }),
+          release: () => {},
+          depth: () => 5,
+          totalDepth: () => 5,
+        },
+      })
+      const database = Database.layerFromPath(":memory:")
+      const core = Layer.mergeAll(DeepAgentEventBus.layerWith({ now }), ApprovalQueue.layerWith({ now })).pipe(
+        Layer.provideMerge(database),
+      )
+      const summary = yield* MultiAgentRuntime.Service.pipe(
+        Effect.flatMap((rt) => rt.coordinate(event())),
+        Effect.provide(cappedRuntime.pipe(Layer.provide(core), Layer.provide(fakeAgentList))),
+      )
+      // the first subtask is capped → deferred; its dependent is then blocked (dependency_not_met).
+      // Neither runs, and the event is unfinished (retryable) — the cap never drops work.
+      expect(summary.outcomes.some((o) => o.status === "deferred" && o.reason === "concurrency_capped")).toBe(true)
+      expect(summary.hasUnfinished).toBe(true) // → dispatch nacks → retry when the workspace drains
+      expect(ran.length).toBe(0)
+    }),
+  )
+
   it.effect("§C monitor.alert chain (diagnose → propose-fix) completes without self-conflict", () =>
     Effect.gen(function* () {
       resetRunner()
