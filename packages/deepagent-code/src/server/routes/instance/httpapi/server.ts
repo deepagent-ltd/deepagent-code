@@ -88,6 +88,10 @@ import { oversightHandlers } from "./handlers/oversight"
 import { Observability as OversightObservability } from "@deepagent-code/core/deepagent/observability"
 import { ApprovalQueue } from "@deepagent-code/core/deepagent/approval-queue"
 import { DeepAgentEventBus } from "@deepagent-code/core/deepagent/deepagent-event-bus"
+import { Scheduler } from "@deepagent-code/core/deepagent/scheduler"
+import { WorkspaceConfig } from "@deepagent-code/core/deepagent/workspace-config"
+import { WorkspaceConcurrency } from "@deepagent-code/core/deepagent/workspace-concurrency"
+import { V4EventRuntime } from "@/session/v4-event-runtime"
 import { experimentalHandlers } from "./handlers/experimental"
 import { debugHandlers } from "./handlers/debug"
 import { fileHandlers } from "./handlers/file"
@@ -164,6 +168,23 @@ const imRuntimeLayer = Layer.mergeAll(
   ServerAgentReplySinkLive,
   AgentContextBuilderLive.pipe(Layer.provide(imRepositoryLayer)),
 )
+// V4.0 §A4/§C — the PRODUCTION event-runtime daemons (EventDispatcher router + tick + retry pump,
+// MultiAgentRuntime DispatchPort, RetentionSweeper). Without this the V4 daemons never start and
+// published events are logged-then-ignored. Composed here so it shares the ONE DeepAgentEventBus +
+// ApprovalQueue + Database with the IM double-write and goal-manager (module-const layers memoize to a
+// single instance under the shared memoMap — publishers and the dispatcher must not split-brain). The
+// session stack (Session/SessionPrompt/Agent/Provider) + RuntimeFlags are drawn from the shared graph
+// below. Daemon startup is gated on the V4 flags inside V4EventRuntime.layer, so with flags off (the
+// default) it is inert — nothing subscribes, ticks, or prunes.
+const v4EventRuntimeLayer = V4EventRuntime.layer.pipe(
+  Layer.provide(DeepAgentEventBus.defaultLayer),
+  Layer.provide(ApprovalQueue.layer.pipe(Layer.provide(Database.defaultLayer))),
+  Layer.provide(Scheduler.defaultLayer),
+  Layer.provide(WorkspaceConfig.defaultLayer),
+  Layer.provide(WorkspaceConcurrency.defaultLayer),
+  Layer.provide(ServerAgentListProviderLive),
+)
+
 const rootApiRoutes = HttpApiBuilder.layer(RootHttpApi).pipe(
   Layer.provide([controlHandlers, controlPlaneHandlers, globalHandlers]),
   Layer.provide(schemaErrorLayer),
@@ -262,6 +283,9 @@ export function createRoutes(
     serverRoutes,
     docRoute,
     uiRoute,
+    // §A4/§C — start the V4 event-runtime daemons with the server (inert unless V4 flags are on). Draws
+    // the session stack + RuntimeFlags from the provide stack below.
+    v4EventRuntimeLayer,
   ).pipe(
     Layer.provide([
       errorLayer,
