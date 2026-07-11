@@ -9,6 +9,12 @@ describe("LMNEvents", () => {
     expect(LMNEvents.GOAL_TICK).toBe("goal.tick")
     expect(LMNEvents.GOAL_COMPLETED).toBe("goal.completed")
     expect(LMNEvents.PANEL_VERDICT).toBe("panel.verdict")
+    expect(LMNEvents.IM_MESSAGE_CREATED).toBe("im.message.created") // §B1 double-write
+  })
+
+  test("§B im.message.created is NOT an approval-queue / archive trigger", () => {
+    expect(LMNEvents.isApprovalQueueCandidate(LMNEvents.IM_MESSAGE_CREATED)).toBe(false)
+    expect(LMNEvents.isArchiveTrigger(LMNEvents.IM_MESSAGE_CREATED)).toBe(false)
   })
 
   test("§D2 Approval Queue candidate membership (coarse)", () => {

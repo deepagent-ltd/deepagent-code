@@ -14,6 +14,9 @@ import { MentionParser } from "@deepagent-code/core/im/mention-parser"
 import { AgentListProviderService } from "@deepagent-code/core/im/agent-list-provider"
 import { executeAgentMentions } from "@deepagent-code/core/im/agent-orchestrator"
 import { getWorkspaceContext } from "../utils/workspace-context"
+import { RuntimeFlags } from "@/effect/runtime-flags"
+import { DeepAgentEventBus } from "@deepagent-code/core/deepagent/deepagent-event-bus"
+import { LMNEvents } from "@deepagent-code/core/deepagent/lmn-events"
 
 const IM_MAX_MESSAGE_LENGTH = 100000 // 增加到 100k，更灵活
 
@@ -75,6 +78,9 @@ export const imHandlers = HttpApiBuilder.group(InstanceHttpApi, "im", (handlers)
     const repo = yield* IMRepository
     const broadcaster = yield* IMBroadcasterService
     const agentListProvider = yield* AgentListProviderService
+    // V4.0 §B1 — the flag + bus for the double-write (user message persist → publish im.message.created).
+    const flags = yield* RuntimeFlags.Service
+    const eventBus = yield* DeepAgentEventBus.Service
     // Long-lived scope for detached agent runs. Forking into the SERVER scope (not
     // the request scope) means the agent keeps running after the HTTP response is
     // sent, while still inheriting the request fiber's full context — crucially the
@@ -238,7 +244,7 @@ export const imHandlers = HttpApiBuilder.group(InstanceHttpApi, "im", (handlers)
               })
               .pipe(
                 Effect.tap((msg) =>
-                  Effect.sync(() => {
+                  Effect.gen(function* () {
                     // Broadcast message_created event via WebSocket
                     broadcaster.broadcast(groupId, {
                       type: "message_created",
@@ -256,6 +262,33 @@ export const imHandlers = HttpApiBuilder.group(InstanceHttpApi, "im", (handlers)
                         updatedAt: msg.updatedAt,
                       },
                     })
+                    // V4.0 §B1 — double-write: publish im.message.created onto the DeepAgent Event Bus
+                    // AFTER the message is durably persisted (so the legacy path stays authoritative and
+                    // the event is never emitted for an un-persisted message). Flag-gated on
+                    // v4EventDrivenIm (default OFF ⇒ no publish, byte-identical to V3.8). Best-effort:
+                    // idempotencyKey = the message id (one event per message), and a bus failure never
+                    // fails the user's send (the message already persisted + broadcast).
+                    if (flags.v4EventDrivenIm) {
+                      yield* eventBus
+                        .publish({
+                          type: LMNEvents.IM_MESSAGE_CREATED,
+                          source: "im",
+                          workspaceID: workspaceID ?? directory,
+                          actorID: userID,
+                          idempotencyKey: `im:${msg.id}`,
+                          priority: "normal",
+                          payload: {
+                            messageID: msg.id,
+                            groupID: msg.groupID,
+                            senderID: msg.senderID,
+                            senderType: msg.senderType,
+                            content: msg.content,
+                            mentions: msg.mentions,
+                            replyToID: msg.replyToID,
+                          },
+                        })
+                        .pipe(Effect.catchCause(() => Effect.void))
+                    }
                   }),
                 ),
                 Effect.catch((error) =>
