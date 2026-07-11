@@ -93,7 +93,7 @@ describe("ApprovalQueue.listPending + resolve", () => {
       const item = yield* q.offer(event({ id: DeepAgentEvent.ID.create(2_000), type: LMNEvents.GOAL_NEEDS_HUMAN }))
       expect((yield* q.listPending("wrk_1")).some((i) => i.id === item!.id)).toBe(true)
       // resolve it → drops out of pending
-      const resolved = yield* q.resolve({ id: item!.id, decision: "approved", resolvedBy: "human-1" })
+      const resolved = yield* q.resolve({ id: item!.id, workspaceID: "wrk_1", decision: "approved", resolvedBy: "human-1" })
       expect(resolved?.status).toBe("resolved")
       expect(resolved?.decision).toBe("approved")
       expect(resolved?.resolvedBy).toBe("human-1")
@@ -118,10 +118,25 @@ describe("ApprovalQueue.listPending + resolve", () => {
       setNow(1_000)
       const q = yield* ApprovalQueue.Service
       const item = yield* q.offer(event({ id: DeepAgentEvent.ID.create(4_000), type: LMNEvents.GOAL_NEEDS_HUMAN }))
-      yield* q.resolve({ id: item!.id, decision: "approved", resolvedBy: "human-1" })
-      const again = yield* q.resolve({ id: item!.id, decision: "rejected", resolvedBy: "human-2" })
+      yield* q.resolve({ id: item!.id, workspaceID: "wrk_1", decision: "approved", resolvedBy: "human-1" })
+      const again = yield* q.resolve({ id: item!.id, workspaceID: "wrk_1", decision: "rejected", resolvedBy: "human-2" })
       expect(again?.decision).toBe("approved") // unchanged — first resolution wins
       expect(again?.resolvedBy).toBe("human-1")
+    }),
+  )
+
+  it.effect("§D2 tenant isolation: workspace A cannot resolve workspace B's item by id", () =>
+    Effect.gen(function* () {
+      setNow(1_000)
+      const q = yield* ApprovalQueue.Service
+      // B enqueues an item.
+      const bItem = yield* q.offer(event({ id: DeepAgentEvent.ID.create(5_000), workspaceID: "wrk_b", type: LMNEvents.GOAL_NEEDS_HUMAN }))
+      expect(bItem).not.toBeNull()
+      // A attempts to resolve B's item by id → null (not found in A's scope), and B's item stays pending.
+      const cross = yield* q.resolve({ id: bItem!.id, workspaceID: "wrk_a", decision: "approved", resolvedBy: "attacker" })
+      expect(cross).toBeNull()
+      const bPending = yield* q.listPending("wrk_b")
+      expect(bPending.some((i) => i.id === bItem!.id && i.status === "pending")).toBe(true)
     }),
   )
 })

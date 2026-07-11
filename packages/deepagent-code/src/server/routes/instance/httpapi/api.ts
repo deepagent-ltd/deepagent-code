@@ -7,6 +7,7 @@ import { ConfigApi } from "./groups/config"
 import { ControlApi } from "./groups/control"
 import { ControlPlaneApi } from "./groups/control-plane"
 import { DeepAgentApi } from "./groups/deepagent"
+import { OversightApi } from "./groups/oversight"
 import { EventApi } from "./groups/event"
 import { ExperimentalApi } from "./groups/experimental"
 import { DebugApi } from "./groups/debug"
@@ -59,6 +60,7 @@ export const InstanceHttpApi = HttpApi.make("deepagent-code-instance")
   .addHttpApi(DebugApi)
   .addHttpApi(ProfileApi)
   .addHttpApi(DeepAgentApi)
+  .addHttpApi(OversightApi)
   .addHttpApi(ExperimentalApi)
   .addHttpApi(FileApi)
   .addHttpApi(IMApi)
