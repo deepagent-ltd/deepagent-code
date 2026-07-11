@@ -14,6 +14,7 @@ import { Auth } from "@/auth"
 import { Config } from "@/config/config"
 import { Provider } from "@/provider/provider"
 import { ProviderTransform } from "@/provider/transform"
+import { SettingsStore } from "@/settings/store"
 import { ModelsDev } from "@deepagent-code/core/models-dev"
 import { Plugin } from "@/plugin"
 
@@ -30,29 +31,29 @@ import { ModelV2 } from "@deepagent-code/core/model"
 
 type ConfigModel = NonNullable<NonNullable<ConfigV1.Info["provider"]>[string]["models"]>[string]
 
-const openAIConfig = (model: ModelsDev.Provider["models"][string], baseURL: string): Partial<ConfigV1.Info> => {
-  const { experimental: _experimental, ...configModel } = model
-  return {
-    enabled_providers: ["openai"],
-    provider: {
-      openai: {
-        name: "OpenAI",
-        env: ["OPENAI_API_KEY"],
-        npm: "@ai-sdk/openai",
-        api: "https://api.openai.com/v1",
-        models: {
-          [model.id]: JSON.parse(JSON.stringify(configModel)) as ConfigModel,
-        },
-        options: {
-          apiKey: "test-openai-key",
-          baseURL,
-        },
-      },
-    },
-  }
-}
 
-const it = testEffect(Layer.mergeAll(LLM.defaultLayer, Provider.defaultLayer))
+const it = testEffect(Layer.mergeAll(LLM.defaultLayer, Provider.defaultLayer, Auth.defaultLayer))
+
+// Register an OFFICIAL provider (openai/anthropic/google/…) for a test and resolve one of its models
+// pointed at the mock server, using the SAME channels a real deployment uses. Post-"官方 provider
+// 收窄+第三方隔离" (6065b22), official providers no longer read `config.provider.<id>`: they register
+// ONLY from the auth key store, and their endpoint can be overridden ONLY via SettingsStore (the
+// connect dialog's advanced section — e.g. a corporate proxy / self-hosted gateway). So we:
+//   1. seed the auth key store  → the provider registers,
+//   2. write the SettingsStore baseURL override → resolveSDK routes to the mock (and the OpenAI codex
+//      WS transport is skipped because a custom baseURL is present).
+// Both writes happen before the first `getModel`, i.e. before the provider InstanceState
+// materializes, so they are picked up. SettingsStore is global-file backed and cached, so invalidate
+// to be safe against a prior test's read. Cleanup (auth/settings reset) is handled by the fresh
+// per-test instance home (withTmpdirInstance) + the afterEach below.
+const resolveOfficialModelAt = (providerID: string, modelID: string, baseURL: string) =>
+  Effect.gen(function* () {
+    const auth = yield* Auth.Service
+    yield* auth.set(providerID, { type: "api", key: `test-${providerID}-key` })
+    SettingsStore.invalidate()
+    yield* Effect.promise(() => SettingsStore.update({ providers: { [providerID]: { baseURL } } }))
+    return yield* Provider.use.getModel(ProviderV2.ID.make(providerID), ModelV2.ID.make(modelID))
+  })
 
 // LLM.stream returns a Stream, not an Effect, so we can't use the serviceUse proxy.
 const drain = (input: LLM.StreamInput) => LLM.Service.use((svc) => svc.stream(input).pipe(Stream.runDrain))
@@ -663,6 +664,9 @@ beforeAll(() => {
 
 beforeEach(() => {
   state.queue.length = 0
+  // SettingsStore is backed by a shared global file + in-memory cache; drop the cache so a baseURL
+  // override written by resolveOfficialModelAt in one test never leaks into the next.
+  SettingsStore.invalidate()
 })
 
 afterAll(() => {
@@ -1014,7 +1018,7 @@ describe("session.llm.stream", () => {
         ]
         const request = waitRequest("/responses", createEventResponse(responseChunks, true))
 
-        const resolved = yield* Provider.use.getModel(ProviderV2.ID.openai, ModelV2.ID.make(model.id))
+        const resolved = yield* resolveOfficialModelAt("openai", model.id, `${state.server!.url.origin}/v1`)
         const sessionID = SessionID.make("session-test-2")
         const agent = {
           name: "test",
@@ -1054,7 +1058,7 @@ describe("session.llm.stream", () => {
         const maxTokens = body.max_output_tokens as number | undefined
         expect(maxTokens).toBe(undefined) // match codex cli behavior
       }),
-    { config: () => openAIConfig(loadFixture("openai", "gpt-5.2").model, `${state.server!.url.origin}/v1`) },
+    { config: () => ({ enabled_providers: ["openai"] }) },
   )
 
   it.instance(
@@ -1119,7 +1123,7 @@ describe("session.llm.stream", () => {
           }),
         )
 
-        const resolved = yield* Provider.use.getModel(ProviderV2.ID.openai, ModelV2.ID.make(model.id))
+        const resolved = yield* resolveOfficialModelAt("openai", model.id, `${state.server!.url.origin}/v1`)
         const sessionID = SessionID.make("session-test-native-flag-off")
         const agent = {
           name: "test",
@@ -1159,7 +1163,7 @@ describe("session.llm.stream", () => {
         expect(capture.url.pathname.endsWith("/responses")).toBe(true)
         expect(capture.body.model).toBe(resolved.api.id)
       }),
-    { config: () => openAIConfig(loadFixture("openai", "gpt-5.2").model, `${state.server!.url.origin}/v1`) },
+    { config: () => ({ enabled_providers: ["openai"] }) },
   )
 
   it.instance(
@@ -1189,7 +1193,7 @@ describe("session.llm.stream", () => {
         ]
         const request = waitRequest("/responses", createEventResponse(chunks, true))
 
-        const resolved = yield* Provider.use.getModel(ProviderV2.ID.openai, ModelV2.ID.make(model.id))
+        const resolved = yield* resolveOfficialModelAt("openai", model.id, `${state.server!.url.origin}/v1`)
         const sessionID = SessionID.make("session-test-native")
         const agent = {
           name: "test",
@@ -1226,7 +1230,7 @@ describe("session.llm.stream", () => {
         expect(JSON.stringify(capture.body.input)).toContain("You are a helpful assistant.")
         expect(capture.body.input).toContainEqual({ role: "user", content: [{ type: "input_text", text: "Hello" }] })
       }),
-    { config: () => openAIConfig(loadFixture("openai", "gpt-5.2").model, `${state.server!.url.origin}/v1`) },
+    { config: () => ({ enabled_providers: ["openai"] }) },
   )
 
   it.instance(
@@ -1273,7 +1277,7 @@ describe("session.llm.stream", () => {
           }),
         )
 
-        const resolved = yield* Provider.use.getModel(ProviderV2.ID.openai, ModelV2.ID.make(model.id))
+        const resolved = yield* resolveOfficialModelAt("openai", model.id, "https://injected-openai.test/v1")
         const sessionID = SessionID.make("session-test-native-injected-tool")
         const agent = {
           name: "test",
@@ -1325,7 +1329,7 @@ describe("session.llm.stream", () => {
         ])
         expect(executed).toEqual({ args: { query: "weather" }, toolCallId: "call-injected-tool" })
       }),
-    { config: () => openAIConfig(loadFixture("openai", "gpt-5.2").model, "https://injected-openai.test/v1") },
+    { config: () => ({ enabled_providers: ["openai"] }) },
   )
 
   it.instance(
@@ -1361,7 +1365,7 @@ describe("session.llm.stream", () => {
         const request = waitRequest("/responses", createEventResponse(chunks, true))
         let executed: unknown
 
-        const resolved = yield* Provider.use.getModel(ProviderV2.ID.openai, ModelV2.ID.make(model.id))
+        const resolved = yield* resolveOfficialModelAt("openai", model.id, `${state.server!.url.origin}/v1`)
         const sessionID = SessionID.make("session-test-native-tool")
         const agent = {
           name: "test",
@@ -1414,22 +1418,7 @@ describe("session.llm.stream", () => {
         expect(executed).toEqual({ args: { query: "weather" }, toolCallId: "call-native-tool" })
       }),
     {
-      config: () => {
-        const model = loadFixture("openai", "gpt-5.2").model
-        return {
-          enabled_providers: ["openai"],
-          provider: {
-            openai: {
-              name: "OpenAI",
-              env: ["OPENAI_API_KEY"],
-              npm: "@ai-sdk/openai",
-              api: "https://api.openai.com/v1",
-              models: { [model.id]: JSON.parse(JSON.stringify(model)) as ConfigModel },
-              options: { apiKey: "test-openai-key", baseURL: `${state.server!.url.origin}/v1` },
-            },
-          },
-        }
-      },
+      config: () => ({ enabled_providers: ["openai"] }),
     },
   )
 
@@ -1487,7 +1476,7 @@ describe("session.llm.stream", () => {
           ),
         ).toString("base64")}`
 
-        const resolved = yield* Provider.use.getModel(ProviderV2.ID.openai, ModelV2.ID.make(model.id))
+        const resolved = yield* resolveOfficialModelAt("openai", model.id, `${state.server!.url.origin}/v1`)
         const sessionID = SessionID.make("session-test-data-url")
         const agent = {
           name: "test",
@@ -1526,7 +1515,7 @@ describe("session.llm.stream", () => {
         const capture = yield* Effect.promise(() => request)
         expect(capture.url.pathname.endsWith("/responses")).toBe(true)
       }),
-    { config: () => openAIConfig(loadFixture("openai", "gpt-5.2").model, `${state.server!.url.origin}/v1`) },
+    { config: () => ({ enabled_providers: ["openai"] }) },
   )
 
   const minimaxFixture = { providerID: "minimax", modelID: "MiniMax-M2.5" }
@@ -1671,7 +1660,11 @@ describe("session.llm.stream", () => {
         ]
         const request = waitRequest("/messages", createEventResponse(chunks))
 
-        const resolved = yield* Provider.use.getModel(ProviderV2.ID.make("anthropic"), ModelV2.ID.make(model.id))
+        const resolved = yield* resolveOfficialModelAt(
+          "anthropic",
+          model.id,
+          `${state.server!.url.origin}/v1`,
+        )
         const sessionID = SessionID.make("session-test-anthropic-tools")
         const agent = {
           name: "test",
@@ -1686,6 +1679,11 @@ describe("session.llm.stream", () => {
           time: { created: Date.now() },
           agent: agent.name,
           model: { providerID: ProviderV2.ID.make("anthropic"), modelID: resolved.id, variant: "max" },
+          // Pin the plain (non-DeepAgent) mode: this test asserts the exact provider request payload
+          // (message ordering, tool_use/tool_result adjacency), so the DeepAgent orchestrator's
+          // volatile round-context message must not be injected. The gateway is active by default in
+          // tests (agentMode undefined ≠ "general"), so pin general to exercise the raw provider path.
+          metadata: { deepagent: { agent_mode_override: "general" } },
         } satisfies SessionV1.User
 
         const input = [
@@ -1834,24 +1832,7 @@ describe("session.llm.stream", () => {
           ],
         })
       }),
-    {
-      config: () => {
-        const model = loadFixture("anthropic", "claude-opus-4-6").model
-        return {
-          enabled_providers: ["anthropic"],
-          provider: {
-            anthropic: {
-              name: "Anthropic",
-              env: ["ANTHROPIC_API_KEY"],
-              npm: "@ai-sdk/anthropic",
-              api: "https://api.anthropic.com/v1",
-              models: { [model.id]: configModel(model) as ConfigModel },
-              options: { apiKey: "test-anthropic-key", baseURL: `${state.server!.url.origin}/v1` },
-            },
-          },
-        }
-      },
-    },
+    { config: () => ({ enabled_providers: ["anthropic"] }) },
   )
 
   const geminiFixture = { providerID: "google", modelID: "gemini-2.5-flash" }
@@ -1870,9 +1851,10 @@ describe("session.llm.stream", () => {
         ]
         const request = waitRequest(pathSuffix, createEventResponse(chunks))
 
-        const resolved = yield* Provider.use.getModel(
-          ProviderV2.ID.make(geminiFixture.providerID),
-          ModelV2.ID.make(model.id),
+        const resolved = yield* resolveOfficialModelAt(
+          geminiFixture.providerID,
+          model.id,
+          `${state.server!.url.origin}/v1beta`,
         )
         const sessionID = SessionID.make("session-test-4")
         const agent = {
@@ -1891,6 +1873,9 @@ describe("session.llm.stream", () => {
           time: { created: Date.now() },
           agent: agent.name,
           model: { providerID: ProviderV2.ID.make(geminiFixture.providerID), modelID: resolved.id },
+          // Plain provider path (see the anthropic test above): this asserts the exact Gemini request
+          // body, so the DeepAgent round-context message must not be injected.
+          metadata: { deepagent: { agent_mode_override: "general" } },
         } satisfies SessionV1.User
 
         yield* drain({
@@ -1918,15 +1903,6 @@ describe("session.llm.stream", () => {
         expect(config?.topP).toBe(0.8)
         expect(config?.maxOutputTokens).toBe(ProviderTransform.maxOutputTokens(resolved))
       }),
-    {
-      config: () => ({
-        enabled_providers: [geminiFixture.providerID],
-        provider: {
-          [geminiFixture.providerID]: {
-            options: { apiKey: "test-google-key", baseURL: `${state.server!.url.origin}/v1beta` },
-          },
-        },
-      }),
-    },
+    { config: () => ({ enabled_providers: [geminiFixture.providerID] }) },
   )
 })
