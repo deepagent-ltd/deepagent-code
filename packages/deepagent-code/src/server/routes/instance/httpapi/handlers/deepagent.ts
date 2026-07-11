@@ -559,6 +559,9 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
     const goalStatus = Effect.fn("DeepAgentHttpApi.goalStatus")(function* (ctx) {
       return { goal: yield* goals.status(ctx.query.sessionID) }
     })
+    const goalStartable = Effect.fn("DeepAgentHttpApi.goalStartable")(function* (ctx) {
+      return yield* goals.startable(ctx.query.sessionID)
+    })
 
     // ── V3.9 §B Repo & Wiki ─────────────────────────────────────────────────
     // Read-only projection + governed knowledge edit + full-text search. All fail-closed on the wiki
@@ -679,6 +682,7 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
       .handle("goalResume", goalResume)
       .handle("goalStop", goalStop)
       .handle("goalStatus", goalStatus)
+      .handle("goalStartable", goalStartable)
       .handle("wikiPages", wikiPages)
       .handle("wikiPage", wikiPage)
       .handle("wikiSearch", wikiSearch)
