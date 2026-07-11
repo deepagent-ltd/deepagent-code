@@ -793,6 +793,7 @@ export const dict = {
   "sidebar.wiki": "仓库与百科",
   "goal.start.hint": "计划已就绪 — 转为受监督的长跑目标",
   "goal.start.button": "转为 Goal",
+  "goal.start.success": "目标已启动，正在后台运行",
   "goal.start.failed": "无法启动目标",
   "wiki.title": "仓库与百科",
   "wiki.description": "阅读、检索、治理四张图。知识与记忆可编辑；文档与代码只读。",

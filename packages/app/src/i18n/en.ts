@@ -932,6 +932,7 @@ export const dict = {
   "sidebar.wiki": "Repo & Wiki",
   "goal.start.hint": "Plan ready — run it as a supervised goal",
   "goal.start.button": "Run as goal",
+  "goal.start.success": "Goal started — running in the background",
   "goal.start.failed": "Couldn't start the goal",
   "wiki.title": "Repo & Wiki",
   "wiki.description": "Read, search, and govern the four graphs. Knowledge and Memory are editable; Documents and Code are read-only.",
