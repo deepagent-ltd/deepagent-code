@@ -1,12 +1,13 @@
 export * as V4EventRuntime from "./v4-event-runtime"
 
-import { Effect, Layer } from "effect"
+import { Cause, Duration, Effect, Layer, Schedule } from "effect"
 import { DeepAgentEventBus } from "@deepagent-code/core/deepagent/deepagent-event-bus"
 import { ApprovalQueue } from "@deepagent-code/core/deepagent/approval-queue"
 import { WorkspaceConfig } from "@deepagent-code/core/deepagent/workspace-config"
 import { WorkspaceConcurrency } from "@deepagent-code/core/deepagent/workspace-concurrency"
 import { RetentionSweeper } from "@deepagent-code/core/deepagent/retention-sweeper"
 import { AgentListProviderService } from "@deepagent-code/core/im/agent-list-provider"
+import { SecurityResolvers } from "@deepagent-code/core/deepagent/security-resolvers"
 import { Scheduler } from "@deepagent-code/core/deepagent/scheduler"
 import { ModelV2 } from "@deepagent-code/core/model"
 import { ProviderV2 } from "@deepagent-code/core/provider"
@@ -147,6 +148,11 @@ const runtimeLayer = Layer.unwrap(
     const provider = yield* Provider.Service
     const instanceStore = yield* InstanceStore.Service
     const concurrency = yield* WorkspaceConcurrency.Service
+    // §E1 — the PRODUCTION security resolvers. Without these the four-layer gate is default-OPEN (L1/L2/L4
+    // resolve to trusted/permitted/allowed unconditionally); injecting them makes L1 (event-source trust),
+    // L2 (actor workspace permission) and L4 (runtime operation pre-gate) evaluate REAL facts and FAIL
+    // CLOSED on any lookup error. L3 (agent capability) is pure in SecurityGate and already enforced.
+    const sec = yield* SecurityResolvers.Service
     const runner = makeEventTurnRunner({
       sessions,
       agents,
@@ -156,7 +162,26 @@ const runtimeLayer = Layer.unwrap(
       defaultModel: () => provider.defaultModel().pipe(Effect.orDie),
     })
     // §E2 — cap concurrent agent execution per workspace (default 5).
-    return MultiAgentRuntime.layerWith({ runner, concurrency })
+    // §E1 — wire the four-layer gate to real, fail-closed resolvers:
+    //   L1 (event_source)  — per-EVENT: the event's workspace trusted-source set (system events must
+    //                        still pass this — the default set includes "system"). Fails closed.
+    //   L2 (actor_permission) — the actor is a member of the workspace OR the acting agent is registered
+    //                        for it (no-actor/system events defer to L1 by design). Fails closed.
+    //   L4 (runtime_operation) — the agent's declared toolWhitelist pre-gate (defense-in-depth; the child
+    //                        session's own permission path remains the fine-grained enforcement).
+    return MultiAgentRuntime.layerWith({
+      runner,
+      concurrency,
+      trustedSourcesFor: (event) => sec.resolveTrustedSources(event.workspaceID),
+      actorHasPermission: (event, agent) =>
+        sec.actorHasWorkspacePermission({
+          workspaceID: event.workspaceID,
+          ...(event.actorID != null ? { actorID: event.actorID } : {}),
+          agentID: agent.id,
+        }),
+      runtimeAllowed: (event, agent, capability) =>
+        sec.runtimeAllowsOperation({ workspaceID: event.workspaceID, agent, capability }),
+    })
   }),
 )
 
@@ -199,16 +224,44 @@ const retentionLayer = Layer.unwrap(
   }),
 )
 
+// §E2 — the publish rate-limiter SWEEP daemon. The bus's per-workspace publish-rate buckets are an
+// in-memory map that grows one entry per workspace that publishes; without a periodic prune it retains
+// a bucket for every workspace forever (a slow leak). This scoped fiber calls sweepPublishLimiter on a
+// cadence to drop windows that have already elapsed. Same flag coupling as the retention sweeper: the
+// limiter is only populated by V4 publishers (im.message.created / goal.*), so with all V4 flags off
+// nothing publishes → no buckets → nothing to prune, and this daemon stays inert. A failure in one pass
+// is logged and swallowed so the loop never dies. Provides no service (Layer.effectDiscard) — it exists
+// purely for its scoped daemon fiber, so it merges cleanly alongside the other daemon layers.
+const LIMITER_SWEEP_INTERVAL_MS = 60_000
+const limiterSweepLayer = Layer.effectDiscard(
+  Effect.gen(function* () {
+    const flags = yield* RuntimeFlags.Service
+    if (!anyV4DaemonEnabled(flags)) return
+    const bus = yield* DeepAgentEventBus.Service
+    yield* bus
+      .sweepPublishLimiter()
+      .pipe(
+        Effect.catchCause((cause) =>
+          Effect.sync(() => log.error("publish-limiter sweep failed", { cause: Cause.pretty(cause) })),
+        ),
+        Effect.repeat(Schedule.spaced(Duration.millis(LIMITER_SWEEP_INTERVAL_MS))),
+        Effect.forkScoped,
+      )
+  }),
+)
+
 /**
  * The full V4 event-runtime, ready to merge into the instance app graph. Starts (as scoped daemons):
  * the EventDispatcher (router + scheduler tick + retry pump), the MultiAgentRuntime (DispatchPort),
- * and the RetentionSweeper. All behavior is flag-gated, so providing this layer is inert until the V4
- * flags are enabled.
+ * the RetentionSweeper, and the §E2 publish-limiter sweep. All behavior is flag-gated, so providing
+ * this layer is inert until the V4 flags are enabled.
  *
  * Requires from the surrounding graph: Session, SessionPrompt, Agent, Provider, RuntimeFlags, and a
  * Database (for the core V4 services this self-provides over it). The core services
  * (DeepAgentEventBus / ApprovalQueue / Scheduler / WorkspaceConfig / WorkspaceConcurrency /
  * AgentListProvider / RetentionSweeper) are provided here so the daemons share one bus + DB.
  */
-export const layer = Layer.mergeAll(dispatcherLayer, retentionLayer).pipe(Layer.provideMerge(runtimeLayer))
+export const layer = Layer.mergeAll(dispatcherLayer, retentionLayer, limiterSweepLayer).pipe(
+  Layer.provideMerge(runtimeLayer),
+)
 

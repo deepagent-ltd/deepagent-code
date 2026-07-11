@@ -48,19 +48,13 @@ export type Settings = Schema.Schema.Type<typeof Settings>
 
 // §A3 — default retention: 30 days (spec default), lenient.
 export const DEFAULT_RETENTION_DAYS = 30
-// §E1 — default trusted sources. Internal/first-party sources are trusted by default; external webhook
-// sources (git/ci/pr) that a workspace hasn't explicitly vouched for are ALSO trusted by default here
-// (lenient per the standing "don't over-restrict" constraint) — an operator tightens per deploy by
-// writing an explicit trustedSources list.
-export const DEFAULT_TRUSTED_SOURCES: ReadonlyArray<DeepAgentEvent.EventSource> = [
-  "im",
-  "git",
-  "ci",
-  "pr",
-  "monitor",
-  "schedule",
-  "system",
-]
+// §E1 — default trusted sources (layer 1 fail-closed posture). ONLY first-party sources are trusted by
+// default: "im" (authenticated in-product chat), "system" (the runtime's own coordination events), and
+// "schedule" (the internal scheduler). External webhook sources (git/ci/pr/monitor) are NOT trusted by
+// default — a workspace must EXPLICITLY opt them in by writing a per-workspace trustedSources list. This
+// makes L1 an opt-in trust boundary (safe by default) rather than opt-out (open by default): an
+// unconfigured workspace never auto-trusts an unauthenticated external webhook.
+export const DEFAULT_TRUSTED_SOURCES: ReadonlyArray<DeepAgentEvent.EventSource> = ["im", "system", "schedule"]
 
 // The fully-resolved (defaults-applied) view the subsystems consume.
 export interface Resolved {
