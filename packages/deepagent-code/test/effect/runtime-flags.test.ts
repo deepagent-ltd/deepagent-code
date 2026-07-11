@@ -75,6 +75,31 @@ describe("RuntimeFlags", () => {
     }),
   )
 
+  it.effect("§H3: all six V4.0 flags default OFF (rollback-safe — feature absent unless opted in)", () =>
+    Effect.gen(function* () {
+      const flags = yield* readFlags.pipe(Effect.provide(fromConfig({})))
+      expect(flags.v4EventDrivenIm).toBe(false)
+      expect(flags.v4AgentPushEnabled).toBe(false)
+      expect(flags.v4MultiAgentRuntime).toBe(false)
+      expect(flags.v4AgentAutonomyLevel2).toBe(false)
+      expect(flags.v4ThreadEnabled).toBe(false)
+      expect(flags.v4FileUploadEnabled).toBe(false)
+    }),
+  )
+
+  it.effect("§H2: each V4.0 flag is individually toggleable (independent kill-switch)", () =>
+    Effect.gen(function* () {
+      // turning ONE on must not turn the others on — each rolls back independently.
+      const flags = yield* readFlags.pipe(
+        Effect.provide(fromConfig({ DEEPAGENT_CODE_V4_MULTI_AGENT_RUNTIME: "true" })),
+      )
+      expect(flags.v4MultiAgentRuntime).toBe(true)
+      expect(flags.v4EventDrivenIm).toBe(false)
+      expect(flags.v4AgentPushEnabled).toBe(false)
+      expect(flags.v4AgentAutonomyLevel2).toBe(false)
+    }),
+  )
+
   it.effect("defaultLayer parses DEEPAGENT_CODE_EXPERIMENTAL_LSP_TY", () =>
     Effect.gen(function* () {
       const flags = yield* readFlags.pipe(
