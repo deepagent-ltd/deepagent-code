@@ -1,10 +1,12 @@
 export * as DeepAgentEventBus from "./deepagent-event-bus"
 
 import { Context, Effect, Layer, PubSub, Stream } from "effect"
-import { and, asc, desc, eq, lte, gt } from "drizzle-orm"
+import { and, asc, desc, eq, lte, lt, gt, notExists, sql } from "drizzle-orm"
 import { Database } from "../database/database"
 import { DeepAgentEventDeliveryTable, DeepAgentEventTable } from "./deepagent-event-sql"
+import { ApprovalQueueTable } from "./approval-queue-sql"
 import { DeepAgentEvent } from "./deepagent-event"
+import { RateLimiter } from "./rate-limiter"
 
 // V4.0 §A2 — the Event Bus service. Implements the §A2 contract (publish / subscribe / ack / nack /
 // replay) on the durable `deepagent_event` + `deepagent_event_delivery` tables (deepagent-event-sql.ts).
@@ -33,6 +35,13 @@ export const DEFAULT_BACKOFF_BASE_MS = 1000
 // exposes the primitive (recentByType); the Router applies the merge policy.
 export const DEFAULT_DEDUPE_WINDOW_MS = 10_000
 
+// §A4/§E2 tryPublish outcome — a discriminated union so a caller learns whether the event was shed by
+// the rate gate. `published` carries the persisted event (identical to `publish`'s result); `dropped`
+// signals the low/normal event exceeded the per-workspace ceiling and was NOT persisted.
+export type TryPublishResult =
+  | { readonly published: DeepAgentEvent.Event }
+  | { readonly dropped: "rate_limited" }
+
 export interface DeliveryTracker {
   readonly eventID: DeepAgentEvent.ID
   readonly subscriptionGroup: string
@@ -48,6 +57,22 @@ export interface Interface {
    * to live subscribers. A duplicate idempotency_key returns the existing event without re-dispatch.
    */
   readonly publish: (input: DeepAgentEvent.PublishInput) => Effect.Effect<DeepAgentEvent.Event>
+  /**
+   * §A4/§E2 rate-gated publish. Applies the per-workspace event-publish rate ceiling
+   * (EVENT_PUBLISH_PER_WORKSPACE, or `opts.limit`) BEFORE persisting, then delegates to `publish`.
+   *
+   * PRIORITY BYPASS (§A4): high/critical events ALWAYS publish (never dropped) — the ceiling only sheds
+   * low/normal load. A low/normal event over the ceiling returns `{ dropped: "rate_limited" }` and is
+   * NOT persisted (no row, no dispatch). Otherwise the persisted event is returned as `{ published }`.
+   * The discriminated union lets the caller observe the drop (e.g. to log a blocked-push counter).
+   *
+   * Keyed per workspaceID (fixed-window, in-memory). This is ADDITIVE — existing `publish` callers are
+   * untouched and bypass the gate entirely.
+   */
+  readonly tryPublish: (
+    input: DeepAgentEvent.PublishInput,
+    opts?: { readonly limit?: number },
+  ) => Effect.Effect<TryPublishResult>
   /**
    * Live stream of newly published events (post-persist). Historical events come from `replay`.
    *
@@ -95,6 +120,25 @@ export interface Interface {
   readonly dueRetries: (now?: number) => Effect.Effect<ReadonlyArray<DeliveryTracker>>
   /** Load a single event by id from the durable log — used by the retry pump to re-dispatch a nacked delivery. */
   readonly getByID: (eventID: DeepAgentEvent.ID) => Effect.Effect<DeepAgentEvent.Event | undefined>
+  /**
+   * §A3 保留期 (retention sweep) — delete durable events for one workspace older than `olderThan`
+   * (epoch ms, exclusive), returning how many event rows were removed.
+   *
+   * REFERENTIAL SAFETY (an event still owed to a human/consumer MUST survive its retention window):
+   *   - an event with a PENDING `deepagent_event_delivery` (status='pending') is EXCLUDED — an unacked
+   *     at-least-once delivery still owes the event to a consumer group; deleting it would strand the
+   *     retry pump (which loads the event by id to re-dispatch).
+   *   - an event referenced by an UNRESOLVED `deepagent_approval_queue` row (status='pending') is
+   *     EXCLUDED — a human still has to act on it; its source event must remain for the trace + payload.
+   *   - `delivered`/`dead` deliveries do NOT protect an event (terminal), and cascade-delete with it.
+   *
+   * Workspace-scoped via `deepagent_event_workspace_created_idx`. Delivery rows for deleted events are
+   * removed by the FK ON DELETE CASCADE (PRAGMA foreign_keys=ON).
+   */
+  readonly sweep: (input: {
+    readonly workspaceID: string
+    readonly olderThan: number
+  }) => Effect.Effect<{ readonly deletedEvents: number }>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@deepagent-code/DeepAgentEventBus") {}
@@ -142,6 +186,10 @@ export const layerWith = (options?: LayerOptions) =>
       const backoffBaseMs = options?.backoffBaseMs ?? DEFAULT_BACKOFF_BASE_MS
       const now = options?.now ?? Date.now
       const live = yield* PubSub.unbounded<DeepAgentEvent.Event>()
+      // §A4/§E2 — ONE in-memory fixed-window limiter for the whole bus, keyed per workspaceID. Only
+      // `tryPublish` consults it; `publish` is unchanged. `now` (the injected clock) drives window
+      // resets so tests cross a boundary deterministically.
+      const publishLimiter = new RateLimiter.Service()
 
       yield* Effect.addFinalizer(() => PubSub.shutdown(live))
 
@@ -210,6 +258,10 @@ export const layerWith = (options?: LayerOptions) =>
           // past the read-check above hits UNIQUE(idempotency_key) → 0 rows → not the winner). Dispatch
           // happens AFTER commit, so a subscriber never observes an uncommitted event.
           const owed = groupsFor(event.type)
+          // §F1 event_publish_latency_ms — wall-clock delta (injected clock) around the persist
+          // transaction. One now() before, one after; the delta is written on the row so Observability
+          // can build the publish-latency histogram. Cheap + additive.
+          const publishStart = now()
           const wonInsert = yield* db
             .transaction(
               () =>
@@ -278,8 +330,37 @@ export const layerWith = (options?: LayerOptions) =>
               .pipe(Effect.orDie)
             return winner ? decodeRow(winner) : event
           }
+          // §F1 — record the persist latency on the row (delta of the two clock reads around the
+          // commit). Non-fatal + additive: a lightweight UPDATE that never blocks dispatch.
+          const publishLatencyMs = now() - publishStart
+          yield* db
+            .update(DeepAgentEventTable)
+            .set({ publish_latency_ms: publishLatencyMs })
+            .where(eq(DeepAgentEventTable.id, event.id))
+            .run()
+            .pipe(Effect.orDie)
           yield* PubSub.publish(live, event)
           return event
+        })
+
+      // §A4/§E2 rate-gated publish — see the Interface doc. Priority bypass first (high/critical always
+      // pass), then the fixed-window ceiling for low/normal; under the ceiling we delegate to `publish`.
+      const tryPublish: Interface["tryPublish"] = (input, opts) =>
+        Effect.gen(function* () {
+          const priority = input.priority ?? "normal"
+          // §A4: high/critical are never shed — publish unconditionally (still records a hit-free path).
+          if (priority === "high" || priority === "critical") {
+            return { published: yield* publish(input) }
+          }
+          const limit = opts?.limit ?? RateLimiter.EVENT_PUBLISH_PER_WORKSPACE.limit
+          const admitted = publishLimiter.check(
+            input.workspaceID,
+            limit,
+            RateLimiter.EVENT_PUBLISH_PER_WORKSPACE.windowMs,
+            now(),
+          )
+          if (!admitted) return { dropped: "rate_limited" as const }
+          return { published: yield* publish(input) }
         })
 
       const subscribe: Interface["subscribe"] = (input) => {
@@ -479,8 +560,79 @@ export const layerWith = (options?: LayerOptions) =>
           .get()
           .pipe(Effect.orDie, Effect.map((row) => (row ? decodeRow(row) : undefined)))
 
+      // §A3 保留期 — delete this workspace's events older than `olderThan`, SPARING any event still owed
+      // to a consumer (a pending delivery) or a human (an unresolved approval-queue item). Runs in an
+      // immediate transaction so the count reflects exactly what was removed. Delivery rows for the
+      // deleted events cascade via the FK (foreign_keys=ON) — we assert that below with a defensive
+      // cleanup that is a no-op when the cascade fires as expected.
+      const sweep: Interface["sweep"] = (input) =>
+        db
+          .transaction(
+            () =>
+              Effect.gen(function* () {
+                // an event is DELETABLE iff: this workspace, older than the cutoff, AND not referenced by
+                // a pending delivery, AND not referenced by a pending approval-queue row. The two
+                // notExists sub-selects are the referential-safety guard.
+                const noPendingDelivery = notExists(
+                  db
+                    .select({ one: sql`1` })
+                    .from(DeepAgentEventDeliveryTable)
+                    .where(
+                      and(
+                        eq(DeepAgentEventDeliveryTable.event_id, DeepAgentEventTable.id),
+                        eq(DeepAgentEventDeliveryTable.status, "pending"),
+                      ),
+                    ),
+                )
+                const noPendingApproval = notExists(
+                  db
+                    .select({ one: sql`1` })
+                    .from(ApprovalQueueTable)
+                    .where(
+                      and(
+                        eq(ApprovalQueueTable.event_id, DeepAgentEventTable.id),
+                        eq(ApprovalQueueTable.status, "pending"),
+                      ),
+                    ),
+                )
+                const deletable = and(
+                  eq(DeepAgentEventTable.workspace_id, input.workspaceID),
+                  lt(DeepAgentEventTable.created_at, input.olderThan),
+                  noPendingDelivery,
+                  noPendingApproval,
+                )
+
+                // Delete the terminal (delivered/dead) delivery rows of the doomed events FIRST. The FK
+                // cascade already removes them, but doing it explicitly keeps the sweep correct even if a
+                // future backend runs with foreign_keys OFF, and never touches a `pending` delivery (those
+                // events are excluded by `deletable`, so their deliveries aren't in this set).
+                yield* db
+                  .delete(DeepAgentEventDeliveryTable)
+                  .where(
+                    sql`${DeepAgentEventDeliveryTable.event_id} in (${db
+                      .select({ id: DeepAgentEventTable.id })
+                      .from(DeepAgentEventTable)
+                      .where(deletable)})`,
+                  )
+                  .run()
+                  .pipe(Effect.orDie)
+
+                const deleted = yield* db
+                  .delete(DeepAgentEventTable)
+                  .where(deletable)
+                  .returning({ id: DeepAgentEventTable.id })
+                  .all()
+                  .pipe(Effect.orDie)
+
+                return { deletedEvents: deleted.length }
+              }),
+            { behavior: "immediate" },
+          )
+          .pipe(Effect.orDie)
+
       return Service.of({
         publish,
+        tryPublish,
         subscribe,
         ack,
         nack,
@@ -489,6 +641,7 @@ export const layerWith = (options?: LayerOptions) =>
         deadLetters,
         dueRetries,
         getByID,
+        sweep,
       })
     }),
   )
