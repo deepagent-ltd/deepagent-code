@@ -37,7 +37,7 @@ describe("IM Agent Orchestrator", () => {
     yield* db.run(`
       CREATE TABLE im_messages (
         id TEXT PRIMARY KEY, group_id TEXT NOT NULL, sender_id TEXT NOT NULL, sender_type TEXT NOT NULL,
-        type TEXT NOT NULL, content TEXT NOT NULL, mentions TEXT, metadata TEXT, reply_to_id TEXT,
+        type TEXT NOT NULL, content TEXT NOT NULL, mentions TEXT, metadata TEXT, reply_to_id TEXT, event_id TEXT, delivery_status TEXT,
         created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, deleted_at INTEGER,
         FOREIGN KEY (group_id) REFERENCES im_groups(id)
       )`)
