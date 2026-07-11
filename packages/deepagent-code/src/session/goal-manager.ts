@@ -27,6 +27,9 @@ import {
   type PanelQuestionInput,
 } from "./goal-loop-wiring"
 import { GoalDriver, type GoalDriverPorts } from "./goal-driver"
+import { DeepAgentEventBus } from "@deepagent-code/core/deepagent/deepagent-event-bus"
+import { ApprovalQueue } from "@deepagent-code/core/deepagent/approval-queue"
+import { LMNEvents } from "@deepagent-code/core/deepagent/lmn-events"
 
 /**
  * V3.9 §D — the GOAL MANAGER service: the resident, in-process supervisor that OWNS running goals.
@@ -141,6 +144,10 @@ export const layer = Layer.effect(
     const provider = yield* Provider.Service
     const lsp = yield* LSP.Service
     const flags = yield* RuntimeFlags.Service
+    // V4.0 §N — the event bus + Approval Queue the goal loop escalates through. Only used when the
+    // event-driven runtime flag is on (default OFF → behavior byte-identical to V3.9).
+    const eventBus = yield* DeepAgentEventBus.Service
+    const approvalQueue = yield* ApprovalQueue.Service
 
     // Diagnostics accessor with LSP already provided, so the goal-loop wiring stays free of LSP in its
     // requirement channel (liveDiagnostics needs LSP.Service; we satisfy it here at construction).
@@ -233,6 +240,44 @@ export const layer = Layer.effect(
           stallCount: status.stallCount,
           gaps: status.gaps,
         })
+        // V4.0 §N — mirror the goal lifecycle onto the DeepAgent Event Bus (and escalations into the
+        // §D2 Approval Queue). Flag-gated: OFF (default) ⇒ this whole block is skipped and the V3.9
+        // goal.updated path above is unchanged. Best-effort: a bus/queue failure never breaks the loop.
+        if (flags.v4MultiAgentRuntime) {
+          yield* emitGoalLifecycleEvent(sessionID, status, phase).pipe(
+            Effect.catchCause(() => Effect.void),
+          )
+        }
+      })
+
+    // §N — publish the discrete goal lifecycle event (goal.tick for a running tick, or the terminal
+    // type) and, for a terminal escalation (needs_human / rolled_back), offer it to the Approval Queue.
+    // The workspace key is the session's directory (matches how the Oversight surface scopes).
+    const emitGoalLifecycleEvent = (sessionID: string, status: GoalStatus, phase: string) =>
+      Effect.gen(function* () {
+        const session = yield* sessions.get(SessionID.make(sessionID)).pipe(Effect.orElseSucceed(() => undefined))
+        // workspace key MUST mirror the Oversight read side (route.workspaceID ?? route.directory), else
+        // an escalation written here is keyed on the filesystem directory while GET /oversight/approvals
+        // reads by the WorkspaceV2.ID → invisible on the Dashboard in server edition. Prefer the
+        // session's workspaceID, fall back to directory, then sessionID.
+        const workspaceID = session?.workspaceID ?? session?.directory ?? sessionID
+        // map the driver phase → the discrete §N event type (running/paused/stopped ⇒ goal.tick).
+        const eventType = LMNEvents.goalPhaseToEventType(phase) ?? LMNEvents.GOAL_TICK
+        // idempotencyKey reuses the V3.9 plan-version idempotency intent: one event per (goal, phase,
+        // tick) so a re-published status doesn't double-emit.
+        const idempotencyKey = `goal:${status.goalId}:${phase}:${status.ledger.ticks}`
+        const event = yield* eventBus.publish({
+          type: eventType,
+          source: "system",
+          workspaceID,
+          actorID: sessionID,
+          correlationID: status.goalId,
+          idempotencyKey,
+          priority: eventType === LMNEvents.GOAL_NEEDS_HUMAN ? "high" : "normal",
+          payload: { goalId: status.goalId, planDocId: status.planDocId, phase, gaps: status.gaps },
+        })
+        // terminal escalations queue for human review (§D2). shouldQueueForApproval gates it.
+        yield* approvalQueue.offer(event)
       })
 
     // Publish an IMMEDIATE goal.updated for a control transition (pause/resume/stop). Reuses the control's
@@ -523,6 +568,8 @@ export const defaultLayer = Layer.suspend(() =>
     Layer.provide(Provider.defaultLayer),
     Layer.provide(LSP.defaultLayer),
     Layer.provide(RuntimeFlags.defaultLayer),
+    Layer.provide(DeepAgentEventBus.defaultLayer),
+    Layer.provide(ApprovalQueue.defaultLayer),
   ),
 )
 
