@@ -18,7 +18,7 @@ const database = Database.layerFromPath(":memory:")
 const it = testEffect(WorkspaceConfig.layerWith({ now }).pipe(Layer.provideMerge(database)))
 
 describe("WorkspaceConfig", () => {
-  it.effect("absent row → lenient defaults (30d retention, no quiet hours, all sources trusted)", () =>
+  it.effect("absent row → defaults (30d retention, no quiet hours, only first-party sources trusted)", () =>
     Effect.gen(function* () {
       const cfg = yield* WorkspaceConfig.Service
       const r = yield* cfg.get("wrk_never_written")
@@ -26,6 +26,20 @@ describe("WorkspaceConfig", () => {
       expect(r.quietHours).toBeUndefined()
       expect(r.trustedSources).toEqual(WorkspaceConfig.DEFAULT_TRUSTED_SOURCES)
       expect(r.rateLimits).toEqual({})
+    }),
+  )
+
+  it.effect("§E1 fail-closed default: DEFAULT_TRUSTED_SOURCES is first-party only (im/system/schedule)", () =>
+    Effect.gen(function* () {
+      // the trust boundary is opt-IN: external webhook sources (git/ci/pr/monitor) are NOT trusted by
+      // default and must be explicitly vouched for per-workspace.
+      expect(WorkspaceConfig.DEFAULT_TRUSTED_SOURCES).toEqual(["im", "system", "schedule"])
+      const cfg = yield* WorkspaceConfig.Service
+      const r = yield* cfg.get("wrk_default_trust")
+      // an unconfigured workspace does NOT trust "git" (an external webhook) at L1.
+      expect(r.trustedSources.includes("git")).toBe(false)
+      expect(r.trustedSources.includes("ci")).toBe(false)
+      expect(r.trustedSources.includes("im")).toBe(true)
     }),
   )
 

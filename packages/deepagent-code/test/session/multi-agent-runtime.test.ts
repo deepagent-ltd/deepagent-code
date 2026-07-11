@@ -7,6 +7,9 @@ import { DeepAgentEvent } from "@deepagent-code/core/deepagent/deepagent-event"
 import { Database } from "@deepagent-code/core/database/database"
 import { AgentListProviderService } from "@deepagent-code/core/im/agent-list-provider"
 import { ApprovalQueue } from "@deepagent-code/core/deepagent/approval-queue"
+import { SecurityResolvers } from "@deepagent-code/core/deepagent/security-resolvers"
+import { WorkspaceConfig } from "@deepagent-code/core/deepagent/workspace-config"
+import { IMRepositoryLive } from "@deepagent-code/core/im/repository"
 import type { AgentDescriptor } from "@deepagent-code/core/im/mention-parser"
 import { testEffect } from "../lib/effect"
 
@@ -324,6 +327,189 @@ describe("MultiAgentRuntime registry failure", () => {
       const runtime = yield* MultiAgentRuntime.Service
       const exit = yield* runtime.coordinate(event()).pipe(Effect.exit)
       expect(exit._tag).toBe("Failure")
+      expect(ran).toEqual([])
+    }),
+  )
+})
+
+// ─── §E1 PRODUCTION WIRING — the four-layer gate built the way v4-event-runtime builds it ─────────────
+// These tests do NOT stub the gate: they inject the REAL SecurityResolvers (over WorkspaceConfig +
+// IMRepository + the registry) exactly as v4-event-runtime.runtimeLayer does, then prove the composite
+// FAILS CLOSED. Under the OLD default-open wiring (no trustedSourcesFor / actorHasPermission /
+// runtimeAllowed) every one of these subtasks would RUN — so each test is a direct regression guard on
+// the §E1 default-open defect.
+
+// A descriptor with an explicit toolWhitelist (drives §E1 layer-4). `caps` still feeds layer-3 + binding.
+const agentWithTools = (id: string, caps: string[], toolWhitelist: string[]): AgentDescriptor => ({
+  id,
+  name: id,
+  displayName: id,
+  visible: true,
+  capabilities: caps,
+  autonomy: "level_2",
+  limits: { toolWhitelist },
+})
+
+// The MultiAgentRuntime built the PRODUCTION way — resolvers closed over the live SecurityResolvers,
+// byte-for-byte the shape v4-event-runtime.ts injects (L1 per-event, L2 actor, L4 runtime+capability).
+const prodRuntimeLayer = Layer.unwrap(
+  Effect.gen(function* () {
+    const sec = yield* SecurityResolvers.Service
+    return MultiAgentRuntime.layerWith({
+      runner: fakeRunner,
+      trustedSourcesFor: (ev) => sec.resolveTrustedSources(ev.workspaceID),
+      actorHasPermission: (ev, ag) =>
+        sec.actorHasWorkspacePermission({
+          workspaceID: ev.workspaceID,
+          ...(ev.actorID != null ? { actorID: ev.actorID } : {}),
+          agentID: ag.id,
+        }),
+      runtimeAllowed: (ev, ag, capability) =>
+        sec.runtimeAllowsOperation({ workspaceID: ev.workspaceID, agent: ag, capability }),
+    })
+  }),
+)
+
+// Assemble runtime + real resolvers + WorkspaceConfig (exposed so a test can set trustedSources) over ONE
+// shared in-memory DB — the same single-instance discipline server.ts uses.
+const makeProdLayer = () => {
+  const database = Database.layerFromPath(":memory:")
+  const wsConfig = WorkspaceConfig.layer.pipe(Layer.provideMerge(database))
+  const imRepo = IMRepositoryLive.pipe(Layer.provideMerge(database))
+  const sec = SecurityResolvers.layer.pipe(Layer.provide(Layer.mergeAll(wsConfig, imRepo, fakeAgentList)))
+  const core = Layer.mergeAll(DeepAgentEventBus.layerWith({ now }), ApprovalQueue.layerWith({ now })).pipe(
+    Layer.provideMerge(database),
+  )
+  const runtime = prodRuntimeLayer.pipe(Layer.provide(sec), Layer.provide(core), Layer.provide(fakeAgentList))
+  return Layer.mergeAll(runtime, core, wsConfig)
+}
+
+describe("MultiAgentRuntime §E1 production wiring (real SecurityResolvers) fails closed", () => {
+  const it = testEffect(makeProdLayer())
+
+  it.effect("§E1 L1 fail-closed: an event whose source is NOT in the workspace trusted set is BLOCKED (security:event_source)", () =>
+    Effect.gen(function* () {
+      resetRunner()
+      setNow(1_000)
+      // capable + autonomy-cleared agent — the ONLY reason it must not run is layer 1.
+      setRegistry([agent("fixer", ["code_edit", "test_run"], "level_2")])
+      // tighten the workspace to trust ONLY "im"; the event below is source "ci" → untrusted.
+      const cfg = yield* WorkspaceConfig.Service
+      yield* cfg.set("wrk_1", { trustedSources: ["im"] })
+      const runtime = yield* MultiAgentRuntime.Service
+      const summary = yield* runtime.coordinate(event({ source: "ci" }))
+      expect(summary.outcomes.every((o) => o.status === "blocked")).toBe(true)
+      expect(summary.outcomes[0].reason).toBe("security:event_source")
+      expect(ran).toEqual([]) // nothing ran — the default-open bug would have run both subtasks
+    }),
+  )
+
+  it.effect("§E1 L1: a TRUSTED source with the same agent DOES run (proves the gate isn't blanket-deny)", () =>
+    Effect.gen(function* () {
+      resetRunner()
+      setNow(1_000)
+      setRegistry([agent("fixer", ["code_edit", "test_run"], "level_2")])
+      const cfg = yield* WorkspaceConfig.Service
+      yield* cfg.set("wrk_1", { trustedSources: ["ci", "im", "system"] }) // now "ci" is trusted
+      const runtime = yield* MultiAgentRuntime.Service
+      const summary = yield* runtime.coordinate(event({ source: "ci", payload: { files: ["src/a.ts"] } }))
+      expect(summary.outcomes.map((o) => o.status)).toEqual(["completed", "completed"])
+      expect(ran).toEqual(["fixer", "fixer"])
+    }),
+  )
+
+  it.effect("§E1 L4 fail-closed: an agent whose toolWhitelist excludes the capability is BLOCKED (security:runtime_operation)", () =>
+    Effect.gen(function* () {
+      resetRunner()
+      setNow(1_000)
+      // capable (L3 ok) + autonomy-cleared — but its declared toolWhitelist does NOT permit the required
+      // capability, so layer 4 must deny. First trust "ci" so L1 passes and the gate reaches L4.
+      const cfg = yield* WorkspaceConfig.Service
+      yield* cfg.set("wrk_1", { trustedSources: ["ci", "im", "system"] })
+      setRegistry([agentWithTools("locked", ["code_edit", "test_run"], ["read_only"])])
+      const runtime = yield* MultiAgentRuntime.Service
+      const summary = yield* runtime.coordinate(event())
+      expect(summary.outcomes.every((o) => o.status === "blocked")).toBe(true)
+      expect(summary.outcomes[0].reason).toBe("security:runtime_operation")
+      expect(ran).toEqual([])
+    }),
+  )
+
+})
+
+describe("MultiAgentRuntime §E1 production wiring — L2 actor_permission fails closed", () => {
+  // §E1 layer 2 blocks an actor who is (arm 1) NOT a member of any workspace IM group AND (arm 2) cannot
+  // see the acting agent in their own registry scope. To exercise this honestly we must let the runtime
+  // BIND a capable agent (else it blocks at no_capable_agent, never reaching L2) while the RESOLVER's
+  // actor-scoped agent lookup comes up empty — i.e. the runtime can bind from the workspace registry, but
+  // the actor themselves is neither a member nor has that agent visible. So the resolver is provided a
+  // SEPARATE, actor-empty AgentListProvider, while the runtime binds from the full `fakeAgentList`
+  // ([fixer]). IMRepository is real + empty (no membership). Source is trusted so L1 passes and the gate
+  // reaches L2. This is precisely the multi-tenant "outsider acting through an agent they don't own" case.
+  const database = Database.layerFromPath(":memory:")
+  const wsConfig = WorkspaceConfig.layer.pipe(Layer.provideMerge(database))
+  const imRepo = IMRepositoryLive.pipe(Layer.provideMerge(database)) // real IM DB, no seeded membership
+  // the actor's scope sees NO agents ⇒ resolver arm-2 (agent registered for the actor) fails.
+  const actorEmptyAgentList = Layer.succeed(AgentListProviderService, {
+    listAgents: () => Effect.succeed([]),
+    findByTrigger: () => Effect.succeed([]),
+    findByCapability: () => Effect.succeed([]),
+  })
+  const sec = SecurityResolvers.layer.pipe(Layer.provide(Layer.mergeAll(wsConfig, imRepo, actorEmptyAgentList)))
+  const core = Layer.mergeAll(DeepAgentEventBus.layerWith({ now }), ApprovalQueue.layerWith({ now })).pipe(
+    Layer.provideMerge(database),
+  )
+  // the runtime binds from the FULL registry (fakeAgentList → whatever setRegistry set) so binding
+  // succeeds; only the resolver sees the actor-empty list, isolating L2 as the failing layer.
+  const runtime = prodRuntimeLayer.pipe(Layer.provide(sec), Layer.provide(core), Layer.provide(fakeAgentList))
+  const it = testEffect(Layer.mergeAll(runtime, core, wsConfig))
+
+  it.effect("§E1 L2 fail-closed: a NON-member actor whose agent isn't in their scope is BLOCKED (security:actor_permission)", () =>
+    Effect.gen(function* () {
+      resetRunner()
+      setNow(1_000)
+      // trust the event source so L1 PASSES — we must reach L2 to test it. The bound agent is capable
+      // (L3 ok), autonomy-cleared, no toolWhitelist (L4 ok). The ONLY failing layer is L2.
+      const cfg = yield* WorkspaceConfig.Service
+      yield* cfg.set("wrk_1", { trustedSources: ["ci", "im", "system"] })
+      setRegistry([agent("fixer", ["code_edit", "test_run"], "level_2")])
+      const runtime = yield* MultiAgentRuntime.Service
+      const summary = yield* runtime.coordinate(event({ actorID: "stranger_not_a_member" }))
+      expect(summary.outcomes.every((o) => o.status === "blocked")).toBe(true)
+      expect(summary.outcomes[0].reason).toBe("security:actor_permission")
+      expect(ran).toEqual([])
+    }),
+  )
+})
+
+describe("MultiAgentRuntime §E1 production wiring — L1 resolver ERROR fails closed", () => {
+  // A WorkspaceConfig whose `get` DEFECTS (transient store failure). The per-event L1 resolver must
+  // resolve the source to NOT trusted (fail closed), never open. Built the production way otherwise.
+  const failingConfig = Layer.succeed(
+    WorkspaceConfig.Service,
+    WorkspaceConfig.Service.of({
+      get: () => Effect.die(new Error("config store down")),
+      set: () => Effect.die(new Error("config store down")),
+    }),
+  )
+  const database = Database.layerFromPath(":memory:")
+  const imRepo = IMRepositoryLive.pipe(Layer.provideMerge(database))
+  const sec = SecurityResolvers.layer.pipe(Layer.provide(Layer.mergeAll(failingConfig, imRepo, fakeAgentList)))
+  const core = Layer.mergeAll(DeepAgentEventBus.layerWith({ now }), ApprovalQueue.layerWith({ now })).pipe(
+    Layer.provideMerge(database),
+  )
+  const runtime = prodRuntimeLayer.pipe(Layer.provide(sec), Layer.provide(core), Layer.provide(fakeAgentList))
+  const it = testEffect(Layer.mergeAll(runtime, core))
+
+  it.effect("a trusted-source lookup DEFECT ⇒ source not trusted ⇒ BLOCKED (security:event_source), never open", () =>
+    Effect.gen(function* () {
+      resetRunner()
+      setNow(1_000)
+      setRegistry([agent("fixer", ["code_edit", "test_run"], "level_2")])
+      const runtime = yield* MultiAgentRuntime.Service
+      const summary = yield* runtime.coordinate(event())
+      expect(summary.outcomes.every((o) => o.status === "blocked")).toBe(true)
+      expect(summary.outcomes[0].reason).toBe("security:event_source")
       expect(ran).toEqual([])
     }),
   )
