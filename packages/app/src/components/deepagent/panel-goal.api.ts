@@ -175,3 +175,26 @@ export const goalStatus = async (
   })
   return response.data?.goal ?? null
 }
+
+export type GoalStartable = { startable: boolean; source: "plan" | "file" | "none" }
+
+/**
+ * Whether a goal can be started for this session right now, resolved SERVER-SIDE with the same plan
+ * precedence start() uses (session_plan → repo goal+plan.md → none). The button gates on this instead
+ * of reading session_plan directly, because loop/design modes author the plan as the repo file (never
+ * touching session_plan), so a client-only hasPlan() check would hide the button in exactly the modes
+ * where it belongs. Tolerant of an older server that lacks the route (treated as not-startable).
+ */
+export const fetchGoalStartable = async (
+  client: PanelGoalClient,
+  sessionID: string,
+): Promise<GoalStartable> => {
+  const response = await client.client.request<GoalStartable>({
+    method: "GET",
+    url: `/deepagent/goal/startable?sessionID=${encodeURIComponent(sessionID)}`,
+  })
+  return {
+    startable: response.data?.startable ?? false,
+    source: response.data?.source ?? "none",
+  }
+}
