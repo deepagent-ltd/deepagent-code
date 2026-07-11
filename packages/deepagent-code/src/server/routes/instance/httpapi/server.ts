@@ -85,6 +85,7 @@ import { controlHandlers } from "./handlers/control"
 import { controlPlaneHandlers } from "./handlers/control-plane"
 import { deepagentHandlers } from "./handlers/deepagent"
 import { oversightHandlers } from "./handlers/oversight"
+import { webhookHandlers } from "./handlers/webhook"
 import { Observability as OversightObservability } from "@deepagent-code/core/deepagent/observability"
 import { ApprovalQueue } from "@deepagent-code/core/deepagent/approval-queue"
 import { DeepAgentEventBus } from "@deepagent-code/core/deepagent/deepagent-event-bus"
@@ -219,6 +220,7 @@ const instanceApiRoutes = HttpApiBuilder.layer(InstanceHttpApi).pipe(
     profileHandlers,
     deepagentHandlers,
     oversightHandlers,
+    webhookHandlers,
     experimentalHandlers,
     fileHandlers,
     imHandlers,
