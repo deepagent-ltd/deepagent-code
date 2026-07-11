@@ -25,6 +25,12 @@ export interface ConditionSpec {
   readonly eventType: string
   readonly threshold: number
   readonly windowMs: number
+  // §A4 跨 workspace 计数 — when true, the tick loop counts trigger events across ALL workspaces (it
+  // omits the workspaceID filter in recentByType), so a SYSTEM-level condition (e.g. the "3× CI failure
+  // → repair" trigger registered in the system workspace) can observe CI failures that land in per-
+  // project workspaces. Omitted/false ⇒ the historical behavior: count only within the schedule's own
+  // workspace. Fail-safe: an existing condition row (no flag) is unchanged.
+  readonly crossWorkspace?: boolean
 }
 
 export type ScheduleKind = "delay" | "periodic" | "condition"
@@ -40,18 +46,27 @@ export interface Schedule {
   readonly intervalMs?: number
   readonly condition?: ConditionSpec
   readonly lastFiredAt?: number
+  // the stable dedupe key (schedule_key column), when this row was registered with one.
+  readonly scheduleKey?: string
 }
 
+// `scheduleKey` (all three inputs): an OPTIONAL stable dedupe identity. When set, the row carries it in
+// the `schedule_key` column, which has a partial-unique index (NULLs distinct) — so a second insert of
+// the same key is rejected at the DB layer and the service swallows the conflict (onConflictDoNothing).
+// This makes boot-time idempotent registration safe even under a multi-process TOCTOU. Omit for ad-hoc
+// schedules (no dedupe).
 export interface ScheduleDelayInput {
   readonly workspaceID: string
   readonly fireAt: number
   readonly eventTemplate: EventTemplate
+  readonly scheduleKey?: string
 }
 export interface SchedulePeriodicInput {
   readonly workspaceID: string
   readonly intervalMs: number
   readonly firstFireAt: number
   readonly eventTemplate: EventTemplate
+  readonly scheduleKey?: string
 }
 export interface ScheduleConditionInput {
   readonly workspaceID: string
@@ -59,6 +74,7 @@ export interface ScheduleConditionInput {
   readonly recheckEveryMs?: number // next re-check cadence; omit ⇒ eligible every tick
   readonly firstCheckAt: number
   readonly eventTemplate: EventTemplate
+  readonly scheduleKey?: string
 }
 
 // §A4 条件触发 — PURE evaluator. `recentCount` is the number of matching events the caller counted via
@@ -105,6 +121,7 @@ const decode = (row: {
   interval_ms: number | null
   condition: unknown
   last_fired_at: number | null
+  schedule_key?: string | null
 }): Schedule => ({
   id: row.id,
   workspaceID: row.workspace_id,
@@ -115,6 +132,7 @@ const decode = (row: {
   ...(row.interval_ms != null ? { intervalMs: row.interval_ms } : {}),
   ...(row.condition != null ? { condition: row.condition as ConditionSpec } : {}),
   ...(row.last_fired_at != null ? { lastFiredAt: row.last_fired_at } : {}),
+  ...(row.schedule_key != null ? { scheduleKey: row.schedule_key } : {}),
 })
 
 export const layerWith = (options?: LayerOptions) =>
@@ -125,6 +143,7 @@ export const layerWith = (options?: LayerOptions) =>
       const now = options?.now ?? Date.now
       const newID = () => "sch_" + Identifier.ascending()
 
+      // Unkeyed insert: no dedupe, return the row we wrote (the historical behavior).
       const insert = (values: typeof DeepAgentScheduleTable.$inferInsert) =>
         db
           .insert(DeepAgentScheduleTable)
@@ -132,9 +151,36 @@ export const layerWith = (options?: LayerOptions) =>
           .run()
           .pipe(Effect.orDie, Effect.as(decode(values as Parameters<typeof decode>[0])))
 
+      // Keyed insert: idempotent on `schedule_key`. `onConflictDoNothing` makes a duplicate insert a
+      // no-op at the DB layer (closing the multi-process TOCTOU that a list-then-insert guard cannot),
+      // then we re-read the CANONICAL row by key so a race-loser returns the WINNER's row (its real id),
+      // not the phantom values it tried to insert. Existing rows may predate the column and thus carry a
+      // key already, so this also dedupes an ordinary re-registration.
+      const insertKeyed = (values: typeof DeepAgentScheduleTable.$inferInsert, key: string) =>
+        Effect.gen(function* () {
+          yield* db
+            .insert(DeepAgentScheduleTable)
+            .values([values])
+            .onConflictDoNothing({ target: DeepAgentScheduleTable.schedule_key })
+            .run()
+            .pipe(Effect.orDie)
+          const winner = yield* db
+            .select()
+            .from(DeepAgentScheduleTable)
+            .where(eq(DeepAgentScheduleTable.schedule_key, key))
+            .get()
+            .pipe(Effect.orDie)
+          // winner is always present (we either inserted it or a concurrent writer did).
+          return decode((winner ?? values) as Parameters<typeof decode>[0])
+        })
+
+      // Route to the keyed or unkeyed path based on whether a scheduleKey was supplied.
+      const insertMaybeKeyed = (values: typeof DeepAgentScheduleTable.$inferInsert) =>
+        values.schedule_key != null ? insertKeyed(values, values.schedule_key) : insert(values)
+
       const scheduleDelay: Interface["scheduleDelay"] = (input) => {
         const at = now()
-        return insert({
+        return insertMaybeKeyed({
           id: newID(),
           workspace_id: input.workspaceID,
           kind: "delay",
@@ -144,6 +190,7 @@ export const layerWith = (options?: LayerOptions) =>
           interval_ms: null,
           condition: null,
           last_fired_at: null,
+          schedule_key: input.scheduleKey ?? null,
           created_at: at,
           updated_at: at,
         })
@@ -156,7 +203,7 @@ export const layerWith = (options?: LayerOptions) =>
         if (!Number.isFinite(input.intervalMs) || input.intervalMs <= 0)
           return Effect.die(new Error(`schedulePeriodic: intervalMs must be a positive number, got ${input.intervalMs}`))
         const at = now()
-        return insert({
+        return insertMaybeKeyed({
           id: newID(),
           workspace_id: input.workspaceID,
           kind: "periodic",
@@ -166,6 +213,7 @@ export const layerWith = (options?: LayerOptions) =>
           interval_ms: input.intervalMs,
           condition: null,
           last_fired_at: null,
+          schedule_key: input.scheduleKey ?? null,
           created_at: at,
           updated_at: at,
         })
@@ -179,7 +227,7 @@ export const layerWith = (options?: LayerOptions) =>
             new Error(`scheduleCondition: recheckEveryMs must be a positive number when set, got ${input.recheckEveryMs}`),
           )
         const at = now()
-        return insert({
+        return insertMaybeKeyed({
           id: newID(),
           workspace_id: input.workspaceID,
           kind: "condition",
@@ -189,6 +237,7 @@ export const layerWith = (options?: LayerOptions) =>
           interval_ms: input.recheckEveryMs ?? null,
           condition: input.condition,
           last_fired_at: null,
+          schedule_key: input.scheduleKey ?? null,
           created_at: at,
           updated_at: at,
         })
