@@ -40,9 +40,15 @@ export interface Interface {
   readonly offer: (event: DeepAgentEvent.Event) => Effect.Effect<ApprovalItem | null>
   /** §D2 — a workspace's pending items, newest first (the Dashboard view). */
   readonly listPending: (workspaceID: string) => Effect.Effect<ReadonlyArray<ApprovalItem>>
-  /** §D2 — a human resolves a pending item. Idempotent: resolving an already-resolved item is a no-op. */
+  /**
+   * §D2 — a human resolves a pending item. REQUIRES `workspaceID`: the resolve is scoped to it so a
+   * caller can never resolve (write) or read back an item belonging to a DIFFERENT workspace by id
+   * (tenant isolation). Returns null if no PENDING item with that id exists IN THAT workspace. Idempotent:
+   * an already-resolved item is unchanged and its row is returned.
+   */
   readonly resolve: (input: {
     readonly id: string
+    readonly workspaceID: string
     readonly decision: "approved" | "rejected" | "acknowledged"
     readonly resolvedBy: string
   }) => Effect.Effect<ApprovalItem | null>
@@ -145,17 +151,26 @@ export const layerWith = (options?: LayerOptions) =>
       const resolve: Interface["resolve"] = (input) =>
         Effect.gen(function* () {
           const at = now()
-          // only a PENDING item transitions — resolving an already-resolved item is a no-op (idempotent).
+          // only a PENDING item IN THIS WORKSPACE transitions — the workspace_id predicate prevents a
+          // cross-tenant write (resolving another workspace's item by id). Already-resolved = no-op.
           yield* db
             .update(ApprovalQueueTable)
             .set({ status: "resolved", decision: input.decision, resolved_by: input.resolvedBy, resolved_at: at })
-            .where(and(eq(ApprovalQueueTable.id, input.id), eq(ApprovalQueueTable.status, "pending")))
+            .where(
+              and(
+                eq(ApprovalQueueTable.id, input.id),
+                eq(ApprovalQueueTable.workspace_id, input.workspaceID),
+                eq(ApprovalQueueTable.status, "pending"),
+              ),
+            )
             .run()
             .pipe(Effect.orDie)
+          // re-select is ALSO workspace-scoped: a row belonging to another workspace is never returned
+          // (no cross-tenant read-back), so an unknown/foreign id yields null.
           const row = yield* db
             .select()
             .from(ApprovalQueueTable)
-            .where(eq(ApprovalQueueTable.id, input.id))
+            .where(and(eq(ApprovalQueueTable.id, input.id), eq(ApprovalQueueTable.workspace_id, input.workspaceID)))
             .get()
             .pipe(Effect.orDie)
           return row ? decode(row) : null

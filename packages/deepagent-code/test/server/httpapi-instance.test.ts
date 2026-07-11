@@ -99,6 +99,32 @@ describe("instance HttpApi", () => {
     }),
   )
 
+  it.live("§D2 GET /oversight/approvals returns an empty pending queue for a fresh workspace", () =>
+    Effect.gen(function* () {
+      const dir = yield* tmpdirScoped({ git: true })
+      const response = yield* HttpClientRequest.get("/oversight/approvals").pipe(directoryHeader(dir), HttpClient.execute)
+      expect(response.status).toBe(200)
+      expect(yield* response.json).toEqual({ items: [] })
+    }),
+  )
+
+  it.live("§F GET /oversight/metrics returns the metric shape (zero/​null on a fresh workspace)", () =>
+    Effect.gen(function* () {
+      const dir = yield* tmpdirScoped({ git: true })
+      const response = yield* HttpClientRequest.get("/oversight/metrics").pipe(directoryHeader(dir), HttpClient.execute)
+      expect(response.status).toBe(200)
+      const body = (yield* response.json) as Record<string, unknown>
+      expect(body).toMatchObject({
+        dlqEventsTotal: 0,
+        agentPushRejectedTotal: 0,
+        agentTaskCompleted: 0,
+        agentTaskFailed: 0,
+        // no task activity on a fresh workspace → success rate is null (distinct from 100%).
+        agentTaskSuccessRate: null,
+      })
+    }),
+  )
+
   it.live("emits a sync fence header for fixed-workspace mutations", () =>
     Effect.gen(function* () {
       const originalWorkspaceID = Flag.DEEPAGENT_CODE_WORKSPACE_ID
