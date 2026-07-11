@@ -4,8 +4,8 @@ import { Timestamps } from "../database/schema.sql"
 import { ProjectTable } from "../project/sql"
 import * as IMID from "./id"
 
-// V3.8: project / system
-export const GroupType = Schema.Literals(["project", "system"])
+// V3.8: project / system  ·  V4.0 §B3: direct (private 1:1 — user+user or user+agent, exactly 2 members)
+export const GroupType = Schema.Literals(["project", "system", "direct"])
 export type GroupType = Schema.Schema.Type<typeof GroupType>
 
 // V3.8: owner / member / agent
@@ -159,5 +159,41 @@ export const MessageTable = sqliteTable(
     // V4.0 §B4 — thread pagination (reply_to_id chains) + event linkage lookups.
     index("idx_im_messages_thread").on(table.group_id, table.reply_to_id, table.created_at),
     index("idx_im_messages_event").on(table.event_id),
+  ],
+)
+
+// V4.0 §B3/§B4 schema: im_attachments
+//
+// A file record is DECOUPLED from a message ("文件记录与消息解耦"): `message_id` is nullable so a file
+// can be uploaded first (returning its id/checksum) and only later referenced by a message — or never
+// referenced at all. `storage_path` is a SERVER-DERIVED absolute path on local disk (workspace data
+// dir), never the client filename, which eliminates path-traversal. `checksum` is the sha256 of the
+// bytes (integrity + dedup signal). Soft delete via `deleted_at` mirrors the rest of the IM schema.
+export const AttachmentTable = sqliteTable(
+  "im_attachments",
+  {
+    id: text().$type<IMID.AttachmentID>().primaryKey(),
+    // Grouping key (routed workspace id or working directory) — same semantics as im_groups.workspace_id.
+    workspace_id: text().notNull(),
+    project_id: text().references(() => ProjectTable.id, { onDelete: "cascade" }),
+    // Nullable: an attachment MAY be scoped to a group / bound to a message, or exist standalone.
+    group_id: text().$type<IMID.GroupID>(),
+    message_id: text().$type<IMID.MessageID>(),
+    uploaded_by: text().notNull(),
+    // Absolute on-disk path, server-derived from ids (never the client filename).
+    storage_path: text().notNull(),
+    // Original client filename — retained for display/download only, never used to build a path.
+    filename: text().notNull(),
+    mime: text().notNull(),
+    size_bytes: integer().notNull(),
+    // sha256 hex digest of the stored bytes.
+    checksum: text().notNull(),
+    created_at: integer().notNull().$default(() => Date.now()),
+    deleted_at: integer(),
+  },
+  (table) => [
+    index("idx_im_attachments_workspace").on(table.workspace_id, table.created_at),
+    index("idx_im_attachments_message").on(table.message_id),
+    index("idx_im_attachments_group").on(table.group_id),
   ],
 )
