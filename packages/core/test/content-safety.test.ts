@@ -93,6 +93,61 @@ describe("ContentSafety.scrub — §E3 注入风险标记", () => {
   })
 })
 
+describe("ContentSafety.scrub — §E3 文件路径权限 (path ACL)", () => {
+  const ROOT = "/workspace/project"
+
+  test("undefined allowedPathRoots = no-op, strippedPaths 0, content unchanged", () => {
+    const r = ContentSafety.scrub({ content: "look at /etc/passwd and ../../secret/key" })
+    expect(r.strippedPaths).toBe(0)
+    expect(r.content).toContain("/etc/passwd")
+    expect(r.content).toContain("../../secret/key")
+  })
+
+  test("strips disallowed absolute paths, increments strippedPaths, keeps allowed paths", () => {
+    const r = ContentSafety.scrub({
+      content: "edited /workspace/project/src/app.ts but not /etc/passwd",
+      allowedPathRoots: [ROOT],
+    })
+    expect(r.strippedPaths).toBe(1)
+    expect(r.content).toContain("/workspace/project/src/app.ts") // allowed, kept
+    expect(r.content).not.toContain("/etc/passwd") // disallowed, stripped
+    expect(r.content).toContain("«path removed»")
+  })
+
+  test("strips traversal escapes", () => {
+    const r = ContentSafety.scrub({
+      content: "sneaky /workspace/project/../../etc/shadow here",
+      allowedPathRoots: [ROOT],
+    })
+    expect(r.strippedPaths).toBe(1)
+    expect(r.content).not.toContain("etc/shadow")
+  })
+
+  test("empty allowedPathRoots strips every detected path (fail-closed)", () => {
+    const r = ContentSafety.scrub({
+      content: "paths /a/b/c.ts and /d/e/f.md",
+      allowedPathRoots: [],
+    })
+    expect(r.strippedPaths).toBe(2)
+  })
+
+  test("leaves ordinary prose intact (conservative detector)", () => {
+    const prose = "we ship 1/2 of the work and/or defer the rest; ratios like 3/4 are fine"
+    const r = ContentSafety.scrub({ content: prose, allowedPathRoots: [ROOT] })
+    expect(r.strippedPaths).toBe(0)
+    expect(r.content).toBe(prose)
+  })
+
+  test("path leg composes with secret redaction and reports both counters", () => {
+    const r = ContentSafety.scrub({
+      content: "key sk-ant-abcdefghijklmnop123 in /etc/passwd",
+      allowedPathRoots: [ROOT],
+    })
+    expect(r.redactedSecrets).toBe(1)
+    expect(r.strippedPaths).toBe(1)
+  })
+})
+
 describe("ContentSafety.scrub — hardening", () => {
   test("a whitelisted host with a trailing dot is kept (not over-stripped)", () => {
     const r = ContentSafety.scrub({ content: "see https://ok.com. for more", allowedLinkHosts: ["ok.com"] })
