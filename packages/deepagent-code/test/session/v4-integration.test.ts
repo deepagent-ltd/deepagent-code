@@ -6,6 +6,7 @@ import type { SubagentTurnRunner } from "../../src/session/goal-loop-wiring"
 import { DeepAgentEventBus } from "@deepagent-code/core/deepagent/deepagent-event-bus"
 import { Scheduler } from "@deepagent-code/core/deepagent/scheduler"
 import { Observability } from "@deepagent-code/core/deepagent/observability"
+import { ApprovalQueue } from "@deepagent-code/core/deepagent/approval-queue"
 import { DeepAgentEvent } from "@deepagent-code/core/deepagent/deepagent-event"
 import { Database } from "@deepagent-code/core/database/database"
 import { AgentListProviderService } from "@deepagent-code/core/im/agent-list-provider"
@@ -64,6 +65,7 @@ const makeLayer = (flags?: Partial<RuntimeFlags.Info>) => {
     DeepAgentEventBus.layerWith({ now }),
     Scheduler.layerWith({ now }),
     Observability.layerWith({ now }),
+    ApprovalQueue.layerWith({ now }),
   ).pipe(Layer.provideMerge(database))
   // MultiAgentRuntime is the REAL DispatchPort the dispatcher hands routed events to.
   const runtime = MultiAgentRuntime.layerWith({ runner }).pipe(Layer.provide(core), Layer.provide(registry))
