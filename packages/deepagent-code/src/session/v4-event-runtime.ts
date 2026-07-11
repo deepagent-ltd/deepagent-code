@@ -23,6 +23,7 @@ import { MultiAgentRuntime } from "./multi-agent-runtime"
 import { EventDispatcher } from "./event-dispatcher"
 import type { SubagentTurnRunner, SubagentTurnResult } from "./goal-loop-wiring"
 import { MessageID } from "./schema"
+import { SessionCompletedPublisher } from "./session-completed-publisher"
 import * as Log from "@deepagent-code/core/util/log"
 
 // V4.0 §A4/§C — the PRODUCTION event-runtime. This is the layer that was missing: every V4 daemon and
@@ -192,7 +193,11 @@ const runtimeLayer = Layer.unwrap(
 // 30-day TTL, a real behavior change). Flip a flag and restart to activate; per-event behavior remains
 // additionally flag-gated inside each daemon.
 const anyV4DaemonEnabled = (flags: RuntimeFlags.Info): boolean =>
-  flags.v4MultiAgentRuntime || flags.v4EventDrivenIm || flags.v4PanelAutoConvene || flags.v4AgentPushEnabled
+  flags.v4MultiAgentRuntime ||
+  flags.v4EventDrivenIm ||
+  flags.v4PanelAutoConvene ||
+  flags.v4AgentPushEnabled ||
+  flags.v4EventDrivenArchive
 
 // The EventDispatcher layer whose DispatchPort is the live MultiAgentRuntime. Its subscribe/tick/retry
 // daemons run only when a V4 daemon is enabled (else runLoops:false ⇒ built but dormant). The dispatcher
@@ -250,18 +255,126 @@ const limiterSweepLayer = Layer.effectDiscard(
   }),
 )
 
+// ── §A4/§N — PRODUCTION schedule bootstrap ──────────────────────────────────────────────────────────
+// The Scheduler's tick loop scans a durable table that, until now, NOTHING in production ever wrote to
+// (the entire delay/periodic/condition machinery + the "3× CI failure → repair" example were dead). This
+// block registers the two canonical §A4 schedules at startup so the tick loop has real rows to fire.
+//
+// The schedules live under a single SYSTEM workspace. `Scheduler.due(now)` scans across ALL workspaces
+// (it filters only on status + fire_at), so one system-scoped row is enough for the periodic scan to be
+// picked up process-wide. The "wrk"-prefix marks it a genuine workspace id (not a directory fallback in
+// the turn runner); an absent WorkspaceConfig row resolves to DEFAULT_TRUSTED_SOURCES (which includes
+// "schedule"), so the §E1 layer-1 source-trust gate passes for these self-originated events.
+export const SYSTEM_WORKSPACE_ID = "wrk_system"
+
+// (A) §A4 周期扫描 — a daily maintenance scan for the §A1 MaintenanceAgent. Fires `schedule.scan`.
+export const MAINTENANCE_SCAN_EVENT = "schedule.scan"
+export const MAINTENANCE_SCAN_INTERVAL_MS = 24 * 60 * 60 * 1000 // daily
+
+// (B) §A4 条件触发 / §N — the "连续 3 次 CI 失败才启动修复" trigger. Fires `ci.repair.requested` only when
+// ≥ 3 `ci.failure` events are seen in the window. crossWorkspace: real per-project CI failures (P1.4
+// webhook ingress) land in their own project workspaces, so this SYSTEM-level trigger counts ci.failure
+// ACROSS workspaces (the tick omits the workspace filter) — else it would never fire on real failures.
+export const CI_FAILURE_EVENT = "ci.failure"
+export const CI_REPAIR_EVENT = "ci.repair.requested"
+export const CI_REPAIR_THRESHOLD = 3
+export const CI_REPAIR_WINDOW_MS = 30 * 60 * 1000 // 30 min
+export const CI_REPAIR_RECHECK_MS = 60 * 1000 // re-evaluate the window once a minute
+
+// Stable identity keys embedded in each schedule's eventTemplate.payload + written to the unique
+// `schedule_key` column. The Scheduler inserts keyed schedules with onConflictDoNothing, so a duplicate
+// registration (even a concurrent second process racing the same boot) is a DB-level no-op that returns
+// the existing row — idempotent across restarts with no accreting duplicate rows.
+export const MAINTENANCE_SCAN_KEY = "v4:maintenance-scan"
+export const CI_REPAIR_KEY = "v4:ci-3x-failure-repair"
+
+/**
+ * Register the canonical production schedules IDEMPOTENTLY. Idempotency is enforced at the DB layer: each
+ * schedule is registered with a stable `scheduleKey`, written to the unique `schedule_key` column and
+ * inserted with onConflictDoNothing — so a duplicate registration (even a concurrent second process
+ * racing the same boot) is a no-op that returns the existing row, never a duplicate. Exported for direct,
+ * clock-controlled testing; `scheduleBootstrapLayer` calls it (flag-gated) with the real clock at startup.
+ */
+export const registerBootstrapSchedules = (scheduler: Scheduler.Interface, now: number): Effect.Effect<void> =>
+  Effect.gen(function* () {
+    yield* scheduler.schedulePeriodic({
+      workspaceID: SYSTEM_WORKSPACE_ID,
+      intervalMs: MAINTENANCE_SCAN_INTERVAL_MS,
+      firstFireAt: now + MAINTENANCE_SCAN_INTERVAL_MS,
+      scheduleKey: MAINTENANCE_SCAN_KEY,
+      eventTemplate: {
+        type: MAINTENANCE_SCAN_EVENT,
+        source: "schedule",
+        workspaceID: SYSTEM_WORKSPACE_ID,
+        priority: "low",
+        payload: { scheduleKey: MAINTENANCE_SCAN_KEY, kind: "maintenance" },
+      },
+    })
+
+    yield* scheduler.scheduleCondition({
+      workspaceID: SYSTEM_WORKSPACE_ID,
+      condition: {
+        eventType: CI_FAILURE_EVENT,
+        threshold: CI_REPAIR_THRESHOLD,
+        windowMs: CI_REPAIR_WINDOW_MS,
+        crossWorkspace: true,
+      },
+      recheckEveryMs: CI_REPAIR_RECHECK_MS,
+      firstCheckAt: now,
+      scheduleKey: CI_REPAIR_KEY,
+      eventTemplate: {
+        type: CI_REPAIR_EVENT,
+        source: "schedule",
+        workspaceID: SYSTEM_WORKSPACE_ID,
+        priority: "high",
+        payload: { scheduleKey: CI_REPAIR_KEY, reason: "3x-ci-failure" },
+      },
+    })
+  })
+
+// The startup effect that registers the production schedules. Gated on v4MultiAgentRuntime — the flag
+// that governs dispatch of these non-im/non-push events. Registering them while that flag is OFF would
+// seed rows that fire events the dispatcher then drops, so we only register when the capability is live.
+// Default OFF ⇒ nothing registered ⇒ a fresh prod DB stays empty (no dead rows). A failure is logged and
+// swallowed so a transient DB hiccup at boot can't crash the layer build; the next restart re-attempts
+// (idempotently). Provides no service (Layer.effectDiscard) — like the limiter sweep it exists purely for
+// its startup effect and merges cleanly alongside the daemon layers.
+export const scheduleBootstrapLayer = Layer.effectDiscard(
+  Effect.gen(function* () {
+    const flags = yield* RuntimeFlags.Service
+    if (!flags.v4MultiAgentRuntime) return
+    const scheduler = yield* Scheduler.Service
+    yield* registerBootstrapSchedules(scheduler, Date.now()).pipe(
+      Effect.catchCause((cause) =>
+        Effect.sync(() => log.error("schedule bootstrap failed", { cause: Cause.pretty(cause) })),
+      ),
+    )
+  }),
+)
+
 /**
  * The full V4 event-runtime, ready to merge into the instance app graph. Starts (as scoped daemons):
  * the EventDispatcher (router + scheduler tick + retry pump), the MultiAgentRuntime (DispatchPort),
- * the RetentionSweeper, and the §E2 publish-limiter sweep. All behavior is flag-gated, so providing
- * this layer is inert until the V4 flags are enabled.
+ * the RetentionSweeper, the §E2 publish-limiter sweep, the §A4/§N schedule bootstrap, and the §L
+ * SessionCompletedPublisher (republishes a completed root session's end-of-turn idle as
+ * `session.completed` so the archiver has a trigger). All behavior is flag-gated, so providing this
+ * layer is inert until the V4 flags are enabled.
  *
- * Requires from the surrounding graph: Session, SessionPrompt, Agent, Provider, RuntimeFlags, and a
- * Database (for the core V4 services this self-provides over it). The core services
+ * Requires from the surrounding graph: Session, SessionPrompt, Agent, Provider, RuntimeFlags,
+ * EventV2Bridge, and a Database (for the core V4 services this self-provides over it). The core services
  * (DeepAgentEventBus / ApprovalQueue / Scheduler / WorkspaceConfig / WorkspaceConcurrency /
  * AgentListProvider / RetentionSweeper) are provided here so the daemons share one bus + DB.
  */
-export const layer = Layer.mergeAll(dispatcherLayer, retentionLayer, limiterSweepLayer).pipe(
+export const layer = Layer.mergeAll(
+  dispatcherLayer,
+  retentionLayer,
+  limiterSweepLayer,
+  scheduleBootstrapLayer,
+  // §L — the session.completed producer. Its subscription/publish is gated on v4EventDrivenArchive
+  // (inert when off). It draws DeepAgentEventBus (provided alongside the runtime), plus RuntimeFlags /
+  // EventV2Bridge / Session from the shared app graph — so it shares the ONE bus the archiver consumes.
+  SessionCompletedPublisher.layer,
+).pipe(
   Layer.provideMerge(runtimeLayer),
 )
 
