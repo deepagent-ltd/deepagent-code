@@ -70,12 +70,27 @@ export interface LayerOptions {
   // resolved facts the pure gates need but the runtime can't know purely:
   //   trusted event sources (§E1 layer 1) — default: all sources trusted (lenient; tighten per deploy).
   readonly trustedSources?: ReadonlyArray<DeepAgentEvent.EventSource>
+  //   trusted event sources resolved PER-EVENT (§E1 layer 1, PRODUCTION). Trusted sources are a
+  //   PER-WORKSPACE fact (SecurityResolvers.resolveTrustedSources(workspaceID)), so the static
+  //   `trustedSources` array cannot express them; when provided this resolver is consulted with the
+  //   actual event and TAKES PRECEDENCE over `trustedSources`. FAIL CLOSED: any resolver failure (typed
+  //   error OR defect) resolves the source to NOT trusted rather than opening. The static option is kept
+  //   for tests/back-compat.
+  readonly trustedSourcesFor?: (
+    event: DeepAgentEvent.Event,
+  ) => Effect.Effect<ReadonlyArray<DeepAgentEvent.EventSource>>
   //   whether the actor has workspace/project permission (§E1 layer 2). Default: allow (the HTTP layer
   //   already authenticated the actor; tighten with a real resolver in a multi-tenant deploy).
   readonly actorHasPermission?: (event: DeepAgentEvent.Event, agent: AgentDescriptor) => Effect.Effect<boolean>
   //   whether the tool/session runtime allows the operation (§E1 layer 4). Default: allow (the child
-  //   session's own permission path is the real enforcement; this is a coarse pre-gate).
-  readonly runtimeAllowed?: (event: DeepAgentEvent.Event, agent: AgentDescriptor) => Effect.Effect<boolean>
+  //   session's own permission path is the real enforcement; this is a coarse pre-gate). The subtask's
+  //   required `capability` is passed so a production resolver can pre-gate it against the agent's
+  //   declared toolWhitelist (defense-in-depth).
+  readonly runtimeAllowed?: (
+    event: DeepAgentEvent.Event,
+    agent: AgentDescriptor,
+    capability: string,
+  ) => Effect.Effect<boolean>
   //   §E2 per-workspace agent-execution concurrency cap. When provided, a subtask is admitted only if
   //   the workspace is below its cap (default 5); over-cap subtasks defer (retryable), never drop.
   //   Omitted ⇒ no cap (current behavior; tests don't need it).
@@ -92,6 +107,7 @@ export const layerWith = (options: LayerOptions) =>
       const concurrency = options.concurrency
       const runner = options.runner
       const trustedSources = options.trustedSources
+      const trustedSourcesFor = options.trustedSourcesFor
       const actorHasPermission = options.actorHasPermission ?? (() => Effect.succeed(true))
       const runtimeAllowed = options.runtimeAllowed ?? (() => Effect.succeed(true))
 
@@ -253,9 +269,20 @@ export const layerWith = (options: LayerOptions) =>
             }
 
             // §E1 four-layer security gate (fail-closed).
-            const sourceTrusted = trustedSources == null ? true : SecurityGate.isTrustedSource(event.source, trustedSources)
+            // Layer 1 — event source trust. Prefer the PER-EVENT resolver (production: resolves the
+            // workspace's trusted-source set); it TAKES PRECEDENCE over the static `trustedSources` and
+            // FAILS CLOSED — a resolver error/defect resolves the source to NOT trusted rather than
+            // opening. Only when NEITHER is configured does trust default open (tests/back-compat).
+            const sourceTrusted = trustedSourcesFor
+              ? yield* trustedSourcesFor(event).pipe(
+                  Effect.map((sources) => SecurityGate.isTrustedSource(event.source, sources)),
+                  Effect.catchCause(() => Effect.succeed(false)), // resolver failure ⇒ fail closed
+                )
+              : trustedSources == null
+                ? true
+                : SecurityGate.isTrustedSource(event.source, trustedSources)
             const actorOk = yield* actorHasPermission(event, agent)
-            const runtimeOk = yield* runtimeAllowed(event, agent)
+            const runtimeOk = yield* runtimeAllowed(event, agent, subtask.capability)
             const security = SecurityGate.check({
               eventSourceTrusted: sourceTrusted,
               actorHasPermission: actorOk,
