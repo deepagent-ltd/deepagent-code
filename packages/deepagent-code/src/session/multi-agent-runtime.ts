@@ -1,5 +1,6 @@
 export * as MultiAgentRuntime from "./multi-agent-runtime"
 
+import path from "node:path"
 import { Context, Effect, Layer, Cause } from "effect"
 import { DeepAgentEventBus } from "@deepagent-code/core/deepagent/deepagent-event-bus"
 import { DeepAgentEvent } from "@deepagent-code/core/deepagent/deepagent-event"
@@ -12,6 +13,7 @@ import { AgentListProviderService } from "@deepagent-code/core/im/agent-list-pro
 import { ApprovalQueue } from "@deepagent-code/core/deepagent/approval-queue"
 import { WorkspaceConcurrency } from "@deepagent-code/core/deepagent/workspace-concurrency"
 import { LMNEvents } from "@deepagent-code/core/deepagent/lmn-events"
+import { FileLock } from "@deepagent-code/core/file-lock"
 import type { SubagentTurnRunner } from "./goal-loop-wiring"
 import type { EventDispatcher } from "./event-dispatcher"
 import * as Log from "@deepagent-code/core/util/log"
@@ -95,6 +97,21 @@ export interface LayerOptions {
   //   the workspace is below its cap (default 5); over-cap subtasks defer (retryable), never drop.
   //   Omitted ⇒ no cap (current behavior; tests don't need it).
   readonly concurrency?: WorkspaceConcurrency.Interface
+  //   §C3.1 physical file-lock enforcement. When provided, a subtask that is about to run acquires an
+  //   AGENT lock on each file in its scope; a file already held by another agent OR by a human (human
+  //   locks make an agent acquire return null) DEFERS the subtask (retryable) so two concurrently-
+  //   admitted subtasks never edit the same file — the arbiter DECIDES conflicts (§C3.3), the lock
+  //   ENFORCES them. FAIL CLOSED: an acquire that returns null defers, never runs. Omitted ⇒ no locking
+  //   (current behavior; the arbiter's in-pass claim tracking is the only guard).
+  readonly fileLock?: FileLock.Interface
+  //   §C3.3 code-graph symbol resolution. When provided, the symbols a subtask's file scope touches are
+  //   resolved from the code graph and put on its ConflictArbiter.Claim so the arbiter's SEMANTIC layer
+  //   (symbol overlap) can fire, not just file-scope overlap. FAIL SAFE: any resolver failure resolves to
+  //   [] so file-level conflict detection still works. Omitted ⇒ symbols default to [] (file-level only).
+  readonly symbolsForFiles?: (
+    event: DeepAgentEvent.Event,
+    files: ReadonlyArray<string>,
+  ) => Effect.Effect<ReadonlyArray<string>>
 }
 
 export const layerWith = (options: LayerOptions) =>
@@ -105,6 +122,8 @@ export const layerWith = (options: LayerOptions) =>
       const agentList = yield* AgentListProviderService
       const approvalQueue = yield* ApprovalQueue.Service
       const concurrency = options.concurrency
+      const fileLock = options.fileLock
+      const symbolsForFiles = options.symbolsForFiles
       const runner = options.runner
       const trustedSources = options.trustedSources
       const trustedSourcesFor = options.trustedSourcesFor
@@ -297,11 +316,19 @@ export const layerWith = (options: LayerOptions) =>
             }
 
             // §C3 conflict arbitration — does this subtask's claim conflict with an already-admitted one?
+            // §C3.3 resolve the code-graph symbols this subtask touches (fully-qualified per host file so
+            // the same symbol name in different files does NOT false-conflict). FAIL SAFE: a resolver
+            // failure resolves to [] so file-level detection still works.
+            const symbols = symbolsForFiles
+              ? yield* symbolsForFiles(event, subtask.fileScope).pipe(
+                  Effect.catchCause(() => Effect.succeed([] as ReadonlyArray<string>)),
+                )
+              : []
             const claim: ConflictArbiter.Claim = {
               taskID: subtask.id,
               agentID: agent.id,
               files: subtask.fileScope,
-              symbols: [],
+              symbols,
               priority: event.priority,
               origin: event.source === "im" || event.actorID != null ? "human" : event.source === "schedule" ? "schedule" : "system",
             }
@@ -328,12 +355,51 @@ export const layerWith = (options: LayerOptions) =>
               hasUnfinished = true
               continue
             }
+            // §C3.1 physical file-lock enforcement (the ConflictArbiter above DECIDES conflicts; the
+            // FileLock ENFORCES them). Acquire an AGENT lock on every file this subtask will write. A
+            // file already held by another agent — OR by a HUMAN (a human lock makes an agent acquire
+            // return null) — DEFERS the subtask (retryable), so two concurrently-admitted subtasks never
+            // edit the same file. FAIL CLOSED: acquire === null ⇒ defer, never run.
+            // §C3.2: physical branch/worktree isolation per agent is DEFERRED; the FileLock acquisition
+            // (§C3.1) + ConflictArbiter (§C3.3) provide the concurrency-safety guarantee (no two
+            // concurrently-admitted subtasks edit the same file/symbol) without separate worktrees.
+            const acquiredLocks: string[] = []
+            if (fileLock) {
+              // fileScope entries are repo-relative; resolve against the event's directory when it carries
+              // one (a NON-"wrk" workspaceID doubles as a directory), else lock on the raw scope string —
+              // lock keys only need to be CONSISTENT across subtasks of the same event, not real paths.
+              const eventDir =
+                typeof (event.payload as { directory?: unknown } | null)?.directory === "string"
+                  ? (event.payload as { directory: string }).directory
+                  : event.workspaceID && !event.workspaceID.startsWith("wrk")
+                    ? event.workspaceID
+                    : undefined
+              let contended = false
+              for (const file of subtask.fileScope) {
+                const lockKey = eventDir ? path.resolve(eventDir, file) : file
+                const entry = fileLock.acquire(lockKey, "agent")
+                if (entry === null) {
+                  contended = true
+                  break
+                }
+                acquiredLocks.push(entry.lockId)
+              }
+              if (contended) {
+                for (const id of acquiredLocks) fileLock.release(id)
+                concurrency?.release(event.workspaceID)
+                outcomes.push({ taskID: subtask.id, capability: subtask.capability, status: "deferred", agentID: agent.id, reason: "file_locked" })
+                // deferred = a DELAY, not a drop (§C3.1): the holding agent/human must release first.
+                hasUnfinished = true
+                continue
+              }
+            }
+
             // record the claim only for a subtask that WILL run this pass — a concurrency-deferred task
             // must not leave a phantom claim that later subtasks would needlessly arbitrate against.
             admittedClaims.push(claim)
 
-            // §C4 started → run one turn → completed/blocked. Release the concurrency slot when the turn
-            // settles (ensuring runs on success, failure, and interruption).
+            // §C4 started → run one turn → completed/blocked. Release the concurrency slot AND the file
+            // locks when the turn settles (ensuring runs on success, failure, and interruption).
             yield* emit(event, { type: "agent.task.started", taskID: subtask.id, agentID: agent.id }, `coord:${subtask.id}:started`)
             const result = yield* runner({
               agentType: agent.name,
@@ -350,7 +416,12 @@ export const layerWith = (options: LayerOptions) =>
                 log.error("subtask runner failed", { taskID: subtask.id, cause: Cause.pretty(cause) })
                 return Effect.succeed({ ok: false, structured: undefined, text: "", tokensUsed: 0, cost: 0 })
               }),
-              Effect.ensuring(Effect.sync(() => concurrency?.release(event.workspaceID))),
+              Effect.ensuring(
+                Effect.sync(() => {
+                  concurrency?.release(event.workspaceID)
+                  if (fileLock) for (const id of acquiredLocks) fileLock.release(id)
+                }),
+              ),
             )
             if (result.ok) {
               outcomes.push({ taskID: subtask.id, capability: subtask.capability, status: "completed", agentID: agent.id })

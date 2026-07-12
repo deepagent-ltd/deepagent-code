@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto"
+import { Effect } from "effect"
 import type { DurableKnowledgeStore } from "./durable-knowledge-store"
 import type { Doc, DocType, LinkRel, Provenance } from "./document-store"
 
@@ -538,3 +539,33 @@ export const linkCallEdges = (
   }
   return { callsEdges, callsSkipped }
 }
+
+// V4.0 §C3.3 — resolve the FULLY-QUALIFIED symbol keys ("<host_path>#<symbol_path>") of the symbol
+// nodes hosted by a set of files, from an already-open project store. This is the code-graph feed for
+// the ConflictArbiter's semantic layer: two subtasks touching the same symbol conflict, and qualifying
+// the key by host_path means the SAME symbol name in DIFFERENT files does NOT false-conflict. It scans
+// the store's code_symbol nodes and collects the symbol children whose `extensions.host_path` matches a
+// requested file (the file-level parent node carries no symbol_path, so it is naturally excluded).
+// PURE over the store + no filesystem; default-safe — a missing/empty graph yields []. Wrapped in Effect
+// so the runtime's resolver can catch any store defect and fall back to file-level detection.
+export const symbolsForFilePaths = (
+  store: DurableKnowledgeStore,
+  files: ReadonlyArray<string>,
+): Effect.Effect<ReadonlyArray<string>> =>
+  Effect.sync(() => {
+    if (files.length === 0) return []
+    const wanted = new Set(files)
+    const ds = store.documentStore
+    const keys: string[] = []
+    for (const ref of ds.list({ type: CODE_SYMBOL })) {
+      const doc = ds.get(ref.id)
+      if (!doc || doc.status === "rejected") continue
+      const hostPath = doc.extensions?.host_path
+      const symbolPath = doc.extensions?.symbol_path
+      // only symbol CHILD nodes carry host_path + symbol_path; file-level parents have neither.
+      if (typeof hostPath !== "string" || typeof symbolPath !== "string") continue
+      if (!wanted.has(hostPath)) continue
+      keys.push(symbolNodeKey(hostPath, symbolPath))
+    }
+    return keys
+  })
