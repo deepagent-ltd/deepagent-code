@@ -2,6 +2,7 @@ import { describe, expect } from "bun:test"
 import { Effect, Layer } from "effect"
 import { AgentPush } from "../../src/session/agent-push"
 import { AgentPushPolicy } from "@deepagent-code/core/deepagent/agent-push-policy"
+import { WorkspaceConfig } from "@deepagent-code/core/deepagent/workspace-config"
 import { Database } from "@deepagent-code/core/database/database"
 import { IMRepository, IMRepositoryLive } from "@deepagent-code/core/im/repository"
 import { RuntimeFlags } from "../../src/effect/runtime-flags"
@@ -170,6 +171,135 @@ describe("AgentPush flag off", () => {
       expect(result.decision).toBe("flag_disabled")
       const page = yield* repo.listMessages({ groupID, limit: 10 })
       expect(page.messages.length).toBe(0)
+    }),
+  )
+})
+
+// §E4 (P2.8) — the REAL quiet-hours resolution (no factOverrides.withinQuietHours). AgentPush resolves
+// the workspace's configured quiet-hours window from WorkspaceConfig and honors it. This layer PROVIDES
+// WorkspaceConfig (unlike the base makeLayer) so the resolution path is exercised end-to-end.
+const HOUR = 3_600_000
+const QUIET = { startHour: 22, endHour: 6, tzOffsetMinutes: 0 } // 22:00→06:00 UTC
+const at2am = 2 * HOUR // inside quiet hours
+const at10am = 10 * HOUR // outside quiet hours
+
+const makeConfigLayer = () => {
+  const database = Database.layerFromPath(":memory:")
+  const repo = IMRepositoryLive.pipe(Layer.provideMerge(database))
+  const cfg = WorkspaceConfig.layerWith({ now }).pipe(Layer.provideMerge(database))
+  const flagsLayer = RuntimeFlags.layer({ v4AgentPushEnabled: true })
+  const push = AgentPush.layerWith({ now }).pipe(
+    Layer.provide(repo),
+    Layer.provide(flagsLayer),
+    Layer.provide(cfg),
+  )
+  return Layer.mergeAll(push, repo, cfg, flagsLayer, database)
+}
+
+describe("AgentPush.push §E4 real quiet-hours (WorkspaceConfig-resolved)", () => {
+  const it = testEffect(makeConfigLayer())
+
+  it.effect("normal push INSIDE a configured quiet window → digest (no message), NO override", () =>
+    Effect.gen(function* () {
+      const cfg = yield* WorkspaceConfig.Service
+      yield* cfg.set("wrk_1", { quietHours: QUIET })
+      const push = yield* AgentPush.Service
+      const repo = yield* IMRepository
+      setNow(at2am)
+      const groupID = yield* seedGroup("agt_1", true)
+      // no factOverrides — the real window resolution must decide "digest".
+      const result = yield* push.push(req(groupID, { priority: "normal", idempotencyKey: "q-normal" }))
+      expect(result.decision).toBe("digest")
+      const page = yield* repo.listMessages({ groupID, limit: 10 })
+      expect(page.messages.length).toBe(0) // held, not delivered
+    }),
+  )
+
+  it.effect("high push INSIDE quiet hours punches through → delivered", () =>
+    Effect.gen(function* () {
+      const cfg = yield* WorkspaceConfig.Service
+      yield* cfg.set("wrk_1", { quietHours: QUIET })
+      const push = yield* AgentPush.Service
+      setNow(at2am)
+      const groupID = yield* seedGroup("agt_1", true)
+      const result = yield* push.push(req(groupID, { priority: "high", idempotencyKey: "q-high" }))
+      expect(result.decision).toBe("deliver")
+    }),
+  )
+
+  it.effect("normal push OUTSIDE the configured window → delivered (real resolution)", () =>
+    Effect.gen(function* () {
+      const cfg = yield* WorkspaceConfig.Service
+      yield* cfg.set("wrk_1", { quietHours: QUIET })
+      const push = yield* AgentPush.Service
+      setNow(at10am)
+      const groupID = yield* seedGroup("agt_1", true)
+      const result = yield* push.push(req(groupID, { priority: "normal", idempotencyKey: "q-out" }))
+      expect(result.decision).toBe("deliver")
+    }),
+  )
+
+  it.effect("no configured window → never quiet (fail-safe): normal push delivered even at 2am", () =>
+    Effect.gen(function* () {
+      // no cfg.set: default resolved config has no quietHours ⇒ never quiet.
+      const push = yield* AgentPush.Service
+      setNow(at2am)
+      const groupID = yield* seedGroup("agt_1", true)
+      const result = yield* push.push(req(groupID, { priority: "normal", idempotencyKey: "q-none" }))
+      expect(result.decision).toBe("deliver")
+    }),
+  )
+})
+
+// §E3 (P2.8) — the path-ACL leg. scrub now runs WITH allowedPathRoots resolved from the workspace, so a
+// push naming a file OUTSIDE the allowed roots has that path stripped («path removed») before delivery.
+describe("AgentPush.push §E3 file-path ACL", () => {
+  const it = testEffect(makeConfigLayer())
+
+  it.effect("an out-of-ACL absolute path in push content is stripped, an in-root path survives", () =>
+    Effect.gen(function* () {
+      const push = yield* AgentPush.Service
+      const repo = yield* IMRepository
+      setNow(1_000_000)
+      const groupID = yield* seedGroup("agt_1", true)
+      // roots = /workspace/root; /etc/passwd is outside → stripped; /workspace/root/src/app.ts inside → kept.
+      const result = yield* push.push(
+        req(groupID, {
+          content: "leaked /etc/passwd but ok /workspace/root/src/app.ts",
+          idempotencyKey: "acl-1",
+        }),
+        { allowedPathRoots: ["/workspace/root"] },
+      )
+      expect(result.decision).toBe("deliver")
+      const page = yield* repo.listMessages({ groupID, limit: 10 })
+      const content = page.messages[0].content
+      expect(content).toContain("«path removed»") // /etc/passwd stripped
+      expect(content).not.toContain("/etc/passwd")
+      expect(content).toContain("/workspace/root/src/app.ts") // in-root path preserved
+    }),
+  )
+
+  it.effect("default resolver: a directory-style workspaceID becomes its own root", () =>
+    Effect.gen(function* () {
+      const push = yield* AgentPush.Service
+      const repo = yield* IMRepository
+      setNow(1_000_000)
+      // a directory-routed workspace: the id IS the fs root, so /etc/passwd is out-of-root → stripped.
+      const repoSvc = yield* IMRepository
+      const group = yield* repoSvc.createGroup({
+        workspaceID: "/home/proj",
+        type: "project",
+        name: "g",
+        createdBy: "user_1",
+      })
+      yield* repoSvc.addMember({ groupID: group.id, memberID: "agt_1", memberType: "agent", role: "agent" })
+      const result = yield* push.push(
+        req(group.id, { workspaceID: "/home/proj", content: "see /etc/shadow", idempotencyKey: "acl-2" }),
+      )
+      expect(result.decision).toBe("deliver")
+      const page = yield* repo.listMessages({ groupID: group.id, limit: 10 })
+      expect(page.messages[0].content).toContain("«path removed»")
+      expect(page.messages[0].content).not.toContain("/etc/shadow")
     }),
   )
 })
