@@ -24,6 +24,20 @@ import { EventDispatcher } from "./event-dispatcher"
 import type { SubagentTurnRunner, SubagentTurnResult } from "./goal-loop-wiring"
 import { MessageID } from "./schema"
 import { SessionCompletedPublisher } from "./session-completed-publisher"
+import { EventDrivenArchiver } from "@/wiki/event-driven-archiver"
+import { PanelConveneConsumer } from "@/panel/panel-convene-consumer"
+import { consultPanel } from "@/panel/consult"
+import type { PanelTurnRunner } from "@/panel/panelist-runner"
+import { makeTaskSubagentRunner } from "./goal-loop-wiring"
+// §B2/§E4 (P2.8) — proactive push stack.
+import { AgentPush } from "./agent-push"
+import { DigestBuilder } from "./digest-builder"
+import { SupervisorNotifier } from "./supervisor-notifier"
+// §C3 (P2.9) — file locks + code-graph symbols.
+import { FileLock } from "@deepagent-code/core/file-lock"
+import { openProjectStore } from "@deepagent-code/core/deepagent/durable-knowledge-store"
+import { symbolsForFilePaths } from "@deepagent-code/core/deepagent/code-indexer"
+import { resolveDeepAgentCodeHome } from "@deepagent-code/core/deepagent/workspace"
 import * as Log from "@deepagent-code/core/util/log"
 
 // V4.0 §A4/§C — the PRODUCTION event-runtime. This is the layer that was missing: every V4 daemon and
@@ -55,7 +69,10 @@ const failedTurn = (): SubagentTurnResult => ({ ok: false, structured: undefined
 // ROOT session rooted in the triggering event's workspace/directory (mirrors the IM agent executor),
 // then runs one prompt turn. The model is the provider default (event-triggered agents have no
 // inherited session model).
-const makeEventTurnRunner = (deps: {
+// Exported for direct testing: the regression lock asserts this runner does NOT silently return
+// failedTurn when invoked with no ambient InstanceRef (the real daemon-fiber environment) — proving
+// every InstanceState-touching call runs inside withContext (a die would pierce orElseSucceed).
+export const makeEventTurnRunner = (deps: {
   readonly sessions: Session.Interface
   readonly agents: Agent.Interface
   readonly sessionPrompt: SessionPrompt.Interface
@@ -64,10 +81,9 @@ const makeEventTurnRunner = (deps: {
 }): SubagentTurnRunner =>
   (input) =>
     Effect.gen(function* () {
-      const next = yield* deps.agents.get(input.agentType).pipe(Effect.orElseSucceed(() => undefined))
-      if (!next) return failedTurn()
       // §C — the event's workspaceID is a grouping key that may be a genuine "wrk"-id OR a directory
       // fallback (single-user / directory-routed). Only forward a genuine workspace id to the session.
+      // (This derivation reads NO InstanceState, so it is safe on the bare daemon fiber — do it first.)
       const workspaceID =
         input.workspaceID && input.workspaceID.startsWith("wrk")
           ? WorkspaceV2.ID.make(input.workspaceID)
@@ -79,15 +95,25 @@ const makeEventTurnRunner = (deps: {
       if (!directory) return failedTurn()
 
       // CRITICAL: this runs on a background daemon fiber, which carries NO InstanceRef (that is only set
-      // per-request by the instance-context middleware). sessions.create → InstanceState.context reads
-      // InstanceRef and dies without it. So we must ESTABLISH the instance context here — load it for the
-      // event's directory and provide InstanceRef/WorkspaceRef around create + prompt (mirrors the
-      // instance-context middleware + the IM executor, which inherit it from the request fiber).
+      // per-request by the instance-context middleware). EVERY InstanceState-touching call — agents.get,
+      // sessions.create, defaultModel, the prompt calls — reads InstanceRef and `Effect.die`s without it
+      // (instance-state.ts:15-17). A die is a DEFECT that pierces `orElseSucceed` (which only catches the
+      // E channel), so it would hit the outer catchCause → EVERY event-driven turn silently returns
+      // failedTurn — i.e. the whole event-driven execution chain never runs. So we ESTABLISH the instance
+      // context FIRST — load it for the event's directory (load PRODUCES ctx; it does not itself need an
+      // InstanceRef) — then run all four call sites inside withContext (mirrors the instance-context
+      // middleware + the IM executor, which inherit it from the request fiber).
       const ctx = yield* deps.instanceStore.load({ directory }).pipe(Effect.orElseSucceed(() => undefined))
       if (!ctx) return failedTurn()
 
       const withContext = <A, E, R>(eff: Effect.Effect<A, E, R>) =>
         eff.pipe(Effect.provideService(InstanceRef, ctx), Effect.provideService(WorkspaceRef, workspaceID))
+
+      // agents.get MUST run inside withContext (it resolves through InstanceState → dies without
+      // InstanceRef). With the context provided it no longer dies; a genuine unknown-agent still resolves
+      // to undefined via orElseSucceed → fail-soft failedTurn (semantics preserved).
+      const next = yield* withContext(deps.agents.get(input.agentType)).pipe(Effect.orElseSucceed(() => undefined))
+      if (!next) return failedTurn()
 
       const child = yield* withContext(
         deps.sessions.create({
@@ -107,7 +133,9 @@ const makeEventTurnRunner = (deps: {
         }
       }
 
-      const model = yield* deps.defaultModel()
+      // defaultModel resolves through InstanceState too (Provider.defaultModel → InstanceState.get) →
+      // wrap it, else it dies on the daemon fiber exactly like agents.get.
+      const model = yield* withContext(deps.defaultModel())
       const parts = yield* withContext(deps.sessionPrompt.resolvePromptParts(input.prompt))
       const result = yield* withContext(
         deps.sessionPrompt.prompt({
@@ -139,6 +167,102 @@ const makeEventTurnRunner = (deps: {
       }
     }).pipe(Effect.catchCause(() => Effect.succeed(failedTurn())))
 
+// §M — the PRODUCTION PanelConvenePort for the auto-convene daemon. The PanelConveneConsumer never
+// creates sessions itself (it takes an injected port); this builds the real one for the DAEMON context,
+// which — like makeEventTurnRunner — carries NO InstanceRef. So we: derive a real working directory from
+// the event (explicit payload.directory else a non-"wrk" workspaceID doubles as a path); establish the
+// instance context (InstanceStore.load + provide InstanceRef/WorkspaceRef); create a fresh ROOT session
+// the panelists parent to; build a PanelTurnRunner via makeTaskSubagentRunner (the SAME child-session +
+// permission-derivation path the HTTP panelConsult handler uses via panelTurnRunnerFor); then run
+// consultPanel with the frozen question and return the deterministic PanelVerdict. Risk class → quorum
+// policy: "security" ⇒ the §C.6 any-block-blocks policy, else "default". Wrapped in catchCause so a
+// failure surfaces as a PORT error (the consumer nacks → retry, capped) rather than a fabricated verdict.
+// Exported for direct testing: the regression lock asserts this port does NOT die when invoked with no
+// ambient InstanceRef (the real daemon-fiber environment) — proving every InstanceState-touching call
+// runs inside withContext.
+export const makeEventPanelPort = (deps: {
+  readonly sessions: Session.Interface
+  readonly agents: Agent.Interface
+  readonly sessionPrompt: SessionPrompt.Interface
+  readonly instanceStore: InstanceStore.Interface
+  readonly defaultModel: () => Effect.Effect<{ providerID: ProviderV2.ID; modelID: ModelV2.ID }>
+}): PanelConveneConsumer.PanelConvenePort =>
+  (input) =>
+    Effect.gen(function* () {
+      const event = input.event
+      // Derive the working directory the same way makeEventTurnRunner does: an explicit event
+      // `directory` in the payload, else a NON-"wrk" workspaceID (which doubles as a directory in the
+      // single-user / directory-routed model). A bare "wrk_"-id is NOT a path.
+      const payloadDir = (event.payload as { directory?: unknown } | null)?.directory
+      const directory =
+        typeof payloadDir === "string"
+          ? payloadDir
+          : event.workspaceID && !event.workspaceID.startsWith("wrk")
+            ? event.workspaceID
+            : undefined
+      if (!directory) return yield* Effect.fail("panel port: no directory derivable from event" as const)
+
+      const workspaceID =
+        event.workspaceID && event.workspaceID.startsWith("wrk")
+          ? WorkspaceV2.ID.make(event.workspaceID)
+          : undefined
+
+      // Establish the instance context on this daemon fiber (no InstanceRef otherwise → session.create
+      // dies). Mirrors makeEventTurnRunner + the instance-context middleware.
+      const ctx = yield* deps.instanceStore.load({ directory })
+      const withContext = <A, E, R>(eff: Effect.Effect<A, E, R>) =>
+        eff.pipe(Effect.provideService(InstanceRef, ctx), Effect.provideService(WorkspaceRef, workspaceID))
+
+      // The panelists parent to a fresh ROOT session rooted in the event's workspace/directory.
+      // CRITICAL: defaultAgent / defaultModel / sessions.create ALL resolve through InstanceState, which
+      // reads InstanceRef and `Effect.die`s when it is absent (instance-state.ts:15-17). This port runs
+      // on the consumer's daemon subscription fiber, which carries NO ambient InstanceRef — so EVERY such
+      // call MUST run inside withContext, not just sessions.create. (Agent.defaultAgent → useEffect →
+      // get → directory → context → InstanceRef; Provider.defaultModel → InstanceState.get → same path.)
+      const agentName = yield* withContext(deps.agents.defaultAgent())
+      const root = yield* withContext(
+        deps.sessions.create({
+          agent: agentName,
+          title: `panel (event ${event.type})`,
+          directory,
+          ...(workspaceID ? { workspaceID } : {}),
+        } as Parameters<Session.Interface["create"]>[0]),
+      )
+
+      const model = yield* withContext(deps.defaultModel())
+      // Build the panelist turn runner exactly as the HTTP handler's panelTurnRunnerFor does — but run
+      // each turn inside the established instance context (the daemon fiber has none).
+      const baseRunner = makeTaskSubagentRunner({
+        sessions: deps.sessions,
+        agents: deps.agents,
+        sessionPrompt: deps.sessionPrompt,
+        parentSessionID: root.id,
+        model: { providerID: model.providerID, modelID: model.modelID },
+      })
+      const runTurn: PanelTurnRunner = (turnInput) =>
+        withContext(
+          baseRunner({
+            agentType: turnInput.agentType,
+            prompt: turnInput.prompt,
+            ...(turnInput.outputSchema ? { outputSchema: turnInput.outputSchema } : {}),
+          }),
+        ).pipe(Effect.map((r) => ({ structured: r.structured })))
+
+      // Risk class → quorum policy: a security risk gets the §C.6 any-block-blocks policy; else default.
+      const policy = input.riskClass === "security" ? ("security" as const) : ("default" as const)
+      const verdict = yield* withContext(
+        consultPanel(
+          { question: input.question, codeRefs: [], parentSessionID: root.id, policy },
+          { runTurn },
+        ),
+      )
+      return verdict
+    }).pipe(
+      // A daemon-side failure (missing directory, unloadable instance, session create) surfaces as a
+      // port error so the consumer NACKS for a capped retry — never a fabricated verdict.
+      Effect.catchCause((cause) => Effect.fail(cause)),
+    )
+
 // The MultiAgentRuntime layer, built with the production event turn runner. Requires the session stack
 // + core V4 services (provided by the app graph). This is the DispatchPort the dispatcher drives.
 const runtimeLayer = Layer.unwrap(
@@ -154,6 +278,9 @@ const runtimeLayer = Layer.unwrap(
     // L2 (actor workspace permission) and L4 (runtime operation pre-gate) evaluate REAL facts and FAIL
     // CLOSED on any lookup error. L3 (agent capability) is pure in SecurityGate and already enforced.
     const sec = yield* SecurityResolvers.Service
+    // §C3.1 — the process-wide file-lock service (a Layer.succeed singleton; the SAME instance the file
+    // HTTP handlers use, so a human editing a file blocks an agent subtask from touching it).
+    const fileLock = yield* FileLock.Service
     const runner = makeEventTurnRunner({
       sessions,
       agents,
@@ -173,6 +300,23 @@ const runtimeLayer = Layer.unwrap(
     return MultiAgentRuntime.layerWith({
       runner,
       concurrency,
+      fileLock,
+      // §C3.3 — feed the arbiter's semantic layer. Best-effort: open the event directory's project store
+      // and read the code-graph symbol keys hosted by the subtask's files. A bare "wrk"-id (not a real
+      // path) OR any store/config failure resolves to [] so file-level conflict detection still holds.
+      symbolsForFiles: (event, files) =>
+        Effect.gen(function* () {
+          if (files.length === 0) return [] as ReadonlyArray<string>
+          const directory =
+            typeof (event.payload as { directory?: unknown } | null)?.directory === "string"
+              ? (event.payload as { directory: string }).directory
+              : event.workspaceID && !event.workspaceID.startsWith("wrk")
+                ? event.workspaceID
+                : undefined
+          if (!directory) return [] as ReadonlyArray<string>
+          const store = openProjectStore(resolveDeepAgentCodeHome(), directory)
+          return yield* symbolsForFilePaths(store, files)
+        }).pipe(Effect.catchCause(() => Effect.succeed([] as ReadonlyArray<string>))),
       trustedSourcesFor: (event) => sec.resolveTrustedSources(event.workspaceID),
       actorHasPermission: (event, agent) =>
         sec.actorHasWorkspacePermission({
@@ -352,6 +496,82 @@ export const scheduleBootstrapLayer = Layer.effectDiscard(
   }),
 )
 
+// ── §B2/§E4 (P2.8) — the PROACTIVE PUSH stack ────────────────────────────────────────────────────────
+// The §B2 push stack (AgentPush policy runtime + §E4 DigestBuilder + the SupervisorNotifier caller) was
+// built + tested but never STARTED in prod. This wires all three, sharing the ONE DeepAgentEventBus /
+// Database / WorkspaceConfig / IMRepository the rest of the runtime uses. All gated on v4AgentPushEnabled:
+//   • AgentPush.push fail-closes on the flag (returns flag_disabled) — inert when off.
+//   • SupervisorNotifier's subscription runLoop is off ⇒ no subscription (no pending-row pileup).
+//   • DigestBuilder's flush daemon runs ONLY when the flag is on.
+// AgentPush.layer resolves REAL quiet-hours from WorkspaceConfig — not a false default.
+const agentPushLayer = AgentPush.layer
+const digestBuilderLayer = Layer.unwrap(
+  Effect.gen(function* () {
+    const flags = yield* RuntimeFlags.Service
+    return DigestBuilder.layerWith({ runLoop: flags.v4AgentPushEnabled })
+  }),
+)
+const supervisorNotifierLayer = Layer.unwrap(
+  Effect.gen(function* () {
+    const flags = yield* RuntimeFlags.Service
+    return SupervisorNotifier.layerWith({ runLoop: flags.v4AgentPushEnabled })
+  }),
+)
+// The push stack, with AgentPush.Service provided into the digest + notifier (the notifier CALLS it).
+const pushStackLayer = Layer.mergeAll(digestBuilderLayer, supervisorNotifierLayer).pipe(
+  Layer.provideMerge(agentPushLayer),
+)
+
+// §L — the EVENT-DRIVEN execution archiver. Subscribes the shared bus and archives on session.completed
+// (published by SessionCompletedPublisher under v4EventDrivenArchive) AND goal.completed (published by
+// the goal-manager under v4MultiAgentRuntime). Its ONLY build-time dep is DeepAgentEventBus (the archive
+// mechanics — archiveSessionOnCompletion — are pulled best-effort inside handle, never at layer build),
+// so it merges cleanly alongside the other daemon layers over the shared bus.
+//
+// FLAG COUPLING: runLoop = v4EventDrivenArchive || v4MultiAgentRuntime. The archiver consumes BOTH
+// trigger types, and its group ("wiki-archiver") is delivery-tracked — so it must subscribe whenever
+// EITHER producer is live, else a published trigger's pending delivery row never gets acked (symmetric
+// producer/consumer gating). With both flags OFF (the default) runLoop is false ⇒ NO subscription ⇒ the
+// group is never registered ⇒ no pending-row pileup. That is the correctness point.
+// Exported for direct flag-coupling testing; `layer` merges it. (The panel consumer layer is not
+// exported because it yields the full session stack at build — its flag-off inertness is covered by the
+// consumer's own layerWith(runLoop:false) unit test.)
+export const archiverLayer = Layer.unwrap(
+  Effect.gen(function* () {
+    const flags = yield* RuntimeFlags.Service
+    return EventDrivenArchiver.layerWith({ runLoop: flags.v4EventDrivenArchive || flags.v4MultiAgentRuntime })
+  }),
+)
+
+// §M — the Expert Panel AUTO-CONVENE consumer. Subscribes the shared bus, runs the pure §M policy on
+// each event, and — on "convene" — drives the EXISTING V3.9 panel engine via makeEventPanelPort (which
+// establishes daemon-fiber instance context, creates a root session, and runs consultPanel). Draws the
+// session stack (Session/Agent/SessionPrompt/InstanceStore/Provider) — the SAME set makeEventTurnRunner
+// uses in runtimeLayer — plus DeepAgentEventBus + ApprovalQueue + RuntimeFlags from the outer graph.
+//
+// FLAG COUPLING: runLoop = v4PanelAutoConvene. Default OFF ⇒ runLoop false ⇒ NO subscription ⇒ the
+// "panel-convener" group is never registered ⇒ no pending-row pileup. The consumer additionally
+// flag-gates per event (handle() acks + returns null when the flag is off), so even a stray delivery is
+// discharged rather than leaking.
+const panelConsumerLayer = Layer.unwrap(
+  Effect.gen(function* () {
+    const flags = yield* RuntimeFlags.Service
+    const sessions = yield* Session.Service
+    const agents = yield* Agent.Service
+    const sessionPrompt = yield* SessionPrompt.Service
+    const provider = yield* Provider.Service
+    const instanceStore = yield* InstanceStore.Service
+    const convene = makeEventPanelPort({
+      sessions,
+      agents,
+      sessionPrompt,
+      instanceStore,
+      defaultModel: () => provider.defaultModel().pipe(Effect.orDie),
+    })
+    return PanelConveneConsumer.layerWith({ convene, runLoop: flags.v4PanelAutoConvene })
+  }),
+)
+
 /**
  * The full V4 event-runtime, ready to merge into the instance app graph. Starts (as scoped daemons):
  * the EventDispatcher (router + scheduler tick + retry pump), the MultiAgentRuntime (DispatchPort),
@@ -374,6 +594,17 @@ export const layer = Layer.mergeAll(
   // (inert when off). It draws DeepAgentEventBus (provided alongside the runtime), plus RuntimeFlags /
   // EventV2Bridge / Session from the shared app graph — so it shares the ONE bus the archiver consumes.
   SessionCompletedPublisher.layer,
+  // §L — the event-driven archiver CONSUMER. Shares the ONE DeepAgentEventBus with the publisher above;
+  // gated on v4EventDrivenArchive || v4MultiAgentRuntime (see archiverLayer).
+  archiverLayer,
+  // §M — the Expert Panel auto-convene CONSUMER. Shares the ONE DeepAgentEventBus + ApprovalQueue with
+  // the rest of the runtime; gated on v4PanelAutoConvene (see panelConsumerLayer). Draws the session
+  // stack from the outer graph (same services runtimeLayer consumes).
+  panelConsumerLayer,
+  // §B2/§E4 (P2.8) — the proactive-push stack (AgentPush + DigestBuilder flush + SupervisorNotifier).
+  // All flag-gated on v4AgentPushEnabled; inert (no push, no flush) when off. Draws DeepAgentEventBus /
+  // Database / WorkspaceConfig / IMRepository / RuntimeFlags from the shared graph.
+  pushStackLayer,
 ).pipe(
   Layer.provideMerge(runtimeLayer),
 )
