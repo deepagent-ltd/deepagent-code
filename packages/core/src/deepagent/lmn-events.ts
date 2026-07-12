@@ -44,6 +44,14 @@ export const GOAL_ROLLED_BACK = "goal.rolled_back"
 export const PANEL_CONVENE_REQUESTED = "panel.convene.requested"
 export const PANEL_VERDICT = "panel.verdict"
 
+// §A3 DLQ ALERT — the Event Bus publishes this (source="system", high priority) the moment a delivery
+// exhausts its retries and flips to "dead", so a dead-letter "生成告警" (§A3) instead of sitting silently
+// in the DLQ view until someone queries it. It carries the dead event's id, the subscription group, the
+// final failure reason, and the attempt count so Oversight/notify can surface it. It is a SYSTEM
+// observation signal — NOT an agent-dispatch trigger — so it is guarded against self-cascade at the
+// producer (a dead delivery OF a dlq.alert never re-alerts).
+export const DLQ_ALERT = "dlq.alert"
+
 // §C/§D — a multi-agent subtask that could NOT auto-execute and needs a human: it exceeded the agent's
 // autonomy ceiling, or it is a level_5 suggestion_only action (never auto-runs). The Multi-Agent
 // Runtime publishes this so the §D2 Approval Queue surfaces it for a human decision (rather than the
