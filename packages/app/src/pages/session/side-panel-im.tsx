@@ -1,11 +1,14 @@
-import { createEffect, createSignal, For, Show, type Component } from "solid-js"
+import { createEffect, createResource, createSignal, For, Show, type Component } from "solid-js"
 import { IconButton } from "@deepagent-code/ui/icon-button"
 import { InlineInput } from "@deepagent-code/ui/inline-input"
 import { useLanguage } from "@/context/language"
+import { useSDK } from "@/context/sdk"
 import { GroupChatPanel } from "@/components/im/group-chat-panel"
+import { MessageSearch } from "@/components/im/message-search"
+import { fetchIMCapabilities } from "@/components/im/capabilities"
 import { useIMClient } from "@/utils/im-client"
 import type { IMGroup } from "@/components/im/types"
-import { submitCreateGroup } from "@/pages/session/im-panel-helpers"
+import { submitCreateDirect, submitCreateGroup } from "@/pages/session/im-panel-helpers"
 
 // IM as a right-side-panel tab. Mirrors the other side-panels (browser, subagents):
 // owns a header + close button (calls onClose), fills the panel with `h-full`
@@ -14,12 +17,23 @@ import { submitCreateGroup } from "@/pages/session/im-panel-helpers"
 export const SidePanelIM: Component<{ onClose: () => void }> = (props) => {
   const language = useLanguage()
   const client = useIMClient()
+  const sdk = useSDK()
 
   const [groups, setGroups] = createSignal<IMGroup[]>([])
   const [loading, setLoading] = createSignal(true)
   const [selectedGroupID, setSelectedGroupID] = createSignal<string | null>(null)
   const [creatingName, setCreatingName] = createSignal<string | null>(null)
   const [busy, setBusy] = createSignal(false)
+  const [searching, setSearching] = createSignal(false)
+  // §B3 direct message — the inline counterparty editor state (null = closed).
+  const [directTarget, setDirectTarget] = createSignal<string | null>(null)
+
+  // §B3/§H3 capability gate — thread view + file upload only where the server's flags are ON.
+  const [capabilities] = createResource(() =>
+    fetchIMCapabilities(sdk.client as unknown as Parameters<typeof fetchIMCapabilities>[0]),
+  )
+  const threadsEnabled = () => capabilities()?.v4ThreadEnabled ?? false
+  const fileUploadEnabled = () => capabilities()?.v4FileUploadEnabled ?? false
 
   const loadGroups = () => {
     setLoading(true)
@@ -65,6 +79,43 @@ export const SidePanelIM: Component<{ onClose: () => void }> = (props) => {
     setCreatingName(null)
   }
 
+  const startDirect = () => setDirectTarget("")
+  const cancelDirect = () => setDirectTarget(null)
+
+  const submitDirect = async () => {
+    const target = directTarget()?.trim() ?? ""
+    if (!target) {
+      cancelDirect()
+      return
+    }
+    // A leading "@" marks an agent counterparty; otherwise a user id.
+    const isAgent = target.startsWith("@")
+    const memberID = isAgent ? target.slice(1) : target
+    setBusy(true)
+    const result = await submitCreateDirect(
+      memberID,
+      { memberID, memberType: isAgent ? "agent" : "user" },
+      (payload) => client.createGroup(payload),
+    )
+    setBusy(false)
+    if ("skipped" in result) {
+      cancelDirect()
+      return
+    }
+    if ("error" in result) {
+      const { showToast } = await import("@/utils/toast")
+      showToast({
+        variant: "error",
+        title: language.t("im.group.create.failed"),
+        description: result.error,
+      })
+      return
+    }
+    setGroups((prev) => [...prev, result.group])
+    setSelectedGroupID(result.group.id)
+    setDirectTarget(null)
+  }
+
   const backToList = () => setSelectedGroupID(null)
 
   return (
@@ -84,6 +135,22 @@ export const SidePanelIM: Component<{ onClose: () => void }> = (props) => {
         </div>
         <div class="flex items-center gap-1 shrink-0">
           <Show when={!selectedGroupID()}>
+            <IconButton
+              icon="magnifying-glass"
+              variant="ghost"
+              class="h-7 w-7 rounded-md"
+              classList={{ "bg-surface-raised-base-active": searching() }}
+              onClick={() => setSearching((v) => !v)}
+              aria-label="Search messages"
+            />
+            <IconButton
+              icon="bubble-5"
+              variant="ghost"
+              class="h-7 w-7 rounded-md"
+              disabled={busy() || directTarget() !== null}
+              onClick={startDirect}
+              aria-label="New direct message"
+            />
             <IconButton
               icon="plus-small"
               variant="ghost"
@@ -107,6 +174,39 @@ export const SidePanelIM: Component<{ onClose: () => void }> = (props) => {
         when={selectedGroupID()}
         fallback={
           <div class="flex-1 min-h-0 flex flex-col overflow-y-auto">
+            {/* §B3 search — opens a message search over the caller's group memberships. Selecting a
+                result jumps to its group. */}
+            <Show when={searching()}>
+              <div class="border-b border-border-weaker-base">
+                <MessageSearch
+                  onSelect={({ groupID }) => {
+                    setSearching(false)
+                    setSelectedGroupID(groupID)
+                  }}
+                />
+              </div>
+            </Show>
+            {/* §B3 direct message — inline counterparty editor. Prefix "@" for an agent. */}
+            <Show when={directTarget() !== null}>
+              <div class="p-2 border-b border-border-weaker-base">
+                <InlineInput
+                  ref={(el: HTMLInputElement) => queueMicrotask(() => el.isConnected && el.focus())}
+                  class="w-full rounded-md border border-border-weak-base bg-surface-panel px-2 py-1 text-13-regular outline-none"
+                  value={directTarget() ?? ""}
+                  placeholder="User id, or @agent-id"
+                  disabled={busy()}
+                  onInput={(event) => setDirectTarget(event.currentTarget.value)}
+                  onKeyDown={(event) => {
+                    event.stopPropagation()
+                    if (event.key === "Enter") void submitDirect()
+                    else if (event.key === "Escape") cancelDirect()
+                  }}
+                  onBlur={() => {
+                    if (!busy()) cancelDirect()
+                  }}
+                />
+              </div>
+            </Show>
             <Show when={creatingName() !== null}>
               <div class="p-2 border-b border-border-weaker-base">
                 <InlineInput
@@ -155,8 +255,12 @@ export const SidePanelIM: Component<{ onClose: () => void }> = (props) => {
         }
       >
         {(id) => (
-          <div class="flex-1 min-h-0 flex flex-col overflow-hidden">
-            <GroupChatPanel groupID={id()} />
+          <div class="flex-1 min-h-0 flex flex-col overflow-hidden relative">
+            <GroupChatPanel
+              groupID={id()}
+              threadsEnabled={threadsEnabled()}
+              fileUploadEnabled={fileUploadEnabled()}
+            />
           </div>
         )}
       </Show>

@@ -27,6 +27,7 @@ import { SidePanelWorktree } from "@/pages/session/side-panel-worktree"
 import { SidePanelDebug } from "@/pages/session/side-panel-debug"
 import { SidePanelProfile } from "@/pages/session/side-panel-profile"
 import { SidePanelIM } from "@/pages/session/side-panel-im"
+import { SidePanelOversight } from "@/pages/session/side-panel-oversight"
 
 type RenderDiff = (SnapshotFileDiff & { file: string }) | VcsFileDiff
 type SidePanelItem = {
@@ -89,6 +90,7 @@ export function SessionSidePanel(props: {
   const debugOpen = createMemo(() => isDesktop() && view().rightPanel.mode() === "debug")
   const profileOpen = createMemo(() => isDesktop() && view().rightPanel.mode() === "profile")
   const imOpen = createMemo(() => isDesktop() && view().rightPanel.mode() === "im")
+  const oversightOpen = createMemo(() => isDesktop() && view().rightPanel.mode() === "oversight")
   const open = createMemo(
     () =>
       menuOpen() ||
@@ -101,7 +103,8 @@ export function SessionSidePanel(props: {
       pluginsOpen() ||
       debugOpen() ||
       profileOpen() ||
-      imOpen(),
+      imOpen() ||
+      oversightOpen(),
   )
   const panelWidth = createMemo(() => (open() ? `${layout.rightPanel.width()}px` : "0px"))
 
@@ -291,6 +294,12 @@ export function SessionSidePanel(props: {
     view().rightPanel.open("im")
   }
 
+  const openOversight = () => {
+    view().reviewPanel.close()
+    layout.fileTree.close()
+    view().rightPanel.open("oversight")
+  }
+
   const openTerminal = () => {
     view().terminal.open()
     queueMicrotask(() => {
@@ -330,6 +339,12 @@ export function SessionSidePanel(props: {
       title: language.t("session.tab.im"),
       active: imOpen(),
       onClick: openIM,
+    },
+    {
+      icon: "shield",
+      title: "Oversight",
+      active: oversightOpen(),
+      onClick: openOversight,
     },
     {
       icon: "link",
@@ -597,6 +612,9 @@ export function SessionSidePanel(props: {
               </Match>
               <Match when={imOpen()}>
                 <SidePanelIM onClose={openMenu} />
+              </Match>
+              <Match when={oversightOpen()}>
+                <SidePanelOversight onClose={openMenu} />
               </Match>
             </Switch>
           </div>

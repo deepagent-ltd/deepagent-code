@@ -86,6 +86,7 @@ type SessionView = {
     | "profile"
     | "debug"
     | "im"
+    | "oversight"
   pendingMessage?: string
   pendingMessageAt?: number
   todoCollapsed?: boolean
