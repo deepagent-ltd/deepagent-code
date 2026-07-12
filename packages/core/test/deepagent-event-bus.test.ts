@@ -2,7 +2,7 @@ import { describe, expect } from "bun:test"
 import { Effect, Fiber, Layer, Stream } from "effect"
 import { DeepAgentEventBus } from "@deepagent-code/core/deepagent/deepagent-event-bus"
 import { DeepAgentEvent } from "@deepagent-code/core/deepagent/deepagent-event"
-import { DeepAgentEventTable } from "@deepagent-code/core/deepagent/deepagent-event-sql"
+import { DeepAgentEventTable, DeepAgentEventDropTable } from "@deepagent-code/core/deepagent/deepagent-event-sql"
 import { Database } from "@deepagent-code/core/database/database"
 import { eq } from "drizzle-orm"
 import { testEffect } from "./lib/effect"
@@ -159,6 +159,50 @@ describe("DeepAgentEventBus", () => {
       // a dead delivery is not retry-eligible
       const due = yield* bus.dueRetries(Number.MAX_SAFE_INTEGER)
       expect(due.length).toBe(0)
+    }),
+  )
+
+  it.effect("§A3 DLQ alert: a delivery flipping to dead emits ONE dlq.alert (idempotent, no self-cascade)", () =>
+    Effect.gen(function* () {
+      const bus = yield* DeepAgentEventBus.Service
+      setNow(0)
+      const event = yield* bus.publish(input({ idempotencyKey: "alert-1" }))
+      // no alert before the delivery dies (attempts 1,2 are still pending retries).
+      yield* bus.nack({ subscriptionGroup: "router", eventID: event.id, reason: "1" })
+      yield* bus.nack({ subscriptionGroup: "router", eventID: event.id, reason: "2" })
+      let alerts = yield* bus.recentByType({ type: "dlq.alert", windowMs: Number.MAX_SAFE_INTEGER, now: 0 })
+      expect(alerts.length).toBe(0)
+      // the third nack flips it to dead → exactly one alert, carrying the dead event's id + reason.
+      yield* bus.nack({ subscriptionGroup: "router", eventID: event.id, reason: "3" })
+      alerts = yield* bus.recentByType({ type: "dlq.alert", windowMs: Number.MAX_SAFE_INTEGER, now: 0 })
+      expect(alerts.length).toBe(1)
+      expect(alerts[0]?.priority).toBe("high")
+      expect(alerts[0]?.source).toBe("system")
+      const payload = alerts[0]?.payload as { deadEventID?: string; subscriptionGroup?: string; reason?: string }
+      expect(payload.deadEventID).toBe(event.id)
+      expect(payload.subscriptionGroup).toBe("router")
+      expect(payload.reason).toBe("3")
+      // re-nacking an already-dead delivery must NOT emit a second alert (idempotent on event+group).
+      yield* bus.nack({ subscriptionGroup: "router", eventID: event.id, reason: "again" })
+      alerts = yield* bus.recentByType({ type: "dlq.alert", windowMs: Number.MAX_SAFE_INTEGER, now: 0 })
+      expect(alerts.length).toBe(1)
+    }),
+  )
+
+  it.effect("§A4 event_dropped: recordDrop persists a queryable drop row (best-effort, never fails)", () =>
+    Effect.gen(function* () {
+      const bus = yield* DeepAgentEventBus.Service
+      const { db } = yield* Database.Service
+      setNow(1_000)
+      const event = yield* bus.publish(input({ idempotencyKey: "drop-1" }))
+      // recording a drop is a total effect — it resolves without failing.
+      yield* bus.recordDrop({ event, reason: "backpressure" })
+      const rows = yield* db.select().from(DeepAgentEventDropTable).all().pipe(Effect.orDie)
+      expect(rows.length).toBe(1)
+      expect(rows[0]?.event_id).toBe(event.id)
+      expect(rows[0]?.reason).toBe("backpressure")
+      expect(rows[0]?.workspace_id).toBe("wrk_1")
+      expect(rows[0]?.priority).toBe("normal")
     }),
   )
 

@@ -6,6 +6,9 @@ import { DeepAgentEvent } from "@deepagent-code/core/deepagent/deepagent-event"
 import { DeepAgentEventTable } from "@deepagent-code/core/deepagent/deepagent-event-sql"
 import { Database } from "@deepagent-code/core/database/database"
 import { AgentPushLogTable } from "@deepagent-code/core/im/push-log-sql"
+import { HumanTakeover } from "@deepagent-code/core/deepagent/human-takeover"
+import { SessionTable, MessageTable } from "@deepagent-code/core/session/sql"
+import { ProjectTable } from "@deepagent-code/core/project/sql"
 import { testEffect } from "./lib/effect"
 
 // V4.0 §F — Observability. Verifies §F2 trace assembly + §F1 metric aggregation over the durable
@@ -21,7 +24,10 @@ const database = Database.layerFromPath(":memory:")
 const busLayer = DeepAgentEventBus.layerWith({ maxAttempts: 2, backoffBaseMs: 1000, now }).pipe(
   Layer.provideMerge(database),
 )
-const obsLayer = Observability.layerWith({ now }).pipe(Layer.provideMerge(busLayer))
+// §D2/§F — the takeover recorder shares the ONE in-memory DB so recording a takeover is visible to the
+// Observability human_takeover_total query (both read the same deepagent_human_takeover table).
+const takeoverLayer = HumanTakeover.layerWith({ now }).pipe(Layer.provideMerge(busLayer))
+const obsLayer = Observability.layerWith({ now }).pipe(Layer.provideMerge(takeoverLayer))
 const it = testEffect(obsLayer)
 
 const pub = (over: Partial<DeepAgentEvent.PublishInput>): DeepAgentEvent.PublishInput => ({
@@ -70,6 +76,96 @@ describe("Observability.trace (§F2)", () => {
       const a = yield* obs.trace({ workspaceID: "wrk_a", correlationID: "shared" })
       expect(a.length).toBe(1) // only wrk_a's event, not wrk_b's
       expect(a[0].type).toBe("ci.failure")
+    }),
+  )
+
+  // §F2 BACK-HALF regression lock. This is the assertion the reviewer required: given a coordinated event
+  // whose runner produced a CHILD SESSION stamped with the event's correlationID (metadata.correlationID),
+  // Observability.trace(correlationID) must INCLUDE that child session — not just the coordination events.
+  // BEFORE the trace-query fix (trace read only DeepAgentEventTable) this failed: the child session's
+  // metadata stamp was inert and the trace stopped at the events. AFTER (trace also reads the session's
+  // metadata.correlationID via json_extract) the child session appears as a kind:"session" node, proving
+  // the stamp is actually read and the trace follows correlationID down into the child session.
+  it.effect("§F2 back-half: trace INCLUDES a child session stamped with the correlationID (not just events)", () =>
+    Effect.gen(function* () {
+      const bus = yield* DeepAgentEventBus.Service
+      const obs = yield* Observability.Service
+      const { db } = yield* Database.Service
+      const CORR = "corr-backhalf"
+      const WS = "wrk_bh"
+
+      // the coordination event chain for this correlationID (front-half).
+      setNow(1_000)
+      const root = yield* bus.publish(pub({ idempotencyKey: "bh-root", workspaceID: WS, type: "ci.failure", correlationID: CORR }))
+      setNow(1_100)
+      yield* bus.publish(pub({ idempotencyKey: "bh-started", workspaceID: WS, type: "agent.task.started", source: "system", correlationID: CORR, causationID: root.id }))
+
+      // a project + the CHILD SESSION the runner created, stamped with metadata.correlationID = CORR — the
+      // exact row makeEventTurnRunner/makeTaskSubagentRunner produce when handed the event's correlationID.
+      yield* db.insert(ProjectTable).values([{ id: "prj_bh" as never, worktree: "/tmp/bh" as never, sandboxes: [] as never }]).run()
+      yield* db
+        .insert(SessionTable)
+        .values([
+          {
+            id: "ses_child_bh" as never,
+            project_id: "prj_bh" as never,
+            workspace_id: WS as never,
+            directory: "/tmp/bh",
+            slug: "child-bh",
+            title: "reviewer (event)",
+            version: "0",
+            metadata: { correlationID: CORR } as never,
+            time_created: 1_150,
+            time_updated: 1_150,
+          } as never,
+        ])
+        .run()
+      // one persisted message in the child session → messageCount surfaces as a light activity summary.
+      yield* db
+        .insert(MessageTable)
+        .values([{ id: "msg_bh_1" as never, session_id: "ses_child_bh" as never, time_created: 1_160, time_updated: 1_160, data: {} as never }])
+        .run()
+
+      const chain = yield* obs.trace({ workspaceID: WS, correlationID: CORR })
+      // the trace now spans BOTH halves: the two events AND the child session node.
+      const sessionNodes = chain.filter((n) => n.kind === "session")
+      expect(sessionNodes.length).toBe(1)
+      expect(sessionNodes[0].sessionID).toBe("ses_child_bh")
+      expect(sessionNodes[0].title).toBe("reviewer (event)")
+      expect(sessionNodes[0].messageCount).toBe(1) // read the child's activity
+      // the event front-half is still present, and the child session interleaves at its creation time.
+      expect(chain.map((n) => n.kind)).toEqual(["event", "event", "session"])
+      expect(chain.filter((n) => n.kind === "event").map((n) => n.type)).toEqual(["ci.failure", "agent.task.started"])
+    }),
+  )
+
+  it.effect("§F2 back-half is workspace-scoped: a same-correlationID child session in another tenant does NOT leak", () =>
+    Effect.gen(function* () {
+      const obs = yield* Observability.Service
+      const { db } = yield* Database.Service
+      const CORR = "corr-bh-tenant"
+      // a child session carrying the correlationID, but in ANOTHER workspace/directory.
+      yield* db.insert(ProjectTable).values([{ id: "prj_bh2" as never, worktree: "/tmp/bh2" as never, sandboxes: [] as never }]).run()
+      yield* db
+        .insert(SessionTable)
+        .values([
+          {
+            id: "ses_child_bh2" as never,
+            project_id: "prj_bh2" as never,
+            workspace_id: "wrk_other_bh" as never,
+            directory: "/tmp/bh2",
+            slug: "child-bh2",
+            title: "reviewer (event)",
+            version: "0",
+            metadata: { correlationID: CORR } as never,
+            time_created: 1_150,
+            time_updated: 1_150,
+          } as never,
+        ])
+        .run()
+      // querying a DIFFERENT workspace for the same correlationID must not surface the other tenant's child.
+      const chain = yield* obs.trace({ workspaceID: "wrk_bh_query", correlationID: CORR })
+      expect(chain.filter((n) => n.kind === "session").length).toBe(0)
     }),
   )
 })
@@ -167,6 +263,28 @@ describe("Observability.metrics (§F1)", () => {
     }),
   )
 
+  it.effect("§A4 event_dropped_total counts persisted drops in the window, by reason", () =>
+    Effect.gen(function* () {
+      const bus = yield* DeepAgentEventBus.Service
+      const obs = yield* Observability.Service
+      setNow(4_000)
+      const e1 = yield* bus.publish(pub({ idempotencyKey: "drop-a", workspaceID: "wrk_drop" }))
+      const e2 = yield* bus.publish(pub({ idempotencyKey: "drop-b", workspaceID: "wrk_drop" }))
+      // two backpressure drops in the window, plus one out-of-window drop that must NOT count.
+      yield* bus.recordDrop({ event: e1, reason: "backpressure" })
+      yield* bus.recordDrop({ event: e2, reason: "backpressure" })
+      setNow(50_000)
+      const e3 = yield* bus.publish(pub({ idempotencyKey: "drop-c", workspaceID: "wrk_drop" }))
+      yield* bus.recordDrop({ event: e3, reason: "backpressure" })
+      const m = yield* obs.metrics({ workspaceID: "wrk_drop", from: 0, to: 10_000 })
+      expect(m.eventDroppedTotal).toBe(2)
+      expect(m.eventDroppedByReason).toEqual({ backpressure: 2 })
+      // a different workspace's drop is not visible here (workspace-scoped).
+      const other = yield* obs.metrics({ workspaceID: "wrk_1", from: 0, to: 10_000 })
+      expect(other.eventDroppedTotal).toBe(0)
+    }),
+  )
+
   it.effect("event_publish_latency_ms P50/P95 aggregates the per-row publish_latency_ms samples", () =>
     Effect.gen(function* () {
       const { db } = yield* Database.Service
@@ -203,6 +321,26 @@ describe("Observability.metrics (§F1)", () => {
       expect(m.eventPublishLatencyMsP95).toBeNull()
       expect(m.eventToAgentStartMsP50).toBeNull()
       expect(m.eventToAgentStartMsP95).toBeNull()
+    }),
+  )
+
+  it.effect("human_takeover_total counts recorded takeovers in the window (workspace-scoped)", () =>
+    Effect.gen(function* () {
+      const takeovers = yield* HumanTakeover.Service
+      const obs = yield* Observability.Service
+      setNow(8_000)
+      // no takeovers yet ⇒ 0 (a plain count, never null).
+      let m = yield* obs.metrics({ workspaceID: "wrk_tko", from: 0, to: 10_000 })
+      expect(m.humanTakeoverTotal).toBe(0)
+      // record two takeovers in this workspace + one in another (must not leak across tenants).
+      yield* takeovers.record({ workspaceID: "wrk_tko", sessionID: "ses_1", agentID: "agt_1", actorID: "human_1", reason: "paused" })
+      yield* takeovers.record({ workspaceID: "wrk_tko", actorID: "human_1", reason: "claimed_branch" })
+      yield* takeovers.record({ workspaceID: "wrk_other", actorID: "human_2", reason: "paused" })
+      m = yield* obs.metrics({ workspaceID: "wrk_tko", from: 0, to: 10_000 })
+      expect(m.humanTakeoverTotal).toBe(2) // only this workspace's takeovers
+      // out-of-window takeovers are excluded.
+      const narrow = yield* obs.metrics({ workspaceID: "wrk_tko", from: 9_000, to: 10_000 })
+      expect(narrow.humanTakeoverTotal).toBe(0)
     }),
   )
 

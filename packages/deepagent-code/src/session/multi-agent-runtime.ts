@@ -14,7 +14,7 @@ import { ApprovalQueue } from "@deepagent-code/core/deepagent/approval-queue"
 import { WorkspaceConcurrency } from "@deepagent-code/core/deepagent/workspace-concurrency"
 import { LMNEvents } from "@deepagent-code/core/deepagent/lmn-events"
 import { FileLock } from "@deepagent-code/core/file-lock"
-import type { SubagentTurnRunner } from "./goal-loop-wiring"
+import type { SubagentTurnRunner, SubagentTurnResult } from "./goal-loop-wiring"
 import type { EventDispatcher } from "./event-dispatcher"
 import * as Log from "@deepagent-code/core/util/log"
 
@@ -112,6 +112,11 @@ export interface LayerOptions {
     event: DeepAgentEvent.Event,
     files: ReadonlyArray<string>,
   ) => Effect.Effect<ReadonlyArray<string>>
+  //   §E2 token budget — injectable clock for the per-agent-per-hour LLM token budget's fixed window.
+  //   Defaults to Date.now; tests inject a mutable clock to cross the window boundary deterministically.
+  readonly now?: () => number
+  //   §E2 token budget window (ms). Defaults to 1 hour — the §E2 "max_tokens_per_hour" cadence.
+  readonly tokenBudgetWindowMs?: number
 }
 
 export const layerWith = (options: LayerOptions) =>
@@ -125,6 +130,29 @@ export const layerWith = (options: LayerOptions) =>
       const fileLock = options.fileLock
       const symbolsForFiles = options.symbolsForFiles
       const runner = options.runner
+      const now = options.now ?? Date.now
+      const tokenBudgetWindowMs = options.tokenBudgetWindowMs ?? 3_600_000 // 1h — §E2 max_tokens_per_hour
+      // §E2 LLM token budget — a per-agent fixed-window token accumulator (agentID → {windowStart, used}).
+      // A subtask is admitted only if the agent is not ALREADY over its declared maxTokensPerHour; after a
+      // turn we DEBIT the runner's reported tokensUsed. In-memory + process-local (mirrors the bus's
+      // publishLimiter): a single runtime instance owns it. NOTE: the production event turn runner reports
+      // tokensUsed:0 today (usage isn't threaded through it), so this budget only bites for runners that
+      // DO report usage — the tracker + enforcement are real; the event-path usage plumbing is deferred.
+      const tokenUsage = new Map<string, { windowStart: number; used: number }>()
+      const tokensUsedThisHour = (agentID: string, at: number): number => {
+        const bucket = tokenUsage.get(agentID)
+        if (!bucket || at - bucket.windowStart >= tokenBudgetWindowMs) return 0
+        return bucket.used
+      }
+      const debitTokens = (agentID: string, tokens: number, at: number): void => {
+        if (tokens <= 0) return
+        const bucket = tokenUsage.get(agentID)
+        if (!bucket || at - bucket.windowStart >= tokenBudgetWindowMs) {
+          tokenUsage.set(agentID, { windowStart: at, used: tokens })
+        } else {
+          bucket.used += tokens
+        }
+      }
       const trustedSources = options.trustedSources
       const trustedSourcesFor = options.trustedSourcesFor
       const actorHasPermission = options.actorHasPermission ?? (() => Effect.succeed(true))
@@ -265,6 +293,19 @@ export const layerWith = (options: LayerOptions) =>
               continue
             }
 
+            // §C1 max_files_changed — the agent's declared per-subtask file-scope ceiling. A subtask
+            // whose declared write scope exceeds it is BLOCKED (terminal, not deferred): the partition's
+            // fileScope is fixed, so a retry would present the SAME oversized scope — blocking is the
+            // honest outcome (deferring would spin forever). Unset ⇒ no ceiling. Checked right after the
+            // bind (it is an agent-vs-subtask fact) and before the autonomy/security gates.
+            const maxFilesChanged = agent.limits?.maxFilesChanged
+            if (maxFilesChanged != null && maxFilesChanged >= 0 && subtask.fileScope.length > maxFilesChanged) {
+              outcomes.push({ taskID: subtask.id, capability: subtask.capability, status: "blocked", agentID: agent.id, reason: "max_files_changed" })
+              yield* emit(event, { type: "agent.task.blocked", taskID: subtask.id, reason: "max_files_changed" }, `coord:${subtask.id}:blocked`)
+              // terminal (retrying won't shrink the scope) — do NOT mark hasUnfinished.
+              continue
+            }
+
             // §D autonomy gate — the agent's ceiling vs the subtask's required level.
             const autonomy = AutonomyPolicy.decide({
               agentCeiling: AutonomyPolicy.resolveCeiling(agent),
@@ -347,6 +388,18 @@ export const layerWith = (options: LayerOptions) =>
                 continue
               }
             }
+            // §E2 LLM token budget — a per-agent-per-hour ceiling on tokens consumed. If the agent is
+            // ALREADY at/over its declared maxTokensPerHour, DEFER this subtask (retryable — the window
+            // rolls over, unlike max_files_changed which is terminal). Checked before acquiring a slot so
+            // there is nothing to release on defer. Only bites when a budget is declared AND the runner
+            // reports real usage (the event turn runner reports 0 today → this never trips there yet).
+            const maxTokensPerHour = agent.limits?.maxTokensPerHour
+            if (maxTokensPerHour != null && maxTokensPerHour >= 0 && tokensUsedThisHour(agent.id, now()) >= maxTokensPerHour) {
+              outcomes.push({ taskID: subtask.id, capability: subtask.capability, status: "deferred", agentID: agent.id, reason: "token_budget_exceeded" })
+              hasUnfinished = true
+              continue
+            }
+
             // §E2 concurrency cap — acquire a per-workspace execution slot. Over cap ⇒ DEFER (retryable
             // via the bus, not dropped), so a burst never runs more than the workspace's cap at once.
             const slot = concurrency ? yield* concurrency.acquire(event.workspaceID) : undefined
@@ -408,13 +461,24 @@ export const layerWith = (options: LayerOptions) =>
               // parent session; it creates a fresh root session here). actorID-less events fall back to
               // the workspaceID as the directory (single-user / directory-routed model).
               workspaceID: event.workspaceID,
+              // §F2 trace back-half — carry the triggering event's correlationID (falling back to its id,
+              // mirroring the coordination-event chaining above) into the child session the runner creates.
+              // The runner STAMPS this onto the child session's metadata.correlationID, and
+              // Observability.trace READS it back (json_extract on metadata) to append the child session as
+              // a "session" node — together these two halves let the §F2 trace follow correlationID from the
+              // event DOWN into the child session's activity (its message / tool-call turns), instead of
+              // stopping at the coordination events. The stamp alone is inert without the trace-query read.
+              correlationID: event.correlationID ?? event.id,
+              // §C1/§G — thread the agent's declared per-turn wall-clock ceiling to the runner; the event
+              // turn runner applies it via Effect.timeout, falling back to its fixed default when unset.
+              ...(agent.limits?.maxTurnDurationMs != null ? { maxTurnDurationMs: agent.limits.maxTurnDurationMs } : {}),
               ...(typeof (event.payload as { directory?: unknown } | null)?.directory === "string"
                 ? { directory: (event.payload as { directory: string }).directory }
                 : {}),
             }).pipe(
               Effect.catchCause((cause) => {
                 log.error("subtask runner failed", { taskID: subtask.id, cause: Cause.pretty(cause) })
-                return Effect.succeed({ ok: false, structured: undefined, text: "", tokensUsed: 0, cost: 0 })
+                return Effect.succeed({ ok: false, structured: undefined, text: "", tokensUsed: 0, cost: 0 } satisfies SubagentTurnResult)
               }),
               Effect.ensuring(
                 Effect.sync(() => {
@@ -423,10 +487,24 @@ export const layerWith = (options: LayerOptions) =>
                 }),
               ),
             )
+            // §E2 — DEBIT the tokens this turn actually consumed against the agent's per-hour budget, so
+            // the NEXT subtask this pass (and future events within the window) see the running total. A
+            // runner that reports 0 (the current event turn runner) is a no-op debit — enforcement is real
+            // but only bites once usage is threaded through.
+            debitTokens(agent.id, result.tokensUsed, now())
+
             if (result.ok) {
               outcomes.push({ taskID: subtask.id, capability: subtask.capability, status: "completed", agentID: agent.id })
               completed.add(subtask.id) // unblocks dependents in this pass
-              yield* emit(event, { type: "agent.task.completed", taskID: subtask.id, artifacts: [] }, `coord:${subtask.id}:completed`)
+              // §F2 artifacts — emit the REAL artifacts this subtask produced, not a hardcoded []. What is
+              // honestly available at this seam is the child session the runner ran in (result.sessionID,
+              // added in P1): a stable `session:<id>` handle the §F2 trace + Oversight use to pivot from the
+              // completed event into the child's activity (its tool calls / message / PR are queried by
+              // sessionID). The changed-file set is NOT resolvable here — the runtime holds no Session
+              // handle (the runner is an injected port) — so we emit what we genuinely have rather than
+              // fabricating a file list. An older/stub runner that returns no sessionID yields [].
+              const artifacts = result.sessionID ? [`session:${result.sessionID}`] : []
+              yield* emit(event, { type: "agent.task.completed", taskID: subtask.id, artifacts }, `coord:${subtask.id}:completed`)
             } else {
               outcomes.push({ taskID: subtask.id, capability: subtask.capability, status: "blocked", agentID: agent.id, reason: "runner_failed" })
               yield* emit(event, { type: "agent.task.blocked", taskID: subtask.id, reason: "runner_failed" }, `coord:${subtask.id}:blocked`)
