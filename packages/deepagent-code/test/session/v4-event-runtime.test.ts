@@ -450,8 +450,12 @@ describe("V4EventRuntime makeEventTurnRunner daemon-context (§C / P2.10 regress
     get: () => viaInstanceState({ name: "reviewer" }),
   } as unknown as Agent.Interface
 
+  // capture the create inputs so the §F2 test can assert the correlationID was stamped onto the child.
+  type CreateInput = { metadata?: Record<string, unknown> }
+  const createInputs: (CreateInput | undefined)[] = []
   const fakeSessions = {
-    create: () => viaInstanceState({ id: SessionID.make("ses_event_root") }),
+    create: (input?: CreateInput) =>
+      viaInstanceState(void createInputs.push(input)).pipe(Effect.as({ id: SessionID.make("ses_event_root") })),
   } as unknown as Session.Interface
 
   // A light SessionPrompt: resolvePromptParts + prompt both resolve via InstanceState (so the test also
@@ -484,6 +488,93 @@ describe("V4EventRuntime makeEventTurnRunner daemon-context (§C / P2.10 regress
       const result = yield* runner({ agentType: "reviewer", prompt: "do it", workspaceID: "/tmp/event-turn-ctx" })
       // BEFORE the fix: agents.get dies → orElseSucceed does NOT catch it → outer catchCause → failedTurn
       // (ok:false). AFTER the fix: every InstanceState call ran inside withContext → the turn completes.
+      expect(result.ok).toBe(true)
+      expect(result.text).toBe("done")
+    }),
+  )
+
+  // §F2 trace back-half — the runner must STAMP the triggering event's correlationID onto the child
+  // session it creates, so the §F2 trace spine can join the child's activity (tool calls / message / PR)
+  // back to the trigger. Without this the trace stops at the coordination events.
+  baseIt.effect("§F2 stamps the input correlationID onto the created child session's metadata", () =>
+    Effect.gen(function* () {
+      createInputs.length = 0
+      const result = yield* runner({
+        agentType: "reviewer",
+        prompt: "do it",
+        workspaceID: "/tmp/event-turn-ctx",
+        correlationID: "corr-xyz",
+      })
+      expect(result.ok).toBe(true)
+      // the child session the runner created carries the correlationID in its metadata → the §F2 trace
+      // query can pivot from the triggering event into this child's activity.
+      const last = createInputs.at(-1)
+      expect(last?.metadata?.correlationID).toBe("corr-xyz")
+    }),
+  )
+
+  baseIt.effect("§F2 omits metadata.correlationID when the caller supplies none", () =>
+    Effect.gen(function* () {
+      createInputs.length = 0
+      const result = yield* runner({ agentType: "reviewer", prompt: "do it", workspaceID: "/tmp/event-turn-ctx" })
+      expect(result.ok).toBe(true)
+      // no correlationID in ⇒ no metadata stamped (goal-loop / stub callers are unaffected).
+      const last = createInputs.at(-1)
+      expect(last?.metadata?.correlationID).toBeUndefined()
+    }),
+  )
+})
+
+// §C1/§G (P3.13) — makeEventTurnRunner must HONOR the agent's declared per-turn ceiling
+// (limits.maxTurnDurationMs), threaded through the runner input, rather than always using the fixed
+// 10-min default. A prompt that outlives the ceiling times out → the runner fail-softs to ok:false; a
+// generous ceiling lets the same prompt complete. Uses the LIVE clock so Effect.timeout resolves in real
+// time against the injected sleep.
+describe("V4EventRuntime makeEventTurnRunner honors maxTurnDurationMs (§C1/§G / P3.13)", () => {
+  const CTX = { directory: "/tmp/event-turn-timeout" } as unknown as InstanceContext
+  const fakeStore = { load: () => Effect.succeed(CTX) } as unknown as InstanceStore.Interface
+  const fakeAgents = { get: () => Effect.succeed({ name: "reviewer" }) } as unknown as Agent.Interface
+  const fakeSessions = {
+    create: () => Effect.succeed({ id: SessionID.make("ses_timeout_root") }),
+  } as unknown as Session.Interface
+  const defaultModel = () =>
+    Effect.succeed({ providerID: ProviderV2.ID.make("anthropic"), modelID: ModelV2.ID.make("claude") })
+
+  // a prompt that takes ~120ms — longer than a tight ceiling, shorter than a generous one.
+  const slowPrompt = {
+    resolvePromptParts: () => Effect.succeed([{ type: "text", text: "hi" }]),
+    prompt: () =>
+      Effect.succeed({ info: { role: "assistant" }, parts: [], text: "done" }).pipe(Effect.delay("120 millis")),
+  } as unknown as SessionPrompt.Interface
+
+  const runner = V4EventRuntime.makeEventTurnRunner({
+    sessions: fakeSessions,
+    agents: fakeAgents,
+    sessionPrompt: slowPrompt,
+    instanceStore: fakeStore,
+    defaultModel,
+  })
+
+  baseIt.live("a turn exceeding the agent's maxTurnDurationMs times out → ok:false", () =>
+    Effect.gen(function* () {
+      const result = yield* runner({
+        agentType: "reviewer",
+        prompt: "do it",
+        workspaceID: "/tmp/event-turn-timeout",
+        maxTurnDurationMs: 20, // tighter than the ~120ms prompt → the turn times out
+      })
+      expect(result.ok).toBe(false)
+    }),
+  )
+
+  baseIt.live("the SAME prompt completes under a generous maxTurnDurationMs → ok:true", () =>
+    Effect.gen(function* () {
+      const result = yield* runner({
+        agentType: "reviewer",
+        prompt: "do it",
+        workspaceID: "/tmp/event-turn-timeout",
+        maxTurnDurationMs: 60_000, // far above the ~120ms prompt → completes
+      })
       expect(result.ok).toBe(true)
       expect(result.text).toBe("done")
     }),
