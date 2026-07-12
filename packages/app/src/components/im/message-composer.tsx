@@ -6,6 +6,11 @@ interface MessageComposerProps {
   onTyping?: (typing: boolean) => void
   agents: AgentDescriptor[]
   disabled?: boolean
+  // §B3 file attachments — when provided, a paperclip button lets the user upload a file. The panel
+  // owns the upload (uploadAttachment → file message) so the composer stays presentation-only.
+  onAttach?: (file: File) => Promise<void>
+  // Placeholder override (e.g. thread replies read "Reply in thread…").
+  placeholder?: string
 }
 
 export function MessageComposer(props: MessageComposerProps) {
@@ -14,9 +19,23 @@ export function MessageComposer(props: MessageComposerProps) {
   const [mentionQuery, setMentionQuery] = createSignal("")
   const [mentionPosition, setMentionPosition] = createSignal({ top: 0, left: 0 })
   const [selectedIndex, setSelectedIndex] = createSignal(0)
+  const [uploading, setUploading] = createSignal(false)
   let textareaRef: HTMLTextAreaElement | undefined
+  let fileInputRef: HTMLInputElement | undefined
   let typingActive = false
   let typingStopTimer: ReturnType<typeof setTimeout> | undefined
+
+  const handleFileSelected = async (e: Event & { currentTarget: HTMLInputElement }) => {
+    const file = e.currentTarget.files?.[0]
+    e.currentTarget.value = ""
+    if (!file || !props.onAttach) return
+    setUploading(true)
+    try {
+      await props.onAttach(file)
+    } finally {
+      setUploading(false)
+    }
+  }
 
   // Emit a throttled typing signal: "true" on first keystroke, "false" after a
   // short idle gap. Cleaned up on unmount.
@@ -163,7 +182,7 @@ export function MessageComposer(props: MessageComposerProps) {
           else stopTyping()
         }}
         onKeyDown={handleKeyDown}
-        placeholder="Type a message... Use @ to mention agents"
+        placeholder={props.placeholder ?? "Type a message... Use @ to mention agents"}
         disabled={props.disabled}
         class="w-full p-3 bg-surface-base border border-border-base rounded-lg resize-none focus:outline-none focus:ring-2 focus:ring-accent-base text-text-base placeholder:text-text-weak"
         rows={3}
@@ -198,10 +217,24 @@ export function MessageComposer(props: MessageComposerProps) {
         </div>
       </Show>
 
-      <div class="mt-2 text-xs text-text-weak">
-        Press <kbd class="px-1 py-0.5 bg-surface-raised-base border border-border-base rounded">Enter</kbd> to
-        send, <kbd class="px-1 py-0.5 bg-surface-raised-base border border-border-base rounded">Shift+Enter</kbd>{" "}
-        for new line
+      <div class="mt-2 flex items-center justify-between gap-2">
+        <div class="text-xs text-text-weak">
+          Press <kbd class="px-1 py-0.5 bg-surface-raised-base border border-border-base rounded">Enter</kbd> to
+          send, <kbd class="px-1 py-0.5 bg-surface-raised-base border border-border-base rounded">Shift+Enter</kbd>{" "}
+          for new line
+        </div>
+        <Show when={props.onAttach}>
+          <input ref={fileInputRef} type="file" class="hidden" onChange={handleFileSelected} />
+          <button
+            type="button"
+            class="shrink-0 flex items-center gap-1 rounded-md px-2 py-1 text-xs text-text-base hover:bg-surface-raised-base-hover disabled:opacity-50"
+            disabled={props.disabled || uploading()}
+            onClick={() => fileInputRef?.click()}
+            aria-label="Attach file"
+          >
+            {uploading() ? "Uploading…" : "Attach"}
+          </button>
+        </Show>
       </div>
     </div>
   )
