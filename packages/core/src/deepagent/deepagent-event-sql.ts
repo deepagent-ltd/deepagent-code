@@ -67,3 +67,28 @@ export const DeepAgentEventDeliveryTable = sqliteTable(
     index("deepagent_event_delivery_due_idx").on(table.status, table.next_attempt_at),
   ],
 )
+
+// §A4 event_dropped — the durable DROP LOG. One append-only row per event the router shed (a §A4
+// backpressure drop), so Observability can aggregate `event_dropped_total` by reason exactly the way
+// `dlq_events_total` aggregates dead deliveries. Kept SEPARATE from the delivery table (a drop is not a
+// delivery attempt) and NOT FK-cascaded to the event log: a drop is an audit counter that must survive
+// the retention sweep of the event it references (the count is the signal, the row is the evidence).
+export const DeepAgentEventDropTable = sqliteTable(
+  "deepagent_event_drop",
+  {
+    id: integer().primaryKey({ autoIncrement: true }),
+    // the dropped event's id (for the §F2 trace) — plain column, no FK (see above).
+    event_id: text().$type<DeepAgentEvent.ID>().notNull(),
+    workspace_id: text().notNull(),
+    // why it was dropped — mirrors EventRouter.DropReason (currently "backpressure"; kept open for
+    // future reasons so the metric is decomposable by reason).
+    reason: text().notNull(),
+    // the event's priority at drop time (a low/normal shed under §A4 回压) — useful for the trace.
+    priority: text().$type<DeepAgentEvent.EventPriority>().notNull(),
+    created_at: integer().notNull(),
+  },
+  (table) => [
+    // workspace-scoped, windowed aggregation for the §F1 event_dropped_total metric.
+    index("deepagent_event_drop_workspace_created_idx").on(table.workspace_id, table.created_at),
+  ],
+)

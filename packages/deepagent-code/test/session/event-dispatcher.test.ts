@@ -7,6 +7,7 @@ import { DeepAgentEvent } from "@deepagent-code/core/deepagent/deepagent-event"
 import { Database } from "@deepagent-code/core/database/database"
 import { AgentListProviderService } from "@deepagent-code/core/im/agent-list-provider"
 import type { AgentDescriptor } from "@deepagent-code/core/im/mention-parser"
+import { WorkspaceConfig } from "@deepagent-code/core/deepagent/workspace-config"
 import { RuntimeFlags } from "../../src/effect/runtime-flags"
 import { testEffect } from "../lib/effect"
 
@@ -235,6 +236,105 @@ describe("EventDispatcher condition tick", () => {
       expect(yield* dispatcher.tick(1_000)).toBe(1)
       const fired = yield* bus.recentByType({ type: "git.push", windowMs: Number.MAX_SAFE_INTEGER, now: 1_000 })
       expect(fired.length).toBe(1)
+    }),
+  )
+})
+
+// §E4/§N (P3.13) — quiet-hours filter for the scheduler tick. The dispatcher resolves the workspace's
+// configured window via the OPTIONAL WorkspaceConfig service; a low/normal scheduled fire during quiet
+// hours is DEFERRED (rescheduled past the window), while high/critical always fire (§E4 允许即时送达).
+describe("EventDispatcher quiet-hours tick filter", () => {
+  // a layer that ALSO provides WorkspaceConfig over the same in-memory DB, so a test can configure a
+  // quiet-hours window and observe the dispatcher defer during it.
+  const makeQuietLayer = () => {
+    const database = Database.layerFromPath(":memory:")
+    const flagsLayer = RuntimeFlags.layer({ v4EventDrivenIm: true, v4AgentPushEnabled: true, v4MultiAgentRuntime: true })
+    const core = Layer.mergeAll(
+      DeepAgentEventBus.layerWith({ now }),
+      Scheduler.layerWith({ now }),
+      WorkspaceConfig.layerWith({ now }),
+    ).pipe(Layer.provideMerge(database))
+    const dispatcher = EventDispatcher.layerWith({ dispatchPort: recordingPort, runLoops: false, now }).pipe(
+      Layer.provide(core),
+      Layer.provide(fakeAgentList),
+      Layer.provide(flagsLayer),
+    )
+    return Layer.mergeAll(dispatcher, core, flagsLayer)
+  }
+  const it = testEffect(makeQuietLayer())
+
+  // a UTC window 00:00–06:00 (tz offset 0). now() returns epoch ms; hour-of-day = floor(ms/3.6e6)%24.
+  const setQuiet = (config: WorkspaceConfig.Interface) =>
+    config.set("wrk_1", { quietHours: { startHour: 0, endHour: 6, tzOffsetMinutes: 0 } })
+
+  // an epoch ms whose UTC hour is 2 (inside 00:00–06:00): 2h = 7_200_000ms.
+  const QUIET_AT = 2 * 3_600_000
+  // an epoch ms whose UTC hour is 8 (outside the window): 8h.
+  const AWAKE_AT = 8 * 3_600_000
+
+  it.effect("a NORMAL scheduled fire during quiet hours DEFERS (does not publish), reschedules past window", () =>
+    Effect.gen(function* () {
+      resetRecorder()
+      const config = yield* WorkspaceConfig.Service
+      yield* setQuiet(config)
+      const scheduler = yield* Scheduler.Service
+      const bus = yield* DeepAgentEventBus.Service
+      const dispatcher = yield* EventDispatcher.Service
+      setNow(QUIET_AT)
+      yield* scheduler.scheduleDelay({
+        workspaceID: "wrk_1",
+        fireAt: QUIET_AT,
+        // normal priority (default) — subject to the quiet-hours defer.
+        eventTemplate: { type: "ci.failure", source: "schedule", workspaceID: "wrk_1", priority: "normal", payload: { via: "sched" } },
+      })
+      // tick during quiet hours → deferred, NOT fired.
+      expect(yield* dispatcher.tick(QUIET_AT)).toBe(0)
+      const duringQuiet = yield* bus.recentByType({ type: "ci.failure", windowMs: Number.MAX_SAFE_INTEGER, now: QUIET_AT })
+      expect(duringQuiet.length).toBe(0) // nothing published during quiet hours
+      // it was rescheduled to the window END (06:00 = 6h) — due once we tick past the window.
+      const afterWindow = yield* dispatcher.tick(6 * 3_600_000)
+      expect(afterWindow).toBe(1)
+      const fired = yield* bus.recentByType({ type: "ci.failure", windowMs: Number.MAX_SAFE_INTEGER, now: 6 * 3_600_000 })
+      expect(fired.map((r) => (r.payload as { via?: string }).via)).toContain("sched")
+    }),
+  )
+
+  it.effect("a HIGH-priority scheduled fire ALWAYS fires, even during quiet hours (§E4 允许即时送达)", () =>
+    Effect.gen(function* () {
+      resetRecorder()
+      const config = yield* WorkspaceConfig.Service
+      yield* setQuiet(config)
+      const scheduler = yield* Scheduler.Service
+      const bus = yield* DeepAgentEventBus.Service
+      const dispatcher = yield* EventDispatcher.Service
+      setNow(QUIET_AT)
+      yield* scheduler.scheduleDelay({
+        workspaceID: "wrk_1",
+        fireAt: QUIET_AT,
+        eventTemplate: { type: "pr.comment", source: "schedule", workspaceID: "wrk_1", priority: "high", payload: { urgent: true } },
+      })
+      // high priority breaks through quiet hours → fires immediately.
+      expect(yield* dispatcher.tick(QUIET_AT)).toBe(1)
+      const fired = yield* bus.recentByType({ type: "pr.comment", windowMs: Number.MAX_SAFE_INTEGER, now: QUIET_AT })
+      expect(fired.length).toBe(1)
+    }),
+  )
+
+  it.effect("outside quiet hours a normal fire proceeds normally", () =>
+    Effect.gen(function* () {
+      resetRecorder()
+      const config = yield* WorkspaceConfig.Service
+      yield* setQuiet(config)
+      const scheduler = yield* Scheduler.Service
+      const bus = yield* DeepAgentEventBus.Service
+      const dispatcher = yield* EventDispatcher.Service
+      setNow(AWAKE_AT)
+      yield* scheduler.scheduleDelay({
+        workspaceID: "wrk_1",
+        fireAt: AWAKE_AT,
+        eventTemplate: { type: "ci.failure", source: "schedule", workspaceID: "wrk_1", priority: "normal", payload: { via: "awake" } },
+      })
+      expect(yield* dispatcher.tick(AWAKE_AT)).toBe(1)
     }),
   )
 })

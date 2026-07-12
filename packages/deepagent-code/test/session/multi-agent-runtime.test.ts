@@ -23,17 +23,26 @@ const setNow = (t: number) => {
   clock = t
 }
 
-// record which agents the runner was asked to run.
+// record which agents the runner was asked to run + the correlationID each turn carried (§F2 trace).
 let ran: string[] = []
 let runnerOk = true
+let correlationIDs: (string | undefined)[] = []
+// a stable synthetic child session id the fake runner "creates" (§F2 artifacts + trace stamping).
+let runnerSessionCounter = 0
 const resetRunner = () => {
   ran = []
   runnerOk = true
+  correlationIDs = []
+  runnerSessionCounter = 0
 }
 const fakeRunner: SubagentTurnRunner = (input) =>
   Effect.sync(() => {
     ran.push(input.agentType)
-    return { ok: runnerOk, structured: undefined, text: "done", tokensUsed: 0, cost: 0 }
+    correlationIDs.push(input.correlationID)
+    // mirror the real runners: a successful turn reports the child session it ran in (P1) so the
+    // runtime can populate §F2 artifacts from it.
+    const sessionID = `ses_fake_${++runnerSessionCounter}`
+    return { ok: runnerOk, structured: undefined, text: "done", tokensUsed: 0, cost: 0, sessionID }
   })
 
 // registry knobs per-test.
@@ -47,13 +56,19 @@ const fakeAgentList = Layer.succeed(AgentListProviderService, {
   findByCapability: () => Effect.succeed([]),
 })
 
-const agent = (id: string, caps: string[], autonomy?: AgentDescriptor["autonomy"]): AgentDescriptor => ({
+const agent = (
+  id: string,
+  caps: string[],
+  autonomy?: AgentDescriptor["autonomy"],
+  limits?: AgentDescriptor["limits"],
+): AgentDescriptor => ({
   id,
   name: id,
   displayName: id,
   visible: true,
   capabilities: caps,
   ...(autonomy ? { autonomy } : {}),
+  ...(limits ? { limits } : {}),
 })
 
 const makeLayer = (opts?: Partial<MultiAgentRuntime.LayerOptions>) => {
@@ -100,6 +115,52 @@ describe("MultiAgentRuntime.coordinate", () => {
       expect(coord.length).toBe(2)
       const done = yield* bus.recentByType({ type: "agent.task.completed", windowMs: Number.MAX_SAFE_INTEGER, now: 1_000 })
       expect(done.length).toBe(2)
+    }),
+  )
+
+  it.effect("§F2 threads the event's correlationID into each subtask's runner turn (trace back-half)", () =>
+    Effect.gen(function* () {
+      resetRunner()
+      setNow(1_000)
+      setRegistry([agent("fixer", ["code_edit", "test_run"], "level_2")])
+      const runtime = yield* MultiAgentRuntime.Service
+      yield* runtime.coordinate(event({ correlationID: "corr-abc", payload: { files: ["src/a.ts"] } }))
+      // every turn the runner drove carried the triggering event's correlationID, so the child session it
+      // creates (and thus the child's tool calls / message / PR) join back to the trigger's §F2 trace.
+      expect(correlationIDs.length).toBe(2)
+      expect(correlationIDs.every((c) => c === "corr-abc")).toBe(true)
+    }),
+  )
+
+  it.effect("§F2 falls back to the event id when it carries no correlationID", () =>
+    Effect.gen(function* () {
+      resetRunner()
+      setNow(1_000)
+      setRegistry([agent("fixer", ["code_edit", "test_run"], "level_2")])
+      const runtime = yield* MultiAgentRuntime.Service
+      const ev = event({ payload: { files: ["src/a.ts"] } }) // no correlationID set
+      yield* runtime.coordinate(ev)
+      expect(correlationIDs.every((c) => c === ev.id)).toBe(true)
+    }),
+  )
+
+  it.effect("§F2 agent.task.completed carries REAL artifacts (≥ the child sessionID), not a hardcoded []", () =>
+    Effect.gen(function* () {
+      resetRunner()
+      setNow(1_000)
+      setRegistry([agent("fixer", ["code_edit", "test_run"], "level_2")])
+      const runtime = yield* MultiAgentRuntime.Service
+      const bus = yield* DeepAgentEventBus.Service
+      yield* runtime.coordinate(event({ payload: { files: ["src/a.ts"] } }))
+      const done = yield* bus.recentByType({ type: "agent.task.completed", windowMs: Number.MAX_SAFE_INTEGER, now: 1_000 })
+      expect(done.length).toBe(2)
+      // each completed event names the child session the turn ran in — a non-empty artifact the §F2 trace
+      // + Oversight pivot on (not the old hardcoded []).
+      for (const e of done) {
+        const artifacts = (e.payload as { artifacts?: readonly string[] } | null)?.artifacts ?? []
+        expect(artifacts.length).toBeGreaterThan(0)
+        expect(artifacts.some((a) => a.startsWith("session:ses_fake_"))).toBe(true)
+      }
     }),
   )
 
@@ -187,6 +248,78 @@ describe("MultiAgentRuntime.coordinate", () => {
       expect(summary.outcomes.some((o) => o.status === "deferred" && o.reason === "concurrency_capped")).toBe(true)
       expect(summary.hasUnfinished).toBe(true) // → dispatch nacks → retry when the workspace drains
       expect(ran.length).toBe(0)
+    }),
+  )
+
+  it.effect("§C1 max_files_changed: a subtask whose fileScope exceeds the agent's ceiling is BLOCKED (terminal)", () =>
+    Effect.gen(function* () {
+      resetRunner()
+      setNow(1_000)
+      // the agent's declared max_files_changed=2, but the event carries a 3-file scope → code_edit is
+      // blocked (terminal — the partition won't shrink on retry), and its dependent test_run is then
+      // dependency_not_met. Neither runs.
+      setRegistry([agent("fixer", ["code_edit", "test_run"], "level_2", { maxFilesChanged: 2 })])
+      const runtime = yield* MultiAgentRuntime.Service
+      const summary = yield* runtime.coordinate(
+        event({ payload: { files: ["src/a.ts", "src/b.ts", "src/c.ts"] } }),
+      )
+      const codeEdit = summary.outcomes.find((o) => o.capability === "code_edit")
+      expect(codeEdit?.status).toBe("blocked")
+      expect(codeEdit?.reason).toBe("max_files_changed")
+      expect(ran.length).toBe(0)
+      // terminal, NOT deferred: the dependency_not_met dependent DOES mark the event unfinished, but the
+      // max_files_changed block itself is terminal (no retry would shrink the scope).
+    }),
+  )
+
+  it.effect("§C1 max_files_changed: a subtask WITHIN the ceiling runs normally", () =>
+    Effect.gen(function* () {
+      resetRunner()
+      setNow(1_000)
+      setRegistry([agent("fixer", ["code_edit", "test_run"], "level_2", { maxFilesChanged: 3 })])
+      const runtime = yield* MultiAgentRuntime.Service
+      const summary = yield* runtime.coordinate(
+        event({ payload: { files: ["src/a.ts", "src/b.ts"] } }),
+      )
+      expect(summary.outcomes.map((o) => o.status)).toEqual(["completed", "completed"])
+    }),
+  )
+
+  it.effect("§E2 token budget: an agent already over maxTokensPerHour DEFERS the subtask (retryable)", () =>
+    Effect.gen(function* () {
+      // a runner that reports a big token spend so the FIRST subtask pushes the agent over budget; the
+      // SECOND (dependent) subtask then sees the agent over budget → deferred (retryable, not dropped).
+      let calls = 0
+      const bigSpendRunner: SubagentTurnRunner = (input) =>
+        Effect.sync(() => {
+          calls++
+          ran.push(input.agentType)
+          return { ok: true, structured: undefined, text: "done", tokensUsed: 100, cost: 0 }
+        })
+      ran = []
+      setNow(1_000)
+      setRegistry([agent("fixer", ["code_edit", "test_run"], "level_2", { maxTokensPerHour: 100 })])
+      const database = Database.layerFromPath(":memory:")
+      const core = Layer.mergeAll(DeepAgentEventBus.layerWith({ now }), ApprovalQueue.layerWith({ now })).pipe(
+        Layer.provideMerge(database),
+      )
+      const rt = MultiAgentRuntime.layerWith({ runner: bigSpendRunner, now }).pipe(
+        Layer.provide(core),
+        Layer.provide(fakeAgentList),
+      )
+      const summary = yield* MultiAgentRuntime.Service.pipe(
+        Effect.flatMap((r) => r.coordinate(event({ payload: { files: ["src/a.ts"] } }))),
+        Effect.provide(rt.pipe(Layer.provide(core), Layer.provide(fakeAgentList))),
+      )
+      // first subtask ran (was under budget when admitted) and spent 100 → agent now AT the ceiling.
+      const first = summary.outcomes[0]
+      expect(first.status).toBe("completed")
+      // the dependent second subtask sees the agent over budget → deferred (retryable), never runs.
+      const second = summary.outcomes[1]
+      expect(second.status).toBe("deferred")
+      expect(second.reason).toBe("token_budget_exceeded")
+      expect(summary.hasUnfinished).toBe(true)
+      expect(calls).toBe(1) // only the first turn actually ran
     }),
   )
 
