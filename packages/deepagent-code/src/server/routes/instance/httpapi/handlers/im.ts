@@ -14,6 +14,7 @@ import {
   IMValidationFailedError,
   IMInternalServerError,
   IMFileUploadDisabledError,
+  IMThreadDisabledError,
   IMFileTooLargeError,
   IMUnsupportedMediaTypeError,
 } from "../groups/im"
@@ -571,6 +572,18 @@ export const imHandlers = HttpApiBuilder.group(InstanceHttpApi, "im", (handlers)
       .handle("listThread", ({ params, query }) =>
         mapRepositoryError(
           Effect.gen(function* () {
+            // §B3 threads — fail-closed when the flag is off (404: the endpoint does not exist for the
+            // caller), mirroring the uploadAttachment gate. Checked FIRST so no membership/thread lookup
+            // runs when threads are disabled.
+            if (!flags.v4ThreadEnabled) {
+              return yield* Effect.fail(
+                new IMThreadDisabledError({
+                  name: "THREAD_DISABLED",
+                  data: { message: "Threads are disabled." },
+                }),
+              )
+            }
+
             const { userID } = yield* getWorkspaceContext(query)
             const groupId = params.groupId
 

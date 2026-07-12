@@ -85,6 +85,58 @@ describe("ApprovalQueue.offer (§D2 escalation gate)", () => {
   )
 })
 
+describe("ApprovalQueue.deriveWorkspaceKey (§D2 [NEW] produce/read key alignment)", () => {
+  // The canonical rule shared by the produce side (goal-manager / multi-agent-runtime) and the read side
+  // (oversight): a genuine wrk_ id wins, else the directory, else a non-wrk workspaceID, else the fallback.
+  it.effect("prefers a genuine wrk_ workspaceID over the directory", () =>
+    Effect.sync(() => {
+      expect(ApprovalQueue.deriveWorkspaceKey({ workspaceID: "wrk_42", directory: "/repo", fallback: "sess" })).toBe("wrk_42")
+    }),
+  )
+  it.effect("falls back to the directory when no wrk_ id is present", () =>
+    Effect.sync(() => {
+      expect(ApprovalQueue.deriveWorkspaceKey({ workspaceID: undefined, directory: "/repo", fallback: "sess" })).toBe("/repo")
+    }),
+  )
+  it.effect("falls back to a non-wrk workspaceID (directory-routed model) then the fallback", () =>
+    Effect.sync(() => {
+      expect(ApprovalQueue.deriveWorkspaceKey({ workspaceID: "/dir-as-ws", fallback: "sess" })).toBe("/dir-as-ws")
+      expect(ApprovalQueue.deriveWorkspaceKey({ fallback: "sess" })).toBe("sess")
+    }),
+  )
+  it.effect("produce→read round-trips for a wrk_ workspaceID", () =>
+    Effect.gen(function* () {
+      setNow(1_000)
+      const q = yield* ApprovalQueue.Service
+      // PRODUCE side derives the key exactly as goal-manager does (session with a real wrk_ id).
+      const produceKey = ApprovalQueue.deriveWorkspaceKey({ workspaceID: "wrk_rt", directory: "/some/dir", fallback: "sess_rt" })
+      const item = yield* q.offer(event({ id: DeepAgentEvent.ID.create(6_000), workspaceID: produceKey, type: LMNEvents.GOAL_NEEDS_HUMAN }))
+      expect(item).not.toBeNull()
+      // READ side derives the key exactly as oversight does (route carries the same wrk_ id + a directory).
+      const readKey = ApprovalQueue.deriveWorkspaceKey({ workspaceID: "wrk_rt", directory: "/some/dir" })
+      expect(readKey).toBe(produceKey)
+      const pending = yield* q.listPending(readKey)
+      expect(pending.some((i) => i.id === item!.id)).toBe(true) // VISIBLE via the read path
+    }),
+  )
+  it.effect("produce→read round-trips for a directory-only session", () =>
+    Effect.gen(function* () {
+      setNow(1_000)
+      const q = yield* ApprovalQueue.Service
+      // PRODUCE: a session with no workspaceID → keyed on the directory.
+      const produceKey = ApprovalQueue.deriveWorkspaceKey({ workspaceID: undefined, directory: "/dir/only", fallback: "sess_do" })
+      expect(produceKey).toBe("/dir/only")
+      const item = yield* q.offer(event({ id: DeepAgentEvent.ID.create(6_100), workspaceID: produceKey, type: LMNEvents.GOAL_NEEDS_HUMAN }))
+      expect(item).not.toBeNull()
+      // READ: the route carries only the directory (no wrk_ id).
+      const readKey = ApprovalQueue.deriveWorkspaceKey({ workspaceID: undefined, directory: "/dir/only" })
+      expect(readKey).toBe(produceKey)
+      const pending = yield* q.listPending(readKey)
+      expect(pending.some((i) => i.id === item!.id)).toBe(true)
+    }),
+  )
+})
+
 describe("ApprovalQueue.listPending + resolve", () => {
   it.effect("lists a workspace's pending items and excludes resolved ones", () =>
     Effect.gen(function* () {

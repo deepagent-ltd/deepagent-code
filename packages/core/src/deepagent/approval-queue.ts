@@ -56,6 +56,33 @@ export interface Interface {
 
 export class Service extends Context.Service<Service, Interface>()("@deepagent-code/ApprovalQueue") {}
 
+// §D2 CANONICAL WORKSPACE KEY. The Approval Queue is keyed by a single `workspace_id` string, so the
+// PRODUCE side (goal-manager.emitGoalLifecycleEvent, multi-agent-runtime.escalateForHuman — via the
+// published event's workspaceID) and the READ side (oversight.listPending / resolve) MUST derive that
+// string identically, or an enqueued item is written under one key and queried under another → invisible
+// on the Dashboard. Both sides previously hand-wrote `workspaceID ?? directory` chains that could silently
+// drift. This one function is the shared source of truth for the rule:
+//
+//   1. a GENUINE workspace id (wrk_…) wins — it is the stable, relocation-independent tenant key;
+//   2. else the filesystem directory (single-user / directory-routed model);
+//   3. else a non-wrk workspaceID (which "doubles as a directory" in the directory-routed model);
+//   4. else the caller-supplied fallback (e.g. the sessionID) so a key is always produced.
+//
+// For the typed callers `workspaceID` is `WorkspaceV2.ID | undefined` (schema-checked to start with
+// "wrk"), so steps 1–2 already cover them; step 3 defends the untyped/raw-event path where a directory
+// string may have been carried in the workspaceID field.
+export const deriveWorkspaceKey = (input: {
+  readonly workspaceID?: string | null
+  readonly directory?: string | null
+  readonly fallback?: string
+}): string => {
+  const { workspaceID, directory, fallback } = input
+  if (workspaceID && workspaceID.startsWith("wrk")) return workspaceID
+  if (directory && directory.length > 0) return directory
+  if (workspaceID && workspaceID.length > 0) return workspaceID
+  return fallback ?? ""
+}
+
 export interface LayerOptions {
   readonly now?: () => number
 }
