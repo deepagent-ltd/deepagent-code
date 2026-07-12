@@ -1,10 +1,12 @@
 export * as Observability from "./observability"
 
 import { Context, Effect, Layer } from "effect"
-import { and, asc, eq, gt, gte, inArray, lte, sql } from "drizzle-orm"
+import { and, asc, eq, gt, gte, inArray, lte, or, sql } from "drizzle-orm"
 import { Database } from "../database/database"
-import { DeepAgentEventTable, DeepAgentEventDeliveryTable } from "./deepagent-event-sql"
+import { DeepAgentEventTable, DeepAgentEventDeliveryTable, DeepAgentEventDropTable } from "./deepagent-event-sql"
 import { AgentPushLogTable } from "../im/push-log-sql"
+import { HumanTakeoverTable } from "./human-takeover-sql"
+import { SessionTable, MessageTable } from "../session/sql"
 import { DeepAgentEvent } from "./deepagent-event"
 
 // V4.0 §F — Observability. Read-only aggregation over the durable substrate this V4.0 work already
@@ -19,14 +21,30 @@ import { DeepAgentEvent } from "./deepagent-event"
 // here now that the bus records publish_latency_ms on each row and agent.task.started carries the
 // triggering event's id as causationID — nearest-rank percentiles over the window, workspace-scoped.
 
-// One node in a §F2 trace — a durable event on the correlation chain, with its causal parent.
+// One node in a §F2 trace. `kind` discriminates the two halves of the spine:
+//   "event"   — a durable DeepAgentEvent on the correlation chain (event → route → coordination), with
+//               its causal parent.
+//   "session" — a CHILD SESSION an agent ran in that was stamped with this correlationID (the §F2
+//               trace BACK-HALF). This is what makes the trace follow correlationID down into the child's
+//               activity: the Multi-Agent / event runner stamps `metadata.correlationID` on the session it
+//               creates, and `trace` reads it back here so the child (and its message/tool-call activity)
+//               appears on the same spine as the triggering event.
+// A "session" node reuses eventID/type/source (eventID=sessionID, type="session.activity", source="system")
+// so an existing event-only projection encodes it unchanged; the session-specific detail rides the optional
+// sessionID/title/messageCount fields.
 export interface TraceNode {
-  readonly eventID: DeepAgentEvent.ID
+  readonly kind: "event" | "session"
+  readonly eventID: string
   readonly type: string
   readonly source: DeepAgentEvent.EventSource
   readonly causationID?: string
   readonly createdAt: number
-  readonly payload: unknown
+  readonly payload?: unknown
+  // §F2 back-half — present only on kind:"session" nodes.
+  readonly sessionID?: string
+  readonly title?: string
+  // count of persisted messages in the child session (a light activity summary; 0 when none / unknown).
+  readonly messageCount?: number
 }
 
 // §F1 metric snapshot over a window.
@@ -35,6 +53,11 @@ export interface Metrics {
   readonly windowTo: number
   // dlq_events_total — deliveries that exhausted retries (status=dead). Alarms in Oversight.
   readonly dlqEventsTotal: number
+  // §A4 event_dropped_total — events the router SHED (backpressure) in the window, from the durable
+  // deepagent_event_drop log. Decomposable by reason (mirrors agentPushRejectedByReason). Total is the
+  // sum across reasons; the by-reason map keys on the DropReason string (currently "backpressure").
+  readonly eventDroppedTotal: number
+  readonly eventDroppedByReason: Readonly<Record<string, number>>
   // agent_push_rejected_total, decomposable by reason (blocked:<reason>).
   readonly agentPushRejectedTotal: number
   readonly agentPushRejectedByReason: Readonly<Record<string, number>>
@@ -59,6 +82,9 @@ export interface Metrics {
   // joined by the started event's causationID = the trigger event's id, workspace-scoped. null ⇒ no samples.
   readonly eventToAgentStartMsP50: number | null
   readonly eventToAgentStartMsP95: number | null
+  // §F human_takeover_total — the count of human takeovers (a human pausing/reverting an agent or claiming
+  // a branch/session) in the window, workspace-scoped. Backs the §D2 Takeover surface's headline count.
+  readonly humanTakeoverTotal: number
 }
 
 // Nearest-rank percentile (§F1 histograms computed in-code, no SQL percentile fn). `p` in [0,1].
@@ -95,33 +121,103 @@ export const layerWith = (options?: LayerOptions) =>
       const now = options?.now ?? Date.now
 
       const trace: Interface["trace"] = (input) =>
-        db
-          .select()
-          .from(DeepAgentEventTable)
-          .where(
-            and(
-              eq(DeepAgentEventTable.workspace_id, input.workspaceID),
-              eq(DeepAgentEventTable.correlation_id, input.correlationID),
-            ),
-          )
-          // stable causal order: created_at asc, id asc (ids are ascending-monotonic — matches the bus).
-          .orderBy(asc(DeepAgentEventTable.created_at), asc(DeepAgentEventTable.id))
-          .all()
-          .pipe(
-            Effect.orDie,
-            Effect.map((rows) =>
-              rows.map(
-                (r): TraceNode => ({
-                  eventID: r.id as DeepAgentEvent.ID,
-                  type: r.type,
-                  source: r.source as DeepAgentEvent.EventSource,
-                  ...(r.causation_id != null ? { causationID: r.causation_id } : {}),
-                  createdAt: r.created_at,
-                  payload: r.payload ?? undefined,
-                }),
+        Effect.gen(function* () {
+          // ── front-half: the durable event chain (event → route → coordination) for this correlationID.
+          const eventRows = yield* db
+            .select()
+            .from(DeepAgentEventTable)
+            .where(
+              and(
+                eq(DeepAgentEventTable.workspace_id, input.workspaceID),
+                eq(DeepAgentEventTable.correlation_id, input.correlationID),
               ),
-            ),
+            )
+            // stable causal order: created_at asc, id asc (ids are ascending-monotonic — matches the bus).
+            .orderBy(asc(DeepAgentEventTable.created_at), asc(DeepAgentEventTable.id))
+            .all()
+            .pipe(Effect.orDie)
+
+          const eventNodes = eventRows.map(
+            (r): TraceNode => ({
+              kind: "event",
+              eventID: r.id as string,
+              type: r.type,
+              source: r.source as DeepAgentEvent.EventSource,
+              ...(r.causation_id != null ? { causationID: r.causation_id } : {}),
+              createdAt: r.created_at,
+              payload: r.payload ?? undefined,
+            }),
           )
+
+          // ── §F2 BACK-HALF: the CHILD SESSIONS an agent ran in that were stamped with this correlationID.
+          // The event/goal runner writes `metadata.correlationID` onto the child session it creates; here we
+          // read it back so the trace follows correlationID DOWN into the child's activity (its message /
+          // tool-call turns), not just the coordination events. SessionTable.metadata is a JSON column →
+          // json_extract('$.correlationID'). Scope to the same routing key the front-half used: an
+          // event-driven child stores workspace_id ONLY for a genuine "wrk"-id but always stores a
+          // directory, while the trace's workspaceID param is `route.workspaceID ?? route.directory` — so
+          // match EITHER column to cover both the workspace- and directory-routed models without leaking
+          // across the tenant boundary (both columns are the routed identity). FAIL SAFE: any failure here
+          // resolves to NO session nodes so the front-half event chain is still returned (never crash the
+          // trace). A best-effort per-session message count gives a light activity summary.
+          const sessionNodes = yield* Effect.gen(function* () {
+            const sessionRows = yield* db
+              .select({
+                id: SessionTable.id,
+                title: SessionTable.title,
+                createdAt: SessionTable.time_created,
+              })
+              .from(SessionTable)
+              .where(
+                and(
+                  or(
+                    eq(SessionTable.workspace_id, input.workspaceID as never),
+                    // compare `directory` via raw sql: the column's custom type encodes the compared value
+                    // through an absolute-path validator that THROWS on a non-path routing key (e.g. a
+                    // "wrk_"-id) at query-build time — binding the value as a plain string sidesteps that.
+                    sql`${SessionTable.directory} = ${input.workspaceID}`,
+                  ),
+                  eq(sql`json_extract(${SessionTable.metadata}, '$.correlationID')`, input.correlationID),
+                ),
+              )
+              .orderBy(asc(SessionTable.time_created), asc(SessionTable.id))
+              .all()
+            if (sessionRows.length === 0) return [] as TraceNode[]
+
+            // per-session message count (a light activity summary) via ONE grouped query over the matched
+            // sessions — avoids a correlated subquery and stays cheap.
+            const ids = sessionRows.map((r) => r.id as string)
+            const countRows = yield* db
+              .select({ sessionID: MessageTable.session_id, n: sql<number>`count(*)` })
+              .from(MessageTable)
+              .where(inArray(MessageTable.session_id, ids as never))
+              .groupBy(MessageTable.session_id)
+              .all()
+            const countBySession = new Map(countRows.map((r) => [r.sessionID as string, Number(r.n ?? 0)]))
+
+            return sessionRows.map(
+              (r): TraceNode => ({
+                kind: "session",
+                // reuse eventID/type/source so an event-only projection renders this node unchanged.
+                eventID: r.id as string,
+                type: "session.activity",
+                source: "system",
+                createdAt: r.createdAt,
+                sessionID: r.id as string,
+                title: r.title,
+                messageCount: countBySession.get(r.id as string) ?? 0,
+              }),
+            )
+          }).pipe(
+            // fail-safe: a missing session table / json_extract quirk must not crash the trace — just
+            // return the front-half event chain with no session nodes appended.
+            Effect.catchCause(() => Effect.succeed([] as TraceNode[])),
+          )
+
+          // merge both halves into one causally-ordered spine (created_at asc; session nodes interleave at
+          // their creation time — a child session created after its trigger event sorts after it).
+          return [...eventNodes, ...sessionNodes].sort((a, b) => a.createdAt - b.createdAt)
+        })
 
       const metrics: Interface["metrics"] = (input) =>
         Effect.gen(function* () {
@@ -146,6 +242,29 @@ export const layerWith = (options?: LayerOptions) =>
             )
             .get()
             .pipe(Effect.orDie)
+
+          // §A4 event_dropped_total — router-shed events (backpressure) in the window, grouped by reason,
+          // from the durable deepagent_event_drop log. Workspace-scoped, windowed on the drop's created_at.
+          // Mirrors the dlq_events_total pattern (a persisted signal, not a log line).
+          const dropRows = yield* db
+            .select({ reason: DeepAgentEventDropTable.reason, n: sql<number>`count(*)` })
+            .from(DeepAgentEventDropTable)
+            .where(
+              and(
+                eq(DeepAgentEventDropTable.workspace_id, ws),
+                gte(DeepAgentEventDropTable.created_at, from),
+                lte(DeepAgentEventDropTable.created_at, to),
+              ),
+            )
+            .groupBy(DeepAgentEventDropTable.reason)
+            .all()
+            .pipe(Effect.orDie)
+          let eventDroppedTotal = 0
+          const eventDroppedByReason: Record<string, number> = {}
+          for (const row of dropRows) {
+            eventDroppedTotal += row.n
+            eventDroppedByReason[row.reason] = (eventDroppedByReason[row.reason] ?? 0) + row.n
+          }
 
           // agent_push_* — from im_agent_push_logs in the window, scoped to the workspace.
           const pushRows = yield* db
@@ -276,10 +395,28 @@ export const layerWith = (options?: LayerOptions) =>
           const eventToAgentStartMsP50 = percentile(startSamples, 0.5)
           const eventToAgentStartMsP95 = percentile(startSamples, 0.95)
 
+          // §F human_takeover_total — count the human-takeover audit rows in the window (workspace-scoped).
+          // The takeover log is its own table (deepagent_human_takeover) written by the §D2 Takeover
+          // endpoint; a fresh workspace with no takeovers reads 0 (never null — a takeover is a plain count).
+          const takeoverRow = yield* db
+            .select({ n: sql<number>`count(*)` })
+            .from(HumanTakeoverTable)
+            .where(
+              and(
+                eq(HumanTakeoverTable.workspace_id, ws),
+                gte(HumanTakeoverTable.created_at, from),
+                lte(HumanTakeoverTable.created_at, to),
+              ),
+            )
+            .get()
+            .pipe(Effect.orDie)
+
           return {
             windowFrom: from,
             windowTo: to,
             dlqEventsTotal: dlqRow?.n ?? 0,
+            eventDroppedTotal,
+            eventDroppedByReason,
             agentPushRejectedTotal,
             agentPushRejectedByReason,
             agentTaskSuccessRate,
@@ -292,6 +429,7 @@ export const layerWith = (options?: LayerOptions) =>
             eventPublishLatencyMsP95,
             eventToAgentStartMsP50,
             eventToAgentStartMsP95,
+            humanTakeoverTotal: takeoverRow?.n ?? 0,
           }
         })
 

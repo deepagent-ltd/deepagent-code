@@ -121,6 +121,11 @@ export const makeEventTurnRunner = (deps: {
           title: `${input.agentType} (event)`,
           directory,
           ...(workspaceID ? { workspaceID } : {}),
+          // §F2 trace back-half — stamp the correlationID onto the child session's metadata; Observability
+          // .trace reads it back (json_extract) and appends this child as a "session" node, so the trace
+          // follows correlationID from the event down into the child session's activity (its message /
+          // tool-call turns). The Multi-Agent Runtime passes event.correlationID ?? event.id.
+          ...(input.correlationID ? { metadata: { correlationID: input.correlationID } } : {}),
         } as Parameters<Session.Interface["create"]>[0]),
       ).pipe(Effect.orElseSucceed(() => undefined))
       if (!child) return failedTurn()
@@ -149,9 +154,15 @@ export const makeEventTurnRunner = (deps: {
           parts,
         }),
       ).pipe(
-        // §G — bound the turn: an event-triggered session has no interactive client, so a tool that
-        // blocks on approval would otherwise hang the whole (sequential) dispatch loop indefinitely.
-        Effect.timeout(EVENT_TURN_TIMEOUT_MS),
+        // §C1/§G — bound the turn: an event-triggered session has no interactive client, so a tool that
+        // blocks on approval would otherwise hang the whole (sequential) dispatch loop indefinitely. Honor
+        // the agent's DECLARED per-turn ceiling (limits.maxTurnDurationMs, threaded via input) when set +
+        // positive; else fall back to the fixed default. (P3.13 — was a hard-coded constant.)
+        Effect.timeout(
+          typeof input.maxTurnDurationMs === "number" && input.maxTurnDurationMs > 0
+            ? input.maxTurnDurationMs
+            : EVENT_TURN_TIMEOUT_MS,
+        ),
         Effect.map((r) => r as { text?: string }),
         Effect.orElseSucceed(() => undefined),
       )
