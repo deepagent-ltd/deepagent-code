@@ -101,6 +101,23 @@ export const parseCompositeCursor = (cursor: string | undefined): CompositeCurso
 // stripping them — acceptable for the degraded LIKE fallback (FTS5 is the primary path).
 const escapeLike = (q: string): string => q.replace(/[%_\\]/g, "")
 
+// Escape an arbitrary user query into a syntactically-safe FTS5 MATCH expression. The primary FTS path
+// previously fed the RAW query straight into `content MATCH ${query}` — but FTS5 has its own query
+// grammar (column filters like `foo:`, prefix `*`, boolean `AND`/`OR`/`NOT`/`NEAR`, parentheses, quoted
+// phrases). Arbitrary input such as `foo:`, an unbalanced `"`, `(`, or `*` raises a SQLite syntax error
+// that surfaces as a 500 rather than empty results. We neutralize the grammar by treating the query as
+// plain text: tokenize on whitespace and wrap EACH term in a double-quoted FTS5 string literal (internal
+// `"` doubled, per FTS5 phrase-escaping), then join with a space. Space-separated quoted phrases are an
+// implicit AND in FTS5, so this yields term-AND matching (every term must appear) — a reasonable search
+// semantics that treats every character literally and can never throw. A query that tokenizes to nothing
+// (empty or whitespace-only) would make MATCH throw on an empty expression, so we emit `""` (a quoted
+// empty phrase) which is syntactically valid and matches nothing.
+const toFtsMatchQuery = (q: string): string => {
+  const terms = q.trim().split(/\s+/).filter((t) => t.length > 0)
+  if (terms.length === 0) return `""`
+  return terms.map((t) => `"${t.replace(/"/g, '""')}"`).join(" ")
+}
+
 // Map an im_messages row (snake_case) to the camelCase IMMessage domain model.
 const mapMessageRow = (m: {
   id: string
@@ -704,7 +721,7 @@ export const IMRepositoryLive = Layer.effect(
                 .innerJoin(GroupTable, eq(GroupTable.id, MessageTable.group_id))
                 .innerJoin(
                   sql`im_messages_fts`,
-                  sql`im_messages_fts.msg_id = ${MessageTable.id} AND im_messages_fts.content MATCH ${input.query}`,
+                  sql`im_messages_fts.msg_id = ${MessageTable.id} AND im_messages_fts.content MATCH ${toFtsMatchQuery(input.query)}`,
                 )
                 .where(and(...filters))
                 .orderBy(asc(MessageTable.created_at), asc(MessageTable.id))

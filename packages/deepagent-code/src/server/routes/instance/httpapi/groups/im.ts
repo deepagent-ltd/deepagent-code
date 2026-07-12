@@ -240,6 +240,20 @@ export class IMFileUploadDisabledError extends Schema.ErrorClass<IMFileUploadDis
   { httpApiStatus: 404 },
 ) {}
 
+// §B3 threads — fail-closed error when the v4ThreadEnabled flag is off, mirroring IMFileUploadDisabledError
+// (404: the endpoint does not exist for the caller). Keeps thread gating consistent with the upload gate.
+export class IMThreadDisabledError extends Schema.ErrorClass<IMThreadDisabledError>(
+  "IMThreadDisabledError",
+)(
+  {
+    name: Schema.Literal("THREAD_DISABLED"),
+    data: Schema.Struct({
+      message: Schema.String,
+    }),
+  },
+  { httpApiStatus: 404 },
+) {}
+
 export class IMFileTooLargeError extends Schema.ErrorClass<IMFileTooLargeError>("IMFileTooLargeError")(
   {
     name: Schema.Literal("FILE_TOO_LARGE"),
@@ -379,7 +393,7 @@ export const IMApi = HttpApi.make("im")
           params: { groupId: Schema.String, messageId: Schema.String },
           query: ThreadQuery,
           success: described(MessagePageResponse, "Thread messages"),
-          error: [IMGroupNotFoundError, IMPermissionDeniedError, IMInternalServerError],
+          error: [IMThreadDisabledError, IMGroupNotFoundError, IMPermissionDeniedError, IMInternalServerError],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "im.messages.thread",
