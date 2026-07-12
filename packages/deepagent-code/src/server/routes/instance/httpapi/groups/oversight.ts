@@ -31,15 +31,25 @@ export const OversightMetrics = Schema.Struct({
   eventPublishLatencyMsP95: Schema.optional(Schema.NullOr(Schema.Number)),
   eventToAgentStartMsP50: Schema.optional(Schema.NullOr(Schema.Number)),
   eventToAgentStartMsP95: Schema.optional(Schema.NullOr(Schema.Number)),
+  // §F human_takeover_total — count of human takeovers in the window (backs the §D2 Takeover surface).
+  // Optional so an older client that ignores it is unaffected (ADDITIVE).
+  humanTakeoverTotal: Schema.optional(Schema.Number),
 })
 
 // ── §F2 trace ───────────────────────────────────────────────────────────────────────────────────
+// A node is either an "event" on the correlation chain or a "session" the trace followed correlationID
+// INTO (the §F2 back-half). `kind` discriminates; session nodes carry the extra sessionID/title/count.
 export const OversightTraceNode = Schema.Struct({
+  kind: Schema.optional(Schema.Literals(["event", "session"])),
   eventID: Schema.String,
   type: Schema.String,
   source: Schema.String,
   causationID: Schema.optional(Schema.String),
   createdAt: Schema.Number,
+  // §F2 back-half — present on kind:"session" nodes (the child session an agent ran in for this trace).
+  sessionID: Schema.optional(Schema.String),
+  title: Schema.optional(Schema.String),
+  messageCount: Schema.optional(Schema.Number),
 })
 export const OversightTrace = Schema.Struct({ nodes: Schema.Array(OversightTraceNode) })
 
@@ -61,6 +71,25 @@ export const OversightApprovalList = Schema.Struct({ items: Schema.Array(Oversig
 export const OversightResolveInput = Schema.Struct({
   id: Schema.String,
   decision: Schema.Literals(["approved", "rejected", "acknowledged"]),
+})
+
+// ── §D2 human takeover ────────────────────────────────────────────────────────────────────────────
+// A takeover is the FACT a human stepped in over an agent (paused/reverted its session, or claimed a
+// branch/session it was driving). Recording one appends an audit row + feeds the §F human_takeover_total
+// metric. The actor is the routed workspace identity (never client-supplied → no spoofing).
+export const OversightTakeoverRecord = Schema.Struct({
+  id: Schema.String,
+  workspaceID: Schema.String,
+  sessionID: Schema.optional(Schema.String),
+  agentID: Schema.optional(Schema.String),
+  actorID: Schema.optional(Schema.String),
+  reason: Schema.optional(Schema.String),
+  createdAt: Schema.Number,
+})
+export const OversightTakeoverInput = Schema.Struct({
+  sessionID: Schema.optional(Schema.String),
+  agentID: Schema.optional(Schema.String),
+  reason: Schema.optional(Schema.String),
 })
 
 // metrics/trace query params extend the workspace routing query (spread the shared fields, matching
@@ -121,6 +150,19 @@ export const OversightApi = HttpApi.make("oversight").add(
           identifier: "oversight.approvals.resolve",
           summary: "Resolve an Approval Queue item",
           description: "V4.0 §D2: a human approves / rejects / acknowledges a pending item (first resolution wins).",
+        }),
+      ),
+    )
+    .add(
+      HttpApiEndpoint.post("oversightTakeover", `${root}/takeover`, {
+        query: WorkspaceRoutingQuery,
+        payload: OversightTakeoverInput,
+        success: described(OversightTakeoverRecord, "The recorded human-takeover audit row"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "oversight.takeover",
+          summary: "Record a human takeover",
+          description: "V4.0 §D2: record that a human stepped in over an agent (pause/revert/claim). Feeds §F human_takeover_total.",
         }),
       ),
     )
