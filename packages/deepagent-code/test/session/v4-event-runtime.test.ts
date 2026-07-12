@@ -1,5 +1,5 @@
 import { describe, expect } from "bun:test"
-import { Effect, Layer } from "effect"
+import { Effect, Exit, Layer } from "effect"
 import { V4EventRuntime } from "../../src/session/v4-event-runtime"
 import { DeepAgentEventBus } from "@deepagent-code/core/deepagent/deepagent-event-bus"
 import { DeepAgentEvent } from "@deepagent-code/core/deepagent/deepagent-event"
@@ -8,7 +8,16 @@ import { EventDispatcher } from "../../src/session/event-dispatcher"
 import { AgentListProviderService } from "@deepagent-code/core/im/agent-list-provider"
 import { RuntimeFlags } from "../../src/effect/runtime-flags"
 import { Database } from "@deepagent-code/core/database/database"
-import { testEffect } from "../lib/effect"
+import { InstanceState } from "../../src/effect/instance-state"
+import type { InstanceContext } from "../../src/project/instance-context"
+import type { InstanceStore } from "../../src/project/instance-store"
+import type { Session } from "../../src/session/session"
+import type { Agent } from "../../src/agent/agent"
+import type { SessionPrompt } from "../../src/session/prompt"
+import { SessionID } from "../../src/session/schema"
+import { ProviderV2 } from "@deepagent-code/core/provider"
+import { ModelV2 } from "@deepagent-code/core/model"
+import { it as baseIt, testEffect, pollWithTimeout } from "../lib/effect"
 
 // V4.0 — proves the production event-runtime layer BUILDS and starts its scoped daemons without error
 // against a real bus + DB. This is the layer whose absence meant every V4 daemon was dormant in prod.
@@ -178,6 +187,74 @@ describe("V4EventRuntime scheduleBootstrapLayer flag gate", () => {
   )
 })
 
+// §L (P2) — the archiver CONSUMER flag coupling. The wiring decides runLoop = v4EventDrivenArchive ||
+// v4MultiAgentRuntime (the archiver consumes BOTH trigger types), and the group is delivery-tracked. So:
+//   - both flags OFF ⇒ NO subscription ⇒ the "wiki-archiver" group is never registered ⇒ a published
+//     archive trigger records NO pending delivery row (no pileup). THIS is the correctness point.
+//   - either flag ON ⇒ the group IS registered ⇒ a published trigger records a pending delivery (owed),
+//     which the running consumer then discharges.
+describe("V4EventRuntime archiverLayer flag coupling (§L / P2)", () => {
+  const trigger = (over?: Partial<DeepAgentEvent.PublishInput>): DeepAgentEvent.PublishInput => ({
+    type: "session.completed",
+    source: "system",
+    workspaceID: "wrk_1",
+    idempotencyKey: `arc-${Math.random()}`,
+    priority: "normal",
+    payload: { sessionID: "s1", workspacePath: "/tmp/nonexistent-ws" },
+    ...over,
+  })
+
+  // The group is registered while a subscribe({group}) stream is live. With runLoop off the archiver
+  // never subscribes, so publishing a trigger must NOT create a pending delivery for that group.
+  const build = (flags: Partial<RuntimeFlags.Info>) =>
+    V4EventRuntime.archiverLayer.pipe(
+      Layer.provide(RuntimeFlags.layer(flags)),
+      Layer.provideMerge(DeepAgentEventBus.layer.pipe(Layer.provideMerge(Database.layerFromPath(":memory:")))),
+    )
+
+  const noPileup = (flags: Partial<RuntimeFlags.Info>, label: string) => {
+    const it = testEffect(build(flags))
+    it.effect(`${label} ⇒ no subscription, a published trigger leaves NO pending delivery row`, () =>
+      Effect.gen(function* () {
+        // providing the layer builds archiverLayer eagerly (with runLoop off ⇒ no subscription).
+        const bus = yield* DeepAgentEventBus.Service
+        const published = yield* bus.publish(trigger())
+        // no group registered ⇒ no pending delivery owed ⇒ dueRetries never surfaces this event.
+        const due = yield* bus.dueRetries(Number.MAX_SAFE_INTEGER)
+        expect(due.some((d) => d.eventID === published.id)).toBe(false)
+      }),
+    )
+  }
+
+  noPileup({ v4EventDrivenArchive: false, v4MultiAgentRuntime: false }, "both flags OFF")
+
+  // either producer flag ON ⇒ the archiver subscribes ⇒ the group is registered. A trigger published
+  // WHILE the subscriber is live records a pending delivery (which the live consumer then discharges).
+  // Uses the LIVE clock (it.live) so the daemon fiber's real-time consume/ack settles — under TestClock
+  // the background Stream.runForEach + a wall-clock wait would never progress.
+  const registeredWhenOn = (flags: Partial<RuntimeFlags.Info>, label: string) => {
+    const it = testEffect(build(flags))
+    it.live(`${label} ⇒ archiver subscribes (group registered; delivery is tracked then discharged)`, () =>
+      Effect.gen(function* () {
+        // providing the layer builds archiverLayer eagerly (runLoop on ⇒ the daemon subscribes).
+        const bus = yield* DeepAgentEventBus.Service
+        const published = yield* bus.publish(trigger())
+        // the running consumer discharges what it receives; poll until the (best-effort null) archive is
+        // acked → the event is no longer retry-eligible (no orphaned pending row for the registered group).
+        yield* pollWithTimeout(
+          bus
+            .dueRetries(Number.MAX_SAFE_INTEGER)
+            .pipe(Effect.map((due) => (due.some((d) => d.eventID === published.id) ? undefined : true))),
+          "archiver never discharged the delivery",
+        )
+      }),
+    )
+  }
+
+  registeredWhenOn({ v4EventDrivenArchive: true, v4MultiAgentRuntime: false }, "v4EventDrivenArchive ON")
+  registeredWhenOn({ v4EventDrivenArchive: false, v4MultiAgentRuntime: true }, "v4MultiAgentRuntime ON (goal.completed producer)")
+})
+
 // P1.6 — the CI-repair condition actually FIRES when 3 ci.failure events are in the window. Drives the
 // dispatcher tick directly (runLoops:false) against a real bus + scheduler and asserts the templated
 // ci.repair.requested event is published. This proves the §A4/§N condition path end-to-end.
@@ -260,6 +337,155 @@ describe("V4EventRuntime CI-repair condition fires on 3× failure", () => {
       const repairs = yield* bus.recentByType({ type: V4EventRuntime.CI_REPAIR_EVENT, workspaceID: WS })
       expect(repairs.length).toBe(1)
       expect((repairs[0]?.payload as { scheduleKey?: string })?.scheduleKey).toBe(V4EventRuntime.CI_REPAIR_KEY)
+    }),
+  )
+})
+
+// §M (P2.7) — the makeEventPanelPort DAEMON-CONTEXT regression lock. The port runs on the panel
+// consumer's subscription fiber (forked at layer build), which carries NO ambient InstanceRef. Every
+// InstanceState-touching call (Agent.defaultAgent, Provider.defaultModel, Session.create) `Effect.die`s
+// when InstanceRef is absent (instance-state.ts:15-17), so each MUST run inside the port's `withContext`
+// (which provides InstanceRef from the ctx it loads). This test injects fakes whose defaultAgent /
+// defaultModel / create reproduce that EXACT die-on-missing-InstanceRef behavior (they read the real
+// InstanceState.context), then invokes the port with NO ambient InstanceRef — the real daemon-fiber
+// environment. BEFORE the fix (defaultAgent/defaultModel called outside withContext) the port dies →
+// caught by the outer catchCause → surfaces as a port failure → consumer nacks → infinite retry, panel
+// never convenes. AFTER the fix every such call is wrapped, so the port reaches consultPanel and returns
+// a real verdict. agents.get returns undefined ⇒ all panelists are absent ⇒ the Arbiter returns
+// needs_human with NO LLM — keeping the test light while still exercising the full port path.
+describe("V4EventRuntime makeEventPanelPort daemon-context (§M / P2.7 regression)", () => {
+  const CTX = { directory: "/tmp/panel-daemon-ctx" } as unknown as InstanceContext
+
+  // A call that resolves the SAME way the real Agent/Provider/Session services do: through
+  // InstanceState.context, which dies without an ambient InstanceRef. Provides the value only when
+  // InstanceRef is present (i.e. only when the port wrapped it in withContext).
+  const viaInstanceState = <A>(value: A): Effect.Effect<A> =>
+    Effect.gen(function* () {
+      yield* InstanceState.context // dies if InstanceRef is absent (the daemon-fiber default)
+      return value
+    })
+
+  const fakeAgents = {
+    // reached OUTSIDE withContext in the bug; MUST be wrapped → reads InstanceState.
+    defaultAgent: () => viaInstanceState("reviewer"),
+    // makeTaskSubagentRunner calls this per panelist turn; returning undefined ⇒ the panelist is absent
+    // (failedTurn) ⇒ no LLM, and the Arbiter degrades to needs_human. This runs inside runTurn's
+    // withContext, so it does not die.
+    get: () => Effect.succeed(undefined),
+  } as unknown as Agent.Interface
+
+  const fakeSessions = {
+    // reached only inside withContext (already correct) — but resolve via InstanceState too, so the test
+    // also proves session.create works under the wrapped context.
+    create: () => viaInstanceState({ id: SessionID.make("ses_panel_root") }),
+    get: () => viaInstanceState({ id: SessionID.make("ses_panel_root"), permission: [], agent: undefined }),
+  } as unknown as Session.Interface
+
+  const fakePrompt = {} as unknown as SessionPrompt.Interface
+
+  const fakeStore = {
+    // load establishes the ctx the port then provides via withContext. Does NOT read InstanceRef (it
+    // PRODUCES the context), so it must succeed on the bare daemon fiber.
+    load: () => Effect.succeed(CTX),
+  } as unknown as InstanceStore.Interface
+
+  const defaultModel = () =>
+    viaInstanceState({ providerID: ProviderV2.ID.make("anthropic"), modelID: ModelV2.ID.make("claude") })
+
+  const port = V4EventRuntime.makeEventPanelPort({
+    sessions: fakeSessions,
+    agents: fakeAgents,
+    sessionPrompt: fakePrompt,
+    instanceStore: fakeStore,
+    defaultModel,
+  })
+
+  const event: DeepAgentEvent.Event = {
+    id: "evt_panel_1",
+    type: "monitor.alert",
+    source: "monitor",
+    // a NON-"wrk" workspaceID doubles as the directory (single-user / directory-routed) so the port
+    // derives a directory WITHOUT needing a payload.directory.
+    workspaceID: "/tmp/panel-daemon-ctx",
+    createdAt: 1_000,
+    payload: { summary: "security alert" },
+  } as unknown as DeepAgentEvent.Event
+
+  // CRITICAL: run the port with NO ambient InstanceRef provided — exactly the daemon subscription fiber.
+  baseIt.effect("port does NOT die on missing InstanceRef; reaches consultPanel + returns a verdict", () =>
+    Effect.gen(function* () {
+      const exit = yield* port({ question: "assess", riskClass: "security", event }).pipe(Effect.exit)
+      // BEFORE the fix this is a die (defect) surfaced as a failure by the port's catchCause. AFTER the
+      // fix the port completes: every InstanceState call ran inside withContext, so none died.
+      expect(Exit.isSuccess(exit)).toBe(true)
+      if (Exit.isSuccess(exit)) {
+        // all panelists absent ⇒ Arbiter degrades to needs_human (never a silent approve).
+        expect(exit.value.decision).toBe("needs_human")
+      }
+    }),
+  )
+})
+
+// §C (P2.10) — the makeEventTurnRunner DAEMON-CONTEXT regression lock (same defect class as the panel
+// port). The event-driven turn runner runs on the EventDispatcher → MultiAgentRuntime dispatch fiber,
+// which carries NO ambient InstanceRef. agents.get / defaultModel / sessions.create / the prompt calls
+// all resolve through InstanceState, which `Effect.die`s without InstanceRef (instance-state.ts:15-17).
+// A die is a DEFECT that pierces `orElseSucceed` (which only catches the E channel), so BEFORE the fix
+// (agents.get + defaultModel called before withContext) it hit the outer catchCause → EVERY event-driven
+// turn silently returned failedTurn (ok:false) — i.e. the whole multi-agent event-driven execution chain
+// never ran in prod. AFTER the fix ctx is loaded first and every such call runs inside withContext, so
+// the runner reaches the prompt and returns ok:true. Fakes reproduce the EXACT die-on-missing-InstanceRef
+// via the real InstanceState.context; the runner is invoked with NO ambient InstanceRef (the real fiber).
+describe("V4EventRuntime makeEventTurnRunner daemon-context (§C / P2.10 regression)", () => {
+  const CTX = { directory: "/tmp/event-turn-ctx" } as unknown as InstanceContext
+
+  const viaInstanceState = <A>(value: A): Effect.Effect<A> =>
+    Effect.gen(function* () {
+      yield* InstanceState.context // dies if InstanceRef is absent (the daemon-fiber default)
+      return value
+    })
+
+  const fakeAgents = {
+    // reached OUTSIDE withContext in the bug; MUST be wrapped → resolves via InstanceState.
+    get: () => viaInstanceState({ name: "reviewer" }),
+  } as unknown as Agent.Interface
+
+  const fakeSessions = {
+    create: () => viaInstanceState({ id: SessionID.make("ses_event_root") }),
+  } as unknown as Session.Interface
+
+  // A light SessionPrompt: resolvePromptParts + prompt both resolve via InstanceState (so the test also
+  // proves they run under the wrapped context), returning a minimal assistant result with text.
+  const fakePrompt = {
+    resolvePromptParts: () => viaInstanceState([{ type: "text", text: "hi" }]),
+    prompt: () => viaInstanceState({ info: { role: "assistant" }, parts: [], text: "done" }),
+  } as unknown as SessionPrompt.Interface
+
+  const fakeStore = {
+    // load PRODUCES ctx; it does not read InstanceRef, so it must succeed on the bare daemon fiber.
+    load: () => Effect.succeed(CTX),
+  } as unknown as InstanceStore.Interface
+
+  const defaultModel = () =>
+    viaInstanceState({ providerID: ProviderV2.ID.make("anthropic"), modelID: ModelV2.ID.make("claude") })
+
+  const runner = V4EventRuntime.makeEventTurnRunner({
+    sessions: fakeSessions,
+    agents: fakeAgents,
+    sessionPrompt: fakePrompt,
+    instanceStore: fakeStore,
+    defaultModel,
+  })
+
+  // CRITICAL: invoke the runner with NO ambient InstanceRef — exactly the dispatch daemon fiber.
+  baseIt.effect("runner does NOT silently fail on missing InstanceRef; reaches prompt + returns ok:true", () =>
+    Effect.gen(function* () {
+      // a NON-"wrk" workspaceID doubles as the directory (single-user / directory-routed).
+      const result = yield* runner({ agentType: "reviewer", prompt: "do it", workspaceID: "/tmp/event-turn-ctx" })
+      // BEFORE the fix: agents.get dies → orElseSucceed does NOT catch it → outer catchCause → failedTurn
+      // (ok:false). AFTER the fix: every InstanceState call ran inside withContext → the turn completes.
+      expect(result.ok).toBe(true)
+      expect(result.text).toBe("done")
     }),
   )
 })
