@@ -185,6 +185,9 @@ const v4EventRuntimeLayer = V4EventRuntime.layer.pipe(
   // AgentListProvider + IMRepository) are satisfied by the same provide stack below, so it shares the ONE
   // instance the runtime + IM double-write use — no split-brain.
   Layer.provide(SecurityResolvers.layer),
+  // §C3.1 — the process-wide file-lock singleton (Layer.succeed). Providing the SAME layer the file HTTP
+  // handlers use means a human editing a file (human lock) blocks an agent subtask from touching it.
+  Layer.provide(FileLock.layer),
   Layer.provide(DeepAgentEventBus.defaultLayer),
   Layer.provide(ApprovalQueue.layer.pipe(Layer.provide(Database.defaultLayer))),
   Layer.provide(Scheduler.defaultLayer),
