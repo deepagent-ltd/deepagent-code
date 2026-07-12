@@ -119,6 +119,23 @@ export type SubagentTurnInput = {
   readonly workspaceID?: string
   readonly directory?: string
   /**
+   * §F2 trace — the triggering event's correlationID. When present, the runner STAMPS it onto the child
+   * session's `metadata.correlationID`. This is one HALF of the §F2 back-half: `Observability.trace` READS
+   * it back (json_extract over session metadata, scoped to the same correlationID + routing key) and
+   * appends the child session as a "session" node, so the trace follows correlationID from the event down
+   * into the child session's activity (its message / tool-call turns). The stamp is inert on its own — the
+   * trace-query read is what makes it observable. The goal-loop runner leaves this unset (its turns belong
+   * to the goal session's own trace); the event-driven Multi-Agent Runtime passes `event.correlationID ??
+   * event.id` so a coordinated turn's child session joins back to the triggering event.
+   */
+  readonly correlationID?: string
+  /**
+   * §C1/§G — the executing agent's declared per-turn wall-clock ceiling (limits.maxTurnDurationMs). The
+   * event turn runner bounds the turn with THIS when set, falling back to its fixed default otherwise.
+   * The goal-loop runner ignores it (its turns are bounded by the goal ledger). Unset ⇒ default timeout.
+   */
+  readonly maxTurnDurationMs?: number
+  /**
    * §D/§E F3 — optional hook invoked with the child session id AFTER the session is created but BEFORE
    * the prompt turn runs. The goal-worker StepExecutor uses it to SEED the child session's plan-state
    * from the goal plan doc, so the worker's `plan` tool edits build on (and stay bound to) the goal's
@@ -380,6 +397,11 @@ export const makeTaskSubagentRunner = (deps: TaskSubagentRunnerDeps): SubagentTu
         parentID: deps.parentSessionID,
         title: `${input.agentType} (goal-loop)`,
         agent: next.name,
+        // §F2 trace back-half — stamp the correlationID onto the child session's metadata; Observability
+        // .trace reads it back (json_extract) and appends this child as a "session" node, so the trace
+        // joins the child's activity back to the event. Omitted when the caller supplies none (goal-loop
+        // turns belong to the goal session's own trace).
+        ...(input.correlationID ? { metadata: { correlationID: input.correlationID } } : {}),
         permission: deriveSubagentSessionPermission({
           parentSessionPermission: parent.permission ?? [],
           parentAgent,

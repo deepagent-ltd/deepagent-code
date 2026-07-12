@@ -3,10 +3,14 @@ export * as DeepAgentEventBus from "./deepagent-event-bus"
 import { Context, Effect, Layer, PubSub, Stream } from "effect"
 import { and, asc, desc, eq, lte, lt, gt, notExists, sql } from "drizzle-orm"
 import { Database } from "../database/database"
-import { DeepAgentEventDeliveryTable, DeepAgentEventTable } from "./deepagent-event-sql"
+import { DeepAgentEventDeliveryTable, DeepAgentEventDropTable, DeepAgentEventTable } from "./deepagent-event-sql"
 import { ApprovalQueueTable } from "./approval-queue-sql"
 import { DeepAgentEvent } from "./deepagent-event"
 import { RateLimiter } from "./rate-limiter"
+import { LMNEvents } from "./lmn-events"
+
+// §A3 DLQ alert — the event type the bus publishes when a delivery flips to "dead" (see nack).
+const DLQ_ALERT_TYPE = LMNEvents.DLQ_ALERT
 
 // V4.0 §A2 — the Event Bus service. Implements the §A2 contract (publish / subscribe / ack / nack /
 // replay) on the durable `deepagent_event` + `deepagent_event_delivery` tables (deepagent-event-sql.ts).
@@ -116,6 +120,17 @@ export interface Interface {
   }) => Effect.Effect<ReadonlyArray<DeepAgentEvent.Event>>
   /** §A Dead Letter view — deliveries that exhausted retries. */
   readonly deadLetters: () => Effect.Effect<ReadonlyArray<DeliveryTracker>>
+  /**
+   * §A4 event_dropped — persist an append-only DROP RECORD for an event the router SHED (a backpressure
+   * drop). Makes event_dropped a queryable/persisted signal (Observability.event_dropped_total by
+   * reason), mirroring how dead deliveries feed dlq_events_total. FAIL-SAFE: never fails — a drop record
+   * is best-effort audit, and a write hiccup must not perturb the caller's ack/nack path (Effect.orDie is
+   * intentionally avoided; a write failure is swallowed).
+   */
+  readonly recordDrop: (input: {
+    readonly event: DeepAgentEvent.Event
+    readonly reason: string
+  }) => Effect.Effect<void>
   /** §A3 retry scan — pending deliveries whose backoff has elapsed (Router/Scheduler drives re-delivery). */
   readonly dueRetries: (now?: number) => Effect.Effect<ReadonlyArray<DeliveryTracker>>
   /** Load a single event by id from the durable log — used by the retry pump to re-dispatch a nacked delivery. */
@@ -418,62 +433,113 @@ export const layerWith = (options?: LayerOptions) =>
       // the second serializes behind the first and reads N+1. Without this the DLQ transition
       // (attempts ≥ maxAttempts) could be delayed or skipped under concurrent failures.
       const nack: Interface["nack"] = (input) =>
-        Effect.uninterruptible(
-          db
-            .transaction(
-              () =>
-                Effect.gen(function* () {
-                  const current = yield* db
-                    .select()
-                    .from(DeepAgentEventDeliveryTable)
-                    .where(
-                      and(
-                        eq(DeepAgentEventDeliveryTable.event_id, input.eventID),
-                        eq(DeepAgentEventDeliveryTable.subscription_group, input.subscriptionGroup),
-                      ),
-                    )
-                    .get()
-                    .pipe(Effect.orDie)
-                  const attempts = (current?.attempts ?? 0) + 1
-                  // §A Dead Letter: past the cap the delivery is dead (surfaces in the DLQ view); else
-                  // schedule the next retry with exponential backoff (base × 2^(attempts-1)).
-                  const dead = attempts >= maxAttempts
-                  const at = now()
-                  const nextAttemptAt = dead ? null : at + backoffBaseMs * 2 ** (attempts - 1)
-                  yield* db
-                    .insert(DeepAgentEventDeliveryTable)
-                    .values([
-                      {
-                        event_id: input.eventID,
-                        subscription_group: input.subscriptionGroup,
-                        status: dead ? "dead" : "pending",
-                        attempts,
-                        last_error: input.reason,
-                        next_attempt_at: nextAttemptAt,
-                        created_at: at,
-                        updated_at: at,
-                      },
-                    ])
-                    .onConflictDoUpdate({
-                      target: [
-                        DeepAgentEventDeliveryTable.event_id,
-                        DeepAgentEventDeliveryTable.subscription_group,
-                      ],
-                      set: {
-                        status: dead ? "dead" : "pending",
-                        attempts,
-                        last_error: input.reason,
-                        next_attempt_at: nextAttemptAt,
-                        updated_at: at,
-                      },
-                    })
-                    .run()
-                    .pipe(Effect.orDie)
-                }),
-              { behavior: "immediate" },
+        Effect.gen(function* () {
+          // The transaction returns whether THIS nack flipped the delivery to "dead" for the FIRST time
+          // (a fresh DLQ transition), plus the final attempt count — so the §A3 alert fires once, after
+          // commit, only on the transition (not on a nack of an already-dead delivery).
+          const transition = yield* Effect.uninterruptible(
+            db
+              .transaction(
+                () =>
+                  Effect.gen(function* () {
+                    const current = yield* db
+                      .select()
+                      .from(DeepAgentEventDeliveryTable)
+                      .where(
+                        and(
+                          eq(DeepAgentEventDeliveryTable.event_id, input.eventID),
+                          eq(DeepAgentEventDeliveryTable.subscription_group, input.subscriptionGroup),
+                        ),
+                      )
+                      .get()
+                      .pipe(Effect.orDie)
+                    const attempts = (current?.attempts ?? 0) + 1
+                    // §A Dead Letter: past the cap the delivery is dead (surfaces in the DLQ view); else
+                    // schedule the next retry with exponential backoff (base × 2^(attempts-1)).
+                    const dead = attempts >= maxAttempts
+                    const at = now()
+                    const nextAttemptAt = dead ? null : at + backoffBaseMs * 2 ** (attempts - 1)
+                    yield* db
+                      .insert(DeepAgentEventDeliveryTable)
+                      .values([
+                        {
+                          event_id: input.eventID,
+                          subscription_group: input.subscriptionGroup,
+                          status: dead ? "dead" : "pending",
+                          attempts,
+                          last_error: input.reason,
+                          next_attempt_at: nextAttemptAt,
+                          created_at: at,
+                          updated_at: at,
+                        },
+                      ])
+                      .onConflictDoUpdate({
+                        target: [
+                          DeepAgentEventDeliveryTable.event_id,
+                          DeepAgentEventDeliveryTable.subscription_group,
+                        ],
+                        set: {
+                          status: dead ? "dead" : "pending",
+                          attempts,
+                          last_error: input.reason,
+                          next_attempt_at: nextAttemptAt,
+                          updated_at: at,
+                        },
+                      })
+                      .run()
+                      .pipe(Effect.orDie)
+                    // FIRST transition = it is dead now AND was not already dead before this nack.
+                    return { justDied: dead && current?.status !== "dead", attempts }
+                  }),
+                { behavior: "immediate" },
+              )
+              .pipe(Effect.orDie),
+          )
+          // §A3 "生成告警" — a dead-letter must fire an alert, not sit silently in the DLQ view. Emit ONCE
+          // on the transition. FAIL-SAFE: the whole alert path is caught so an alert failure never breaks
+          // the nack contract (the delivery is already durably "dead"; the alert is best-effort notify).
+          if (transition.justDied) {
+            yield* emitDlqAlert(input.eventID, input.subscriptionGroup, input.reason, transition.attempts).pipe(
+              Effect.catchCause(() => Effect.void),
             )
-            .pipe(Effect.orDie),
-        )
+          }
+        })
+
+      // §A3 DLQ alert — publish a system `dlq.alert` (high priority) for a delivery that just exhausted
+      // its retries. IDEMPOTENT: the idempotency key is (event, group)-stable so a re-emit is a bus no-op
+      // (never a second alert). SELF-CASCADE GUARD: if the DEAD event is itself a dlq.alert, do NOT alert
+      // on it (an alert whose own delivery dies must not spawn another alert). Best-effort by construction
+      // — the caller wraps this in catchCause so any failure is swallowed.
+      const emitDlqAlert = (
+        eventID: DeepAgentEvent.ID,
+        subscriptionGroup: string,
+        reason: string,
+        attempts: number,
+      ) =>
+        Effect.gen(function* () {
+          const dead = yield* getByID(eventID)
+          // guard: never alert on a dead dlq.alert (severs the alert-of-an-alert cascade).
+          if (dead && dead.type === DLQ_ALERT_TYPE) return
+          yield* publish({
+            type: DLQ_ALERT_TYPE,
+            source: "system",
+            workspaceID: dead?.workspaceID ?? "system",
+            ...(dead?.projectID != null ? { projectID: dead.projectID } : {}),
+            // chain the alert to the dead event's correlation so it lands on the same §F2 trace spine.
+            correlationID: dead?.correlationID ?? eventID,
+            causationID: eventID,
+            // (event, group)-keyed ⇒ one alert per dead delivery, idempotent across re-emits.
+            idempotencyKey: `dlq-alert:${eventID}:${subscriptionGroup}`,
+            priority: "high",
+            payload: {
+              deadEventID: eventID,
+              deadEventType: dead?.type,
+              subscriptionGroup,
+              reason,
+              attempts,
+            },
+          })
+        })
 
       const replay: Interface["replay"] = (input) =>
         Stream.unwrap(
@@ -541,6 +607,26 @@ export const layerWith = (options?: LayerOptions) =>
           .where(eq(DeepAgentEventDeliveryTable.status, "dead"))
           .all()
           .pipe(Effect.orDie, Effect.map((rows) => rows.map(trackerOf)))
+
+      // §A4 event_dropped — append a durable drop record. Best-effort: a write failure is caught + logged
+      // (not orDie'd) so a drop-audit hiccup never perturbs the caller's ack/nack path.
+      const recordDrop: Interface["recordDrop"] = (input) =>
+        db
+          .insert(DeepAgentEventDropTable)
+          .values([
+            {
+              event_id: input.event.id,
+              workspace_id: input.event.workspaceID,
+              reason: input.reason,
+              priority: input.event.priority,
+              created_at: now(),
+            },
+          ])
+          .run()
+          .pipe(
+            Effect.catchCause(() => Effect.void),
+            Effect.asVoid,
+          )
 
       const dueRetries: Interface["dueRetries"] = (nowArg) =>
         Effect.gen(function* () {
@@ -652,6 +738,7 @@ export const layerWith = (options?: LayerOptions) =>
         replay,
         recentByType,
         deadLetters,
+        recordDrop,
         dueRetries,
         getByID,
         sweep,
