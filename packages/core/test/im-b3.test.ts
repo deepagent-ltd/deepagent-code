@@ -279,6 +279,59 @@ describe("IM §B3 — Thread / Direct / Search / Attachments", () => {
       expect(result.metaCount).toBe(1)
       expect(result.allCount).toBe(2)
     })
+
+    // §B3 [NEW] correctness — FTS5 MATCH injection guard. The primary FTS path fed the RAW query into
+    // `content MATCH ${query}`; FTS5 grammar (column filter `foo:`, prefix `*`, boolean/parens, an
+    // unbalanced quote) then raised a SQLite syntax error surfacing as a 500 rather than empty results.
+    // These queries must ALL resolve to results-or-empty and never throw.
+    it("does not throw on FTS5-grammar / malformed queries (injection guard)", async () => {
+      const hostile = ['foo:', '"unbalanced', "foo*", "(paren", "^caret", "AND", "NEAR", 'a"b', "   ", "NOT bar"]
+      const result = await run(
+        Effect.gen(function* () {
+          const repo = yield* IMRepository
+          const g = yield* repo.createGroup({ workspaceID: WS, name: "Fts", type: "project", createdBy: USER })
+          yield* repo.createMessage({
+            groupID: g.id, senderID: USER, senderType: "user", type: "text",
+            content: "hello world foo bar",
+          })
+          const counts: number[] = []
+          for (const q of hostile) {
+            // must not throw — returns results-or-empty
+            const hits = yield* repo.searchMessages({ workspaceID: WS, userID: USER, query: q, limit: 50 })
+            counts.push(hits.messages.length)
+          }
+          return counts
+        }),
+      )
+      // No throw ⇒ we get a count array back; each entry is a valid (non-negative) result count.
+      expect(result.length).toBe(hostile.length)
+      expect(result.every((n) => n >= 0)).toBe(true)
+    })
+
+    it("still matches a normal query after escaping, and preserves membership scoping on the FTS path", async () => {
+      const result = await run(
+        Effect.gen(function* () {
+          const repo = yield* IMRepository
+          const mine = yield* repo.createGroup({ workspaceID: WS, name: "FtsMine", type: "project", createdBy: USER })
+          yield* repo.createMessage({
+            groupID: mine.id, senderID: USER, senderType: "user", type: "text",
+            content: "escaping keeps ordinary words matchable",
+          })
+          const theirs = yield* repo.createGroup({
+            workspaceID: WS, name: "FtsTheirs", type: "project", createdBy: "otherUser",
+          })
+          yield* repo.createMessage({
+            groupID: theirs.id, senderID: "otherUser", senderType: "user", type: "text",
+            content: "matchable but foreign",
+          })
+          // multi-term query exercises the term-AND escaping (both terms quoted, implicit AND).
+          const hits = yield* repo.searchMessages({ workspaceID: WS, userID: USER, query: "ordinary matchable", limit: 50 })
+          return hits.messages.map((m) => m.content)
+        }),
+      )
+      // Only the caller's own group message matches; the foreign "matchable" row is scoped out on the FTS path.
+      expect(result).toEqual(["escaping keeps ordinary words matchable"])
+    })
   })
 
   // ── ATTACHMENTS ─────────────────────────────────────────────────────────────────────────────────

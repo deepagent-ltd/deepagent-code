@@ -8,9 +8,9 @@
 // the test callback starts — so we control the gate with a `beforeEach` that sets the env var BEFORE the
 // layer builds (an in-body `Effect.provide` can't override the flags the route graph provides itself).
 
-import { afterEach, describe, expect } from "bun:test"
+import { afterEach, beforeEach, describe, expect } from "bun:test"
 import { NodeHttpServer, NodeServices } from "@effect/platform-node"
-import { Config, Effect, Layer } from "effect"
+import { Config, ConfigProvider, Effect, Layer } from "effect"
 import { HttpClient, HttpClientRequest, HttpClientResponse, HttpRouter, HttpServer } from "effect/unstable/http"
 import { layerWebSocketConstructorGlobal } from "effect/unstable/socket/Socket"
 import { Flag } from "@deepagent-code/core/flag/flag"
@@ -31,6 +31,7 @@ void Log.init({ print: false })
 
 const originalWorkspaces = Flag.DEEPAGENT_CODE_EXPERIMENTAL_WORKSPACES
 const originalUploadFlag = process.env.DEEPAGENT_CODE_V4_FILE_UPLOAD_ENABLED
+const originalThreadFlag = process.env.DEEPAGENT_CODE_V4_THREAD_ENABLED
 
 const workspaceLayer = Workspace.defaultLayer.pipe(
   Layer.provide(InstanceStore.defaultLayer),
@@ -51,6 +52,16 @@ const httpApiLayer = servedRoutes.pipe(
   Layer.provideMerge(NodeServices.layer),
 )
 
+// Effect's ambient/default ConfigProvider snapshots `process.env` process-globally on the FIRST read, so
+// once one test reads a flag its value is frozen for the whole file — which would make the flag-gated
+// thread tests unable to observe a per-test env change. Injecting a FRESH `ConfigProvider.fromEnv()` at
+// the test graph root makes RuntimeFlags.defaultLayer re-read the live env at EACH per-test layer build,
+// so the beforeEach env toggles (thread ON by default, OFF in the nested describe) take effect.
+// `ConfigProvider.fromEnv()` snapshots env at CALL time, so it must be constructed at each layer BUILD
+// (after the beforeEach env toggle) — not once at module load (when the flag is still unset). Wrapping it
+// in Layer.unwrapEffect defers the `fromEnv()` call to build time.
+const freshEnvProvider = Layer.suspend(() => ConfigProvider.layer(ConfigProvider.fromEnv()))
+
 const it = testEffect(
   Layer.mergeAll(
     instanceStoreLayer,
@@ -59,7 +70,7 @@ const it = testEffect(
     workspaceLayer,
     Database.defaultLayer,
     httpApiLayer,
-  ),
+  ).pipe(Layer.provide(freshEnvProvider)),
 )
 
 function request(path: string, init?: RequestInit) {
@@ -80,10 +91,20 @@ function requestJson<T>(path: string, init?: RequestInit) {
   return request(path, init).pipe(Effect.flatMap(json<T>))
 }
 
+// §B3 threads are now flag-gated (v4ThreadEnabled) exactly like file upload: the endpoint fail-closes when
+// the flag is off. The RuntimeFlags service reads env at LAYER BUILD time (after the test callback starts),
+// so we opt into the behavior under test by setting the env var in a `beforeEach` — the thread tests below
+// assert the ON behavior; the flag-off (disabled ⇒ 404) case is asserted explicitly by clearing it.
+beforeEach(() => {
+  process.env.DEEPAGENT_CODE_V4_THREAD_ENABLED = "true"
+})
+
 afterEach(async () => {
   Flag.DEEPAGENT_CODE_EXPERIMENTAL_WORKSPACES = originalWorkspaces
   if (originalUploadFlag === undefined) delete process.env.DEEPAGENT_CODE_V4_FILE_UPLOAD_ENABLED
   else process.env.DEEPAGENT_CODE_V4_FILE_UPLOAD_ENABLED = originalUploadFlag
+  if (originalThreadFlag === undefined) delete process.env.DEEPAGENT_CODE_V4_THREAD_ENABLED
+  else process.env.DEEPAGENT_CODE_V4_THREAD_ENABLED = originalThreadFlag
   await disposeAllInstances()
   await resetDatabase()
 })
@@ -144,6 +165,28 @@ describe("IM §B3 HttpApi — Thread / Direct / Search", () => {
       expect(res.status).toBe(404)
     }),
   )
+
+  // §B3 [NEW] flag gate — with v4ThreadEnabled OFF the endpoint fail-closes (404 THREAD_DISABLED),
+  // mirroring the file-upload gate. The RuntimeFlags layer reads env at BUILD time (before the body), so
+  // the flag must be cleared in a hook — a nested describe whose beforeEach runs AFTER the outer one that
+  // sets it true, leaving it OFF for this test's layer build.
+  describe("thread flag OFF", () => {
+    beforeEach(() => {
+      delete process.env.DEEPAGENT_CODE_V4_THREAD_ENABLED
+    })
+    it.live("thread endpoint 404s (disabled) when v4ThreadEnabled is OFF", () =>
+      Effect.gen(function* () {
+        const directory = yield* tmpdirScoped({ git: true })
+        const q = `directory=${encodeURIComponent(directory)}`
+        // The gate fail-closes FIRST, before any group/membership lookup — even a nonexistent group id
+        // returns THREAD_DISABLED (not GROUP_NOT_FOUND), proving the flag check precedes the handler body.
+        const res = yield* request(`/api/v1/im/groups/img_x/messages/imsg_x/thread?${q}`, {})
+        expect(res.status).toBe(404)
+        const text = yield* res.text
+        expect(text).toContain("THREAD_DISABLED")
+      }),
+    )
+  })
 
   it.live("direct group creation enforces the pair and is idempotent", () =>
     Effect.gen(function* () {

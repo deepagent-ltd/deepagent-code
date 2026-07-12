@@ -256,11 +256,16 @@ export const layer = Layer.effect(
     const emitGoalLifecycleEvent = (sessionID: string, status: GoalStatus, phase: string) =>
       Effect.gen(function* () {
         const session = yield* sessions.get(SessionID.make(sessionID)).pipe(Effect.orElseSucceed(() => undefined))
-        // workspace key MUST mirror the Oversight read side (route.workspaceID ?? route.directory), else
-        // an escalation written here is keyed on the filesystem directory while GET /oversight/approvals
-        // reads by the WorkspaceV2.ID → invisible on the Dashboard in server edition. Prefer the
-        // session's workspaceID, fall back to directory, then sessionID.
-        const workspaceID = session?.workspaceID ?? session?.directory ?? sessionID
+        // workspace key MUST mirror the Oversight read side, else an escalation written here is keyed on
+        // one identity while GET /oversight/approvals reads by another → invisible on the Dashboard in
+        // server edition. Both sides derive the key via the SINGLE canonical rule (ApprovalQueue.
+        // deriveWorkspaceKey): a genuine wrk_ workspaceID wins, else the directory, with sessionID as the
+        // last-resort fallback so a key is always produced.
+        const workspaceID = ApprovalQueue.deriveWorkspaceKey({
+          workspaceID: session?.workspaceID,
+          directory: session?.directory,
+          fallback: sessionID,
+        })
         // map the driver phase → the discrete §N event type (running/paused/stopped ⇒ goal.tick).
         const eventType = LMNEvents.goalPhaseToEventType(phase) ?? LMNEvents.GOAL_TICK
         // idempotencyKey reuses the V3.9 plan-version idempotency intent: one event per (goal, phase,
