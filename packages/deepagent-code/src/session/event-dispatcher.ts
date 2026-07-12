@@ -1,10 +1,12 @@
 export * as EventDispatcher from "./event-dispatcher"
 
-import { Context, Effect, Layer, Stream, Schedule, Duration, Cause, Deferred } from "effect"
+import { Context, Effect, Layer, Stream, Schedule, Duration, Cause, Deferred, Option } from "effect"
 import { DeepAgentEventBus } from "@deepagent-code/core/deepagent/deepagent-event-bus"
 import { EventRouter } from "@deepagent-code/core/deepagent/event-router"
 import { Scheduler } from "@deepagent-code/core/deepagent/scheduler"
 import { DeepAgentEvent } from "@deepagent-code/core/deepagent/deepagent-event"
+import { QuietHours } from "@deepagent-code/core/deepagent/quiet-hours"
+import { WorkspaceConfig } from "@deepagent-code/core/deepagent/workspace-config"
 import type { AgentDescriptor } from "@deepagent-code/core/im/mention-parser"
 import { AgentListProviderService } from "@deepagent-code/core/im/agent-list-provider"
 import { RuntimeFlags } from "@/effect/runtime-flags"
@@ -135,6 +137,11 @@ export const layerWith = (options?: LayerOptions) =>
       const scheduler = yield* Scheduler.Service
       const agentList = yield* AgentListProviderService
       const flags = yield* RuntimeFlags.Service
+      // §E4/§N — quiet-hours filter for the scheduler tick. WorkspaceConfig is OPTIONAL (mirrors
+      // agent-push): absent ⇒ never quiet (the correct fail-safe), so the dispatcher stays testable with
+      // just Bus + Scheduler + AgentList + Flags. When present, a CONFIGURED window defers a low/normal
+      // scheduled fire past the window; high/critical always fire (§E4 允许即时送达).
+      const workspaceConfig = yield* Effect.serviceOption(WorkspaceConfig.Service)
       const port = options?.dispatchPort ?? observeOnlyDispatchPort
       const maxQueueDepth = options?.maxQueueDepth ?? DEFAULT_MAX_QUEUE_DEPTH
       const dedupeWindowMs = options?.dedupeWindowMs ?? DEFAULT_DEDUPE_WINDOW_MS
@@ -150,6 +157,44 @@ export const layerWith = (options?: LayerOptions) =>
 
       const nack = (event: DeepAgentEvent.Event, reason: string) =>
         bus.nack({ subscriptionGroup: DISPATCH_GROUP, eventID: event.id, reason })
+
+      // §E4/§N — resolve whether `at` falls in the workspace's configured quiet window + the window's END
+      // (epoch ms) so a deferred tick can be rescheduled PAST the window. Returns { quiet:false } when no
+      // config service, no configured window, or a lookup fails (fail-safe: never quiet ⇒ fire normally).
+      // `endAt`: the next instant at/after `at` where the local hour leaves [startHour,endHour) — computed
+      // arithmetically from the same tz math QuietHours.isWithinQuietHours uses, so the two never disagree.
+      const resolveQuietHours = (
+        workspaceID: string,
+        at: number,
+      ): Effect.Effect<{ readonly quiet: boolean; readonly endAt?: number }> =>
+        Option.isNone(workspaceConfig)
+          ? Effect.succeed({ quiet: false })
+          : workspaceConfig.value.get(workspaceID).pipe(
+              Effect.map((resolved) => {
+                const qh = resolved.quietHours
+                if (qh == null) return { quiet: false as const }
+                if (!QuietHours.isWithinQuietHours(at, qh.startHour, qh.endHour, qh.tzOffsetMinutes))
+                  return { quiet: false as const }
+                // Walk forward hour-by-hour to the first instant NOT in the window (bounded: ≤ 24 steps
+                // since the window is < 24h). Align to the next whole local-hour boundary first so the
+                // reschedule lands cleanly on the window's end rather than mid-hour.
+                const hourMs = 3_600_000
+                const localMs = at + qh.tzOffsetMinutes * 60_000
+                let boundary = Math.ceil(localMs / hourMs) * hourMs // next local-hour boundary (local ms)
+                for (let i = 0; i < 25; i++) {
+                  const hour = ((Math.floor(boundary / hourMs) % 24) + 24) % 24
+                  const inWindow =
+                    qh.startHour < qh.endHour
+                      ? hour >= qh.startHour && hour < qh.endHour
+                      : hour >= qh.startHour || hour < qh.endHour
+                  if (!inWindow) break
+                  boundary += hourMs
+                }
+                // convert the local-ms boundary back to epoch ms.
+                return { quiet: true as const, endAt: boundary - qh.tzOffsetMinutes * 60_000 }
+              }),
+              Effect.orElseSucceed(() => ({ quiet: false as const })),
+            )
 
       const handle: Interface["handle"] = (event) =>
         Effect.gen(function* () {
@@ -210,7 +255,11 @@ export const layerWith = (options?: LayerOptions) =>
           } else if (decision.reason === "backpressure") {
             // §A4 回压: a backpressure drop is TRANSIENT — the queue is momentarily full. NACK so the
             // bus retries when it drains, rather than acking (which would permanently lose the event).
+            // Record it as a PERSISTED §A4 event_dropped signal (by reason) so Oversight can report the
+            // shed rate, not just a log line. Best-effort (recordDrop never fails) — ordered before the
+            // nack so a shed is always counted even if the nack write later hiccups.
             log.info("route.backpressure; nacking for retry", { eventType: event.type, eventID: event.id })
+            yield* bus.recordDrop({ event, reason: decision.reason })
             yield* nack(event, "backpressure")
           } else {
             // terminal drop (flag_disabled / no_match / deduped) — ack the delivery (the durable event
@@ -244,6 +293,31 @@ export const layerWith = (options?: LayerOptions) =>
           yield* scheduler.markFired(schedule.id, at)
         })
 
+      // §E4/§N — fire a due schedule UNLESS it is a side-effecting low/normal fire during the workspace's
+      // quiet hours, in which case DEFER it past the window (reschedule fire_at = the window end via
+      // recheckCondition — works for every kind: it pushes the next eligibility without marking fired).
+      // high/critical schedules ALWAYS fire (§E4 允许即时送达). Returns whether it actually fired.
+      const fireOrDefer = (schedule: Scheduler.Schedule, at: number): Effect.Effect<boolean> =>
+        Effect.gen(function* () {
+          const priority = schedule.eventTemplate.priority ?? "normal"
+          if (priority !== "high" && priority !== "critical") {
+            const qh = yield* resolveQuietHours(schedule.workspaceID, at)
+            if (qh.quiet) {
+              // defer to the window end (fail-safe: if endAt is somehow ≤ now, nudge by 1ms so it's future).
+              const nextAt = qh.endAt != null && qh.endAt > at ? qh.endAt : at + 1
+              log.info("schedule deferred by quiet hours", {
+                scheduleID: schedule.id,
+                workspaceID: schedule.workspaceID,
+                deferUntil: nextAt,
+              })
+              yield* scheduler.recheckCondition(schedule.id, nextAt)
+              return false
+            }
+          }
+          yield* fireSchedule(schedule, at)
+          return true
+        })
+
       const tick: Interface["tick"] = (nowArg) =>
         Effect.gen(function* () {
           const at = nowArg ?? now()
@@ -266,20 +340,23 @@ export const layerWith = (options?: LayerOptions) =>
                 now: at,
               })
               if (Scheduler.conditionMet(spec, recent.length)) {
-                yield* fireSchedule(schedule, at)
-                // advance the recheck so a still-satisfied window doesn't refire next tick (markFired
-                // already advanced fireAt when a cadence exists; for cadence-less, push it forward here).
-                if (schedule.intervalMs == null)
-                  yield* scheduler.recheckCondition(schedule.id, at + (spec.windowMs || 1))
-                fired++
+                // §E4 — fireOrDefer holds the fire for quiet hours (low/normal) and reschedules it past
+                // the window; a deferred fire already advanced fire_at, so skip the recheck below.
+                const didFire = yield* fireOrDefer(schedule, at)
+                if (didFire) {
+                  // advance the recheck so a still-satisfied window doesn't refire next tick (markFired
+                  // already advanced fireAt when a cadence exists; for cadence-less, push it forward here).
+                  if (schedule.intervalMs == null)
+                    yield* scheduler.recheckCondition(schedule.id, at + (spec.windowMs || 1))
+                  fired++
+                }
               } else {
                 const nextCheck = at + (schedule.intervalMs ?? (spec.windowMs || 1))
                 yield* scheduler.recheckCondition(schedule.id, nextCheck)
               }
               continue
             }
-            yield* fireSchedule(schedule, at)
-            fired++
+            if (yield* fireOrDefer(schedule, at)) fired++
           }
           return fired
         })
