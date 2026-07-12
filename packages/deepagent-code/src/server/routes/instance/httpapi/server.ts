@@ -88,6 +88,7 @@ import { oversightHandlers } from "./handlers/oversight"
 import { webhookHandlers } from "./handlers/webhook"
 import { Observability as OversightObservability } from "@deepagent-code/core/deepagent/observability"
 import { ApprovalQueue } from "@deepagent-code/core/deepagent/approval-queue"
+import { HumanTakeover } from "@deepagent-code/core/deepagent/human-takeover"
 import { DeepAgentEventBus } from "@deepagent-code/core/deepagent/deepagent-event-bus"
 import { Scheduler } from "@deepagent-code/core/deepagent/scheduler"
 import { WorkspaceConfig } from "@deepagent-code/core/deepagent/workspace-config"
@@ -151,9 +152,12 @@ const workspaceRoutingLive = workspaceRoutingLayer.pipe(Layer.provide(Socket.lay
 const imRepositoryLayer = IMRepositoryLive.pipe(Layer.provide(Database.defaultLayer))
 // V4.0 §D2/§F — Oversight services (read-only projection of the durable V4 substrate). Both need only
 // the Database layer; provided independently to the oversight handler.
-const oversightServicesLayer = Layer.mergeAll(OversightObservability.layer, ApprovalQueue.layer).pipe(
-  Layer.provide(Database.defaultLayer),
-)
+const oversightServicesLayer = Layer.mergeAll(
+  OversightObservability.layer,
+  ApprovalQueue.layer,
+  // §D2/§F — the human-takeover recorder the Takeover endpoint calls + the human_takeover_total metric.
+  HumanTakeover.layer,
+).pipe(Layer.provide(Database.defaultLayer))
 // IM agent execution is driven by the deepagent-code session stack (Session +
 // SessionPrompt), NOT core SessionV2 (which binds a no-op execution layer and
 // never runs an agent). ServerAgentExecutorLive / ServerAgentListProviderLive
