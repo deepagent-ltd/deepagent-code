@@ -10,6 +10,7 @@ import { ApprovalQueue } from "@deepagent-code/core/deepagent/approval-queue"
 import { SecurityResolvers } from "@deepagent-code/core/deepagent/security-resolvers"
 import { WorkspaceConfig } from "@deepagent-code/core/deepagent/workspace-config"
 import { IMRepositoryLive } from "@deepagent-code/core/im/repository"
+import { FileLock } from "@deepagent-code/core/file-lock"
 import type { AgentDescriptor } from "@deepagent-code/core/im/mention-parser"
 import { testEffect } from "../lib/effect"
 
@@ -511,6 +512,123 @@ describe("MultiAgentRuntime §E1 production wiring — L1 resolver ERROR fails c
       expect(summary.outcomes.every((o) => o.status === "blocked")).toBe(true)
       expect(summary.outcomes[0].reason).toBe("security:event_source")
       expect(ran).toEqual([])
+    }),
+  )
+})
+
+// ─── §C3.1 FileLock enforcement — a REAL FileLock.Service instance drives contention/release ──────────
+// The runtime acquires an AGENT lock on each file a subtask writes before running it; a file already
+// held (by another agent OR by a human) DEFERS the subtask (retryable), so two concurrently-admitted
+// subtasks never edit the same file. Tests 1+2 share ONE FileLock instance (the same singleton the file
+// HTTP handlers use) so an external lock held in test 1 is observed by the runtime.
+describe("MultiAgentRuntime §C3.1 file-lock enforcement", () => {
+  // The process-wide FileLock singleton (Layer.succeed value) — the exact instance production shares.
+  const testFileLock = Effect.runSync(FileLock.Service.pipe(Effect.provide(FileLock.layer)))
+  const it = testEffect(makeLayer({ fileLock: testFileLock }))
+  // carried from test 1 → test 2: the external agent lock we hold, then release.
+  let externalLockId = ""
+
+  it.effect("§C3.1 a pre-held EXTERNAL agent lock on a file defers a subtask touching it", () =>
+    Effect.gen(function* () {
+      resetRunner()
+      setNow(1_000)
+      setRegistry([agent("fixer", ["code_edit", "test_run"], "level_2")])
+      // an OTHER agent already holds the lock on the file the code_edit subtask will touch.
+      const held = testFileLock.acquire("src/locked.ts", "agent")
+      expect(held).not.toBeNull()
+      externalLockId = held!.lockId
+      const runtime = yield* MultiAgentRuntime.Service
+      const summary = yield* runtime.coordinate(event({ payload: { files: ["src/locked.ts"] } }))
+      // code_edit can't get the lock → deferred (file_locked); its dependent test_run is then blocked.
+      const codeEdit = summary.outcomes.find((o) => o.capability === "code_edit")
+      expect(codeEdit?.status).toBe("deferred")
+      expect(codeEdit?.reason).toBe("file_locked")
+      expect(summary.hasUnfinished).toBe(true) // retryable — the lock will clear
+      expect(ran).toEqual([]) // the runner was NEVER called
+    }),
+  )
+
+  it.effect("§C3.1 after the external lock releases, re-coordination runs", () =>
+    Effect.gen(function* () {
+      resetRunner()
+      setNow(1_000)
+      setRegistry([agent("fixer", ["code_edit", "test_run"], "level_2")])
+      // release the external lock held in the previous test → the file is now free.
+      testFileLock.release(externalLockId)
+      const runtime = yield* MultiAgentRuntime.Service
+      const summary = yield* runtime.coordinate(event({ payload: { files: ["src/locked.ts"] } }))
+      expect(summary.outcomes.map((o) => o.status)).toEqual(["completed", "completed"])
+      expect(ran).toEqual(["fixer", "fixer"]) // the runner ran now that the file is unlocked
+    }),
+  )
+
+  it.effect("§C3.1 a HUMAN lock blocks an agent subtask (human wins)", () =>
+    Effect.gen(function* () {
+      resetRunner()
+      setNow(1_000)
+      setRegistry([agent("fixer", ["code_edit", "test_run"], "level_2")])
+      // a HUMAN is editing the file — an agent acquire returns null (human precedence).
+      const human = testFileLock.acquire("src/human.ts", "human")
+      expect(human).not.toBeNull()
+      const runtime = yield* MultiAgentRuntime.Service
+      const summary = yield* runtime.coordinate(event({ payload: { files: ["src/human.ts"] } }))
+      const codeEdit = summary.outcomes.find((o) => o.capability === "code_edit")
+      expect(codeEdit?.status).toBe("deferred")
+      expect(codeEdit?.reason).toBe("file_locked")
+      expect(ran).toEqual([])
+      testFileLock.release(human!.lockId) // cleanup
+    }),
+  )
+})
+
+// ─── §C3.3 code-graph symbols — the resolver is consulted per subtask + fails safe ────────────────────
+// symbolsForFiles feeds the ConflictArbiter's SEMANTIC layer (symbol overlap). The partitioner gives
+// uniform fileScope to a single event's subtasks, so two same-symbol disjoint-file subtasks can't be
+// naturally constructed here — the arbiter's symbol-overlap logic is unit-tested directly in
+// packages/core/test/conflict-arbiter.test.ts. Here we prove the resolver is INVOKED with the subtask's
+// fileScope and that a THROWING resolver fails safe (coordination still completes).
+describe("MultiAgentRuntime §C3.3 symbolsForFiles resolver", () => {
+  const it = testEffect(makeLayer())
+
+  it.effect("§C3.3 symbolsForFiles is invoked with the subtask fileScope", () =>
+    Effect.gen(function* () {
+      resetRunner()
+      setNow(1_000)
+      setRegistry([agent("fixer", ["code_edit", "test_run"], "level_2")])
+      const calls: ReadonlyArray<string>[] = []
+      const spyLayer = makeLayer({
+        symbolsForFiles: (_event, files) =>
+          Effect.sync(() => {
+            calls.push(files)
+            return ["src/s.ts#Foo.bar"]
+          }),
+      })
+      const summary = yield* MultiAgentRuntime.Service.pipe(
+        Effect.flatMap((rt) => rt.coordinate(event({ payload: { files: ["src/s.ts"] } }))),
+        Effect.provide(spyLayer),
+      )
+      expect(summary.outcomes.map((o) => o.status)).toEqual(["completed", "completed"])
+      // the resolver was consulted once per admitted subtask, with that subtask's declared fileScope.
+      expect(calls.length).toBeGreaterThan(0)
+      expect(calls.every((files) => files.includes("src/s.ts"))).toBe(true)
+    }),
+  )
+
+  it.effect("§C3.3 a THROWING symbolsForFiles resolver fails safe — coordination still completes", () =>
+    Effect.gen(function* () {
+      resetRunner()
+      setNow(1_000)
+      setRegistry([agent("fixer", ["code_edit", "test_run"], "level_2")])
+      const throwingLayer = makeLayer({
+        symbolsForFiles: () => Effect.die(new Error("code graph unavailable")),
+      })
+      const summary = yield* MultiAgentRuntime.Service.pipe(
+        Effect.flatMap((rt) => rt.coordinate(event({ payload: { files: ["src/s.ts"] } }))),
+        Effect.provide(throwingLayer),
+      )
+      // symbols fall back to [] → file-level detection still works → the subtasks run normally.
+      expect(summary.outcomes.map((o) => o.status)).toEqual(["completed", "completed"])
+      expect(ran).toEqual(["fixer", "fixer"])
     }),
   )
 })
