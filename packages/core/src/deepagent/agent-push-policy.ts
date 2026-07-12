@@ -45,6 +45,12 @@ export interface PushFacts {
   // content-safety config: allowed external-link hosts + max content length.
   readonly allowedLinkHosts?: ReadonlyArray<string>
   readonly maxContentChars?: number
+  // §E3 文件路径权限 — the workspace's allowed FS roots for the path ACL. UNDEFINED ⇒ the path leg is a
+  // no-op (backward compatible). An explicit (possibly empty) array turns it ON: file-path tokens in the
+  // push content resolving OUTSIDE every root are stripped («path removed») — an empty array is
+  // fail-closed (strips every detected path). The agent-push runtime resolves this from the workspace
+  // directory / project roots so an agent can never leak an out-of-workspace path in a proactive push.
+  readonly allowedPathRoots?: ReadonlyArray<string>
 }
 
 export type PushDecision =
@@ -63,8 +69,9 @@ export type PushBlockReason = "not_authorized" | "rate_limited"
  * §B2 — decide the fate of a proactive agent push. Order (fail-closed first):
  *   1. 权限   → not_authorized unless group member OR workspace push permission.
  *   2. 限流   → rate_limited when pushesThisWindow >= limit.
- *   3. 内容安全 → scrub content (redact secrets / strip off-allowlist links / truncate); the injection
- *               flag is CARRIED to the caller (a flag, not a hard block, per §E3), never silently sent.
+ *   3. 内容安全 → scrub content (redact secrets / strip off-allowlist links / strip out-of-ACL file
+ *               paths / truncate); the injection flag is CARRIED to the caller (a flag, not a hard
+ *               block, per §E3), never silently sent.
  *   4. 静默时段 → normal/low → digest; high/critical → deliver with requiresReason.
  * Note: 去重 (idempotencyKey) is enforced at the persistence layer (unique key), not here.
  */
@@ -85,6 +92,9 @@ export const decide = (request: AgentPushRequest, facts: PushFacts): PushDecisio
     content: request.content,
     ...(facts.allowedLinkHosts != null ? { allowedLinkHosts: facts.allowedLinkHosts } : {}),
     ...(facts.maxContentChars != null ? { maxLogChars: facts.maxContentChars } : {}),
+    // §E3 文件路径权限 — enable the path ACL leg when the caller resolved the workspace roots (undefined
+    // ⇒ no-op, preserving the pure-policy tests that pass no roots).
+    ...(facts.allowedPathRoots != null ? { allowedPathRoots: facts.allowedPathRoots } : {}),
   })
 
   // 4. 静默时段
