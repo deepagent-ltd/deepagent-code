@@ -40,3 +40,19 @@ export interface IMMessage {
   updatedAt: number
   deletedAt: number | null
 }
+
+// V4.0 §B3 file attachments. Mirrors the server's `IMAttachmentResponse`
+// (packages/deepagent-code/src/server/routes/instance/httpapi/groups/im.ts).
+export interface IMAttachment {
+  id: string
+  workspaceID: string
+  projectID: string | null
+  groupID: string | null
+  messageID: string | null
+  uploadedBy: string
+  filename: string
+  mime: string
+  sizeBytes: number
+  checksum: string
+  createdAt: number
+}
