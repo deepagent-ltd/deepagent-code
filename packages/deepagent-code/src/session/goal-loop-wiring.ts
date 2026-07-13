@@ -25,6 +25,7 @@ import { Agent } from "../agent/agent"
 import { deriveSubagentSessionPermission } from "../agent/subagent-permissions"
 import { MessageID, SessionID } from "./schema"
 import { runValidationCommands } from "../deepagent/validation-exec"
+import type { GoalSteerRelay, PendingGoalSteer } from "./goal-driver"
 
 /**
  * V3.9 §D / §F.3 — Goal Loop production WIRING.
@@ -275,12 +276,24 @@ export type PlanBridge = {
 export const buildStepExecutor = (
   runTurn: SubagentTurnRunner,
   planBridgeFor?: (planDocId: string) => PlanBridge,
+  /**
+   * V4.1 §S1.3 — the goal-steer RELAY (shared with the driver). At prompt-build time the executor
+   * `drainForPrompt()`s any staged goal-directed guidance and threads it into the step prompt as a
+   * clearly-marked USER GUIDANCE section. Draining here (not in the driver) is what lets the driver
+   * stamp EXACTLY the steers a real tick threaded — a tick that short-circuits before the executor runs
+   * never drains, so nothing is consumed. Omitted ⇒ no goal-tick steering (base behaviour).
+   */
+  steerRelay?: GoalSteerRelay,
 ): StepExecutor =>
   (input) => {
     const planBridge = planBridgeFor?.(input.planDocId)
+    // §S1.3: pull the staged goal-steer into THIS tick's prompt (cache-safe — it becomes the child
+    // turn's user-message tail via renderStepPrompt, never a system prefix). Draining marks it as
+    // threaded-this-tick on the relay so the driver stamps exactly these ids consumed after the tick.
+    const steer = steerRelay ? steerRelay.drainForPrompt() : []
     return runTurn({
       agentType: "goal-worker",
-      prompt: renderStepPrompt(input),
+      prompt: renderStepPrompt({ ...input, steer }),
       ...(planBridge ? { prepareSession: (childId: string) => planBridge.seedChildPlan(childId) } : {}),
     }).pipe(
       Effect.map((turn): StepExecutorResult => {
@@ -344,19 +357,40 @@ export const makePlanBridge = (input: {
   },
 })
 
-const renderStepPrompt = (input: {
+/**
+ * Build the goal-worker's per-tick step prompt. §S1.3: when the driver staged mid-run user guidance
+ * (drained from the goal session's steer buffer BETWEEN ticks), it is rendered as a clearly-marked
+ * "USER GUIDANCE (mid-run steering)" section at the TAIL of the prompt. This is cache-safe by
+ * construction: the step prompt IS the child turn's user message, so the guidance lands in the model
+ * INPUT tail — never in any cached system prefix. Placing it FIRST (before the advance instruction)
+ * makes the controller/step-selection weigh it when picking the next step.
+ */
+export const renderStepPrompt = (input: {
   readonly goalId: string
   readonly sessionId: string
   readonly planDocId: string
   readonly activeStepId: string | null
-}): string =>
-  [
+  /** §S1.3 — mid-run steering drained from the goal session's steer buffer, threaded into this turn. */
+  readonly steer?: ReadonlyArray<PendingGoalSteer>
+}): string => {
+  const steerLines =
+    input.steer && input.steer.length > 0
+      ? [
+          `USER GUIDANCE (mid-run steering): the user sent the following while this goal was running.`,
+          `Weigh it BEFORE deciding the next step; it may add a requirement, skip work, or re-prioritise.`,
+          ...input.steer.map((s) => `- ${s.text}`),
+          ``,
+        ]
+      : []
+  return [
+    ...steerLines,
     `Advance goal ${input.goalId}. Execute exactly ONE plan step of real progress this turn.`,
     input.activeStepId
       ? `The active step is "${input.activeStepId}". Complete it, then mark it done and set the next step active.`
       : `No step is currently active. Read the plan, pick the next pending step, mark it active, and make progress.`,
     `Ground every "done" in a verifiable fact (a command you ran, a test that passed). Do NOT mark a step done to satisfy the gate.`,
   ].join("\n")
+}
 
 // ---------------------------------------------------------------------------------------------------
 // makeTaskSubagentRunner — the REAL turn runner (item 4 live wiring). One call = one SessionPrompt
@@ -488,6 +522,13 @@ export type GoalLoopWiringInput = {
    */
   readonly agentMode?: string
   readonly now?: () => number
+  /**
+   * V4.1 §S1.3 — the goal-steer RELAY shared with the driver's `runToCompletion`. When set, the step
+   * executor threads staged goal-directed steering into each tick's step prompt. The GoalManager creates
+   * ONE relay per goal run and passes the SAME instance here and to `runToCompletion`. Omitted ⇒ the goal
+   * loop runs with no goal-tick steering (unchanged behaviour).
+   */
+  readonly steerRelay?: GoalSteerRelay
 }
 
 /**
@@ -524,7 +565,8 @@ export const makeGoalLoopWiring = (
     return {
       store: input.store,
       ports,
-      executor: buildStepExecutor(input.runTurn, planBridgeFor),
+      // §S1.3: thread the shared goal-steer relay so each tick's step prompt carries staged user guidance.
+      executor: buildStepExecutor(input.runTurn, planBridgeFor, input.steerRelay),
       rollback: input.rollback,
       now: input.now ?? (() => Date.now()),
     } satisfies ControllerDeps
