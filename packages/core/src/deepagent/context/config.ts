@@ -80,11 +80,3 @@ export const resolveContextConfig = (overrides: ContextConfigOverrides = {}): Co
     excludeReasoning: merged.excludeReasoning,
   }
 }
-
-// The absolute token ceiling for a working set given a model context window. This is THE enforcement
-// point referenced by the Curator: budget = floor(contextTokens * budgetFraction), and budgetFraction
-// is already clamped to <= 0.5. Returns 0 for an unknown/zero context (caller then falls back).
-export const workingSetBudgetTokens = (contextTokens: number, config: ContextConfig): number => {
-  if (!Number.isFinite(contextTokens) || contextTokens <= 0) return 0
-  return Math.floor(contextTokens * config.budgetFraction)
-}
