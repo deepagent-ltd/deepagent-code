@@ -215,12 +215,15 @@ describe("V4.1 §S2 — goal plan hot-edit port (pendingPlanEdit / markPlanEditC
     // One pending edit, delivered on the FIRST iteration then cleared by markPlanEditConsumed.
     let pending: PlanInput | null = { goal: "reach the goal", steps: [{ step_id: "a", title: "renamed", status: "pending" }] }
     let consumedCount = 0
+    let consumedWith: PlanInput | null = null
     const ports: GoalDriverPorts = {
       ...noopPorts,
       pendingPlanEdit: () => Effect.succeed(pending),
-      markPlanEditConsumed: () =>
+      // The driver passes the EXACT edit it drained+applied so the port can identity-guard the clear.
+      markPlanEditConsumed: (applied) =>
         Effect.sync(() => {
           consumedCount += 1
+          consumedWith = applied
           pending = null
         }),
     }
@@ -240,6 +243,10 @@ describe("V4.1 §S2 — goal plan hot-edit port (pendingPlanEdit / markPlanEditC
     const revised = JSON.parse(store.get(planDocId)!.body) as PlanDoc
     expect(revised.steps[0].title).toBe("renamed")
     expect(consumedCount).toBe(1)
+    // The consume call received the SAME edit object the driver applied (enables the manager's identity
+    // guard so a newer edit admitted mid-apply is not clobbered).
+    expect(consumedWith).not.toBeNull()
+    expect((consumedWith as unknown as PlanInput).steps[0]!.title).toBe("renamed")
   })
 
   test("a pendingPlanEdit port DEFECT does not crash the driver (degrades to no edit this iteration)", async () => {

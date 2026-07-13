@@ -1,4 +1,4 @@
-import { For, Show, createSignal } from "solid-js"
+import { For, Index, Show, createSignal } from "solid-js"
 import { Dialog, DialogFooter } from "@deepagent-code/ui/v2/dialog-v2"
 import { Button } from "@deepagent-code/ui/button"
 import { Icon } from "@deepagent-code/ui/icon"
@@ -111,19 +111,23 @@ export function GoalPlanEditDialog(props: {
 
         <div class="flex flex-col gap-2">
           <span class="text-13-medium text-text-base">{language.t("composer.goal.editPlan.stepsLabel")}</span>
-          <For each={steps()}>
+          {/* Index (not For): the rows are keyed by POSITION, so editing a step's title in place updates
+              the existing DOM node rather than remounting it. With <For> (keyed by object reference) every
+              keystroke — which replaces the step object via setStep — would re-create the row and the
+              <input> would lose focus after one character. */}
+          <Index each={steps()}>
             {(s, i) => (
               <div class="flex items-center gap-2">
                 <input
                   class="min-w-0 flex-1 rounded-md border border-border-weak-base bg-surface-base px-2 py-1.5 text-13-regular text-text-strong outline-none focus:ring-2 focus:ring-accent-base"
                   placeholder={language.t("composer.goal.editPlan.stepPlaceholder")}
-                  value={s.title}
-                  onInput={(e) => setStep(i(), { title: e.currentTarget.value })}
+                  value={s().title}
+                  onInput={(e) => setStep(i, { title: e.currentTarget.value })}
                 />
                 <select
                   class="shrink-0 rounded-md border border-border-weak-base bg-surface-base px-2 py-1.5 text-13-regular text-text-strong outline-none focus:ring-2 focus:ring-accent-base"
-                  value={s.status}
-                  onChange={(e) => setStep(i(), { status: normStatus(e.currentTarget.value) })}
+                  value={s().status}
+                  onChange={(e) => setStep(i, { status: normStatus(e.currentTarget.value) })}
                 >
                   <For each={STATUS_OPTIONS}>
                     {(opt) => <option value={opt}>{language.t(STATUS_LABEL_KEY[opt] as never)}</option>}
@@ -133,14 +137,14 @@ export function GoalPlanEditDialog(props: {
                   variant="ghost"
                   size="small"
                   class="size-8 p-0 shrink-0"
-                  onClick={() => removeStep(i())}
+                  onClick={() => removeStep(i)}
                   aria-label={language.t("composer.goal.editPlan.removeStep")}
                 >
                   <Icon name="trash" class="size-4" />
                 </Button>
               </div>
             )}
-          </For>
+          </Index>
           <Button variant="ghost" size="small" class="self-start" icon="plus" onClick={addStep}>
             {language.t("composer.goal.editPlan.addStep")}
           </Button>
