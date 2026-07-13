@@ -5,6 +5,10 @@ import { WorkspaceRouteContext } from "../middleware/workspace-routing"
 import { Observability } from "@deepagent-code/core/deepagent/observability"
 import { ApprovalQueue } from "@deepagent-code/core/deepagent/approval-queue"
 import { HumanTakeover } from "@deepagent-code/core/deepagent/human-takeover"
+import { RollbackAudit } from "@deepagent-code/core/deepagent/rollback-audit"
+import { Session } from "@/session/session"
+import { SessionRevert } from "@/session/revert"
+import { SessionID, MessageID } from "@/session/schema"
 
 // V4.0 §D2/§F — Oversight handlers. Project the durable V4 substrate for the Dashboard: metrics + the
 // causal trace (Observability) and the human Approval Queue (list pending + resolve). Workspace scope
@@ -25,6 +29,9 @@ export const oversightHandlers = HttpApiBuilder.group(InstanceHttpApi, "oversigh
     const observability = yield* Observability.Service
     const approvals = yield* ApprovalQueue.Service
     const takeovers = yield* HumanTakeover.Service
+    const rollbacks = yield* RollbackAudit.Service
+    const sessions = yield* Session.Service
+    const revertSvc = yield* SessionRevert.Service
 
     const oversightMetrics = Effect.fn("OversightHttpApi.metrics")(function* (ctx) {
       const workspaceID = yield* workspaceKey
@@ -93,11 +100,60 @@ export const oversightHandlers = HttpApiBuilder.group(InstanceHttpApi, "oversigh
       })
     })
 
+    const oversightRollback = Effect.fn("OversightHttpApi.rollback")(function* (ctx) {
+      const workspaceID = yield* workspaceKey
+      // §D2 — roll back a session's agent-produced changes. The target session MUST belong to the routed
+      // workspace: resolve it, then derive ITS workspace key by the SAME canonical rule and compare. An
+      // unknown session, or one in another tenant, is indistinguishable → typed 404 (never a cross-tenant
+      // revert, never an untyped 500). This is the security boundary — no cross-workspace revert.
+      const session = yield* sessions
+        .get(SessionID.make(ctx.payload.sessionID))
+        .pipe(Effect.catchCause(() => Effect.succeed(null)))
+      if (!session) return yield* new HttpApiError.NotFound()
+      const sessionKey = ApprovalQueue.deriveWorkspaceKey({
+        workspaceID: session.workspaceID,
+        directory: session.directory,
+      })
+      if (sessionKey !== workspaceID) return yield* new HttpApiError.NotFound()
+
+      // Invoke SessionRevert — the SAME primitive the goal loop's production rollback port uses
+      // (goal-loop-wiring.ts liveRollback): revert to the last message. Best-effort: if the session is
+      // busy or there is nothing to revert, the outcome is "noop" (never a 500 — a rollback is recorded
+      // either way as an audit fact). A revert only happens when there is a message to revert to.
+      const messages = yield* sessions
+        .messages({ sessionID: SessionID.make(ctx.payload.sessionID) })
+        .pipe(Effect.orElseSucceed(() => []))
+      const latestMessageID = messages.at(-1)?.info.id ?? null
+      const outcome: RollbackAudit.RollbackOutcome =
+        latestMessageID == null
+          ? "noop"
+          : yield* revertSvc
+              .revert({
+                sessionID: SessionID.make(ctx.payload.sessionID),
+                messageID: MessageID.make(latestMessageID),
+              })
+              .pipe(
+                Effect.as<RollbackAudit.RollbackOutcome>("reverted"),
+                Effect.catchCause(() => Effect.succeed<RollbackAudit.RollbackOutcome>("noop")),
+              )
+
+      // Append the audit row + feed the §F rollback_total metric. The actor is the routed workspace
+      // identity (never client-supplied → a caller can't spoof who rolled back).
+      return yield* rollbacks.record({
+        workspaceID,
+        sessionID: ctx.payload.sessionID,
+        actorID: workspaceID,
+        outcome,
+        ...(ctx.payload.reason != null ? { reason: ctx.payload.reason } : {}),
+      })
+    })
+
     return handlers
       .handle("oversightMetrics", oversightMetrics)
       .handle("oversightTrace", oversightTrace)
       .handle("oversightApprovals", oversightApprovals)
       .handle("oversightResolve", oversightResolve)
       .handle("oversightTakeover", oversightTakeover)
+      .handle("oversightRollback", oversightRollback)
   }),
 )
