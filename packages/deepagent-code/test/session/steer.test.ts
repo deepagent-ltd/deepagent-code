@@ -336,6 +336,50 @@ off.instance("admit buffers steers, pending returns them in send-order, markCons
   { config: cfg },
 )
 
+// ── §S1.3 FIX 1: the DELIVERY dimension isolates two drainers on the SAME session id ────────────────
+off.instance(
+  "delivery scoping: pending/markConsumed/hasPending default to steer, and goal_steer is a disjoint channel",
+  () =>
+    Effect.gen(function* () {
+      const steer = yield* SessionSteer.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({ title: "Steer delivery" })
+
+      // On the SAME session id: one parent-chat steer (delivery="steer") and one goal-directed steer
+      // (delivery="goal_steer"). This models a goal running in a session whose parent runLoop is also live.
+      yield* steer.admit({ id: SessionMessage.ID.create(), sessionID: chat.id, prompt: mkPrompt("chat steer") })
+      yield* steer.admit({
+        id: SessionMessage.ID.create(),
+        sessionID: chat.id,
+        prompt: mkPrompt("goal guidance"),
+        delivery: "goal_steer",
+      })
+
+      // The parent runLoop's drain (default "steer") sees ONLY the chat steer.
+      const steerRows = yield* steer.pending(chat.id)
+      expect(steerRows.map((d) => d.prompt.text)).toEqual(["chat steer"])
+      expect(yield* steer.hasPending(chat.id)).toBe(true) // default channel has one
+
+      // The goal driver's drain ("goal_steer") sees ONLY the goal guidance.
+      const goalRows = yield* steer.pending(chat.id, "goal_steer")
+      expect(goalRows.map((d) => d.prompt.text)).toEqual(["goal guidance"])
+      expect(yield* steer.hasPending(chat.id, "goal_steer")).toBe(true)
+
+      // Consuming ALL of the goal channel does NOT touch the steer channel (disjoint rows, no contention).
+      yield* steer.markConsumed(chat.id, goalRows.map((d) => d.id), "goal_steer")
+      expect(yield* steer.pending(chat.id, "goal_steer")).toHaveLength(0)
+      expect(yield* steer.hasPending(chat.id, "goal_steer")).toBe(false)
+      // The parent chat steer is UNTOUCHED — the parent runLoop can still drain it normally.
+      expect((yield* steer.pending(chat.id)).map((d) => d.prompt.text)).toEqual(["chat steer"])
+      expect(yield* steer.hasPending(chat.id)).toBe(true)
+
+      // Symmetrically, consuming the steer channel leaves any (re-admitted) goal_steer row untouched.
+      yield* steer.markConsumed(chat.id, steerRows.map((d) => d.id))
+      expect(yield* steer.hasPending(chat.id)).toBe(false)
+    }),
+  { config: cfg },
+)
+
 off.instance("admit is idempotent on message id (no double-buffer)", () =>
   Effect.gen(function* () {
     const steer = yield* SessionSteer.Service
