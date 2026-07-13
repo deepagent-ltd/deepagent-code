@@ -295,18 +295,19 @@ describe("§S1.3 goal-tick steering — absorb a steer between ticks, consumed e
   })
 })
 
-describe("§S1.3 FIX 2 — steerGoal terminal gate (no orphan steer after a goal settles)", () => {
-  // The gate GoalManager.steerGoal applies AFTER the running/stopped check: once the active-goal pointer
-  // reports a TERMINAL phase, no live driver will drain again, so steerGoal must refuse (else it would
-  // admit a steer that is never consumed — the orphan-buffer defect). "running"/"paused" are the only
-  // non-terminal phases (a paused goal resumes and drains). This asserts the exact decision boundary.
+describe("§S1.3 FIX 2 — terminal-goal gate (no orphan steer/edit after a goal settles)", () => {
+  // The orphan guard that promptOrSteer's goal-steer branch AND GoalManager.editPlan share: once the
+  // active-goal pointer reports a TERMINAL phase, no live driver will drain again, so a goal-directed
+  // steer/edit must NOT be admitted (else it would buffer a steer that is never consumed — the
+  // orphan-buffer defect). "running"/"paused" are the only non-terminal phases (a paused goal resumes and
+  // drains). This asserts the exact decision boundary the isTerminalGoalPhase predicate enforces.
   test("terminal phases (done / needs_human / rolled_back / stopped) are terminal; running/paused are not", () => {
     expect(isTerminalGoalPhase("done")).toBe(true)
     expect(isTerminalGoalPhase("needs_human")).toBe(true)
     expect(isTerminalGoalPhase("rolled_back")).toBe(true)
     expect(isTerminalGoalPhase("stopped")).toBe(true)
     // A goal that finished NATURALLY (done) is terminal even though its control is still non-null and
-    // non-stopped (background.start has no onFinish that clears control) — this is exactly the case the
+    // non-stopped (background.start has no onFinish that clears control) — this is exactly the case a
     // `!c || c.stopped` check missed, so the phase gate is what refuses the orphan admit.
     expect(isTerminalGoalPhase("running")).toBe(false)
     expect(isTerminalGoalPhase("paused")).toBe(false)

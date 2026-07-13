@@ -22,8 +22,6 @@ import { SessionID } from "./schema"
 import { GoalEvent } from "./goal-event"
 import { PlanEvent } from "../tool/plan-write"
 import { Log } from "@deepagent-code/core/util/log"
-import { SessionMessage } from "@deepagent-code/core/session/message"
-import { Prompt } from "@deepagent-code/core/session/prompt"
 import {
   GoalLoopWiring,
   liveDiagnostics,
@@ -32,6 +30,7 @@ import {
   type PanelQuestionInput,
 } from "./goal-loop-wiring"
 import { GoalDriver, type GoalDriverPorts } from "./goal-driver"
+import { writeGovernanceAudit } from "./goal-governance-audit"
 import { DeepAgentEventBus } from "@deepagent-code/core/deepagent/deepagent-event-bus"
 import { ApprovalQueue } from "@deepagent-code/core/deepagent/approval-queue"
 import { LMNEvents } from "@deepagent-code/core/deepagent/lmn-events"
@@ -59,38 +58,6 @@ const goalStoreRoot = (sessionID: string): string =>
 
 const glog = Log.create({ service: "session.goal" })
 
-// V4.1 — write a durable audit record of a human governance action on a running goal (a plan hot-edit
-// or a mid-run steer) into the goal's Document Graph, alongside the per-tick worklog trail. This gives
-// "user X edited/steered goal Y at T" a queryable home (the worklog docs record the loop's own ticks;
-// these record the HUMAN interventions). Best-effort + idempotent per (kind, monotonic clock): a failure
-// never blocks the governance action. `detail` carries the redacted specifics (step count / steer length,
-// not full free-text, to keep the audit body bounded and PII-light).
-const writeGovernanceAudit = (
-  sessionID: string,
-  goalId: string,
-  kind: "plan_edit" | "steer",
-  detail: Record<string, unknown>,
-): void => {
-  try {
-    const store = new DocumentStore(goalStoreRoot(sessionID))
-    // A stable-ish slug that does not collide across repeated actions: include the current doc count so
-    // successive edits/steers each land their own audit record rather than overwriting (upsert would
-    // no-op an identical body, but sequential human actions differ).
-    const seq = store.list({ type: "worklog", scope: `run:${sessionID}` }).length
-    store.upsert({
-      type: "worklog",
-      scope: `run:${sessionID}`,
-      description: `goal ${goalId} human ${kind} #${seq}`,
-      idSlug: `goal-governance-${goalId}-${kind}-${seq}`,
-      body: JSON.stringify({ kind, goalId, sessionID, ...detail }, null, 2),
-      provenance: { source: "human", run_ref: `run:${sessionID}` },
-      extensions: { goal_id: goalId, governance: kind },
-    })
-  } catch {
-    /* best-effort audit — never block the governance action */
-  }
-}
-
 // DESIGN mode's plan source: read the human-authored `.deepagent-code/plans/goal+plan.md` from the
 // session's working directory and parse it into a PlanDoc (+ any declared criteria). Default-safe — a
 // missing/unreadable/malformed file returns null so `start` falls through to the next plan source and
@@ -108,8 +75,9 @@ const readGoalPlanFile = (cwd: string, sessionID: string): ParsedGoalPlan | null
 
 // §S1.3 FIX 2 — the terminal active-goal-pointer phases. A goal in any of these has settled: its driver
 // job has returned (natural terminal) or been cancelled (stopped), so no further tick will drain the
-// steer buffer. steerGoal refuses to admit once the pointer reports one of these (no orphan buffering).
-// "running" and "paused" are the only non-terminal phases (a paused goal resumes and drains again).
+// steer buffer. The goal-steer ingress (promptOrSteer) and editPlan refuse to admit once the pointer
+// reports one of these (no orphan buffering). "running" and "paused" are the only non-terminal phases
+// (a paused goal resumes and drains again).
 export const isTerminalGoalPhase = (phase: string): boolean =>
   phase === "done" || phase === "needs_human" || phase === "rolled_back" || phase === "stopped"
 
@@ -179,19 +147,6 @@ export interface Interface {
   readonly stop: (sessionID: string) => Effect.Effect<boolean>
   readonly status: (sessionID: string) => Effect.Effect<GoalSnapshot | null>
   readonly startable: (sessionID: string) => Effect.Effect<GoalStartable>
-  /**
-   * V4.1 §S1.3 — admit a GOAL-directed steering message. The ingress (S1.2 / IM) calls this to guide a
-   * RUNNING goal ("also handle the edge case", "skip step 3"); the driver drains it BETWEEN ticks and
-   * threads it into the next step prompt. Buffered on the GOAL (parent) session's SessionSteer buffer —
-   * a DIFFERENT key than the goal-worker child sessions S1.1 drains, so no double-consume. Idempotent on
-   * `id` (an at-least-once ingress never double-buffers). Returns false when no goal is running for the
-   * session (nothing to steer). Best-effort admit failures surface as false rather than crashing ingress.
-   */
-  readonly steerGoal: (input: {
-    readonly sessionID: string
-    readonly text: string
-    readonly id?: string
-  }) => Effect.Effect<boolean>
   /**
    * V4.1 §S2 — apply a USER plan edit to a RUNNING or PAUSED goal. The revised plan (a PlanInput) is
    * enqueued on the control channel and applied by the driver BETWEEN ticks (via its own store handle,
@@ -806,63 +761,12 @@ export const layer = Layer.effect(
         return { startable: false, source: "none" as const }
       })
 
-    // §S1.3 — admit a GOAL-directed steering message onto the GOAL (parent) session's steer buffer (on the
-    // DISTINCT `goal_steer` delivery channel), so the running driver absorbs it between ticks. Only when a
-    // goal is actually running AND NOT YET TERMINAL for the session (else there is no live driver to drain
-    // it — admitting would leak an orphan steer that is never consumed).
-    //
-    // FIX 2 (orphan-after-termination): checking `!c || c.stopped` alone is insufficient — a goal that
-    // finished NATURALLY (done / needs_human / rolled_back) leaves the control non-null and non-stopped
-    // (background.start has no onFinish that clears it), so getControl would still say "running" and
-    // steerGoal would admit a steer no driver will ever drain. We therefore gate on the ACTIVE-GOAL
-    // POINTER PHASE (the authoritative terminal signal, set by finalizeOutcome / stop): any terminal phase
-    // ⇒ refuse. `admit` is idempotent on `id`, so an at-least-once ingress never double-buffers; a blank
-    // message is a no-op.
-    const steerGoal: Interface["steerGoal"] = (input) =>
-      Effect.gen(function* () {
-        const text = input.text.trim()
-        if (text.length === 0) return false
-        const c = yield* getControl(input.sessionID)
-        if (!c || c.stopped) return false
-        // Terminal phase (done / needs_human / rolled_back / stopped) ⇒ the driver has settled and will not
-        // drain again. Refuse rather than buffer an orphan. "paused" is NOT terminal (a resume re-drives).
-        const ptr = AgentGateway.DeepAgentSessionState.getActiveGoal(input.sessionID)
-        if (ptr && isTerminalGoalPhase(ptr.phase)) return false
-        const id = input.id ? SessionMessage.ID.make(input.id) : SessionMessage.ID.create()
-        // Surface an admit failure as false (per the interface contract "best-effort admit failures surface
-        // as false"): if the durable write is swallowed and we still returned true, the ingress would tell
-        // the user their guidance was accepted when it was dropped. A DB write failure ⇒ false so the caller
-        // can signal the steer was NOT absorbed.
-        const admitted = yield* steerBuffer
-          .admit({
-            id,
-            sessionID: SessionID.make(input.sessionID),
-            prompt: Prompt.fromUserMessage({ text }),
-            delivery: GoalDriver.GOAL_STEER_DELIVERY,
-          })
-          .pipe(
-            Effect.as(true),
-            Effect.catchCause(() => Effect.succeed(false)),
-          )
-        // Audit + operational log ONLY a genuinely-absorbed steer (admit succeeded). We record the LENGTH,
-        // not the text, to keep the audit body bounded and PII-light. A dropped admit (false) is not
-        // audited as accepted — consistent with returning false to the caller.
-        if (admitted) {
-          writeGovernanceAudit(input.sessionID, c.goalId, "steer", { textChars: text.length })
-          glog.info("goal steer admitted", {
-            sessionID: input.sessionID,
-            goalId: c.goalId,
-            textChars: text.length,
-          })
-        }
-        return admitted
-      })
-
-    // §S2 — apply a USER plan edit to a running/paused goal. Like steerGoal, this does NOT touch the
+    // §S2 — apply a USER plan edit to a running/paused goal. Like the goal-steer path, this does NOT touch the
     // durable doc directly (the running driver holds its own DocumentStore handle that would not see an
     // HTTP-fiber write). It ENQUEUES the revised plan onto the control channel; the driver drains it
     // between ticks and applies it via its own handle (loop.applyPlanEdit → upsert + re-baseline). Refuses
-    // when no goal is running OR the goal reached a terminal phase (same orphan guard as steerGoal). The
+    // when no goal is running OR the goal reached a terminal phase (the orphan guard: no live driver to
+    // drain a terminal goal). The
     // revised plan is normalized through buildPlanFromInput, which PRESERVES step ids + evidence across the
     // rewrite (accumulated proof survives a re-status/reorder). Last-write-wins: a newer edit replaces an
     // un-applied older one on the control slot.
@@ -896,7 +800,7 @@ export const layer = Layer.effect(
         return true
       })
 
-    return Service.of({ start, pause, resume, stop, status, startable, steerGoal, editPlan })
+    return Service.of({ start, pause, resume, stop, status, startable, editPlan })
   }),
 )
 
