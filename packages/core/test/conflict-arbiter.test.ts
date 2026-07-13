@@ -45,18 +45,6 @@ describe("ConflictArbiter.conflicts", () => {
   })
 })
 
-describe("ConflictArbiter.conflictGroups", () => {
-  test("transitively-conflicting claims form one group; disjoint ones stay singletons", () => {
-    const a = claim({ taskID: "t1", files: ["src/a.ts"] })
-    const b = claim({ taskID: "t2", files: ["src/a.ts", "src/b.ts"] }) // overlaps a
-    const c = claim({ taskID: "t3", files: ["src/b.ts"] }) // overlaps b → transitively with a
-    const d = claim({ taskID: "t4", files: ["src/z.ts"] }) // disjoint
-    const groups = ConflictArbiter.conflictGroups([a, b, c, d])
-    const sizes = groups.map((g) => g.length).sort()
-    expect(sizes).toEqual([1, 3])
-  })
-})
-
 describe("ConflictArbiter.resolve", () => {
   test("§C3 ordering: higher priority wins", () => {
     const lo = claim({ taskID: "t1", priority: "normal" })

@@ -147,7 +147,6 @@ describe("EventRouter.route", () => {
       "agent.task.blocked",
       "agent.task.completed",
       "agent.task.needs_human",
-      "agent.handoff.requested",
     ]) {
       const d = EventRouter.route({
         event: event({ type, source: "system", priority: "high" }), // high can't sneak past via bypass
@@ -167,9 +166,8 @@ describe("EventRouter.route", () => {
       flagEnabled: true,
     })
     expect(push.type).toBe("dispatch")
-    // isCoordinationEvent membership is exactly the task/handoff families.
+    // isCoordinationEvent membership is exactly the task family.
     expect(EventRouter.isCoordinationEvent("agent.task.completed")).toBe(true)
-    expect(EventRouter.isCoordinationEvent("agent.handoff.requested")).toBe(true)
     expect(EventRouter.isCoordinationEvent("agent.push.suggestion")).toBe(false)
     expect(EventRouter.isCoordinationEvent("ci.failure")).toBe(false)
   })

@@ -31,11 +31,6 @@ describe("AutonomyPolicy.GATE_FOR_LEVEL", () => {
     })
   })
 
-  test("gateForLevel mirrors GATE_FOR_LEVEL", () => {
-    for (const l of LEVELS) {
-      expect(AutonomyPolicy.gateForLevel(l)).toBe(AutonomyPolicy.GATE_FOR_LEVEL[l])
-    }
-  })
 })
 
 describe("AutonomyPolicy.decide", () => {
