@@ -164,7 +164,7 @@ export type GoalDriverPorts = {
   readonly shouldStop: () => Effect.Effect<boolean>
   /**
    * V4.1 §S1.3 — cooperative GOAL-LEVEL steering. Drains any user guidance directed at the GOAL (admitted
-   * to the goal session's SessionSteer buffer via GoalManager.steerGoal) and threads it into the NEXT
+   * to the goal session's SessionSteer buffer via the promptOrSteer goal_steer channel) and threads it into the NEXT
    * tick's step prompt so the goal-worker absorbs it when selecting/executing the next step. KEYING (the
    * anti-double-consume invariant): this drains the GOAL (parent) session's buffer; the goal-worker turns
    * run in FRESH child session ids, so S1.1's intra-turn child-runLoop drain reads a DIFFERENT buffer and
