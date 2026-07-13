@@ -47,11 +47,15 @@ type RawSdkClient = {
 
 export type PanelGoalClient = RawSdkClient
 
-/** Which V3.9 experimental subsystems this server has enabled (from /global/capabilities.features). */
+/** Which V3.9/V4 subsystems this server has enabled (from /global/capabilities.features). */
 export type DeepAgentCapabilities = {
   expertPanel: boolean
   goalLoop: boolean
   wiki: boolean
+  // V4.0 §D2 — the Multi-Agent Runtime flag gates the Oversight Approval Queue's PRODUCERS
+  // (goal-manager / panel-convene-consumer). When it is OFF the queue can never be fed, so the client
+  // hides the Oversight entry rather than showing a permanently-empty dead-end (T1.1). Default OFF.
+  v4MultiAgentRuntime: boolean
 }
 
 /**
@@ -68,6 +72,7 @@ export const fetchCapabilities = async (client: PanelGoalClient): Promise<DeepAg
     expertPanel: response.data?.features?.expertPanel ?? false,
     goalLoop: response.data?.features?.goalLoop ?? false,
     wiki: response.data?.features?.wiki ?? false,
+    v4MultiAgentRuntime: response.data?.features?.v4MultiAgentRuntime ?? false,
   }
 }
 
