@@ -264,7 +264,12 @@ export const layerWith = (options?: LayerOptions) =>
           } else {
             // terminal drop (flag_disabled / no_match / deduped) — ack the delivery (the durable event
             // log keeps it for the §F2 trace) and record WHY as an observability signal (§A4 event_dropped).
+            // T4.3: the comment always claimed to record the drop, but only the backpressure branch did —
+            // so terminal drops (the common no_match / flag_disabled case) were invisible to the shed-rate
+            // metric. Record it here too (best-effort, ordered before the ack) so Oversight sees the full
+            // drop picture by reason, not just backpressure.
             log.info("route.dropped", { eventType: event.type, eventID: event.id, reason: decision.reason })
+            yield* bus.recordDrop({ event, reason: decision.reason })
             yield* bus.ack(DISPATCH_GROUP, event.id)
           }
 

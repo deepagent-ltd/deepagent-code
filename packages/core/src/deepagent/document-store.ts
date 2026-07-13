@@ -49,11 +49,21 @@ export type DocType =
   // for integrity (INV-2). body carries path/language/symbol/signature; an optional content sha in
   // extensions is for change-detection only, never identity/dedup. The lightweight indexer that
   // registers these nodes is Phase 3's concern — this union entry is the only Phase-0 change.
-  //   ⚠ Phase 3 TODO (v3.8.1 §B.3 version-bloat tradeoff): upsert()/update() bump version+1 and write
-  //   a supersede link on every fingerprint change (INV-4, append-only). A frequently-edited code
-  //   base makes code_symbol version files grow linearly. Phase 3's indexer must decide the mitigation
-  //   (mtime-batched rate-limited rebuild, or relax append-only to in-place overwrite for code_symbol
-  //   since code nodes are derived data with no audit value). NOT relaxed here — left as a marker.
+  //   version-bloat tradeoff (v3.8.1 §B.3): upsert()/update() bump version+1 and write a supersede link
+  //   on every fingerprint change (INV-4, append-only). A frequently-edited code base makes code_symbol
+  //   version files grow linearly.
+  //   ⚠ T4.2 EVALUATION (V4.1): bloat is now bounded on TWO layers before it reaches here —
+  //     (1) content-sha gating in code-indexer.registerFile writes ZERO new versions for an unchanged
+  //         file (a re-index of an unchanged tree bumps nothing), and
+  //     (2) T4.1's mtime gate in code-index-trigger skips the read+hash of an mtime-unchanged file, so
+  //         an unchanged file never even reaches registerFile.
+  //   So a version is created ONLY on a genuine content change — which is semantically correct
+  //   versioning, one version per real edit. The residual (a single file edited many times across a
+  //   long session accumulates that many versions) is low-severity derived data. DECISION: do NOT relax
+  //   the append-only invariant for code_symbol here — the in-place-overwrite option would carve a
+  //   special case into a load-bearing store invariant (INV-4) for a bounded, cosmetic cost. If disk
+  //   growth ever becomes real, prefer a periodic retention sweep of superseded code_symbol versions
+  //   (external to the store's write path) over relaxing append-only. Left as a marker, not relaxed.
   | "code_symbol"
   // ledger (v3.8.0 App-A §C2 Session Ledger): the session's structured, incrementally-maintained
   // authoritative fact ledger (entries {kind: goal|constraint|decision|done|open|next|artifact,
