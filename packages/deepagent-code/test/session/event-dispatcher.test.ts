@@ -5,6 +5,7 @@ import { DeepAgentEventBus } from "@deepagent-code/core/deepagent/deepagent-even
 import { Scheduler } from "@deepagent-code/core/deepagent/scheduler"
 import { DeepAgentEvent } from "@deepagent-code/core/deepagent/deepagent-event"
 import { Database } from "@deepagent-code/core/database/database"
+import { DeepAgentEventDropTable } from "@deepagent-code/core/deepagent/deepagent-event-sql"
 import { AgentListProviderService } from "@deepagent-code/core/im/agent-list-provider"
 import type { AgentDescriptor } from "@deepagent-code/core/im/mention-parser"
 import { WorkspaceConfig } from "@deepagent-code/core/deepagent/workspace-config"
@@ -124,6 +125,11 @@ describe("EventDispatcher", () => {
       const decision = yield* dispatcher.handle(event)
       expect(decision).toMatchObject({ type: "dropped", reason: "no_match" })
       expect(recorded.length).toBe(0)
+      // T4.3: a TERMINAL drop (no_match here) now records a queryable §A4 event_dropped row — previously
+      // only backpressure did, so no_match/flag_disabled drops were invisible to the shed-rate metric.
+      const { db } = yield* Database.Service
+      const drops = yield* db.select().from(DeepAgentEventDropTable).all().pipe(Effect.orDie)
+      expect(drops.map((d) => d.reason)).toContain("no_match")
     }),
   )
 
