@@ -58,6 +58,7 @@ import * as EffectLogger from "@deepagent-code/core/effect/logger"
 import { InstanceState } from "@/effect/instance-state"
 import { TaskTool, type TaskPromptOps } from "@/tool/task"
 import { SessionRunState } from "./run-state"
+import { SessionSteer } from "./steer"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { archiveSessionOnCompletion } from "@/wiki/session-archive"
 import { EventV2Bridge } from "@/event-v2-bridge"
@@ -114,6 +115,10 @@ function isOrphanedInterruptedTool(part: SessionV1.ToolPart) {
 export interface Interface {
   readonly cancel: (sessionID: SessionID) => Effect.Effect<void>
   readonly prompt: (input: PromptInput) => Effect.Effect<SessionV1.WithParts, Image.Error>
+  // V4.1 §S1.1: buffer a mid-turn user message into the durable steer queue for absorption at the next
+  // model-request boundary of the live turn loop. This is the admit() API; S1.2 wires the busy-session
+  // ingress that decides WHEN to route a message here vs. the normal prompt() path. Idempotent on `id`.
+  readonly steer: (input: SteerInput) => Effect.Effect<SessionSteer.Admitted>
   readonly loop: (input: LoopInput) => Effect.Effect<SessionV1.WithParts>
   readonly shell: (input: ShellInput) => Effect.Effect<SessionV1.WithParts, Session.BusyError>
   readonly command: (input: CommandInput) => Effect.Effect<SessionV1.WithParts, Image.Error>
@@ -166,6 +171,7 @@ export const layer = Layer.effect(
     const scope = yield* Scope.Scope
     const instruction = yield* Instruction.Service
     const state = yield* SessionRunState.Service
+    const steerBuffer = yield* SessionSteer.Service
     const revert = yield* SessionRevert.Service
     const snapshot = yield* Snapshot.Service
     const summary = yield* SessionSummary.Service
@@ -1841,6 +1847,82 @@ export const layer = Layer.effect(
       throw new Error("Impossible")
     })
 
+    // V4.1 §S1.1: drain the durable steer buffer and PERSIST each pending steer as an ordinary V1 user
+    // message at the TAIL of history — exactly the append path a normal prompt uses (updateMessage +
+    // updatePart). This is codex's "drain pendingInput into history as a role:user tail message". Because
+    // the steer lands as a plain history message BEFORE the single volatile round-context tail assembled
+    // in llm/request.ts, the cached system prefix and the single trailing volatile message are both
+    // untouched — cache-safe (see request.ts applyCaching slice(-2)). Returns the count drained so the
+    // caller can decide whether the freshly-read history now includes new tail user messages.
+    //
+    // EXACTLY-ONCE, PERSIST-FIRST (no loss + no duplicate). We (1) read the pending steers non-
+    // consumingly, (2) materialize each as a history message, THEN (3) mark them consumed. If the process
+    // crashes between (2) and (3) the row stays pending, so the next drain re-materializes it — a no-op
+    // because BOTH the message id AND its text part id are DERIVED FROM THE STEER ID (stable across
+    // replays), and the V1 projector upserts on those ids (MessageUpdated/PartUpdated →
+    // onConflictDoUpdate on the id). So re-persisting hits the same row (idempotent), never a duplicate
+    // turn. The steer id is an ascending SessionMessage.ID minted at admit time, so tail-sorting (Check 3)
+    // is preserved. This replaces the earlier stamp-then-persist ordering, whose crash window between the
+    // consume stamp and the message write could lose a steer permanently.
+    const steerPartID = (messageID: MessageID) =>
+      // Deterministic, valid PartID (prt_<message-suffix>) so a replayed persist targets the SAME part
+      // row and the projector's onConflictDoUpdate makes it a no-op instead of appending a duplicate.
+      PartID.make("prt_" + messageID.slice("msg_".length))
+    const drainSteers = Effect.fn("SessionPrompt.drainSteers")(function* (sessionID: SessionID) {
+      if (!flags.v4Steering) return 0
+      const pending = yield* steerBuffer.pending(sessionID)
+      if (pending.length === 0) return 0
+      const current = yield* db
+        .select({ agent: SessionTable.agent, model: SessionTable.model })
+        .from(SessionTable)
+        .where(eq(SessionTable.id, sessionID))
+        .get()
+        .pipe(Effect.orDie)
+      const defaultAgent = current?.agent ?? (yield* agents.defaultInfo())?.name ?? "build"
+      const resolved = current?.model
+        ? {
+            providerID: ProviderV2.ID.make(current.model.providerID),
+            modelID: ModelV2.ID.make(current.model.id),
+            variant:
+              current.model.variant && current.model.variant !== "default" ? current.model.variant : undefined,
+          }
+        : yield* currentModel(sessionID)
+      const variant = "variant" in resolved ? resolved.variant : undefined
+      const persisted: SessionMessage.ID[] = []
+      for (const admitted of pending) {
+        const agentName = admitted.prompt.agents?.[0]?.name ?? defaultAgent
+        const info: SessionV1.User = {
+          id: MessageID.make(admitted.id),
+          role: "user",
+          sessionID,
+          time: { created: admitted.timeCreated },
+          agent: agentName,
+          model: {
+            providerID: resolved.providerID,
+            modelID: resolved.modelID,
+            ...(variant ? { variant } : {}),
+          },
+        }
+        // PERSIST-FIRST: materialize the history message + its text part (both keyed by the steer id, so
+        // a replay after a mid-drain crash is an idempotent upsert, not a duplicate) BEFORE stamping the
+        // steer consumed below.
+        yield* sessions.updateMessage(info)
+        yield* sessions.updatePart({
+          id: steerPartID(info.id),
+          messageID: info.id,
+          sessionID,
+          type: "text",
+          text: admitted.prompt.text,
+        })
+        persisted.push(admitted.id)
+        yield* elog.info("steer absorbed at boundary", { sessionID, messageID: info.id, seq: admitted.seq })
+      }
+      // Only AFTER every steer is durably in history do we mark them consumed. A crash before this leaves
+      // them pending → re-materialized (idempotently) on the next drain. No loss, no double-apply.
+      yield* steerBuffer.markConsumed(sessionID, persisted)
+      return pending.length
+    })
+
     const runLoop: (sessionID: SessionID) => Effect.Effect<SessionV1.WithParts> = Effect.fn("SessionPrompt.run")(
       function* (sessionID: SessionID) {
         const ctx = yield* InstanceState.context
@@ -1872,6 +1954,17 @@ export const layer = Layer.effect(
         while (true) {
           yield* status.set(sessionID, { type: "busy" })
           yield* slog.info("loop", { step })
+
+          // V4.1 §S1.1 STEER DRAIN POINT — absorb-at-boundary, NOT abort. Drain the durable steer buffer
+          // at the TOP of each iteration and persist each pending steer as a tail user message BEFORE we
+          // re-read history below, so the fresh read picks it up at the end of history (codex's
+          // drain-at-turn-top). SKIP the FIRST iteration (step === 0): the initiating user message must
+          // sample first, matching codex. The in-flight model stream + tool loop of the PREVIOUS
+          // iteration have already completed by the time we re-enter here, so nothing is interrupted.
+          // A drained steer's id (MessageID.ascending) sorts after the last assistant, which flips the
+          // top-of-loop finish check (`lastUser.id < lastAssistant.id`) to keep looping — so a steer that
+          // arrived after the model said "done" is naturally absorbed on this next pass.
+          if (step > 0) yield* drainSteers(sessionID)
 
           let msgs = yield* MessageV2.filterCompactedEffect(sessionID).pipe(
             Effect.provideService(Database.Service, database),
@@ -2118,7 +2211,17 @@ export const layer = Layer.effect(
             Effect.ensuring(instruction.clear(handle.message.id)),
             Effect.onInterrupt(() => finalizeInterruptedAssistant),
           )
-          if (outcome === "break") break
+          // V4.1 §S1.1 needsFollowUp: the model finished this step (outcome === "break"), but if a steer
+          // arrived while it was running, do NOT exit — loop once more so the top-of-loop drain absorbs
+          // it (codex: needsFollowUp = modelSaidContinue || pendingInput-nonempty). A non-consuming peek;
+          // the actual drain (consume-once) happens at the next iteration's top. Gated by the flag.
+          if (outcome === "break") {
+            if (flags.v4Steering && (yield* steerBuffer.hasPending(sessionID))) {
+              yield* slog.info("steer pending at model boundary, continuing to absorb")
+              continue
+            }
+            break
+          }
           continue
         }
 
@@ -2133,6 +2236,32 @@ export const layer = Layer.effect(
 
         yield* compaction.prune({ sessionID }).pipe(Effect.ignore, Effect.forkIn(scope))
         return yield* lastAssistant(sessionID)
+      },
+    )
+
+    // V4.1 §S1.1: admit a mid-turn user message into the durable steer buffer. Pure buffering — it does
+    // NOT interrupt the in-flight run; the runLoop absorbs it at its next model-request boundary (see
+    // drainSteers below). With the kill-switch OFF this is a no-op guard: the caller (S1.2 ingress)
+    // must not route here when steering is disabled, but we defensively refuse to buffer so an
+    // orphaned steer can never accumulate undrained. Idempotent on `id`.
+    const steer: (input: SteerInput) => Effect.Effect<SessionSteer.Admitted> = Effect.fn("SessionPrompt.steer")(
+      function* (input: SteerInput) {
+        if (!flags.v4Steering)
+          return yield* Effect.die(new NamedError.Unknown({ message: "Steering is disabled (v4Steering=false)" }))
+        const prompt = Prompt.fromUserMessage({
+          text: input.text,
+          ...(input.files === undefined ? {} : { files: input.files }),
+          ...(input.agents === undefined ? {} : { agents: input.agents }),
+          ...(input.references === undefined ? {} : { references: input.references }),
+        })
+        const admitted = yield* steerBuffer.admit({
+          id: input.messageID ?? SessionMessage.ID.create(),
+          sessionID: input.sessionID,
+          prompt,
+          delivery: "steer",
+        })
+        yield* elog.info("steer admitted", { sessionID: input.sessionID, messageID: admitted.id, seq: admitted.seq })
+        return admitted
       },
     )
 
@@ -2269,6 +2398,7 @@ export const layer = Layer.effect(
     return Service.of({
       cancel,
       prompt,
+      steer,
       loop,
       shell,
       command,
@@ -2312,6 +2442,7 @@ export const defaultLayer = Layer.suspend(() =>
         CrossSpawnSpawner.defaultLayer,
         RuntimeFlags.defaultLayer,
         EventV2Bridge.defaultLayer,
+        SessionSteer.defaultLayer,
       ),
     ),
   ),
@@ -2345,6 +2476,20 @@ export const PromptInput = Schema.Struct({
   ),
 })
 export type PromptInput = Schema.Schema.Type<typeof PromptInput>
+
+// V4.1 §S1.1: the shape a mid-turn steer is admitted with. Deliberately the reduced Prompt payload (a
+// steer is a plain user turn) — file/agent/reference attachments carry through so a steered @mention or
+// attachment is preserved. `messageID` is optional so an at-least-once ingress (S1.2) can supply a
+// stable idempotency id; when omitted, admit generates one.
+export const SteerInput = Schema.Struct({
+  sessionID: SessionID,
+  messageID: Schema.optional(SessionMessage.ID),
+  text: Schema.String,
+  files: Schema.optional(Schema.Array(FileAttachment)),
+  agents: Schema.optional(Schema.Array(AgentAttachment)),
+  references: Schema.optional(Schema.Array(ReferenceAttachment)),
+})
+export type SteerInput = Schema.Schema.Type<typeof SteerInput>
 
 export class LoopInput extends Schema.Class<LoopInput>("SessionPrompt.LoopInput")({
   sessionID: SessionID,
