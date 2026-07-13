@@ -610,6 +610,10 @@ export const layerWith = (options?: LayerOptions) =>
 
       // §A4 event_dropped — append a durable drop record. Best-effort: a write failure is caught + logged
       // (not orDie'd) so a drop-audit hiccup never perturbs the caller's ack/nack path.
+      // DISTINCT-event semantics: the backpressure path calls recordDrop on EVERY shed pass, so one logical
+      // event shed→nacked→re-shed ×N would otherwise write N rows and inflate event_dropped_total to count
+      // shed-ATTEMPTS, not distinct events. onConflictDoNothing on the UNIQUE event_id index makes a re-shed
+      // of the same event a no-op → COUNT(*) == distinct events shed.
       const recordDrop: Interface["recordDrop"] = (input) =>
         db
           .insert(DeepAgentEventDropTable)
@@ -622,6 +626,7 @@ export const layerWith = (options?: LayerOptions) =>
               created_at: now(),
             },
           ])
+          .onConflictDoNothing({ target: DeepAgentEventDropTable.event_id })
           .run()
           .pipe(
             Effect.catchCause(() => Effect.void),
