@@ -178,6 +178,77 @@ describe("IM Agent Orchestrator", () => {
     expect(kinds).not.toContain("message_created")
   })
 
+  // ── §S1.2 FIX C: a STEERED agent result broadcasts "steered", NOT "failed", and posts NO message ────
+  //
+  // The seam (agent-orchestrator.ts broadcastAgentResult): `steered:true` is handled FIRST → broadcast a
+  // single agent_status status:"steered" and RETURN — no createMessage, no "failed". The prior bug: a
+  // steered result (success:true but empty content, because the running turn replies through its own path)
+  // fell through to the success-with-content check (skipped on empty content) and landed in the "failed"
+  // branch, while any message path posted an empty-content success. We drive the real public
+  // executeAgentMentions with a fake executor returning a steered result and assert the exact broadcast +
+  // that nothing was persisted.
+  it("a steered result broadcasts status:steered (not failed) and posts no message", async () => {
+    captured.length = 0
+    let createCalls = 0
+    // Wrap the real repo so we can assert createMessage is NEVER called for a steered result (no empty
+    // agent reply posted), while listMessages still works to confirm zero agent messages landed.
+    const program = Effect.gen(function* () {
+      yield* setupDatabase
+      const realRepo = yield* IMRepository
+      const group = yield* realRepo.createGroup({
+        workspaceID: "ws1",
+        name: "G",
+        type: "project",
+        createdBy: "server",
+      })
+
+      const spyRepo = {
+        ...realRepo,
+        createMessage: (input: Parameters<typeof realRepo.createMessage>[0]) => {
+          createCalls += 1
+          return realRepo.createMessage(input)
+        },
+      }
+
+      yield* executeAgentMentions({
+        workspaceID: "ws1",
+        directory: "/tmp/ws1",
+        groupID: group.id,
+        messageID: "msg-steer",
+        userID: "server",
+        content: "@code-agent do the thing",
+        mentionedAgentNames: ["code-agent"],
+      }).pipe(Effect.provideService(IMRepository, spyRepo))
+
+      const page = yield* realRepo.listMessages({ groupID: group.id, limit: 10 })
+      return page.messages
+    })
+
+    // The steered outcome: success:true + timeout:false + steered:true + empty content — precisely the
+    // shape that used to fall through to "failed"/empty-post.
+    const layer = Layer.merge(
+      baseLayer,
+      makeExecutor({ success: true, timeout: false, steered: true, content: "" }),
+    )
+    const messages = await Effect.runPromise(program.pipe(Effect.provide(layer)))
+
+    // No agent message was persisted at all (createMessage never invoked, no agent row in history).
+    expect(createCalls).toBe(0)
+    expect(messages.find((m) => m.senderType === "agent")).toBeUndefined()
+
+    // Exactly ONE agent_status broadcast — status:"steered" — and NEITHER "failed" NOR "message_created".
+    const statuses = captured
+      .filter((c) => c.event.type === "agent_status")
+      .map((c) => (c.event as any).data.status as string)
+    expect(statuses).toContain("started")
+    expect(statuses).toContain("steered")
+    expect(statuses).not.toContain("failed")
+    expect(statuses).not.toContain("success")
+    // Exactly one "steered" event, and no message_created event on the group.
+    expect(statuses.filter((s) => s === "steered")).toHaveLength(1)
+    expect(captured.some((c) => c.event.type === "message_created")).toBe(false)
+  })
+
   it("ignores mentions of unknown or invisible agents", async () => {
     captured.length = 0
     const program = Effect.gen(function* () {

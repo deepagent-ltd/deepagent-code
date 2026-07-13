@@ -314,13 +314,23 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       payload: typeof PromptPayload.Type
     }) {
       yield* requireSession(ctx.params.sessionID)
-      const message = yield* promptSvc
-        .prompt({
+      // V4.1 §S1.2: route through promptOrSteer — if the session is mid-turn, the message is absorbed as
+      // a steer (the running turn picks it up at its next boundary) instead of erroring/blocking; if idle,
+      // it runs a normal turn. For a completed turn we stream the assistant message as before (unchanged
+      // wire shape). For an accepted steer there is no turn result to stream, so we return a small ack
+      // envelope ({ steered: true, ... }) — additive; existing clients that only read a completed turn
+      // never sent a message mid-turn under the old BusyError contract, so they never see this branch.
+      const result = yield* promptSvc
+        .promptOrSteer({
           ...ctx.payload,
           sessionID: ctx.params.sessionID,
         })
         .pipe(Effect.mapError(() => new HttpApiError.BadRequest({})))
-      return HttpServerResponse.stream(Stream.make(JSON.stringify(message)).pipe(Stream.encodeText), {
+      const body =
+        result.kind === "turn"
+          ? JSON.stringify(result.message)
+          : JSON.stringify({ steered: true, delivery: result.delivery, messageID: result.admitted.id })
+      return HttpServerResponse.stream(Stream.make(body).pipe(Stream.encodeText), {
         contentType: "application/json",
       })
     })
