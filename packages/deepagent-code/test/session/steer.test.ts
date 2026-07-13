@@ -55,6 +55,8 @@ import { RuntimeFlags } from "@/effect/runtime-flags"
 import { ProviderV2 } from "@deepagent-code/core/provider"
 import { ModelV2 } from "@deepagent-code/core/model"
 import { AgentGateway } from "@deepagent-code/core/agent-gateway"
+import { Global } from "@deepagent-code/core/global"
+import { DocumentStore } from "@deepagent-code/core/deepagent/document-store"
 import { mkdtempSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
@@ -736,6 +738,18 @@ on.instance(
       expect(goalRows.some((d) => d.id === result.admitted.id)).toBe(true)
       expect(yield* steer.pending(chat.id, "steer")).toHaveLength(0)
       expect(yield* steer.hasPending(chat.id, "steer")).toBe(false)
+
+      // T2.6 — the governance audit now lives on the REAL goal-steer ingress (was previously stranded on
+      // the never-called GoalManager.steerGoal). A worklog audit doc must be written into the goal's
+      // Document Graph, recording the human steer (length only, PII-light) with governance="steer".
+      const goalStore = new DocumentStore(path.join(Global.Path.agent.data, "state", "goal", chat.id, "graph"))
+      const audits = goalStore
+        .list({ type: "worklog", scope: `run:${chat.id}` })
+        .map((ref) => goalStore.get(ref.id)!)
+      const steerAudit = audits.find((d) => d.extensions?.governance === "steer")
+      expect(steerAudit).toBeDefined()
+      expect(steerAudit?.extensions?.goal_id).toBe("g_" + chat.id)
+      expect(steerAudit?.body).toContain("\"textChars\": 13") // "GOAL-GUIDANCE".length
     }),
   15_000,
 )
