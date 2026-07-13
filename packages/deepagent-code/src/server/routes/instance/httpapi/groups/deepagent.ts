@@ -415,6 +415,25 @@ export const DeepAgentWikiEditInput = Schema.Struct({
   editor: Schema.Struct({ id: Schema.String, name: Schema.optional(Schema.String) }),
 })
 
+/** GET /deepagent/wiki/execution-archive — the read side of §B.6: a session's aggregated execution
+ * trajectory (plan + worklog + diagnosis + decision + eval), rendered from its run-scoped Document
+ * Graph. The archive is WRITTEN by the session-completion hook / EventDrivenArchiver; this is the only
+ * route that reads it back. `sessionID` is REQUIRED — the run-scoped stores are only unioned into the
+ * graph when the session id is known (openWikiGraph). */
+export const DeepAgentExecutionArchiveEntry = Schema.Struct({
+  docId: Schema.String,
+  type: Schema.String,
+  title: Schema.String,
+  body: Schema.String,
+  version: Schema.Number,
+})
+export const DeepAgentExecutionArchive = Schema.Struct({
+  sessionId: Schema.String,
+  title: Schema.String,
+  markdown: Schema.String,
+  entries: Schema.Array(DeepAgentExecutionArchiveEntry),
+})
+
 export const DeepAgentApi = HttpApi.make("deepagent").add(
   HttpApiGroup.make("deepagent")
     .add(
@@ -746,6 +765,23 @@ export const DeepAgentApi = HttpApi.make("deepagent").add(
           summary: "Governed edit of a Knowledge/Memory Wiki page",
           description:
             "V3.9 §B.3: append-only new version through the real promotion evidence-gate + human provenance. Non-editable type ⇒ read-only error.",
+        }),
+      ),
+    )
+    .add(
+      HttpApiEndpoint.get("wikiExecutionArchive", `${root}/wiki/execution-archive`, {
+        query: Schema.Struct({ ...WorkspaceRoutingQueryFields, sessionID: Schema.String }),
+        success: described(
+          DeepAgentExecutionArchive,
+          "A session's aggregated execution trajectory (plan + worklog + diagnosis + decision + eval)",
+        ),
+        error: DeepAgentPromotionError,
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "deepagent.wiki.executionArchive",
+          summary: "Read a session's execution archive",
+          description:
+            "V3.9 §B.6 read side: aggregate a completed session's run-scoped Document Graph trajectory into a single archive (markdown + entries). Gated by the wiki flag.",
         }),
       ),
     )
