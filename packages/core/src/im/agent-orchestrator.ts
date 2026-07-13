@@ -207,12 +207,23 @@ function broadcastAgentResult(input: {
     success: boolean
     timeout: boolean
     content?: string
+    // V4.1 §S1.2: the message was absorbed as a mid-turn STEER into an already-running turn (goal or a
+    // live chat turn). There is no reply of our own to post — the running turn replies through its own
+    // path — so this is an ACCEPTED outcome, NOT a failure. Broadcast a "steered" status and post nothing.
+    steered?: boolean
     error?: { code: string; message: string; retryable: boolean }
   }
   broadcaster: IMBroadcaster
   repo: IMRepositoryInterface
 }): Effect.Effect<void, never, never> {
   return Effect.gen(function* () {
+    if (input.result.steered) {
+      input.broadcaster.broadcast(input.groupID, {
+        type: "agent_status",
+        data: { messageID: input.messageID, agentID: input.agentID, status: "steered" },
+      })
+      return
+    }
     if (input.result.success && input.result.content) {
       const agentMessage = yield* input.repo
         .createMessage({

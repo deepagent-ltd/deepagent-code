@@ -112,6 +112,20 @@ function isOrphanedInterruptedTool(part: SessionV1.ToolPart) {
   return part.state.status === "error" && part.state.metadata?.interrupted === true
 }
 
+// §S1.2 — a goal in one of these phases is no longer ticking, so a "goal_steer" would never be drained.
+// promptOrSteer routes to the plain "steer" channel (or a fresh turn) instead. Mirrors goal-manager's
+// isTerminalGoalPhase (kept as a local const to avoid a circular import: goal-manager imports this file).
+const TERMINAL_GOAL_PHASES: ReadonlySet<string> = new Set(["done", "needs_human", "rolled_back", "stopped"])
+
+// §S1.2 — extract the plain text a steer should carry from a PromptInput's parts (text parts only; file/
+// agent/subtask attachments are not re-encoded into a steer's text — a steered turn is a user message).
+const promptInputText = (parts: PromptInput["parts"]): string =>
+  parts
+    .filter((p): p is Extract<PromptInput["parts"][number], { type: "text" }> => p.type === "text")
+    .map((p) => p.text)
+    .join("\n")
+    .trim()
+
 export interface Interface {
   readonly cancel: (sessionID: SessionID) => Effect.Effect<void>
   readonly prompt: (input: PromptInput) => Effect.Effect<SessionV1.WithParts, Image.Error>
@@ -119,6 +133,14 @@ export interface Interface {
   // model-request boundary of the live turn loop. This is the admit() API; S1.2 wires the busy-session
   // ingress that decides WHEN to route a message here vs. the normal prompt() path. Idempotent on `id`.
   readonly steer: (input: SteerInput) => Effect.Effect<SessionSteer.Admitted>
+  // V4.1 §S1.2: the busy-session ingress decision. If the session is IDLE (no live turn) → run a normal
+  // turn (prompt). If it is BUSY (mid-turn) and steering is enabled → buffer the message as a steer so
+  // the running turn absorbs it at its next boundary (delivery="goal_steer" when a non-terminal goal is
+  // active — drained by the goal driver between ticks; else "steer" — drained by the session's own
+  // runLoop). Returns a discriminated ack so the caller knows whether a turn ran or the message was
+  // accepted as steering. With steering disabled it falls back to prompt() (which enforces the runner's
+  // own busy semantics), preserving pre-steering behavior exactly.
+  readonly promptOrSteer: (input: PromptInput) => Effect.Effect<PromptOrSteerResult, Image.Error>
   readonly loop: (input: LoopInput) => Effect.Effect<SessionV1.WithParts>
   readonly shell: (input: ShellInput) => Effect.Effect<SessionV1.WithParts, Session.BusyError>
   readonly command: (input: CommandInput) => Effect.Effect<SessionV1.WithParts, Image.Error>
@@ -1923,8 +1945,14 @@ export const layer = Layer.effect(
       return pending.length
     })
 
-    const runLoop: (sessionID: SessionID) => Effect.Effect<SessionV1.WithParts> = Effect.fn("SessionPrompt.run")(
-      function* (sessionID: SessionID) {
+    const runLoop: (sessionID: SessionID, drainFirst?: boolean) => Effect.Effect<SessionV1.WithParts> = Effect.fn(
+      "SessionPrompt.run",
+    )(
+      // §S1.2: `drainFirst` — a PURE-DRAIN turn (started to absorb a steer that landed in the isBusy→admit
+      // race, with no initiating user message of its own) must drain on step 0 too; otherwise the step-0
+      // skip + the immediate finish check would break before the steer is ever consumed. A normal turn
+      // leaves it false so the initiating message samples first (S1.1).
+      function* (sessionID: SessionID, drainFirst = false) {
         const ctx = yield* InstanceState.context
         const slog = elog.with({ sessionID })
         let structured: unknown
@@ -1964,7 +1992,7 @@ export const layer = Layer.effect(
           // A drained steer's id (MessageID.ascending) sorts after the last assistant, which flips the
           // top-of-loop finish check (`lastUser.id < lastAssistant.id`) to keep looping — so a steer that
           // arrived after the model said "done" is naturally absorbed on this next pass.
-          if (step > 0) yield* drainSteers(sessionID)
+          if (step > 0 || drainFirst) yield* drainSteers(sessionID)
 
           let msgs = yield* MessageV2.filterCompactedEffect(sessionID).pipe(
             Effect.provideService(Database.Service, database),
@@ -2254,21 +2282,87 @@ export const layer = Layer.effect(
           ...(input.agents === undefined ? {} : { agents: input.agents }),
           ...(input.references === undefined ? {} : { references: input.references }),
         })
+        // §S1.3 delivery channel: "goal_steer" is drained by the goal driver between ticks; "steer"
+        // (default) by the session's own runLoop. The two never contend on the same buffer rows.
+        const delivery = input.delivery ?? "steer"
         const admitted = yield* steerBuffer.admit({
           id: input.messageID ?? SessionMessage.ID.create(),
           sessionID: input.sessionID,
           prompt,
-          delivery: "steer",
+          delivery,
         })
-        yield* elog.info("steer admitted", { sessionID: input.sessionID, messageID: admitted.id, seq: admitted.seq })
+        yield* elog.info("steer admitted", {
+          sessionID: input.sessionID,
+          messageID: admitted.id,
+          seq: admitted.seq,
+          delivery,
+        })
         return admitted
       },
     )
 
+    // V4.1 §S1.2 — the ingress decision. Both the HTTP prompt route and the IM agent executor call THIS
+    // instead of prompt() directly, so the steer-vs-turn choice lives in exactly one place.
+    //
+    // Routing (in priority order):
+    //   1. steering OFF → prompt() (exact pre-steering behavior; the runner enforces its own busy policy).
+    //   2. a NON-terminal active GOAL on this session → "goal_steer". A goal runs as a detached background
+    //      job in CHILD sessions and does NOT busy the parent runner, so we must key off the active-goal
+    //      pointer, NOT isBusy (an earlier version gated goal_steer behind isBusy and it was unreachable in
+    //      the pure-goal case). The goal driver drains "goal_steer" between ticks (§S1.3); paused → drained
+    //      on resume; terminal phases never buffer (checked here AND steerGoal-side).
+    //   3. else, the parent runner is BUSY (a live chat turn) → "steer", absorbed at that turn's next
+    //      boundary (§S1.1). Race: if the turn ends between the isBusy read and the admit, the steer is
+    //      durable but the still-running loop won't see it — so we start a PURE-DRAIN turn (drainFirst)
+    //      that drains on step 0. ensureRunning makes this a no-op await if a turn is (still) running, so
+    //      there is no double-turn; if idle, it runs one drain turn. Forked so the ingress returns promptly.
+    //   4. else idle, no goal → prompt() runs a normal turn.
+    const promptOrSteer: (input: PromptInput) => Effect.Effect<PromptOrSteerResult, Image.Error> = Effect.fn(
+      "SessionPrompt.promptOrSteer",
+    )(function* (input: PromptInput) {
+      if (!flags.v4Steering) {
+        const message = yield* prompt(input)
+        return { kind: "turn" as const, message }
+      }
+      // (2) Active-goal check FIRST — independent of the parent runner's busy flag.
+      const goal = AgentGateway.DeepAgentSessionState.getActiveGoal(input.sessionID)
+      const goalActive = goal != null && !TERMINAL_GOAL_PHASES.has(goal.phase)
+      if (goalActive) {
+        const admitted = yield* steer({
+          sessionID: input.sessionID,
+          text: promptInputText(input.parts),
+          delivery: "goal_steer",
+        })
+        return { kind: "steer" as const, delivery: "goal_steer" as const, admitted }
+      }
+      // (3) No active goal → a parent chat turn in flight becomes a chat steer.
+      const busy = yield* state.isBusy(input.sessionID)
+      if (!busy) {
+        // (4) idle, no goal → normal turn.
+        const message = yield* prompt(input)
+        return { kind: "turn" as const, message }
+      }
+      // Let steer() mint a fresh ascending SessionMessage.ID (tail-sorting, §S1.1 Check 3). We do NOT
+      // forward input.messageID: it is a PromptInput MessageID (a different brand) and a client-supplied id
+      // could be non-ascending and insert mid-history — breaking order + cache.
+      const admitted = yield* steer({
+        sessionID: input.sessionID,
+        text: promptInputText(input.parts),
+        delivery: "steer",
+      })
+      // Race guard (see header): a pure-drain turn absorbs a steer stranded by the isBusy→admit window.
+      yield* loop({ sessionID: input.sessionID, drainFirst: true }).pipe(Effect.ignore, Effect.forkIn(scope))
+      return { kind: "steer" as const, delivery: "steer" as const, admitted }
+    })
+
     const loop: (input: LoopInput) => Effect.Effect<SessionV1.WithParts> = Effect.fn("SessionPrompt.loop")(function* (
       input: LoopInput,
     ) {
-      return yield* state.ensureRunning(input.sessionID, lastAssistant(input.sessionID), runLoop(input.sessionID))
+      return yield* state.ensureRunning(
+        input.sessionID,
+        lastAssistant(input.sessionID),
+        runLoop(input.sessionID, input.drainFirst ?? false),
+      )
     })
 
     const shell: (input: ShellInput) => Effect.Effect<SessionV1.WithParts, Session.BusyError> = Effect.fn(
@@ -2399,6 +2493,7 @@ export const layer = Layer.effect(
       cancel,
       prompt,
       steer,
+      promptOrSteer,
       loop,
       shell,
       command,
@@ -2488,11 +2583,24 @@ export const SteerInput = Schema.Struct({
   files: Schema.optional(Schema.Array(FileAttachment)),
   agents: Schema.optional(Schema.Array(AgentAttachment)),
   references: Schema.optional(Schema.Array(ReferenceAttachment)),
+  // §S1.3 delivery channel: "steer" (default, drained by the session runLoop) or "goal_steer" (drained
+  // by the goal driver between ticks). Omitted ⇒ "steer".
+  delivery: Schema.optional(Schema.Literals(["steer", "goal_steer"])),
 })
 export type SteerInput = Schema.Schema.Type<typeof SteerInput>
 
+// §S1.2 the discriminated ack returned by promptOrSteer: either a completed turn (the session was idle)
+// or an accepted steer (the session was mid-turn; the running/next turn absorbs it). The `delivery` tells
+// the caller which channel absorbed it ("steer" = this session's turn, "goal_steer" = the active goal).
+export type PromptOrSteerResult =
+  | { readonly kind: "turn"; readonly message: SessionV1.WithParts }
+  | { readonly kind: "steer"; readonly delivery: "steer" | "goal_steer"; readonly admitted: SessionSteer.Admitted }
+
 export class LoopInput extends Schema.Class<LoopInput>("SessionPrompt.LoopInput")({
   sessionID: SessionID,
+  // §S1.2: start a pure-drain turn that absorbs a pending steer on step 0 (no initiating message). Only
+  // set by promptOrSteer's race guard; a normal loop() leaves it unset (false).
+  drainFirst: Schema.optional(Schema.Boolean),
 }) {}
 
 export const ShellInput = Schema.Struct({

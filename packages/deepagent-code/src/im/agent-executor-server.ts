@@ -91,9 +91,12 @@ class ServerAgentExecutor implements AgentExecutor {
         ? { providerID: ProviderV2.ID.make(imModelRef.providerID), modelID: ModelV2.ID.make(imModelRef.modelID) }
         : undefined
 
-      // Run the agent to completion. `prompt` returns the assistant message with
-      // its parts; extract the concatenated text as the IM reply.
-      const runPrompt = prompts.prompt({
+      // Run the agent to completion. V4.1 §S1.2: route through promptOrSteer — if the session is already
+      // mid-turn (e.g. a goal is running, or a prior IM turn is still executing), this message is absorbed
+      // as a STEER into that running turn instead of erroring/blocking; the running turn produces the
+      // reply through its own progress bridge / IM output, so THIS call returns a steering-accepted ack
+      // (no fabricated reply). If the session is idle, promptOrSteer runs a normal turn exactly as before.
+      const runPrompt = prompts.promptOrSteer({
         sessionID: session.id,
         agent: input.agentID,
         ...(imModel ? { model: imModel } : {}),
@@ -105,11 +108,11 @@ class ServerAgentExecutor implements AgentExecutor {
       // forward throttled reasoning/tool/text batches. The bridge is resolved at
       // RUNTIME via serviceOption (adds no static requirement, so execute stays
       // R = never); it's part of the instance runtime this executor runs in.
-      // `withAgentProgress` is transparent — returns exactly prompt's result and
+      // `withAgentProgress` is transparent — returns exactly promptOrSteer's result and
       // never fails the run. No sink or no bridge → run bare, unchanged.
       const onProgress = input.onProgress
       const eventBridge = Option.getOrUndefined(yield* Effect.serviceOption(EventV2Bridge.Service))
-      const reply =
+      const outcome =
         onProgress && eventBridge !== undefined
           ? yield* withAgentProgress({
               sessionID: session.id,
@@ -117,6 +120,19 @@ class ServerAgentExecutor implements AgentExecutor {
               body: runPrompt,
             }).pipe(Effect.provideService(EventV2Bridge.Service, eventBridge))
           : yield* runPrompt
+
+      // Steer branch: the message was absorbed into the already-running turn (its reply streams through
+      // that turn's own IM/progress path). Ack success without a synthesized reply of our own.
+      if (outcome.kind === "steer") {
+        return {
+          success: true,
+          timeout: false,
+          content: "",
+          messageID: outcome.admitted.id,
+          steered: true,
+        } satisfies AgentExecutionResult
+      }
+      const reply = outcome.message
 
       const text = reply.parts
         .filter((part): part is SessionV1.TextPart => part.type === "text")
