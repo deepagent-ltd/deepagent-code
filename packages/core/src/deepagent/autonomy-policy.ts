@@ -64,9 +64,6 @@ export const GATE_FOR_LEVEL: Record<AutonomyLevel, HumanGate> = {
 // the AutonomyLevel literals: an action's risk IS the minimum level a capable agent must be at.
 export type ActionRisk = AutonomyLevel
 
-// The gate demanded by a given level. Small indirection so callers resolve gates in one place.
-export const gateForLevel = (level: AutonomyLevel): HumanGate => GATE_FOR_LEVEL[level]
-
 export type AutonomyDecision =
   // action within the ceiling → allowed; `gate` is the ACTION's own gate to enforce (see decide).
   | { readonly allowed: true; readonly gate: HumanGate }

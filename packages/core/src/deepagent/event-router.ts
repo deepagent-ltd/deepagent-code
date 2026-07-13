@@ -50,14 +50,14 @@ export const OPERATIONAL_EVENT_TYPES: ReadonlySet<string> = new Set([LMNEvents.D
 export const isOperationalEvent = (eventType: string): boolean => OPERATIONAL_EVENT_TYPES.has(eventType)
 
 // §C4 RE-ENTRANCY GUARD — the coordination/derivative event-type family. The Multi-Agent Runtime emits
-// these BACK onto the bus (agent.task.started/blocked/completed/needs_human, agent.handoff.*) as a
-// side effect of a `coordinate()` pass, so a broad-glob agent trigger (`agent.*` / `*`) subscribed to
-// them would re-enter the dispatcher → a new `coordinate()` → fresh coordination events (new ids, so the
-// alreadyCompleted guard never fires) → an unbounded, ceiling-bypassing cascade. Per §C4 these events
-// are for observation/oversight/trace only; they must NEVER re-trigger agent dispatch. They are still
-// persisted and delivered to the trace/oversight consumers (separate subscribers) — this only closes
-// the AGENT-DISPATCH loop. NOTE: `agent.push.*` (proactive push) is a DIFFERENT family and still routes.
-export const COORDINATION_EVENT_PREFIXES = ["agent.task.", "agent.handoff."] as const
+// these BACK onto the bus (agent.task.started/blocked/completed/needs_human) as a side effect of a
+// `coordinate()` pass, so a broad-glob agent trigger (`agent.*` / `*`) subscribed to them would re-enter
+// the dispatcher → a new `coordinate()` → fresh coordination events (new ids, so the alreadyCompleted
+// guard never fires) → an unbounded, ceiling-bypassing cascade. Per §C4 these events are for
+// observation/oversight/trace only; they must NEVER re-trigger agent dispatch. They are still persisted
+// and delivered to the trace/oversight consumers (separate subscribers) — this only closes the
+// AGENT-DISPATCH loop. NOTE: `agent.push.*` (proactive push) is a DIFFERENT family and still routes.
+export const COORDINATION_EVENT_PREFIXES = ["agent.task."] as const
 export const isCoordinationEvent = (eventType: string): boolean =>
   COORDINATION_EVENT_PREFIXES.some((prefix) => eventType.startsWith(prefix))
 
