@@ -173,4 +173,31 @@ describe("EventRouter.route", () => {
     expect(EventRouter.isCoordinationEvent("agent.push.suggestion")).toBe(false)
     expect(EventRouter.isCoordinationEvent("ci.failure")).toBe(false)
   })
+
+  // §A3 OPERATIONAL GUARD (P4.6a) — dlq.alert is an operator notice, NEVER agent work. Even a wildcard-
+  // trigger agent must not grab it; it drops as `operational` (terminal-acked upstream, no nack loop).
+  test("§A3 dlq.alert does NOT dispatch even with a wildcard-trigger agent (operational guard)", () => {
+    const wildcard = agent({ id: "agt_star", triggers: [{ event: "*" }] })
+    const d = EventRouter.route({
+      event: event({ type: "dlq.alert", source: "system", priority: "high", idempotencyKey: "dlq" }),
+      agents: [wildcard],
+      flagEnabled: true,
+    })
+    expect(d).toEqual({ type: "dropped", reason: "operational" })
+  })
+
+  test("§A3 operational guard is scoped: only dlq.alert; agent-work types still route", () => {
+    expect(EventRouter.isOperationalEvent("dlq.alert")).toBe(true)
+    expect(EventRouter.isOperationalEvent("schedule.scan")).toBe(false)
+    expect(EventRouter.isOperationalEvent("ci.repair.requested")).toBe(false)
+    expect(EventRouter.isOperationalEvent("ci.failure")).toBe(false)
+    // schedule.scan / ci.repair.requested route to a matching agent (P4.3's descriptors bind them).
+    const maint = agent({ id: "agt_maint", triggers: [{ event: "schedule.scan" }] })
+    const scan = EventRouter.route({
+      event: event({ type: "schedule.scan", source: "schedule", idempotencyKey: "s" }),
+      agents: [maint],
+      flagEnabled: true,
+    })
+    expect(scan.type).toBe("dispatch")
+  })
 })
