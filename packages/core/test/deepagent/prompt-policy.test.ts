@@ -104,6 +104,30 @@ describe("buildSystemPrompt prompt-cache stability", () => {
     }
     expect(buildSystemPrompt(advanced)).toBe(buildSystemPrompt(base))
   })
+
+  test("T4.4: the fan-out verdict does NOT enter the system prefix (it is task-complexity-derived, per-turn)", () => {
+    const base = ctxAt(2, 90_000)
+    // A concrete fan-out decision — the exact vector the orchestrator stamps per turn. It changes with
+    // the user request every turn, so leaking it into the cached prefix would bust the prompt cache.
+    const withFanout: PromptContext = {
+      ...base,
+      fanoutDecision: {
+        orchestrate: true,
+        level: 2,
+        tier: 3,
+        complexity: 2,
+        researchers: 3,
+        reviewers: 1,
+        maxConcurrency: 4,
+      },
+    }
+    // Prefix is byte-identical with/without the fan-out verdict …
+    expect(buildSystemPrompt(withFanout)).toBe(buildSystemPrompt(base))
+    // … and the verdict lands in the VOLATILE tail instead (proving it is emitted, just in the right place).
+    const tail = buildVolatileRoundContext(withFanout)
+    expect(tail).toContain("orchestration verdict")
+    expect(buildVolatileRoundContext(base)).not.toContain("orchestration verdict")
+  })
 })
 
 describe("buildVolatileRoundContext", () => {
