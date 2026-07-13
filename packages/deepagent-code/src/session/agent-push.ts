@@ -1,6 +1,7 @@
 export * as AgentPush from "./agent-push"
 
-import { Context, Effect, Layer, Option } from "effect"
+import nodePath from "path"
+import { Cause, Context, Effect, Layer, Option } from "effect"
 import { and, eq, gt, sql } from "drizzle-orm"
 import { Database } from "@deepagent-code/core/database/database"
 import { AgentPushPolicy } from "@deepagent-code/core/deepagent/agent-push-policy"
@@ -10,6 +11,9 @@ import { AgentPushLogTable } from "@deepagent-code/core/im/push-log-sql"
 import { MemberTable } from "@deepagent-code/core/im/sql"
 import { IMRepository } from "@deepagent-code/core/im/repository"
 import * as IMID from "@deepagent-code/core/im/id"
+import { WorkspaceTable } from "@deepagent-code/core/control-plane/workspace.sql"
+import { ProjectTable, ProjectDirectoryTable } from "@deepagent-code/core/project/sql"
+import { WorkspaceV2 } from "@deepagent-code/core/workspace"
 import { Identifier } from "@deepagent-code/core/util/identifier"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import * as Log from "@deepagent-code/core/util/log"
@@ -26,12 +30,26 @@ import * as Log from "@deepagent-code/core/util/log"
 // correct there); but a CONFIGURED window is honored. `factOverrides.withinQuietHours` still wins so
 // tests remain deterministic and a caller with its own tz logic can pass a resolved value.
 //
-// §E3 PATH ACL: scrub is called WITH `allowedPathRoots` resolved from the workspace's directory root, so
-// a proactive push can never leak a file path OUTSIDE the workspace. Resolution (see
-// `resolveAllowedPathRoots`) treats a directory-style workspaceID as its own root; a caller/test may
-// override via `factOverrides.allowedPathRoots` or the layer's `allowedPathRootsFor` port.
+// §E3 PATH ACL: scrub is called WITH `allowedPathRoots` resolved from the workspace's REAL filesystem
+// root(s), so a proactive push can never leak a file path OUTSIDE the workspace. Resolution (see
+// `defaultAllowedPathRootsFor` / `makeWorkspaceRootResolver`):
+//   • a DIRECTORY-style workspaceID (an absolute-ish path, NOT a "wrk_"-synthetic id) doubles as its own
+//     single root — unchanged from P2.8.
+//   • a genuine multi-tenant "wrk_"-id is NOT a filesystem path, so it is resolved to the workspace's
+//     real project root(s) via the SAME workspace→directory mechanism the control-plane uses: the
+//     `workspace` row's `directory`, unioned with its project's directories (project_directory) +
+//     worktree + sandboxes (multi-repo). Before P4.2 a "wrk_"-id resolved to NO roots ⇒ the path-ACL leg
+//     was silently OFF for every genuine workspace; this closes that.
+// A caller/test may override via `factOverrides.allowedPathRoots` (highest priority) or the layer's
+// `allowedPathRootsFor` port. FAIL-SAFE: an unresolvable "wrk_"-id (no row / no on-disk root) resolves to
+// `undefined` ⇒ the path leg stays OFF for that push (scrub still runs, push still proceeds) and the miss
+// is logged — we do NOT fabricate a root (which would wrongly strip every path) nor crash the push.
 //
-// LAYERING: `deepagent-code`. The DECISION is pure (core); this owns the IO (DB reads/writes + flag).
+// LAYERING: `deepagent-code`. The DECISION is pure (core); this owns the IO (DB reads/writes + flag). The
+// wrk_→root resolver reads the SAME `workspace`/`project`/`project_directory` tables the control-plane
+// Workspace service reads, over the ONE Database this layer already depends on — no new service needed in
+// the daemon graph (Workspace.Service is not part of it), so `AgentPush.layer` closes the gap in prod
+// without any wiring change at the call site.
 
 const log = Log.create({ service: "agent-push" })
 
@@ -67,21 +85,107 @@ export class Service extends Context.Service<Service, Interface>()("@deepagent-c
 export interface LayerOptions {
   readonly now?: () => number
   /**
-   * §E3 — resolve the allowed FS roots for a workspace's push content path ACL. Injected so a test can
-   * pin roots and production can swap in a richer project-roots resolver. Returns `undefined` to leave
-   * the path leg OFF (no-op) for that workspace. Default: a directory-style workspaceID (not a "wrk"-id)
-   * is its own single root; a bare "wrk_"-id resolves to no roots (nothing to contain against ⇒ leg off).
+   * §E3 — the SYNCHRONOUS path-roots port for the content path ACL. Injected so a test can PIN roots (for
+   * ANY workspaceID, incl. a "wrk_"-id) and production/tests can swap the directory heuristic. Returns
+   * `undefined` to defer: a directory-style workspaceID resolves to its own root here; a genuine "wrk_"-id
+   * returns `undefined` from the default so the runtime falls through to the DB-backed wrk_→root resolver
+   * (see `makeWorkspaceRootResolver`). A non-undefined return (incl. `[]`) SHORT-CIRCUITS that fallback.
    */
   readonly allowedPathRootsFor?: (workspaceID: string) => ReadonlyArray<string> | undefined
 }
 
-// Default path-roots resolver: a directory-routed workspaceID (single-user / directory model — an
-// absolute-ish path, NOT a "wrk_"-prefixed synthetic id) doubles as the workspace's FS root, so a push
-// may reference paths INSIDE it but not outside (/etc/passwd, ~/.ssh, ../../secrets are stripped). A
-// genuine "wrk_"-id is not a filesystem path, so there is nothing to contain against here ⇒ leave the
-// leg off (undefined) rather than fabricate a bogus root that would strip every path.
+// Default SYNCHRONOUS path-roots resolver: a directory-routed workspaceID (single-user / directory model
+// — an absolute-ish path, NOT a "wrk_"-prefixed synthetic id) doubles as the workspace's FS root, so a
+// push may reference paths INSIDE it but not outside (/etc/passwd, ~/.ssh, ../../secrets are stripped). A
+// genuine "wrk_"-id is not itself a path ⇒ returns `undefined` here so the caller falls through to the
+// DB-backed resolver (P4.2) which looks up the workspace's REAL project root(s). We never fabricate a
+// bogus root for a wrk_ id (that would strip every path).
 const defaultAllowedPathRootsFor = (workspaceID: string): ReadonlyArray<string> | undefined =>
   workspaceID.length > 0 && !workspaceID.startsWith("wrk") ? [workspaceID] : undefined
+
+// True when `dir` resolves to a filesystem root (posix "/" or a drive/UNC root). A project's worktree
+// sentinel for non-git / "global" projects is "/", and including that as an allowed root would make the
+// path ACL match EVERY absolute path (defeating the leg) — so such roots are excluded. Mirrors the
+// instance-context invariant without importing the FS layer.
+const isFilesystemRoot = (dir: string): boolean => {
+  const trimmed = dir.trim()
+  if (!trimmed) return true
+  const resolved = nodePath.resolve(trimmed)
+  return nodePath.dirname(resolved) === resolved
+}
+
+// P4.2 §E3 — resolve a genuine multi-tenant "wrk_" workspaceID to its REAL filesystem root(s) using the
+// SAME workspace→directory mechanism the control-plane Workspace service uses: the `workspace` row's
+// `directory`, unioned with its project's roots (worktree + sandboxes + project_directory) so a MULTI-REPO
+// workspace contains ALL its repos. Reads the shared Database (already a hard dep of this layer) directly
+// — no new service in the daemon graph is needed. FAIL-SAFE: any DB error, a missing row, or a resolution
+// that yields zero usable (non-filesystem-root) roots returns `undefined` (⇒ ACL leg stays OFF for that
+// push, which still proceeds) and logs the miss; we never fabricate a root that would wrongly allow/deny.
+const makeWorkspaceRootResolver = (db: Database.Interface["db"]) => {
+  const collectRoots = (workspaceID: string) =>
+    Effect.gen(function* () {
+      const wsRow = yield* db
+        .select({ directory: WorkspaceTable.directory, projectID: WorkspaceTable.project_id })
+        .from(WorkspaceTable)
+        .where(eq(WorkspaceTable.id, workspaceID as WorkspaceV2.ID))
+        .get()
+      if (!wsRow) {
+        log.warn("wrk_ path-ACL: no workspace row — path leg OFF for this push", { workspaceID })
+        return undefined
+      }
+
+      const roots = new Set<string>()
+      const add = (dir: string | null | undefined) => {
+        if (!dir) return
+        const resolved = nodePath.resolve(dir)
+        if (isFilesystemRoot(resolved)) return
+        roots.add(resolved)
+      }
+
+      add(wsRow.directory)
+
+      if (wsRow.projectID) {
+        const projRow = yield* db
+          .select({ worktree: ProjectTable.worktree, sandboxes: ProjectTable.sandboxes })
+          .from(ProjectTable)
+          .where(eq(ProjectTable.id, wsRow.projectID))
+          .get()
+        add(projRow?.worktree)
+        for (const sandbox of projRow?.sandboxes ?? []) add(sandbox)
+
+        // multi-repo: every registered project directory (main / root / git_worktree) is an allowed root.
+        const dirRows = yield* db
+          .select({ directory: ProjectDirectoryTable.directory })
+          .from(ProjectDirectoryTable)
+          .where(eq(ProjectDirectoryTable.project_id, wsRow.projectID))
+          .all()
+        for (const dirRow of dirRows) add(dirRow.directory)
+      }
+
+      if (roots.size === 0) {
+        log.warn("wrk_ path-ACL: workspace resolved to no on-disk root — path leg OFF for this push", {
+          workspaceID,
+          projectID: wsRow.projectID,
+        })
+        return undefined
+      }
+      return [...roots]
+    })
+
+  // FAIL-SAFE outer guard: a DB failure must never crash the push — degrade to "leg off" + log.
+  return (workspaceID: string): Effect.Effect<ReadonlyArray<string> | undefined> =>
+    collectRoots(workspaceID).pipe(
+      Effect.catchCause((cause) =>
+        Effect.sync(() => {
+          log.warn("wrk_ path-ACL resolution failed — path leg OFF for this push", {
+            workspaceID,
+            cause: Cause.pretty(cause),
+          })
+          return undefined
+        }),
+      ),
+    )
+}
 
 export const layerWith = (options?: LayerOptions) =>
   Layer.effect(
@@ -92,6 +196,10 @@ export const layerWith = (options?: LayerOptions) =>
       const flags = yield* RuntimeFlags.Service
       const now = options?.now ?? Date.now
       const allowedPathRootsFor = options?.allowedPathRootsFor ?? defaultAllowedPathRootsFor
+      // §E3 (P4.2) — the DB-backed wrk_→real-root resolver, over the SAME Database this layer already
+      // holds. Used only when the synchronous port defers (returns undefined) — i.e. for a genuine
+      // "wrk_"-id. Fail-safe: unresolvable ⇒ undefined ⇒ leg off (logged), never a crash.
+      const resolveWorkspaceRoots = makeWorkspaceRootResolver(db)
       // §E4 — WorkspaceConfig is OPTIONAL so the AgentPush layer stays unit-testable with just Database +
       // IMRepository + Flags (the existing agent-push.test.ts provides no config layer). When present
       // (production + the digest-builder test graph both provide it), a CONFIGURED quiet-hours window is
@@ -132,9 +240,15 @@ export const layerWith = (options?: LayerOptions) =>
           const withinQuietHours =
             factOverrides?.withinQuietHours ?? (yield* resolveWithinQuietHours(request.workspaceID, at))
 
-          // §E3 — the workspace's allowed FS roots for the content path ACL. An explicit override wins;
-          // else the default/injected resolver. `undefined` ⇒ the path leg stays off for this workspace.
-          const allowedPathRoots = factOverrides?.allowedPathRoots ?? allowedPathRootsFor(request.workspaceID)
+          // §E3 — the workspace's allowed FS roots for the content path ACL. Priority: an explicit
+          // factOverrides wins (tests / a caller that pre-resolved) → the synchronous port (directory-id
+          // becomes its own root) → for a genuine "wrk_"-id that deferred, the DB-backed resolver looks up
+          // the REAL project root(s). `undefined` at every step ⇒ the path leg stays off for this push
+          // (scrub still runs; the push still proceeds). Fail-safe throughout.
+          const allowedPathRoots =
+            factOverrides?.allowedPathRoots ??
+            allowedPathRootsFor(request.workspaceID) ??
+            (yield* resolveWorkspaceRoots(request.workspaceID))
 
           // §B2 去重 (idempotency): a re-attempt with the same key returns the ORIGINAL outcome and
           // never re-delivers. Checked FIRST (before any persist) so a retry can't double-send the
