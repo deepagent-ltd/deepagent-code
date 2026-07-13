@@ -37,23 +37,32 @@ export function PanelButton(props: { sessionID: string }) {
   )
   const armed = () => armedOverride() ?? status()?.armed ?? false
 
-  const consultNow = async () => {
-    const verdict = await consultPanel(client(), { sessionID: props.sessionID })
+  // T2.1 — a normal convene is a single round; a DEEP convene (Shift/Alt-click) runs up to 3 debate
+  // rounds so panelists see each other's ANONYMIZED opinions and revise (§C.4). The server clamps the
+  // ceiling, so we just request the deep depth here. The verdict dialog surfaces the rounds actually run.
+  const DEEP_PANEL_ROUNDS = 3
+  const consultNow = async (deep: boolean) => {
+    const verdict = await consultPanel(client(), {
+      sessionID: props.sessionID,
+      ...(deep ? { maxRounds: DEEP_PANEL_ROUNDS } : {}),
+    })
     if (verdict) dialog.show(() => <PanelVerdictDialog verdict={verdict} />)
   }
 
-  const onClick = async () => {
+  const onClick = async (e: MouseEvent) => {
     if (busy() || !props.sessionID) return
+    // Shift or Alt turns an on-demand convene into a multi-round debate.
+    const deep = e.shiftKey || e.altKey
     setBusy(true)
     try {
       if (!armed()) {
         // OFF → ON: arm, then convene once on the current context.
         await armPanel(client(), props.sessionID, true)
         setArmedOverride(true)
-        await consultNow()
+        await consultNow(deep)
       } else {
         // Already armed: a press re-convenes on demand (stays armed).
-        await consultNow()
+        await consultNow(deep)
       }
     } finally {
       setBusy(false)
@@ -76,7 +85,7 @@ export function PanelButton(props: { sessionID: string }) {
     <Tooltip
       placement="top"
       gutter={4}
-      value={armed() ? language.t("composer.panel.armed") : language.t("composer.panel.convene")}
+      value={`${armed() ? language.t("composer.panel.armed") : language.t("composer.panel.convene")} · ${language.t("composer.panel.deepHint")}`}
     >
       <div class="flex items-center" data-component="prompt-panel-control">
         <Button
