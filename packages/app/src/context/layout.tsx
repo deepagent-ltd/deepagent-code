@@ -78,7 +78,6 @@ type SessionView = {
     | "menu"
     | "review"
     | "files"
-    | "status"
     | "worktree"
     | "subagents"
     | "browser"
