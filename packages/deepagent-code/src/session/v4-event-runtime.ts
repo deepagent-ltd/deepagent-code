@@ -39,6 +39,8 @@ import { openProjectStore } from "@deepagent-code/core/deepagent/durable-knowled
 import { symbolsForFilePaths } from "@deepagent-code/core/deepagent/code-indexer"
 import { resolveDeepAgentCodeHome } from "@deepagent-code/core/deepagent/workspace"
 import * as Log from "@deepagent-code/core/util/log"
+// §C3.2 (P4.5a) — physical per-agent worktree isolation (git-CLI helper; fail-safe → event dir).
+import { createAgentWorktree, cleanupAgentWorktree, type AgentWorktree } from "./agent-worktree"
 
 // V4.0 §A4/§C — the PRODUCTION event-runtime. This is the layer that was missing: every V4 daemon and
 // consumer was built + unit-tested but NEVER STARTED in prod, so published events were durably logged
@@ -78,6 +80,17 @@ export const makeEventTurnRunner = (deps: {
   readonly sessionPrompt: SessionPrompt.Interface
   readonly instanceStore: InstanceStore.Interface
   readonly defaultModel: () => Effect.Effect<{ providerID: ProviderV2.ID; modelID: ModelV2.ID }>
+  // §C3.2 (P4.5a) — physical per-agent worktree isolation. Injectable so a test can drive it without a
+  // real git repo; production defaults to the git-CLI helpers. createWorktree returns null when isolation
+  // is impossible (not a git repo / git unavailable / add failed) → the runner FALLS BACK to the event
+  // directory (prior behavior, never fails the turn). cleanupWorktree runs on turn settle (Effect.ensuring)
+  // and preserves the agent's work on its branch. Set enableWorktreeIsolation:false to disable entirely.
+  readonly enableWorktreeIsolation?: boolean
+  readonly createWorktree?: (input: {
+    readonly eventDirectory: string
+    readonly label: string
+  }) => Promise<AgentWorktree | null>
+  readonly cleanupWorktree?: (wt: AgentWorktree) => Promise<void>
 }): SubagentTurnRunner =>
   (input) =>
     Effect.gen(function* () {
@@ -90,10 +103,50 @@ export const makeEventTurnRunner = (deps: {
           : undefined
       // The turn must run in a REAL working directory. Prefer an explicit event directory; else, only a
       // NON-"wrk" workspaceID doubles as a directory. A bare "wrk_"-id is NOT a path → no directory.
-      const directory =
+      const eventDirectory =
         input.directory ?? (input.workspaceID && !input.workspaceID.startsWith("wrk") ? input.workspaceID : undefined)
-      if (!directory) return failedTurn()
+      if (!eventDirectory) return failedTurn()
 
+      // §C3.2 (P4.5a) — attempt to create a dedicated, isolated git worktree for THIS agent turn, rooted
+      // at the event directory. On success the turn runs in the isolated tree (physical isolation between
+      // concurrent agents, complementing the P2.9 file-locks + arbiter); on ANY failure (not a git repo,
+      // git unavailable, add failed) createWorktree resolves null and we FALL BACK to the event directory
+      // — the prior behavior — so a non-git / single-agent path is unaffected. Default ON; injectable +
+      // toggleable for testing. The worktree is torn down on turn settle via Effect.ensuring below.
+      const worktreeEnabled = deps.enableWorktreeIsolation !== false
+      const createWt = deps.createWorktree ?? createAgentWorktree
+      const cleanupWt = deps.cleanupWorktree ?? cleanupAgentWorktree
+
+      // §C3.2 (P4.5a) — acquire/use/release BINDS cleanup to creation so there is NO interrupt window
+      // between "worktree created" and "cleanup installed". Effect.acquireUseRelease runs `acquire`
+      // UNINTERRUPTIBLY and GUARANTEES `release` runs once acquire succeeds — even if `use` (the turn) is
+      // interrupted mid-flight (a MultiAgentRuntime concurrency-pool teardown or daemon shutdown). This
+      // closes the leak a plain create-then-Effect.ensuring left open: an EXTERNAL interrupt observed at the
+      // create→ensuring gap (the Effect.promise async boundary) would skip the finalizer install and orphan
+      // the worktree dir + agent/* branch forever. timeout / normal failure / happy path are unaffected
+      // (release also runs on those) — this only additionally covers the external-interrupt timing window.
+      //
+      // acquire — create the isolated worktree (or null on non-git / failure → fallback to the event dir).
+      const acquire = worktreeEnabled
+        ? Effect.promise(() => createWt({ eventDirectory, label: input.correlationID ?? input.agentType })).pipe(
+            Effect.orElseSucceed(() => null),
+          )
+        : Effect.succeed<AgentWorktree | null>(null)
+      // release — tear down the worktree, preserving the agent's work on its branch (agent-worktree.ts). A
+      // NO-OP when no worktree was created (fallback path) — it NEVER touches the event directory. Wrapped
+      // in catchCause so a cleanup hiccup can't become a defect during interruption/settle (fail-safe).
+      const release = (worktree: AgentWorktree | null) =>
+        worktree
+          ? Effect.promise(() => cleanupWt(worktree)).pipe(Effect.catchCause(() => Effect.void))
+          : Effect.void
+
+      return yield* Effect.acquireUseRelease(
+        acquire,
+        (worktree) =>
+          Effect.gen(function* () {
+            // The directory the rest of the turn runs in: the isolated worktree when we got one, else the
+            // event directory (fallback). Everything below (instance load, session.create) uses THIS.
+            const directory = worktree?.directory ?? eventDirectory
       // CRITICAL: this runs on a background daemon fiber, which carries NO InstanceRef (that is only set
       // per-request by the instance-context middleware). EVERY InstanceState-touching call — agents.get,
       // sessions.create, defaultModel, the prompt calls — reads InstanceRef and `Effect.die`s without it
@@ -163,19 +216,61 @@ export const makeEventTurnRunner = (deps: {
             ? input.maxTurnDurationMs
             : EVENT_TURN_TIMEOUT_MS,
         ),
-        Effect.map((r) => r as { text?: string }),
+        // The prompt result is a SessionV1.WithParts — its assistant `info` carries the REAL per-turn
+        // token accounting. Keep the full shape (info + parts) so P4.1 can thread usage/cost/text below.
+        Effect.map(
+          (r) =>
+            r as {
+              readonly info?: {
+                readonly role?: string
+                readonly tokens?: {
+                  readonly input?: number
+                  readonly output?: number
+                  readonly reasoning?: number
+                }
+                readonly cost?: number
+              }
+              readonly parts?: ReadonlyArray<{ readonly type: string; readonly text?: string }>
+              // legacy/back-compat: some callers surfaced a flattened top-level `text`.
+              readonly text?: string
+            },
+        ),
         Effect.orElseSucceed(() => undefined),
       )
       if (!result) return failedTurn()
 
-      return {
-        ok: true,
-        structured: undefined,
-        text: typeof result.text === "string" ? result.text : "",
-        tokensUsed: 0,
-        cost: 0,
-        sessionID: child.id,
-      }
+      // P4.1 — thread the REAL token usage from the prompt result so the §E2 per-agent/hour token-budget
+      // gate (multi-agent-runtime.ts debitTokens) actually debits. The completed assistant message carries
+      // {input, output, reasoning, cache:{read,write}}; the budget counts input+output+reasoning (the
+      // billable LLM work — same total the goal-loop runner debits; cache reads/writes are excluded to
+      // match). Fail-soft to 0 when the shape is absent (a stub/non-assistant turn). Mirrors
+      // makeTaskSubagentRunner (goal-loop-wiring.ts) so both runners feed the budget identically.
+      const info = result.info
+      const tokensUsed =
+        info?.role === "assistant"
+          ? Math.max(0, (info.tokens?.input ?? 0) + (info.tokens?.output ?? 0) + (info.tokens?.reasoning ?? 0))
+          : 0
+      const cost = info?.role === "assistant" && typeof info.cost === "number" && Number.isFinite(info.cost) ? info.cost : 0
+      // Prefer the final text part (real WithParts shape); fall back to a flattened top-level `text`.
+      const text =
+        result.parts?.findLast?.((p) => p.type === "text")?.text ??
+        (typeof result.text === "string" ? result.text : "") ??
+        ""
+
+            return {
+              ok: true,
+              structured: undefined,
+              text,
+              tokensUsed,
+              cost,
+              sessionID: child.id,
+            }
+          }), // end use (the turn body)
+        // release — GUARANTEED once acquire succeeds, on ANY exit (success / failure / timeout / external
+        // interrupt). Preserves the agent's work on its branch; a no-op for the null-fallback (never the
+        // event dir).
+        (worktree) => release(worktree),
+      )
     }).pipe(Effect.catchCause(() => Effect.succeed(failedTurn())))
 
 // §M — the PRODUCTION PanelConvenePort for the auto-convene daemon. The PanelConveneConsumer never
@@ -430,6 +525,10 @@ export const MAINTENANCE_SCAN_INTERVAL_MS = 24 * 60 * 60 * 1000 // daily
 // ≥ 3 `ci.failure` events are seen in the window. crossWorkspace: real per-project CI failures (P1.4
 // webhook ingress) land in their own project workspaces, so this SYSTEM-level trigger counts ci.failure
 // ACROSS workspaces (the tick omits the workspace filter) — else it would never fire on real failures.
+// groupByRepo (P4.5b): the count is PARTITIONED by the failure's `payload.repo` and the threshold is
+// evaluated PER REPO, so a repair fires for the repo that actually failed 3× (carrying repo=<repo> +
+// scoped to that repo's workspace) — not a global counter that conflates independent repos. crossWorkspace
+// + groupByRepo compose: crossWorkspace gathers the cross-tenant ci.failure stream, groupByRepo splits it.
 export const CI_FAILURE_EVENT = "ci.failure"
 export const CI_REPAIR_EVENT = "ci.repair.requested"
 export const CI_REPAIR_THRESHOLD = 3
@@ -473,6 +572,8 @@ export const registerBootstrapSchedules = (scheduler: Scheduler.Interface, now: 
         threshold: CI_REPAIR_THRESHOLD,
         windowMs: CI_REPAIR_WINDOW_MS,
         crossWorkspace: true,
+        // P4.5b — count + fire PER REPO (payload.repo), so a repair is scoped to the repo that failed 3×.
+        groupByRepo: true,
       },
       recheckEveryMs: CI_REPAIR_RECHECK_MS,
       firstCheckAt: now,

@@ -1,5 +1,5 @@
 import { describe, expect } from "bun:test"
-import { Effect, Exit, Layer } from "effect"
+import { Deferred, Effect, Exit, Fiber, Layer } from "effect"
 import { V4EventRuntime } from "../../src/session/v4-event-runtime"
 import { DeepAgentEventBus } from "@deepagent-code/core/deepagent/deepagent-event-bus"
 import { DeepAgentEvent } from "@deepagent-code/core/deepagent/deepagent-event"
@@ -76,12 +76,14 @@ describe("V4EventRuntime schedule bootstrap", () => {
       // (A) periodic maintenance scan: daily, publishes schedule.scan
       expect(byKind.periodic?.intervalMs).toBe(V4EventRuntime.MAINTENANCE_SCAN_INTERVAL_MS)
       expect((byKind.periodic?.eventTemplate as { type: string }).type).toBe(V4EventRuntime.MAINTENANCE_SCAN_EVENT)
-      // (B) condition: 3× ci.failure in-window → ci.repair.requested, counted ACROSS workspaces
+      // (B) condition: 3× ci.failure in-window → ci.repair.requested, counted ACROSS workspaces and
+      // grouped PER REPO (P4.5b), so a repair is scoped to the repo that actually failed 3×.
       expect(byKind.condition?.condition).toEqual({
         eventType: V4EventRuntime.CI_FAILURE_EVENT,
         threshold: V4EventRuntime.CI_REPAIR_THRESHOLD,
         windowMs: V4EventRuntime.CI_REPAIR_WINDOW_MS,
         crossWorkspace: true,
+        groupByRepo: true,
       })
       expect((byKind.condition?.eventTemplate as { type: string }).type).toBe(V4EventRuntime.CI_REPAIR_EVENT)
       // the stable dedupe keys are persisted on the rows (schedule_key column), enabling DB-level dedupe.
@@ -280,13 +282,15 @@ describe("V4EventRuntime CI-repair condition fires on 3× failure", () => {
   )
   const it = testEffect(Layer.mergeAll(dispatcher, core))
 
-  const ciFailure = (key: string, workspaceID = WS): DeepAgentEvent.PublishInput => ({
+  // P4.5b — real ci.failure events carry a `repo` discriminator (P1.4 webhook payload). The per-repo
+  // trigger groups on it, so every failure here names its repo (default "repo-a").
+  const ciFailure = (key: string, opts?: { workspaceID?: string; repo?: string }): DeepAgentEvent.PublishInput => ({
     type: V4EventRuntime.CI_FAILURE_EVENT,
     source: "ci",
-    workspaceID,
+    workspaceID: opts?.workspaceID ?? WS,
     idempotencyKey: key,
     priority: "normal",
-    payload: {},
+    payload: { repo: opts?.repo ?? "repo-a" },
   })
 
   it.effect("condition met ⇒ tick publishes ci.repair.requested; not met ⇒ does not", () =>
@@ -297,23 +301,25 @@ describe("V4EventRuntime CI-repair condition fires on 3× failure", () => {
       const disp = yield* EventDispatcher.Service
       yield* V4EventRuntime.registerBootstrapSchedules(scheduler, 0)
 
-      // only 2 failures in the window → below threshold(3) → no repair published. The not-met tick
-      // reschedules the next re-check to now + recheckEveryMs (60_000), so we advance the clock past it.
+      // only 2 failures for repo-a in the window → below threshold(3) → no repair published. The not-met
+      // tick reschedules the next re-check to now + recheckEveryMs (60_000), so we advance past it.
       yield* bus.publish(ciFailure("f1"))
       yield* bus.publish(ciFailure("f2"))
       yield* disp.tick()
-      let repairs = yield* bus.recentByType({ type: V4EventRuntime.CI_REPAIR_EVENT, workspaceID: WS })
+      let repairs = yield* bus.recentByType({ type: V4EventRuntime.CI_REPAIR_EVENT })
       expect(repairs.length).toBe(0)
 
-      // a 3rd failure (still inside the 30-min window) meets the threshold; the next due re-check fires
-      // the templated repair event. Advance the clock to the rescheduled re-check time first.
+      // a 3rd failure for repo-a (still inside the 30-min window) meets the threshold; the next due
+      // re-check fires the templated repair event. Advance the clock to the rescheduled re-check first.
       clock = V4EventRuntime.CI_REPAIR_RECHECK_MS
       yield* bus.publish(ciFailure("f3"))
       yield* disp.tick()
-      repairs = yield* bus.recentByType({ type: V4EventRuntime.CI_REPAIR_EVENT, workspaceID: WS })
+      repairs = yield* bus.recentByType({ type: V4EventRuntime.CI_REPAIR_EVENT })
       expect(repairs.length).toBe(1)
       expect(repairs[0]?.source).toBe("schedule")
       expect((repairs[0]?.payload as { scheduleKey?: string })?.scheduleKey).toBe(V4EventRuntime.CI_REPAIR_KEY)
+      // P4.5b — the repair carries the repo discriminator (repo=repo-a), so it's scoped, not global.
+      expect((repairs[0]?.payload as { repo?: string })?.repo).toBe("repo-a")
     }),
   )
 
@@ -327,16 +333,42 @@ describe("V4EventRuntime CI-repair condition fires on 3× failure", () => {
 
       // Real CI failures land in per-project workspaces (P1.4 webhook ingress), NOT wrk_system. Because
       // the condition is crossWorkspace, the system-scoped trigger counts them across tenants. Publish 3
-      // failures spread across TWO different project workspaces — none in wrk_system.
-      yield* bus.publish(ciFailure("p1", "wrk_projectA"))
-      yield* bus.publish(ciFailure("p2", "wrk_projectA"))
-      yield* bus.publish(ciFailure("p3", "wrk_projectB"))
+      // failures for the SAME repo spread across TWO project workspaces — none in wrk_system.
+      yield* bus.publish(ciFailure("p1", { workspaceID: "wrk_projectA", repo: "repo-x" }))
+      yield* bus.publish(ciFailure("p2", { workspaceID: "wrk_projectA", repo: "repo-x" }))
+      yield* bus.publish(ciFailure("p3", { workspaceID: "wrk_projectB", repo: "repo-x" }))
       yield* disp.tick()
 
-      // the system-workspace repair event fired even though ZERO failures were in wrk_system.
-      const repairs = yield* bus.recentByType({ type: V4EventRuntime.CI_REPAIR_EVENT, workspaceID: WS })
+      // the repair event fired even though ZERO failures were in wrk_system, and it carries repo-x.
+      const repairs = yield* bus.recentByType({ type: V4EventRuntime.CI_REPAIR_EVENT })
       expect(repairs.length).toBe(1)
       expect((repairs[0]?.payload as { scheduleKey?: string })?.scheduleKey).toBe(V4EventRuntime.CI_REPAIR_KEY)
+      expect((repairs[0]?.payload as { repo?: string })?.repo).toBe("repo-x")
+    }),
+  )
+
+  it.effect("P4.5b: 3× for repo A + 1× for repo B → ONE repair for A (carrying repo=A), none for B", () =>
+    Effect.gen(function* () {
+      clock = 0
+      const scheduler = yield* Scheduler.Service
+      const bus = yield* DeepAgentEventBus.Service
+      const disp = yield* EventDispatcher.Service
+      yield* V4EventRuntime.registerBootstrapSchedules(scheduler, 0)
+
+      // repo A fails 3× (meets threshold); repo B fails once (below threshold). Per-repo grouping must
+      // fire EXACTLY ONE repair, for repo A, carrying repo=A — repo B gets none.
+      yield* bus.publish(ciFailure("a1", { workspaceID: "wrk_projectA", repo: "repoA" }))
+      yield* bus.publish(ciFailure("a2", { workspaceID: "wrk_projectA", repo: "repoA" }))
+      yield* bus.publish(ciFailure("a3", { workspaceID: "wrk_projectA", repo: "repoA" }))
+      yield* bus.publish(ciFailure("b1", { workspaceID: "wrk_projectB", repo: "repoB" }))
+      yield* disp.tick()
+
+      const repairs = yield* bus.recentByType({ type: V4EventRuntime.CI_REPAIR_EVENT })
+      const repos = repairs.map((r) => (r.payload as { repo?: string })?.repo)
+      expect(repairs.length).toBe(1)
+      expect(repos).toEqual(["repoA"])
+      // the fired repair is scoped to the failing repo's project workspace, not wrk_system.
+      expect(repairs[0]?.workspaceID).toBe("wrk_projectA")
     }),
   )
 })
@@ -577,6 +609,240 @@ describe("V4EventRuntime makeEventTurnRunner honors maxTurnDurationMs (§C1/§G 
       })
       expect(result.ok).toBe(true)
       expect(result.text).toBe("done")
+    }),
+  )
+})
+
+// §C3.2 (P4.5a) — the event turn runner must run each agent turn in a PHYSICALLY ISOLATED git worktree
+// (a temp dir on a dedicated branch) when the event directory is a git repo, so concurrent agents work
+// on separate trees (complementing the P2.9 file-locks + arbiter). On non-git / creation failure it must
+// FALL BACK to the event directory — never fail the turn. Here we drive it with an INJECTED worktree
+// factory (deterministic, no real git) and assert: (a) success → the child session's directory is the
+// worktree dir, not the event dir, and cleanup runs on settle; (b) factory returns null → falls back to
+// the event dir; (c) cleanup runs even when the turn times out.
+describe("V4EventRuntime makeEventTurnRunner worktree isolation (§C3.2 / P4.5a)", () => {
+  const CTX = { directory: "/tmp/event-turn-wt" } as unknown as InstanceContext
+  const fakeStore = { load: () => Effect.succeed(CTX) } as unknown as InstanceStore.Interface
+  const fakeAgents = { get: () => Effect.succeed({ name: "reviewer" }) } as unknown as Agent.Interface
+  const defaultModel = () =>
+    Effect.succeed({ providerID: ProviderV2.ID.make("anthropic"), modelID: ModelV2.ID.make("claude") })
+
+  // capture the directory each child session was created in.
+  const makeSessions = (sink: string[]) =>
+    ({
+      create: (input?: { directory?: string }) =>
+        Effect.sync(() => void sink.push(input?.directory ?? "")).pipe(Effect.as({ id: SessionID.make("ses_wt") })),
+    }) as unknown as Session.Interface
+
+  const okPrompt = {
+    resolvePromptParts: () => Effect.succeed([{ type: "text", text: "hi" }]),
+    prompt: () => Effect.succeed({ info: { role: "assistant" }, parts: [{ type: "text", text: "done" }] }),
+  } as unknown as SessionPrompt.Interface
+
+  baseIt.effect("git repo → runs in the isolated worktree dir (not the event dir); cleanup runs on settle", () =>
+    Effect.gen(function* () {
+      const dirs: string[] = []
+      const cleaned: string[] = []
+      const WT = {
+        directory: "/tmp/isolated-worktree-abc",
+        branch: "agent/reviewer-abc",
+        repoRoot: "/tmp/event-turn-wt",
+        baseSha: "deadbeef",
+      }
+      const runner = V4EventRuntime.makeEventTurnRunner({
+        sessions: makeSessions(dirs),
+        agents: fakeAgents,
+        sessionPrompt: okPrompt,
+        instanceStore: fakeStore,
+        defaultModel,
+        createWorktree: () => Promise.resolve(WT),
+        cleanupWorktree: (wt) => Promise.resolve(void cleaned.push(wt.directory)),
+      })
+      const result = yield* runner({ agentType: "reviewer", prompt: "do it", directory: "/tmp/event-turn-wt" })
+      expect(result.ok).toBe(true)
+      // the child session ran in the ISOLATED worktree directory, NOT the event directory.
+      expect(dirs.at(-1)).toBe(WT.directory)
+      // cleanup ran on settle for exactly that worktree.
+      expect(cleaned).toEqual([WT.directory])
+    }),
+  )
+
+  baseIt.effect("non-git / creation failure → falls back to the event dir; no cleanup, no crash", () =>
+    Effect.gen(function* () {
+      const dirs: string[] = []
+      let cleanupCalls = 0
+      const runner = V4EventRuntime.makeEventTurnRunner({
+        sessions: makeSessions(dirs),
+        agents: fakeAgents,
+        sessionPrompt: okPrompt,
+        instanceStore: fakeStore,
+        defaultModel,
+        createWorktree: () => Promise.resolve(null), // not a git repo / add failed → fall back
+        cleanupWorktree: () => Promise.resolve(void cleanupCalls++),
+      })
+      const result = yield* runner({ agentType: "reviewer", prompt: "do it", directory: "/tmp/event-turn-wt" })
+      expect(result.ok).toBe(true)
+      // ran in the EVENT directory (fallback), and cleanup was never invoked (no worktree existed).
+      expect(dirs.at(-1)).toBe("/tmp/event-turn-wt")
+      expect(cleanupCalls).toBe(0)
+    }),
+  )
+
+  baseIt.live("cleanup runs even when the turn TIMES OUT", () =>
+    Effect.gen(function* () {
+      const cleaned: string[] = []
+      const WT = {
+        directory: "/tmp/isolated-worktree-timeout",
+        branch: "agent/reviewer-to",
+        repoRoot: "/tmp/event-turn-wt",
+        baseSha: "cafe",
+      }
+      const slowPrompt = {
+        resolvePromptParts: () => Effect.succeed([{ type: "text", text: "hi" }]),
+        prompt: () =>
+          Effect.succeed({ info: { role: "assistant" }, parts: [] }).pipe(Effect.delay("120 millis")),
+      } as unknown as SessionPrompt.Interface
+      const runner = V4EventRuntime.makeEventTurnRunner({
+        sessions: makeSessions([]),
+        agents: fakeAgents,
+        sessionPrompt: slowPrompt,
+        instanceStore: fakeStore,
+        defaultModel,
+        createWorktree: () => Promise.resolve(WT),
+        cleanupWorktree: (wt) => Promise.resolve(void cleaned.push(wt.directory)),
+      })
+      const result = yield* runner({
+        agentType: "reviewer",
+        prompt: "do it",
+        directory: "/tmp/event-turn-wt",
+        maxTurnDurationMs: 20, // times out before the ~120ms prompt
+      })
+      expect(result.ok).toBe(false)
+      // Effect.ensuring guaranteed cleanup despite the timeout.
+      expect(cleaned).toEqual([WT.directory])
+    }),
+  )
+
+  // §C3.2 (P4.5a) INTERRUPT-WINDOW REGRESSION LOCK — the leak the coordinator flagged: a plain
+  // create-then-Effect.ensuring left a NARROW window where an EXTERNAL interrupt (a MultiAgentRuntime
+  // concurrency-pool teardown / daemon shutdown) observed right after the worktree was created but
+  // BEFORE the finalizer was installed would skip cleanup → the worktree dir + agent/* branch leak
+  // forever. Effect.acquireUseRelease binds release to acquire (acquire runs uninterruptibly; release is
+  // GUARANTEED once acquire succeeds, even if `use` is interrupted), closing the window. This test forces
+  // that exact timing: the worktree is created (signaling a Deferred), the turn body then BLOCKS, we
+  // interrupt the running fiber mid-body, and assert cleanup STILL ran. Before the fix (ensuring installed
+  // only after the create→body gap) an interrupt at the gap would NOT run cleanup; after, it always does.
+  baseIt.live("INTERRUPT at the create→install gap → cleanup STILL runs (no leak) — the window lock", () =>
+    Effect.gen(function* () {
+      const cleaned: string[] = []
+      const WT = {
+        directory: "/tmp/isolated-worktree-interrupt",
+        branch: "agent/reviewer-int",
+        repoRoot: "/tmp/event-turn-wt",
+        baseSha: "beef",
+      }
+      // A CONTROLLABLE create: createWorktree signals `acquireStarted` synchronously (so the test knows the
+      // worktree side-effect has begun), then returns a promise that resolves ONLY when the test opens
+      // `createGate`. This lets the test make an interrupt PENDING while create is still in flight — the
+      // EXACT leak window (interrupt observed at the create async boundary, before the finalizer install).
+      const acquireStarted = yield* Deferred.make<void>()
+      let openCreateGate: () => void = () => {}
+      const createGate = new Promise<void>((resolve) => {
+        openCreateGate = resolve
+      })
+      const runner = V4EventRuntime.makeEventTurnRunner({
+        sessions: makeSessions([]),
+        agents: fakeAgents,
+        sessionPrompt: okPrompt,
+        instanceStore: fakeStore,
+        defaultModel,
+        createWorktree: async () => {
+          Deferred.doneUnsafe(acquireStarted, Exit.void) // synchronous: the create side-effect has begun
+          await createGate // hold acquire in-flight until the test opens the gate
+          return WT
+        },
+        cleanupWorktree: (wt) => Promise.resolve(void cleaned.push(wt.directory)),
+      })
+
+      const fiber = yield* Effect.forkChild(
+        runner({ agentType: "reviewer", prompt: "do it", directory: "/tmp/event-turn-wt" }),
+      )
+      // wait until create is in-flight, then make an interrupt PENDING (fork it: interrupting a fiber whose
+      // acquire is uninterruptible would otherwise block until acquire completes). The interrupt is now
+      // queued against the fiber while it sits in `acquire`.
+      yield* Deferred.await(acquireStarted)
+      yield* Effect.forkChild(Fiber.interrupt(fiber))
+      yield* Effect.sleep("10 millis") // let the interrupt signal reach the fiber while it's in acquire
+      // now open the gate → acquire completes. With acquireUseRelease, acquire is UNINTERRUPTIBLE so it
+      // finishes producing WT and REGISTERS release; the pending interrupt then fires during `use` and
+      // release runs. With the OLD create-then-ensuring shape, create was INTERRUPTIBLE: the pending
+      // interrupt would abort at this async boundary BEFORE the finalizer was installed → cleanup skipped.
+      openCreateGate()
+      yield* Fiber.await(fiber)
+
+      // The window is CLOSED: release ran during interruption → the worktree was cleaned up, not leaked.
+      expect(cleaned).toEqual([WT.directory])
+    }),
+  )
+})
+
+// P4.1 — the event turn runner must thread the REAL per-turn token usage + cost from the prompt result
+// (a SessionV1.WithParts whose assistant `info` carries {tokens:{input,output,reasoning,cache}, cost})
+// into SubagentTurnResult.tokensUsed/cost — NOT the hardcoded 0 it used before. This is what makes the
+// §E2 per-agent/hour token-budget gate (multi-agent-runtime.ts debitTokens) actually bite in prod.
+// tokensUsed = input + output + reasoning (cache read/write excluded), matching the goal-loop runner.
+describe("V4EventRuntime makeEventTurnRunner threads real token usage (§E2 / P4.1)", () => {
+  const CTX = { directory: "/tmp/event-turn-tokens" } as unknown as InstanceContext
+  const fakeStore = { load: () => Effect.succeed(CTX) } as unknown as InstanceStore.Interface
+  const fakeAgents = { get: () => Effect.succeed({ name: "reviewer" }) } as unknown as Agent.Interface
+  const fakeSessions = {
+    create: () => Effect.succeed({ id: SessionID.make("ses_tokens_root") }),
+  } as unknown as Session.Interface
+  const defaultModel = () =>
+    Effect.succeed({ providerID: ProviderV2.ID.make("anthropic"), modelID: ModelV2.ID.make("claude") })
+
+  // A prompt returning the REAL WithParts shape: an assistant message with a known token breakdown +
+  // cost, and the final text as a text part (not a flattened top-level field).
+  const makeRunner = (promptResult: unknown) => {
+    const fakePrompt = {
+      resolvePromptParts: () => Effect.succeed([{ type: "text", text: "hi" }]),
+      prompt: () => Effect.succeed(promptResult),
+    } as unknown as SessionPrompt.Interface
+    return V4EventRuntime.makeEventTurnRunner({
+      sessions: fakeSessions,
+      agents: fakeAgents,
+      sessionPrompt: fakePrompt,
+      instanceStore: fakeStore,
+      defaultModel,
+    })
+  }
+
+  baseIt.effect("surfaces input+output+reasoning as tokensUsed + the real cost (not 0)", () =>
+    Effect.gen(function* () {
+      const runner = makeRunner({
+        info: {
+          role: "assistant",
+          tokens: { input: 100, output: 40, reasoning: 10, cache: { read: 7, write: 3 } },
+          cost: 0.0123,
+        },
+        parts: [{ type: "text", text: "reviewed" }],
+      })
+      const result = yield* runner({ agentType: "reviewer", prompt: "do it", workspaceID: "/tmp/event-turn-tokens" })
+      expect(result.ok).toBe(true)
+      // 100 + 40 + 10 = 150 (cache read/write are NOT counted, mirroring the goal-loop runner).
+      expect(result.tokensUsed).toBe(150)
+      expect(result.cost).toBe(0.0123)
+      expect(result.text).toBe("reviewed")
+    }),
+  )
+
+  baseIt.effect("fail-soft: a non-assistant / shapeless result yields tokensUsed:0, cost:0 (no crash)", () =>
+    Effect.gen(function* () {
+      const runner = makeRunner({ info: { role: "user" }, parts: [], text: "done" })
+      const result = yield* runner({ agentType: "reviewer", prompt: "do it", workspaceID: "/tmp/event-turn-tokens" })
+      expect(result.ok).toBe(true)
+      expect(result.tokensUsed).toBe(0)
+      expect(result.cost).toBe(0)
     }),
   )
 })
