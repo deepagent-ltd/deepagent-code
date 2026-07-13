@@ -314,6 +314,32 @@ export const DeepAgentGoalStartInput = Schema.Struct({
 /** Goal lifecycle mutations that only need the session id. */
 export const DeepAgentGoalSessionInput = Schema.Struct({ sessionID: Schema.String })
 
+/**
+ * POST /deepagent/goal/edit-plan — V4.1 §S2 GOAL PLAN HOT-EDIT. A user revises the plan of a RUNNING or
+ * PAUSED goal; the driver applies it BETWEEN ticks (durable-doc upsert + stall re-baseline). The step
+ * shape mirrors plan-controller PlanInput (loose input: step_id/status/acceptance optional; evidence is
+ * runtime-owned and never taken from input). `ok:false` when no goal is running or it reached a terminal
+ * phase (no orphan edit).
+ */
+export const DeepAgentGoalPlanStepInput = Schema.Struct({
+  step_id: Schema.optional(Schema.String),
+  title: Schema.String,
+  status: Schema.optional(Schema.String),
+  acceptance: Schema.optional(Schema.NullOr(Schema.String)),
+  assigned_agent: Schema.optional(Schema.NullOr(Schema.String)),
+  note: Schema.optional(Schema.NullOr(Schema.String)),
+})
+export const DeepAgentGoalPlanInput = Schema.Struct({
+  goal: Schema.String,
+  steps: Schema.Array(DeepAgentGoalPlanStepInput),
+  assumptions: Schema.optional(Schema.Array(Schema.String)),
+  active_step_id: Schema.optional(Schema.NullOr(Schema.String)),
+})
+export const DeepAgentGoalEditPlanInput = Schema.Struct({
+  sessionID: Schema.String,
+  plan: DeepAgentGoalPlanInput,
+})
+
 export const DeepAgentGoalSnapshot = Schema.Struct({
   goalId: Schema.String,
   planDocId: Schema.String,
@@ -646,6 +672,21 @@ export const DeepAgentApi = HttpApi.make("deepagent").add(
         success: described(DeepAgentGoalMutateResult, "Whether the goal was stopped"),
         error: DeepAgentPromotionError,
       }),
+    )
+    .add(
+      HttpApiEndpoint.post("goalEditPlan", `${root}/goal/edit-plan`, {
+        query: WorkspaceRoutingQuery,
+        payload: DeepAgentGoalEditPlanInput,
+        success: described(DeepAgentGoalMutateResult, "Whether the plan edit was enqueued for the goal"),
+        error: DeepAgentPromotionError,
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "deepagent.goal.editPlan",
+          summary: "Hot-edit the plan of a running/paused Goal Loop",
+          description:
+            "V4.1 §S2: enqueue a user plan revision on the goal control channel. The driver applies it between ticks (durable-doc upsert + stall re-baseline). ok:false when no goal is running or it reached a terminal phase.",
+        }),
+      ),
     )
     .add(
       HttpApiEndpoint.get("goalStatus", `${root}/goal/status`, {

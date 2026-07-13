@@ -26,6 +26,7 @@ import { WIKI_EDITABLE_TYPES, type WikiPage } from "@/wiki/wiki-service"
 import type { PanelTurnRunner } from "@/panel/panelist-runner"
 import type { PanelVerdict } from "@/agent/schema/panel"
 import type { CompletionCriterion } from "@deepagent-code/core/deepagent/goal-loop"
+import type { PlanInput } from "@deepagent-code/core/deepagent/plan-controller"
 
 const dbgLog = Log.create({ service: "deepagent.packs.debug" })
 
@@ -556,6 +557,27 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
     const goalStop = Effect.fn("DeepAgentHttpApi.goalStop")(function* (ctx) {
       return { ok: yield* goals.stop(ctx.payload.sessionID) }
     })
+    // V4.1 §S2 — hot-edit the plan of a running/paused goal. Normalize the wire payload (readonly step
+    // structs → the loose PlanInput the backend reconciles via buildPlanFromInput, preserving ids +
+    // runtime-owned evidence). GoalManager.editPlan enqueues it on the control channel (ok:false when no
+    // goal is running or the goal is terminal); the driver applies it between ticks.
+    const goalEditPlan = Effect.fn("DeepAgentHttpApi.goalEditPlan")(function* (ctx) {
+      const p = ctx.payload.plan
+      const plan: PlanInput = {
+        goal: p.goal,
+        steps: p.steps.map((s: (typeof p.steps)[number]) => ({
+          ...(s.step_id != null ? { step_id: s.step_id } : {}),
+          title: s.title,
+          ...(s.status != null ? { status: s.status } : {}),
+          ...(s.acceptance !== undefined ? { acceptance: s.acceptance } : {}),
+          ...(s.assigned_agent !== undefined ? { assigned_agent: s.assigned_agent } : {}),
+          ...(s.note !== undefined ? { note: s.note } : {}),
+        })),
+        ...(p.assumptions ? { assumptions: [...p.assumptions] } : {}),
+        ...(p.active_step_id !== undefined ? { active_step_id: p.active_step_id } : {}),
+      }
+      return { ok: yield* goals.editPlan({ sessionID: ctx.payload.sessionID, plan }) }
+    })
     const goalStatus = Effect.fn("DeepAgentHttpApi.goalStatus")(function* (ctx) {
       return { goal: yield* goals.status(ctx.query.sessionID) }
     })
@@ -681,6 +703,7 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
       .handle("goalPause", goalPause)
       .handle("goalResume", goalResume)
       .handle("goalStop", goalStop)
+      .handle("goalEditPlan", goalEditPlan)
       .handle("goalStatus", goalStatus)
       .handle("goalStartable", goalStartable)
       .handle("wikiPages", wikiPages)
