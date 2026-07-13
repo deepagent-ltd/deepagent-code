@@ -1,4 +1,4 @@
-import { For, Match, Show, Switch, createEffect, createMemo, createSignal, batch, type ComponentProps, type JSX } from "solid-js"
+import { For, Match, Show, Switch, createEffect, createMemo, createResource, createSignal, batch, type ComponentProps, type JSX } from "solid-js"
 import { createMediaQuery } from "@solid-primitives/media"
 import { Tabs } from "@deepagent-code/ui/tabs"
 import { IconButton } from "@deepagent-code/ui/icon-button"
@@ -8,14 +8,15 @@ import { ResizeHandle } from "@deepagent-code/ui/resize-handle"
 import type { SnapshotFileDiff, VcsFileDiff } from "@deepagent-code/sdk/v2"
 
 import FileTree from "@/components/file-tree"
-import { StatusPopoverBody } from "@/components/status-popover-body"
 import { SidePanelPlugins } from "@/pages/session/side-panel-plugins"
 import { useCommand } from "@/context/command"
 import { useDebug } from "@/context/debug"
 import { useFile, type SelectedLineRange } from "@/context/file"
 import { useLanguage } from "@/context/language"
 import { useLayout } from "@/context/layout"
+import { useSDK } from "@/context/sdk"
 import { useSync } from "@/context/sync"
+import { fetchCapabilities } from "@/components/deepagent/panel-goal.api"
 import { useTerminal } from "@/context/terminal"
 import { createOpenSessionFileTab, createSessionTabs, focusTerminalById, type Sizing } from "@/pages/session/helpers"
 import { IdeFileEditor } from "@/pages/session/ide-file-editor"
@@ -63,9 +64,20 @@ export function SessionSidePanel(props: {
   const command = useCommand()
   const terminal = useTerminal()
   const sync = useSync()
+  const sdk = useSDK()
   const { params, sessionKey, tabs, view } = useSessionLayout()
 
   const isDesktop = createMediaQuery("(min-width: 768px)")
+
+  // T1.1 — gate flag-off panel entries on the server's advertised capabilities so an entry never opens
+  // a permanently-empty dead-end. The Oversight Approval Queue's producers live behind
+  // v4MultiAgentRuntime (default OFF); when it is off the queue can never be fed, so we hide the icon
+  // rather than let a user open an empty panel with no way to populate it. Tolerant of an older server
+  // (fetch fails ⇒ all V4 flags treated OFF ⇒ entry hidden).
+  const [capabilities] = createResource(() =>
+    fetchCapabilities(sdk.client as unknown as Parameters<typeof fetchCapabilities>[0]).catch(() => null),
+  )
+  const oversightEnabled = () => capabilities()?.v4MultiAgentRuntime ?? false
 
   // Subagents = child sessions (parentID === current). Surface a live count on the sidebar icon so
   // the user sees a spawn happened without opening the panel; the running count (session_working)
@@ -82,7 +94,6 @@ export function SessionSidePanel(props: {
   const menuOpen = createMemo(() => isDesktop() && view().rightPanel.mode() === "menu")
   const reviewOpen = createMemo(() => isDesktop() && view().rightPanel.mode() === "review")
   const fileOpen = createMemo(() => isDesktop() && view().rightPanel.mode() === "files")
-  const statusOpen = createMemo(() => isDesktop() && view().rightPanel.mode() === "status")
   const subagentsOpen = createMemo(() => isDesktop() && view().rightPanel.mode() === "subagents")
   const browserOpen = createMemo(() => isDesktop() && view().rightPanel.mode() === "browser")
   const worktreeOpen = createMemo(() => isDesktop() && view().rightPanel.mode() === "worktree")
@@ -96,7 +107,6 @@ export function SessionSidePanel(props: {
       menuOpen() ||
       reviewOpen() ||
       fileOpen() ||
-      statusOpen() ||
       subagentsOpen() ||
       browserOpen() ||
       worktreeOpen() ||
@@ -208,7 +218,7 @@ export function SessionSidePanel(props: {
       const res = await file.createFile(name)
       if (!res.ok) {
         const { showToast } = await import("@/utils/toast")
-        showToast({ variant: "error", title: "创建失败", description: res.error ?? "unknown" })
+        showToast({ variant: "error", title: language.t("session.files.create.failed"), description: res.error ?? "unknown" })
       } else {
         void file.load(name)
       }
@@ -216,7 +226,7 @@ export function SessionSidePanel(props: {
       const res = await file.mkdir(name)
       if (!res.ok) {
         const { showToast } = await import("@/utils/toast")
-        showToast({ variant: "error", title: "创建文件夹失败", description: res.error ?? "unknown" })
+        showToast({ variant: "error", title: language.t("session.files.createFolder.failed"), description: res.error ?? "unknown" })
       }
     }
   }
@@ -244,12 +254,6 @@ export function SessionSidePanel(props: {
     view().reviewPanel.close()
     layout.fileTree.close()
     view().rightPanel.open("files")
-  }
-
-  const openStatus = () => {
-    view().reviewPanel.close()
-    layout.fileTree.close()
-    view().rightPanel.open("status")
   }
 
   const openSubagents = () => {
@@ -340,12 +344,17 @@ export function SessionSidePanel(props: {
       active: imOpen(),
       onClick: openIM,
     },
-    {
-      icon: "shield",
-      title: "Oversight",
-      active: oversightOpen(),
-      onClick: openOversight,
-    },
+    // T1.1: Oversight only when its Approval-Queue producers can actually run (v4MultiAgentRuntime).
+    ...(oversightEnabled()
+      ? [
+          {
+            icon: "shield" as const,
+            title: language.t("session.panel.oversight"),
+            active: oversightOpen(),
+            onClick: openOversight,
+          },
+        ]
+      : []),
     {
       icon: "link",
       title: language.t("browser.title"),
@@ -367,13 +376,13 @@ export function SessionSidePanel(props: {
     },
     {
       icon: "terminal",
-      title: "调试",
+      title: language.t("session.panel.debug"),
       active: debugOpen(),
       onClick: openDebug,
     },
     {
       icon: "status",
-      title: "性能剖析",
+      title: language.t("session.panel.profile"),
       active: profileOpen(),
       onClick: openProfile,
     },
@@ -488,14 +497,14 @@ export function SessionSidePanel(props: {
                         <Tabs.Content value="all" class="bg-background-stronger px-3 py-0">
                           {/* V3.6 Phase 1B F5: file ops toolbar */}
                           <div class="flex items-center gap-1 py-1.5 -mx-3 px-3 border-b border-border-weaker-base">
-                            <span class="flex-1 text-12-regular text-text-weak">文件</span>
+                            <span class="flex-1 text-12-regular text-text-weak">{language.t("session.files.heading")}</span>
                             <IconButton
                               icon="plus"
                               variant="ghost"
                               size="small"
                               class="h-6 w-6 rounded-md"
                               onClick={() => startNewItem("file")}
-                              aria-label="新建文件"
+                              aria-label={language.t("session.files.newFile")}
                             />
                             <IconButton
                               icon="folder"
@@ -503,7 +512,7 @@ export function SessionSidePanel(props: {
                               size="small"
                               class="h-6 w-6 rounded-md"
                               onClick={() => startNewItem("dir")}
-                              aria-label="新建文件夹"
+                              aria-label={language.t("session.files.newFolder")}
                             />
                           </div>
                           <Show when={newItemState()}>
@@ -511,7 +520,11 @@ export function SessionSidePanel(props: {
                               <div class="flex items-center gap-1 py-1">
                                 <input
                                   class="flex-1 min-w-0 bg-surface-base-active rounded px-2 py-0.5 text-12-regular text-text-strong outline-none border border-border-weak-base"
-                                  placeholder={s().type === "file" ? "文件名" : "文件夹名"}
+                                  placeholder={
+                                    s().type === "file"
+                                      ? language.t("session.files.newFile.placeholder")
+                                      : language.t("session.files.newFolder.placeholder")
+                                  }
                                   value={s().name}
                                   onInput={(e) => setNewItemState({ ...s(), name: e.currentTarget.value })}
                                   onKeyDown={(e) => {
@@ -526,7 +539,7 @@ export function SessionSidePanel(props: {
                                   size="small"
                                   class="h-6 w-6 rounded-md shrink-0"
                                   onClick={commitNewItem}
-                                  aria-label="确认"
+                                  aria-label={language.t("session.files.create.confirm")}
                                 />
                                 <IconButton
                                   icon="close-small"
@@ -534,7 +547,7 @@ export function SessionSidePanel(props: {
                                   size="small"
                                   class="h-6 w-6 rounded-md shrink-0"
                                   onClick={cancelNewItem}
-                                  aria-label="取消"
+                                  aria-label={language.t("session.files.create.cancel")}
                                 />
                               </div>
                             )}
@@ -575,22 +588,6 @@ export function SessionSidePanel(props: {
                     />
                   )}
                 </Show>
-              </Match>
-              <Match when={statusOpen()}>
-                <div class="h-full w-full min-w-0 overflow-y-auto bg-background-base">
-                  <div class="sticky top-0 z-10 h-10 flex items-center justify-end px-2 bg-background-base">
-                    <IconButton
-                      icon="close-small"
-                      variant="ghost"
-                      class="h-7 w-7 rounded-md"
-                      onClick={openMenu}
-                      aria-label={language.t("common.close")}
-                    />
-                  </div>
-                  <div class="[&>div]:!w-full [&>div]:!rounded-none [&>div]:!shadow-none [&_.tabs]:!rounded-none [&_.tabs]:!bg-background-base">
-                    <StatusPopoverBody shown={statusOpen} />
-                  </div>
-                </div>
               </Match>
               <Match when={subagentsOpen()}>
                 <SidePanelSubagents onClose={openMenu} />

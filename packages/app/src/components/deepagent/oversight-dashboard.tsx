@@ -1,6 +1,7 @@
 import { createResource, createSignal, For, Show, type Component } from "solid-js"
 import { Button } from "@deepagent-code/ui/button"
 import { Spinner } from "@deepagent-code/ui/spinner"
+import { useLanguage } from "@/context/language"
 import { useSDK } from "@/context/sdk"
 import {
   fetchOversightApprovals,
@@ -56,6 +57,7 @@ function MetricCard(props: { label: string; value: string; tone?: "ok" | "warn" 
 
 export const OversightDashboard: Component = () => {
   const sdk = useSDK()
+  const language = useLanguage()
   const client = () => sdk.client as unknown as OversightClient
 
   // ── §F1 metrics ─────────────────────────────────────────────────────────────
@@ -82,7 +84,7 @@ export const OversightDashboard: Component = () => {
       const { showToast } = await import("@/utils/toast")
       showToast({
         variant: "error",
-        title: "Failed to resolve",
+        title: language.t("oversight.approvals.resolveFailed"),
         description: error instanceof Error ? error.message : String(error),
       })
     } finally {
@@ -120,13 +122,13 @@ export const OversightDashboard: Component = () => {
     setTakeoverBusy(false)
     if (result.ok) {
       setTakeoverReason("")
-      setTakeoverNote("Takeover recorded.")
+      setTakeoverNote(language.t("oversight.takeover.recorded"))
       // A takeover bumps the human_takeover_total metric — refresh the dashboard.
       await refetchMetrics()
     } else if (result.unsupported) {
-      setTakeoverNote("Takeover recording activates once the backend endpoint (P3.10) is available.")
+      setTakeoverNote(language.t("oversight.takeover.unsupported"))
     } else {
-      setTakeoverNote(`Failed: ${result.error}`)
+      setTakeoverNote(language.t("oversight.takeover.failed", { error: result.error ?? "unknown" }))
     }
   }
 
@@ -149,15 +151,15 @@ export const OversightDashboard: Component = () => {
       setRollbackReason("")
       setRollbackNote(
         result.record?.outcome === "noop"
-          ? "Nothing to revert — rollback recorded as a no-op."
-          : "Rollback applied — session reverted.",
+          ? language.t("oversight.rollback.noop")
+          : language.t("oversight.rollback.applied"),
       )
       // A rollback bumps the rollback_total metric — refresh the dashboard.
       await refetchMetrics()
     } else if (result.notFound) {
-      setRollbackNote("No such session in this workspace.")
+      setRollbackNote(language.t("oversight.rollback.notFound"))
     } else {
-      setRollbackNote(`Failed: ${result.error}`)
+      setRollbackNote(language.t("oversight.rollback.failed", { error: result.error ?? "unknown" }))
     }
   }
 
@@ -167,28 +169,28 @@ export const OversightDashboard: Component = () => {
         {/* ── Agent Dashboard (§F1) ── */}
         <section>
           <div class="mb-2 flex items-center justify-between">
-            <h3 class="text-13-medium text-text-strong">Agent Dashboard</h3>
+            <h3 class="text-13-medium text-text-strong">{language.t("oversight.dashboard.title")}</h3>
             <Button variant="secondary" size="small" icon="reset" onClick={() => setMetricsVersion((v) => v + 1)}>
-              Refresh
+              {language.t("oversight.common.refresh")}
             </Button>
           </div>
           <Show
             when={!metrics.loading}
             fallback={
               <div class="flex items-center gap-2 py-4 text-12-regular text-text-weak">
-                <Spinner /> Loading metrics…
+                <Spinner /> {language.t("oversight.dashboard.loading")}
               </div>
             }
           >
             <Show
               when={metrics()}
-              fallback={<div class="py-4 text-12-regular text-text-weak">No metrics available.</div>}
+              fallback={<div class="py-4 text-12-regular text-text-weak">{language.t("oversight.dashboard.empty")}</div>}
             >
               {(m) => (
                 <>
                   <div class="grid grid-cols-2 gap-2">
                     <MetricCard
-                      label="Task success rate"
+                      label={language.t("oversight.metric.taskSuccessRate")}
                       value={pct(m().agentTaskSuccessRate)}
                       tone={
                         m().agentTaskSuccessRate == null
@@ -201,7 +203,7 @@ export const OversightDashboard: Component = () => {
                       }
                     />
                     <MetricCard
-                      label="Conflict rate"
+                      label={language.t("oversight.metric.conflictRate")}
                       value={pct(m().agentConflictRate)}
                       tone={
                         m().agentConflictRate == null
@@ -214,35 +216,35 @@ export const OversightDashboard: Component = () => {
                       }
                     />
                     <MetricCard
-                      label="DLQ events"
+                      label={language.t("oversight.metric.dlqEvents")}
                       value={num(m().dlqEventsTotal)}
                       tone={m().dlqEventsTotal > 0 ? "warn" : "ok"}
                     />
                     <MetricCard
-                      label="Push rejected"
+                      label={language.t("oversight.metric.pushRejected")}
                       value={num(m().agentPushRejectedTotal)}
                       tone={m().agentPushRejectedTotal > 0 ? "warn" : "ok"}
                     />
-                    <MetricCard label="Tasks completed" value={num(m().agentTaskCompleted)} />
-                    <MetricCard label="Tasks failed" value={num(m().agentTaskFailed)} tone={m().agentTaskFailed > 0 ? "warn" : "neutral"} />
-                    <MetricCard label="Publish latency P50" value={ms(m().eventPublishLatencyMsP50)} />
-                    <MetricCard label="Publish latency P95" value={ms(m().eventPublishLatencyMsP95)} />
-                    <MetricCard label="Event→agent P50" value={ms(m().eventToAgentStartMsP50)} />
-                    <MetricCard label="Event→agent P95" value={ms(m().eventToAgentStartMsP95)} />
+                    <MetricCard label={language.t("oversight.metric.tasksCompleted")} value={num(m().agentTaskCompleted)} />
+                    <MetricCard label={language.t("oversight.metric.tasksFailed")} value={num(m().agentTaskFailed)} tone={m().agentTaskFailed > 0 ? "warn" : "neutral"} />
+                    <MetricCard label={language.t("oversight.metric.publishLatencyP50")} value={ms(m().eventPublishLatencyMsP50)} />
+                    <MetricCard label={language.t("oversight.metric.publishLatencyP95")} value={ms(m().eventPublishLatencyMsP95)} />
+                    <MetricCard label={language.t("oversight.metric.eventToAgentP50")} value={ms(m().eventToAgentStartMsP50)} />
+                    <MetricCard label={language.t("oversight.metric.eventToAgentP95")} value={ms(m().eventToAgentStartMsP95)} />
                     {/* P3.10 — only rendered when the server reports it. */}
                     <Show when={m().humanTakeoverTotal != null}>
-                      <MetricCard label="Human takeovers" value={num(m().humanTakeoverTotal)} tone="neutral" />
+                      <MetricCard label={language.t("oversight.metric.humanTakeovers")} value={num(m().humanTakeoverTotal)} tone="neutral" />
                     </Show>
                     {/* P4.4 — only rendered when the server reports it. */}
                     <Show when={m().rollbackTotal != null}>
-                      <MetricCard label="Rollbacks" value={num(m().rollbackTotal)} tone="neutral" />
+                      <MetricCard label={language.t("oversight.metric.rollbacks")} value={num(m().rollbackTotal)} tone="neutral" />
                     </Show>
                   </div>
 
                   {/* push-rejected breakdown by reason */}
                   <Show when={Object.keys(m().agentPushRejectedByReason ?? {}).length > 0}>
                     <div class="mt-2 rounded-lg border border-border-weak-base bg-surface-base px-3 py-2">
-                      <div class="text-11-regular text-text-weak mb-1">Push rejected by reason</div>
+                      <div class="text-11-regular text-text-weak mb-1">{language.t("oversight.metric.pushRejectedByReason")}</div>
                       <For each={Object.entries(m().agentPushRejectedByReason)}>
                         {([reason, count]) => (
                           <div class="flex items-center justify-between py-0.5 text-12-regular">
@@ -255,7 +257,7 @@ export const OversightDashboard: Component = () => {
                   </Show>
 
                   <div class="mt-1.5 text-11-regular text-text-weaker">
-                    Window: {fmtTime(m().windowFrom)} → {fmtTime(m().windowTo)}
+                    {language.t("oversight.metric.window", { from: fmtTime(m().windowFrom), to: fmtTime(m().windowTo) })}
                   </div>
                 </>
               )}
@@ -276,11 +278,11 @@ export const OversightDashboard: Component = () => {
 
         {/* ── Event Trace (§F2) ── */}
         <section>
-          <h3 class="mb-2 text-13-medium text-text-strong">Event Trace</h3>
+          <h3 class="mb-2 text-13-medium text-text-strong">{language.t("oversight.trace.title")}</h3>
           <div class="flex items-center gap-2">
             <input
               class="flex-1 min-w-0 rounded-md border border-border-weak-base bg-surface-base px-2 py-1 text-12-regular text-text-strong outline-none focus:ring-2 focus:ring-accent-base"
-              placeholder="correlationID…"
+              placeholder={language.t("oversight.trace.placeholder")}
               value={traceInput()}
               onInput={(e) => setTraceInput(e.currentTarget.value)}
               onKeyDown={(e) => {
@@ -288,7 +290,7 @@ export const OversightDashboard: Component = () => {
               }}
             />
             <Button variant="secondary" size="small" onClick={runTrace} disabled={!traceInput().trim()}>
-              Trace
+              {language.t("oversight.trace.action")}
             </Button>
           </div>
           <Show when={traceQuery()}>
@@ -296,13 +298,13 @@ export const OversightDashboard: Component = () => {
               when={!traceResource.loading}
               fallback={
                 <div class="flex items-center gap-2 py-3 text-12-regular text-text-weak">
-                  <Spinner /> Loading trace…
+                  <Spinner /> {language.t("oversight.trace.loading")}
                 </div>
               }
             >
               <Show
                 when={trace().length > 0}
-                fallback={<div class="py-3 text-12-regular text-text-weak">No events for this correlationID.</div>}
+                fallback={<div class="py-3 text-12-regular text-text-weak">{language.t("oversight.trace.empty")}</div>}
               >
                 <div class="mt-2 flex flex-col">
                   <For each={trace()}>
@@ -318,11 +320,11 @@ export const OversightDashboard: Component = () => {
                         <div class="min-w-0 flex-1">
                           <div class="text-12-medium text-text-strong font-mono truncate">{node.type}</div>
                           <div class="text-11-regular text-text-weak truncate">
-                            source: <span class="font-mono">{node.source}</span>
+                            {language.t("oversight.trace.source")} <span class="font-mono">{node.source}</span>
                           </div>
                           <Show when={node.causationID}>
                             <div class="text-11-regular text-text-weaker truncate">
-                              caused by: <span class="font-mono">{node.causationID}</span>
+                              {language.t("oversight.trace.causedBy")} <span class="font-mono">{node.causationID}</span>
                             </div>
                           </Show>
                           <div class="text-11-regular text-text-weaker">{fmtTime(node.createdAt)}</div>
@@ -338,14 +340,12 @@ export const OversightDashboard: Component = () => {
 
         {/* ── Human Takeover (§D2) ── */}
         <section>
-          <h3 class="mb-1 text-13-medium text-text-strong">Human Takeover</h3>
-          <p class="mb-2 text-11-regular text-text-weak">
-            Record that a human is taking over from the autonomous agents (pauses autonomy escalation).
-          </p>
+          <h3 class="mb-1 text-13-medium text-text-strong">{language.t("oversight.takeover.title")}</h3>
+          <p class="mb-2 text-11-regular text-text-weak">{language.t("oversight.takeover.description")}</p>
           <textarea
             class="w-full rounded-md border border-border-weak-base bg-surface-base px-2 py-1.5 text-12-regular text-text-strong outline-none resize-none focus:ring-2 focus:ring-accent-base"
             rows={2}
-            placeholder="Reason for taking over…"
+            placeholder={language.t("oversight.takeover.placeholder")}
             value={takeoverReason()}
             onInput={(e) => setTakeoverReason(e.currentTarget.value)}
           />
@@ -360,7 +360,7 @@ export const OversightDashboard: Component = () => {
               <Show when={takeoverBusy()}>
                 <Spinner />
               </Show>
-              Take over
+              {language.t("oversight.takeover.action")}
             </Button>
             <Show when={takeoverNote()}>
               <span class="text-11-regular text-text-weak">{takeoverNote()}</span>
@@ -370,21 +370,18 @@ export const OversightDashboard: Component = () => {
 
         {/* ── Rollback (§D2) ── */}
         <section>
-          <h3 class="mb-1 text-13-medium text-text-strong">Rollback</h3>
-          <p class="mb-2 text-11-regular text-text-weak">
-            Revert an agent-produced change over a session (via SessionRevert). Only affects a session in
-            this workspace. This reverts real changes — use with care.
-          </p>
+          <h3 class="mb-1 text-13-medium text-text-strong">{language.t("oversight.rollback.title")}</h3>
+          <p class="mb-2 text-11-regular text-text-weak">{language.t("oversight.rollback.description")}</p>
           <input
             class="w-full rounded-md border border-border-weak-base bg-surface-base px-2 py-1.5 text-12-regular text-text-strong outline-none focus:ring-2 focus:ring-accent-base font-mono"
-            placeholder="Session ID (ses_…)"
+            placeholder={language.t("oversight.rollback.sessionPlaceholder")}
             value={rollbackSession()}
             onInput={(e) => setRollbackSession(e.currentTarget.value)}
           />
           <textarea
             class="mt-2 w-full rounded-md border border-border-weak-base bg-surface-base px-2 py-1.5 text-12-regular text-text-strong outline-none resize-none focus:ring-2 focus:ring-accent-base"
             rows={2}
-            placeholder="Reason for rolling back… (optional)"
+            placeholder={language.t("oversight.rollback.reasonPlaceholder")}
             value={rollbackReason()}
             onInput={(e) => setRollbackReason(e.currentTarget.value)}
           />
@@ -399,7 +396,7 @@ export const OversightDashboard: Component = () => {
               <Show when={rollbackBusy()}>
                 <Spinner />
               </Show>
-              Roll back
+              {language.t("oversight.rollback.action")}
             </Button>
             <Show when={rollbackNote()}>
               <span class="text-11-regular text-text-weak">{rollbackNote()}</span>
@@ -419,12 +416,13 @@ function ApprovalQueueSection(props: {
   onRefresh: () => void
   onTrace: (correlationID: string) => void
 }) {
+  const language = useLanguage()
   const items = () => props.approvals() ?? []
   return (
     <section>
       <div class="mb-2 flex items-center justify-between">
         <h3 class="text-13-medium text-text-strong">
-          Approval Queue
+          {language.t("oversight.approvals.title")}
           <Show when={items().length > 0}>
             <span class="ml-1.5 rounded-full bg-surface-raised-base px-1.5 py-0.5 text-11-medium text-text-base">
               {items().length}
@@ -432,12 +430,12 @@ function ApprovalQueueSection(props: {
           </Show>
         </h3>
         <Button variant="secondary" size="small" icon="reset" onClick={props.onRefresh}>
-          Refresh
+          {language.t("oversight.common.refresh")}
         </Button>
       </div>
       <Show
         when={items().length > 0}
-        fallback={<div class="py-3 text-12-regular text-text-weak">No pending approvals.</div>}
+        fallback={<div class="py-3 text-12-regular text-text-weak">{language.t("oversight.approvals.empty")}</div>}
       >
         <div class="flex flex-col gap-2">
           <For each={items()}>
@@ -457,7 +455,7 @@ function ApprovalQueueSection(props: {
                     disabled={props.resolvingId() === item.id}
                     onClick={() => props.onResolve(item, "approved")}
                   >
-                    Approve
+                    {language.t("oversight.approvals.approve")}
                   </Button>
                   <Button
                     variant="secondary"
@@ -465,7 +463,7 @@ function ApprovalQueueSection(props: {
                     disabled={props.resolvingId() === item.id}
                     onClick={() => props.onResolve(item, "rejected")}
                   >
-                    Reject
+                    {language.t("oversight.approvals.reject")}
                   </Button>
                   <Button
                     variant="ghost"
@@ -473,7 +471,7 @@ function ApprovalQueueSection(props: {
                     disabled={props.resolvingId() === item.id}
                     onClick={() => props.onResolve(item, "acknowledged")}
                   >
-                    Acknowledge
+                    {language.t("oversight.approvals.acknowledge")}
                   </Button>
                   <Show when={item.correlationID}>
                     <button
@@ -481,7 +479,7 @@ function ApprovalQueueSection(props: {
                       class="ml-auto text-11-regular text-text-link hover:underline"
                       onClick={() => props.onTrace(item.correlationID!)}
                     >
-                      View trace
+                      {language.t("oversight.approvals.viewTrace")}
                     </button>
                   </Show>
                 </div>
