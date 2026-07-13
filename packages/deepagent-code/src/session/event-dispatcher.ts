@@ -271,18 +271,37 @@ export const layerWith = (options?: LayerOptions) =>
           return decision
         })
 
-      const fireSchedule = (schedule: Scheduler.Schedule, at: number) =>
+      // Publish a schedule's templated event. `overrides` lets the per-repo (P4.5b) path stamp a repo
+      // discriminator into the payload + scope the workspaceID to the failing repo's workspace, and
+      // `keySuffix` lets it distinguish each repo's fire in the idempotency key. Does NOT markFired — the
+      // caller does that ONCE per schedule (a per-repo tick publishes N events but marks the schedule
+      // fired once). No-op-safe: a publish failure is logged + swallowed so one bad fire can't kill the tick.
+      const publishScheduleEvent = (
+        schedule: Scheduler.Schedule,
+        at: number,
+        overrides?: { readonly workspaceID?: string; readonly payload?: Record<string, unknown>; readonly keySuffix?: string },
+      ) =>
         Effect.gen(function* () {
           const template = schedule.eventTemplate
           // Idempotency key anchored on the STABLE logical fire time, not the tick's wall clock: if a
           // tick publishes but crashes before markFired, the next tick re-fires the SAME logical fire
           // and the bus dedupes on this key (no duplicate event). For a cadence-less condition (null
           // fireAt) there is no stable logical time, so fall back to the tick's `at` — every-tick
-          // evaluation genuinely wants a distinct fire per tick.
+          // evaluation genuinely wants a distinct fire per tick. A per-repo fire adds `keySuffix` (the
+          // repo) so each repo's repair dedupes independently.
           const logical = schedule.fireAt ?? at
-          const idempotencyKey = `sched:${schedule.id}:${logical}`
+          const idempotencyKey = `sched:${schedule.id}:${overrides?.keySuffix ? `${overrides.keySuffix}:` : ""}${logical}`
+          const basePayload =
+            typeof template.payload === "object" && template.payload != null
+              ? (template.payload as Record<string, unknown>)
+              : {}
           yield* bus
-            .publish({ ...template, idempotencyKey })
+            .publish({
+              ...template,
+              ...(overrides?.workspaceID ? { workspaceID: overrides.workspaceID } : {}),
+              ...(overrides?.payload ? { payload: { ...basePayload, ...overrides.payload } } : {}),
+              idempotencyKey,
+            })
             .pipe(
               Effect.catchCause((cause) =>
                 Effect.sync(() =>
@@ -290,6 +309,11 @@ export const layerWith = (options?: LayerOptions) =>
                 ),
               ),
             )
+        })
+
+      const fireSchedule = (schedule: Scheduler.Schedule, at: number) =>
+        Effect.gen(function* () {
+          yield* publishScheduleEvent(schedule, at)
           yield* scheduler.markFired(schedule.id, at)
         })
 
@@ -318,6 +342,63 @@ export const layerWith = (options?: LayerOptions) =>
           return true
         })
 
+      // §C3.2 / P4.5b — the PER-REPO condition fire. Partition `recent` trigger events by their
+      // `payload.repo` discriminator and publish ONE templated event per repo that independently meets the
+      // threshold — stamping `repo` into the fired payload and scoping the event to that repo's failing
+      // workspace. Marks the schedule fired ONCE (a per-repo tick emits N events for one schedule). Honors
+      // quiet hours on the schedule's workspace for low/normal fires exactly like fireOrDefer (defers the
+      // whole evaluation past the window); the CI-repair template is high priority so it always fires.
+      // Returns whether the schedule fired (≥1 repo repair emitted) so the tick advances its recheck.
+      const readRepo = (event: DeepAgentEvent.Event): string | undefined => {
+        const repo = (event.payload as { repo?: unknown } | null)?.repo
+        return typeof repo === "string" && repo.length > 0 ? repo : undefined
+      }
+      const firePerRepoOrDefer = (
+        schedule: Scheduler.Schedule,
+        spec: Scheduler.ConditionSpec,
+        recent: ReadonlyArray<DeepAgentEvent.Event>,
+        at: number,
+      ): Effect.Effect<boolean> =>
+        Effect.gen(function* () {
+          const priority = schedule.eventTemplate.priority ?? "normal"
+          if (priority !== "high" && priority !== "critical") {
+            const qh = yield* resolveQuietHours(schedule.workspaceID, at)
+            if (qh.quiet) {
+              const nextAt = qh.endAt != null && qh.endAt > at ? qh.endAt : at + 1
+              log.info("per-repo condition deferred by quiet hours", {
+                scheduleID: schedule.id,
+                workspaceID: schedule.workspaceID,
+                deferUntil: nextAt,
+              })
+              yield* scheduler.recheckCondition(schedule.id, nextAt)
+              return false
+            }
+          }
+          // Group the window's trigger events by repo; keep each repo's count + the workspace its latest
+          // failure landed in (so the repair is scoped to the failing repo's project workspace).
+          // recentByType returns newest-first (desc created_at); scope each repo's repair to the workspace
+          // of its MOST RECENT failure (the first one encountered for that repo).
+          const byRepo = new Map<string, { count: number; workspaceID: string }>()
+          for (const event of recent) {
+            const repo = readRepo(event)
+            if (!repo) continue // an event with no repo discriminator can't be repo-scoped → ignore.
+            const prev = byRepo.get(repo)
+            byRepo.set(repo, { count: (prev?.count ?? 0) + 1, workspaceID: prev?.workspaceID ?? event.workspaceID })
+          }
+          let firedAny = false
+          for (const [repo, agg] of byRepo) {
+            if (!Scheduler.conditionMet(spec, agg.count)) continue // this repo hasn't hit the threshold.
+            yield* publishScheduleEvent(schedule, at, {
+              workspaceID: agg.workspaceID,
+              payload: { repo },
+              keySuffix: repo,
+            })
+            firedAny = true
+          }
+          if (firedAny) yield* scheduler.markFired(schedule.id, at)
+          return firedAny
+        })
+
       const tick: Interface["tick"] = (nowArg) =>
         Effect.gen(function* () {
           const at = nowArg ?? now()
@@ -339,17 +420,22 @@ export const layerWith = (options?: LayerOptions) =>
                 windowMs: spec.windowMs,
                 now: at,
               })
-              if (Scheduler.conditionMet(spec, recent.length)) {
-                // §E4 — fireOrDefer holds the fire for quiet hours (low/normal) and reschedules it past
-                // the window; a deferred fire already advanced fire_at, so skip the recheck below.
-                const didFire = yield* fireOrDefer(schedule, at)
-                if (didFire) {
-                  // advance the recheck so a still-satisfied window doesn't refire next tick (markFired
-                  // already advanced fireAt when a cadence exists; for cadence-less, push it forward here).
-                  if (schedule.intervalMs == null)
-                    yield* scheduler.recheckCondition(schedule.id, at + (spec.windowMs || 1))
-                  fired++
-                }
+              // §C3.2 / P4.5b — a groupByRepo condition evaluates the threshold PER REPO (partitioning the
+              // window by payload.repo) and fires ONE repair per repo that hits it, carrying repo=<repo>.
+              // A plain condition keeps the single-counter behavior (fire once when the total meets it).
+              const didFire = spec.groupByRepo
+                ? yield* firePerRepoOrDefer(schedule, spec, recent, at)
+                : Scheduler.conditionMet(spec, recent.length)
+                  ? // §E4 — fireOrDefer holds the fire for quiet hours (low/normal) and reschedules it past
+                    // the window; a deferred fire already advanced fire_at, so skip the recheck below.
+                    yield* fireOrDefer(schedule, at)
+                  : false
+              if (didFire) {
+                // advance the recheck so a still-satisfied window doesn't refire next tick (markFired
+                // already advanced fireAt when a cadence exists; for cadence-less, push it forward here).
+                if (schedule.intervalMs == null)
+                  yield* scheduler.recheckCondition(schedule.id, at + (spec.windowMs || 1))
+                fired++
               } else {
                 const nextCheck = at + (schedule.intervalMs ?? (spec.windowMs || 1))
                 yield* scheduler.recheckCondition(schedule.id, nextCheck)
