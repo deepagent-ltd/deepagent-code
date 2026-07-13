@@ -327,6 +327,7 @@ export const dict = {
   "composer.panel.label": "Expert Panel",
   "composer.panel.convene": "Convene the expert panel on this conversation",
   "composer.panel.armed": "Expert panel armed — click to consult now",
+  "composer.panel.deepHint": "Shift-click for a multi-round debate",
   "composer.panel.disarm": "Disarm expert panel",
   "composer.panel.verdict.title": "Expert panel verdict",
   "composer.panel.verdict.approve": "Approve",
