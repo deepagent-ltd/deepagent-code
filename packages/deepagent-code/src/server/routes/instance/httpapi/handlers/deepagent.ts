@@ -548,13 +548,19 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
       return snapshot
     })
 
+    // The goal MUTATION handlers gate on experimentalGoalLoop too (defense-in-depth, matching goalStart):
+    // with the flag off no goal can be started, so these are already no-ops (getControl → null ⇒ ok:false),
+    // but gating here makes the posture explicit and uniform across the whole goal-lifecycle surface.
     const goalPause = Effect.fn("DeepAgentHttpApi.goalPause")(function* (ctx) {
+      if (!flags.experimentalGoalLoop) return { ok: false }
       return { ok: yield* goals.pause(ctx.payload.sessionID) }
     })
     const goalResume = Effect.fn("DeepAgentHttpApi.goalResume")(function* (ctx) {
+      if (!flags.experimentalGoalLoop) return { ok: false }
       return { ok: yield* goals.resume(ctx.payload.sessionID) }
     })
     const goalStop = Effect.fn("DeepAgentHttpApi.goalStop")(function* (ctx) {
+      if (!flags.experimentalGoalLoop) return { ok: false }
       return { ok: yield* goals.stop(ctx.payload.sessionID) }
     })
     // V4.1 §S2 — hot-edit the plan of a running/paused goal. Normalize the wire payload (readonly step
@@ -562,6 +568,7 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
     // runtime-owned evidence). GoalManager.editPlan enqueues it on the control channel (ok:false when no
     // goal is running or the goal is terminal); the driver applies it between ticks.
     const goalEditPlan = Effect.fn("DeepAgentHttpApi.goalEditPlan")(function* (ctx) {
+      if (!flags.experimentalGoalLoop) return { ok: false }
       const p = ctx.payload.plan
       const plan: PlanInput = {
         goal: p.goal,

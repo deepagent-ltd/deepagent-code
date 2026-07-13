@@ -21,6 +21,7 @@ import { Provider } from "../provider/provider"
 import { SessionID } from "./schema"
 import { GoalEvent } from "./goal-event"
 import { PlanEvent } from "../tool/plan-write"
+import { Log } from "@deepagent-code/core/util/log"
 import { SessionMessage } from "@deepagent-code/core/session/message"
 import { Prompt } from "@deepagent-code/core/session/prompt"
 import {
@@ -55,6 +56,40 @@ import { LMNEvents } from "@deepagent-code/core/deepagent/lmn-events"
 // root, keyed by session id, so a restart re-opens the same store (the loop state is restart-recoverable).
 const goalStoreRoot = (sessionID: string): string =>
   path.join(Global.Path.agent.data, "state", "goal", sessionID, "graph")
+
+const glog = Log.create({ service: "session.goal" })
+
+// V4.1 — write a durable audit record of a human governance action on a running goal (a plan hot-edit
+// or a mid-run steer) into the goal's Document Graph, alongside the per-tick worklog trail. This gives
+// "user X edited/steered goal Y at T" a queryable home (the worklog docs record the loop's own ticks;
+// these record the HUMAN interventions). Best-effort + idempotent per (kind, monotonic clock): a failure
+// never blocks the governance action. `detail` carries the redacted specifics (step count / steer length,
+// not full free-text, to keep the audit body bounded and PII-light).
+const writeGovernanceAudit = (
+  sessionID: string,
+  goalId: string,
+  kind: "plan_edit" | "steer",
+  detail: Record<string, unknown>,
+): void => {
+  try {
+    const store = new DocumentStore(goalStoreRoot(sessionID))
+    // A stable-ish slug that does not collide across repeated actions: include the current doc count so
+    // successive edits/steers each land their own audit record rather than overwriting (upsert would
+    // no-op an identical body, but sequential human actions differ).
+    const seq = store.list({ type: "worklog", scope: `run:${sessionID}` }).length
+    store.upsert({
+      type: "worklog",
+      scope: `run:${sessionID}`,
+      description: `goal ${goalId} human ${kind} #${seq}`,
+      idSlug: `goal-governance-${goalId}-${kind}-${seq}`,
+      body: JSON.stringify({ kind, goalId, sessionID, ...detail }, null, 2),
+      provenance: { source: "human", run_ref: `run:${sessionID}` },
+      extensions: { goal_id: goalId, governance: kind },
+    })
+  } catch {
+    /* best-effort audit — never block the governance action */
+  }
+}
 
 // DESIGN mode's plan source: read the human-authored `.deepagent-code/plans/goal+plan.md` from the
 // session's working directory and parse it into a PlanDoc (+ any declared criteria). Default-safe — a
@@ -786,7 +821,7 @@ export const layer = Layer.effect(
         // as false"): if the durable write is swallowed and we still returned true, the ingress would tell
         // the user their guidance was accepted when it was dropped. A DB write failure ⇒ false so the caller
         // can signal the steer was NOT absorbed.
-        return yield* steerBuffer
+        const admitted = yield* steerBuffer
           .admit({
             id,
             sessionID: SessionID.make(input.sessionID),
@@ -797,6 +832,18 @@ export const layer = Layer.effect(
             Effect.as(true),
             Effect.catchCause(() => Effect.succeed(false)),
           )
+        // Audit + operational log ONLY a genuinely-absorbed steer (admit succeeded). We record the LENGTH,
+        // not the text, to keep the audit body bounded and PII-light. A dropped admit (false) is not
+        // audited as accepted — consistent with returning false to the caller.
+        if (admitted) {
+          writeGovernanceAudit(input.sessionID, c.goalId, "steer", { textChars: text.length })
+          glog.info("goal steer admitted", {
+            sessionID: input.sessionID,
+            goalId: c.goalId,
+            textChars: text.length,
+          })
+        }
+        return admitted
       })
 
     // §S2 — apply a USER plan edit to a running/paused goal. Like steerGoal, this does NOT touch the
@@ -823,6 +870,16 @@ export const layer = Layer.effect(
           const next = new Map(m)
           next.set(input.sessionID, { ...ctrl, pendingPlanEdit: input.plan })
           return next
+        })
+        // Audit + operational log the human plan edit (enqueue-time; the driver applies it next tick).
+        writeGovernanceAudit(input.sessionID, c.goalId, "plan_edit", {
+          stepCount: input.plan.steps.length,
+          goalChars: input.plan.goal.length,
+        })
+        glog.info("goal plan hot-edit enqueued", {
+          sessionID: input.sessionID,
+          goalId: c.goalId,
+          stepCount: input.plan.steps.length,
         })
         return true
       })
