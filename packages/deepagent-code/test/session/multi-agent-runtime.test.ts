@@ -12,6 +12,9 @@ import { WorkspaceConfig } from "@deepagent-code/core/deepagent/workspace-config
 import { IMRepositoryLive } from "@deepagent-code/core/im/repository"
 import { FileLock } from "@deepagent-code/core/file-lock"
 import type { AgentDescriptor } from "@deepagent-code/core/im/mention-parser"
+import { BUILTIN_AGENT_DESCRIPTORS } from "@deepagent-code/core/im/builtin-agents"
+import { Agent } from "@/agent/agent"
+import { ServerAgentListProviderLive } from "@/im/agent-executor-server"
 import { testEffect } from "../lib/effect"
 
 // V4.0 §C Multi-Agent Runtime — verifies the coordination pipeline (partition → gate → arbitrate → run
@@ -762,6 +765,131 @@ describe("MultiAgentRuntime §C3.3 symbolsForFiles resolver", () => {
       // symbols fall back to [] → file-level detection still works → the subtasks run normally.
       expect(summary.outcomes.map((o) => o.status)).toEqual(["completed", "completed"])
       expect(ran).toEqual(["fixer", "fixer"])
+    }),
+  )
+})
+
+// ─── V4.0 §A1 BUILT-IN descriptors drive the autonomous path (the money test) ─────────────────────────
+// The audit's core defect: the core AgentListProvider emitted metadata-less descriptors, so NO agent
+// matched an autonomous event's capability → every event blocked with `no_capable_agent` → the
+// autonomous half never ran. These tests feed the REAL BUILTIN_AGENT_DESCRIPTORS (verbatim from the
+// core provider) into the runtime's registry and prove each autonomous event now BINDS a capable agent
+// and REACHES the gates — no subtask blocks with no_capable_agent.
+describe("MultiAgentRuntime with BUILT-IN descriptors — autonomous path is no longer dead", () => {
+  const it = testEffect(makeLayer())
+
+  it.effect("§A1 ci.failure binds a capable agent (NOT no_capable_agent) and runs the fix→test DAG", () =>
+    Effect.gen(function* () {
+      resetRunner()
+      setNow(1_000)
+      // the exact built-ins the core AgentListProviderImpl now appends.
+      setRegistry([...BUILTIN_AGENT_DESCRIPTORS])
+      const runtime = yield* MultiAgentRuntime.Service
+      const summary = yield* runtime.coordinate(event({ type: "ci.failure", source: "ci", payload: { files: ["src/a.ts"] } }))
+      // NO subtask blocked for lack of a capable agent — the whole point of §A1.
+      expect(summary.outcomes.some((o) => o.reason === "no_capable_agent")).toBe(false)
+      // code_edit binds CodeFixAgent(name:auto), test_run binds CodeFixAgent too (first in registry order).
+      expect(summary.outcomes.map((o) => o.status)).toEqual(["completed", "completed"])
+      expect(ran).toEqual(["auto", "auto"])
+    }),
+  )
+
+  it.effect("§A1 monitor.alert binds diagnose(general) + code_edit(auto) — reaches the gates, no no_capable_agent", () =>
+    Effect.gen(function* () {
+      resetRunner()
+      setNow(1_000)
+      setRegistry([...BUILTIN_AGENT_DESCRIPTORS])
+      const runtime = yield* MultiAgentRuntime.Service
+      const summary = yield* runtime.coordinate(
+        event({ type: "monitor.alert", source: "monitor", payload: { files: ["src/y.ts"] } }),
+      )
+      expect(summary.outcomes.some((o) => o.reason === "no_capable_agent")).toBe(false)
+      // diagnose → DiagnosisAgent(general), propose-fix code_edit → CodeFixAgent(auto).
+      expect(ran).toEqual(["general", "auto"])
+      expect(summary.outcomes.map((o) => o.status)).toEqual(["completed", "completed"])
+    }),
+  )
+
+  it.effect("§A1 pr.comment (analyze→code_edit→review) all bind capable agents — no no_capable_agent", () =>
+    Effect.gen(function* () {
+      resetRunner()
+      setNow(1_000)
+      setRegistry([...BUILTIN_AGENT_DESCRIPTORS])
+      const runtime = yield* MultiAgentRuntime.Service
+      const summary = yield* runtime.coordinate(
+        event({ type: "pr.comment", source: "im", payload: { files: ["src/z.ts"] } }),
+      )
+      expect(summary.outcomes.some((o) => o.reason === "no_capable_agent")).toBe(false)
+      // analyze→CodeReviewAgent(general), code_edit→ChangeAgent OR CodeFixAgent (auto), review→CodeReviewAgent(general).
+      expect(summary.outcomes.length).toBe(3)
+      expect(summary.outcomes.every((o) => o.status === "completed")).toBe(true)
+    }),
+  )
+})
+
+// ─── V4.0 §A1 CRITICAL — the runtime over the REAL PRODUCTION provider (ServerAgentListProviderLive) ────
+// The money test above used the fake registry, which bypassed the two real providers. THIS test wires the
+// runtime's AgentListProviderService to the actual ServerAgentListProviderLive over an Agent.Service that
+// mirrors production (auto/general/plan with NO trigger/capability metadata). If the built-ins weren't
+// appended INSIDE ServerAgentListProvider, coordinate() would block with no_capable_agent here — this is
+// the direct regression guard on the "built-ins in the wrong provider" defect.
+describe("MultiAgentRuntime over the REAL ServerAgentListProvider (production wiring) — no no_capable_agent", () => {
+  // Agent.Service mirroring production: real primary agents, none carrying autonomous metadata.
+  const agentInfo = (partial: Record<string, unknown>): Agent.Info =>
+    ({ options: {}, permission: [], mode: "all", ...partial }) as unknown as Agent.Info
+  const agentMock = {
+    list: () =>
+      Effect.succeed([
+        agentInfo({ name: "auto", mode: "primary", description: "default" }),
+        agentInfo({ name: "general", mode: "all" }),
+        agentInfo({ name: "plan", mode: "primary" }),
+      ]),
+  } as unknown as Agent.Interface
+  const realProvider = ServerAgentListProviderLive.pipe(Layer.provide(Layer.succeed(Agent.Service, agentMock)))
+
+  const makeRealLayer = () => {
+    const database = Database.layerFromPath(":memory:")
+    const core = Layer.mergeAll(DeepAgentEventBus.layerWith({ now }), ApprovalQueue.layerWith({ now })).pipe(
+      Layer.provideMerge(database),
+    )
+    const runtime = MultiAgentRuntime.layerWith({ runner: fakeRunner }).pipe(
+      Layer.provide(core),
+      Layer.provide(realProvider),
+    )
+    return Layer.mergeAll(runtime, core)
+  }
+  const it = testEffect(makeRealLayer())
+
+  it.effect("§A1 ci.failure over the PRODUCTION provider binds a capable agent (no no_capable_agent)", () =>
+    Effect.gen(function* () {
+      resetRunner()
+      setNow(1_000)
+      const runtime = yield* MultiAgentRuntime.Service
+      const summary = yield* runtime.coordinate(event({ type: "ci.failure", source: "ci", payload: { files: ["src/a.ts"] } }))
+      // the built-ins are appended INSIDE ServerAgentListProvider → the production path is live.
+      expect(summary.outcomes.some((o) => o.reason === "no_capable_agent")).toBe(false)
+      expect(summary.outcomes.map((o) => o.status)).toEqual(["completed", "completed"])
+      expect(ran).toEqual(["auto", "auto"]) // CodeFixAgent runs as the real "auto" agent
+    }),
+  )
+
+  it.effect("§A1 all six autonomous event types bind via the production provider (none no_capable_agent)", () =>
+    Effect.gen(function* () {
+      const runtime = yield* MultiAgentRuntime.Service
+      for (const [type, source] of [
+        ["ci.failure", "ci"],
+        ["ci.repair.requested", "ci"],
+        ["pr.comment", "im"],
+        ["monitor.alert", "monitor"],
+        ["git.push", "git"],
+        ["schedule.scan", "system"],
+      ] as const) {
+        resetRunner()
+        setNow(1_000)
+        const summary = yield* runtime.coordinate(event({ type, source, payload: { files: ["src/a.ts"] } }))
+        expect(summary.outcomes.length).toBeGreaterThan(0)
+        expect(summary.outcomes.some((o) => o.reason === "no_capable_agent")).toBe(false)
+      }
     }),
   )
 })

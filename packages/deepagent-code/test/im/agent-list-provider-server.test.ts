@@ -100,7 +100,8 @@ describe("ServerAgentListProvider — metadata mapping & defaults", () => {
       agentInfo({ name: "sub", mode: "subagent" }),
     ])
     const listed = await run(layer, (p) => p.listAgents(scope))
-    expect(listed.map((d) => d.name)).toEqual(["visible"])
+    // config agents (excluding the appended built-ins) still filter hidden/subagent exactly as V3.8.
+    expect(listed.filter((d) => !d.id.startsWith("builtin:")).map((d) => d.name)).toEqual(["visible"])
   })
 })
 
@@ -111,18 +112,67 @@ describe("ServerAgentListProvider — findByTrigger / findByCapability", () => {
     agentInfo({ name: "legacy", mode: "all" }),
   ])
 
+  // These assert on the CONFIG agents only; the appended built-ins are filtered out (they're covered by
+  // the dedicated built-ins suite below). "code.changed" is a config-only trigger no built-in declares.
   it("findByTrigger returns only matching agents", async () => {
     const r = await run(layer, (p) => p.findByTrigger({ ...scope, event: "code.changed" }))
-    expect(r.map((d) => d.name)).toEqual(["alpha"])
+    expect(r.filter((d) => !d.id.startsWith("builtin:")).map((d) => d.name)).toEqual(["alpha"])
   })
 
   it("findByCapability returns only matching agents", async () => {
     const r = await run(layer, (p) => p.findByCapability({ ...scope, capability: "review" }))
-    expect(r.map((d) => d.name)).toEqual(["beta"])
+    // "beta" is the only CONFIG agent with `review`; the built-in CodeReviewAgent also declares it.
+    expect(r.filter((d) => !d.id.startsWith("builtin:")).map((d) => d.name)).toEqual(["beta"])
   })
 
-  it("no-match returns empty; legacy agent never matches", async () => {
-    expect(await run(layer, (p) => p.findByTrigger({ ...scope, event: "ci.failure" }))).toEqual([])
+  it("no-match returns empty for a capability no agent (built-in or config) declares; legacy agent never matches", async () => {
+    // NOTE: "ci.failure" now DOES match — the built-in CodeFixAgent carries that trigger (see the
+    // built-ins suite below). A capability no built-in declares (doc.write) still returns empty.
     expect(await run(layer, (p) => p.findByCapability({ ...scope, capability: "doc.write" }))).toEqual([])
+    // the config agents ("alpha"/"beta"/"legacy") alone never match ci.failure — only the built-in does.
+    const ciMatches = await run(layer, (p) => p.findByTrigger({ ...scope, event: "ci.failure" }))
+    expect(ciMatches.map((d) => d.name)).not.toContain("alpha")
+    expect(ciMatches.map((d) => d.name)).not.toContain("legacy")
+  })
+})
+
+// V4.0 §A1 CRITICAL — the PRODUCTION provider (ServerAgentListProviderLive, wired into
+// v4EventRuntimeLayer via server.ts) must carry the built-in autonomous descriptors. The real
+// deepagent-code agents (auto/general/plan) declare NO trigger/capability metadata, so without the
+// built-in append every autonomous event would still block with `no_capable_agent` in production. These
+// tests drive the REAL ServerAgentListProvider (not a fake registry) to prove the built-ins are present.
+describe("ServerAgentListProvider — built-in autonomous descriptors (production path)", () => {
+  // a registry of ONLY config agents that carry no autonomous metadata — mirrors production, where
+  // auto/general/plan have no triggers/capabilities. Any match therefore comes from the built-ins.
+  const layer = makeLayer([
+    agentInfo({ name: "auto", mode: "primary", description: "default" }),
+    agentInfo({ name: "general", mode: "all" }),
+    agentInfo({ name: "plan", mode: "primary" }),
+  ])
+
+  it("findByTrigger('ci.failure') returns the built-in CodeFixAgent (metadata now present in production)", async () => {
+    const r = await run(layer, (p) => p.findByTrigger({ ...scope, event: "ci.failure" }))
+    expect(r.some((d) => d.id === "builtin:codefix")).toBe(true)
+  })
+
+  it("findByCapability('code_edit') returns a built-in (CodeFixAgent/ChangeAgent) in production", async () => {
+    const r = await run(layer, (p) => p.findByCapability({ ...scope, capability: "code_edit" }))
+    expect(r.some((d) => d.id === "builtin:codefix" || d.id === "builtin:change")).toBe(true)
+  })
+
+  it("every autonomous trigger resolves to >=1 capable agent via the production provider", async () => {
+    for (const evt of ["ci.failure", "ci.repair.requested", "pr.comment", "monitor.alert", "git.push", "schedule.scan"]) {
+      const r = await run(layer, (p) => p.findByTrigger({ ...scope, event: evt }))
+      expect(r.length).toBeGreaterThan(0)
+    }
+  })
+
+  it("built-ins are visible:false so they don't leak into the human @mention list, but ARE listed for matching", async () => {
+    const listed = await run(layer, (p) => p.listAgents(scope))
+    const builtins = listed.filter((d) => d.id.startsWith("builtin:"))
+    expect(builtins.length).toBeGreaterThan(0)
+    expect(builtins.every((d) => d.visible === false)).toBe(true)
+    // the config agents remain visible.
+    expect(listed.some((d) => d.name === "auto" && d.visible === true)).toBe(true)
   })
 })

@@ -92,6 +92,28 @@ export const DEFAULT_RULES: ReadonlyArray<PartitionRule> = [
       { capability: "code_edit", intent: "propose a fix", dependsOnIdx: [0], requiredAutonomy: "level_2" },
     ],
   },
+  {
+    // A push → read-only review pass (§A1 CodeReviewAgent covers `review`). level_1 (no edits). Without
+    // this rule git.push fell through to fallbackStep()'s "handle" capability, which no built-in declares
+    // → no_capable_agent. Emitting the concrete `review` capability lets CodeReviewAgent bind.
+    match: "git.push",
+    steps: [{ capability: "review", intent: "review the pushed changes", dependsOnIdx: [], requiredAutonomy: "level_1" }],
+  },
+  {
+    // A scheduled scan → read-only maintenance analysis (§A1 MaintenanceAgent covers `maintain`). level_1.
+    match: "schedule.scan",
+    steps: [
+      { capability: "maintain", intent: "run the scheduled maintenance scan", dependsOnIdx: [], requiredAutonomy: "level_1" },
+    ],
+  },
+  {
+    // An explicit repair request → same fix→test DAG as ci.failure (§A1 CodeFixAgent covers both caps).
+    match: "ci.repair.requested",
+    steps: [
+      { capability: "code_edit", intent: "apply the requested repair", dependsOnIdx: [], requiredAutonomy: "level_2" },
+      { capability: "test_run", intent: "verify the repair with tests", dependsOnIdx: [0], requiredAutonomy: "level_2" },
+    ],
+  },
 ]
 
 // A single-subtask fallback for events with no matching rule: one generic handler subtask requiring the
