@@ -67,12 +67,6 @@ export const AgentCoordinationEvent = Schema.Union([
     taskID: Schema.String,
     artifacts: Schema.Array(Schema.String),
   }),
-  Schema.Struct({
-    type: Schema.Literal("agent.handoff.requested"),
-    from: Schema.String,
-    to: Schema.String,
-    reason: Schema.String,
-  }),
 ]).annotate({ identifier: "AgentCoordinationEvent" })
 export type AgentCoordinationEvent = Schema.Schema.Type<typeof AgentCoordinationEvent>
 
