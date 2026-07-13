@@ -46,10 +46,6 @@ export const DEFAULT_RULES: ReadonlyArray<RiskRule> = [
   { match: "ci.failure", riskClass: "repeated_failure", when: (p) => typeof p.consecutiveFailures === "number" && (p.consecutiveFailures as number) >= 3 },
 ]
 
-export type ConveneDecision =
-  | { readonly type: "convene"; readonly riskClass: RiskClass; readonly urgency: DeepAgentEvent.EventPriority }
-  | { readonly type: "skip"; readonly reason: "flag_disabled" | "no_risk_match" }
-
 /**
  * §M — decide whether an event auto-convenes a panel.
  *   1. flag gate  → skip flag_disabled when the auto-convene feature is off (fail-closed: no panel).
@@ -63,7 +59,9 @@ export const shouldConvene = (input: {
   readonly event: DeepAgentEvent.Event
   readonly flagEnabled: boolean
   readonly rules?: ReadonlyArray<RiskRule>
-}): ConveneDecision => {
+}):
+  | { readonly type: "convene"; readonly riskClass: RiskClass; readonly urgency: DeepAgentEvent.EventPriority }
+  | { readonly type: "skip"; readonly reason: "flag_disabled" | "no_risk_match" } => {
   if (!input.flagEnabled) return { type: "skip", reason: "flag_disabled" }
 
   const rules = input.rules ?? DEFAULT_RULES
