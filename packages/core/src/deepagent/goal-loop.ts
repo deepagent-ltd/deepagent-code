@@ -3,7 +3,9 @@ import { randomUUID } from "node:crypto"
 import type { DocumentStore } from "./document-store"
 import {
   type PlanDoc,
+  type PlanInput,
   buildCompletionReport,
+  buildPlanFromInput,
   planScope,
 } from "./plan-controller"
 
@@ -559,6 +561,21 @@ export interface GoalLoop {
   readonly tick: (handle: GoalHandle) => Effect.Effect<TickOutcome>
   readonly status: (handle: GoalHandle) => Effect.Effect<GoalStatus>
   readonly stop: (handle: GoalHandle) => Effect.Effect<void>
+  /**
+   * V4.1 §S2 — apply a USER plan edit to a running/paused goal and RE-BASELINE stall/progress tracking.
+   * Called by the driver BETWEEN ticks (never mid-tick), using the driver's OWN store handle — that is
+   * why the edit is observed on the next tick (a separate store handle from an HTTP fiber would NOT be,
+   * since DocumentStore serves reads from an in-memory map rebuilt only at construction). It:
+   *   1. upserts the plan doc with the edited PlanDoc (version+1 — so the next tick's version-dedup does
+   *      NOT skip it; a fingerprint-identical no-op edit is a no-op upsert, harmless).
+   *   2. RE-BASELINES the persisted run_context state to the EDITED plan: stallCount→0 and
+   *      lastDoneCount/lastEvidenceCount/lastMetCount/lastFingerprint set to the edited plan's values, and
+   *      lastProcessedVersion→null (so the tick after the edit runs). Without this, a user re-opening a
+   *      done step (done→pending) reads as a progress REGRESSION and could trip the stall-stop; the
+   *      re-baseline gives the revision a fresh runway.
+   * No-op when no persisted state exists for the handle (goal not started / already gone).
+   */
+  readonly applyPlanEdit: (handle: GoalHandle, edit: PlanInput) => Effect.Effect<void>
 }
 
 // §D.4 start validation — HARD, no defaults that bypass. criteria empty → not objectively decidable;
@@ -792,7 +809,48 @@ export const makeGoalLoop = (deps: ControllerDeps): GoalLoop => {
       persistState(deps, { ...state, phase: "stopped", lastOutcome: state.lastOutcome })
     })
 
-  return { start, tick, status, stop }
+  const applyPlanEdit: GoalLoop["applyPlanEdit"] = (handle, edit) =>
+    Effect.sync(() => {
+      const state = loadState(deps, handle)
+      // No persisted state (goal not started / gone), or already terminal → nothing to edit/re-baseline.
+      if (state == null || isTerminalPhase(state.phase)) return
+      // Reconcile the user's revision against the CURRENT durable plan (via this driver's own store
+      // handle) so step ids + accumulated evidence are PRESERVED across the rewrite (buildPlanFromInput
+      // matches revised steps to prior steps by id). Reading `previous` here — not in the HTTP fiber —
+      // is why evidence isn't lost: the driver's handle holds the up-to-date doc incl. the last tick's
+      // mirrored-back progress.
+      const existing = deps.store.get(state.planDocId)
+      // The goal's plan doc must already exist (start materialized it). If it is somehow gone, do NOT
+      // fabricate an orphan under a fresh id — a re-baseline against a doc the tick can't read would be
+      // silent data loss. Bail (no-op) so the caller's ok:true never lies about a lost edit.
+      if (existing == null) return
+      const previous = readPlan(deps.store, state.planDocId).plan
+      const editedPlan = buildPlanFromInput(state.sessionId, edit, previous)
+      // 1) Write the edited plan back to THE SAME durable doc by id (version+1), so the next tick's
+      //    readPlan(state.planDocId) sees the revision. Writing by id — not upsert-by-logical-key —
+      //    avoids the description/idSlug matching that would otherwise mint an orphan doc (upsert's
+      //    findLogical keys on description, which need not equal the doc materialize() wrote). A
+      //    fingerprint-identical edit is a no-op (updateWithProvenance returns cur unchanged, INV-4).
+      //    provenance.source="human" records the human-authored revision (vs the model's plan-tool edits).
+      deps.store.updateWithProvenance(state.planDocId, JSON.stringify(editedPlan), {
+        source: "human",
+        run_ref: planScope(state.sessionId),
+      })
+      // 2) Re-baseline: reset stall + set the progress baselines to the EDITED plan, and null the
+      //    processed-version so the next tick runs against the revision (not deduped, not a false stall).
+      persistState(deps, {
+        ...state,
+        stallCount: 0,
+        lastFingerprint: planFingerprint(editedPlan),
+        lastDoneCount: doneStepCount(editedPlan),
+        lastEvidenceCount: evidenceCount(editedPlan),
+        // metCount is criteria-derived (independent of plan structure); leave it — a plan edit does not
+        // retroactively un-meet a satisfied criterion, and the next tick re-grades regardless.
+        lastProcessedVersion: null,
+      })
+    })
+
+  return { start, tick, status, stop, applyPlanEdit }
 }
 
 export * as GoalLoop from "./goal-loop"
