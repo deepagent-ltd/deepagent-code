@@ -72,13 +72,23 @@ export interface Interface {
   // step 1: the runLoop reads these, materializes each as a V1 history message keyed by the steer id
   // (idempotent), THEN calls markConsumed. Reading does NOT mark anything — a crash before markConsumed
   // leaves the rows pending so the next drain re-materializes (no loss).
-  readonly pending: (sessionID: SessionID) => Effect.Effect<ReadonlyArray<Admitted>>
+  //
+  // V4.1 §S1.3 DELIVERY DIMENSION: `delivery` scopes the read to ONE delivery channel (default "steer",
+  // so S1.1's parent-runLoop drain is unchanged). This is what lets TWO drainers coexist on the SAME
+  // session id without contention: the parent runLoop drains `delivery="steer"` while the goal driver
+  // drains `delivery="goal_steer"` — disjoint rows, never first-come-first-served over the same buffer.
+  readonly pending: (sessionID: SessionID, delivery?: Delivery) => Effect.Effect<ReadonlyArray<Admitted>>
   // Stamp the given steer ids consumed, in ONE transaction, re-asserting `consumed_seq IS NULL` so a
   // concurrent drain can never re-claim them. Called by the runLoop AFTER the messages are durably
-  // persisted (persist-first). Idempotent: already-consumed ids are skipped by the WHERE guard.
-  readonly markConsumed: (sessionID: SessionID, ids: ReadonlyArray<SessionMessage.ID>) => Effect.Effect<void>
-  // Non-consuming peek used by the loop's needsFollowUp decision.
-  readonly hasPending: (sessionID: SessionID) => Effect.Effect<boolean>
+  // persisted (persist-first). Idempotent: already-consumed ids are skipped by the WHERE guard. The
+  // `delivery` filter (default "steer") keeps the stamp scoped to the caller's own channel.
+  readonly markConsumed: (
+    sessionID: SessionID,
+    ids: ReadonlyArray<SessionMessage.ID>,
+    delivery?: Delivery,
+  ) => Effect.Effect<void>
+  // Non-consuming peek used by the loop's needsFollowUp decision. `delivery` (default "steer") scopes it.
+  readonly hasPending: (sessionID: SessionID, delivery?: Delivery) => Effect.Effect<boolean>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@deepagent-code/SessionSteer") {}
@@ -123,7 +133,7 @@ export const layer = Layer.effect(
       return yield* Effect.die("SessionSteer.admit: conflicting row vanished")
     })
 
-    const pending: Interface["pending"] = Effect.fn("SessionSteer.pending")(function* (sessionID) {
+    const pending: Interface["pending"] = Effect.fn("SessionSteer.pending")(function* (sessionID, delivery = "steer") {
       const rows = yield* db
         .select()
         .from(SessionSteerTable)
@@ -131,7 +141,7 @@ export const layer = Layer.effect(
           and(
             eq(SessionSteerTable.session_id, sessionID),
             isNull(SessionSteerTable.consumed_seq),
-            eq(SessionSteerTable.delivery, "steer"),
+            eq(SessionSteerTable.delivery, delivery),
           ),
         )
         .orderBy(asc(SessionSteerTable.seq))
@@ -140,12 +150,17 @@ export const layer = Layer.effect(
       return rows.map(fromRow)
     })
 
-    const markConsumed: Interface["markConsumed"] = Effect.fn("SessionSteer.markConsumed")(function* (sessionID, ids) {
+    const markConsumed: Interface["markConsumed"] = Effect.fn("SessionSteer.markConsumed")(function* (
+      sessionID,
+      ids,
+      delivery = "steer",
+    ) {
       if (ids.length === 0) return
       // Persist-first step 3: stamp consumed AFTER the caller has durably materialized the messages.
       // `consumed_seq` records the wall-clock of the stamp (any non-null == consumed). Re-assert
       // `consumed_seq IS NULL` in the WHERE so a concurrent drain that already claimed a row is a no-op
       // here, and only the ids we were handed are touched. Uninterruptible so the stamp commits atomically.
+      // The `delivery` filter keeps the stamp scoped to the caller's own channel (steer vs goal_steer).
       const stampedAt = DateTime.toEpochMillis(yield* DateTime.now)
       yield* Effect.uninterruptible(
         db
@@ -155,7 +170,7 @@ export const layer = Layer.effect(
             and(
               eq(SessionSteerTable.session_id, sessionID),
               isNull(SessionSteerTable.consumed_seq),
-              eq(SessionSteerTable.delivery, "steer"),
+              eq(SessionSteerTable.delivery, delivery),
               inArray(SessionSteerTable.id, [...ids]),
             ),
           )
@@ -164,7 +179,10 @@ export const layer = Layer.effect(
       )
     })
 
-    const hasPending: Interface["hasPending"] = Effect.fn("SessionSteer.hasPending")(function* (sessionID) {
+    const hasPending: Interface["hasPending"] = Effect.fn("SessionSteer.hasPending")(function* (
+      sessionID,
+      delivery = "steer",
+    ) {
       const row = yield* db
         .select({ seq: SessionSteerTable.seq })
         .from(SessionSteerTable)
@@ -172,7 +190,7 @@ export const layer = Layer.effect(
           and(
             eq(SessionSteerTable.session_id, sessionID),
             isNull(SessionSteerTable.consumed_seq),
-            eq(SessionSteerTable.delivery, "steer"),
+            eq(SessionSteerTable.delivery, delivery),
           ),
         )
         .limit(1)

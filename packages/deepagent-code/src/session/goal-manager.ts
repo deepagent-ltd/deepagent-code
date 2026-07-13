@@ -15,10 +15,13 @@ import { Session } from "./session"
 import { Agent } from "../agent/agent"
 import { SessionPrompt } from "./prompt"
 import { SessionRevert } from "./revert"
+import { SessionSteer } from "./steer"
 import { LSP } from "../lsp/lsp"
 import { Provider } from "../provider/provider"
 import { SessionID } from "./schema"
 import { GoalEvent } from "./goal-event"
+import { SessionMessage } from "@deepagent-code/core/session/message"
+import { Prompt } from "@deepagent-code/core/session/prompt"
 import {
   GoalLoopWiring,
   liveDiagnostics,
@@ -66,6 +69,13 @@ const readGoalPlanFile = (cwd: string, sessionID: string): ParsedGoalPlan | null
     return null
   }
 }
+
+// §S1.3 FIX 2 — the terminal active-goal-pointer phases. A goal in any of these has settled: its driver
+// job has returned (natural terminal) or been cancelled (stopped), so no further tick will drain the
+// steer buffer. steerGoal refuses to admit once the pointer reports one of these (no orphan buffering).
+// "running" and "paused" are the only non-terminal phases (a paused goal resumes and drains again).
+export const isTerminalGoalPhase = (phase: string): boolean =>
+  phase === "done" || phase === "needs_human" || phase === "rolled_back" || phase === "stopped"
 
 // Per-session control state the driver ports read. Held in a SynchronizedRef so pause/stop from a route
 // are observed by the running background driver without a lock.
@@ -125,6 +135,19 @@ export interface Interface {
   readonly stop: (sessionID: string) => Effect.Effect<boolean>
   readonly status: (sessionID: string) => Effect.Effect<GoalSnapshot | null>
   readonly startable: (sessionID: string) => Effect.Effect<GoalStartable>
+  /**
+   * V4.1 §S1.3 — admit a GOAL-directed steering message. The ingress (S1.2 / IM) calls this to guide a
+   * RUNNING goal ("also handle the edge case", "skip step 3"); the driver drains it BETWEEN ticks and
+   * threads it into the next step prompt. Buffered on the GOAL (parent) session's SessionSteer buffer —
+   * a DIFFERENT key than the goal-worker child sessions S1.1 drains, so no double-consume. Idempotent on
+   * `id` (an at-least-once ingress never double-buffers). Returns false when no goal is running for the
+   * session (nothing to steer). Best-effort admit failures surface as false rather than crashing ingress.
+   */
+  readonly steerGoal: (input: {
+    readonly sessionID: string
+    readonly text: string
+    readonly id?: string
+  }) => Effect.Effect<boolean>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@deepagent-code/GoalManager") {}
@@ -139,6 +162,8 @@ export const layer = Layer.effect(
     const agents = yield* Agent.Service
     const sessionPrompt = yield* SessionPrompt.Service
     const revert = yield* SessionRevert.Service
+    // §S1.3 — the durable steer buffer the goal driver drains between ticks (goal-directed steering).
+    const steerBuffer = yield* SessionSteer.Service
     const events = yield* EventV2Bridge.Service
     const background = yield* BackgroundJob.Service
     const provider = yield* Provider.Service
@@ -167,6 +192,29 @@ export const layer = Layer.effect(
       question: "Is the current change safe and correct enough to complete this goal?",
       codeRefs: [],
       lenses: ["correctness", "security", "architecture"],
+    })
+
+    // §S1.3 — the goal-tick steer PORT, backed by SessionSteer keyed on the GOAL (parent) session id AND
+    // the DISTINCT `goal_steer` delivery channel.
+    // TWO independence dimensions prevent any drainer contention:
+    //   (a) SESSION-ID: the goal-worker turns run in FRESH child session ids (makeTaskSubagentRunner →
+    //       sessions.create), so S1.1's intra-turn child-runLoop drain reads a DIFFERENT session's buffer.
+    //   (b) DELIVERY: on the GOAL/parent session id there are TWO drainers — the parent's OWN runLoop
+    //       (drainSteers, delivery="steer") and this goal driver. Scoping this port to delivery=
+    //       "goal_steer" makes the two read DISJOINT rows, so a goal-directed steer is never swept into
+    //       the parent chat history instead of the goal step prompt (FIX 1 — the design-level race).
+    // pendingSteer is NON-consuming: the driver stamps consumed only AFTER the tick threads the steer; the
+    // `consumed_seq IS NULL` guard keeps a stamped row from being re-drained by this channel.
+    const goalSteerPort = (sessionID: string): GoalDriver.GoalSteerPort => ({
+      pendingSteer: () =>
+        steerBuffer.pending(SessionID.make(sessionID), GoalDriver.GOAL_STEER_DELIVERY).pipe(
+          Effect.map((rows) => rows.map((r) => ({ id: r.id, text: r.prompt.text }))),
+          Effect.catchCause(() => Effect.succeed([] as ReadonlyArray<GoalDriver.PendingGoalSteer>)),
+        ),
+      markSteerConsumed: (ids) =>
+        steerBuffer
+          .markConsumed(SessionID.make(sessionID), [...ids], GoalDriver.GOAL_STEER_DELIVERY)
+          .pipe(Effect.catchCause(() => Effect.void)),
     })
 
     // Per-session control state, observed by the running driver's ports.
@@ -390,6 +438,10 @@ export const layer = Layer.effect(
           model: { providerID: model.providerID, modelID: model.modelID },
         })
 
+        // §S1.3 — ONE goal-steer relay per run, shared by the wiring (executor threads staged guidance
+        // into the step prompt) and the driver (drains between ticks + stamps consumed after the tick).
+        const steerRelay = GoalDriver.makeGoalSteerRelay()
+
         const deps = yield* GoalLoopWiring.makeGoalLoopWiring({
           store,
           parentSessionID: sessionID,
@@ -398,6 +450,7 @@ export const layer = Layer.effect(
           panelQuestion: () => input.panelQuestion ?? defaultPanelQuestion(),
           diagnostics,
           rollback,
+          steerRelay,
         }).pipe(Effect.provideService(RuntimeFlags.Service, flags))
         // Flag OFF ⇒ wiring is null ⇒ the goal loop is unavailable. Reject clearly.
         if (deps == null) {
@@ -442,11 +495,15 @@ export const layer = Layer.effect(
           gaps: [],
         })
 
-        // The driver ports read the per-session control flags (pause/stop) live.
+        // The driver ports read the per-session control flags (pause/stop) live, plus the §S1.3 goal-steer
+        // channel (drained between ticks and threaded into the next step prompt via the shared relay).
+        const steerPort = goalSteerPort(sessionID)
         const ports: GoalDriverPorts = {
           onStatus: (status) => publishStatus(sessionID, status),
           shouldPause: () => getControl(sessionID).pipe(Effect.map((c) => c?.paused ?? false)),
           shouldStop: () => getControl(sessionID).pipe(Effect.map((c) => c?.stopped ?? false)),
+          pendingSteer: steerPort.pendingSteer,
+          markSteerConsumed: steerPort.markSteerConsumed,
         }
 
         // Start the driver as a resident background task. onFinish clears the pointer / control state.
@@ -454,7 +511,7 @@ export const layer = Layer.effect(
           type: "goal-loop",
           title: `goal ${handle.goalId}`,
           metadata: { sessionID, goalId: handle.goalId },
-          run: GoalDriver.runToCompletion({ deps, handle, ports }).pipe(
+          run: GoalDriver.runToCompletion({ deps, handle, ports, steerRelay }).pipe(
             // A terminal outcome clears the running pointer to its terminal phase (unless the user already
             // stopped it); a paused exit ("continue") leaves the pointer for a later resume.
             Effect.tap((outcome) => finalizeOutcome(sessionID, outcome)),
@@ -506,6 +563,9 @@ export const layer = Layer.effect(
           parentSessionID: SessionID.make(sessionID),
           model: { providerID: model.providerID, modelID: model.modelID },
         })
+        // §S1.3 — a fresh relay for the resumed run (steers admitted while paused are still pending in the
+        // durable buffer, so the resumed driver re-drains and threads them on its first tick — no loss).
+        const steerRelay = GoalDriver.makeGoalSteerRelay()
         const deps = yield* GoalLoopWiring.makeGoalLoopWiring({
           store,
           parentSessionID: sessionID,
@@ -514,19 +574,23 @@ export const layer = Layer.effect(
           panelQuestion: defaultPanelQuestion,
           diagnostics,
           rollback,
+          steerRelay,
         }).pipe(Effect.provideService(RuntimeFlags.Service, flags))
         if (deps == null) return false
         const handle = { goalId: c.goalId, planDocId: c.planDocId, sessionId: sessionID }
+        const steerPort = goalSteerPort(sessionID)
         const ports: GoalDriverPorts = {
           onStatus: (status) => publishStatus(sessionID, status),
           shouldPause: () => getControl(sessionID).pipe(Effect.map((ctrl) => ctrl?.paused ?? false)),
           shouldStop: () => getControl(sessionID).pipe(Effect.map((ctrl) => ctrl?.stopped ?? false)),
+          pendingSteer: steerPort.pendingSteer,
+          markSteerConsumed: steerPort.markSteerConsumed,
         }
         const job = yield* background.start({
           type: "goal-loop",
           title: `goal ${c.goalId} (resumed)`,
           metadata: { sessionID, goalId: c.goalId },
-          run: GoalDriver.runToCompletion({ deps, handle, ports }).pipe(
+          run: GoalDriver.runToCompletion({ deps, handle, ports, steerRelay }).pipe(
             Effect.tap((outcome) => finalizeOutcome(sessionID, outcome)),
             Effect.map((outcome) => `goal ${c.goalId}: ${outcome}`),
             Effect.catchCause(() => Effect.succeed(`goal ${c.goalId}: driver defect`)),
@@ -583,7 +647,41 @@ export const layer = Layer.effect(
         return { startable: false, source: "none" as const }
       })
 
-    return Service.of({ start, pause, resume, stop, status, startable })
+    // §S1.3 — admit a GOAL-directed steering message onto the GOAL (parent) session's steer buffer (on the
+    // DISTINCT `goal_steer` delivery channel), so the running driver absorbs it between ticks. Only when a
+    // goal is actually running AND NOT YET TERMINAL for the session (else there is no live driver to drain
+    // it — admitting would leak an orphan steer that is never consumed).
+    //
+    // FIX 2 (orphan-after-termination): checking `!c || c.stopped` alone is insufficient — a goal that
+    // finished NATURALLY (done / needs_human / rolled_back) leaves the control non-null and non-stopped
+    // (background.start has no onFinish that clears it), so getControl would still say "running" and
+    // steerGoal would admit a steer no driver will ever drain. We therefore gate on the ACTIVE-GOAL
+    // POINTER PHASE (the authoritative terminal signal, set by finalizeOutcome / stop): any terminal phase
+    // ⇒ refuse. `admit` is idempotent on `id`, so an at-least-once ingress never double-buffers; a blank
+    // message is a no-op.
+    const steerGoal: Interface["steerGoal"] = (input) =>
+      Effect.gen(function* () {
+        const text = input.text.trim()
+        if (text.length === 0) return false
+        const c = yield* getControl(input.sessionID)
+        if (!c || c.stopped) return false
+        // Terminal phase (done / needs_human / rolled_back / stopped) ⇒ the driver has settled and will not
+        // drain again. Refuse rather than buffer an orphan. "paused" is NOT terminal (a resume re-drives).
+        const ptr = AgentGateway.DeepAgentSessionState.getActiveGoal(input.sessionID)
+        if (ptr && isTerminalGoalPhase(ptr.phase)) return false
+        const id = input.id ? SessionMessage.ID.make(input.id) : SessionMessage.ID.create()
+        yield* steerBuffer
+          .admit({
+            id,
+            sessionID: SessionID.make(input.sessionID),
+            prompt: Prompt.fromUserMessage({ text }),
+            delivery: GoalDriver.GOAL_STEER_DELIVERY,
+          })
+          .pipe(Effect.catchCause(() => Effect.void))
+        return true
+      })
+
+    return Service.of({ start, pause, resume, stop, status, startable, steerGoal })
   }),
 )
 
@@ -593,6 +691,7 @@ export const defaultLayer = Layer.suspend(() =>
     Layer.provide(Agent.defaultLayer),
     Layer.provide(SessionPrompt.defaultLayer),
     Layer.provide(SessionRevert.defaultLayer),
+    Layer.provide(SessionSteer.defaultLayer),
     Layer.provide(EventV2Bridge.defaultLayer),
     Layer.provide(BackgroundJob.defaultLayer),
     Layer.provide(Provider.defaultLayer),
