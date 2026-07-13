@@ -4,7 +4,7 @@ import { tmpdir } from "node:os"
 import path from "node:path"
 import { Effect } from "effect"
 import { DocumentStore } from "@deepagent-code/core/deepagent/document-store"
-import { createPlanDoc, type PlanDoc, type PlanStep } from "@deepagent-code/core/deepagent/plan-controller"
+import { createPlanDoc, type PlanDoc, type PlanStep, type PlanInput } from "@deepagent-code/core/deepagent/plan-controller"
 import type {
   ControllerDeps,
   GraderPorts,
@@ -204,5 +204,85 @@ describe("startGoal + runToCompletion", () => {
     store.update(planDocId, JSON.stringify(plan([step("a", "done")])))
     const second = await Effect.runPromise(runToCompletion({ deps, handle, ports }))
     expect(second).toBe("done")
+  })
+})
+
+describe("V4.1 §S2 — goal plan hot-edit port (pendingPlanEdit / markPlanEditConsumed)", () => {
+  test("drains a pending plan edit BETWEEN ticks, applies it to the durable doc, then stamps consumed", async () => {
+    const planDocId = materializePlanDoc({ store, sessionId: SESSION, plan: plan([step("a", "pending")]) })
+    const deps = controllerDeps()
+
+    // One pending edit, delivered on the FIRST iteration then cleared by markPlanEditConsumed.
+    let pending: PlanInput | null = { goal: "reach the goal", steps: [{ step_id: "a", title: "renamed", status: "pending" }] }
+    let consumedCount = 0
+    const ports: GoalDriverPorts = {
+      ...noopPorts,
+      pendingPlanEdit: () => Effect.succeed(pending),
+      markPlanEditConsumed: () =>
+        Effect.sync(() => {
+          consumedCount += 1
+          pending = null
+        }),
+    }
+    const { handle } = await Effect.runPromise(
+      startGoal({
+        deps,
+        planDocId,
+        criteria: [{ kind: "plan_complete" }],
+        limits: { maxTicks: 10, maxTokens: 10_000, maxWallclockMs: 10_000 },
+      }),
+    )
+
+    // The plan never completes (step stays pending, executor is a no-op) so the run stalls out; what we
+    // assert is that the edit landed on the durable doc and was consumed exactly once.
+    await Effect.runPromise(runToCompletion({ deps, handle, ports }))
+
+    const revised = JSON.parse(store.get(planDocId)!.body) as PlanDoc
+    expect(revised.steps[0].title).toBe("renamed")
+    expect(consumedCount).toBe(1)
+  })
+
+  test("a pendingPlanEdit port DEFECT does not crash the driver (degrades to no edit this iteration)", async () => {
+    const planDocId = materializePlanDoc({ store, sessionId: SESSION, plan: plan([step("a", "done")]) })
+    const deps = controllerDeps()
+    const ports: GoalDriverPorts = {
+      ...noopPorts,
+      pendingPlanEdit: () => Effect.die(new Error("port blew up")),
+    }
+    const { handle } = await Effect.runPromise(
+      startGoal({
+        deps,
+        planDocId,
+        criteria: [{ kind: "plan_complete" }],
+        limits: { maxTicks: 10, maxTokens: 10_000, maxWallclockMs: 10_000 },
+      }),
+    )
+    // The plan is already complete; despite the throwing port, the driver still drives to done.
+    const outcome = await Effect.runPromise(runToCompletion({ deps, handle, ports }))
+    expect(outcome).toBe("done")
+  })
+
+  test("no pending edit (null) ⇒ the goal runs exactly as before, doc untouched", async () => {
+    const planDocId = materializePlanDoc({ store, sessionId: SESSION, plan: plan([step("a", "done")]) })
+    const v0 = store.get(planDocId)!.version
+    const deps = controllerDeps()
+    let consumed = false
+    const ports: GoalDriverPorts = {
+      ...noopPorts,
+      pendingPlanEdit: () => Effect.succeed(null),
+      markPlanEditConsumed: () => Effect.sync(() => (consumed = true)),
+    }
+    const { handle } = await Effect.runPromise(
+      startGoal({
+        deps,
+        planDocId,
+        criteria: [{ kind: "plan_complete" }],
+        limits: { maxTicks: 10, maxTokens: 10_000, maxWallclockMs: 10_000 },
+      }),
+    )
+    const outcome = await Effect.runPromise(runToCompletion({ deps, handle, ports }))
+    expect(outcome).toBe("done")
+    expect(consumed).toBe(false)
+    expect(store.get(planDocId)!.version).toBe(v0)
   })
 })

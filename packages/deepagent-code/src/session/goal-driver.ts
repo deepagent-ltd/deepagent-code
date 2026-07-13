@@ -1,6 +1,6 @@
 import { Effect } from "effect"
 import type { DocumentStore } from "@deepagent-code/core/deepagent/document-store"
-import type { PlanDoc } from "@deepagent-code/core/deepagent/plan-controller"
+import type { PlanDoc, PlanInput } from "@deepagent-code/core/deepagent/plan-controller"
 import type { SessionMessage } from "@deepagent-code/core/session/message"
 import {
   makeGoalLoop,
@@ -177,6 +177,18 @@ export type GoalDriverPorts = {
    * exactly-once). Optional; omitted ⇒ drained steers are never stamped (test stubs).
    */
   readonly markSteerConsumed?: (ids: ReadonlyArray<SessionMessage.ID>) => Effect.Effect<void>
+  /**
+   * V4.1 §S2 — cooperative USER PLAN EDIT. Drains a pending user plan edit (enqueued via
+   * GoalManager.editPlan onto the per-session control channel) BETWEEN ticks. Returns the revised PlanDoc
+   * or null. The driver applies it via loop.applyPlanEdit (durable-doc upsert + stall re-baseline) using
+   * ITS OWN store handle — this is why a running goal observes the edit next tick (a separate store handle
+   * from the HTTP fiber would not, DocumentStore reads from its construction-time in-memory map). Applied
+   * BEFORE the tick and AFTER the previous tick's mirror-back, so no edit is clobbered by child progress
+   * and no child progress is lost (§S2.3). Optional; omitted / null ⇒ no plan edit this iteration.
+   */
+  readonly pendingPlanEdit?: () => Effect.Effect<PlanInput | null>
+  /** V4.1 §S2 — clear the pending plan edit AFTER it was applied+re-baselined (consume-once). Optional. */
+  readonly markPlanEditConsumed?: () => Effect.Effect<void>
 }
 
 /** No-op ports (fire-and-forget usage / tests that only care about the terminal outcome). */
@@ -187,6 +199,9 @@ export const noopPorts: GoalDriverPorts = {
   // §S1.3: no goal-steer by default — pendingSteer yields empty, so the goal runs exactly as before.
   pendingSteer: () => Effect.succeed([]),
   markSteerConsumed: () => Effect.void,
+  // §S2: no user plan edit by default — the goal runs exactly as before.
+  pendingPlanEdit: () => Effect.succeed(null),
+  markPlanEditConsumed: () => Effect.void,
 }
 
 export type StartGoalInput = {
@@ -248,7 +263,25 @@ export const runToCompletion = (input: RunToCompletionInput): Effect.Effect<Tick
         // Cooperative suspend: do NOT tick, do NOT mark terminal — the persisted state resumes later.
         // A steer staged BEFORE a pause is NOT stamped consumed (the tick that would absorb it never
         // ran), so it stays pending and is re-drained on resume — no guidance is lost across a pause.
+        // A plan edit enqueued during pause likewise stays pending on the control channel and is applied
+        // on resume (drained here on the first post-resume iteration), so no edit is lost across a pause.
         return "continue"
+      }
+
+      // §S2 — apply a pending USER PLAN EDIT BETWEEN ticks (after the PREVIOUS tick's mirror-back, before
+      // THIS tick). Draining here — not mid-tick — is what prevents the child-bridge clobber: the prior
+      // tick's mirrorChildPlan has already written the child's progress back, so applying the user edit on
+      // top preserves both (child progress + user revision). loop.applyPlanEdit upserts the durable doc
+      // via the DRIVER's store handle (so the next tick's readPlan sees it) and re-baselines stall/version.
+      // consume-once: stamp consumed ONLY after a successful apply; a crash before markPlanEditConsumed
+      // leaves the edit pending → re-applied next iteration (idempotent: a fingerprint-identical re-upsert
+      // is a no-op, and re-baseline to the same values is harmless).
+      if (ports.pendingPlanEdit) {
+        const editedPlan = yield* safePlanEdit(ports.pendingPlanEdit())
+        if (editedPlan != null) {
+          yield* safe(loop.applyPlanEdit(input.handle, editedPlan))
+          if (ports.markPlanEditConsumed) yield* safe(ports.markPlanEditConsumed())
+        }
       }
 
       // §S1.3 — absorb any GOAL-directed steer BETWEEN ticks. READ-STAGE-THEN-STAMP (at-least-once
@@ -299,6 +332,11 @@ const safeSteers = (
   effect: Effect.Effect<ReadonlyArray<PendingGoalSteer>>,
 ): Effect.Effect<ReadonlyArray<PendingGoalSteer>> =>
   effect.pipe(Effect.catchCause(() => Effect.succeed([] as ReadonlyArray<PendingGoalSteer>)))
+
+// §S2 — a pendingPlanEdit port defect must not crash the driver: degrade to "no edit this iteration"
+// (the edit stays pending on the control channel and is re-drained next iteration — no loss).
+const safePlanEdit = (effect: Effect.Effect<PlanInput | null>): Effect.Effect<PlanInput | null> =>
+  effect.pipe(Effect.catchCause(() => Effect.succeed(null as PlanInput | null)))
 
 const safeStatus = (
   loop: ReturnType<typeof makeGoalLoop>,
