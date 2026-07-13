@@ -346,6 +346,7 @@ export const dict = {
   "composer.panel.label": "专家团",
   "composer.panel.convene": "就当前对话召集专家团会诊",
   "composer.panel.armed": "专家团已激活 — 点击立即会诊",
+  "composer.panel.deepHint": "Shift + 点击进行多轮辩论",
   "composer.panel.disarm": "关闭专家团",
   "composer.panel.verdict.title": "专家团裁定",
   "composer.panel.verdict.approve": "批准",

@@ -290,6 +290,7 @@ export const dict = {
   "composer.panel.label": "專家團",
   "composer.panel.convene": "就當前對話召集專家團會診",
   "composer.panel.armed": "專家團已啟用 — 點擊立即會診",
+  "composer.panel.deepHint": "Shift + 點擊進行多輪辯論",
   "composer.panel.disarm": "關閉專家團",
   "composer.panel.verdict.title": "專家團裁定",
   "composer.panel.verdict.approve": "批准",

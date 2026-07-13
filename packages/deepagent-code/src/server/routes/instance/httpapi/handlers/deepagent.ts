@@ -30,6 +30,11 @@ import type { PlanInput } from "@deepagent-code/core/deepagent/plan-controller"
 
 const dbgLog = Log.create({ service: "deepagent.packs.debug" })
 
+// §C.4 — the server-side ceiling on Expert-Panel debate rounds a single consult may request. Round 1
+// plus up to 2 debate rounds: enough for opinions to converge (the orchestrator also early-stops on a
+// stable verdict distribution) while bounding the fan-out (one subagent turn per lens per round).
+const PANEL_MAX_ROUNDS_CEILING = 3
+
 export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagent", (handlers) =>
   Effect.gen(function* () {
     const config = yield* Config.Service
@@ -477,6 +482,15 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
         return yield* Effect.fail(new DeepAgentPromotionError({ message: "expert panel is disabled" }))
       const { sessionID } = ctx.payload
       const runTurn = yield* panelTurnRunnerFor(sessionID)
+      // Clamp the requested debate depth to [1, PANEL_MAX_ROUNDS_CEILING]. The orchestrator already
+      // floors/mins internally, but each round fans out one subagent turn PER lens, so an unbounded
+      // client-supplied maxRounds would let one request spawn arbitrarily many panelist turns. Cap it
+      // server-side (defense-in-depth) so a hostile/buggy client can't amplify a single consult.
+      const requestedRounds = ctx.payload.maxRounds
+      const maxRounds =
+        requestedRounds != null
+          ? Math.max(1, Math.min(PANEL_MAX_ROUNDS_CEILING, Math.floor(requestedRounds)))
+          : undefined
       const verdict = yield* consultPanel(
         {
           question:
@@ -484,7 +498,7 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
           codeRefs: ctx.payload.codeRefs ? [...ctx.payload.codeRefs] : [],
           parentSessionID: sessionID,
           ...(ctx.payload.lenses ? { lenses: [...ctx.payload.lenses] } : {}),
-          ...(ctx.payload.maxRounds != null ? { maxRounds: ctx.payload.maxRounds } : {}),
+          ...(maxRounds != null ? { maxRounds } : {}),
           ...(ctx.payload.policy ? { policy: ctx.payload.policy } : {}),
         },
         { runTurn },
