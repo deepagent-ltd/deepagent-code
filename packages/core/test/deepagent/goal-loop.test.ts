@@ -4,7 +4,14 @@ import { tmpdir } from "node:os"
 import path from "node:path"
 import { Effect } from "effect"
 import { DocumentStore } from "../../src/deepagent/document-store"
-import { createPlanDoc, planScope, type PlanDoc, type PlanStep } from "../../src/deepagent/plan-controller"
+import {
+  createPlanDoc,
+  planScope,
+  buildPlanFromInput,
+  type PlanDoc,
+  type PlanStep,
+  type PlanInput,
+} from "../../src/deepagent/plan-controller"
 import {
   makeGoalLoop,
   evaluateCriteria,
@@ -629,5 +636,136 @@ describe("V3.9 §D — process restart recovery (§D.6 可恢复)", () => {
     const after = await Effect.runPromise(loop2.status(handle))
     expect(after.ledger.ticks).toBe(3)
     expect(after.ledger.tokens).toBe(12)
+  })
+})
+
+describe("V4.1 §S2 — goal plan hot-edit (applyPlanEdit)", () => {
+  // A user plan edit expressed as the loose PlanInput the route/handler forwards.
+  const edit = (steps: { title: string; step_id?: string; status?: string }[], goal = "reach the goal"): PlanInput => ({
+    goal,
+    steps,
+  })
+
+  test("upserts the edited plan to the durable doc (version+1) so the next tick sees the revision", async () => {
+    const clock = new FakeClock()
+    const planDocId = putPlan([step("a", "pending")])
+    const v0 = store.get(planDocId)!.version
+    const loop = makeGoalLoop(deps({}, clock))
+    const handle = await Effect.runPromise(loop.start(spec(planDocId)))
+
+    await Effect.runPromise(loop.applyPlanEdit(handle, edit([{ title: "revised step", status: "pending" }])))
+
+    const doc = store.get(planDocId)!
+    expect(doc.version).toBeGreaterThan(v0)
+    const revised = JSON.parse(doc.body) as PlanDoc
+    expect(revised.steps.map((s) => s.title)).toEqual(["revised step"])
+    // Human-sourced provenance distinguishes a user edit from the model's plan-tool writes.
+    expect(doc.provenance.source).toBe("human")
+  })
+
+  test("preserves step ids + accumulated evidence across the rewrite (buildPlanFromInput reconciliation)", async () => {
+    const clock = new FakeClock()
+    // Seed a plan whose step "a" already carries evidence (as the executor's mirror-back would leave it).
+    const seeded = createPlanDoc(SESSION, "reach the goal", [{ ...step("a", "active"), evidence: ["tests pass"] }])
+    const planDocId = store.upsert({
+      type: "plan",
+      scope: planScope(SESSION),
+      description: `plan ${SESSION}`,
+      idSlug: `plan-${SESSION}`,
+      body: JSON.stringify(seeded),
+      provenance: { source: "model", run_ref: planScope(SESSION) },
+    }).id
+    const loop = makeGoalLoop(deps({}, clock))
+    const handle = await Effect.runPromise(loop.start(spec(planDocId)))
+
+    // The user re-titles the SAME step (same id) — evidence must survive (it is runtime-owned, never
+    // taken from the loose input).
+    await Effect.runPromise(loop.applyPlanEdit(handle, edit([{ step_id: "a", title: "renamed", status: "active" }])))
+
+    const revised = JSON.parse(store.get(planDocId)!.body) as PlanDoc
+    expect(revised.steps[0].step_id).toBe("a")
+    expect(revised.steps[0].title).toBe("renamed")
+    expect(revised.steps[0].evidence).toEqual(["tests pass"])
+  })
+
+  test("re-baselines stall tracking: re-opening a done step (done→pending) does NOT read as a regression stall", async () => {
+    const clock = new FakeClock()
+    // Executor bumps the version each tick (dedup never fires) but never resolves the step or records
+    // evidence — no forward progress. plan_complete stays UNMET (a pending step remains), so the loop
+    // accumulates stall ticks rather than completing.
+    const executor: StepExecutor = ({ planDocId }) =>
+      Effect.sync(() => {
+        updatePlan(planDocId, (p) => ({ ...p, goal: `${p.goal}.` }))
+        return { tokensUsed: 1 }
+      })
+    const planDocId = putPlan([step("a", "pending")])
+    const loop = makeGoalLoop(deps({ executor }, clock))
+    const handle = await Effect.runPromise(loop.start(spec(planDocId, { stallThreshold: 5 })))
+
+    // Drive it near the stall threshold with a plan that has no forward movement.
+    await Effect.runPromise(loop.tick(handle))
+    await Effect.runPromise(loop.tick(handle))
+    const beforeEdit = await Effect.runPromise(loop.status(handle))
+    expect(beforeEdit.stallCount).toBe(2)
+
+    // User re-opens the step (done→pending) + adds a new one. The re-baseline resets stallCount to 0.
+    await Effect.runPromise(
+      loop.applyPlanEdit(handle, edit([{ step_id: "a", title: "a", status: "pending" }, { title: "b", status: "pending" }])),
+    )
+    const afterEdit = await Effect.runPromise(loop.status(handle))
+    expect(afterEdit.stallCount).toBe(0)
+
+    // The tick immediately after the edit runs (lastProcessedVersion was nulled) and does not
+    // immediately stall — the revision got a fresh runway.
+    const outcome = await Effect.runPromise(loop.tick(handle))
+    expect(outcome).toBe("continue")
+  })
+
+  test("no-op on an unknown/unstarted goal (never throws, never creates a doc)", async () => {
+    const clock = new FakeClock()
+    const loop = makeGoalLoop(deps({}, clock))
+    const handle = { goalId: "nope", planDocId: "no-doc", sessionId: SESSION }
+    await Effect.runPromise(loop.applyPlanEdit(handle, edit([{ title: "x" }])))
+    expect(store.get("no-doc")).toBeNull()
+  })
+
+  test("no-op once the goal is terminal (a stopped goal cannot be re-planned)", async () => {
+    const clock = new FakeClock()
+    const planDocId = putPlan([step("a", "pending")])
+    const loop = makeGoalLoop(deps({}, clock))
+    const handle = await Effect.runPromise(loop.start(spec(planDocId)))
+    await Effect.runPromise(loop.stop(handle))
+    const vAfterStop = store.get(planDocId)!.version
+
+    await Effect.runPromise(loop.applyPlanEdit(handle, edit([{ title: "revised" }])))
+
+    // Terminal → the edit is ignored; the durable doc is untouched.
+    expect(store.get(planDocId)!.version).toBe(vAfterStop)
+    const status = await Effect.runPromise(loop.status(handle))
+    expect(status.phase).toBe("stopped")
+  })
+
+  test("a repeated identical edit is a harmless no-op write (INV-4, no version bump)", async () => {
+    const clock = new FakeClock()
+    // Seed a doc ALREADY human-authored, so the first edit below can no-op (provenance is in the
+    // fingerprint: a model→human authorship change bumps the version even on identical body — that is
+    // correct, so we start from human provenance to isolate the body no-op).
+    const seeded = createPlanDoc(SESSION, "reach the goal", [step("a", "pending")])
+    const planDocId = store.upsert({
+      type: "plan",
+      scope: planScope(SESSION),
+      description: `plan ${SESSION}`,
+      idSlug: `plan-${SESSION}`,
+      body: JSON.stringify(seeded),
+      provenance: { source: "human", run_ref: planScope(SESSION) },
+    }).id
+    const loop = makeGoalLoop(deps({}, clock))
+    const handle = await Effect.runPromise(loop.start(spec(planDocId)))
+    const v0 = store.get(planDocId)!.version
+
+    // An edit that reconciles to the exact same body + same (human) provenance ⇒ INV-4 no-op.
+    await Effect.runPromise(loop.applyPlanEdit(handle, edit([{ step_id: "a", title: "a", status: "pending" }])))
+
+    expect(store.get(planDocId)!.version).toBe(v0)
   })
 })

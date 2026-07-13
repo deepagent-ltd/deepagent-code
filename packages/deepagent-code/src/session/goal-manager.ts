@@ -4,7 +4,7 @@ import fs from "node:fs"
 import { Global } from "@deepagent-code/core/global"
 import { AgentGateway } from "@deepagent-code/core/agent-gateway"
 import { DocumentStore } from "@deepagent-code/core/deepagent/document-store"
-import { createPlanDoc, type PlanDoc } from "@deepagent-code/core/deepagent/plan-controller"
+import { createPlanDoc, type PlanDoc, type PlanInput } from "@deepagent-code/core/deepagent/plan-controller"
 import { parseGoalPlanFile, GOAL_PLAN_FILE, type ParsedGoalPlan } from "@deepagent-code/core/deepagent/goal-plan-file"
 import type { GoalStatus, GoalLimits, CompletionCriterion } from "@deepagent-code/core/deepagent/goal-loop"
 import { InvalidGoalError } from "@deepagent-code/core/deepagent/goal-loop"
@@ -92,6 +92,14 @@ type GoalControl = {
   ledger: { ticks: number; tokens: number; cost: number; wallclockMs: number }
   stallCount: number
   gaps: readonly string[]
+  // §S2 — a pending USER PLAN EDIT (the raw PlanInput) enqueued by editPlan, drained+applied by the
+  // driver between ticks (pendingPlanEdit port) and cleared after apply (markPlanEditConsumed). Held here
+  // on the control channel — NOT written to the durable doc from the HTTP fiber — because the running
+  // driver holds its own DocumentStore handle (in-memory map) that would not see a separate handle's
+  // write; the driver applies it via its own handle (buildPlanFromInput reconciles ids/evidence against
+  // the live doc there). null ⇒ no pending edit. A newer edit replaces an un-applied older one
+  // (last-write-wins: the user's latest revision is what takes effect).
+  pendingPlanEdit: PlanInput | null
 }
 
 export type StartGoalInput = {
@@ -148,6 +156,15 @@ export interface Interface {
     readonly text: string
     readonly id?: string
   }) => Effect.Effect<boolean>
+  /**
+   * V4.1 §S2 — apply a USER plan edit to a RUNNING or PAUSED goal. The revised plan (a PlanInput) is
+   * enqueued on the control channel and applied by the driver BETWEEN ticks (via its own store handle,
+   * reconciled through buildPlanFromInput so step ids + evidence survive), which also RE-BASELINES the
+   * Controller's stall/version tracking so the revision gets a fresh runway. Returns false when no goal
+   * is running for the session OR the goal reached a terminal phase (no orphan edit). Takes effect on the
+   * next tick (or on resume, if paused).
+   */
+  readonly editPlan: (input: { readonly sessionID: string; readonly plan: PlanInput }) => Effect.Effect<boolean>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@deepagent-code/GoalManager") {}
@@ -219,6 +236,22 @@ export const layer = Layer.effect(
 
     // Per-session control state, observed by the running driver's ports.
     const controls = yield* SynchronizedRef.make(new Map<string, GoalControl>())
+
+    // §S2 — the plan-edit driver ports over the control channel. pendingPlanEdit reads the control's
+    // staged edit (non-consuming); markPlanEditConsumed clears it AFTER the driver applied+re-baselined
+    // (consume-once). Kept on the control channel (not the durable doc) because the running driver holds
+    // its own DocumentStore handle — see the GoalControl.pendingPlanEdit doc + loop.applyPlanEdit.
+    const goalPlanEditPort = (sessionID: string): Pick<GoalDriverPorts, "pendingPlanEdit" | "markPlanEditConsumed"> => ({
+      pendingPlanEdit: () => getControl(sessionID).pipe(Effect.map((c) => c?.pendingPlanEdit ?? null)),
+      markPlanEditConsumed: () =>
+        SynchronizedRef.update(controls, (m) => {
+          const c = m.get(sessionID)
+          if (!c || c.pendingPlanEdit == null) return m
+          const next = new Map(m)
+          next.set(sessionID, { ...c, pendingPlanEdit: null })
+          return next
+        }),
+    })
 
     const getControl = (sessionID: string) =>
       SynchronizedRef.get(controls).pipe(Effect.map((m) => m.get(sessionID) ?? null))
@@ -498,12 +531,15 @@ export const layer = Layer.effect(
         // The driver ports read the per-session control flags (pause/stop) live, plus the §S1.3 goal-steer
         // channel (drained between ticks and threaded into the next step prompt via the shared relay).
         const steerPort = goalSteerPort(sessionID)
+        const planEditPort = goalPlanEditPort(sessionID)
         const ports: GoalDriverPorts = {
           onStatus: (status) => publishStatus(sessionID, status),
           shouldPause: () => getControl(sessionID).pipe(Effect.map((c) => c?.paused ?? false)),
           shouldStop: () => getControl(sessionID).pipe(Effect.map((c) => c?.stopped ?? false)),
           pendingSteer: steerPort.pendingSteer,
           markSteerConsumed: steerPort.markSteerConsumed,
+          pendingPlanEdit: planEditPort.pendingPlanEdit,
+          markPlanEditConsumed: planEditPort.markPlanEditConsumed,
         }
 
         // Start the driver as a resident background task. onFinish clears the pointer / control state.
@@ -529,6 +565,7 @@ export const layer = Layer.effect(
           ledger: { ticks: 0, tokens: 0, cost: 0, wallclockMs: 0 },
           stallCount: 0,
           gaps: [],
+          pendingPlanEdit: null,
         })
 
         return { goalId: handle.goalId, planDocId: handle.planDocId, phase: "running", running: true }
@@ -579,12 +616,15 @@ export const layer = Layer.effect(
         if (deps == null) return false
         const handle = { goalId: c.goalId, planDocId: c.planDocId, sessionId: sessionID }
         const steerPort = goalSteerPort(sessionID)
+        const planEditPort = goalPlanEditPort(sessionID)
         const ports: GoalDriverPorts = {
           onStatus: (status) => publishStatus(sessionID, status),
           shouldPause: () => getControl(sessionID).pipe(Effect.map((ctrl) => ctrl?.paused ?? false)),
           shouldStop: () => getControl(sessionID).pipe(Effect.map((ctrl) => ctrl?.stopped ?? false)),
           pendingSteer: steerPort.pendingSteer,
           markSteerConsumed: steerPort.markSteerConsumed,
+          pendingPlanEdit: planEditPort.pendingPlanEdit,
+          markPlanEditConsumed: planEditPort.markPlanEditConsumed,
         }
         const job = yield* background.start({
           type: "goal-loop",
@@ -681,7 +721,35 @@ export const layer = Layer.effect(
         return true
       })
 
-    return Service.of({ start, pause, resume, stop, status, startable, steerGoal })
+    // §S2 — apply a USER plan edit to a running/paused goal. Like steerGoal, this does NOT touch the
+    // durable doc directly (the running driver holds its own DocumentStore handle that would not see an
+    // HTTP-fiber write). It ENQUEUES the revised plan onto the control channel; the driver drains it
+    // between ticks and applies it via its own handle (loop.applyPlanEdit → upsert + re-baseline). Refuses
+    // when no goal is running OR the goal reached a terminal phase (same orphan guard as steerGoal). The
+    // revised plan is normalized through buildPlanFromInput, which PRESERVES step ids + evidence across the
+    // rewrite (accumulated proof survives a re-status/reorder). Last-write-wins: a newer edit replaces an
+    // un-applied older one on the control slot.
+    const editPlan: Interface["editPlan"] = (input) =>
+      Effect.gen(function* () {
+        const c = yield* getControl(input.sessionID)
+        if (!c || c.stopped) return false
+        const ptr = AgentGateway.DeepAgentSessionState.getActiveGoal(input.sessionID)
+        if (ptr && isTerminalGoalPhase(ptr.phase)) return false
+        // Enqueue the RAW PlanInput on the control channel. The driver applies it between ticks via
+        // loop.applyPlanEdit, which reconciles it (buildPlanFromInput, preserving ids/evidence) against
+        // the live doc using the driver's own store handle — not from this HTTP fiber (whose separate
+        // handle would not see the running driver's in-memory doc). Last-write-wins on the slot.
+        yield* SynchronizedRef.update(controls, (m) => {
+          const ctrl = m.get(input.sessionID)
+          if (!ctrl) return m
+          const next = new Map(m)
+          next.set(input.sessionID, { ...ctrl, pendingPlanEdit: input.plan })
+          return next
+        })
+        return true
+      })
+
+    return Service.of({ start, pause, resume, stop, status, startable, steerGoal, editPlan })
   }),
 )
 
