@@ -31,6 +31,16 @@ export interface ConditionSpec {
   // project workspaces. Omitted/false ⇒ the historical behavior: count only within the schedule's own
   // workspace. Fail-safe: an existing condition row (no flag) is unchanged.
   readonly crossWorkspace?: boolean
+  // §C3.2 / P4.5b 按 repo 分组 — when true, the tick PARTITIONS the recent trigger events by their
+  // `payload.repo` discriminator and evaluates the threshold PER REPO, firing ONE templated event per
+  // repo that independently meets it — with `repo` stamped into the fired event's payload (and its
+  // workspaceID scoped to that repo's failing workspace). This makes the "3× CI failure → repair"
+  // trigger PER REPO: a repair is scoped to the repo that actually failed 3×, not a global counter that
+  // conflates independent repos (the P1.6-review defect). Composes with `crossWorkspace`: crossWorkspace
+  // spans the count across the per-project workspaces CI failures land in, then groupByRepo partitions
+  // that cross-tenant stream by repo. Trigger events with no string `payload.repo` are ignored (they
+  // can't be repo-scoped). Omitted/false ⇒ the historical single-counter behavior (unchanged).
+  readonly groupByRepo?: boolean
 }
 
 export type ScheduleKind = "delay" | "periodic" | "condition"
