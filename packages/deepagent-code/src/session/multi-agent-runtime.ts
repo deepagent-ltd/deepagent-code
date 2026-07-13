@@ -135,9 +135,10 @@ export const layerWith = (options: LayerOptions) =>
       // §E2 LLM token budget — a per-agent fixed-window token accumulator (agentID → {windowStart, used}).
       // A subtask is admitted only if the agent is not ALREADY over its declared maxTokensPerHour; after a
       // turn we DEBIT the runner's reported tokensUsed. In-memory + process-local (mirrors the bus's
-      // publishLimiter): a single runtime instance owns it. NOTE: the production event turn runner reports
-      // tokensUsed:0 today (usage isn't threaded through it), so this budget only bites for runners that
-      // DO report usage — the tracker + enforcement are real; the event-path usage plumbing is deferred.
+      // publishLimiter): a single runtime instance owns it. P4.1 — the production event turn runner now
+      // threads the REAL per-turn token total (input+output+reasoning) from the prompt result, so this
+      // budget is LIVE: an agent over maxTokensPerHour genuinely defers. (A stub runner that reports 0 is
+      // still a harmless no-op debit — the tracker + enforcement are real either way.)
       const tokenUsage = new Map<string, { windowStart: number; used: number }>()
       const tokensUsedThisHour = (agentID: string, at: number): number => {
         const bucket = tokenUsage.get(agentID)
@@ -488,9 +489,9 @@ export const layerWith = (options: LayerOptions) =>
               ),
             )
             // §E2 — DEBIT the tokens this turn actually consumed against the agent's per-hour budget, so
-            // the NEXT subtask this pass (and future events within the window) see the running total. A
-            // runner that reports 0 (the current event turn runner) is a no-op debit — enforcement is real
-            // but only bites once usage is threaded through.
+            // the NEXT subtask this pass (and future events within the window) see the running total. P4.1 —
+            // the event turn runner now reports the real total, so this debit is live (a stub runner that
+            // reports 0 is simply a no-op debit).
             debitTokens(agent.id, result.tokensUsed, now())
 
             if (result.ok) {
