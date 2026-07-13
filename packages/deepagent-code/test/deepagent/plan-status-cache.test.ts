@@ -195,6 +195,79 @@ describe("plan-status prompt-cache fix", () => {
   })
 })
 
+// V4.1 §S3.1 — the goal plan HOT-EDIT (§S2) cache contract. A user revising a running goal's plan
+// (loop.applyPlanEdit writes the durable doc; the next tick's seedChildPlan mirrors it into the worker's
+// plan-state that renderPlanStatus reads) changes ONLY the trailing volatile plan-status message. The
+// cached prefix (system + real history) must stay byte-identical across the edit — the plan revision is
+// exactly the kind of per-turn churn that would bust the cache if it leaked onto a history anchor.
+// steer's tail-anchoring is locked separately in session/steer.test.ts ("steer only adds a tail history
+// message: system prefix byte-identical"); here we lock the PLAN-EDIT side of the same red-line.
+describe("V4.1 §S3.1 — goal plan hot-edit stays tail-anchored (cache red-line)", () => {
+  // Apply a user plan revision the way the goal bridge surfaces it to the prompt on the next tick: the
+  // reconciled PlanDoc is set into the session's plan-state (getPlan/setPlan), which is renderPlanStatus's
+  // source of truth. Mirrors buildPlanFromInput → setPlan, the seedChildPlan path in goal-loop-wiring.
+  const applyEdit = (sessionID: string, revised: Parameters<typeof AgentGateway.DeepAgentPlanController.buildPlanFromInput>[1]) => {
+    const prior = AgentGateway.DeepAgentSessionState.getPlan(sessionID)
+    const plan = AgentGateway.DeepAgentPlanController.buildPlanFromInput(sessionID, revised, prior as never)
+    AgentGateway.DeepAgentSessionState.setPlan(sessionID, plan)
+  }
+
+  test("a plan edit moves the tail plan-status but leaves the cached prefix byte-identical", async () => {
+    AgentGateway.configure({ enabled: true, agentMode: "high" })
+    const sessionID = `ses_planedit_prefix_${crypto.randomUUID()}`
+    const history = [
+      { role: "user", content: "drive the goal" },
+      { role: "assistant", content: "ticking" },
+      { role: "tool", content: [{ type: "tool-result", toolCallId: "t1", toolName: "edit", output: { type: "text", value: "ok" } }] },
+    ] as any[]
+
+    // Before the edit: a 3-step plan, first done.
+    seedPlan(sessionID, 1, 3, 2)
+    const before = await prepare(sessionID, history)
+    expect(tail(before)).toContain("Current plan (1/3 done)")
+
+    // User hot-edits: re-open step 1 (done→pending), rename it, and drop a step — the exact structural
+    // churn a running-goal edit produces. Reflected in the tail via the plan-state render path.
+    applyEdit(sessionID, {
+      goal: "ship the feature",
+      steps: [
+        { step_id: "step_1", title: "reworked step", status: "pending" },
+        { step_id: "step_2", title: "Step 2", status: "pending" },
+      ],
+    })
+    const after = await prepare(sessionID, history)
+
+    // The tail DID reflect the revision (proving the edit surfaces, not vanishes).
+    expect(tail(after)).toContain("Current plan (0/2 done)")
+    expect(tail(after)).toContain("reworked step")
+    // ...while the ENTIRE cached prefix (system + real history, everything before the volatile tail) is
+    // byte-identical across the edit — the cache breakpoint is preserved.
+    const prefixBefore = before.messages.slice(0, -1)
+    const prefixAfter = after.messages.slice(0, -1)
+    expect(JSON.stringify(prefixAfter)).toBe(JSON.stringify(prefixBefore))
+    // Still exactly one trailing volatile message (no second tail introduced that would shift slice(-2)).
+    expect(after.messages.length).toBe(before.messages.length)
+    // The revision NEVER leaked into a prior user-history anchor.
+    expect(userHistory(after)).not.toContain("reworked step")
+    AgentGateway.configure({ enabled: false, agentMode: "high" })
+  })
+
+  test("recordCacheHitOutcome stays healthy (no false break signal) across a plan edit", () => {
+    AgentGateway.configure({ enabled: true, agentMode: "high" })
+    const sessionID = `ses_planedit_cachehit_${crypto.randomUUID()}`
+    seedPlan(sessionID, 1, 3, 1)
+    // Turn 1 baselines: cache write, no reads (first turn is always a write).
+    expect(() => LLMRequestPrep.recordCacheHitOutcome(sessionID, { input: 500, cache: { read: 0, write: 1180 } })).not.toThrow()
+
+    // A hot-edit keeps the cached prefix unchanged (§S3.1 above proves it), so the next turn serves a
+    // strong cache read. The monitor must NOT read this as a break (that signature is a COLLAPSED ratio
+    // on a NON-shrinking prompt); a healthy read is the happy path and never warns/throws.
+    applyEdit(sessionID, { goal: "ship the feature", steps: [{ step_id: "step_1", title: "reworked", status: "pending" }] })
+    expect(() => LLMRequestPrep.recordCacheHitOutcome(sessionID, { input: 12, cache: { read: 1180, write: 0 } })).not.toThrow()
+    AgentGateway.configure({ enabled: false, agentMode: "high" })
+  })
+})
+
 // Response-side cache-hit monitor: a pure, diagnostic-only function (never throws). We can't assert on
 // the log line directly, but we can assert it runs without error across the scenarios it guards, and
 // that the first call of a session only baselines (no comparison). This locks in the "never blocks a
