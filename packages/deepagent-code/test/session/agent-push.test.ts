@@ -4,6 +4,11 @@ import { AgentPush } from "../../src/session/agent-push"
 import { AgentPushPolicy } from "@deepagent-code/core/deepagent/agent-push-policy"
 import { WorkspaceConfig } from "@deepagent-code/core/deepagent/workspace-config"
 import { Database } from "@deepagent-code/core/database/database"
+import { WorkspaceTable } from "@deepagent-code/core/control-plane/workspace.sql"
+import { ProjectTable, ProjectDirectoryTable } from "@deepagent-code/core/project/sql"
+import { ProjectV2 } from "@deepagent-code/core/project"
+import { WorkspaceV2 } from "@deepagent-code/core/workspace"
+import { AbsolutePath } from "@deepagent-code/core/schema"
 import { IMRepository, IMRepositoryLive } from "@deepagent-code/core/im/repository"
 import { RuntimeFlags } from "../../src/effect/runtime-flags"
 import { testEffect } from "../lib/effect"
@@ -300,6 +305,140 @@ describe("AgentPush.push §E3 file-path ACL", () => {
       const page = yield* repo.listMessages({ groupID: group.id, limit: 10 })
       expect(page.messages[0].content).toContain("«path removed»")
       expect(page.messages[0].content).not.toContain("/etc/shadow")
+    }),
+  )
+})
+
+// §E3 (P4.2) — a genuine multi-tenant "wrk_" workspaceID now resolves to its REAL project root(s) via the
+// DB-backed workspace→directory mechanism (workspace.directory ∪ project worktree/sandboxes ∪
+// project_directory). Before P4.2 a "wrk_"-id resolved to NO roots ⇒ the path-ACL leg was OFF for every
+// genuine workspace; these tests prove the leg is now LIVE for wrk_ ids AND still fail-safe when a
+// workspace can't be resolved. NO factOverrides.allowedPathRoots — resolution must come from the DB.
+describe("AgentPush.push §E3 wrk_ path-ACL (real project-root resolution)", () => {
+  const it = testEffect(makeConfigLayer())
+
+  // seed a project (+ optional extra directory for multi-repo) and a workspace row rooting the given id.
+  const seedWorkspace = (input: {
+    workspaceID: string
+    projectID: string
+    worktree: string
+    workspaceDir?: string
+    extraDirectory?: string
+  }) =>
+    Effect.gen(function* () {
+      const { db } = yield* Database.Service
+      yield* db
+        .insert(ProjectTable)
+        .values({
+          id: ProjectV2.ID.make(input.projectID),
+          worktree: AbsolutePath.make(input.worktree),
+          time_created: 1,
+          time_updated: 1,
+          sandboxes: [],
+        })
+        .run()
+      if (input.extraDirectory)
+        yield* db
+          .insert(ProjectDirectoryTable)
+          .values({ project_id: ProjectV2.ID.make(input.projectID), directory: input.extraDirectory, type: "root" })
+          .run()
+      yield* db
+        .insert(WorkspaceTable)
+        .values({
+          id: WorkspaceV2.ID.make(input.workspaceID),
+          type: "local",
+          name: "ws",
+          directory: input.workspaceDir ?? null,
+          project_id: ProjectV2.ID.make(input.projectID),
+        })
+        .run()
+    })
+
+  it.effect("resolvable wrk_ workspace: path OUTSIDE its real root is stripped, path INSIDE is kept", () =>
+    Effect.gen(function* () {
+      setNow(1_000_000)
+      yield* seedWorkspace({ workspaceID: "wrk_resolvable", projectID: "prj_r", worktree: "/repo/main" })
+      const push = yield* AgentPush.Service
+      const repo = yield* IMRepository
+      const group = yield* repo.createGroup({
+        workspaceID: "wrk_resolvable",
+        type: "project",
+        name: "g",
+        createdBy: "user_1",
+      })
+      yield* repo.addMember({ groupID: group.id, memberID: "agt_1", memberType: "agent", role: "agent" })
+      // NO factOverrides.allowedPathRoots — the DB resolver must supply /repo/main.
+      const result = yield* push.push(
+        req(group.id, {
+          workspaceID: "wrk_resolvable",
+          content: "leaked /etc/passwd but ok /repo/main/src/app.ts",
+          idempotencyKey: "wrk-acl-1",
+        }),
+      )
+      expect(result.decision).toBe("deliver")
+      const page = yield* repo.listMessages({ groupID: group.id, limit: 10 })
+      const content = page.messages[0].content
+      expect(content).toContain("«path removed»") // /etc/passwd is outside /repo/main → stripped
+      expect(content).not.toContain("/etc/passwd")
+      expect(content).toContain("/repo/main/src/app.ts") // inside the real root → preserved
+    }),
+  )
+
+  it.effect("multi-repo wrk_ workspace: a path inside EITHER project directory survives", () =>
+    Effect.gen(function* () {
+      setNow(1_000_000)
+      yield* seedWorkspace({
+        workspaceID: "wrk_multirepo",
+        projectID: "prj_m",
+        worktree: "/repo/api",
+        extraDirectory: "/repo/web",
+      })
+      const push = yield* AgentPush.Service
+      const repo = yield* IMRepository
+      const group = yield* repo.createGroup({
+        workspaceID: "wrk_multirepo",
+        type: "project",
+        name: "g",
+        createdBy: "user_1",
+      })
+      yield* repo.addMember({ groupID: group.id, memberID: "agt_1", memberType: "agent", role: "agent" })
+      const result = yield* push.push(
+        req(group.id, {
+          workspaceID: "wrk_multirepo",
+          content: "api /repo/api/main.ts web /repo/web/index.ts out /etc/hosts",
+          idempotencyKey: "wrk-acl-multi",
+        }),
+      )
+      expect(result.decision).toBe("deliver")
+      const content = (yield* repo.listMessages({ groupID: group.id, limit: 10 })).messages[0].content
+      expect(content).toContain("/repo/api/main.ts") // first repo root → kept
+      expect(content).toContain("/repo/web/index.ts") // second repo root (project_directory) → kept
+      expect(content).toContain("«path removed»") // /etc/hosts outside both → stripped
+      expect(content).not.toContain("/etc/hosts")
+    }),
+  )
+
+  it.effect("UNRESOLVABLE wrk_ workspace (no row): ACL leg OFF — push still proceeds, paths untouched", () =>
+    Effect.gen(function* () {
+      setNow(1_000_000)
+      // no seedWorkspace: "wrk_missing" has no workspace row ⇒ resolver returns undefined ⇒ leg off.
+      const push = yield* AgentPush.Service
+      const repo = yield* IMRepository
+      const group = yield* repo.createGroup({
+        workspaceID: "wrk_missing",
+        type: "project",
+        name: "g",
+        createdBy: "user_1",
+      })
+      yield* repo.addMember({ groupID: group.id, memberID: "agt_1", memberType: "agent", role: "agent" })
+      const result = yield* push.push(
+        req(group.id, { workspaceID: "wrk_missing", content: "see /etc/passwd", idempotencyKey: "wrk-acl-none" }),
+      )
+      // fail-safe: the push still delivers (ACL leg simply off), and with no roots nothing is stripped.
+      expect(result.decision).toBe("deliver")
+      const content = (yield* repo.listMessages({ groupID: group.id, limit: 10 })).messages[0].content
+      expect(content).toContain("/etc/passwd") // leg off ⇒ path NOT stripped (no fabricated root)
+      expect(content).not.toContain("«path removed»")
     }),
   )
 })
