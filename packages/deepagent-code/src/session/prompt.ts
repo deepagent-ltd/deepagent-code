@@ -59,6 +59,7 @@ import { InstanceState } from "@/effect/instance-state"
 import { TaskTool, type TaskPromptOps } from "@/tool/task"
 import { SessionRunState } from "./run-state"
 import { SessionSteer } from "./steer"
+import { writeGovernanceAudit } from "./goal-governance-audit"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { archiveSessionOnCompletion } from "@/wiki/session-archive"
 import { EventV2Bridge } from "@/event-v2-bridge"
@@ -2310,7 +2311,7 @@ export const layer = Layer.effect(
     //      job in CHILD sessions and does NOT busy the parent runner, so we must key off the active-goal
     //      pointer, NOT isBusy (an earlier version gated goal_steer behind isBusy and it was unreachable in
     //      the pure-goal case). The goal driver drains "goal_steer" between ticks (§S1.3); paused → drained
-    //      on resume; terminal phases never buffer (checked here AND steerGoal-side).
+    //      on resume; terminal phases never buffer (the goalActive check below excludes them).
     //   3. else, the parent runner is BUSY (a live chat turn) → "steer", absorbed at that turn's next
     //      boundary (§S1.1). Race: if the turn ends between the isBusy read and the admit, the steer is
     //      durable but the still-running loop won't see it — so we start a PURE-DRAIN turn (drainFirst)
@@ -2328,11 +2329,17 @@ export const layer = Layer.effect(
       const goal = AgentGateway.DeepAgentSessionState.getActiveGoal(input.sessionID)
       const goalActive = goal != null && !TERMINAL_GOAL_PHASES.has(goal.phase)
       if (goalActive) {
+        const text = promptInputText(input.parts)
         const admitted = yield* steer({
           sessionID: input.sessionID,
-          text: promptInputText(input.parts),
+          text,
           delivery: "goal_steer",
         })
+        // V4.1 governance audit — this is the REAL user goal-steer path (the ingress every busy-goal
+        // steer flows through). Record the human intervention into the goal's Document Graph alongside
+        // the per-tick worklog trail. Length only (not free-text) to keep the body bounded + PII-light;
+        // best-effort (never blocks the steer). goal!.goalId is safe here: goalActive ⇒ goal != null.
+        writeGovernanceAudit(input.sessionID, goal!.goalId, "steer", { textChars: text.trim().length })
         return { kind: "steer" as const, delivery: "goal_steer" as const, admitted }
       }
       // (3) No active goal → a parent chat turn in flight becomes a chat steer.
