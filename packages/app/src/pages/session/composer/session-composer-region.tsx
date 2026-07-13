@@ -2,6 +2,7 @@ import { Show, createEffect, createMemo, onCleanup } from "solid-js"
 import { createStore } from "solid-js/store"
 import { useNavigate } from "@solidjs/router"
 import { useSpring } from "@deepagent-code/ui/motion-spring"
+import { Icon } from "@deepagent-code/ui/icon"
 import { useLayout } from "@/context/layout"
 import { PromptInput } from "@/components/prompt-input"
 import { useLanguage } from "@/context/language"
@@ -58,6 +59,10 @@ export function SessionComposerRegion(props: {
   const view = layout.view(route.sessionKey)
 
   const handoffPrompt = createMemo(() => getSessionHandoff(route.sessionKey())?.prompt)
+  // V4.1 §S1 — when the session is WORKING, a message the user sends is absorbed as a steer for the
+  // running turn (the server buffers it at the next turn boundary, never a BusyError). Surface a subtle
+  // hint so the user knows the send won't be dropped or start a competing turn.
+  const working = createMemo(() => (route.params.id ? sync.data.session_working(route.params.id) : false))
   const info = createMemo(() => (route.params.id ? sync.session.get(route.params.id) : undefined))
   const parentID = createMemo(() => info()?.parentID)
   const child = createMemo(() => !!parentID())
@@ -253,6 +258,15 @@ export function SessionComposerRegion(props: {
               <Show when={route.params.id}>
                 <GoalStatusBar sessionID={route.params.id!} />
                 <GoalStartButton sessionID={route.params.id!} />
+              </Show>
+              <Show when={working()}>
+                <div
+                  data-component="steer-hint"
+                  class="flex items-center gap-1.5 px-2.5 py-1 text-11-regular text-text-muted"
+                >
+                  <Icon name="speech-bubble" class="size-3.5 shrink-0" />
+                  <span class="truncate">{language.t("composer.steer.hint")}</span>
+                </div>
               </Show>
               <Show when={props.followup?.items.length}>
                 <SessionFollowupDock

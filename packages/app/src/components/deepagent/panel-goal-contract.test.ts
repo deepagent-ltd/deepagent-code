@@ -8,6 +8,7 @@ import {
   resumeGoal,
   stopGoal,
   goalStatus,
+  editPlanGoal,
   fetchCapabilities,
 } from "./panel-goal.api"
 
@@ -110,6 +111,29 @@ describe("Goal Loop route contract (§D)", () => {
   test("goalStatus tolerates a null goal", async () => {
     const calls: Recorded[] = []
     expect(await goalStatus(client(calls, { goal: null }), "ses_1")).toBeNull()
+  })
+
+  test("editPlanGoal POSTs /deepagent/goal/edit-plan with { sessionID, plan } and returns ok", async () => {
+    const calls: Recorded[] = []
+    const plan = {
+      goal: "ship it",
+      steps: [
+        { step_id: "step_1", title: "revised", status: "pending" },
+        { title: "new step" },
+      ],
+    }
+    const ok = await editPlanGoal(client(calls, { ok: true }), "ses_1", plan)
+    expect(calls).toEqual([
+      { method: "POST", url: "/deepagent/goal/edit-plan", body: { sessionID: "ses_1", plan }, headers: JSON_HEADERS },
+    ])
+    expect(ok).toBe(true)
+  })
+
+  test("editPlanGoal returns false when the server refuses (no goal / terminal)", async () => {
+    const calls: Recorded[] = []
+    expect(await editPlanGoal(client(calls, { ok: false }), "ses_1", { goal: "g", steps: [] })).toBe(false)
+    // ...and tolerates a missing body (older server) as false.
+    expect(await editPlanGoal(client(calls, {}), "ses_1", { goal: "g", steps: [] })).toBe(false)
   })
 })
 

@@ -165,6 +165,42 @@ export const pauseGoal = (client: PanelGoalClient, sessionID: string) => goalMut
 export const resumeGoal = (client: PanelGoalClient, sessionID: string) => goalMutate(client, "resume", sessionID)
 export const stopGoal = (client: PanelGoalClient, sessionID: string) => goalMutate(client, "stop", sessionID)
 
+/** A plan step as the edit-plan payload carries it (loose input: step_id/status optional, mirroring the
+ * backend PlanInput — evidence is runtime-owned and never sent from the client). */
+export type GoalPlanStepInput = {
+  step_id?: string
+  title: string
+  status?: string
+  acceptance?: string | null
+  assigned_agent?: string | null
+  note?: string | null
+}
+export type GoalPlanInput = {
+  goal: string
+  steps: GoalPlanStepInput[]
+  assumptions?: string[]
+  active_step_id?: string | null
+}
+
+/**
+ * V4.1 §S2 — hot-edit the plan of a RUNNING or PAUSED goal. POSTs the revised plan on the goal control
+ * channel; the driver applies it between ticks (durable-doc upsert + stall re-baseline). Returns false
+ * when no goal is running or it reached a terminal phase (the server's orphan guard).
+ */
+export const editPlanGoal = async (
+  client: PanelGoalClient,
+  sessionID: string,
+  plan: GoalPlanInput,
+): Promise<boolean> => {
+  const response = await client.client.request<{ ok: boolean }>({
+    method: "POST",
+    url: "/deepagent/goal/edit-plan",
+    body: { sessionID, plan },
+    headers: JSON_HEADERS,
+  })
+  return response.data?.ok ?? false
+}
+
 export const goalStatus = async (
   client: PanelGoalClient,
   sessionID: string,

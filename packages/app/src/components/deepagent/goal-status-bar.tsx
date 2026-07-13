@@ -1,10 +1,12 @@
 import { Show, createMemo, createSignal } from "solid-js"
 import { Button } from "@deepagent-code/ui/button"
 import { Icon } from "@deepagent-code/ui/icon"
+import { useDialog } from "@deepagent-code/ui/context/dialog"
 import { useServerSync } from "@/context/server-sync"
 import { useSDK } from "@/context/sdk"
 import { useLanguage } from "@/context/language"
 import { pauseGoal, resumeGoal, stopGoal, type PanelGoalClient } from "./panel-goal.api"
+import { GoalPlanEditDialog } from "./goal-plan-edit-dialog"
 
 /**
  * V3.9 §D — the Goal status bar. Renders above the composer when a goal is running for this session
@@ -38,6 +40,7 @@ export function GoalStatusBar(props: { sessionID: string }) {
   const serverSync = useServerSync()
   const sdk = useSDK()
   const language = useLanguage()
+  const dialog = useDialog()
   const [busy, setBusy] = createSignal(false)
 
   const goal = createMemo(() => (props.sessionID ? serverSync.data.session_goal[props.sessionID] : undefined))
@@ -64,6 +67,17 @@ export function GoalStatusBar(props: { sessionID: string }) {
   const onResume = withBusy(() => resumeGoal(client(), props.sessionID))
   const onStop = withBusy(() => stopGoal(client(), props.sessionID))
   const onDismiss = () => serverSync.goal.set(props.sessionID, undefined)
+  // §S2 — open the plan hot-edit dialog, pre-filled from the live session_plan (the same plan this bar
+  // reads). Only offered for a non-terminal goal (the backend refuses an edit once terminal anyway).
+  const onEditPlan = () =>
+    dialog.show(() => (
+      <GoalPlanEditDialog
+        sessionID={props.sessionID}
+        plan={serverSync.data.session_plan[props.sessionID]}
+        client={client()}
+        onClose={() => dialog.close()}
+      />
+    ))
 
   const tokens = () => goal()?.ledger.tokens ?? 0
   const ticks = () => goal()?.ledger.ticks ?? 0
@@ -89,6 +103,18 @@ export function GoalStatusBar(props: { sessionID: string }) {
             <span class="text-text-muted truncate italic">— {g().gaps[0]}</span>
           </Show>
           <div class="flex items-center gap-1 ml-auto shrink-0">
+            <Show when={!terminal()}>
+              <Button
+                variant="ghost"
+                size="small"
+                class="h-7 px-2"
+                disabled={busy()}
+                onClick={onEditPlan}
+                aria-label={language.t("composer.goal.editPlan")}
+              >
+                <Icon name="edit" class="size-4" />
+              </Button>
+            </Show>
             <Show when={running()}>
               <Button variant="ghost" size="small" class="h-7 px-2" disabled={busy()} onClick={onPause}>
                 {language.t("composer.goal.pause")}
