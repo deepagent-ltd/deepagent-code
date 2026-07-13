@@ -62,35 +62,6 @@ export const conflicts = (a: Claim, b: Claim): boolean => {
   return false
 }
 
-// Group claims into conflict sets (connected components over the `conflicts` relation). Each returned
-// group is a set of mutually-transitively-conflicting claims the runtime must serialize/arbitrate;
-// singletons (no conflict) can proceed in parallel.
-export const conflictGroups = (claims: ReadonlyArray<Claim>): ReadonlyArray<ReadonlyArray<Claim>> => {
-  const parent = new Map<string, string>()
-  const find = (x: string): string => {
-    let root = x
-    while (parent.get(root) !== root && parent.get(root) !== undefined) root = parent.get(root)!
-    return root
-  }
-  for (const c of claims) parent.set(c.taskID, c.taskID)
-  for (let i = 0; i < claims.length; i++) {
-    for (let j = i + 1; j < claims.length; j++) {
-      if (conflicts(claims[i], claims[j])) {
-        const ri = find(claims[i].taskID)
-        const rj = find(claims[j].taskID)
-        if (ri !== rj) parent.set(ri, rj)
-      }
-    }
-  }
-  const byRoot = new Map<string, Claim[]>()
-  for (const c of claims) {
-    const root = find(c.taskID)
-    const arr = byRoot.get(root) ?? []
-    arr.push(c)
-    byRoot.set(root, arr)
-  }
-  return Array.from(byRoot.values())
-}
 
 // §C3 ordering comparator: negative ⇒ `a` wins (sorts first). Applies the four keys in order:
 // priority desc → diffSize asc → origin(human first) → stable by taskID.
