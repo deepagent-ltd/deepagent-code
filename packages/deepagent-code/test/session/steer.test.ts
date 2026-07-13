@@ -54,8 +54,17 @@ import { TestLLMServer } from "../lib/llm-server"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { ProviderV2 } from "@deepagent-code/core/provider"
 import { ModelV2 } from "@deepagent-code/core/model"
+import { AgentGateway } from "@deepagent-code/core/agent-gateway"
+import { mkdtempSync } from "node:fs"
+import { tmpdir } from "node:os"
+import path from "node:path"
 
 void Log.init({ print: false })
+
+// §S1.2 promptOrSteer routes on the DeepAgent active-goal pointer, which lives in the in-memory
+// session-state map. Point it at a throwaway dir so getOrCreate/setActiveGoal work in-process (no real
+// $HOME writes) and each test seeds its own session pointer.
+AgentGateway.DeepAgentSessionState.configure(mkdtempSync(path.join(tmpdir(), "steer-state-")))
 
 const ref = {
   providerID: ProviderV2.ID.make("test"),
@@ -669,4 +678,188 @@ off.instance(
       expect(yield* steer.hasPending(chat.id)).toBe(true)
     }),
   15_000,
+)
+
+// ── §S1.2 FIX A: promptOrSteer routes on the ACTIVE-GOAL pointer FIRST, independent of isBusy ────────
+//
+// The seam (prompt.ts promptOrSteer): a NON-terminal active goal is checked BEFORE the isBusy branch and
+// forces delivery="goal_steer". The prior bug gated goal_steer behind isBusy, so a background goal (which
+// does NOT busy the parent runner) left the session idle → the goal_steer branch was unreachable and the
+// steer wrongly ran as a fresh normal turn. These tests lock the goal-first ordering at the exact seam.
+
+const seedGoal = (sessionID: string, phase: AgentGateway.DeepAgentSessionState.GoalPointerPhase) => {
+  AgentGateway.DeepAgentSessionState.getOrCreate(sessionID, "high")
+  AgentGateway.DeepAgentSessionState.setActiveGoal(sessionID, {
+    goalId: "g_" + sessionID,
+    planDocId: "plan_" + sessionID,
+    phase: "running",
+    startedAt: new Date(0).toISOString(),
+  })
+  // setActiveGoalPhase patches ONLY the phase of the just-set pointer (drives running↔paused↔terminal).
+  AgentGateway.DeepAgentSessionState.setActiveGoalPhase(sessionID, phase)
+}
+
+on.instance(
+  "promptOrSteer: a NON-terminal active goal routes to goal_steer independent of isBusy (idle session)",
+  () =>
+    Effect.gen(function* () {
+      yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const steer = yield* SessionSteer.Service
+      const sessions = yield* Session.Service
+      const state = yield* SessionRunState.Service
+      const chat = yield* sessions.create({
+        title: "promptOrSteer goal",
+        permission: [{ permission: "*", pattern: "*", action: "allow" }],
+      })
+
+      // A background goal runs in child sessions; the PARENT session is IDLE (not busy). This is exactly
+      // the case the old isBusy gate missed — assert idle so the routing cannot be attributed to busy.
+      seedGoal(chat.id, "running")
+      expect(yield* state.isBusy(chat.id)).toBe(false)
+
+      const result = yield* prompt.promptOrSteer({
+        sessionID: chat.id,
+        agent: "build",
+        model: ref,
+        parts: [{ type: "text", text: "GOAL-GUIDANCE" }],
+      })
+
+      // Routed to the goal channel — NOT a turn, NOT a plain "steer".
+      expect(result.kind).toBe("steer")
+      if (result.kind !== "steer") throw new Error("expected steer")
+      expect(result.delivery).toBe("goal_steer")
+
+      // Admitted to the goal_steer channel; the default "steer" channel is untouched (disjoint rows).
+      const goalRows = yield* steer.pending(chat.id, "goal_steer")
+      expect(goalRows.map((d) => d.prompt.text)).toEqual(["GOAL-GUIDANCE"])
+      expect(goalRows.some((d) => d.id === result.admitted.id)).toBe(true)
+      expect(yield* steer.pending(chat.id, "steer")).toHaveLength(0)
+      expect(yield* steer.hasPending(chat.id, "steer")).toBe(false)
+    }),
+  15_000,
+)
+
+on.instance(
+  "promptOrSteer: no goal + idle runs a normal turn; a TERMINAL goal phase does NOT route to goal_steer",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const steer = yield* SessionSteer.Service
+      const sessions = yield* Session.Service
+
+      // (B) No active goal + idle → a normal turn (the pre-steering path).
+      const plain = yield* sessions.create({
+        title: "promptOrSteer idle",
+        permission: [{ permission: "*", pattern: "*", action: "allow" }],
+      })
+      yield* llm.text("idle-answer")
+      const turn = yield* prompt.promptOrSteer({
+        sessionID: plain.id,
+        agent: "build",
+        model: ref,
+        parts: [{ type: "text", text: "hello" }],
+      })
+      expect(turn.kind).toBe("turn")
+      // Nothing was buffered on either channel.
+      expect(yield* steer.hasPending(plain.id, "goal_steer")).toBe(false)
+      expect(yield* steer.hasPending(plain.id, "steer")).toBe(false)
+
+      // (C) A TERMINAL goal phase ("done") is NOT active → it must NOT route to goal_steer. Idle + no live
+      // turn ⇒ it falls through to a normal turn, proving the goal-active predicate excludes terminal phases.
+      const settled = yield* sessions.create({
+        title: "promptOrSteer terminal goal",
+        permission: [{ permission: "*", pattern: "*", action: "allow" }],
+      })
+      seedGoal(settled.id, "done")
+      yield* llm.text("post-goal-answer")
+      const afterDone = yield* prompt.promptOrSteer({
+        sessionID: settled.id,
+        agent: "build",
+        model: ref,
+        parts: [{ type: "text", text: "after done" }],
+      })
+      expect(afterDone.kind).toBe("turn")
+      // Crucially: NOT admitted to goal_steer (the terminal goal did not capture it).
+      expect(yield* steer.hasPending(settled.id, "goal_steer")).toBe(false)
+    }),
+  15_000,
+)
+
+// ── §S1.2 FIX B: a pure-drain turn (drainFirst) absorbs a raced steer on STEP 0 ──────────────────────
+//
+// The seam (runLoop): `if (step > 0 || drainFirst) yield* drainSteers(...)`. A pure-drain turn — started
+// by promptOrSteer's race guard when a steer is admitted right as a turn ends — has no initiating message,
+// so it MUST drain on step 0; otherwise the immediate top-of-loop finish check breaks before the steer is
+// ever materialized. The prior bug skipped the step-0 drain, stranding the raced steer. We drive the loop
+// directly with drainFirst true vs false over an idle-but-primed session to lock exactly this branch.
+
+on.instance(
+  "drainFirst:true — a pure-drain turn absorbs a steer on step 0; drainFirst:false does NOT",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const steer = yield* SessionSteer.Service
+      const sessions = yield* Session.Service
+      const state = yield* SessionRunState.Service
+
+      // Prime a session with a completed turn so history has a user+assistant pair and the session is idle
+      // (the exact post-turn state in which promptOrSteer's race guard forks a pure-drain turn).
+      const drained = yield* sessions.create({
+        title: "drainFirst true",
+        permission: [{ permission: "*", pattern: "*", action: "allow" }],
+      })
+      yield* llm.text("first-answer")
+      yield* prompt.prompt({ sessionID: drained.id, agent: "build", model: ref, parts: [{ type: "text", text: "initial" }] })
+      expect(yield* llm.calls).toBe(1)
+      expect(yield* state.isBusy(drained.id)).toBe(false)
+
+      // A steer lands in the isBusy→admit race window (buffered while the session is idle).
+      const admitted = yield* steer.admit({
+        id: SessionMessage.ID.create(),
+        sessionID: drained.id,
+        prompt: mkPrompt("STEP0-STEER"),
+      })
+
+      // The pure-drain turn: drainFirst true ⇒ drain on step 0, materialize the steer as a tail user
+      // message, then sample the model on it.
+      yield* llm.text("drain-answer")
+      yield* prompt.loop({ sessionID: drained.id, drainFirst: true })
+
+      // A SECOND model call happened — the drain turn re-ran the loop after absorbing the steer.
+      expect(yield* llm.calls).toBe(2)
+      // The steer is materialized as an ordinary tail user message and the buffer row is consumed.
+      const msgs = yield* sessions.messages({ sessionID: drained.id })
+      const steered = msgs.find((m) => m.info.role === "user" && m.info.id === MessageID.make(admitted.id))
+      expect(steered?.parts.some((p) => p.type === "text" && p.text === "STEP0-STEER")).toBe(true)
+      expect(yield* steer.hasPending(drained.id)).toBe(false)
+      // The model actually sampled the steered text (it rode into the drain turn's input, at the tail).
+      const inputs = yield* llm.inputs
+      const last = inputs.at(-1) as { messages: { role: string; content: unknown }[] }
+      expect(JSON.stringify(last.messages.filter((m) => m.role === "user"))).toContain("STEP0-STEER")
+
+      // CONTRAST — drainFirst:false (the default) leaves step 0 un-drained: the fresh loop's finish check
+      // breaks immediately, so a step-0 steer is NOT absorbed. This proves the flag is what enables the
+      // step-0 drain and that normal turns are unchanged (S1.1's step>0 drain semantics intact).
+      const normal = yield* sessions.create({
+        title: "drainFirst false",
+        permission: [{ permission: "*", pattern: "*", action: "allow" }],
+      })
+      yield* llm.text("first-answer-2")
+      yield* prompt.prompt({ sessionID: normal.id, agent: "build", model: ref, parts: [{ type: "text", text: "initial" }] })
+      const before = yield* llm.calls
+      yield* steer.admit({ id: SessionMessage.ID.create(), sessionID: normal.id, prompt: mkPrompt("NOT-DRAINED") })
+
+      // Default loop() → drainFirst=false. Step 0 does NOT drain; the loop breaks at the finish check.
+      yield* prompt.loop({ sessionID: normal.id })
+
+      // No new model call, the steer stays pending, and it is NOT in history.
+      expect(yield* llm.calls).toBe(before)
+      expect(yield* steer.hasPending(normal.id)).toBe(true)
+      const normalMsgs = yield* sessions.messages({ sessionID: normal.id })
+      expect(normalMsgs.some((m) => m.parts.some((p) => p.type === "text" && p.text === "NOT-DRAINED"))).toBe(false)
+    }),
+  20_000,
 )
