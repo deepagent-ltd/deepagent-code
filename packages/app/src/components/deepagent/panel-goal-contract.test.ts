@@ -140,9 +140,11 @@ describe("Goal Loop route contract (§D)", () => {
 describe("capabilities gating", () => {
   test("fetchCapabilities GETs /global/capabilities and reads the feature flags", async () => {
     const calls: Recorded[] = []
-    const caps = await fetchCapabilities(client(calls, { features: { expertPanel: true, goalLoop: false, wiki: true } }))
+    const caps = await fetchCapabilities(
+      client(calls, { features: { expertPanel: true, goalLoop: false, wiki: true, v4MultiAgentRuntime: true } }),
+    )
     expect(calls).toEqual([{ method: "GET", url: "/global/capabilities" }])
-    expect(caps).toEqual({ expertPanel: true, goalLoop: false, wiki: true })
+    expect(caps).toEqual({ expertPanel: true, goalLoop: false, wiki: true, v4MultiAgentRuntime: true })
   })
 
   test("fetchCapabilities treats a server that omits the fields as disabled", async () => {
@@ -151,8 +153,14 @@ describe("capabilities gating", () => {
       expertPanel: false,
       goalLoop: false,
       wiki: false,
+      v4MultiAgentRuntime: false,
     })
     // and a server with no features object at all
-    expect(await fetchCapabilities(client(calls, {}))).toEqual({ expertPanel: false, goalLoop: false, wiki: false })
+    expect(await fetchCapabilities(client(calls, {}))).toEqual({
+      expertPanel: false,
+      goalLoop: false,
+      wiki: false,
+      v4MultiAgentRuntime: false,
+    })
   })
 })
