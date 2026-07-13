@@ -1,6 +1,7 @@
 export * as EventRouter from "./event-router"
 
 import { DeepAgentEvent } from "./deepagent-event"
+import { LMNEvents } from "./lmn-events"
 import type { AgentDescriptor } from "../im/mention-parser"
 
 // V4.0 §A4 — the Event Router POLICY. This is a PURE, deterministic decision function: given an event,
@@ -33,7 +34,20 @@ export const PRIORITY_RANK: Record<DeepAgentEvent.EventPriority, number> = {
 // Why an event was dropped rather than dispatched — surfaced as an `event_dropped` observability signal.
 // `coordination`: the event is a §C4 inter-agent coordination/derivative signal (agent.task.* /
 // agent.handoff.*) — it exists for observation/oversight/trace, NOT to trigger a fresh agent dispatch.
-export type DropReason = "flag_disabled" | "no_match" | "deduped" | "backpressure" | "coordination"
+// `operational`: the event is a §A3 OPERATIONAL alert (dlq.alert) — a dead-letter notification for
+// Oversight/SupervisorNotifier, NOT agent work; it must never be agent-dispatched (nor spin a
+// no_capable_agent nack loop if an operator happens to register a broad-glob trigger agent).
+export type DropReason = "flag_disabled" | "no_match" | "deduped" | "backpressure" | "coordination" | "operational"
+
+// §A3 OPERATIONAL SIGNAL family — events that are workspace-operator notifications (dead-letter alerts),
+// NOT agent-dispatch triggers. lmn-events.ts is explicit that dlq.alert is "a SYSTEM observation signal —
+// NOT an agent-dispatch trigger". Like the §C4 coordination guard this severs the AGENT-DISPATCH path only:
+// the event is still persisted + delivered to the trace/oversight/notify consumers (separate subscribers).
+// Guarding it in the PURE router (rather than relying on "no agent happens to subscribe") makes it robust
+// to an operator registering a broad-glob (`*` / `dlq.*`) trigger agent — such an agent can never grab an
+// operational alert, and the alert is terminal-acked (never an infinite no_capable_agent nack loop).
+export const OPERATIONAL_EVENT_TYPES: ReadonlySet<string> = new Set([LMNEvents.DLQ_ALERT])
+export const isOperationalEvent = (eventType: string): boolean => OPERATIONAL_EVENT_TYPES.has(eventType)
 
 // §C4 RE-ENTRANCY GUARD — the coordination/derivative event-type family. The Multi-Agent Runtime emits
 // these BACK onto the bus (agent.task.started/blocked/completed/needs_human, agent.handoff.*) as a
@@ -101,7 +115,8 @@ const matchingAgents = (
 
 /**
  * §A4 — the pure routing decision. Order of checks (fail-closed first):
- *   0. coordination   → `coordination` if the event is a §C4 derivative signal (never re-dispatches).
+ *   0a. coordination  → `coordination` if the event is a §C4 derivative signal (never re-dispatches).
+ *   0b. operational   → `operational` if the event is a §A3 dlq.alert (an operator notice, never agent work).
  *   1. flag gate      → `flag_disabled` if the event path's flag is off.
  *   2. type match     → `no_match` if no permitted agent subscribes to this type.
  *   3. dedup (低优)   → `deduped` if a low-priority same-type event already exists in the window.
@@ -119,6 +134,11 @@ export const route = (input: RouteInput): RouteDecision => {
   // regardless of which flag governs the event path. The event is still persisted + observable by the
   // trace/oversight consumers; only the agent-dispatch path is severed here.
   if (isCoordinationEvent(input.event.type)) return { type: "dropped", reason: "coordination" }
+
+  // §A3 OPERATIONAL guard (also before agent matching + the flag gate): a dlq.alert is an operator
+  // notification, never agent work. Severs the agent-dispatch path so a broad-glob trigger agent can't
+  // grab it; the alert is still observable + delivered to the SupervisorNotifier/Oversight consumers.
+  if (isOperationalEvent(input.event.type)) return { type: "dropped", reason: "operational" }
 
   if (!input.flagEnabled) return { type: "dropped", reason: "flag_disabled" }
 
