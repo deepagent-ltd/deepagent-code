@@ -688,6 +688,29 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
       return toWikiPageResult(page)
     })
 
+    // §B.6 read side (T2.2): render a completed session's execution archive. The run-scoped trajectory
+    // stores are only unioned into the graph when the sessionID is passed to openWikiService (see
+    // openWikiGraph), so the archive is empty unless we thread sessionID through — which is exactly the
+    // gap that made renderExecutionArchive unreachable before this route existed.
+    const wikiExecutionArchive = Effect.fn("DeepAgentHttpApi.wikiExecutionArchive")(function* (ctx) {
+      yield* requireWiki()
+      const workspacePath = yield* workspaceDir()
+      const service = openWikiService({ workspacePath, sessionID: ctx.query.sessionID })
+      const archive = yield* service.renderExecutionArchive({ sessionId: ctx.query.sessionID })
+      return {
+        sessionId: archive.sessionId,
+        title: archive.title,
+        markdown: archive.markdown,
+        entries: archive.entries.map((e) => ({
+          docId: e.docId,
+          type: e.type,
+          title: e.title,
+          body: e.body,
+          version: e.version,
+        })),
+      }
+    })
+
     return handlers
       .handle("reviews", reviews)
       .handle("promote", promote)
@@ -717,5 +740,6 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
       .handle("wikiPage", wikiPage)
       .handle("wikiSearch", wikiSearch)
       .handle("wikiEdit", wikiEdit)
+      .handle("wikiExecutionArchive", wikiExecutionArchive)
   }),
 )
