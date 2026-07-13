@@ -238,6 +238,47 @@ describe("EventDispatcher condition tick", () => {
       expect(fired.length).toBe(1)
     }),
   )
+
+  // §C3.2 / P4.5b — a groupByRepo condition evaluates the threshold PER REPO (payload.repo) and fires ONE
+  // templated event per repo that meets it, stamping repo=<repo> + scoping the event to that repo's
+  // workspace. 3× for repo A + 1× for repo B in one window → ONE fire for A, none for B.
+  it.effect("§C3.2/P4.5b groupByRepo: per-repo threshold — fires only for the repo that hit 3×", () =>
+    Effect.gen(function* () {
+      resetRecorder()
+      setNow(0)
+      const scheduler = yield* Scheduler.Service
+      const bus = yield* DeepAgentEventBus.Service
+      const dispatcher = yield* EventDispatcher.Service
+      yield* scheduler.scheduleCondition({
+        workspaceID: "wrk_1",
+        condition: { eventType: "ci.failure", threshold: 3, windowMs: 60_000, crossWorkspace: true, groupByRepo: true },
+        firstCheckAt: 0,
+        recheckEveryMs: 1_000,
+        eventTemplate: {
+          type: "git.push",
+          source: "schedule",
+          workspaceID: "wrk_1",
+          priority: "high", // high → never deferred by quiet hours, so the per-repo fire is deterministic
+          payload: { fixIt: true },
+        },
+      })
+      // repo A fails 3× (across two project workspaces); repo B fails once. Also one failure with NO repo
+      // discriminator — it must be ignored (can't be repo-scoped).
+      yield* bus.publish(input({ idempotencyKey: "a1", workspaceID: "wrk_pa", payload: { repo: "A" } }))
+      yield* bus.publish(input({ idempotencyKey: "a2", workspaceID: "wrk_pa", payload: { repo: "A" } }))
+      yield* bus.publish(input({ idempotencyKey: "a3", workspaceID: "wrk_pb", payload: { repo: "A" } }))
+      yield* bus.publish(input({ idempotencyKey: "b1", workspaceID: "wrk_pb", payload: { repo: "B" } }))
+      yield* bus.publish(input({ idempotencyKey: "n1", workspaceID: "wrk_pb", payload: {} }))
+      expect(yield* dispatcher.tick(0)).toBe(1) // the schedule fired (≥1 repo repair)
+
+      const fired = yield* bus.recentByType({ type: "git.push", windowMs: Number.MAX_SAFE_INTEGER, now: 0 })
+      const repos = fired.map((e) => (e.payload as { repo?: string })?.repo)
+      expect(fired.length).toBe(1)
+      expect(repos).toEqual(["A"]) // repo B (1×) and the repo-less event did NOT fire
+      // the fired event is scoped to A's (latest) workspace, not the schedule's own wrk_1.
+      expect(fired[0]?.workspaceID).toBe("wrk_pb")
+    }),
+  )
 })
 
 // §E4/§N (P3.13) — quiet-hours filter for the scheduler tick. The dispatcher resolves the workspace's
@@ -392,6 +433,97 @@ describe("EventDispatcher §C4 coordination re-entrancy guard", () => {
       const decision = yield* dispatcher.handle(event)
       expect(decision.type).toBe("dispatch")
       expect(recorded.map((r) => r.event.type)).toEqual(["ci.failure"]) // guard is scoped, not blanket
+    }),
+  )
+})
+
+// P4.6a — CONSUMER CONFIRMATION for publish-only events.
+//   (a) schedule.scan / ci.repair.requested are non-im/non-push → gated by v4MultiAgentRuntime, so once
+//       P4.3 registers MaintenanceAgent (trigger schedule.scan) / CodeFixAgent (ci.repair.requested), the
+//       router MATCHES + dispatches them. Here a fake agent stands in for P4.3's descriptor to prove the
+//       router routes these types to the runtime (they are NOT dropped by an allowlist before reaching it).
+//   (b) dlq.alert is a §A3 OPERATIONAL alert — it must be terminal-acked, NEVER agent-dispatched, and never
+//       spin a no_capable_agent nack loop, even when a broad-glob (`*`) trigger agent is registered.
+const scanAgent: AgentDescriptor = {
+  id: "agt_maint",
+  name: "MaintenanceAgent",
+  displayName: "Maintenance Agent",
+  visible: true,
+  triggers: [{ event: "schedule.scan" }, { event: "ci.repair.requested" }],
+}
+const scanAgentList = Layer.succeed(AgentListProviderService, {
+  listAgents: () => Effect.succeed([scanAgent]),
+  findByTrigger: () => Effect.succeed([scanAgent]),
+  findByCapability: () => Effect.succeed([]),
+})
+
+describe("EventDispatcher P4.6a consumer routing", () => {
+  const it = testEffect(makeLayer(undefined, scanAgentList))
+
+  it.effect("schedule.scan is routed to the runtime (reaches dispatch, not dropped by an allowlist)", () =>
+    Effect.gen(function* () {
+      resetRecorder()
+      setNow(3_000)
+      const bus = yield* DeepAgentEventBus.Service
+      const dispatcher = yield* EventDispatcher.Service
+      const event = yield* bus.publish({
+        type: "schedule.scan",
+        source: "schedule",
+        workspaceID: "wrk_1",
+        idempotencyKey: "scan-1",
+        payload: {},
+      })
+      const decision = yield* dispatcher.handle(event)
+      expect(decision.type).toBe("dispatch")
+      expect(recorded.map((r) => r.targets.map((t) => t.id))).toEqual([["agt_maint"]])
+    }),
+  )
+
+  it.effect("ci.repair.requested is routed to the runtime (reaches dispatch, not dropped)", () =>
+    Effect.gen(function* () {
+      resetRecorder()
+      setNow(3_500)
+      const bus = yield* DeepAgentEventBus.Service
+      const dispatcher = yield* EventDispatcher.Service
+      const event = yield* bus.publish({
+        type: "ci.repair.requested",
+        source: "system",
+        workspaceID: "wrk_1",
+        idempotencyKey: "repair-1",
+        payload: {},
+      })
+      const decision = yield* dispatcher.handle(event)
+      expect(decision.type).toBe("dispatch")
+      expect(recorded.length).toBe(1)
+    }),
+  )
+})
+
+// §A3 dlq.alert is OPERATIONAL — even with a WILDCARD agent registered it must NOT dispatch, and must be
+// terminal-acked (no infinite no_capable_agent nack loop). Uses the wildcard registry to prove the pure
+// router's operational guard is robust to an operator registering a broad-glob trigger agent.
+describe("EventDispatcher P4.6a dlq.alert operational guard", () => {
+  const it = testEffect(makeLayer(undefined, wildcardAgentList))
+
+  it.effect("dlq.alert is terminal-acked, never dispatched to an agent (no nack loop)", () =>
+    Effect.gen(function* () {
+      resetRecorder()
+      setNow(4_000)
+      const bus = yield* DeepAgentEventBus.Service
+      const dispatcher = yield* EventDispatcher.Service
+      const alert = yield* bus.publish({
+        type: "dlq.alert",
+        source: "system",
+        workspaceID: "wrk_1",
+        priority: "high",
+        idempotencyKey: "dlq-1",
+        payload: { deadEventID: "dae_x", reason: "exhausted", attempts: 3 },
+      })
+      const decision = yield* dispatcher.handle(alert)
+      expect(decision).toEqual({ type: "dropped", reason: "operational" })
+      expect(recorded.length).toBe(0) // never handed to the DispatchPort
+      // terminal-acked → not retry-eligible → no no_capable_agent nack loop.
+      expect((yield* bus.dueRetries(Number.MAX_SAFE_INTEGER)).length).toBe(0)
     }),
   )
 })
