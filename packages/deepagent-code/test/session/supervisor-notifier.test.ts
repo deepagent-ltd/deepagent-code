@@ -155,6 +155,28 @@ describe("SupervisorNotifier (flag ON)", () => {
     }),
   )
 
+  it.effect("§A3 a dlq.alert (operational) IS notified to the operator, but is NOT an approval-queue type", () =>
+    Effect.gen(function* () {
+      setNow(1_000_000)
+      const groupID = yield* seedGroup()
+      const notifier = yield* SupervisorNotifier.Service
+      const repo = yield* IMRepository
+
+      const alert = yield* publishNeedsHuman({
+        type: LMNEvents.DLQ_ALERT,
+        idempotencyKey: "dlq-notify-1",
+        payload: { deadEventID: "dae_x", subscriptionGroup: "router", reason: "exhausted retries", attempts: 3 },
+      })
+      // dlq.alert is notified (operator should be told about a dead-letter) …
+      expect(yield* notifier.handle(alert)).toBe(1)
+      const page = yield* repo.listMessages({ groupID, limit: 10 })
+      expect(page.messages.length).toBe(1)
+      expect(page.messages[0].content).toContain("dead-letter")
+      // … but it is NOT an Approval-Queue candidate (operational notice, not a human-approval decision).
+      expect(LMNEvents.shouldQueueForApproval({ type: LMNEvents.DLQ_ALERT, payload: {} })).toBe(false)
+    }),
+  )
+
   it.effect("§A3 a notifiable event with a target group is acked (delivery discharged)", () =>
     Effect.gen(function* () {
       setNow(1_000_000)

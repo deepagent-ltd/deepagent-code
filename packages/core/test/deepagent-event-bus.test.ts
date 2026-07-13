@@ -206,6 +206,46 @@ describe("DeepAgentEventBus", () => {
     }),
   )
 
+  it.effect(
+    "§A4 event_dropped DISTINCT: re-shedding the SAME event ×3 records ONE drop row (counts distinct events, not attempts)",
+    () =>
+      Effect.gen(function* () {
+        const bus = yield* DeepAgentEventBus.Service
+        const { db } = yield* Database.Service
+        setNow(1_000)
+        const event = yield* bus.publish(input({ idempotencyKey: "reshed-1" }))
+        // the §A4 backpressure path calls recordDrop on EVERY shed pass: shed → nack → re-shed ×3.
+        yield* bus.recordDrop({ event, reason: "backpressure" })
+        yield* bus.recordDrop({ event, reason: "backpressure" })
+        yield* bus.recordDrop({ event, reason: "backpressure" })
+        const rows = yield* db
+          .select()
+          .from(DeepAgentEventDropTable)
+          .where(eq(DeepAgentEventDropTable.event_id, event.id))
+          .all()
+          .pipe(Effect.orDie)
+        // onConflictDoNothing on the UNIQUE event_id index → one distinct event == one row.
+        expect(rows.length).toBe(1)
+      }),
+  )
+
+  it.effect(
+    "§A4 event_dropped DISTINCT: two DIFFERENT events shed record TWO rows (event_dropped_total == 2)",
+    () =>
+      Effect.gen(function* () {
+        const bus = yield* DeepAgentEventBus.Service
+        const { db } = yield* Database.Service
+        setNow(2_000)
+        const a = yield* bus.publish(input({ idempotencyKey: "distinct-a" }))
+        const b = yield* bus.publish(input({ idempotencyKey: "distinct-b" }))
+        yield* bus.recordDrop({ event: a, reason: "backpressure" })
+        yield* bus.recordDrop({ event: a, reason: "backpressure" }) // a re-shed of a → no-op
+        yield* bus.recordDrop({ event: b, reason: "backpressure" })
+        const all = yield* db.select().from(DeepAgentEventDropTable).all().pipe(Effect.orDie)
+        expect(all.length).toBe(2)
+      }),
+  )
+
   it.effect("§A4 去重窗口: recentByType returns same-type events inside the window only", () =>
     Effect.gen(function* () {
       const bus = yield* DeepAgentEventBus.Service

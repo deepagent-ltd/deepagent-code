@@ -90,5 +90,11 @@ export const DeepAgentEventDropTable = sqliteTable(
   (table) => [
     // workspace-scoped, windowed aggregation for the §F1 event_dropped_total metric.
     index("deepagent_event_drop_workspace_created_idx").on(table.workspace_id, table.created_at),
+    // §A4 DISTINCT-event semantics: one logical event may be shed→nacked→re-shed multiple times on the
+    // backpressure retry path, but event_dropped_total must count DISTINCT events shed, not shed-ATTEMPTS.
+    // UNIQUE on event_id (alone) → at most one drop row per event ever → recordDrop is idempotent per event
+    // (onConflictDoNothing), so COUNT(*) == distinct events shed. Unique on event_id (not event_id+reason)
+    // is deliberate: a given event is shed for one reason (§A4 backpressure); the first drop is the signal.
+    uniqueIndex("deepagent_event_drop_event_id_idx").on(table.event_id),
   ],
 )
