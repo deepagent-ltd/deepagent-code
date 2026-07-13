@@ -89,6 +89,7 @@ import { webhookHandlers } from "./handlers/webhook"
 import { Observability as OversightObservability } from "@deepagent-code/core/deepagent/observability"
 import { ApprovalQueue } from "@deepagent-code/core/deepagent/approval-queue"
 import { HumanTakeover } from "@deepagent-code/core/deepagent/human-takeover"
+import { RollbackAudit } from "@deepagent-code/core/deepagent/rollback-audit"
 import { DeepAgentEventBus } from "@deepagent-code/core/deepagent/deepagent-event-bus"
 import { Scheduler } from "@deepagent-code/core/deepagent/scheduler"
 import { WorkspaceConfig } from "@deepagent-code/core/deepagent/workspace-config"
@@ -157,6 +158,10 @@ const oversightServicesLayer = Layer.mergeAll(
   ApprovalQueue.layer,
   // §D2/§F — the human-takeover recorder the Takeover endpoint calls + the human_takeover_total metric.
   HumanTakeover.layer,
+  // §D2/§F — the rollback audit recorder the Rollback endpoint calls + the rollback_total metric. The
+  // Rollback handler also uses Session + SessionRevert (the revert primitive), which are drawn from the
+  // shared instance runtime graph below (Session.defaultLayer / SessionRevert.defaultLayer).
+  RollbackAudit.layer,
 ).pipe(Layer.provide(Database.defaultLayer))
 // IM agent execution is driven by the deepagent-code session stack (Session +
 // SessionPrompt), NOT core SessionV2 (which binds a no-op execution layer and
