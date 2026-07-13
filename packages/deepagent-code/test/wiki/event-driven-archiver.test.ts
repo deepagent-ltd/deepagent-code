@@ -1,11 +1,36 @@
-import { describe, expect } from "bun:test"
+import { afterEach, describe, expect } from "bun:test"
+import { rmSync } from "node:fs"
+import path from "node:path"
 import { Effect, Layer, Stream } from "effect"
 import { EventDrivenArchiver } from "../../src/wiki/event-driven-archiver"
 import { DeepAgentEventBus } from "@deepagent-code/core/deepagent/deepagent-event-bus"
 import { DeepAgentEvent } from "@deepagent-code/core/deepagent/deepagent-event"
 import { LMNEvents } from "@deepagent-code/core/deepagent/lmn-events"
 import { Database } from "@deepagent-code/core/database/database"
+import { DocumentStore } from "@deepagent-code/core/deepagent/document-store"
+import { Global } from "@deepagent-code/core/global"
 import { testEffect } from "../lib/effect"
+
+// Seed a session's run-scoped context store (the SAME root archiveSessionOnCompletion reads) with a
+// trajectory doc, so a well-formed archive-trigger event produces a REAL archive (handle → true). This
+// is what disambiguates "passed the payload guard" from "guard-dropped" — both a drop and an empty
+// archive return false, but a produced archive returns true only when the guard let the event through.
+const seededSessions: string[] = []
+const seedSessionStore = (sessionID: string) => {
+  const root = path.join(Global.Path.agent.data, "state", "context", sessionID)
+  const store = new DocumentStore(root)
+  store.create({
+    type: "plan",
+    scope: `run:${sessionID}`,
+    body: "goal: ship it\nstep 1 done",
+    description: "plan",
+    provenance: { source: "runner", run_ref: `run:${sessionID}` },
+  })
+  seededSessions.push(root)
+}
+afterEach(() => {
+  for (const root of seededSessions.splice(0)) rmSync(root, { recursive: true, force: true })
+})
 
 // V4.0 §L — the event-driven archiver's ROUTING behavior (which events trigger archival, payload
 // validation, subscription filtering). The archival PROJECTION itself is covered by
@@ -93,6 +118,27 @@ describe("EventDrivenArchiver.handle (§L)", () => {
       // the archiver processes it without throwing (idempotent + best-effort).
       const handled = yield* archiver.handle(published)
       expect(typeof handled).toBe("boolean")
+    }),
+  )
+
+  it.effect("T2.4: a goal.completed carrying sessionID + workspacePath IS archived (not dropped at the guard)", () =>
+    Effect.gen(function* () {
+      setNow(1_000)
+      const archiver = yield* EventDrivenArchiver.Service
+      // Pre-fix the goal.completed producer emitted only { goalId, planDocId, phase, gaps } → the
+      // archiver's payload guard dropped EVERY completed goal (missing sessionID/workspacePath). Seed a
+      // real trajectory store for the session, then publish a goal.completed with the CORRECTED payload
+      // shape (goal-manager.emitGoalLifecycleEvent). handle() returns TRUE — an archive was produced —
+      // which is only reachable if the event cleared the field guard (a missing-field drop and an empty
+      // archive both return false, so `true` unambiguously proves the fix).
+      const sessionID = "sess-goal-archived"
+      seedSessionStore(sessionID)
+      const ev = yield* publish({
+        type: LMNEvents.GOAL_COMPLETED,
+        source: "system",
+        payload: { goalId: "g1", planDocId: "doc1", phase: "done", gaps: [], sessionID, workspacePath: "/tmp/nonexistent-ws" },
+      })
+      expect(yield* archiver.handle(ev)).toBe(true)
     }),
   )
 

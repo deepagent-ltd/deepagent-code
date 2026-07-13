@@ -459,7 +459,19 @@ export const layer = Layer.effect(
           correlationID: status.goalId,
           idempotencyKey,
           priority,
-          payload: { goalId: status.goalId, planDocId: status.planDocId, phase, gaps: status.gaps },
+          // T2.4 archive contract: goal.completed is an ARCHIVE_TRIGGER, and the EventDrivenArchiver
+          // discards any trigger whose payload lacks sessionID + workspacePath (see
+          // event-driven-archiver.ts). Carry both (workspacePath = the session directory, mirroring
+          // session-completed-publisher's `facts.directory`) so a completed goal is actually archived
+          // instead of being silently dropped at the archiver. Harmless on non-archive phases.
+          payload: {
+            goalId: status.goalId,
+            planDocId: status.planDocId,
+            phase,
+            gaps: status.gaps,
+            sessionID,
+            workspacePath: session?.directory,
+          },
         })
         if ("dropped" in outcome) {
           yield* Effect.logWarning("goal lifecycle event dropped by publish rate gate").pipe(
