@@ -20,6 +20,7 @@ import { LSP } from "../lsp/lsp"
 import { Provider } from "../provider/provider"
 import { SessionID } from "./schema"
 import { GoalEvent } from "./goal-event"
+import { PlanEvent } from "../tool/plan-write"
 import { SessionMessage } from "@deepagent-code/core/session/message"
 import { Prompt } from "@deepagent-code/core/session/prompt"
 import {
@@ -243,10 +244,17 @@ export const layer = Layer.effect(
     // its own DocumentStore handle — see the GoalControl.pendingPlanEdit doc + loop.applyPlanEdit.
     const goalPlanEditPort = (sessionID: string): Pick<GoalDriverPorts, "pendingPlanEdit" | "markPlanEditConsumed"> => ({
       pendingPlanEdit: () => getControl(sessionID).pipe(Effect.map((c) => c?.pendingPlanEdit ?? null)),
-      markPlanEditConsumed: () =>
+      // Consume-once with an IDENTITY GUARD: clear the slot ONLY if it still holds the SAME edit object the
+      // driver just applied. Without the guard, a newer edit E2 written by an HTTP fiber between the driver's
+      // pendingPlanEdit read (E1) and this clear would be silently wiped — the driver already applied E1 and
+      // won't re-read, so E2 is lost forever while editPlan told the user ok:true. Passing `applied` (the
+      // reference the driver read) and comparing by identity keeps E2 pending → drained next iteration.
+      markPlanEditConsumed: (applied) =>
         SynchronizedRef.update(controls, (m) => {
           const c = m.get(sessionID)
           if (!c || c.pendingPlanEdit == null) return m
+          // A newer edit replaced the one we applied → leave it pending (do NOT clobber the newer revision).
+          if (applied != null && c.pendingPlanEdit !== applied) return m
           const next = new Map(m)
           next.set(sessionID, { ...c, pendingPlanEdit: null })
           return next
@@ -296,12 +304,55 @@ export const layer = Layer.effect(
         })
         .pipe(Effect.ignore)
 
+    // §S2 — mirror the goal's plan doc INTO the parent session's live plan state + emit plan.updated, so
+    // the client's session_plan reflects the running goal's progress tick-by-tick. Without this the parent
+    // session_plan is frozen at goal-start (the worker's plan edits land on its CHILD session + the goal
+    // doc, never republished here), so the plan-edit dialog would pre-fill from STALE data and a save would
+    // regress live progress (statuses would be reset to whatever the frozen snapshot showed). Reading the
+    // goal doc — the single source of truth the grader uses — keeps the UI and the edit pre-fill honest.
+    // Best-effort: a read/publish failure must never break the tick.
+    const mirrorGoalPlanToSession = (sessionID: string, planDocId: string) =>
+      Effect.gen(function* () {
+        const store = new DocumentStore(goalStoreRoot(sessionID))
+        const doc = store.get(planDocId)
+        if (!doc) return
+        let plan: PlanDoc
+        try {
+          plan = JSON.parse(doc.body) as PlanDoc
+        } catch {
+          return
+        }
+        // Keep the parent session's in-memory plan-state live (the dialog pre-fills from this).
+        AgentGateway.DeepAgentSessionState.setPlan(sessionID, plan as never)
+        const { done, total } = AgentGateway.DeepAgentPlanController.planProgress(plan)
+        yield* events
+          .publish(PlanEvent.Updated, {
+            sessionID: SessionID.make(sessionID),
+            plan_id: plan.plan_id,
+            goal: plan.goal,
+            active_step_id: plan.active_step_id,
+            steps: plan.steps.map((s) => ({
+              step_id: s.step_id,
+              title: s.title,
+              status: s.status,
+              acceptance: s.acceptance ?? null,
+              assigned_agent: s.assigned_agent ?? null,
+              note: s.note ?? null,
+            })),
+            done,
+            total,
+          })
+          .pipe(Effect.ignore)
+      }).pipe(Effect.catchCause(() => Effect.void))
+
     // Publish a driver status → the goal.updated event, the session-state active-goal pointer, AND the
     // cached last-known status on the control (so control transitions can publish the real ledger).
     const publishStatus = (sessionID: string, status: GoalStatus) =>
       Effect.gen(function* () {
         const phase = status.phase as string
         AgentGateway.DeepAgentSessionState.setActiveGoalPhase(sessionID, phase as never)
+        // Keep the parent session_plan live with the goal's plan-doc progress (see helper doc).
+        yield* mirrorGoalPlanToSession(sessionID, status.planDocId)
         const ledger = {
           ticks: status.ledger.ticks,
           tokens: status.ledger.tokens,
@@ -474,6 +525,27 @@ export const layer = Layer.effect(
         // §S1.3 — ONE goal-steer relay per run, shared by the wiring (executor threads staged guidance
         // into the step prompt) and the driver (drains between ticks + stamps consumed after the tick).
         const steerRelay = GoalDriver.makeGoalSteerRelay()
+
+        // §S1.3 hygiene — the goal_steer buffer is scoped by (session_id, delivery) with NO goal_id column,
+        // and stop() does not drain pending rows. So a goal_steer admitted for a PRIOR goal on this session
+        // (e.g. one that landed right before the prior goal settled and was never threaded) would otherwise
+        // be read by THIS new goal's first between-tick drain — cross-goal contamination. Purge any leftover
+        // pending goal_steer rows at start so the new goal begins with a clean buffer. Best-effort: a failure
+        // here must not block starting the goal (the worst case is the pre-existing leak, not a new defect).
+        yield* steerBuffer
+          .pending(SessionID.make(sessionID), GoalDriver.GOAL_STEER_DELIVERY)
+          .pipe(
+            Effect.flatMap((stale) =>
+              stale.length === 0
+                ? Effect.void
+                : steerBuffer.markConsumed(
+                    SessionID.make(sessionID),
+                    stale.map((s) => s.id),
+                    GoalDriver.GOAL_STEER_DELIVERY,
+                  ),
+            ),
+            Effect.catchCause(() => Effect.void),
+          )
 
         const deps = yield* GoalLoopWiring.makeGoalLoopWiring({
           store,
@@ -710,15 +782,21 @@ export const layer = Layer.effect(
         const ptr = AgentGateway.DeepAgentSessionState.getActiveGoal(input.sessionID)
         if (ptr && isTerminalGoalPhase(ptr.phase)) return false
         const id = input.id ? SessionMessage.ID.make(input.id) : SessionMessage.ID.create()
-        yield* steerBuffer
+        // Surface an admit failure as false (per the interface contract "best-effort admit failures surface
+        // as false"): if the durable write is swallowed and we still returned true, the ingress would tell
+        // the user their guidance was accepted when it was dropped. A DB write failure ⇒ false so the caller
+        // can signal the steer was NOT absorbed.
+        return yield* steerBuffer
           .admit({
             id,
             sessionID: SessionID.make(input.sessionID),
             prompt: Prompt.fromUserMessage({ text }),
             delivery: GoalDriver.GOAL_STEER_DELIVERY,
           })
-          .pipe(Effect.catchCause(() => Effect.void))
-        return true
+          .pipe(
+            Effect.as(true),
+            Effect.catchCause(() => Effect.succeed(false)),
+          )
       })
 
     // §S2 — apply a USER plan edit to a running/paused goal. Like steerGoal, this does NOT touch the

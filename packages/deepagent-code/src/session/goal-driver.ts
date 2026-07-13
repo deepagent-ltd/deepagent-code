@@ -187,8 +187,13 @@ export type GoalDriverPorts = {
    * and no child progress is lost (§S2.3). Optional; omitted / null ⇒ no plan edit this iteration.
    */
   readonly pendingPlanEdit?: () => Effect.Effect<PlanInput | null>
-  /** V4.1 §S2 — clear the pending plan edit AFTER it was applied+re-baselined (consume-once). Optional. */
-  readonly markPlanEditConsumed?: () => Effect.Effect<void>
+  /**
+   * V4.1 §S2 — clear the pending plan edit AFTER it was applied+re-baselined (consume-once). Receives the
+   * exact edit object the driver drained + applied, so the port can clear the slot ONLY if it still holds
+   * that same edit (identity guard) — a newer edit admitted between the drain and this call must survive.
+   * Optional.
+   */
+  readonly markPlanEditConsumed?: (applied: PlanInput) => Effect.Effect<void>
 }
 
 /** No-op ports (fire-and-forget usage / tests that only care about the terminal outcome). */
@@ -201,7 +206,7 @@ export const noopPorts: GoalDriverPorts = {
   markSteerConsumed: () => Effect.void,
   // §S2: no user plan edit by default — the goal runs exactly as before.
   pendingPlanEdit: () => Effect.succeed(null),
-  markPlanEditConsumed: () => Effect.void,
+  markPlanEditConsumed: (_applied) => Effect.void,
 }
 
 export type StartGoalInput = {
@@ -280,7 +285,9 @@ export const runToCompletion = (input: RunToCompletionInput): Effect.Effect<Tick
         const editedPlan = yield* safePlanEdit(ports.pendingPlanEdit())
         if (editedPlan != null) {
           yield* safe(loop.applyPlanEdit(input.handle, editedPlan))
-          if (ports.markPlanEditConsumed) yield* safe(ports.markPlanEditConsumed())
+          // Pass the exact edit we applied so the port clears the slot ONLY if it still holds THIS edit —
+          // a newer edit admitted while we were applying stays pending and is drained next iteration.
+          if (ports.markPlanEditConsumed) yield* safe(ports.markPlanEditConsumed(editedPlan))
         }
       }
 
