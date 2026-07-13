@@ -14,7 +14,6 @@ import {
 } from "../../src/deepagent/plan-controller"
 import {
   makeGoalLoop,
-  evaluateCriteria,
   evaluateForController,
   InvalidGoalError,
   type ControllerDeps,
@@ -152,33 +151,33 @@ describe("V3.9 §D — Grader per-criterion evaluation (§D.3)", () => {
 
   test("each criterion met via passing ports → met:true, no gaps", async () => {
     for (const [name, c] of Object.entries(criteria)) {
-      const res = await Effect.runPromise(evaluateCriteria([c], passingPorts(), donePlan()))
-      expect(res.met).toBe(true)
-      expect(res.gaps).toEqual([])
+      const res = await Effect.runPromise(evaluateForController([c], passingPorts(), donePlan()))
+      expect(res.result.met).toBe(true)
+      expect(res.result.gaps).toEqual([])
       void name
     }
   })
 
   test("tests_pass unmet → met:false with gap", async () => {
     const ports: GraderPorts = { ...passingPorts(), runTests: () => Effect.succeed({ pass: false }) }
-    const res = await Effect.runPromise(evaluateCriteria([criteria.tests_pass], ports, donePlan()))
-    expect(res.met).toBe(false)
-    expect(res.gaps[0]).toMatch(/tests_pass/)
+    const res = await Effect.runPromise(evaluateForController([criteria.tests_pass], ports, donePlan()))
+    expect(res.result.met).toBe(false)
+    expect(res.result.gaps[0]).toMatch(/tests_pass/)
   })
 
   test("no_diagnostics: any diagnostic is a gap when unbounded; within bound is met", async () => {
     const withDiag: GraderPorts = { ...passingPorts(), diagnostics: () => Effect.succeed({ maxSeverity: "warning" }) }
-    const strict = await Effect.runPromise(evaluateCriteria([{ kind: "no_diagnostics" }], withDiag, donePlan()))
-    expect(strict.met).toBe(false)
+    const strict = await Effect.runPromise(evaluateForController([{ kind: "no_diagnostics" }], withDiag, donePlan()))
+    expect(strict.result.met).toBe(false)
     const bounded = await Effect.runPromise(
-      evaluateCriteria([{ kind: "no_diagnostics", severityAtMost: "warning" }], withDiag, donePlan()),
+      evaluateForController([{ kind: "no_diagnostics", severityAtMost: "warning" }], withDiag, donePlan()),
     )
-    expect(bounded.met).toBe(true)
+    expect(bounded.result.met).toBe(true)
     const errDiag: GraderPorts = { ...passingPorts(), diagnostics: () => Effect.succeed({ maxSeverity: "error" }) }
     const exceeded = await Effect.runPromise(
-      evaluateCriteria([{ kind: "no_diagnostics", severityAtMost: "warning" }], errDiag, donePlan()),
+      evaluateForController([{ kind: "no_diagnostics", severityAtMost: "warning" }], errDiag, donePlan()),
     )
-    expect(exceeded.met).toBe(false)
+    expect(exceeded.result.met).toBe(false)
   })
 
   test("reviewer_clean / panel_approves unmet → gap", async () => {
@@ -187,27 +186,28 @@ describe("V3.9 §D — Grader per-criterion evaluation (§D.3)", () => {
       reviewerClean: () => Effect.succeed({ pass: false }),
       panelApproves: () => Effect.succeed({ decision: "block" }),
     }
-    const rev = await Effect.runPromise(evaluateCriteria([criteria.reviewer_clean], ports, donePlan()))
-    expect(rev.met).toBe(false)
-    const pan = await Effect.runPromise(evaluateCriteria([criteria.panel_approves], ports, donePlan()))
-    expect(pan.met).toBe(false)
-    expect(pan.gaps[0]).toMatch(/block/)
+    const rev = await Effect.runPromise(evaluateForController([criteria.reviewer_clean], ports, donePlan()))
+    expect(rev.result.met).toBe(false)
+    const pan = await Effect.runPromise(evaluateForController([criteria.panel_approves], ports, donePlan()))
+    expect(pan.result.met).toBe(false)
+    expect(pan.result.gaps[0]).toMatch(/block/)
   })
 
   test("plan_complete reflects outstanding steps", async () => {
-    const met = await Effect.runPromise(evaluateCriteria([criteria.plan_complete], passingPorts(), donePlan()))
-    expect(met.met).toBe(true)
-    const unmet = await Effect.runPromise(evaluateCriteria([criteria.plan_complete], passingPorts(), openPlan()))
-    expect(unmet.met).toBe(false)
-    expect(unmet.gaps[0]).toMatch(/outstanding/)
+    const met = await Effect.runPromise(evaluateForController([criteria.plan_complete], passingPorts(), donePlan()))
+    expect(met.result.met).toBe(true)
+    const unmet = await Effect.runPromise(evaluateForController([criteria.plan_complete], passingPorts(), openPlan()))
+    expect(unmet.result.met).toBe(false)
+    expect(unmet.result.gaps[0]).toMatch(/outstanding/)
   })
 
   test("AND semantics: one unmet among many → met:false", async () => {
     const ports: GraderPorts = { ...passingPorts(), runTests: () => Effect.succeed({ pass: false }) }
-    const all = Object.values(criteria)
-    const res = await Effect.runPromise(evaluateCriteria(all, ports, donePlan()))
-    expect(res.met).toBe(false)
-    expect(res.gaps.length).toBe(1)
+    // Cheap-only set so no expensive gate is deferred: the single tests_pass failure is the only gap.
+    const cheap = [criteria.plan_complete, criteria.no_diagnostics, criteria.tests_pass]
+    const res = await Effect.runPromise(evaluateForController(cheap, ports, donePlan()))
+    expect(res.result.met).toBe(false)
+    expect(res.result.gaps.length).toBe(1)
   })
 })
 
@@ -462,7 +462,7 @@ describe("V3.9 §D — adversarial-review hardening (2026-07-09)", () => {
     expect(panelCalls).toBe(1)
   })
 
-  test("§D.7 非每轮: deferExpensive skips the panel gate when a cheaper criterion is already unmet", async () => {
+  test("§D.7 非每轮: the controller skips the panel gate when a cheaper criterion is already unmet", async () => {
     let panelCalls = 0
     const ports: GraderPorts = {
       ...passingPorts(),
@@ -474,14 +474,10 @@ describe("V3.9 §D — adversarial-review hardening (2026-07-09)", () => {
         }),
     }
     const criteria: CompletionCriterion[] = [{ kind: "panel_approves" }, { kind: "tests_pass", commands: ["x"] }]
-    // deferExpensive OFF (default) → panel IS called.
-    await Effect.runPromise(evaluateCriteria(criteria, ports, openPlanDoc()))
-    expect(panelCalls).toBe(1)
-    // deferExpensive ON → cheap tests_pass fails first, panel is NOT convened.
-    panelCalls = 0
-    const res = await Effect.runPromise(evaluateCriteria(criteria, ports, openPlanDoc(), { deferExpensive: true }))
+    // The controller always defers: cheap tests_pass fails first, so the panel is NOT convened.
+    const res = await Effect.runPromise(evaluateForController(criteria, ports, openPlanDoc()))
     expect(panelCalls).toBe(0)
-    expect(res.met).toBe(false) // verdict unchanged: still unmet
+    expect(res.result.met).toBe(false) // verdict unchanged: still unmet
   })
 
   test("evaluateForController flags panel block as escalate but revise as a soft gap", async () => {

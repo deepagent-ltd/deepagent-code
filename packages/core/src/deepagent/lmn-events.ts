@@ -8,11 +8,9 @@ export * as LMNEvents from "./lmn-events"
 //
 // LAYERING: `core`, constants only.
 
-// §L Repo & Wiki — ExecutionArchiver consumes these to archive execution traces as Wiki pages, and
-// they feed IM push notifications for supervisors.
+// §L Repo & Wiki — the ExecutionArchiver consumes session/goal completion to archive execution traces
+// as Wiki pages, and they feed IM push notifications for supervisors.
 export const SESSION_COMPLETED = "session.completed"
-export const WIKI_PAGE_CHANGED = "wiki.page.changed"
-export const KNOWLEDGE_PROMOTED = "knowledge.promoted"
 
 // §B IM — a user message, after it persists, publishes this (the §B1 double-write). The Router/
 // MentionAgent consume it; the legacy synchronous @mention path stays authoritative until the flag is on.
@@ -40,8 +38,7 @@ export const GOAL_COMPLETED = "goal.completed"
 export const GOAL_NEEDS_HUMAN = "goal.needs_human"
 export const GOAL_ROLLED_BACK = "goal.rolled_back"
 
-// §M Expert Panel — auto-convene request (from the §M policy) + the verdict (needs_human → Approval Queue).
-export const PANEL_CONVENE_REQUESTED = "panel.convene.requested"
+// §M Expert Panel — the verdict (needs_human → Approval Queue).
 export const PANEL_VERDICT = "panel.verdict"
 
 // §A3 DLQ ALERT — the Event Bus publishes this (source="system", high priority) the moment a delivery
