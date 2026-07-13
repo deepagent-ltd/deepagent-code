@@ -6,6 +6,7 @@ import { Database } from "../database/database"
 import { DeepAgentEventTable, DeepAgentEventDeliveryTable, DeepAgentEventDropTable } from "./deepagent-event-sql"
 import { AgentPushLogTable } from "../im/push-log-sql"
 import { HumanTakeoverTable } from "./human-takeover-sql"
+import { RollbackAuditTable } from "./rollback-audit-sql"
 import { SessionTable, MessageTable } from "../session/sql"
 import { DeepAgentEvent } from "./deepagent-event"
 
@@ -85,6 +86,9 @@ export interface Metrics {
   // §F human_takeover_total — the count of human takeovers (a human pausing/reverting an agent or claiming
   // a branch/session) in the window, workspace-scoped. Backs the §D2 Takeover surface's headline count.
   readonly humanTakeoverTotal: number
+  // §F rollback_total — the count of human-initiated rollbacks (a human reverting an agent-produced change
+  // via SessionRevert) in the window, workspace-scoped. Backs the §D2 Rollback surface's headline count.
+  readonly rollbackTotal: number
 }
 
 // Nearest-rank percentile (§F1 histograms computed in-code, no SQL percentile fn). `p` in [0,1].
@@ -411,6 +415,22 @@ export const layerWith = (options?: LayerOptions) =>
             .get()
             .pipe(Effect.orDie)
 
+          // §F rollback_total — count the rollback audit rows in the window (workspace-scoped). The
+          // rollback log is its own table (deepagent_rollback) written by the §D2 Rollback endpoint after
+          // invoking SessionRevert; a fresh workspace with no rollbacks reads 0 (never null — a plain count).
+          const rollbackRow = yield* db
+            .select({ n: sql<number>`count(*)` })
+            .from(RollbackAuditTable)
+            .where(
+              and(
+                eq(RollbackAuditTable.workspace_id, ws),
+                gte(RollbackAuditTable.created_at, from),
+                lte(RollbackAuditTable.created_at, to),
+              ),
+            )
+            .get()
+            .pipe(Effect.orDie)
+
           return {
             windowFrom: from,
             windowTo: to,
@@ -430,6 +450,7 @@ export const layerWith = (options?: LayerOptions) =>
             eventToAgentStartMsP50,
             eventToAgentStartMsP95,
             humanTakeoverTotal: takeoverRow?.n ?? 0,
+            rollbackTotal: rollbackRow?.n ?? 0,
           }
         })
 

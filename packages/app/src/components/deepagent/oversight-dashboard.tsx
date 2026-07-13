@@ -7,6 +7,7 @@ import {
   fetchOversightMetrics,
   fetchOversightTrace,
   recordHumanTakeover,
+  recordRollback,
   resolveOversightApproval,
   type OversightApprovalDecision,
   type OversightApprovalItem,
@@ -129,6 +130,37 @@ export const OversightDashboard: Component = () => {
     }
   }
 
+  // ── §D2 rollback (P4.4) ─────────────────────────────────────────────────────────
+  const [rollbackSession, setRollbackSession] = createSignal("")
+  const [rollbackReason, setRollbackReason] = createSignal("")
+  const [rollbackBusy, setRollbackBusy] = createSignal(false)
+  const [rollbackNote, setRollbackNote] = createSignal<string | null>(null)
+
+  const submitRollback = async () => {
+    const sessionID = rollbackSession().trim()
+    if (!sessionID) return
+    const reason = rollbackReason().trim()
+    setRollbackBusy(true)
+    setRollbackNote(null)
+    const result = await recordRollback(client(), { sessionID, ...(reason ? { reason } : {}) })
+    setRollbackBusy(false)
+    if (result.ok) {
+      setRollbackSession("")
+      setRollbackReason("")
+      setRollbackNote(
+        result.record?.outcome === "noop"
+          ? "Nothing to revert — rollback recorded as a no-op."
+          : "Rollback applied — session reverted.",
+      )
+      // A rollback bumps the rollback_total metric — refresh the dashboard.
+      await refetchMetrics()
+    } else if (result.notFound) {
+      setRollbackNote("No such session in this workspace.")
+    } else {
+      setRollbackNote(`Failed: ${result.error}`)
+    }
+  }
+
   return (
     <div class="flex-1 min-h-0 overflow-y-auto bg-background-base">
       <div class="flex flex-col gap-5 p-4">
@@ -200,6 +232,10 @@ export const OversightDashboard: Component = () => {
                     {/* P3.10 — only rendered when the server reports it. */}
                     <Show when={m().humanTakeoverTotal != null}>
                       <MetricCard label="Human takeovers" value={num(m().humanTakeoverTotal)} tone="neutral" />
+                    </Show>
+                    {/* P4.4 — only rendered when the server reports it. */}
+                    <Show when={m().rollbackTotal != null}>
+                      <MetricCard label="Rollbacks" value={num(m().rollbackTotal)} tone="neutral" />
                     </Show>
                   </div>
 
@@ -328,6 +364,45 @@ export const OversightDashboard: Component = () => {
             </Button>
             <Show when={takeoverNote()}>
               <span class="text-11-regular text-text-weak">{takeoverNote()}</span>
+            </Show>
+          </div>
+        </section>
+
+        {/* ── Rollback (§D2) ── */}
+        <section>
+          <h3 class="mb-1 text-13-medium text-text-strong">Rollback</h3>
+          <p class="mb-2 text-11-regular text-text-weak">
+            Revert an agent-produced change over a session (via SessionRevert). Only affects a session in
+            this workspace. This reverts real changes — use with care.
+          </p>
+          <input
+            class="w-full rounded-md border border-border-weak-base bg-surface-base px-2 py-1.5 text-12-regular text-text-strong outline-none focus:ring-2 focus:ring-accent-base font-mono"
+            placeholder="Session ID (ses_…)"
+            value={rollbackSession()}
+            onInput={(e) => setRollbackSession(e.currentTarget.value)}
+          />
+          <textarea
+            class="mt-2 w-full rounded-md border border-border-weak-base bg-surface-base px-2 py-1.5 text-12-regular text-text-strong outline-none resize-none focus:ring-2 focus:ring-accent-base"
+            rows={2}
+            placeholder="Reason for rolling back… (optional)"
+            value={rollbackReason()}
+            onInput={(e) => setRollbackReason(e.currentTarget.value)}
+          />
+          <div class="mt-2 flex items-center gap-2">
+            <Button
+              variant="primary"
+              size="small"
+              icon="reset"
+              onClick={submitRollback}
+              disabled={rollbackBusy() || !rollbackSession().trim()}
+            >
+              <Show when={rollbackBusy()}>
+                <Spinner />
+              </Show>
+              Roll back
+            </Button>
+            <Show when={rollbackNote()}>
+              <span class="text-11-regular text-text-weak">{rollbackNote()}</span>
             </Show>
           </div>
         </section>

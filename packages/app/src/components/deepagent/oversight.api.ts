@@ -42,6 +42,9 @@ export type OversightMetrics = {
   // P3.10 (parallel) ADDS this to the metrics projection. Optional so this UI type-checks + renders
   // against a server that hasn't merged P3.10 yet (rendered only when present).
   humanTakeoverTotal?: number | null
+  // P4.4 ADDS this — count of human-initiated rollbacks. Optional so the UI feature-detects it (rendered
+  // only when the server reports it).
+  rollbackTotal?: number | null
 }
 
 // ── §F2 trace ─────────────────────────────────────────────────────────────────
@@ -161,5 +164,45 @@ export const recordHumanTakeover = async (
     // can explain rather than show a hard error.
     const unsupported = /\b404\b/.test(message) || /not\s*found/i.test(message)
     return { ok: false, unsupported, error: message }
+  }
+}
+
+// ── §D2 rollback (P4.4) ─────────────────────────────────────────────────────────
+export type RollbackOutcome = "reverted" | "noop"
+export type RollbackRecord = {
+  id: string
+  workspaceID: string
+  sessionID: string
+  actorID?: string
+  reason?: string
+  outcome: RollbackOutcome
+  createdAt: number
+}
+
+/**
+ * §D2: roll back a session's agent-produced changes via the backend (SessionRevert). The server resolves
+ * the target session, enforces it belongs to the routed workspace (404 otherwise — no cross-workspace
+ * revert), invokes SessionRevert, and records an audit row. A 404 means the session is unknown / not in
+ * this workspace; feature-tolerant like `recordHumanTakeover` so the UI can explain rather than hard-error.
+ * Hand-written (never the generated SDK) so it stays wired to the raw oversight route.
+ */
+export const recordRollback = async (
+  client: OversightClient,
+  input: { sessionID: string; reason?: string },
+): Promise<{ ok: true; record?: RollbackRecord } | { ok: false; unsupported: boolean; notFound: boolean; error: string }> => {
+  try {
+    const response = await client.client.request<RollbackRecord>({
+      method: "POST",
+      url: `/oversight/rollback`,
+      body: input,
+      headers: JSON_HEADERS,
+    })
+    return { ok: true, record: response.data }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    const notFound = /\b404\b/.test(message) || /not\s*found/i.test(message)
+    // The route exists (P4.4 ships the backend), so a 404 here means the SESSION is unknown / not in this
+    // workspace — surfaced distinctly from "endpoint unsupported" so the UI messaging is accurate.
+    return { ok: false, unsupported: false, notFound, error: message }
   }
 }

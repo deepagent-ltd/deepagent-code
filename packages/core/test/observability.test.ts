@@ -7,6 +7,7 @@ import { DeepAgentEventTable } from "@deepagent-code/core/deepagent/deepagent-ev
 import { Database } from "@deepagent-code/core/database/database"
 import { AgentPushLogTable } from "@deepagent-code/core/im/push-log-sql"
 import { HumanTakeover } from "@deepagent-code/core/deepagent/human-takeover"
+import { RollbackAudit } from "@deepagent-code/core/deepagent/rollback-audit"
 import { SessionTable, MessageTable } from "@deepagent-code/core/session/sql"
 import { ProjectTable } from "@deepagent-code/core/project/sql"
 import { testEffect } from "./lib/effect"
@@ -27,7 +28,10 @@ const busLayer = DeepAgentEventBus.layerWith({ maxAttempts: 2, backoffBaseMs: 10
 // §D2/§F — the takeover recorder shares the ONE in-memory DB so recording a takeover is visible to the
 // Observability human_takeover_total query (both read the same deepagent_human_takeover table).
 const takeoverLayer = HumanTakeover.layerWith({ now }).pipe(Layer.provideMerge(busLayer))
-const obsLayer = Observability.layerWith({ now }).pipe(Layer.provideMerge(takeoverLayer))
+// §D2/§F — the rollback recorder shares the ONE in-memory DB so a recorded rollback is visible to the
+// Observability rollback_total query (both read the same deepagent_rollback table).
+const rollbackLayer = RollbackAudit.layerWith({ now }).pipe(Layer.provideMerge(takeoverLayer))
+const obsLayer = Observability.layerWith({ now }).pipe(Layer.provideMerge(rollbackLayer))
 const it = testEffect(obsLayer)
 
 const pub = (over: Partial<DeepAgentEvent.PublishInput>): DeepAgentEvent.PublishInput => ({
@@ -285,6 +289,27 @@ describe("Observability.metrics (§F1)", () => {
     }),
   )
 
+  it.effect(
+    "§A4 event_dropped_total counts DISTINCT events — one event re-shed ×3 counts as 1, not 3",
+    () =>
+      Effect.gen(function* () {
+        const bus = yield* DeepAgentEventBus.Service
+        const obs = yield* Observability.Service
+        setNow(4_000)
+        const e1 = yield* bus.publish(pub({ idempotencyKey: "rs-a", workspaceID: "wrk_reshed" }))
+        const e2 = yield* bus.publish(pub({ idempotencyKey: "rs-b", workspaceID: "wrk_reshed" }))
+        // e1 shed→nacked→re-shed ×3 on the backpressure path; e2 shed once. Idempotent per event.
+        yield* bus.recordDrop({ event: e1, reason: "backpressure" })
+        yield* bus.recordDrop({ event: e1, reason: "backpressure" })
+        yield* bus.recordDrop({ event: e1, reason: "backpressure" })
+        yield* bus.recordDrop({ event: e2, reason: "backpressure" })
+        const m = yield* obs.metrics({ workspaceID: "wrk_reshed", from: 0, to: 10_000 })
+        // 2 DISTINCT events shed (not 4 shed-attempts).
+        expect(m.eventDroppedTotal).toBe(2)
+        expect(m.eventDroppedByReason).toEqual({ backpressure: 2 })
+      }),
+  )
+
   it.effect("event_publish_latency_ms P50/P95 aggregates the per-row publish_latency_ms samples", () =>
     Effect.gen(function* () {
       const { db } = yield* Database.Service
@@ -341,6 +366,26 @@ describe("Observability.metrics (§F1)", () => {
       // out-of-window takeovers are excluded.
       const narrow = yield* obs.metrics({ workspaceID: "wrk_tko", from: 9_000, to: 10_000 })
       expect(narrow.humanTakeoverTotal).toBe(0)
+    }),
+  )
+
+  it.effect("rollback_total counts recorded rollbacks in the window (workspace-scoped)", () =>
+    Effect.gen(function* () {
+      const rollbacks = yield* RollbackAudit.Service
+      const obs = yield* Observability.Service
+      setNow(8_000)
+      // no rollbacks yet ⇒ 0 (a plain count, never null).
+      let m = yield* obs.metrics({ workspaceID: "wrk_rbk", from: 0, to: 10_000 })
+      expect(m.rollbackTotal).toBe(0)
+      // record two rollbacks in this workspace + one in another (must not leak across tenants).
+      yield* rollbacks.record({ workspaceID: "wrk_rbk", sessionID: "ses_1", actorID: "human_1", outcome: "reverted", reason: "bad diff" })
+      yield* rollbacks.record({ workspaceID: "wrk_rbk", sessionID: "ses_2", actorID: "human_1", outcome: "noop" })
+      yield* rollbacks.record({ workspaceID: "wrk_rbk_other", sessionID: "ses_3", actorID: "human_2", outcome: "reverted" })
+      m = yield* obs.metrics({ workspaceID: "wrk_rbk", from: 0, to: 10_000 })
+      expect(m.rollbackTotal).toBe(2) // only this workspace's rollbacks
+      // out-of-window rollbacks are excluded.
+      const narrow = yield* obs.metrics({ workspaceID: "wrk_rbk", from: 9_000, to: 10_000 })
+      expect(narrow.rollbackTotal).toBe(0)
     }),
   )
 

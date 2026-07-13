@@ -34,6 +34,9 @@ export const OversightMetrics = Schema.Struct({
   // §F human_takeover_total — count of human takeovers in the window (backs the §D2 Takeover surface).
   // Optional so an older client that ignores it is unaffected (ADDITIVE).
   humanTakeoverTotal: Schema.optional(Schema.Number),
+  // §F rollback_total — count of human-initiated rollbacks in the window (backs the §D2 Rollback surface).
+  // Optional so an older client that ignores it is unaffected (ADDITIVE).
+  rollbackTotal: Schema.optional(Schema.Number),
 })
 
 // ── §F2 trace ───────────────────────────────────────────────────────────────────────────────────
@@ -89,6 +92,27 @@ export const OversightTakeoverRecord = Schema.Struct({
 export const OversightTakeoverInput = Schema.Struct({
   sessionID: Schema.optional(Schema.String),
   agentID: Schema.optional(Schema.String),
+  reason: Schema.optional(Schema.String),
+})
+
+// ── §D2 rollback ────────────────────────────────────────────────────────────────────────────────────
+// A rollback REVERTS an agent-produced change over a session (via SessionRevert — the same primitive the
+// goal loop uses). Human-initiated only. The endpoint resolves the target session, invokes SessionRevert,
+// then appends an audit row + feeds the §F rollback_total metric. The actor is the routed workspace
+// identity (never client-supplied → no spoofing), and the target session MUST belong to the routed
+// workspace (no cross-workspace revert). `outcome` reports whether a revert happened ("reverted") or there
+// was nothing to revert ("noop").
+export const OversightRollbackRecord = Schema.Struct({
+  id: Schema.String,
+  workspaceID: Schema.String,
+  sessionID: Schema.String,
+  actorID: Schema.optional(Schema.String),
+  reason: Schema.optional(Schema.String),
+  outcome: Schema.Literals(["reverted", "noop"]),
+  createdAt: Schema.Number,
+})
+export const OversightRollbackInput = Schema.Struct({
+  sessionID: Schema.String,
   reason: Schema.optional(Schema.String),
 })
 
@@ -163,6 +187,21 @@ export const OversightApi = HttpApi.make("oversight").add(
           identifier: "oversight.takeover",
           summary: "Record a human takeover",
           description: "V4.0 §D2: record that a human stepped in over an agent (pause/revert/claim). Feeds §F human_takeover_total.",
+        }),
+      ),
+    )
+    .add(
+      HttpApiEndpoint.post("oversightRollback", `${root}/rollback`, {
+        query: WorkspaceRoutingQuery,
+        payload: OversightRollbackInput,
+        success: described(OversightRollbackRecord, "The recorded rollback audit row"),
+        // 404 ⇒ no such session IN THIS WORKSPACE (unknown id, or another tenant's) — never a cross-tenant leak.
+        error: HttpApiError.NotFound,
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "oversight.rollback",
+          summary: "Roll back an agent-produced change",
+          description: "V4.0 §D2: a human reverts a session's agent-produced changes via SessionRevert. Feeds §F rollback_total.",
         }),
       ),
     )
