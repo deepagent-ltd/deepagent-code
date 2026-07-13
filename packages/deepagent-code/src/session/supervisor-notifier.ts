@@ -55,11 +55,18 @@ export const DEFAULT_RETRY_PUMP_INTERVAL_MS = 30_000
 // supervisor notifications to the runtime itself (not a masqueraded human/agent).
 export const SYSTEM_PUSHER_AGENT_ID = "agent_system_notifier"
 
-// The event types this notifier pushes on — EXACTLY the §D2 Approval-Queue candidates (human-attention
-// terminal outcomes). Kept in lockstep with LMNEvents.APPROVAL_QUEUE_TYPES via the shared
-// `shouldQueueForApproval` fold, so a new approval-queue type is automatically notified too.
+// The event types this notifier pushes on. TWO legs, kept deliberately distinct:
+//   (a) §D2 human-attention terminal outcomes — EXACTLY the Approval-Queue candidates, via the shared
+//       `shouldQueueForApproval` fold, so a new approval-queue type is automatically notified too.
+//   (b) §A3 OPERATIONAL alerts — a dlq.alert (a delivery exhausted its retries → dead-letter). §A3's
+//       whole point is "生成告警 instead of sitting silently in the DLQ view until someone queries it", so
+//       a workspace operator SHOULD be told. Kept OUT of shouldQueueForApproval / APPROVAL_QUEUE_TYPES on
+//       purpose: a dead-letter is an operational notice, NOT an approval-queue decision — folding it there
+//       would wrongly create Approval-Queue rows. The producer's self-cascade guard (a dead dlq.alert never
+//       re-alerts) + AgentPush's idempotencyKey keep this from looping or double-notifying.
 const isNotifiable = (event: DeepAgentEvent.Event): boolean =>
-  LMNEvents.shouldQueueForApproval({ type: event.type, payload: event.payload })
+  LMNEvents.shouldQueueForApproval({ type: event.type, payload: event.payload }) ||
+  event.type === LMNEvents.DLQ_ALERT
 
 // A short machine reason + a human-readable body for the push, derived from the event. The body prefers
 // a payload `reason`/`summary`/`question` when present (runtime/goal/panel all carry one), else a
@@ -83,7 +90,9 @@ const notifyContent = (event: DeepAgentEvent.Event): { reason: string; content: 
           ? "A goal run was rolled back"
           : event.type === LMNEvents.AGENT_TASK_NEEDS_HUMAN
             ? "An agent task needs human attention"
-            : `Event ${event.type} needs human attention`
+            : event.type === LMNEvents.DLQ_ALERT
+              ? "An event delivery hit the dead-letter queue"
+              : `Event ${event.type} needs human attention`
   return {
     reason: event.type,
     content: detail ? `${label}: ${detail}` : `${label} (event ${event.id}).`,
