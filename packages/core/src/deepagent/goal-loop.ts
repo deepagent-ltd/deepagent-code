@@ -217,41 +217,6 @@ const CRITERION_COST_RANK: Record<CompletionCriterion["kind"], number> = {
 const isExpensiveCriterion = (kind: CompletionCriterion["kind"]): boolean =>
   kind === "reviewer_clean" || kind === "panel_approves"
 
-/**
- * §D.3 Grader.evaluate — ALL criteria must be met (AND). `gaps` lists every unmet criterion. Pure with
- * respect to its ports: same ports + same plan → same result.
- *
- * With `{ deferExpensive: true }` (the Controller default) the criteria are evaluated cheap-first and
- * the SUBAGENT-SPAWNING gates (reviewer_clean, panel_approves) are SKIPPED once any cheaper criterion is
- * already unmet — the goal cannot be `met` this tick regardless, so spending a panel/reviewer turn to
- * enumerate a gap we will not act on is pure waste (§D.7 非每轮). This never changes the met/unmet
- * verdict (a cheap gap already forces met=false); it only avoids convening the panel except at the key
- * decision point when everything cheaper passes. Direct callers (tests) default to the full evaluation.
- */
-export const evaluateCriteria = (
-  criteria: readonly CompletionCriterion[],
-  ports: GraderPorts,
-  plan: PlanDoc | null,
-  options: { readonly deferExpensive?: boolean } = {},
-): Effect.Effect<GraderResult> =>
-  Effect.gen(function* () {
-    const deferExpensive = options.deferExpensive ?? false
-    const ordered = deferExpensive
-      ? [...criteria].sort((a, b) => CRITERION_COST_RANK[a.kind] - CRITERION_COST_RANK[b.kind])
-      : criteria
-    const gaps: string[] = []
-    for (const c of ordered) {
-      // Defer the expensive, subagent-spawning gates until every cheaper criterion has passed.
-      if (deferExpensive && gaps.length > 0 && isExpensiveCriterion(c.kind)) {
-        gaps.push(`${c.kind}: deferred — a cheaper criterion is unmet (panel/reviewer not convened this tick)`)
-        continue
-      }
-      const gap = yield* evaluateOne(c, ports, plan)
-      if (gap != null) gaps.push(gap)
-    }
-    return { met: gaps.length === 0, gaps }
-  })
-
 // The Controller's view of grading: the spec GraderResult PLUS whether a gate ACTIVELY rejected (as
 // opposed to merely being unmet). A panel `block` / `needs_human` verdict is an active rejection — the
 // panel is telling us to stop and get a human, not "try again" — so the loop escalates on the FIRST
@@ -264,9 +229,15 @@ export type GraderDecision = {
   readonly escalateReason: string | null
 }
 
-// Evaluate for the Controller: same AND-gate + cheap-first deferral as evaluateCriteria, but also flags
-// an active panel rejection for immediate escalation. Only `panel_approves` can escalate (the panel is
-// the human-in-the-loop decision point, §D.7); a `revise` verdict is a soft gap.
+// Evaluate for the Controller — the sole grader entry point. ALL criteria must be met (AND); `gaps`
+// lists every unmet criterion. Pure w.r.t. its ports: same ports + same plan → same result. Criteria
+// are ordered cheap-first and the SUBAGENT-SPAWNING gates (reviewer_clean, panel_approves) are SKIPPED
+// once any cheaper criterion is already unmet — the goal cannot be `met` this tick regardless, so
+// spending a panel/reviewer turn to enumerate a gap we will not act on is pure waste (§D.7 非每轮).
+// This never changes the met/unmet verdict; it only avoids convening the panel except at the key
+// decision point when everything cheaper passes. It ALSO flags an active panel rejection for immediate
+// escalation: only `panel_approves` can escalate (the human-in-the-loop decision point, §D.7); a
+// `revise` verdict stays a soft gap.
 export const evaluateForController = (
   criteria: readonly CompletionCriterion[],
   ports: GraderPorts,
@@ -298,8 +269,6 @@ export const evaluateForController = (
     }
     return { result: { met: gaps.length === 0, gaps }, escalate, escalateReason }
   })
-
-export const Grader = { evaluate: evaluateCriteria, evaluateForController }
 
 // ---------------------------------------------------------------------------------------------------
 // Controller — the tick state machine. State lives entirely in a run_context doc so a restart recovers.
