@@ -9,6 +9,7 @@ import {
 } from "@deepagent-code/core/im/agent-list-provider"
 import type { AgentDescriptor } from "@deepagent-code/core/im/mention-parser"
 import { DEFAULT_AUTONOMY_LEVEL } from "@deepagent-code/core/im/mention-parser"
+import { BUILTIN_AGENT_DESCRIPTORS } from "@deepagent-code/core/im/builtin-agents"
 import { Option } from "effect"
 import type { AgentProgressPart } from "@deepagent-code/core/im/agent-reply-sink"
 import { ServerCapabilities } from "@deepagent-code/core/server-capabilities"
@@ -203,7 +204,7 @@ class ServerAgentListProvider implements AgentListProvider {
     const agents = this.agents
     return Effect.gen(function* () {
       const all = yield* agents.list()
-      return all
+      const mapped = all
         .filter((agent) => !agent.hidden && (agent.mode === "all" || agent.mode === "primary"))
         .map((agent): AgentDescriptor => {
           // Resolve autonomy to its conservative default when the agent didn't
@@ -231,6 +232,14 @@ class ServerAgentListProvider implements AgentListProvider {
             ...(agent.limits !== undefined ? { limits: agent.limits } : {}),
           } satisfies AgentDescriptor
         })
+      // V4.0 §A1 — this is the PRODUCTION provider (ServerAgentListProviderLive is what
+      // server.ts wires into v4EventRuntimeLayer + what multi-agent-runtime resolves).
+      // The real deepagent-code agents (auto/general/plan) carry NO trigger/capability
+      // metadata, so without this every autonomous event (ci.failure/pr.comment/…) would
+      // still block with `no_capable_agent` here. Append the built-ins (each `name`
+      // resolves to a real runnable agent) so the autonomous path is live in production.
+      // `visible: false` keeps them out of the @mention UI while staying matchable.
+      return [...mapped, ...BUILTIN_AGENT_DESCRIPTORS]
     })
   }
 
