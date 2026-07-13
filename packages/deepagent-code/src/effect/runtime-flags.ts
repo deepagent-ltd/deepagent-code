@@ -155,6 +155,16 @@ export class Service extends ConfigService.Service<Service>()("@deepagent-code/R
   // the V3.9 inline archive (prompt.ts, gated by experimentalWiki) remains the only archival path.
   // Enable with DEEPAGENT_CODE_V4_EVENT_DRIVEN_ARCHIVE=true.
   v4EventDrivenArchive: bool("DEEPAGENT_CODE_V4_EVENT_DRIVEN_ARCHIVE"),
+  // V4.1 §S1.1: mid-turn STEERING — a user message that arrives while a turn is in flight is buffered
+  // in a durable per-session steer queue and ABSORBED at the next model-request boundary of the live
+  // turn loop (SessionPrompt.runLoop), appended as an ordinary tail user message (never aborting the
+  // in-flight stream/tools). Unlike the HIGH-RISK V4 autonomy flags, steering is a pure-additive
+  // soft-absorb with NO autonomous side effects, so it SHIPS ON by default — it is the foundational
+  // interactive primitive. It is nonetheless a real kill-switch: with `=false` the drain never runs and
+  // behavior is exactly the pre-steering path (busy sessions await / BusyError as before). This gates
+  // ONLY the runLoop steer drain — it does NOT activate the dormant experimentalEventSystem V2 runner.
+  // Disable with DEEPAGENT_CODE_V4_STEERING=false.
+  v4Steering: stableOn("DEEPAGENT_CODE_V4_STEERING"),
   client: Config.string("DEEPAGENT_CODE_CLIENT").pipe(Config.withDefault("cli")),
 }) {}
 
