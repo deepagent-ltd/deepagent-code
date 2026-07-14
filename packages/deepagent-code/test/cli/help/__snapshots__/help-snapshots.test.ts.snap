@@ -133,6 +133,7 @@ Commands:
   deepagent-code debug v2            debug v2 catalog and built-in plugins
   deepagent-code debug info          show debug information
   deepagent-code debug paths         show global paths (data, config, cache, state)
+  deepagent-code debug logs          package recent logs into a zip for troubleshooting
   deepagent-code debug wait          wait indefinitely (for debugging)
 
 Options:
@@ -764,6 +765,7 @@ Commands:
   deepagent-code debug v2            debug v2 catalog and built-in plugins
   deepagent-code debug info          show debug information
   deepagent-code debug paths         show global paths (data, config, cache, state)
+  deepagent-code debug logs          package recent logs into a zip for troubleshooting
   deepagent-code debug wait          wait indefinitely (for debugging)
 
 Options:
