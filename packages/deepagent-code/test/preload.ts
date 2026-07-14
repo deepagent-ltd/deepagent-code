@@ -68,42 +68,14 @@ const testHome = path.join(dir, "home")
 await fs.mkdir(testHome, { recursive: true })
 process.env["DEEPAGENT_CODE_TEST_HOME"] = testHome
 
-// Pre-seed the ripgrep binary into the isolated test bin dir so NO test pays a first-use download.
-// ripgrep resolution (core/src/filesystem/ripgrep.ts) is: PATH → Global.Path.bin/rg → DOWNLOAD from
-// GitHub. Tests run with an isolated DEEPAGENT_CODE_TEST_HOME, so Global.Path.bin
-// (<home>/.deepagent/code/cache/bin) is empty and the FIRST search test in the process (grep/glob/
-// skill/file/sdk) triggers a network download; under full-suite load that download is slow/flaky and
-// blows the per-test timeout → the first search test times out nondeterministically. Copy an already-
-// present rg from a known cache into the test bin dir up front (offline, once). Best-effort: if no
-// cached rg exists on this machine, do nothing and the original download path still applies, so this
-// never breaks a fresh environment — it only removes the flake where a binary is already available.
-{
-  const rgName = process.platform === "win32" ? "rg.exe" : "rg"
-  const testBinDir = path.join(testHome, ".deepagent", "code", "cache", "bin")
-  const testBinRg = path.join(testBinDir, rgName)
-  const alreadySeeded = await fs
-    .stat(testBinRg)
-    .then(() => true)
-    .catch(() => false)
-  if (!alreadySeeded) {
-    const candidates = [
-      process.env["DEEPAGENT_CODE_RG_PATH"] ?? "",
-      path.join(os.homedir(), ".cache", "deepcode", "bin", rgName),
-      path.join(os.homedir(), ".deepagent", "code", "cache", "bin", rgName),
-    ].filter(Boolean)
-    for (const src of candidates) {
-      const ok = await fs
-        .stat(src)
-        .then((s) => s.isFile())
-        .catch(() => false)
-      if (!ok) continue
-      await fs.mkdir(testBinDir, { recursive: true }).catch(() => undefined)
-      await fs.copyFile(src, testBinRg).catch(() => undefined)
-      await fs.chmod(testBinRg, 0o755).catch(() => undefined)
-      break
-    }
-  }
-}
+// Seed the ripgrep binary into the isolated test cache. The grep/glob/shell/skill tools (and the
+// tool-registry construction that eagerly resolves `rg`) look it up under
+// `<home>/.deepagent/code/cache/bin` and, when absent, download it from GitHub releases — a ~50s
+// transfer that blows past every per-test timeout and makes search-backed tests appear to hang.
+// Seeding it up front makes those tests deterministic and offline. Tests that repoint
+// DEEPAGENT_CODE_TEST_HOME to a fresh dir re-seed via the same helper.
+const { seedRipgrep } = await import("./lib/seed-ripgrep")
+await seedRipgrep(testHome)
 
 // Set test managed config directory to isolate tests from system managed settings
 const testManagedConfigDir = path.join(dir, "managed")
