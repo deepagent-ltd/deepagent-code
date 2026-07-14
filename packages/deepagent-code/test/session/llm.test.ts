@@ -15,6 +15,7 @@ import { Auth } from "@/auth"
 import { Config } from "@/config/config"
 import { Provider } from "@/provider/provider"
 import { ProviderTransform } from "@/provider/transform"
+import { SettingsStore } from "@/settings/store"
 import { ModelsDev } from "@deepagent-code/core/models-dev"
 import { Plugin } from "@/plugin"
 
@@ -31,7 +32,7 @@ import { ModelV2 } from "@deepagent-code/core/model"
 import { FSUtil } from "@deepagent-code/core/fs-util"
 import { Env } from "@/env"
 
-const it = testEffect(Layer.mergeAll(LLM.defaultLayer, Provider.defaultLayer))
+const it = testEffect(Layer.mergeAll(LLM.defaultLayer, Provider.defaultLayer, Auth.defaultLayer))
 
 // Official providers (openai/google/anthropic) ignore `config.provider.<id>`: their apiKey comes from
 // the auth key store and their baseURL from the models.dev catalog `api` field (never config). To point
@@ -727,6 +728,9 @@ beforeAll(() => {
 
 beforeEach(() => {
   state.queue.length = 0
+  // SettingsStore is backed by a shared global file + in-memory cache; drop the cache so a baseURL
+  // override written in one test never leaks into the next.
+  SettingsStore.invalidate()
 })
 
 afterAll(() => {
