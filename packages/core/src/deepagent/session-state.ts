@@ -90,6 +90,12 @@ const sessions = new Map<string, SessionRunState>()
 export const configure = (dir: string) => {
   stateDir = dir
   mkdirSync(dir, { recursive: true })
+  // Pointing at a (new) state dir means a fresh session set: clear the in-memory map BEFORE loading, so
+  // configure() reflects exactly what's on disk at `dir` and never merges stale sessions from a prior
+  // dir. Production calls configure once at gateway init (nothing to lose); tests that configure a fresh
+  // tmp dir per case were previously polluted by in-memory sessions surviving across cases/files
+  // (loadFromDisk only ADDED entries, never reset), making id-keyed state (e.g. grace counters) leak.
+  sessions.clear()
   loadFromDisk()
 }
 
