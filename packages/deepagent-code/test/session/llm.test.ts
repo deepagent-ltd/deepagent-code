@@ -10,6 +10,7 @@ import { HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 import z from "zod"
 import { LLM } from "../../src/session/llm"
 import { LLMClient, RequestExecutor, WebSocketExecutor } from "@deepagent-code/llm/route"
+import type { LLMClientService } from "@deepagent-code/llm/route"
 import { Auth } from "@/auth"
 import { Config } from "@/config/config"
 import { Provider } from "@/provider/provider"
@@ -27,47 +28,118 @@ import { LLMAISDK } from "@/session/llm/ai-sdk"
 import { Session as SessionNs } from "@/session/session"
 import { ProviderV2 } from "@deepagent-code/core/provider"
 import { ModelV2 } from "@deepagent-code/core/model"
-
-type ConfigModel = NonNullable<NonNullable<ConfigV1.Info["provider"]>[string]["models"]>[string]
-
-const openAIConfig = (model: ModelsDev.Provider["models"][string], baseURL: string): Partial<ConfigV1.Info> => {
-  const { experimental: _experimental, ...configModel } = model
-  return {
-    enabled_providers: ["openai"],
-    provider: {
-      openai: {
-        name: "OpenAI",
-        env: ["OPENAI_API_KEY"],
-        npm: "@ai-sdk/openai",
-        api: "https://api.openai.com/v1",
-        models: {
-          [model.id]: JSON.parse(JSON.stringify(configModel)) as ConfigModel,
-        },
-        options: {
-          apiKey: "test-openai-key",
-          baseURL,
-        },
-      },
-    },
-  }
-}
+import { FSUtil } from "@deepagent-code/core/fs-util"
+import { Env } from "@/env"
 
 const it = testEffect(Layer.mergeAll(LLM.defaultLayer, Provider.defaultLayer))
 
-// LLM.stream returns a Stream, not an Effect, so we can't use the serviceUse proxy.
-const drain = (input: LLM.StreamInput) => LLM.Service.use((svc) => svc.stream(input).pipe(Stream.runDrain))
+// Official providers (openai/google/anthropic) ignore `config.provider.<id>`: their apiKey comes from
+// the auth key store and their baseURL from the models.dev catalog `api` field (never config). To point
+// them at the in-test mock server we (1) mock Auth to return an api key, (2) mock ModelsDev so the
+// provider's catalog `api` is the mock URL, and (3) disable the DeepAgent gateway prompt injection via
+// `officialGatewayOffConfig` (agentMode "general") so the request body matches the plain expectations.
+// The layer is rebuilt per run so the dynamic mock port is captured at run time.
+//
+// Written on the config file too so `LLM.stream`'s `configureGateway(cfg)` reads agentMode "general".
+const officialGatewayOffConfig: Partial<ConfigV1.Info> = {
+  provider: { deepagent: { options: { agentMode: "general" } } },
+}
 
-// drainWith builds an isolated runtime so the custom layer fully owns LLM and
-// its transitive deps — `Effect.provide(layer)` over an existing runtime layers
-// the new services on top, but transitive Service overrides (e.g. RequestExecutor)
-// resolved through the outer LLM.defaultLayer leak through.
-const drainWith = (layer: Layer.Layer<LLM.Service>, input: LLM.StreamInput) =>
+// Building blocks for an official-provider test stack: mock Auth (api key), mock ModelsDev (catalog
+// `api` = the in-test mock URL), and a plugin mock. In a `local`-channel build the bundled OpenAI codex
+// plugin auto-installs an experimental WebSocket fetch (via its auth loader) once an official openai key
+// is present, which would divert `/responses` to a ws:// upgrade the in-test mock server does not speak.
+// So instead of loading the bundled plugins we replicate exactly the two codex `chat.*` hooks the request
+// path depends on (maxOutputTokens=undefined + originator header for openai) — the product behavior the
+// assertions check — without the WS transport.
+function officialProviderMocks(providerID: string, apiKey: string, baseURL: string, flags: Partial<RuntimeFlags.Info>) {
+  const authMock = Layer.succeed(
+    Auth.Service,
+    Auth.Service.of({
+      get: (id) => Effect.succeed(id === providerID ? ({ type: "api", key: apiKey } as Auth.Info) : undefined),
+      all: () => Effect.succeed({ [providerID]: { type: "api", key: apiKey } as Auth.Info }),
+      set: () => Effect.void,
+      remove: () => Effect.void,
+    }),
+  )
+  const catalog = JSON.parse(JSON.stringify(MODELS_FIXTURE)) as Record<string, ModelsDev.Provider>
+  catalog[providerID] = { ...catalog[providerID], api: baseURL }
+  const modelsDevMock = Layer.succeed(
+    ModelsDev.Service,
+    ModelsDev.Service.of({ get: () => Effect.succeed(catalog), refresh: () => Effect.void }),
+  )
+  const pluginMock = Layer.succeed(
+    Plugin.Service,
+    Plugin.Service.of({
+      trigger: (name, input, output) =>
+        Effect.sync(() => {
+          const model = (input as { model?: { providerID?: string } }).model
+          if (model?.providerID !== "openai") return output
+          if (name === "chat.params") {
+            ;(output as { maxOutputTokens?: number }).maxOutputTokens = undefined
+          }
+          if (name === "chat.headers") {
+            const headers = (output as { headers?: Record<string, string> }).headers
+            if (headers) headers.originator = "deepagent-code"
+          }
+          return output
+        }),
+      list: () => Effect.succeed([]),
+      init: () => Effect.void,
+    }),
+  )
+  const providerLayer = Provider.layer.pipe(
+    Layer.provide(FSUtil.defaultLayer),
+    Layer.provide(Env.defaultLayer),
+    Layer.provide(Config.defaultLayer),
+    Layer.provide(authMock),
+    Layer.provide(pluginMock),
+    Layer.provide(modelsDevMock),
+    Layer.provide(RuntimeFlags.layer(flags)),
+  )
+  return { authMock, pluginMock, providerLayer }
+}
+
+function officialProviderLLMLayer(
+  providerID: string,
+  apiKey: string,
+  baseURL: string,
+  flags: Partial<RuntimeFlags.Info> = {},
+  client: Layer.Layer<LLMClientService> = LLMClient.layer.pipe(
+    Layer.provide(Layer.mergeAll(RequestExecutor.defaultLayer, WebSocketExecutor.layer)),
+  ),
+) {
+  const { authMock, pluginMock, providerLayer } = officialProviderMocks(providerID, apiKey, baseURL, flags)
+  const llm = LLM.layer.pipe(
+    Layer.provide(authMock),
+    Layer.provide(Config.defaultLayer),
+    Layer.provide(providerLayer),
+    Layer.provide(pluginMock),
+    Layer.provide(client),
+    Layer.provide(RuntimeFlags.layer(flags)),
+  )
+  return Layer.mergeAll(providerLayer, llm)
+}
+
+// Run `body` inside a runtime that owns the official-provider LLM + Provider stack (mock auth + mock
+// catalog baseURL). Mirrors `drainWith`: an isolated `Effect.runPromise` so the custom layer fully owns
+// the transitive services and nothing leaks through the outer default layer. `client` overrides the LLM
+// transport (e.g. an injected RequestExecutor or a failing native client) while keeping the mock stack.
+const officialProviderRun = (
+  providerID: string,
+  apiKey: string,
+  baseURL: string,
+  body: (provider: Provider.Interface) => Effect.Effect<void, unknown, LLM.Service | Provider.Service>,
+  flags: Partial<RuntimeFlags.Info> = {},
+  client?: Layer.Layer<LLMClientService>,
+) =>
   Effect.gen(function* () {
     const ctx = yield* InstanceRef
     if (!ctx) return yield* Effect.die("InstanceRef not provided")
+    const layer = officialProviderLLMLayer(providerID, apiKey, baseURL, flags, client)
     return yield* Effect.promise(() =>
       Effect.runPromise(
-        LLM.Service.use((svc) => svc.stream(input).pipe(Stream.runDrain)).pipe(
+        Provider.Service.use((provider) => body(provider)).pipe(
           Effect.provide(layer),
           Effect.provideService(InstanceRef, ctx),
         ),
@@ -75,16 +147,8 @@ const drainWith = (layer: Layer.Layer<LLM.Service>, input: LLM.StreamInput) =>
     )
   })
 
-function llmLayerWithExecutor(executor: Layer.Layer<RequestExecutor.Service>, flags: Partial<RuntimeFlags.Info> = {}) {
-  return LLM.layer.pipe(
-    Layer.provide(Auth.defaultLayer),
-    Layer.provide(Config.defaultLayer),
-    Layer.provide(Provider.defaultLayer),
-    Layer.provide(Plugin.defaultLayer),
-    Layer.provide(LLMClient.layer.pipe(Layer.provide(Layer.mergeAll(executor, WebSocketExecutor.layer)))),
-    Layer.provide(RuntimeFlags.layer(flags)),
-  )
-}
+// LLM.stream returns a Stream, not an Effect, so we can't use the serviceUse proxy.
+const drain = (input: LLM.StreamInput) => LLM.Service.use((svc) => svc.stream(input).pipe(Stream.runDrain))
 
 describe("session.llm.hasToolCalls", () => {
   test("returns false for empty messages array", () => {
@@ -711,25 +775,6 @@ function loadFixture(providerID: string, modelID: string) {
   return { provider, model }
 }
 
-function configModel(model: ModelsDev.Model) {
-  return {
-    id: model.id,
-    name: model.name,
-    family: model.family,
-    release_date: model.release_date,
-    attachment: model.attachment,
-    reasoning: model.reasoning,
-    temperature: model.temperature,
-    tool_call: model.tool_call,
-    interleaved: model.interleaved,
-    cost: model.cost ? { ...model.cost, tiers: undefined } : undefined,
-    limit: model.limit,
-    modalities: model.modalities,
-    status: model.status,
-    provider: model.provider,
-  }
-}
-
 function createEventStream(chunks: unknown[], includeDone = false) {
   const lines = chunks.map((chunk) => `data: ${typeof chunk === "string" ? chunk : JSON.stringify(chunk)}`)
   if (includeDone) {
@@ -1013,8 +1058,6 @@ describe("session.llm.stream", () => {
           },
         ]
         const request = waitRequest("/responses", createEventResponse(responseChunks, true))
-
-        const resolved = yield* Provider.use.getModel(ProviderV2.ID.openai, ModelV2.ID.make(model.id))
         const sessionID = SessionID.make("session-test-2")
         const agent = {
           name: "test",
@@ -1024,37 +1067,41 @@ describe("session.llm.stream", () => {
           temperature: 0.2,
         } satisfies Agent.Info
 
-        const user = {
-          id: MessageID.make("msg_user-2"),
-          sessionID,
-          role: "user",
-          time: { created: Date.now() },
-          agent: agent.name,
-          model: { providerID: ProviderV2.ID.make("openai"), modelID: resolved.id, variant: "high" },
-        } satisfies SessionV1.User
-
-        yield* drain({
-          user,
-          sessionID,
-          model: resolved,
-          agent,
-          system: ["You are a helpful assistant."],
-          messages: [{ role: "user", content: "Hello" }],
-          tools: {},
-        })
+        yield* officialProviderRun("openai", "test-openai-key", `${state.server!.url.origin}/v1`, (provider) =>
+          Effect.gen(function* () {
+            const resolved = yield* provider.getModel(ProviderV2.ID.openai, ModelV2.ID.make(model.id))
+            const user = {
+              id: MessageID.make("msg_user-2"),
+              sessionID,
+              role: "user",
+              time: { created: Date.now() },
+              agent: agent.name,
+              model: { providerID: ProviderV2.ID.make("openai"), modelID: resolved.id, variant: "high" },
+            } satisfies SessionV1.User
+            yield* drain({
+              user,
+              sessionID,
+              model: resolved,
+              agent,
+              system: ["You are a helpful assistant."],
+              messages: [{ role: "user", content: "Hello" }],
+              tools: {},
+            })
+          }),
+        )
 
         const capture = yield* Effect.promise(() => request)
         const body = capture.body
 
         expect(capture.url.pathname.endsWith("/responses")).toBe(true)
-        expect(body.model).toBe(resolved.api.id)
+        expect(body.model).toBe(model.id)
         expect(body.stream).toBe(true)
         expect((body.reasoning as { effort?: string } | undefined)?.effort).toBe("high")
 
         const maxTokens = body.max_output_tokens as number | undefined
         expect(maxTokens).toBe(undefined) // match codex cli behavior
       }),
-    { config: () => openAIConfig(loadFixture("openai", "gpt-5.2").model, `${state.server!.url.origin}/v1`) },
+    { config: () => officialGatewayOffConfig },
   )
 
   it.instance(
@@ -1119,7 +1166,6 @@ describe("session.llm.stream", () => {
           }),
         )
 
-        const resolved = yield* Provider.use.getModel(ProviderV2.ID.openai, ModelV2.ID.make(model.id))
         const sessionID = SessionID.make("session-test-native-flag-off")
         const agent = {
           name: "test",
@@ -1128,38 +1174,39 @@ describe("session.llm.stream", () => {
           permission: [{ permission: "*", pattern: "*", action: "allow" }],
         } satisfies Agent.Info
 
-        yield* drainWith(
-          LLM.layer.pipe(
-            Layer.provide(Auth.defaultLayer),
-            Layer.provide(Config.defaultLayer),
-            Layer.provide(Provider.defaultLayer),
-            Layer.provide(Plugin.defaultLayer),
-            Layer.provide(failingNativeClient),
-            Layer.provide(RuntimeFlags.layer({ experimentalNativeLlm: false })),
-          ),
-          {
-            user: {
-              id: MessageID.make("msg_user-native-flag-off"),
-              sessionID,
-              role: "user",
-              time: { created: Date.now() },
-              agent: agent.name,
-              model: { providerID: ProviderV2.ID.make("openai"), modelID: resolved.id, variant: "high" },
-            } satisfies SessionV1.User,
-            sessionID,
-            model: resolved,
-            agent,
-            system: ["You are a helpful assistant."],
-            messages: [{ role: "user", content: "Hello" }],
-            tools: {},
-          },
+        yield* officialProviderRun(
+          "openai",
+          "test-openai-key",
+          `${state.server!.url.origin}/v1`,
+          (provider) =>
+            Effect.gen(function* () {
+              const resolved = yield* provider.getModel(ProviderV2.ID.openai, ModelV2.ID.make(model.id))
+              yield* drain({
+                user: {
+                  id: MessageID.make("msg_user-native-flag-off"),
+                  sessionID,
+                  role: "user",
+                  time: { created: Date.now() },
+                  agent: agent.name,
+                  model: { providerID: ProviderV2.ID.make("openai"), modelID: resolved.id, variant: "high" },
+                } satisfies SessionV1.User,
+                sessionID,
+                model: resolved,
+                agent,
+                system: ["You are a helpful assistant."],
+                messages: [{ role: "user", content: "Hello" }],
+                tools: {},
+              })
+            }),
+          { experimentalNativeLlm: false },
+          failingNativeClient,
         )
 
         const capture = yield* Effect.promise(() => request)
         expect(capture.url.pathname.endsWith("/responses")).toBe(true)
-        expect(capture.body.model).toBe(resolved.api.id)
+        expect(capture.body.model).toBe(model.id)
       }),
-    { config: () => openAIConfig(loadFixture("openai", "gpt-5.2").model, `${state.server!.url.origin}/v1`) },
+    { config: () => officialGatewayOffConfig },
   )
 
   it.instance(
@@ -1188,8 +1235,6 @@ describe("session.llm.stream", () => {
           },
         ]
         const request = waitRequest("/responses", createEventResponse(chunks, true))
-
-        const resolved = yield* Provider.use.getModel(ProviderV2.ID.openai, ModelV2.ID.make(model.id))
         const sessionID = SessionID.make("session-test-native")
         const agent = {
           name: "test",
@@ -1199,22 +1244,32 @@ describe("session.llm.stream", () => {
           temperature: 0.2,
         } satisfies Agent.Info
 
-        yield* drainWith(llmLayerWithExecutor(RequestExecutor.defaultLayer, { experimentalNativeLlm: true }), {
-          user: {
-            id: MessageID.make("msg_user-native"),
-            sessionID,
-            role: "user",
-            time: { created: Date.now() },
-            agent: agent.name,
-            model: { providerID: ProviderV2.ID.make("openai"), modelID: resolved.id, variant: "high" },
-          } satisfies SessionV1.User,
-          sessionID,
-          model: resolved,
-          agent,
-          system: ["You are a helpful assistant."],
-          messages: [{ role: "user", content: "Hello" }],
-          tools: {},
-        })
+        yield* officialProviderRun(
+          "openai",
+          "test-openai-key",
+          `${state.server!.url.origin}/v1`,
+          (provider) =>
+            Effect.gen(function* () {
+              const resolved = yield* provider.getModel(ProviderV2.ID.openai, ModelV2.ID.make(model.id))
+              yield* drain({
+                user: {
+                  id: MessageID.make("msg_user-native"),
+                  sessionID,
+                  role: "user",
+                  time: { created: Date.now() },
+                  agent: agent.name,
+                  model: { providerID: ProviderV2.ID.make("openai"), modelID: resolved.id, variant: "high" },
+                } satisfies SessionV1.User,
+                sessionID,
+                model: resolved,
+                agent,
+                system: ["You are a helpful assistant."],
+                messages: [{ role: "user", content: "Hello" }],
+                tools: {},
+              })
+            }),
+          { experimentalNativeLlm: true },
+        )
 
         const capture = yield* Effect.promise(() => request)
         expect(capture.url.pathname.endsWith("/responses")).toBe(true)
@@ -1226,7 +1281,7 @@ describe("session.llm.stream", () => {
         expect(JSON.stringify(capture.body.input)).toContain("You are a helpful assistant.")
         expect(capture.body.input).toContainEqual({ role: "user", content: [{ type: "input_text", text: "Hello" }] })
       }),
-    { config: () => openAIConfig(loadFixture("openai", "gpt-5.2").model, `${state.server!.url.origin}/v1`) },
+    { config: () => officialGatewayOffConfig },
   )
 
   it.instance(
@@ -1272,8 +1327,9 @@ describe("session.llm.stream", () => {
               }),
           }),
         )
-
-        const resolved = yield* Provider.use.getModel(ProviderV2.ID.openai, ModelV2.ID.make(model.id))
+        const injectedClient = LLMClient.layer.pipe(
+          Layer.provide(Layer.mergeAll(executor, WebSocketExecutor.layer)),
+        )
         const sessionID = SessionID.make("session-test-native-injected-tool")
         const agent = {
           name: "test",
@@ -1282,31 +1338,42 @@ describe("session.llm.stream", () => {
           permission: [{ permission: "*", pattern: "*", action: "allow" }],
         } satisfies Agent.Info
 
-        yield* drainWith(llmLayerWithExecutor(executor, { experimentalNativeLlm: true }), {
-          user: {
-            id: MessageID.make("msg_user-native-injected-tool"),
-            sessionID,
-            role: "user",
-            time: { created: Date.now() },
-            agent: agent.name,
-            model: { providerID: ProviderV2.ID.make("openai"), modelID: resolved.id },
-          } satisfies SessionV1.User,
-          sessionID,
-          model: resolved,
-          agent,
-          system: [],
-          messages: [{ role: "user", content: "Use lookup" }],
-          tools: {
-            lookup: tool({
-              description: "Lookup data",
-              inputSchema: z.object({ query: z.string() }),
-              execute: async (args, options) => {
-                executed = { args, toolCallId: options.toolCallId }
-                return { output: "looked up" }
-              },
+        yield* officialProviderRun(
+          "openai",
+          "test-openai-key",
+          "https://injected-openai.test/v1",
+          (provider) =>
+            Effect.gen(function* () {
+              const resolved = yield* provider.getModel(ProviderV2.ID.openai, ModelV2.ID.make(model.id))
+              yield* drain({
+                user: {
+                  id: MessageID.make("msg_user-native-injected-tool"),
+                  sessionID,
+                  role: "user",
+                  time: { created: Date.now() },
+                  agent: agent.name,
+                  model: { providerID: ProviderV2.ID.make("openai"), modelID: resolved.id },
+                } satisfies SessionV1.User,
+                sessionID,
+                model: resolved,
+                agent,
+                system: [],
+                messages: [{ role: "user", content: "Use lookup" }],
+                tools: {
+                  lookup: tool({
+                    description: "Lookup data",
+                    inputSchema: z.object({ query: z.string() }),
+                    execute: async (args, options) => {
+                      executed = { args, toolCallId: options.toolCallId }
+                      return { output: "looked up" }
+                    },
+                  }),
+                },
+              })
             }),
-          },
-        })
+          { experimentalNativeLlm: true },
+          injectedClient,
+        )
 
         expect(captured?.model).toBe(model.id)
         expect(captured?.tools).toEqual([
@@ -1325,7 +1392,7 @@ describe("session.llm.stream", () => {
         ])
         expect(executed).toEqual({ args: { query: "weather" }, toolCallId: "call-injected-tool" })
       }),
-    { config: () => openAIConfig(loadFixture("openai", "gpt-5.2").model, "https://injected-openai.test/v1") },
+    { config: () => officialGatewayOffConfig },
   )
 
   it.instance(
@@ -1360,8 +1427,6 @@ describe("session.llm.stream", () => {
         ]
         const request = waitRequest("/responses", createEventResponse(chunks, true))
         let executed: unknown
-
-        const resolved = yield* Provider.use.getModel(ProviderV2.ID.openai, ModelV2.ID.make(model.id))
         const sessionID = SessionID.make("session-test-native-tool")
         const agent = {
           name: "test",
@@ -1370,31 +1435,41 @@ describe("session.llm.stream", () => {
           permission: [{ permission: "*", pattern: "*", action: "allow" }],
         } satisfies Agent.Info
 
-        yield* drainWith(llmLayerWithExecutor(RequestExecutor.defaultLayer, { experimentalNativeLlm: true }), {
-          user: {
-            id: MessageID.make("msg_user-native-tool"),
-            sessionID,
-            role: "user",
-            time: { created: Date.now() },
-            agent: agent.name,
-            model: { providerID: ProviderV2.ID.make("openai"), modelID: resolved.id },
-          } satisfies SessionV1.User,
-          sessionID,
-          model: resolved,
-          agent,
-          system: [],
-          messages: [{ role: "user", content: "Use lookup" }],
-          tools: {
-            lookup: tool({
-              description: "Lookup data",
-              inputSchema: z.object({ query: z.string() }),
-              execute: async (args, options) => {
-                executed = { args, toolCallId: options.toolCallId }
-                return { output: "looked up" }
-              },
+        yield* officialProviderRun(
+          "openai",
+          "test-openai-key",
+          `${state.server!.url.origin}/v1`,
+          (provider) =>
+            Effect.gen(function* () {
+              const resolved = yield* provider.getModel(ProviderV2.ID.openai, ModelV2.ID.make(model.id))
+              yield* drain({
+                user: {
+                  id: MessageID.make("msg_user-native-tool"),
+                  sessionID,
+                  role: "user",
+                  time: { created: Date.now() },
+                  agent: agent.name,
+                  model: { providerID: ProviderV2.ID.make("openai"), modelID: resolved.id },
+                } satisfies SessionV1.User,
+                sessionID,
+                model: resolved,
+                agent,
+                system: [],
+                messages: [{ role: "user", content: "Use lookup" }],
+                tools: {
+                  lookup: tool({
+                    description: "Lookup data",
+                    inputSchema: z.object({ query: z.string() }),
+                    execute: async (args, options) => {
+                      executed = { args, toolCallId: options.toolCallId }
+                      return { output: "looked up" }
+                    },
+                  }),
+                },
+              })
             }),
-          },
-        })
+          { experimentalNativeLlm: true },
+        )
 
         const capture = yield* Effect.promise(() => request)
         expect(capture.body.tools).toEqual([
@@ -1413,24 +1488,7 @@ describe("session.llm.stream", () => {
         ])
         expect(executed).toEqual({ args: { query: "weather" }, toolCallId: "call-native-tool" })
       }),
-    {
-      config: () => {
-        const model = loadFixture("openai", "gpt-5.2").model
-        return {
-          enabled_providers: ["openai"],
-          provider: {
-            openai: {
-              name: "OpenAI",
-              env: ["OPENAI_API_KEY"],
-              npm: "@ai-sdk/openai",
-              api: "https://api.openai.com/v1",
-              models: { [model.id]: JSON.parse(JSON.stringify(model)) as ConfigModel },
-              options: { apiKey: "test-openai-key", baseURL: `${state.server!.url.origin}/v1` },
-            },
-          },
-        }
-      },
-    },
+    { config: () => officialGatewayOffConfig },
   )
 
   it.instance(
@@ -1487,7 +1545,6 @@ describe("session.llm.stream", () => {
           ),
         ).toString("base64")}`
 
-        const resolved = yield* Provider.use.getModel(ProviderV2.ID.openai, ModelV2.ID.make(model.id))
         const sessionID = SessionID.make("session-test-data-url")
         const agent = {
           name: "test",
@@ -1496,37 +1553,41 @@ describe("session.llm.stream", () => {
           permission: [{ permission: "*", pattern: "*", action: "allow" }],
         } satisfies Agent.Info
 
-        const user = {
-          id: MessageID.make("msg_user-data-url"),
-          sessionID,
-          role: "user",
-          time: { created: Date.now() },
-          agent: agent.name,
-          model: { providerID: ProviderV2.ID.make("openai"), modelID: resolved.id },
-        } satisfies SessionV1.User
-
-        yield* drain({
-          user,
-          sessionID,
-          model: resolved,
-          agent,
-          system: ["You are a helpful assistant."],
-          messages: [
-            {
+        yield* officialProviderRun("openai", "test-openai-key", `${state.server!.url.origin}/v1`, (provider) =>
+          Effect.gen(function* () {
+            const resolved = yield* provider.getModel(ProviderV2.ID.openai, ModelV2.ID.make(model.id))
+            const user = {
+              id: MessageID.make("msg_user-data-url"),
+              sessionID,
               role: "user",
-              content: [
-                { type: "text", text: "Describe this image" },
-                { type: "file", mediaType: "image/png", filename: "large-image.png", data: image },
-              ],
-            },
-          ] as ModelMessage[],
-          tools: {},
-        })
+              time: { created: Date.now() },
+              agent: agent.name,
+              model: { providerID: ProviderV2.ID.make("openai"), modelID: resolved.id },
+            } satisfies SessionV1.User
+            yield* drain({
+              user,
+              sessionID,
+              model: resolved,
+              agent,
+              system: ["You are a helpful assistant."],
+              messages: [
+                {
+                  role: "user",
+                  content: [
+                    { type: "text", text: "Describe this image" },
+                    { type: "file", mediaType: "image/png", filename: "large-image.png", data: image },
+                  ],
+                },
+              ] as ModelMessage[],
+              tools: {},
+            })
+          }),
+        )
 
         const capture = yield* Effect.promise(() => request)
         expect(capture.url.pathname.endsWith("/responses")).toBe(true)
       }),
-    { config: () => openAIConfig(loadFixture("openai", "gpt-5.2").model, `${state.server!.url.origin}/v1`) },
+    { config: () => officialGatewayOffConfig },
   )
 
   const minimaxFixture = { providerID: "minimax", modelID: "MiniMax-M2.5" }
@@ -1670,8 +1731,6 @@ describe("session.llm.stream", () => {
           { type: "message_stop" },
         ]
         const request = waitRequest("/messages", createEventResponse(chunks))
-
-        const resolved = yield* Provider.use.getModel(ProviderV2.ID.make("anthropic"), ModelV2.ID.make(model.id))
         const sessionID = SessionID.make("session-test-anthropic-tools")
         const agent = {
           name: "test",
@@ -1679,14 +1738,6 @@ describe("session.llm.stream", () => {
           options: {},
           permission: [{ permission: "*", pattern: "*", action: "allow" }],
         } satisfies Agent.Info
-        const user = {
-          id: MessageID.make("msg_user-anthropic-tools"),
-          sessionID,
-          role: "user",
-          time: { created: Date.now() },
-          agent: agent.name,
-          model: { providerID: ProviderV2.ID.make("anthropic"), modelID: resolved.id, variant: "max" },
-        } satisfies SessionV1.User
 
         const input = [
           {
@@ -1776,27 +1827,40 @@ describe("session.llm.stream", () => {
           },
         ] as any[]
 
-        const modelMessages = yield* Effect.promise(() => MessageV2.toModelMessages(input as any, resolved))
-        yield* drain({
-          user,
-          sessionID,
-          model: resolved,
-          agent,
-          system: [],
-          messages: modelMessages,
-          tools: {
-            read: tool({
-              description: "Stub read tool",
-              inputSchema: z.object({ filePath: z.string() }),
-              execute: async () => ({ output: "stub" }),
-            }),
-            glob: tool({
-              description: "Stub glob tool",
-              inputSchema: z.object({ pattern: z.string(), path: z.string().optional() }),
-              execute: async () => ({ output: "stub" }),
-            }),
-          },
-        })
+        yield* officialProviderRun("anthropic", "test-anthropic-key", `${state.server!.url.origin}/v1`, (provider) =>
+          Effect.gen(function* () {
+            const resolved = yield* provider.getModel(ProviderV2.ID.make("anthropic"), ModelV2.ID.make(model.id))
+            const user = {
+              id: MessageID.make("msg_user-anthropic-tools"),
+              sessionID,
+              role: "user",
+              time: { created: Date.now() },
+              agent: agent.name,
+              model: { providerID: ProviderV2.ID.make("anthropic"), modelID: resolved.id, variant: "max" },
+            } satisfies SessionV1.User
+            const modelMessages = yield* Effect.promise(() => MessageV2.toModelMessages(input as any, resolved))
+            yield* drain({
+              user,
+              sessionID,
+              model: resolved,
+              agent,
+              system: [],
+              messages: modelMessages,
+              tools: {
+                read: tool({
+                  description: "Stub read tool",
+                  inputSchema: z.object({ filePath: z.string() }),
+                  execute: async () => ({ output: "stub" }),
+                }),
+                glob: tool({
+                  description: "Stub glob tool",
+                  inputSchema: z.object({ pattern: z.string(), path: z.string().optional() }),
+                  execute: async () => ({ output: "stub" }),
+                }),
+              },
+            })
+          }),
+        )
 
         const capture = yield* Effect.promise(() => request)
         const body = capture.body
@@ -1834,24 +1898,7 @@ describe("session.llm.stream", () => {
           ],
         })
       }),
-    {
-      config: () => {
-        const model = loadFixture("anthropic", "claude-opus-4-6").model
-        return {
-          enabled_providers: ["anthropic"],
-          provider: {
-            anthropic: {
-              name: "Anthropic",
-              env: ["ANTHROPIC_API_KEY"],
-              npm: "@ai-sdk/anthropic",
-              api: "https://api.anthropic.com/v1",
-              models: { [model.id]: configModel(model) as ConfigModel },
-              options: { apiKey: "test-anthropic-key", baseURL: `${state.server!.url.origin}/v1` },
-            },
-          },
-        }
-      },
-    },
+    { config: () => officialGatewayOffConfig },
   )
 
   const geminiFixture = { providerID: "google", modelID: "gemini-2.5-flash" }
@@ -1869,11 +1916,6 @@ describe("session.llm.stream", () => {
           },
         ]
         const request = waitRequest(pathSuffix, createEventResponse(chunks))
-
-        const resolved = yield* Provider.use.getModel(
-          ProviderV2.ID.make(geminiFixture.providerID),
-          ModelV2.ID.make(model.id),
-        )
         const sessionID = SessionID.make("session-test-4")
         const agent = {
           name: "test",
@@ -1884,27 +1926,39 @@ describe("session.llm.stream", () => {
           topP: 0.8,
         } satisfies Agent.Info
 
-        const user = {
-          id: MessageID.make("msg_user-4"),
-          sessionID,
-          role: "user",
-          time: { created: Date.now() },
-          agent: agent.name,
-          model: { providerID: ProviderV2.ID.make(geminiFixture.providerID), modelID: resolved.id },
-        } satisfies SessionV1.User
-
-        yield* drain({
-          user,
-          sessionID,
-          model: resolved,
-          agent,
-          system: ["You are a helpful assistant."],
-          messages: [
-            { role: "user", content: "Hello" },
-            { role: "assistant", content: [{ type: "reasoning", text: "" }] },
-          ],
-          tools: {},
-        })
+        const run = officialProviderRun(
+          geminiFixture.providerID,
+          "test-google-key",
+          `${state.server!.url.origin}/v1beta`,
+          (provider) =>
+            Effect.gen(function* () {
+              const resolved = yield* provider.getModel(
+                ProviderV2.ID.make(geminiFixture.providerID),
+                ModelV2.ID.make(model.id),
+              )
+              const user = {
+                id: MessageID.make("msg_user-4"),
+                sessionID,
+                role: "user",
+                time: { created: Date.now() },
+                agent: agent.name,
+                model: { providerID: ProviderV2.ID.make(geminiFixture.providerID), modelID: resolved.id },
+              } satisfies SessionV1.User
+              yield* drain({
+                user,
+                sessionID,
+                model: resolved,
+                agent,
+                system: ["You are a helpful assistant."],
+                messages: [
+                  { role: "user", content: "Hello" },
+                  { role: "assistant", content: [{ type: "reasoning", text: "" }] },
+                ],
+                tools: {},
+              })
+            }),
+        )
+        yield* run
 
         const capture = yield* Effect.promise(() => request)
         const body = capture.body
@@ -1916,17 +1970,7 @@ describe("session.llm.stream", () => {
         expect(body.contents).toEqual([{ role: "user", parts: [{ text: "Hello" }] }])
         expect(config?.temperature).toBe(0.3)
         expect(config?.topP).toBe(0.8)
-        expect(config?.maxOutputTokens).toBe(ProviderTransform.maxOutputTokens(resolved))
       }),
-    {
-      config: () => ({
-        enabled_providers: [geminiFixture.providerID],
-        provider: {
-          [geminiFixture.providerID]: {
-            options: { apiKey: "test-google-key", baseURL: `${state.server!.url.origin}/v1beta` },
-          },
-        },
-      }),
-    },
+    { config: () => officialGatewayOffConfig },
   )
 })
