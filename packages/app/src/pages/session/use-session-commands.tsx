@@ -491,7 +491,8 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
 
         view().reviewPanel.close()
         layout.fileTree.close()
-        view().rightPanel.open("menu")
+        // T3.2: no more "menu" list — the always-on rail is the switcher; open a default content panel.
+        view().rightPanel.open("review")
       },
     }),
     viewCommand({

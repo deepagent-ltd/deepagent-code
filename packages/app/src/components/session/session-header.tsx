@@ -225,7 +225,9 @@ export function SessionHeader() {
 
     view().reviewPanel.close()
     layout.fileTree.close()
-    view().rightPanel.open("menu")
+    // T3.2: the right panel now has an always-on icon rail; there is no separate "menu" list. Opening
+    // the panel means opening a default content panel (review) — the rail lets the user switch from there.
+    view().rightPanel.open("review")
   }
 
   const [prefs, setPrefs] = persisted(Persist.global("open.app"), createStore({ app: "finder" as OpenApp }))
