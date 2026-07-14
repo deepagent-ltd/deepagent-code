@@ -1,4 +1,4 @@
-import { Effect, Layer, Context, SynchronizedRef } from "effect"
+import { Effect, Layer, Context, SynchronizedRef, Option } from "effect"
 import path from "node:path"
 import fs from "node:fs"
 import { Global } from "@deepagent-code/core/global"
@@ -224,6 +224,27 @@ export const layer = Layer.effect(
           .markConsumed(SessionID.make(sessionID), [...ids], GoalDriver.GOAL_STEER_DELIVERY)
           .pipe(Effect.catchCause(() => Effect.void)),
     })
+
+    // Resolve the model the goal loop should run with. Prefer the SESSION's selected model (what the
+    // user picked in the composer — e.g. GLM-5.2), since a goal is a continuation of that conversation;
+    // fall back to the config default. If NEITHER resolves, fail with a clean InvalidGoalError instead
+    // of dying — otherwise a workspace with no config-default model turns the whole request into an
+    // opaque 500 ("[object Object]") even though the user has a working model selected.
+    const resolveGoalModel = (session: { model?: { providerID: string; id: string } }) =>
+      Effect.gen(function* () {
+        if (session.model) {
+          return { providerID: session.model.providerID, modelID: session.model.id }
+        }
+        const fallback = yield* provider.defaultModel().pipe(Effect.option)
+        if (Option.isNone(fallback)) {
+          return yield* Effect.fail(
+            new InvalidGoalError({
+              reason: "no model is configured for this session — select a model, then start the goal",
+            }),
+          )
+        }
+        return { providerID: fallback.value.providerID, modelID: fallback.value.modelID }
+      })
 
     // Per-session control state, observed by the running driver's ports.
     const controls = yield* SynchronizedRef.make(new Map<string, GoalControl>())
@@ -529,14 +550,14 @@ export const layer = Layer.effect(
             ? GoalDriver.materializePlanDoc({ store, sessionId: sessionID, plan })
             : GoalDriver.goalPlanScope(sessionID) // no plan + no objective → startGoal rejects (no doc)
 
-        const model = yield* provider.defaultModel().pipe(Effect.orDie)
+        const model = yield* resolveGoalModel(session)
 
         const runTurn = makeTaskSubagentRunner({
           sessions,
           agents,
           sessionPrompt,
           parentSessionID: SessionID.make(sessionID),
-          model: { providerID: model.providerID, modelID: model.modelID },
+          model,
         })
 
         // §S1.3 — ONE goal-steer relay per run, shared by the wiring (executor threads staged guidance
@@ -685,14 +706,17 @@ export const layer = Layer.effect(
         // Re-drive: the persisted run_context doc resumes exactly where it paused. A fresh store handle
         // over the same root re-reads the loop state.
         const store = new DocumentStore(goalStoreRoot(sessionID))
-        const model = yield* provider.defaultModel().pipe(Effect.orDie)
         const session = yield* sessions.get(SessionID.make(sessionID)).pipe(Effect.orDie)
+        // Resume can't run without a model; if none resolves, don't crash — just report "not resumed".
+        const modelOpt = yield* resolveGoalModel(session).pipe(Effect.option)
+        if (Option.isNone(modelOpt)) return false
+        const model = modelOpt.value
         const runTurn = makeTaskSubagentRunner({
           sessions,
           agents,
           sessionPrompt,
           parentSessionID: SessionID.make(sessionID),
-          model: { providerID: model.providerID, modelID: model.modelID },
+          model,
         })
         // §S1.3 — a fresh relay for the resumed run (steers admitted while paused are still pending in the
         // durable buffer, so the resumed driver re-drains and threads them on its first tick — no loss).
