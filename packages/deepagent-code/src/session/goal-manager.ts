@@ -475,6 +475,21 @@ export const layer = Layer.effect(
     const start: Interface["start"] = (input) =>
       Effect.gen(function* () {
         const sessionID = input.sessionID
+        // CONCURRENCY GUARD: at most ONE live driver per session. A second start() (double-click / retried
+        // request / stale client) would spawn a second BackgroundJob that RACES the first over the same
+        // run_context doc — the core tick dedup is version-based, NOT a lock, so two ticks reading the same
+        // plan version both execute (double execute + double budget). setControl would also overwrite the
+        // first job's id, orphaning it (unstoppable). If a non-stopped control already exists, this start
+        // is a no-op that returns the live goal's snapshot (idempotent) instead of starting a rival driver.
+        const live = yield* getControl(sessionID)
+        if (live && !live.stopped) {
+          return {
+            goalId: live.goalId,
+            planDocId: live.planDocId,
+            phase: (live.paused ? "paused" : "running") as GoalSnapshot["phase"],
+            running: !live.paused,
+          }
+        }
         const session = yield* sessions.get(SessionID.make(sessionID)).pipe(Effect.orDie)
         const cwd = session.directory ?? process.cwd()
 
@@ -660,6 +675,11 @@ export const layer = Layer.effect(
       Effect.gen(function* () {
         const c = yield* getControl(sessionID)
         if (!c || c.stopped) return false
+        // CONCURRENCY GUARD: only a PAUSED goal has no live driver to re-drive. Resuming a goal that is
+        // already running (paused === false) would spawn a SECOND driver racing the live one over the same
+        // run_context doc (version dedup is not a lock → double execute). A resume on a non-paused goal is
+        // a no-op.
+        if (!c.paused) return true
         yield* mutateControl(sessionID, (ctrl) => (ctrl.paused = false))
         AgentGateway.DeepAgentSessionState.setActiveGoalPhase(sessionID, "running")
         // Re-drive: the persisted run_context doc resumes exactly where it paused. A fresh store handle
