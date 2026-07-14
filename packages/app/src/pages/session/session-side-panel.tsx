@@ -9,6 +9,7 @@ import type { SnapshotFileDiff, VcsFileDiff } from "@deepagent-code/sdk/v2"
 import { RIGHT_PANEL_RAIL_PX, type RightPanelWidthBucket } from "@/context/layout"
 
 import FileTree from "@/components/file-tree"
+import { SidePanelMcp } from "@/pages/session/side-panel-mcp"
 import { SidePanelPlugins } from "@/pages/session/side-panel-plugins"
 import { useCommand } from "@/context/command"
 import { useDebug } from "@/context/debug"
@@ -44,6 +45,7 @@ type PanelMode =
   | "oversight"
   | "browser"
   | "worktree"
+  | "mcp"
   | "plugins"
   | "debug"
   | "profile"
@@ -76,7 +78,8 @@ const PANELS: readonly PanelDef[] = [
   { mode: "browser", icon: "link", titleKey: "browser.title", group: "env", bucket: "narrow" },
   { mode: "worktree", icon: "branch", titleKey: "worktree.title", group: "env", bucket: "narrow" },
   // Dev
-  { mode: "plugins", icon: "dot-grid", titleKey: "sidebar.extensions", group: "dev", bucket: "narrow" },
+  { mode: "mcp", icon: "mcp", titleKey: "status.popover.tab.mcp", group: "dev", bucket: "narrow" },
+  { mode: "plugins", icon: "plugin", titleKey: "status.popover.tab.plugins", group: "dev", bucket: "narrow" },
   { mode: "debug", icon: "terminal", titleKey: "session.panel.debug", group: "dev", bucket: "narrow" },
   { mode: "profile", icon: "status", titleKey: "session.panel.profile", group: "dev", bucket: "narrow" },
 ]
@@ -539,6 +542,9 @@ export function SessionSidePanel(props: {
               </Match>
               <Match when={isActive("worktree")}>
                 <SidePanelWorktree onClose={closePanel} />
+              </Match>
+              <Match when={isActive("mcp")}>
+                <SidePanelMcp onClose={closePanel} />
               </Match>
               <Match when={isActive("plugins")}>
                 <SidePanelPlugins onClose={closePanel} />

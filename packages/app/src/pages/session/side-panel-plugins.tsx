@@ -1,6 +1,7 @@
 import { Component, createMemo, For, type JSXElement, Show } from "solid-js"
 import { useSync } from "@/context/sync"
 import { useLanguage } from "@/context/language"
+import { Icon } from "@deepagent-code/ui/icon"
 import { IconButton } from "@deepagent-code/ui/icon-button"
 
 const pluginEmptyMessage = (value: string, file: string): JSXElement => {
@@ -29,7 +30,10 @@ export const SidePanelPlugins: Component<{ onClose: () => void }> = (props) => {
   return (
     <div class="h-full w-full min-w-0 overflow-y-auto bg-background-base">
       <div class="sticky top-0 z-10 h-10 flex items-center justify-between px-3 bg-background-base">
-        <span class="text-12-medium text-text">{language.t("status.popover.tab.plugins")}</span>
+        <span class="flex items-center gap-1.5 text-12-medium text-text">
+          <Icon name="plugin" size="small" class="text-icon-base" />
+          {language.t("status.popover.tab.plugins")}
+        </span>
         <IconButton
           icon="close-small"
           variant="ghost"

@@ -89,6 +89,7 @@ type SessionView = {
     | "worktree"
     | "subagents"
     | "browser"
+    | "mcp"
     | "plugins"
     | "profile"
     | "debug"
