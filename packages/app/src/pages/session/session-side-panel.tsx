@@ -1,11 +1,12 @@
-import { For, Match, Show, Switch, createEffect, createMemo, createResource, createSignal, batch, type ComponentProps, type JSX } from "solid-js"
+import { For, Match, Show, Switch, createEffect, createMemo, createResource, createSignal, type ComponentProps, type JSX } from "solid-js"
 import { createMediaQuery } from "@solid-primitives/media"
 import { Tabs } from "@deepagent-code/ui/tabs"
 import { IconButton } from "@deepagent-code/ui/icon-button"
 import { Icon } from "@deepagent-code/ui/icon"
-import { Keybind } from "@deepagent-code/ui/keybind"
+import { Tooltip } from "@deepagent-code/ui/tooltip"
 import { ResizeHandle } from "@deepagent-code/ui/resize-handle"
 import type { SnapshotFileDiff, VcsFileDiff } from "@deepagent-code/sdk/v2"
+import { RIGHT_PANEL_RAIL_PX, type RightPanelWidthBucket } from "@/context/layout"
 
 import FileTree from "@/components/file-tree"
 import { SidePanelPlugins } from "@/pages/session/side-panel-plugins"
@@ -17,8 +18,7 @@ import { useLayout } from "@/context/layout"
 import { useSDK } from "@/context/sdk"
 import { useSync } from "@/context/sync"
 import { fetchCapabilities } from "@/components/deepagent/panel-goal.api"
-import { useTerminal } from "@/context/terminal"
-import { createOpenSessionFileTab, createSessionTabs, focusTerminalById, type Sizing } from "@/pages/session/helpers"
+import { createOpenSessionFileTab, createSessionTabs, type Sizing } from "@/pages/session/helpers"
 import { IdeFileEditor } from "@/pages/session/ide-file-editor"
 import { setSessionHandoff } from "@/pages/session/handoff"
 import { useSessionLayout } from "@/pages/session/session-layout"
@@ -31,14 +31,57 @@ import { SidePanelIM } from "@/pages/session/side-panel-im"
 import { SidePanelOversight } from "@/pages/session/side-panel-oversight"
 
 type RenderDiff = (SnapshotFileDiff & { file: string }) | VcsFileDiff
-type SidePanelItem = {
-  icon: ComponentProps<typeof Icon>["name"]
-  title: string
-  keybind?: string
-  badge?: string
-  active: boolean
-  onClick: () => void
+
+// T3.1 — the single source of truth for the right-panel entries. Every panel is one row here; the memo
+// boolean, the click handler, the rail button, and the content <Switch> arm are all DERIVED from this
+// list, so adding a panel means adding ONE entry (not editing 5 parallel places as before). T3.3 adds
+// `group` (rail sectioning) and `bucket` (which remembered width this panel uses).
+type PanelMode =
+  | "review"
+  | "files"
+  | "subagents"
+  | "im"
+  | "oversight"
+  | "browser"
+  | "worktree"
+  | "plugins"
+  | "debug"
+  | "profile"
+
+type PanelGroup = "code" | "agents" | "env" | "dev"
+
+type PanelDef = {
+  readonly mode: PanelMode
+  readonly icon: ComponentProps<typeof Icon>["name"]
+  readonly titleKey: string
+  readonly group: PanelGroup
+  // Wide panels (diff/files) get the wide remembered width; everything else the narrow one (T3.3).
+  readonly bucket: RightPanelWidthBucket
+  // Keybind command id (rendered on the rail tooltip), if any.
+  readonly keybind?: string
+  // Gate the entry on a server capability (T1.1). Absent ⇒ always shown.
+  readonly capability?: "oversight"
 }
+
+// Order = rail order. Groups are contiguous so the rail can draw a divider between them.
+const PANELS: readonly PanelDef[] = [
+  // Code
+  { mode: "review", icon: "review", titleKey: "session.tab.review", group: "code", bucket: "wide", keybind: "review.toggle" },
+  { mode: "files", icon: "file-tree", titleKey: "settings.general.row.showFileTree.title", group: "code", bucket: "wide", keybind: "fileTree.toggle" },
+  // Agents
+  { mode: "subagents", icon: "task", titleKey: "session.subagents.title", group: "agents", bucket: "narrow" },
+  { mode: "im", icon: "bubble-5", titleKey: "session.tab.im", group: "agents", bucket: "narrow" },
+  { mode: "oversight", icon: "shield", titleKey: "session.panel.oversight", group: "agents", bucket: "narrow", capability: "oversight" },
+  // Env
+  { mode: "browser", icon: "link", titleKey: "browser.title", group: "env", bucket: "narrow" },
+  { mode: "worktree", icon: "branch", titleKey: "worktree.title", group: "env", bucket: "narrow" },
+  // Dev
+  { mode: "plugins", icon: "dot-grid", titleKey: "sidebar.extensions", group: "dev", bucket: "narrow" },
+  { mode: "debug", icon: "terminal", titleKey: "session.panel.debug", group: "dev", bucket: "narrow" },
+  { mode: "profile", icon: "status", titleKey: "session.panel.profile", group: "dev", bucket: "narrow" },
+]
+
+const GROUP_ORDER: readonly PanelGroup[] = ["code", "agents", "env", "dev"]
 
 function renderDiff(value: SnapshotFileDiff | VcsFileDiff): value is RenderDiff {
   return typeof value.file === "string"
@@ -62,7 +105,6 @@ export function SessionSidePanel(props: {
   const debug = useDebug()
   const language = useLanguage()
   const command = useCommand()
-  const terminal = useTerminal()
   const sync = useSync()
   const sdk = useSDK()
   const { params, sessionKey, tabs, view } = useSessionLayout()
@@ -79,6 +121,21 @@ export function SessionSidePanel(props: {
   )
   const oversightEnabled = () => capabilities()?.v4MultiAgentRuntime ?? false
 
+  // T3.3 rail badge: the count of PENDING Approval-Queue items, so a supervisor sees a number on the
+  // Oversight icon without opening the panel. Only fetched when the capability is on (else the route
+  // fails-closed); best-effort — a failure just yields 0 (no badge).
+  const [oversightApprovals] = createResource(oversightEnabled, async (enabled) => {
+    if (!enabled) return 0
+    try {
+      const { fetchOversightApprovals } = await import("@/components/deepagent/oversight.api")
+      const items = await fetchOversightApprovals(sdk.client as unknown as Parameters<typeof fetchOversightApprovals>[0])
+      return items.length
+    } catch {
+      return 0
+    }
+  })
+  const oversightPendingCount = () => oversightApprovals() ?? 0
+
   // Subagents = child sessions (parentID === current). Surface a live count on the sidebar icon so
   // the user sees a spawn happened without opening the panel; the running count (session_working)
   // drives a pulsing badge, matching the running dot inside the panel list.
@@ -91,32 +148,21 @@ export function SessionSidePanel(props: {
     () => subagentChildren().filter((s) => sync.data.session_working(s.id)).length,
   )
 
-  const menuOpen = createMemo(() => isDesktop() && view().rightPanel.mode() === "menu")
-  const reviewOpen = createMemo(() => isDesktop() && view().rightPanel.mode() === "review")
-  const fileOpen = createMemo(() => isDesktop() && view().rightPanel.mode() === "files")
-  const subagentsOpen = createMemo(() => isDesktop() && view().rightPanel.mode() === "subagents")
-  const browserOpen = createMemo(() => isDesktop() && view().rightPanel.mode() === "browser")
-  const worktreeOpen = createMemo(() => isDesktop() && view().rightPanel.mode() === "worktree")
-  const pluginsOpen = createMemo(() => isDesktop() && view().rightPanel.mode() === "plugins")
-  const debugOpen = createMemo(() => isDesktop() && view().rightPanel.mode() === "debug")
-  const profileOpen = createMemo(() => isDesktop() && view().rightPanel.mode() === "profile")
-  const imOpen = createMemo(() => isDesktop() && view().rightPanel.mode() === "im")
-  const oversightOpen = createMemo(() => isDesktop() && view().rightPanel.mode() === "oversight")
-  const open = createMemo(
-    () =>
-      menuOpen() ||
-      reviewOpen() ||
-      fileOpen() ||
-      subagentsOpen() ||
-      browserOpen() ||
-      worktreeOpen() ||
-      pluginsOpen() ||
-      debugOpen() ||
-      profileOpen() ||
-      imOpen() ||
-      oversightOpen(),
+  // T3.1: the active panel mode (desktop only), derived once from the layout store instead of one memo
+  // per panel. `isActive(mode)` and `open()` fall out of it.
+  const activeMode = createMemo<PanelMode | undefined>(() => {
+    if (!isDesktop()) return undefined
+    const mode = view().rightPanel.mode()
+    return mode && PANELS.some((p) => p.mode === mode) ? (mode as PanelMode) : undefined
+  })
+  const isActive = (mode: PanelMode) => activeMode() === mode
+  const open = createMemo(() => activeMode() !== undefined)
+  // Per-panel remembered width (T3.3): the wide bucket for diff/files, the narrow bucket for the rest.
+  const activeBucket = createMemo<RightPanelWidthBucket>(
+    () => PANELS.find((p) => p.mode === activeMode())?.bucket ?? "wide",
   )
-  const panelWidth = createMemo(() => (open() ? `${layout.rightPanel.width()}px` : "0px"))
+  const contentWidth = createMemo(() => layout.rightPanel.width(activeBucket()))
+  const panelWidth = createMemo(() => (open() ? `${contentWidth()}px` : "0px"))
 
   const diffs = createMemo(() => props.diffs().filter(renderDiff))
   const diffFiles = createMemo(() => diffs().map((d) => d.file))
@@ -238,155 +284,39 @@ export function SessionSidePanel(props: {
     layout.fileTree.setTab(value)
   }
 
-  const openMenu = () => {
+  // T3.2: switch to a panel with ONE click (was 2 — return-to-menu then pick). Clicking the active
+  // panel's rail icon closes the panel (toggle), matching the titlebar toggle.
+  const openPanel = (mode: PanelMode) => {
     view().reviewPanel.close()
     layout.fileTree.close()
-    view().rightPanel.open("menu")
+    if (isActive(mode)) {
+      view().rightPanel.close()
+      return
+    }
+    view().rightPanel.open(mode)
   }
+  // T3.2: a content panel's close button now CLOSES the panel (was: return to the menu list). The rail
+  // stays visible, so the user re-opens with one click.
+  const closePanel = () => view().rightPanel.close()
 
-  const openReview = () => {
-    view().reviewPanel.close()
-    layout.fileTree.close()
-    view().rightPanel.open("review")
+  // T3.1/T3.3: the rail entries, derived from PANELS — capability-gated (T1.1), with a live badge count
+  // per panel. review-change-count / running-subagent-count / oversight-pending feed `item.badge`; the
+  // rail renders whatever number is present.
+  const badgeFor = (mode: PanelMode): number | undefined => {
+    if (mode === "review") return props.hasReview() ? props.reviewCount() : undefined
+    if (mode === "subagents") return runningSubagentCount() > 0 ? runningSubagentCount() : undefined
+    if (mode === "oversight") return oversightPendingCount() > 0 ? oversightPendingCount() : undefined
+    return undefined
   }
-
-  const openFiles = () => {
-    view().reviewPanel.close()
-    layout.fileTree.close()
-    view().rightPanel.open("files")
-  }
-
-  const openSubagents = () => {
-    view().reviewPanel.close()
-    layout.fileTree.close()
-    view().rightPanel.open("subagents")
-  }
-
-  const openBrowser = () => {
-    view().reviewPanel.close()
-    layout.fileTree.close()
-    view().rightPanel.open("browser")
-  }
-
-  const openWorktree = () => {
-    view().reviewPanel.close()
-    layout.fileTree.close()
-    view().rightPanel.open("worktree")
-  }
-
-  const openPlugins = () => {
-    view().reviewPanel.close()
-    layout.fileTree.close()
-    view().rightPanel.open("plugins")
-  }
-
-  const openDebug = () => {
-    view().reviewPanel.close()
-    layout.fileTree.close()
-    view().rightPanel.open("debug")
-  }
-
-  const openProfile = () => {
-    view().reviewPanel.close()
-    layout.fileTree.close()
-    view().rightPanel.open("profile")
-  }
-
-  const openIM = () => {
-    view().reviewPanel.close()
-    layout.fileTree.close()
-    view().rightPanel.open("im")
-  }
-
-  const openOversight = () => {
-    view().reviewPanel.close()
-    layout.fileTree.close()
-    view().rightPanel.open("oversight")
-  }
-
-  const openTerminal = () => {
-    view().terminal.open()
-    queueMicrotask(() => {
-      const id = terminal.active()
-      if (id) focusTerminalById(id)
-    })
-  }
-
-  // V3.6 Phase 3B: removed duplicate "terminal" and "status/servers-MCP" entries.
-  // Both already appear as titlebar buttons (title-bar right: terminal toggle + StatusPopover).
-  // Keeping them here created confusing dual entry-points for the same functionality (S1).
-  const menuItems = createMemo<SidePanelItem[]>(() => [
-    {
-      icon: "review",
-      title: language.t("session.tab.review"),
-      keybind: command.keybind("review.toggle"),
-      badge: props.hasReview() ? String(props.reviewCount()) : undefined,
-      active: reviewOpen(),
-      onClick: openReview,
-    },
-    {
-      icon: "file-tree",
-      title: language.t("settings.general.row.showFileTree.title"),
-      keybind: command.keybind("fileTree.toggle"),
-      active: fileOpen(),
-      onClick: openFiles,
-    },
-    {
-      icon: "task",
-      title: language.t("session.subagents.title"),
-      badge: runningSubagentCount() > 0 ? String(runningSubagentCount()) : undefined,
-      active: subagentsOpen(),
-      onClick: openSubagents,
-    },
-    {
-      icon: "bubble-5",
-      title: language.t("session.tab.im"),
-      active: imOpen(),
-      onClick: openIM,
-    },
-    // T1.1: Oversight only when its Approval-Queue producers can actually run (v4MultiAgentRuntime).
-    ...(oversightEnabled()
-      ? [
-          {
-            icon: "shield" as const,
-            title: language.t("session.panel.oversight"),
-            active: oversightOpen(),
-            onClick: openOversight,
-          },
-        ]
-      : []),
-    {
-      icon: "link",
-      title: language.t("browser.title"),
-      active: browserOpen(),
-      onClick: openBrowser,
-    },
-    {
-      icon: "branch",
-      title: language.t("worktree.title"),
-      active: worktreeOpen(),
-      onClick: openWorktree,
-    },
-    {
-      icon: "dot-grid",
-      // V3.6 Phase 3C: renamed from "Plugins" to "Extensions & Services" (sidebar.extensions)
-      title: language.t("sidebar.extensions"),
-      active: pluginsOpen(),
-      onClick: openPlugins,
-    },
-    {
-      icon: "terminal",
-      title: language.t("session.panel.debug"),
-      active: debugOpen(),
-      onClick: openDebug,
-    },
-    {
-      icon: "status",
-      title: language.t("session.panel.profile"),
-      active: profileOpen(),
-      onClick: openProfile,
-    },
-  ])
+  const railItems = createMemo(() =>
+    PANELS.filter((p) => (p.capability === "oversight" ? oversightEnabled() : true)).map((p) => ({
+      ...p,
+      title: language.t(p.titleKey),
+      keybindLabel: p.keybind ? command.keybind(p.keybind) : undefined,
+      active: isActive(p.mode),
+      badge: badgeFor(p.mode),
+    })),
+  )
 
   createEffect(() => {
     if (!file.ready()) return
@@ -410,43 +340,55 @@ export function SessionSidePanel(props: {
   })
 
   return (
+    // T3.4 — the entire right panel (rail + content) is DESKTOP-ONLY (≥768px). This is a deliberate
+    // simplification, not an oversight: on a narrow window the session/composer takes the full width and
+    // the panel's functions are reached other ways (titlebar toggles, commands). No mobile drawer is
+    // provided. Revisit only if the product targets tablet/phone widths as a first-class surface.
     <Show when={isDesktop()}>
+      {/* T3.2 — aside = a fixed, always-on icon RAIL + an animated CONTENT region. The rail is always
+          interactive (it's the switcher); only the content region collapses to 0 width when closed. */}
       <aside
         id="review-panel"
         aria-label={language.t("session.panel.reviewAndFiles")}
-        aria-hidden={!open()}
-        inert={!open()}
-        class="relative min-w-0 h-full flex shrink-0 overflow-hidden bg-background-base"
-        classList={{
-          "pointer-events-none": !open(),
-          "transition-[width] duration-[240ms] ease-[cubic-bezier(0.22,1,0.36,1)] will-change-[width] motion-reduce:transition-none":
-            !props.size.active() && !props.reviewSnap,
-        }}
-        style={{ width: panelWidth() }}
+        class="relative min-w-0 h-full flex shrink-0 overflow-hidden bg-background-base border-l border-border-weaker-base"
       >
-        <Show when={open()}>
-          <div class="size-full flex border-l border-border-weaker-base">
-            <div onPointerDown={() => props.size.start()}>
-              <ResizeHandle
-                direction="horizontal"
-                edge="start"
-                size={layout.rightPanel.width()}
-                min={layout.rightPanel.minWidth}
-                max={layout.rightPanel.maxWidth()}
-                onResize={(width) => {
-                  props.size.touch()
-                  layout.rightPanel.resize(width)
-                }}
-              />
-            </div>
+        <SidePanelRail
+          items={railItems}
+          groupOrder={GROUP_ORDER}
+          onSelect={openPanel}
+          collapseLabel={language.t("common.close")}
+        />
+        <div
+          class="relative min-w-0 h-full overflow-hidden bg-background-base border-l border-border-weaker-base"
+          aria-hidden={!open()}
+          inert={!open()}
+          classList={{
+            "pointer-events-none": !open(),
+            "transition-[width] duration-[240ms] ease-[cubic-bezier(0.22,1,0.36,1)] will-change-[width] motion-reduce:transition-none":
+              !props.size.active() && !props.reviewSnap,
+          }}
+          style={{ width: panelWidth() }}
+        >
+          <Show when={open()}>
+            <div class="size-full flex">
+              <div onPointerDown={() => props.size.start()}>
+                <ResizeHandle
+                  direction="horizontal"
+                  edge="start"
+                  size={contentWidth()}
+                  min={layout.rightPanel.minWidth}
+                  max={layout.rightPanel.maxWidth()}
+                  onResize={(width) => {
+                    props.size.touch()
+                    layout.rightPanel.resize(width, activeBucket())
+                  }}
+                />
+              </div>
             <Switch>
-              <Match when={menuOpen()}>
-                <SidePanelMenu items={menuItems} onClose={view().rightPanel.close} />
-              </Match>
-              <Match when={reviewOpen()}>
+              <Match when={isActive("review")}>
                 <div class="h-full w-full min-w-0 overflow-hidden bg-background-base">{props.reviewPanel()}</div>
               </Match>
-              <Match when={fileOpen()}>
+              <Match when={isActive("files")}>
                 <Show
                   when={previewPath()}
                   fallback={
@@ -589,88 +531,108 @@ export function SessionSidePanel(props: {
                   )}
                 </Show>
               </Match>
-              <Match when={subagentsOpen()}>
-                <SidePanelSubagents onClose={openMenu} />
+              <Match when={isActive("subagents")}>
+                <SidePanelSubagents onClose={closePanel} />
               </Match>
-              <Match when={browserOpen()}>
-                <SidePanelBrowser onClose={openMenu} />
+              <Match when={isActive("browser")}>
+                <SidePanelBrowser onClose={closePanel} />
               </Match>
-              <Match when={worktreeOpen()}>
-                <SidePanelWorktree onClose={openMenu} />
+              <Match when={isActive("worktree")}>
+                <SidePanelWorktree onClose={closePanel} />
               </Match>
-              <Match when={pluginsOpen()}>
-                <SidePanelPlugins onClose={openMenu} />
+              <Match when={isActive("plugins")}>
+                <SidePanelPlugins onClose={closePanel} />
               </Match>
-              <Match when={debugOpen()}>
-                <SidePanelDebug onClose={openMenu} onNavigate={openFileAt} />
+              <Match when={isActive("debug")}>
+                <SidePanelDebug onClose={closePanel} onNavigate={openFileAt} />
               </Match>
-              <Match when={profileOpen()}>
-                <SidePanelProfile onClose={openMenu} />
+              <Match when={isActive("profile")}>
+                <SidePanelProfile onClose={closePanel} />
               </Match>
-              <Match when={imOpen()}>
-                <SidePanelIM onClose={openMenu} />
+              <Match when={isActive("im")}>
+                <SidePanelIM onClose={closePanel} />
               </Match>
-              <Match when={oversightOpen()}>
-                <SidePanelOversight onClose={openMenu} />
+              <Match when={isActive("oversight")}>
+                <SidePanelOversight onClose={closePanel} />
               </Match>
             </Switch>
-          </div>
-        </Show>
+            </div>
+          </Show>
+        </div>
       </aside>
     </Show>
   )
 }
 
-function SidePanelMenu(props: { items: () => SidePanelItem[]; onClose: () => void }) {
-  const language = useLanguage()
+type RailItem = {
+  readonly mode: PanelMode
+  readonly icon: ComponentProps<typeof Icon>["name"]
+  readonly title: string
+  readonly group: PanelGroup
+  readonly active: boolean
+  readonly badge?: number
+  readonly keybindLabel?: string
+}
 
+// T3.2/T3.3 — the always-on vertical icon rail. ~44px fixed strip; one icon per panel, grouped with a
+// divider between groups (T3.3). A click switches the content panel in ONE step (or closes it if that
+// panel is already active). Each icon carries a tooltip (title + keybind) and an optional badge count.
+function SidePanelRail(props: {
+  items: () => RailItem[]
+  groupOrder: readonly PanelGroup[]
+  onSelect: (mode: PanelMode) => void
+  collapseLabel: string
+}) {
   return (
-    <div class="h-full w-full min-w-0 bg-background-base">
-      <div class="sticky top-0 z-10 h-10 flex items-center justify-end px-2 bg-background-base">
-        <IconButton
-          icon="close-small"
-          variant="ghost"
-          class="h-7 w-7 rounded-md"
-          onClick={props.onClose}
-          aria-label={language.t("common.close")}
-        />
-      </div>
-      {/* Scrollable so items stay reachable when the bottom terminal shortens the
-          sidebar. Center vertically only while there's spare room (justify-center on
-          a min-h-full inner track); once items overflow, scrolling takes over. */}
-      <div class="h-[calc(100%-40px)] min-h-0 overflow-y-auto">
-        <div class="min-h-full w-full px-4 py-2 flex flex-col justify-center gap-2">
-          <For each={props.items()}>
-            {(item) => (
-              <button
-                type="button"
-                class="group h-14 w-full rounded-lg px-4 flex items-center gap-3 text-left transition-colors bg-surface-base hover:bg-surface-raised-base-hover"
-                classList={{
-                  "ring-1 ring-border-strong-base bg-surface-raised-base-active": item.active,
-                }}
-                onClick={item.onClick}
-              >
-                <Icon name={item.icon} size="small" class="text-icon-base shrink-0" />
-                <span class="min-w-0 flex-1 text-15-medium text-text-strong truncate">{item.title}</span>
-                <Show when={item.badge}>
-                  {(badge) => (
-                    <span class="min-w-5 h-5 px-1.5 rounded-full bg-surface-raised-base text-11-medium text-text-base flex items-center justify-center">
-                      {badge()}
-                    </span>
-                  )}
-                </Show>
-                <Show when={item.keybind}>
-                  {(keybind) => (
-                    <Keybind class="shrink-0 !border-0 !shadow-none bg-surface-raised-base text-text-weaker">
-                      {keybind()}
-                    </Keybind>
-                  )}
-                </Show>
-              </button>
-            )}
-          </For>
-        </div>
-      </div>
+    <div
+      class="h-full shrink-0 flex flex-col items-center gap-0.5 py-2 overflow-y-auto bg-background-base"
+      style={{ width: `${RIGHT_PANEL_RAIL_PX}px` }}
+      role="tablist"
+      aria-label={props.collapseLabel}
+    >
+      <For each={props.groupOrder}>
+        {(group, gi) => {
+          const groupItems = () => props.items().filter((it) => it.group === group)
+          return (
+            <Show when={groupItems().length > 0}>
+              {/* divider between non-empty groups (not before the first) */}
+              <Show when={gi() > 0}>
+                <div class="my-1 h-px w-6 bg-border-weaker-base shrink-0" aria-hidden />
+              </Show>
+              <For each={groupItems()}>
+                {(item) => (
+                  <Tooltip
+                    placement="left"
+                    gutter={6}
+                    value={item.keybindLabel ? `${item.title} · ${item.keybindLabel}` : item.title}
+                  >
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={item.active}
+                      aria-label={item.title}
+                      class="relative h-8 w-8 rounded-md flex items-center justify-center transition-colors text-icon-base hover:bg-surface-raised-base-hover"
+                      classList={{
+                        "bg-surface-raised-base-active text-text-strong ring-1 ring-border-strong-base": item.active,
+                      }}
+                      onClick={() => props.onSelect(item.mode)}
+                    >
+                      <Icon name={item.icon} size="small" class="shrink-0" />
+                      <Show when={item.badge}>
+                        {(badge) => (
+                          <span class="absolute -top-0.5 -right-0.5 min-w-4 h-4 px-1 rounded-full bg-surface-raised-base text-10-regular text-text-base flex items-center justify-center ring-1 ring-background-base">
+                            {badge()}
+                          </span>
+                        )}
+                      </Show>
+                    </button>
+                  </Tooltip>
+                )}
+              </For>
+            </Show>
+          )
+        }}
+      </For>
     </div>
   )
 }
