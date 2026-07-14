@@ -128,6 +128,43 @@ describe("buildSystemPrompt prompt-cache stability", () => {
     expect(tail).toContain("orchestration verdict")
     expect(buildVolatileRoundContext(base)).not.toContain("orchestration verdict")
   })
+
+  test("BUG #5: lazily-retrieved knowledge does NOT enter the system prefix (it appears mid-session)", () => {
+    // Round 1 on a fresh/empty store retrieves no knowledge (null); a later retrieval-enabled round
+    // returns a synthesis. If knowledge sat in the cached prefix, that late appearance would bust the
+    // prompt cache for the rest of the session (~10× cost). The prefix must be byte-identical either way.
+    const base: PromptContext = { ...ctxAt(1, 100_000), mode: "max" } // knowledge is gated to max/ultra
+    const withKnowledge: PromptContext = {
+      ...ctxAt(4, 40_000),
+      mode: "max",
+      knowledge: {
+        synthesis: "prefer parameterized queries; the ORM escapes inputs",
+        strategyRefs: ["strat-1"],
+        methodologyRefs: ["meth-2"],
+        memoryRefs: [],
+        conflicts: [],
+      },
+    }
+    // Prefix is byte-identical with/without the (late) knowledge synthesis …
+    expect(buildSystemPrompt(withKnowledge)).toBe(buildSystemPrompt(base))
+    // … and the synthesis lands in the VOLATILE tail instead (proving it still reaches the model).
+    const tail = buildVolatileRoundContext(withKnowledge)
+    expect(tail).toContain("参考知识")
+    expect(tail).toContain("prefer parameterized queries")
+    expect(buildVolatileRoundContext(base)).not.toContain("参考知识")
+  })
+
+  test("MEDIUM: the current date does NOT enter the system prefix (it advances at midnight)", () => {
+    // Baking the date into the cached prefix busts the whole prefix once per day. Two different dates
+    // must yield a byte-identical prefix, with the date rendered in the volatile tail instead.
+    const day1 = { ...ctxAt(2, 90_000), environment: { ...ctxAt(2, 90_000).environment, date: "Jul 10, 2026" } }
+    const day2 = { ...ctxAt(2, 90_000), environment: { ...ctxAt(2, 90_000).environment, date: "Jul 11, 2026" } }
+    expect(buildSystemPrompt(day2)).toBe(buildSystemPrompt(day1))
+    expect(buildSystemPrompt(day1)).not.toContain("Jul 10, 2026")
+    // … and the date still reaches the model via the volatile tail.
+    expect(buildVolatileRoundContext(day1)).toContain("Jul 10, 2026")
+    expect(buildVolatileRoundContext(day2)).toContain("Jul 11, 2026")
+  })
 })
 
 describe("buildVolatileRoundContext", () => {

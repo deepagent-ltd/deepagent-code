@@ -73,20 +73,23 @@ describe("session ledger (C2)", () => {
 
 describe("session ledger (C2) — corrupt-store recovery", () => {
   test("REGRESSION: constructing + reading a genuinely corrupt on-disk store degrades to a safe default", () => {
-    // Faithful reproduction of the Stage-1 seam (context-ledger.ts): DocumentStore construction parses
-    // every doc file EAGERLY (rebuildIndex -> JSON.parse) and THROWS SYNCHRONOUSLY on a corrupt file.
-    // The seam wraps `new DocumentStore(...)` + loadLedger inside Effect.sync guarded by
-    // matchCauseEffect. Prove that pattern turns the sync throw into a recovered default (0 / fallback),
-    // NOT a thrown exception into the caller. (Effect.catch would MISS this defect — Phase-3 D1.)
+    // Stage-1 seam (context-ledger.ts). This test used to document a DEFECT: DocumentStore construction
+    // parsed every doc file eagerly (rebuildIndex -> JSON.parse) and THREW SYNCHRONOUSLY on one corrupt
+    // file, so the seam wrapped construction in Effect.sync + matchCauseEffect to recover the cause.
+    // That defect is now fixed AT THE SOURCE (audit #4): rebuildIndex skips an unreadable doc file and
+    // still opens the store. So a single corrupt file no longer bricks construction — the store degrades
+    // to a safe EMPTY ledger (0 entries) directly, which is strictly better than a recovered sentinel.
+    // We keep the Effect.sync seam here as defense-in-depth (it must still not throw), but the expected
+    // outcome is now the real 0-entry default rather than the failure sentinel.
     const root = path.join(base, "corrupt")
     const ledgerDir = path.join(root, "docs", "ledger")
     mkdirSync(ledgerDir, { recursive: true })
     writeFileSync(path.join(ledgerDir, "bad.json"), "{ this is : not valid json ]")
 
-    // First: construction alone throws synchronously (documents the defect this guard must catch).
-    expect(() => new DocumentStore(root)).toThrow()
+    // Construction no longer throws on a corrupt file — the bad file is skipped, the store opens.
+    expect(() => new DocumentStore(root)).not.toThrow()
 
-    // Now the seam's exact shape: construct + read inside Effect.sync, recover the CAUSE.
+    // The seam's exact shape still holds (defense-in-depth): construct + read inside Effect.sync.
     const SENTINEL = -1
     const guarded = Effect.sync(() => {
       const store = new DocumentStore(root)
@@ -101,7 +104,8 @@ describe("session ledger (C2) — corrupt-store recovery", () => {
     expect(() => {
       result = Effect.runSync(guarded)
     }).not.toThrow()
-    expect(result).toBe(SENTINEL) // recovered the construction defect to the safe default
+    // Recovered to the real safe default (empty ledger), NOT the failure sentinel — construction succeeded.
+    expect(result).toBe(0)
   })
 })
 
