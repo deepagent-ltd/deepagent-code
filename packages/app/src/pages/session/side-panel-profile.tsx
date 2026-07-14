@@ -398,7 +398,7 @@ export const SidePanelProfile: Component<{ onClose: () => void }> = (props) => {
       {/* ── Header ── */}
       <div class="shrink-0 sticky top-0 z-10 h-10 flex items-center justify-between px-3 bg-background-base border-b border-border-weaker-base">
         <span class="text-12-medium text-text flex items-center gap-1.5">
-          <Icon name="status" size="small" class="text-icon-base" />
+          <Icon name="profile" size="small" class="text-icon-base" />
           性能剖析
         </span>
         <IconButton
