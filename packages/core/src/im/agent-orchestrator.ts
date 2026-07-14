@@ -59,7 +59,21 @@ export function executeAgentMentions(input: {
       .listAgents({ workspaceID: input.workspaceID, userID: input.userID })
       .pipe(Effect.catch(() => Effect.succeed([] as AgentDescriptorLike[])))
 
-    const agentMap = new Map(availableAgents.map((a) => [a.name, a]))
+    // Build a name→agent map for the @mention path. Names are NOT unique across
+    // the list: ServerAgentListProvider appends BUILTIN_AGENT_DESCRIPTORS (all
+    // `visible:false`) that REUSE the primary names "auto"/"general" for the
+    // autonomous trigger/capability routers (matchable-but-hidden, see
+    // builtin-agents.ts). A naive `new Map(list.map(...))` is last-write-wins, so
+    // those hidden builtins would SHADOW the real visible config agents of the
+    // same name — and the `visible` filter below then drops @auto/@general to
+    // nothing. For a human @mention the visible agent must always win, so never
+    // let a non-visible entry overwrite an existing visible one of the same name.
+    const agentMap = new Map<string, AgentDescriptorLike>()
+    for (const agent of availableAgents) {
+      const existing = agentMap.get(agent.name)
+      if (existing && existing.visible && !agent.visible) continue
+      agentMap.set(agent.name, agent)
+    }
     const agentsToExecute = input.mentionedAgentNames
       .map((name) => agentMap.get(name))
       .filter((a): a is AgentDescriptorLike => a !== undefined && a.visible)
