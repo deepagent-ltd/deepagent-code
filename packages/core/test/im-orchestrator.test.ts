@@ -281,4 +281,89 @@ describe("IM Agent Orchestrator", () => {
     expect(messages.length).toBe(0)
     expect(captured.length).toBe(0)
   })
+
+  // ── REGRESSION: a hidden built-in must NOT shadow a visible config agent of the same name ────────────
+  //
+  // The production provider (ServerAgentListProvider.listAgents) returns the real VISIBLE config agents
+  // first, then appends BUILTIN_AGENT_DESCRIPTORS which REUSE the names "auto"/"general" with
+  // `visible:false` (matchable-but-hidden, for autonomous trigger/capability routing — NOT @mentions).
+  // The old `new Map(list.map(...))` was last-write-wins, so a hidden built-in shadowed the visible agent
+  // and the `visible` filter dropped @auto/@general to nothing (0 agent calls). This asserts that when a
+  // hidden built-in named "auto" comes AFTER a visible config "auto", the @mention resolves to the VISIBLE
+  // agent and actually runs — regardless of list order.
+  it("resolves @mention to the VISIBLE agent when a hidden built-in reuses its name", async () => {
+    captured.length = 0
+
+    const visibleAuto: AgentDescriptor = {
+      id: "config:auto",
+      name: "auto",
+      displayName: "Auto",
+      description: "the real primary agent",
+      visible: true,
+    }
+    // Hidden built-in reusing the same name, appended AFTER the visible one (production order).
+    const hiddenAuto: AgentDescriptor = {
+      id: "builtin:codefix",
+      name: "auto",
+      displayName: "Code Fix Agent",
+      description: "autonomous fixer",
+      visible: false,
+    }
+    const ShadowingAgentListLive = Layer.succeed(AgentListProviderService, {
+      listAgents: () => Effect.succeed([visibleAuto, hiddenAuto]),
+      findByTrigger: () => Effect.succeed([]),
+      findByCapability: () => Effect.succeed([]),
+    })
+
+    const program = Effect.gen(function* () {
+      yield* setupDatabase
+      const repo = yield* IMRepository
+      const group = yield* repo.createGroup({
+        workspaceID: "ws1",
+        name: "G",
+        type: "project",
+        createdBy: "server",
+      })
+
+      yield* executeAgentMentions({
+        workspaceID: "ws1",
+        directory: "/tmp/ws1",
+        groupID: group.id,
+        messageID: "msg-shadow",
+        userID: "server",
+        content: "@auto please help",
+        mentionedAgentNames: ["auto"],
+      })
+
+      const page = yield* repo.listMessages({ groupID: group.id, limit: 10 })
+      return page.messages
+    })
+
+    const layer = Layer.merge(
+      Layer.mergeAll(
+        Database.defaultLayer,
+        IMRepositoryLive.pipe(Layer.provide(Database.defaultLayer)),
+        FakeBroadcasterLive,
+        ShadowingAgentListLive,
+        FakeContextBuilderLive,
+      ),
+      makeExecutor({ success: true, timeout: false, content: "ran as the visible auto agent" }),
+    )
+    const messages = await Effect.runPromise(program.pipe(Effect.provide(layer)))
+
+    // The agent DID run (not silently dropped): a reply was persisted.
+    const agentReply = messages.find((m) => m.senderType === "agent")
+    expect(agentReply).toBeDefined()
+    expect(agentReply?.content).toBe("ran as the visible auto agent")
+
+    // And it ran under the VISIBLE config agent's id, not the hidden built-in's.
+    const startedForVisible = captured.some(
+      (c) => c.event.type === "agent_status" && (c.event as any).data.agentID === "config:auto",
+    )
+    const startedForHidden = captured.some(
+      (c) => c.event.type === "agent_status" && (c.event as any).data.agentID === "builtin:codefix",
+    )
+    expect(startedForVisible).toBe(true)
+    expect(startedForHidden).toBe(false)
+  })
 })
