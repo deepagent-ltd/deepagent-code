@@ -922,7 +922,7 @@ export const dict = {
   "session.header.open.app.powershell": "PowerShell",
   "session.header.open.app.sublimeText": "Sublime Text",
 
-  "status.popover.trigger": "Servers & MCP",
+  "status.popover.trigger": "Servers",
   "status.popover.ariaLabel": "Server configurations",
   "status.popover.tab.servers": "Servers",
   "status.popover.tab.mcp": "MCP",
@@ -930,7 +930,7 @@ export const dict = {
   "status.popover.tab.plugins": "Plugins",
   "status.popover.action.manageServers": "Manage servers",
   // V3.6 Phase 3C: right-panel extensions hub label (unifies plugin/packs/MCP concept)
-  "sidebar.extensions": "Extensions & Services",
+  "sidebar.extensions": "Plugins",
 
   "session.share.popover.title": "Publish on web",
   "session.share.popover.description.shared":
