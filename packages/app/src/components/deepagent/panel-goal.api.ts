@@ -101,35 +101,46 @@ export const consultPanel = async (
   return response.data
 }
 
-/** Set the per-session panel armed flag (the button toggle). Returns the effective armed state. */
+/** V4.0 composer three-state control: Off maps to armed:false; Single/Multi map to armed:true + depth. */
+export type PanelRounds = "single" | "multi"
+
+/**
+ * Set the per-session panel armed flag AND (when arming) the debate depth (the composer's three-state
+ * control: Off / Single-round / Multi-round). Returns the effective armed state + depth.
+ */
 export const armPanel = async (
   client: PanelGoalClient,
   sessionID: string,
   armed: boolean,
-): Promise<boolean> => {
-  const response = await client.client.request<{ sessionID: string; armed: boolean }>({
+  rounds?: PanelRounds,
+): Promise<{ armed: boolean; rounds: PanelRounds }> => {
+  const response = await client.client.request<{ sessionID: string; armed: boolean; rounds: PanelRounds }>({
     method: "POST",
     url: "/deepagent/panel/arm",
-    body: { sessionID, armed },
+    body: { sessionID, armed, ...(rounds ? { rounds } : {}) },
     headers: JSON_HEADERS,
   })
-  return response.data?.armed ?? armed
+  return { armed: response.data?.armed ?? armed, rounds: response.data?.rounds ?? rounds ?? "single" }
 }
 
 /**
- * Resolve the EFFECTIVE armed state for a session: the explicit per-session toggle if set, else the
- * server's global expertPanelDefault. Lets the button seed from the server default without the client
- * guessing (the client setting is only a hint; the server is authoritative).
+ * Resolve the EFFECTIVE armed state + debate depth for a session: the explicit per-session toggle if
+ * set, else the server's global expertPanelDefault. Lets the button seed from the server default
+ * without the client guessing (the client setting is only a hint; the server is authoritative).
  */
 export const fetchPanelStatus = async (
   client: PanelGoalClient,
   sessionID: string,
-): Promise<{ armed: boolean; explicit: boolean }> => {
-  const response = await client.client.request<{ armed: boolean; explicit: boolean }>({
+): Promise<{ armed: boolean; explicit: boolean; rounds: PanelRounds }> => {
+  const response = await client.client.request<{ armed: boolean; explicit: boolean; rounds: PanelRounds }>({
     method: "GET",
     url: `/deepagent/panel/status?sessionID=${encodeURIComponent(sessionID)}`,
   })
-  return { armed: response.data?.armed ?? false, explicit: response.data?.explicit ?? false }
+  return {
+    armed: response.data?.armed ?? false,
+    explicit: response.data?.explicit ?? false,
+    rounds: response.data?.rounds ?? "single",
+  }
 }
 
 // ── Goal Loop (§D) ───────────────────────────────────────────────────────────
