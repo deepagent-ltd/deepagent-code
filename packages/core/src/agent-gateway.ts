@@ -725,8 +725,14 @@ const runBackgroundLearning = (run: RunRecord, finalStatus: "completed" | "faile
       // docs/34 §8: the worker stages into THIS workspace's durable project store (opened from the
       // same baseDir + path the retriever reads), so learned knowledge is immediately consistent.
       const durable = DeepAgentKnowledgeSource.projectStoreFor(workspacePath)
+      // Gate 3 (R3 anti-pollution): the worker must consult the SAME durable RejectedBuffer the human
+      // `reject` handler writes, so a rejected pattern is not re-learned + auto-admitted on a later run.
+      // The handler roots it at dirname(runsDir)/memory; construct the reader at the identical path.
+      const rejectedBuffer = current.runsDir
+        ? new DeepAgentPromotion.RejectedBuffer(path.join(path.dirname(current.runsDir), "memory"))
+        : undefined
       return {
-        worker: new DeepAgentBackgroundLearning.LearningWorker(project, projectID, durable),
+        worker: new DeepAgentBackgroundLearning.LearningWorker(project, projectID, durable, rejectedBuffer),
         input: {
           projectID,
           sessionID: sessionId,
