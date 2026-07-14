@@ -16,9 +16,13 @@ import { DeepAgentEvent } from "./deepagent-event"
 // LAYERING: `core`. Pure durable state; the runtime + HTTP layer read/write it.
 
 // §E4 quiet-hours window (local hours + tz offset). start===end ⇒ no quiet window.
+// An hour-of-day: integer in [0,23]. Bounding this is load-bearing — an out-of-range endHour (e.g. 24)
+// makes the quiet window never exit (isWithinQuietHours compares against hour-of-day in [0,24)), so
+// low/normal pushes get deferred into the digest indefinitely. Reject the misconfig at decode time.
+const HourOfDay = Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 23 }))
 export const QuietHoursConfig = Schema.Struct({
-  startHour: Schema.Int, // 0-23 local
-  endHour: Schema.Int, // 0-23 local (wraps midnight if end < start)
+  startHour: HourOfDay, // 0-23 local
+  endHour: HourOfDay, // 0-23 local (wraps midnight if end < start)
   tzOffsetMinutes: Schema.Int, // minutes east of UTC (e.g. +480 for UTC+8, -300 for UTC-5)
 })
 export type QuietHoursConfig = Schema.Schema.Type<typeof QuietHoursConfig>

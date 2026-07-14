@@ -462,6 +462,46 @@ describe("DeepAgentEventBus.sweepPublishLimiter (§E2 bucket prune)", () => {
   )
 })
 
+describe("DeepAgentEventBus.sweep (§A3 retention referential safety)", () => {
+  it.effect("spares a dead event still referenced by a LIVE dlq.alert; still sweeps an unreferenced one", () =>
+    Effect.gen(function* () {
+      const bus = yield* DeepAgentEventBus.Service
+
+      // Two old events (both past the retention cutoff we'll sweep with):
+      //   `dead`   — will be dead-lettered and referenced by a dlq.alert.
+      //   `orphan` — the control: old, unreferenced, must still be swept.
+      setNow(1_000)
+      const dead = yield* bus.publish(input({ idempotencyKey: "sweep-dead-1" }))
+      const orphan = yield* bus.publish(input({ idempotencyKey: "sweep-orphan-1" }))
+
+      // Drive `dead`'s delivery to the DLQ much later (inside the retention window). The 3rd nack flips
+      // it to "dead" and emits ONE real dlq.alert via emitDlqAlert — carrying causationID = dead.id AND
+      // payload.deadEventID = dead.id (the two fields the sweep predicate keys on). A "dead" delivery on
+      // its own does NOT protect an event; only the live dlq.alert reference does.
+      setNow(50_000)
+      yield* bus.nack({ subscriptionGroup: "router", eventID: dead.id, reason: "1" })
+      yield* bus.nack({ subscriptionGroup: "router", eventID: dead.id, reason: "2" })
+      yield* bus.nack({ subscriptionGroup: "router", eventID: dead.id, reason: "3" })
+      const alerts = yield* bus.recentByType({ type: "dlq.alert", windowMs: Number.MAX_SAFE_INTEGER, now: 50_000 })
+      expect(alerts.length).toBe(1) // the alert is live (createdAt 50_000)
+      expect((alerts[0]?.payload as { deadEventID?: string }).deadEventID).toBe(dead.id)
+      expect(alerts[0]?.causationID).toBe(dead.id)
+
+      // Sweep with a cutoff PAST both old events but BEFORE the live alert.
+      const { deletedEvents } = yield* bus.sweep({ workspaceID: "wrk_1", olderThan: 2_000 })
+
+      // Only the unreferenced `orphan` is swept — the sweep still works. `dead` is SPARED because a live
+      // dlq.alert still references it, so no dangling trace reference is left behind.
+      expect(deletedEvents).toBe(1)
+      expect(yield* bus.getByID(dead.id)).toBeDefined() // protected by the live dlq.alert
+      expect(yield* bus.getByID(orphan.id)).toBeUndefined() // no ref → swept
+      // the alert itself survives (newer than the cutoff), so the reference stays live rather than dangling.
+      const after = yield* bus.recentByType({ type: "dlq.alert", windowMs: Number.MAX_SAFE_INTEGER, now: 50_000 })
+      expect(after.length).toBe(1)
+    }),
+  )
+})
+
 describe("DeepAgentEventBus publish latency (§F1)", () => {
   it.effect("publish records publish_latency_ms on the row (the clock delta around persist)", () =>
     Effect.gen(function* () {

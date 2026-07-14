@@ -250,6 +250,21 @@ describe("S6 ContextAdmissionGate", () => {
     expect(r.truncated).toHaveLength(25)
   })
 
+  test("token budget skips an over-budget ref but still admits a smaller one behind it", () => {
+    // large ref (~200 tokens) sits ahead of a small ref (~3 tokens) in filter order.
+    // budget admits only the small one; the large one must be SKIPPED, not starve the small ref.
+    const large = mkEntry({ ref_id: "strategy:large", title: "L", summary: "x".repeat(800) })
+    const small = mkEntry({ ref_id: "strategy:small", title: "S", summary: "tiny" })
+    const budget = 20
+    const r = admitIndexRefs([large, small], "max", { max_estimated_tokens: budget })
+    const ids = r.admitted.map((e) => e.ref_id)
+    expect(ids).toContain("strategy:small") // previously starved by the greedy break
+    expect(ids).not.toContain("strategy:large")
+    // budget bookkeeping: skipped ref must not be charged, total must stay within ceiling
+    expect(r.estimated_tokens).toBeLessThanOrEqual(budget)
+    expect(r.truncated.map((e) => e.ref_id)).toContain("strategy:large")
+  })
+
   test("formatPackIndexSection emits nothing when empty, header when populated", () => {
     expect(
       formatPackIndexSection({ admitted: [], truncated: [], admitted_ref_count: 0, estimated_tokens: 0 }, []),

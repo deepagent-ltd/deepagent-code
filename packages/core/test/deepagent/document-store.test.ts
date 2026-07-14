@@ -1,5 +1,5 @@
 import { describe, expect, test, beforeEach, afterEach } from "bun:test"
-import { mkdtempSync, rmSync } from "node:fs"
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { DocumentStore, knowledgeSimilarity, tokenizeForSimilarity } from "../../src/deepagent/document-store"
@@ -97,6 +97,46 @@ describe("V3 DocumentStore", () => {
       provenance: { source: "runner" },
     })
     expect(store.list({ type: "memory" }).length).toBe(0)
+  })
+
+  // BUG #3 (INV-7): list() excludes sealed docs, but graph traversal (neighbors/getRefsIn) must too —
+  // a sealed doc linked from a visible doc must never surface via an edge.
+  test("sealed docs never leak through graph traversal (INV-7)", () => {
+    // sealed target linked from a visible doc, and a visible doc linked from a sealed source.
+    const sealed = store.create({
+      type: "memory",
+      scope: "sealed",
+      body: "secret",
+      description: "sealed memory",
+      confidence: { evidence_strength: "none", support_count: 0 },
+      provenance: { source: "runner" },
+    })
+    const visible = store.create(design("v", "visible design"))
+    // visible -> sealed : neighbors(visible) must NOT return the sealed doc
+    store.link(visible.id, "derived_from", sealed.id)
+    expect(store.neighbors(visible.id, ["derived_from"], 2).some((x) => x.id === sealed.id)).toBe(false)
+    // sealed -> visible : getRefsIn(visible) must NOT surface the sealed doc as an inbound source
+    store.link(sealed.id, "derived_from", visible.id)
+    expect(store.getRefsIn(visible.id).some((r) => r.from.id === sealed.id)).toBe(false)
+    // and list() still excludes it (baseline invariant)
+    expect(store.list().some((r) => r.id === sealed.id)).toBe(false)
+  })
+
+  // BUG #4: one corrupt/truncated .json doc must not brick store construction (rebuildIndex runs in
+  // the constructor). The bad file is skipped; valid docs are still indexed.
+  test("rebuildIndex skips a corrupt doc file and still opens the store", () => {
+    const a = store.create(design("a", "valid design a"))
+    const b = store.create({ type: "candidate", scope: "run:t1", body: "b", description: "valid cand b", provenance: prov })
+    // Drop a truncated/partial-write .json into a type dir alongside the valid files.
+    const badDir = path.join(root, "docs", "design")
+    mkdirSync(badDir, { recursive: true })
+    writeFileSync(path.join(badDir, "corrupt@v1.json"), '{"id":"doc:design:oops","versi')
+    // Constructing (or rebuilding) must not throw; valid docs remain indexed.
+    const reopened = new DocumentStore(root)
+    const ids = reopened.list().map((r) => r.id)
+    expect(ids).toContain(a.id)
+    expect(ids).toContain(b.id)
+    expect(ids).not.toContain("doc:design:oops")
   })
 
   // V3.9 §B.2/B.3: the human-governance edit path. Append-only new version whose provenance is the
