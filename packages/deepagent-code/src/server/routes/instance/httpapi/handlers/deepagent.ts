@@ -514,10 +514,17 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
       )
 
     const panelArm = Effect.fn("DeepAgentHttpApi.panelArm")(function* (ctx) {
-      const { sessionID, armed } = ctx.payload
+      const { sessionID, armed, rounds } = ctx.payload
       AgentGateway.DeepAgentSessionState.setPanelArmed(sessionID, armed)
+      // Persist the debate depth when arming (the three-state control's Single/Multi choice). On disarm
+      // we leave the stored depth untouched so re-arming restores the user's last choice.
+      if (armed && rounds) AgentGateway.DeepAgentSessionState.setPanelRounds(sessionID, rounds)
       const globalDefault = yield* expertPanelDefault()
-      return { sessionID, armed: AgentGateway.DeepAgentSessionState.resolvePanelArmed(sessionID, globalDefault) }
+      return {
+        sessionID,
+        armed: AgentGateway.DeepAgentSessionState.resolvePanelArmed(sessionID, globalDefault),
+        rounds: AgentGateway.DeepAgentSessionState.panelRounds(sessionID),
+      }
     })
 
     const panelStatus = Effect.fn("DeepAgentHttpApi.panelStatus")(function* (ctx) {
@@ -528,6 +535,7 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
         sessionID,
         armed: choice ?? globalDefault,
         explicit: choice != null,
+        rounds: AgentGateway.DeepAgentSessionState.panelRounds(sessionID),
       }
     })
 
