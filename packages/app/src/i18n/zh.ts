@@ -807,7 +807,7 @@ export const dict = {
   "session.header.open.menu": "打开选项",
   "session.header.open.copyPath": "复制路径",
 
-  "status.popover.trigger": "服务器与MCP",
+  "status.popover.trigger": "服务器",
   "status.popover.ariaLabel": "服务器配置",
   "status.popover.tab.servers": "服务器",
   "status.popover.tab.mcp": "MCP",
@@ -815,7 +815,7 @@ export const dict = {
   "status.popover.tab.plugins": "插件",
   "status.popover.action.manageServers": "管理服务器",
   // V3.6 Phase 3C
-  "sidebar.extensions": "扩展与服务",
+  "sidebar.extensions": "插件",
 
   "session.share.popover.title": "发布到网页",
   "session.share.popover.description.shared": "此会话已在网页上公开。任何拥有链接的人都可以访问。",
