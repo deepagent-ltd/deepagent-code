@@ -224,8 +224,10 @@ const isReadOnlySegment = (segment: string): boolean => {
   if (trimmed === "") return true // empty segment (e.g. trailing operator) is inert
 
   // Any output redirection in the segment → mutating. Strip fd-duplication (2>&1, 1>&2, >&2) first,
-  // which is not a file write, then look for a real `>`.
-  const withoutFdDup = trimmed.replace(/\d*>&\d*/g, " ")
+  // which is not a file write, then look for a real `>`. Only a NUMERIC right-hand side is an fd-dup;
+  // `>&file`/`>&out.txt` (word RHS) is bash shorthand for redirecting both stdout+stderr to a FILE, so
+  // it must NOT be stripped — its `>` has to survive the write-check below.
+  const withoutFdDup = trimmed.replace(/\d*>&\d/g, " ")
   if (withoutFdDup.includes(">")) return false
 
   const tokens = tokenize(trimmed)
@@ -255,7 +257,12 @@ const isReadOnlySegment = (segment: string): boolean => {
     const rest = words.slice(1).filter((token) => !isFlag(token))
     if (rest.length > 0) return false
   }
-  if (head === "curl" && /\s-[oO]\b|--output\b|--remote-name\b/.test(trimmed)) return false
+  // curl writes a file with -o/-O/--output/--remote-name. A short-flag TOKEN can glue or bundle the
+  // output flag (`-ofile.txt`, `-sofile`), and since curl short flags are single-letter and `o`/`O`
+  // are only ever the output flags, any single-dash bundle containing `o`/`O` writes a file. Match a
+  // `-…o`/`-…O` short bundle (not a `--long` option, which is covered by the explicit long forms).
+  if (head === "curl" && (/(?:^|\s)-[a-zA-Z]*[oO]/.test(trimmed) || /--output\b|--remote-name\b/.test(trimmed)))
+    return false
 
   return true
 }
@@ -274,7 +281,7 @@ export const classifyCommand = (command: string): CommandIntent => {
   // exactly per-segment; the placeholder holds no separator or `>` char so it survives the split,
   // and isReadOnlySegment strips fd-dup again defensively.
   const fdSpans: string[] = []
-  const masked = command.replace(/\d*>&\d*/g, (m) => {
+  const masked = command.replace(/\d*>&\d/g, (m) => {
     const token = " fd" + fdSpans.length + "fd "
     fdSpans.push(m)
     return token

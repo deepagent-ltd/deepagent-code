@@ -6,6 +6,7 @@ import {
   type PlanInput,
   buildCompletionReport,
   buildPlanFromInput,
+  hasBlockedSteps,
   planScope,
 } from "./plan-controller"
 
@@ -195,6 +196,13 @@ const evaluateOne = (
       case "plan_complete": {
         if (plan == null) return "plan_complete: plan document not found"
         const report = buildCompletionReport(plan)
+        // U10 parity with plan-controller finalize: buildCompletionReport counts a `blocked` step as
+        // RESOLVED (so finalize isn't deadlocked behind an escape hatch), which makes report.complete
+        // true when every step is done-or-blocked. But a blocked step never finishes on its own — the
+        // goal is NOT cleanly complete, it needs a human. Guard blocked steps explicitly here rather
+        // than trusting report.complete, so a blocked plan surfaces a gap instead of a silent "done".
+        if (hasBlockedSteps(plan))
+          return `plan_complete: blocked steps need a human [${report.blocked.join(", ")}]`
         return report.complete
           ? null
           : `plan_complete: outstanding steps [${report.outstanding.join(", ")}]`
@@ -266,6 +274,14 @@ export const evaluateForController = (
       }
       const gap = yield* evaluateOne(c, ports, plan)
       if (gap != null) gaps.push(gap)
+      // U10 parity: a blocked plan step is an ACTIVE rejection, not a soft gap — the step will never
+      // finish on its own, so route to a human on the FIRST such verdict rather than burning ticks
+      // re-executing an unadvanceable plan until the stall threshold. Mirrors plan-controller finalize
+      // (hasBlockedSteps → needs_human).
+      if (c.kind === "plan_complete" && hasBlockedSteps(plan)) {
+        escalate = true
+        escalateReason = "plan has blocked steps"
+      }
     }
     return { result: { met: gaps.length === 0, gaps }, escalate, escalateReason }
   })
@@ -635,7 +651,32 @@ export const makeGoalLoop = (deps: ControllerDeps): GoalLoop => {
       // dedup guarantees "a repeated no-progress tick has no side effects", not "every tick is exactly-
       // once under a mid-tick crash". The driver must therefore treat tick as at-least-once.
       if (state.lastProcessedVersion === version && state.lastOutcome != null) {
-        return state.lastOutcome
+        // 幂等: a replay at the SAME version has NO side effects — never re-execute, never re-accrue
+        // budget (ticks/tokens/cost). BUT a replay at an unchanged version is by definition a
+        // NO-PROGRESS tick: if we just returned the recorded (non-terminal) outcome forever, an
+        // executor that RUNS but leaves the plan-doc unchanged (no version bump) would bypass the
+        // stall guard entirely — only the driver's maxIterations would ever stop it. So a NON-TERMINAL
+        // replay still accrues toward the stall guard here, and escalates to needs_human once the
+        // stall threshold is reached. (A terminal outcome was already replayed by the phase check
+        // above, so `lastOutcome` here is always the non-terminal `continue`; the guard is defensive.)
+        // Capture the null-checked outcome so the narrowing survives the `let state` reassignments below.
+        const replayOutcome: TickOutcome = state.lastOutcome
+        if (isTerminalPhase(phaseForOutcome(replayOutcome))) return replayOutcome
+        const stallCount = state.stallCount + 1
+        if (stallCount >= state.spec.stallThreshold) {
+          state = {
+            ...state,
+            phase: "needs_human",
+            stallCount,
+            lastOutcome: "needs_human",
+            gaps: [`no progress for ${stallCount} consecutive ticks (plan version unchanged)`, ...state.gaps],
+          }
+          persistState(deps, state)
+          return "needs_human"
+        }
+        state = { ...state, stallCount }
+        persistState(deps, state)
+        return replayOutcome
       }
 
       // 不越权: execute the active step via the injected executor (normal perms; Loop never elevates).
@@ -663,10 +704,13 @@ export const makeGoalLoop = (deps: ControllerDeps): GoalLoop => {
       // is NaN, which would poison the ledger permanently and silently disable the token cap forever
       // (`NaN > maxTokens` is always false). Coerce a non-finite / negative token count to 0.
       const addTokens = Number.isFinite(execResult.tokensUsed) ? Math.max(0, Math.trunc(execResult.tokensUsed)) : 0
+      // Symmetric with tokens: a negative cost from a misbehaving port would DECREMENT the ledger (and
+      // could indefinitely defer the maxCost cap), so clamp to 0 just like the token count.
+      const addCost = Number.isFinite(execResult.cost) ? Math.max(0, execResult.cost as number) : 0
       const ledger: BudgetLedger = {
         ticks: state.ledger.ticks + 1,
         tokens: state.ledger.tokens + addTokens,
-        cost: state.ledger.cost + (Number.isFinite(execResult.cost) ? (execResult.cost as number) : 0),
+        cost: state.ledger.cost + addCost,
         wallclockMs: Math.max(0, deps.now() - state.ledger.startedAtMs),
         startedAtMs: state.ledger.startedAtMs,
       }

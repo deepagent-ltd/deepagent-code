@@ -600,6 +600,76 @@ describe("V3.9 §D — adversarial-review hardening (2026-07-09)", () => {
   })
 })
 
+describe("V3.9 §D — confirmed-bug regressions (2026-07-14)", () => {
+  test("BUG#6: a plan with a blocked step (all others done) routes to needs_human, NOT done", async () => {
+    const clock = new FakeClock()
+    // step a is done, step b is blocked → buildCompletionReport.complete is true (blocked counts as
+    // resolved), which previously made plan_complete report DONE and silently swallowed the blocker.
+    const planDocId = putPlan([step("a", "done"), step("b", "blocked")])
+    const loop = makeGoalLoop(deps({}, clock))
+    const handle = await Effect.runPromise(loop.start(spec(planDocId)))
+    const outcome = await Effect.runPromise(loop.tick(handle))
+    expect(outcome).toBe("needs_human")
+    expect(outcome).not.toBe("done")
+    const status = await Effect.runPromise(loop.status(handle))
+    expect(status.phase).toBe("needs_human")
+    expect(status.gaps.some((g) => /blocked/.test(g))).toBe(true)
+  })
+
+  test("BUG#6: evaluateForController surfaces a blocked plan as an unmet, escalating gap", async () => {
+    const blockedPlan = createPlanDoc(SESSION, "g", [step("a", "done"), step("b", "blocked")])
+    const res = await Effect.runPromise(
+      evaluateForController([{ kind: "plan_complete" }], passingPorts(), blockedPlan),
+    )
+    expect(res.result.met).toBe(false) // NOT a clean completion
+    expect(res.escalate).toBe(true) // route to a human on the first verdict
+  })
+
+  test("BUG#7: an executor that RUNS but leaves the plan-doc unchanged still accrues stall → needs_human", async () => {
+    const clock = new FakeClock()
+    const planDocId = putPlan([step("a", "pending")])
+    let execCount = 0
+    // A no-op executor: it runs (side effect) but NEVER bumps the plan version — the exact structural
+    // defeat of the stall guard. Every later tick hits the version-dedup replay; before the fix that was
+    // a free `return lastOutcome` with no stall accrual, so only the driver's maxIterations (10k) stopped
+    // it. Now the non-terminal replay must accrue toward the stall guard.
+    const executor: StepExecutor = () =>
+      Effect.sync(() => {
+        execCount++
+        return { tokensUsed: 3 }
+      })
+    const loop = makeGoalLoop(deps({ executor }, clock))
+    const handle = await Effect.runPromise(loop.start(spec(planDocId, { stallThreshold: 3 })))
+    const outcomes: string[] = []
+    for (let i = 0; i < 3; i++) outcomes.push(await Effect.runPromise(loop.tick(handle)))
+    // tick1 executes (no progress) → stall 1 continue; tick2/tick3 are version-dedup replays that STILL
+    // accrue stall → stall 2 continue, stall 3 == threshold → needs_human. Bounded by the stall guard.
+    expect(outcomes).toEqual(["continue", "continue", "needs_human"])
+    expect(execCount).toBe(1) // idempotency preserved: the replay never re-ran the executor
+    const status = await Effect.runPromise(loop.status(handle))
+    expect(status.phase).toBe("needs_human")
+    expect(status.ledger.ticks).toBe(1) // replay never re-accrued budget either
+  })
+
+  test("cost clamp: a negative cost from a port does NOT decrement the ledger (clamped to 0)", async () => {
+    const clock = new FakeClock()
+    const planDocId = putPlan([step("a", "pending")])
+    const executor: StepExecutor = ({ planDocId }) =>
+      Effect.sync(() => {
+        updatePlan(planDocId, (p) => ({ ...p, steps: [{ ...p.steps[0], title: `${p.steps[0].title}.` }] }))
+        return { tokensUsed: 1, cost: -100 } // a misbehaving port returning a negative cost
+      })
+    const loop = makeGoalLoop(deps({ executor }, clock))
+    const handle = await Effect.runPromise(
+      loop.start(spec(planDocId, { limits: { maxTicks: 99, maxTokens: 1_000, maxWallclockMs: 100_000, maxCost: 10 }, stallThreshold: 99 })),
+    )
+    await Effect.runPromise(loop.tick(handle))
+    const status = await Effect.runPromise(loop.status(handle))
+    expect(status.ledger.cost).toBe(0) // clamped, NOT -100
+    expect(status.ledger.cost).toBeGreaterThanOrEqual(0)
+  })
+})
+
 describe("V3.9 §D — process restart recovery (§D.6 可恢复)", () => {
   test("a fresh Controller over the same store resumes from persisted state", async () => {
     const clock = new FakeClock()
