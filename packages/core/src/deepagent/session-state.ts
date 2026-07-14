@@ -62,6 +62,12 @@ export type SessionRunState = {
   // client round-trip guess). Armed means the user may convene a panel (button press) and — when a goal
   // loop is running — the loop may convene the panel at high-risk decision points (§C activation).
   panelArmed: boolean | null
+  // V4.0: the DEBATE DEPTH preference for on-demand convenes from the composer's three-state control
+  // (Off / Single-round / Multi-round). Decoupled from `panelArmed` (arm/disarm) on purpose: arming
+  // gates WHETHER a panel may convene; this gates HOW MANY rounds a convene runs. `null` = never chosen
+  // → defaults to "single". Replaces the former Shift/Alt-click gesture with an explicit, discoverable
+  // choice that PERSISTS per session. "multi" requests up to PANEL_MAX_ROUNDS_CEILING debate rounds.
+  panelRounds: "single" | "multi" | null
   // V3.9 §D: a lightweight pointer to the goal currently driven for this session (the authoritative
   // loop state lives in the DocumentStore run_context doc — this is only enough to find/resume it and
   // reflect its phase in the UI). Null when no goal is running.
@@ -119,6 +125,7 @@ export const getOrCreate = (sessionId: string, mode: AgentMode): SessionRunState
     mutationsSinceReport: 0,
     validationPassedSinceReport: false,
     panelArmed: null,
+    panelRounds: null,
     activeGoal: null,
     createdAt: new Date().toISOString(),
     completedAt: null,
@@ -231,6 +238,18 @@ export const resolvePanelArmed = (sessionId: string, globalDefault: boolean): bo
 
 /** Back-compat: effective armed state with a hard `false` fallback (no global default available). */
 export const isPanelArmed = (sessionId: string): boolean => sessions.get(sessionId)?.panelArmed ?? false
+
+// V4.0 — Expert Panel debate-depth preference (composer three-state control). Decoupled from arming.
+export const setPanelRounds = (sessionId: string, rounds: "single" | "multi"): void => {
+  const state = sessions.get(sessionId)
+  if (!state) return
+  state.panelRounds = rounds
+  saveToDisk()
+}
+
+/** The chosen debate depth, defaulting to "single" when never explicitly chosen. */
+export const panelRounds = (sessionId: string): "single" | "multi" =>
+  sessions.get(sessionId)?.panelRounds ?? "single"
 
 // V3.9 §D — active-goal pointer. The GoalLoop status doc in the DocumentStore is authoritative; this
 // pointer is the session-local index the server/UI use to find and reflect the running goal.
@@ -400,6 +419,8 @@ function normalizeState(state: SessionRunState): SessionRunState {
     // Backfill: sessions persisted before V3.9 §C/§D have neither slot on disk. panelArmed backfills to
     // null (= not explicitly toggled → follows the global default), NOT false.
     panelArmed: state.panelArmed ?? null,
+    // Backfill: sessions persisted before V4.0 have no panelRounds → null (defaults to "single").
+    panelRounds: state.panelRounds ?? null,
     activeGoal: state.activeGoal ?? null,
   }
   sessions.set(state.sessionId, normalized)
