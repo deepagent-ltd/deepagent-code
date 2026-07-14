@@ -20,6 +20,7 @@ import { useSync } from "@/context/sync"
 import { useTerminal } from "@/context/terminal"
 import { focusTerminalById } from "@/pages/session/helpers"
 import { useSessionLayout } from "@/pages/session/session-layout"
+import { StatusPopover } from "@/components/status-popover"
 import { messageAgentColor } from "@/utils/agent"
 import { decode64 } from "@/utils/base64"
 import { Persist, persisted } from "@/utils/persist"
@@ -489,6 +490,7 @@ export function SessionHeader() {
                     </Button>
                   </TooltipKeybind>
                 </div>
+                <StatusPopover />
               </div>
             </div>
           </Portal>
