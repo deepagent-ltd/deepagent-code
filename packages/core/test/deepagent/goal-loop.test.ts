@@ -180,6 +180,31 @@ describe("V3.9 §D — Grader per-criterion evaluation (§D.3)", () => {
     expect(exceeded.result.met).toBe(false)
   })
 
+  test("no_diagnostics: an UNCHECKED result (checked:false) is a gap, NOT a vacuous pass (fail-open fix)", async () => {
+    // Regression for the seam bug: the production diagnostics port fell back to { maxSeverity: null } on
+    // an LSP crash/timeout, which the grader read as "clean → met". A port that could not actually check
+    // now reports checked:false → the grader must treat it as an unmet gap (mirrors runTests empty=fail),
+    // so a broken/absent LSP can never vacuously satisfy no_diagnostics.
+    const unchecked: GraderPorts = {
+      ...passingPorts(),
+      diagnostics: () => Effect.succeed({ maxSeverity: null, checked: false }),
+    }
+    const strict = await Effect.runPromise(evaluateForController([{ kind: "no_diagnostics" }], unchecked, donePlan()))
+    expect(strict.result.met).toBe(false)
+    // even with a severity bound, unchecked is still a gap (we never verified anything).
+    const bounded = await Effect.runPromise(
+      evaluateForController([{ kind: "no_diagnostics", severityAtMost: "warning" }], unchecked, donePlan()),
+    )
+    expect(bounded.result.met).toBe(false)
+    // sanity: an explicit checked:true with no diagnostics is still a genuine pass.
+    const cleanChecked: GraderPorts = {
+      ...passingPorts(),
+      diagnostics: () => Effect.succeed({ maxSeverity: null, checked: true }),
+    }
+    const met = await Effect.runPromise(evaluateForController([{ kind: "no_diagnostics" }], cleanChecked, donePlan()))
+    expect(met.result.met).toBe(true)
+  })
+
   test("reviewer_clean / panel_approves unmet → gap", async () => {
     const ports: GraderPorts = {
       ...passingPorts(),
@@ -348,6 +373,46 @@ describe("V3.9 §D — Controller tick semantics", () => {
     // A diagnosis doc was written (可观测).
     const diag = store.list({ type: "diagnosis", scope: planScope(SESSION) })
     expect(diag.length).toBeGreaterThan(0)
+  })
+
+  test("§D.6 可回滚: rollback reverts the executor's ACTUAL run session, not the parent goal session", async () => {
+    // Regression for the wrong-session seam bug: the executor runs each turn in a CHILD session (where
+    // the file edits live), but rollback was called with the parent goal session (which has no edits) →
+    // `rolled_back` reported but nothing reverted. The executor now surfaces `executedSessionId`, and the
+    // controller must pass THAT to the rollback port.
+    const clock = new FakeClock()
+    const planDocId = putPlan([step("a", "pending")])
+    const CHILD = "child-session-xyz"
+    let rolledBackSession: string | undefined
+    const executor: StepExecutor = () =>
+      Effect.succeed({ tokensUsed: 1, critical: true, executedSessionId: CHILD })
+    const rollback: RollbackPort = (input) =>
+      Effect.sync(() => {
+        rolledBackSession = input.sessionId
+      })
+    const loop = makeGoalLoop(deps({ executor, rollback }, clock))
+    const handle = await Effect.runPromise(loop.start(spec(planDocId)))
+    const outcome = await Effect.runPromise(loop.tick(handle))
+    expect(outcome).toBe("rolled_back")
+    // The child session (edits live here) is reverted — NOT the parent goal session.
+    expect(rolledBackSession).toBe(CHILD)
+    expect(rolledBackSession).not.toBe(SESSION)
+  })
+
+  test("§D.6 可回滚: rollback falls back to the goal session when the executor reports none", async () => {
+    // A defect before any child session exists ⇒ no executedSessionId ⇒ revert the goal session itself.
+    const clock = new FakeClock()
+    const planDocId = putPlan([step("a", "pending")])
+    let rolledBackSession: string | undefined
+    const executor: StepExecutor = () => Effect.succeed({ tokensUsed: 0, critical: true })
+    const rollback: RollbackPort = (input) =>
+      Effect.sync(() => {
+        rolledBackSession = input.sessionId
+      })
+    const loop = makeGoalLoop(deps({ executor, rollback }, clock))
+    const handle = await Effect.runPromise(loop.start(spec(planDocId)))
+    await Effect.runPromise(loop.tick(handle))
+    expect(rolledBackSession).toBe(SESSION)
   })
 
   test("§D.6 可接管: stop() → subsequent ticks replay terminal, no execution", async () => {

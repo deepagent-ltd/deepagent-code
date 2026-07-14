@@ -35,7 +35,7 @@ const goalWiringInput = (store: DocumentStore) => ({
   cwd: "/tmp",
   runTurn: turnStub,
   panelQuestion: () => ({ question: "q", codeRefs: [], lenses: ["correctness" as const], maxRounds: 1 }),
-  diagnostics: () => Effect.succeed({} as Record<string, Diagnostic[]>),
+  diagnostics: () => Effect.succeed({ diagnostics: {} as Record<string, Diagnostic[]>, checked: true }),
   rollback: () => Effect.void,
 })
 
