@@ -926,7 +926,7 @@ it.instance(
       const tool = yield* pollWithTimeout(
         Effect.gen(function* () {
           const msgs = yield* MessageV2.filterCompactedEffect(chat.id)
-          const assistant = msgs.findLast((item) => item.info.role === "assistant" && item.info.agent === "build")
+          const assistant = msgs.findLast((item) => item.info.role === "assistant" && item.info.agent === "auto")
           const tool = assistant?.parts.find(
             (part): part is SessionV1.ToolPart => part.type === "tool" && part.tool === "task",
           )
