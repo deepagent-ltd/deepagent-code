@@ -429,6 +429,7 @@ export class DocumentStore {
     const out: { rel: LinkRel; from: DocRef }[] = []
     for (const [, versions] of this.docs) {
       const latest = versions.get(Math.max(...versions.keys()))!
+      if (latest.scope === "sealed") continue // INV-7: sealed never surfaced (mirror list())
       for (const l of latest.links) if (l.to === id) out.push({ rel: l.rel, from: toRef(latest) })
     }
     return out
@@ -464,7 +465,8 @@ export class DocumentStore {
           if (!rels.includes(l.rel) || seen.has(l.to)) continue
           seen.add(l.to)
           const td = this.get(l.to)
-          if (td) {
+          if (td && td.scope !== "sealed") {
+            // INV-7: a sealed doc is never surfaced via a graph edge, nor traversed through (mirror list()).
             result.push(toRef(td))
             next.push(l.to)
           }
@@ -511,8 +513,14 @@ export class DocumentStore {
       const typeDir = path.join(docsDir, entry.name)
       for (const file of readdirSync(typeDir)) {
         if (!file.endsWith(".json")) continue
-        const doc = JSON.parse(readFileSync(path.join(typeDir, file), "utf8")) as Doc
-        this.indexDoc(doc)
+        // A truncated/partial-write .json doc must not brick store construction (the files are the
+        // truth, but one corrupt file is not the whole truth). Skip it and index the rest.
+        try {
+          const doc = JSON.parse(readFileSync(path.join(typeDir, file), "utf8")) as Doc
+          this.indexDoc(doc)
+        } catch (error) {
+          console.warn(`deepagent document-store: skipping unreadable doc file ${path.join(typeDir, file)}`, error)
+        }
       }
     }
   }

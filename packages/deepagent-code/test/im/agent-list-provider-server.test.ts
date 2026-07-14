@@ -11,6 +11,9 @@ import { AgentListProviderService } from "@deepagent-code/core/im/agent-list-pro
 import type { AgentDescriptor } from "@deepagent-code/core/im/mention-parser"
 import { Agent } from "@/agent/agent"
 import { ServerAgentListProviderLive } from "@/im/agent-executor-server"
+import { InstanceRef, WorkspaceRef } from "@/effect/instance-ref"
+import { WorkspaceV2 } from "@deepagent-code/core/workspace"
+import { ProjectV2 } from "@deepagent-code/core/project"
 
 // Minimal Agent.Info records (only fields the provider reads). Cast through
 // unknown so tests don't have to build a full permission ruleset etc.
@@ -174,5 +177,89 @@ describe("ServerAgentListProvider — built-in autonomous descriptors (productio
     expect(builtins.every((d) => d.visible === false)).toBe(true)
     // the config agents remain visible.
     expect(listed.some((d) => d.name === "auto" && d.visible === true)).toBe(true)
+  })
+})
+
+// V4.x defense-in-depth — listAgents must respect the requesting actor's workspace scope. The provider
+// is bound to a single routed instance (deepagent-code is single-user, one workspace/directory per
+// instance): its CONFIG agents belong to that instance's scope, while the appended built-ins are
+// workspace-independent GLOBALS. A query for a workspace this instance was NOT routed to must therefore
+// see only the globals — never this instance's config agents. When the instance's own scope is
+// unresolvable (a bare fiber, no InstanceRef/WorkspaceRef) the provider DEFERS (includes config agents)
+// rather than over-filter, since Layer-1 trusted-source already fails closed on untrusted events.
+describe("ServerAgentListProvider — workspace scope gating", () => {
+  // Build an InstanceContext for a routed instance located at `directory`.
+  const instanceCtx = (directory: string) => ({
+    directory,
+    worktree: directory,
+    project: {
+      id: ProjectV2.ID.global,
+      worktree: directory,
+      time: { created: 0, updated: 0 },
+      sandboxes: [],
+    },
+  })
+
+  // Run listAgents for `queryScope` while the provider believes it is bound to the given instance scope.
+  // `routedWorkspaceID` (WorkspaceRef) and/or `directory` (InstanceRef) set the instance's own identity;
+  // omit both to simulate a bare fiber with no resolvable scope.
+  const runScoped = (
+    agents: Agent.Info[],
+    queryScope: { workspaceID: string; userID: string },
+    own: { routedWorkspaceID?: string; directory?: string },
+  ): Promise<AgentDescriptor[]> => {
+    let eff = Effect.gen(function* () {
+      const provider = yield* AgentListProviderService
+      return yield* provider.listAgents(queryScope)
+    }).pipe(Effect.provide(makeLayer(agents)))
+    if (own.directory !== undefined) {
+      eff = eff.pipe(Effect.provideService(InstanceRef, instanceCtx(own.directory)))
+    }
+    if (own.routedWorkspaceID !== undefined) {
+      eff = eff.pipe(Effect.provideService(WorkspaceRef, WorkspaceV2.ID.make(own.routedWorkspaceID)))
+    }
+    return Effect.runPromise(eff)
+  }
+
+  const configAgents = [
+    agentInfo({ name: "reviewer", mode: "all" }),
+    agentInfo({ name: "auto", mode: "primary" }),
+  ]
+  const configNames = (list: AgentDescriptor[]) => list.filter((d) => !d.id.startsWith("builtin:")).map((d) => d.name)
+  const builtinCount = (list: AgentDescriptor[]) => list.filter((d) => d.id.startsWith("builtin:")).length
+
+  it("returns this instance's config agents when the requested workspaceID matches the routed workspace", async () => {
+    const listed = await runScoped(configAgents, { workspaceID: "wrk_alpha", userID: "u1" }, {
+      routedWorkspaceID: "wrk_alpha",
+    })
+    expect(configNames(listed)).toEqual(["reviewer", "auto"])
+    expect(builtinCount(listed)).toBeGreaterThan(0)
+  })
+
+  it("withholds config agents (globals only) when the requested workspaceID is NOT the routed workspace", async () => {
+    const listed = await runScoped(configAgents, { workspaceID: "wrk_other", userID: "u1" }, {
+      routedWorkspaceID: "wrk_alpha",
+    })
+    // out-of-scope query sees NO config agents, but the workspace-independent built-ins remain.
+    expect(configNames(listed)).toEqual([])
+    expect(builtinCount(listed)).toBeGreaterThan(0)
+  })
+
+  it("matches on the directory fallback when the instance has no routed workspace id", async () => {
+    const dir = "/tmp/project-x"
+    // in-scope: the query addresses the instance by its directory grouping key.
+    const inScope = await runScoped(configAgents, { workspaceID: dir, userID: "u1" }, { directory: dir })
+    expect(configNames(inScope)).toEqual(["reviewer", "auto"])
+    // out-of-scope: a different directory sees globals only.
+    const outScope = await runScoped(configAgents, { workspaceID: "/tmp/project-y", userID: "u1" }, { directory: dir })
+    expect(configNames(outScope)).toEqual([])
+    expect(builtinCount(outScope)).toBeGreaterThan(0)
+  })
+
+  it("defers (includes config agents) when the instance's own scope is unresolvable", async () => {
+    // no InstanceRef and no WorkspaceRef ⇒ own scope undefined ⇒ do not over-filter.
+    const listed = await runScoped(configAgents, { workspaceID: "wrk_whatever", userID: "u1" }, {})
+    expect(configNames(listed)).toEqual(["reviewer", "auto"])
+    expect(builtinCount(listed)).toBeGreaterThan(0)
   })
 })

@@ -50,6 +50,8 @@ describe("CommandIntent.classifyCommand", () => {
       "pip list",
       "curl -sL https://example.com/api",
       "curl https://example.com",
+      "echo hi >&2", // fd-dup to stderr, not a file write
+      "grep f file.txt 2>&1", // genuine fd-dup
     ]
     for (const cmd of readOnly) {
       test(`read_only: ${cmd}`, () => {
@@ -127,6 +129,7 @@ describe("CommandIntent.classifyCommand", () => {
       "find . -exec rm {} \\;", // find -exec
       "curl -o out.zip https://example.com/f.zip", // curl writing a file
       "curl -O https://example.com/f.zip",
+      "ls > out.txt", // plain redirection stays mutating (control for the >& fix)
       "FOO=bar ls", // inline env assignment prefix
       "env FOO=bar node app.js", // env running a command
       "$(rm file.txt)", // command substitution
@@ -150,6 +153,37 @@ describe("CommandIntent.classifyCommand", () => {
     })
     test("but a real > alongside fd-dup is still mutating", () => {
       expect(classifyCommand("grep foo file.txt 2>&1 > out.txt")).toBe("mutating")
+    })
+  })
+
+  // Regression: `>&word` is bash shorthand for redirecting stdout+stderr to a FILE (a write), not an
+  // fd-duplication. The fd-dup mask must only strip a numeric RHS (`2>&1`, `>&2`), so `>&file` keeps
+  // its `>` and reads as a mutating write.
+  describe("regression: >&file redirection is a file write (BUG #1)", () => {
+    const mutating = ["ls >&out.txt", "cat foo >&dump", "ls >&/tmp/evil"]
+    for (const cmd of mutating) {
+      test(`mutating: ${cmd}`, () => {
+        expect(classifyCommand(cmd)).toBe("mutating")
+      })
+    }
+    test("genuine fd-dup stays read_only", () => {
+      expect(classifyCommand("echo hi >&2")).toBe("read_only")
+      expect(classifyCommand("grep f file.txt 2>&1")).toBe("read_only")
+    })
+  })
+
+  // Regression: a glued or bundled curl output flag (`-ofile.txt`, `-sofile`) writes a file but has no
+  // word boundary after `-o`, so the old `\s-[oO]\b` guard missed it.
+  describe("regression: glued/bundled curl -o writes a file (BUG #2)", () => {
+    const mutating = ["curl -ofile.txt https://x", "curl -sofile https://x"]
+    for (const cmd of mutating) {
+      test(`mutating: ${cmd}`, () => {
+        expect(classifyCommand(cmd)).toBe("mutating")
+      })
+    }
+    test("curl with no output flag stays read_only", () => {
+      expect(classifyCommand("curl https://x")).toBe("read_only")
+      expect(classifyCommand("curl -sL https://example.com/api")).toBe("read_only")
     })
   })
 })
