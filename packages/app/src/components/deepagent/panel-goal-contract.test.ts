@@ -52,25 +52,30 @@ describe("Expert Panel route contract (§C)", () => {
     expect(result).toEqual(verdict)
   })
 
-  test("armPanel POSTs /deepagent/panel/arm and returns the effective armed state", async () => {
+  test("armPanel POSTs /deepagent/panel/arm with rounds and returns the effective armed state + depth", async () => {
     const calls: Recorded[] = []
-    const armed = await armPanel(client(calls, { sessionID: "ses_1", armed: true }), "ses_1", true)
+    const result = await armPanel(client(calls, { sessionID: "ses_1", armed: true, rounds: "multi" }), "ses_1", true, "multi")
     expect(calls).toEqual([
-      { method: "POST", url: "/deepagent/panel/arm", body: { sessionID: "ses_1", armed: true }, headers: JSON_HEADERS },
+      {
+        method: "POST",
+        url: "/deepagent/panel/arm",
+        body: { sessionID: "ses_1", armed: true, rounds: "multi" },
+        headers: JSON_HEADERS,
+      },
     ])
-    expect(armed).toBe(true)
+    expect(result).toEqual({ armed: true, rounds: "multi" })
   })
 
-  test("fetchPanelStatus GETs /deepagent/panel/status and reports armed + explicit", async () => {
+  test("fetchPanelStatus GETs /deepagent/panel/status and reports armed + explicit + rounds", async () => {
     const calls: Recorded[] = []
-    const status = await fetchPanelStatus(client(calls, { armed: true, explicit: false }), "ses 1")
+    const status = await fetchPanelStatus(client(calls, { armed: true, explicit: false, rounds: "multi" }), "ses 1")
     expect(calls).toEqual([{ method: "GET", url: "/deepagent/panel/status?sessionID=ses%201" }])
-    expect(status).toEqual({ armed: true, explicit: false })
+    expect(status).toEqual({ armed: true, explicit: false, rounds: "multi" })
   })
 
-  test("fetchPanelStatus tolerates a missing body (disarmed, not explicit)", async () => {
+  test("fetchPanelStatus tolerates a missing body (disarmed, not explicit, single-round default)", async () => {
     const calls: Recorded[] = []
-    expect(await fetchPanelStatus(client(calls, {}), "ses_1")).toEqual({ armed: false, explicit: false })
+    expect(await fetchPanelStatus(client(calls, {}), "ses_1")).toEqual({ armed: false, explicit: false, rounds: "single" })
   })
 })
 
