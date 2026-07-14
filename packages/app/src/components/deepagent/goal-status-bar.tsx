@@ -25,7 +25,7 @@ const PHASE_LABEL_KEY: Record<string, string> = {
 }
 
 const PHASE_ICON: Record<string, Parameters<typeof Icon>[0]["name"]> = {
-  running: "status-active",
+  running: "goal",
   paused: "circle-ban-sign",
   done: "circle-check",
   needs_human: "circle-x",
@@ -89,7 +89,7 @@ export function GoalStatusBar(props: { sessionID: string }) {
           data-component="goal-status-bar"
           class="flex items-center gap-2 px-2.5 py-1.5 rounded-md bg-surface-raised border border-border-subtle text-13-regular"
         >
-          <Icon name={PHASE_ICON[g().phase] ?? "status-active"} class="size-4 shrink-0 text-text-muted" />
+          <Icon name={PHASE_ICON[g().phase] ?? "goal"} class="size-4 shrink-0 text-text-muted" />
           <span class="text-text-base font-medium">
             {PHASE_LABEL_KEY[g().phase] ? language.t(PHASE_LABEL_KEY[g().phase] as never) : g().phase}
           </span>

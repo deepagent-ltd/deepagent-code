@@ -71,17 +71,17 @@ const PANELS: readonly PanelDef[] = [
   { mode: "review", icon: "review", titleKey: "session.tab.review", group: "code", bucket: "wide", keybind: "review.toggle" },
   { mode: "files", icon: "file-tree", titleKey: "settings.general.row.showFileTree.title", group: "code", bucket: "wide", keybind: "fileTree.toggle" },
   // Agents
-  { mode: "subagents", icon: "task", titleKey: "session.subagents.title", group: "agents", bucket: "narrow" },
+  { mode: "subagents", icon: "agent-tree", titleKey: "session.subagents.title", group: "agents", bucket: "narrow" },
   { mode: "im", icon: "bubble-5", titleKey: "session.tab.im", group: "agents", bucket: "narrow" },
-  { mode: "oversight", icon: "shield", titleKey: "session.panel.oversight", group: "agents", bucket: "narrow", capability: "oversight" },
+  { mode: "oversight", icon: "oversight", titleKey: "session.panel.oversight", group: "agents", bucket: "narrow", capability: "oversight" },
   // Env
-  { mode: "browser", icon: "link", titleKey: "browser.title", group: "env", bucket: "narrow" },
+  { mode: "browser", icon: "window-cursor", titleKey: "browser.title", group: "env", bucket: "narrow" },
   { mode: "worktree", icon: "branch", titleKey: "worktree.title", group: "env", bucket: "narrow" },
   // Dev
   { mode: "mcp", icon: "mcp", titleKey: "status.popover.tab.mcp", group: "dev", bucket: "narrow" },
   { mode: "plugins", icon: "plugin", titleKey: "status.popover.tab.plugins", group: "dev", bucket: "narrow" },
-  { mode: "debug", icon: "terminal", titleKey: "session.panel.debug", group: "dev", bucket: "narrow" },
-  { mode: "profile", icon: "status", titleKey: "session.panel.profile", group: "dev", bucket: "narrow" },
+  { mode: "debug", icon: "debug", titleKey: "session.panel.debug", group: "dev", bucket: "narrow" },
+  { mode: "profile", icon: "profile", titleKey: "session.panel.profile", group: "dev", bucket: "narrow" },
 ]
 
 const GROUP_ORDER: readonly PanelGroup[] = ["code", "agents", "env", "dev"]

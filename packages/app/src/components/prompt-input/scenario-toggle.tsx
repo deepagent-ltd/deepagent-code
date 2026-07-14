@@ -17,7 +17,7 @@ const scenarios = [
   },
   {
     mode: "intelligence" as const,
-    icon: "speech-bubble" as const,
+    icon: "intelligence" as const,
     label: "prompt.scenario.intelligence" as const,
     tooltip: "prompt.scenario.intelligence.tooltip" as const,
   },

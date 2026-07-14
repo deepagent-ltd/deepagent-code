@@ -1,6 +1,54 @@
 import { onMount, type ComponentProps, splitProps } from "solid-js"
 
 const icons = {
+  history: {
+    viewBox: "0 0 20 20",
+    body: `<path d="M3.2 5.8V2.8M3.2 5.8H6.2M3.3 5.6A7 7 0 1 1 3 13M10 6V10L13 11.8" stroke="currentColor" stroke-linecap="square" stroke-linejoin="round"/>`,
+  },
+  "knowledge-check": {
+    viewBox: "0 0 20 20",
+    body: `<path d="M3 3.2V16.8M7 3.2V16.8M11 4V16M3 4H11M3 16H11M13 11.5L14.7 13.2L17.8 9.7" stroke="currentColor" stroke-linecap="square" stroke-linejoin="round"/>`,
+  },
+  wiki: {
+    viewBox: "0 0 20 20",
+    body: `<path d="M2.5 3.2H7.7C9 3.2 10 4.2 10 5.5V16.8C10 15.5 9 14.5 7.7 14.5H2.5V3.2ZM17.5 3.2H12.3C11 3.2 10 4.2 10 5.5V16.8C10 15.5 11 14.5 12.3 14.5H17.5V3.2Z" stroke="currentColor" stroke-linejoin="round"/>`,
+  },
+  package: {
+    viewBox: "0 0 20 20",
+    body: `<path d="M3 6L10 2.5L17 6V14L10 17.5L3 14V6ZM3 6L10 9.5L17 6M10 9.5V17.5M6.5 4.2L13.5 7.7" stroke="currentColor" stroke-linecap="square" stroke-linejoin="round"/>`,
+  },
+  review: {
+    viewBox: "0 0 20 20",
+    body: `<path d="M2.5 2.5H17.5V17.5H2.5V2.5ZM5 7H8M6.5 5.5V8.5M11.5 7H15M5.2 12.2L7 14L10.5 10" stroke="currentColor" stroke-linecap="square" stroke-linejoin="round"/>`,
+  },
+  "agent-tree": {
+    viewBox: "0 0 20 20",
+    body: `<circle cx="10" cy="4.5" r="2" stroke="currentColor"/><circle cx="5" cy="15.5" r="2" stroke="currentColor"/><circle cx="15" cy="15.5" r="2" stroke="currentColor"/><path d="M10 6.5V10M5 13.5V10H15V13.5" stroke="currentColor" stroke-linecap="square" stroke-linejoin="round"/>`,
+  },
+  oversight: {
+    viewBox: "0 0 20 20",
+    body: `<path d="M10 2.2L17 4.5V9.9C17 13.9 13.5 16.1 10 17.9C6.5 16.1 3 13.9 3 9.9V4.5L10 2.2Z" stroke="currentColor" stroke-linejoin="round"/><path d="M5.7 9.9C5.7 9.9 7.4 7.6 10 7.6C12.6 7.6 14.3 9.9 14.3 9.9C14.3 9.9 12.6 12.2 10 12.2C7.4 12.2 5.7 9.9 5.7 9.9Z" stroke="currentColor" stroke-linejoin="round"/><circle cx="10" cy="9.9" r="1.2" stroke="currentColor"/>`,
+  },
+  debug: {
+    viewBox: "0 0 20 20",
+    body: `<path d="M7 6V4.8A3 3 0 0 1 13 4.8V6M5.5 7.5H14.5V12.7A4.5 4.5 0 0 1 5.5 12.7V7.5ZM10 7.5V17.2M3 9H5.5M14.5 9H17M3 13H5.5M14.5 13H17M5.5 6L4 4.5M14.5 6L16 4.5" stroke="currentColor" stroke-linecap="square" stroke-linejoin="round"/>`,
+  },
+  profile: {
+    viewBox: "0 0 20 20",
+    body: `<path d="M3 15.5A7 7 0 0 1 17 15.5H3ZM10 15.5L13.7 10.5M5.5 12.8L4.2 12M14.5 12.8L15.8 12M10 8.5V7" stroke="currentColor" stroke-linecap="square" stroke-linejoin="round"/>`,
+  },
+  intelligence: {
+    viewBox: "0 0 20 20",
+    body: `<path d="M10 3V17M10 5.5C8.7 3.3 4.6 3.4 4.5 6.7C1.8 7.5 1.9 11.5 4 12.5C3.8 15.5 7.3 17.3 10 15M10 5.5C11.3 3.3 15.4 3.4 15.5 6.7C18.2 7.5 18.1 11.5 16 12.5C16.2 15.5 12.7 17.3 10 15M6.5 9C8.1 9 10 7.5 10 5.5M13.5 11C11.9 11 10 12.5 10 14.5" stroke="currentColor" stroke-linecap="square" stroke-linejoin="round"/>`,
+  },
+  experts: {
+    viewBox: "0 0 20 20",
+    body: `<circle cx="10" cy="5" r="2.2" stroke="currentColor"/><circle cx="4.8" cy="10.5" r="1.7" stroke="currentColor"/><circle cx="15.2" cy="10.5" r="1.7" stroke="currentColor"/><path d="M6.5 17C6.7 14.5 8 13 10 13C12 13 13.3 14.5 13.5 17M2.2 16C2.3 14.1 3.2 13 4.8 13C5.8 13 6.5 13.4 6.9 14.2M17.8 16C17.7 14.1 16.8 13 15.2 13C14.2 13 13.5 13.4 13.1 14.2" stroke="currentColor" stroke-linecap="square" stroke-linejoin="round"/>`,
+  },
+  goal: {
+    viewBox: "0 0 20 20",
+    body: `<circle cx="10" cy="10" r="7.5" stroke="currentColor"/><circle cx="10" cy="10" r="4" stroke="currentColor"/><circle cx="10" cy="10" r="0.8" fill="currentColor"/>`,
+  },
   edit: {
     viewBox: "0 0 16 16",
     body: `<path d="M13.5555 8.21534V13.5556H2.44434L2.44434 2.4445H7.78462M6.88878 9.11119C6.88878 9.11119 8.96327 9.0367 9.69678 8.3032L14.0301 3.96986C14.5824 3.4176 14.5824 2.52213 14.0301 1.96986C13.4778 1.4176 12.5824 1.4176 12.0301 1.96986L7.69678 6.3032C7.00513 6.99484 6.88878 9.11119 6.88878 9.11119Z" stroke="currentColor"/>`,
@@ -86,11 +134,9 @@ let spriteInserted = false
 function ensureSprite() {
   if (spriteInserted) return
   if (typeof document === "undefined") return
-  if (document.getElementById(spriteID)) {
-    spriteInserted = true
-    return
-  }
 
+  // A hot update keeps the document alive, so replace the stale symbol set from the previous module.
+  document.getElementById(spriteID)?.remove()
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg")
   svg.id = spriteID
   svg.setAttribute("aria-hidden", "true")
