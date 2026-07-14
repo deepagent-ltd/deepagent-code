@@ -270,12 +270,20 @@ export const DeepAgentPanelVerdict = Schema.Struct({
   dissent: Schema.Array(DeepAgentPanelDissent),
 })
 
-/** POST /deepagent/panel/arm — set the per-session armed flag (button toggle). */
+/** POST /deepagent/panel/arm — set the per-session armed flag + debate-depth (composer three-state). */
 export const DeepAgentPanelArmInput = Schema.Struct({
   sessionID: Schema.String,
   armed: Schema.Boolean,
+  // V4.0 three-state composer control: the debate depth to persist when arming. Optional so existing
+  // callers that only toggle armed keep working; ignored when `armed` is false (disarm).
+  rounds: Schema.optional(Schema.Literals(["single", "multi"])),
 })
-export const DeepAgentPanelArmResult = Schema.Struct({ sessionID: Schema.String, armed: Schema.Boolean })
+export const DeepAgentPanelArmResult = Schema.Struct({
+  sessionID: Schema.String,
+  armed: Schema.Boolean,
+  // The effective debate depth after this call (defaults to "single" when never chosen).
+  rounds: Schema.Literals(["single", "multi"]),
+})
 
 /** GET /deepagent/panel/status — the EFFECTIVE armed state (explicit toggle, else global default). */
 export const DeepAgentPanelStatusResult = Schema.Struct({
@@ -283,6 +291,8 @@ export const DeepAgentPanelStatusResult = Schema.Struct({
   armed: Schema.Boolean,
   // Whether `armed` came from an explicit per-session toggle (true) or the global default (false).
   explicit: Schema.Boolean,
+  // V4.0 the persisted debate depth for this session (defaults to "single").
+  rounds: Schema.Literals(["single", "multi"]),
 })
 
 /** POST /deepagent/goal/start */
