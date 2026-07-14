@@ -1,7 +1,8 @@
 export * as DeepAgentEventBus from "./deepagent-event-bus"
 
 import { Context, Effect, Layer, PubSub, Stream } from "effect"
-import { and, asc, desc, eq, lte, lt, gt, notExists, sql } from "drizzle-orm"
+import { and, asc, desc, eq, lte, lt, gt, notExists, or, sql } from "drizzle-orm"
+import { alias } from "drizzle-orm/sqlite-core"
 import { Database } from "../database/database"
 import { DeepAgentEventDeliveryTable, DeepAgentEventDropTable, DeepAgentEventTable } from "./deepagent-event-sql"
 import { ApprovalQueueTable } from "./approval-queue-sql"
@@ -694,11 +695,31 @@ export const layerWith = (options?: LayerOptions) =>
                       ),
                     ),
                 )
+                // A `dlq.alert` fires at nack-time — long after the dead event it references was created —
+                // so the dead event ages past the cutoff and would be swept while its alert survives,
+                // leaving a dangling `causationID`/`payload.deadEventID` trace ref. Spare any event still
+                // referenced by a live dlq.alert (by causation id OR the payload's deadEventID).
+                const dlqAlert = alias(DeepAgentEventTable, "dlq_alert")
+                const noLiveDlqAlert = notExists(
+                  db
+                    .select({ one: sql`1` })
+                    .from(dlqAlert)
+                    .where(
+                      and(
+                        eq(dlqAlert.type, DLQ_ALERT_TYPE),
+                        or(
+                          eq(dlqAlert.causation_id, DeepAgentEventTable.id),
+                          eq(sql`json_extract(${dlqAlert.payload}, '$.deadEventID')`, DeepAgentEventTable.id),
+                        ),
+                      ),
+                    ),
+                )
                 const deletable = and(
                   eq(DeepAgentEventTable.workspace_id, input.workspaceID),
                   lt(DeepAgentEventTable.created_at, input.olderThan),
                   noPendingDelivery,
                   noPendingApproval,
+                  noLiveDlqAlert,
                 )
 
                 // Delete the terminal (delivered/dead) delivery rows of the doomed events FIRST. The FK

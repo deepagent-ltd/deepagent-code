@@ -19,6 +19,8 @@ import { SessionV1 } from "@deepagent-code/core/v1/session"
 import { WorkspaceV2 } from "@deepagent-code/core/workspace"
 import { Agent } from "@/agent/agent"
 import { EventV2Bridge } from "@/event-v2-bridge"
+import { InstanceRef } from "@/effect/instance-ref"
+import { InstanceState } from "@/effect/instance-state"
 import { Session } from "@/session/session"
 import { SessionPrompt } from "@/session/prompt"
 import { withAgentProgress } from "./agent-progress-stream"
@@ -216,10 +218,30 @@ export const ServerAgentExecutorLive = Layer.effect(
 class ServerAgentListProvider implements AgentListProvider {
   constructor(private readonly agents: Agent.Interface) {}
 
-  listAgents(_input: AgentQueryScope): Effect.Effect<AgentDescriptor[], Error, never> {
+  listAgents(input: AgentQueryScope): Effect.Effect<AgentDescriptor[], Error, never> {
     const agents = this.agents
     return Effect.gen(function* () {
-      const all = yield* agents.list()
+      // Scope gate (V4.x defense-in-depth). deepagent-code is a single-user, one-workspace-per-instance
+      // server: `Agent.list()` returns the CONFIG agents of THIS routed instance only, so the correct
+      // scope check is "does the requested scope address the instance this provider is bound to?" We
+      // resolve the instance's own identity exactly like `getWorkspaceContext`: the routed workspace id,
+      // else the working directory (the grouping key IM falls back to). Both reads are R=never and never
+      // fail — `InstanceState.workspaceID` swallows a missing context, and `InstanceRef` is a reference
+      // whose default is `undefined`.
+      //
+      // When the requested `workspaceID` does NOT match the instance's own scope, the caller is asking
+      // about a workspace this instance was not routed to, so only the workspace-independent BUILT-INS
+      // (globals) are returned; the instance's config agents are withheld. When the instance can't
+      // determine its own scope (a bare fiber with no InstanceRef/WorkspaceRef — e.g. a daemon before
+      // context load), we DEFER rather than over-filter and include the config agents: this is
+      // defense-in-depth layered behind Layer-1 (trusted-source) which already fails closed on untrusted
+      // external events, so withholding here would only risk false negatives, never a fail-open.
+      const routedWorkspaceID = yield* InstanceState.workspaceID
+      const instanceCtx = yield* InstanceRef
+      const ownScope = routedWorkspaceID ?? instanceCtx?.directory
+      const inScope = ownScope === undefined || ownScope === input.workspaceID
+
+      const all = inScope ? yield* agents.list() : []
       const mapped = all
         .filter((agent) => !agent.hidden && (agent.mode === "all" || agent.mode === "primary"))
         .map((agent): AgentDescriptor => {
