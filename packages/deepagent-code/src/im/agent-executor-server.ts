@@ -21,6 +21,7 @@ import { Agent } from "@/agent/agent"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { InstanceRef } from "@/effect/instance-ref"
 import { InstanceState } from "@/effect/instance-state"
+import { InstanceStore } from "@/project/instance-store"
 import { Session } from "@/session/session"
 import { SessionPrompt } from "@/session/prompt"
 import { withAgentProgress } from "./agent-progress-stream"
@@ -216,10 +217,14 @@ export const ServerAgentExecutorLive = Layer.effect(
  * ever matches and no agent runs. Mentions match on `name` (the agent's name).
  */
 class ServerAgentListProvider implements AgentListProvider {
-  constructor(private readonly agents: Agent.Interface) {}
+  constructor(
+    private readonly agents: Agent.Interface,
+    private readonly instanceStore: InstanceStore.Interface,
+  ) {}
 
   listAgents(input: AgentQueryScope): Effect.Effect<AgentDescriptor[], Error, never> {
     const agents = this.agents
+    const instanceStore = this.instanceStore
     return Effect.gen(function* () {
       // Scope gate (V4.x defense-in-depth). deepagent-code is a single-user, one-workspace-per-instance
       // server: `Agent.list()` returns the CONFIG agents of THIS routed instance only, so the correct
@@ -231,17 +236,37 @@ class ServerAgentListProvider implements AgentListProvider {
       //
       // When the requested `workspaceID` does NOT match the instance's own scope, the caller is asking
       // about a workspace this instance was not routed to, so only the workspace-independent BUILT-INS
-      // (globals) are returned; the instance's config agents are withheld. When the instance can't
-      // determine its own scope (a bare fiber with no InstanceRef/WorkspaceRef — e.g. a daemon before
-      // context load), we DEFER rather than over-filter and include the config agents: this is
-      // defense-in-depth layered behind Layer-1 (trusted-source) which already fails closed on untrusted
-      // external events, so withholding here would only risk false negatives, never a fail-open.
+      // (globals) are returned; the instance's config agents are withheld.
       const routedWorkspaceID = yield* InstanceState.workspaceID
       const instanceCtx = yield* InstanceRef
       const ownScope = routedWorkspaceID ?? instanceCtx?.directory
       const inScope = ownScope === undefined || ownScope === input.workspaceID
 
-      const all = inScope ? yield* agents.list() : []
+      // BLOCKER (v4-daemon-instanceref-die, residual): `agents.list()` resolves through InstanceState →
+      // `InstanceState.context`, which `Effect.die`s when NO InstanceRef is present (instance-state.ts).
+      // On a per-REQUEST fiber the middleware set it, so this is fine. But the AUTONOMOUS path calls this
+      // provider from a bare DAEMON fiber (event-dispatcher / multi-agent-runtime), which carries no
+      // InstanceRef — so `agents.list()` would die, the dispatcher captures the defect as "registry
+      // lookup failed", nacks → 3× retry → DLQ, and EVERY autonomous event silently fails to dispatch
+      // while looking handled. The prior InstanceRef-die fix wrapped the turn-runner + panel port but not
+      // this earlier call site. Heal it the same way: when there is no InstanceRef, ESTABLISH one by
+      // loading an InstanceContext for the event's directory (a non-"wrk" workspaceID doubles as a real
+      // directory in the single-user / directory-routed model), then run `agents.list()` inside it. When
+      // we cannot derive a directory (a bare "wrk_"-id is not a path), fall back to built-ins only —
+      // never die. A genuine load/list ERROR still propagates so the dispatcher nacks+retries (transient).
+      const listAgentsSafely = inScope
+        ? instanceCtx
+          ? agents.list() // per-request fiber already carries the context
+          : (() => {
+              const directory =
+                input.workspaceID && !input.workspaceID.startsWith("wrk") ? input.workspaceID : undefined
+              if (!directory) return Effect.succeed<Agent.Info[]>([])
+              return instanceStore
+                .load({ directory })
+                .pipe(Effect.flatMap((ctx) => agents.list().pipe(Effect.provideService(InstanceRef, ctx))))
+            })()
+        : Effect.succeed<Agent.Info[]>([])
+      const all = yield* listAgentsSafely
       const mapped = all
         .filter((agent) => !agent.hidden && (agent.mode === "all" || agent.mode === "primary"))
         .map((agent): AgentDescriptor => {
@@ -294,6 +319,7 @@ export const ServerAgentListProviderLive = Layer.effect(
   AgentListProviderService,
   Effect.gen(function* () {
     const agents = yield* Agent.Service
-    return new ServerAgentListProvider(agents)
+    const instanceStore = yield* InstanceStore.Service
+    return new ServerAgentListProvider(agents, instanceStore)
   }),
 )
