@@ -53,7 +53,7 @@ const panelQuestion = (): PanelQuestionInput => ({
 
 const baseDeps = (over: Partial<Parameters<typeof buildGraderPorts>[0]> = {}) => ({
   runValidation: () => Effect.succeed({ pass: true }),
-  diagnostics: () => Effect.succeed({ maxSeverity: null as string | null }),
+  diagnostics: () => Effect.succeed({ maxSeverity: null as string | null, checked: true }),
   runTurn: (() => Effect.succeed(turnFrom())) as SubagentTurnRunner,
   panelQuestion,
   parentSessionID: "parent-1",
@@ -79,9 +79,16 @@ describe("V3.9 §D wiring — highestDiagnosticSeverity (LSP severity reduction)
 describe("V3.9 §D wiring — GraderPorts.diagnostics", () => {
   test("maps live diagnostics through the reducer", async () => {
     const ports = buildGraderPorts(
-      baseDeps({ diagnostics: () => Effect.succeed({ maxSeverity: "warning" }) }),
+      baseDeps({ diagnostics: () => Effect.succeed({ maxSeverity: "warning", checked: true }) }),
     )
-    expect(await Effect.runPromise(ports.diagnostics())).toEqual({ maxSeverity: "warning" })
+    expect(await Effect.runPromise(ports.diagnostics())).toEqual({ maxSeverity: "warning", checked: true })
+  })
+
+  test("a diagnostics DEFECT surfaces checked:false (unknown, not clean) — fail-open fix", async () => {
+    // The safe() wrapper catches a defect from the injected diagnostics fn. It must fall back to
+    // checked:false so the grader treats it as an unmet gap, NOT { maxSeverity: null } read as clean.
+    const ports = buildGraderPorts(baseDeps({ diagnostics: () => Effect.die("LSP crashed") }))
+    expect(await Effect.runPromise(ports.diagnostics())).toEqual({ maxSeverity: null, checked: false })
   })
 })
 
@@ -313,7 +320,7 @@ describe("V3.9 §D/§F.3 wiring — makeGoalLoopWiring flag gate", () => {
     cwd: "/tmp",
     runTurn: (() => Effect.succeed(turnFrom())) as SubagentTurnRunner,
     panelQuestion,
-    diagnostics: () => Effect.succeed({} as Record<string, Diagnostic[]>),
+    diagnostics: () => Effect.succeed({ diagnostics: {} as Record<string, Diagnostic[]>, checked: true }),
     rollback: () => Effect.void,
   }
   test("flag OFF → null (goal loop unavailable, no wiring constructed)", async () => {

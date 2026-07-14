@@ -15,6 +15,7 @@ import type { AgentDescriptor } from "@deepagent-code/core/im/mention-parser"
 import { BUILTIN_AGENT_DESCRIPTORS } from "@deepagent-code/core/im/builtin-agents"
 import { Agent } from "@/agent/agent"
 import { ServerAgentListProviderLive } from "@/im/agent-executor-server"
+import { InstanceStore } from "@/project/instance-store"
 import { testEffect } from "../lib/effect"
 
 // V4.0 §C Multi-Agent Runtime — verifies the coordination pipeline (partition → gate → arbitrate → run
@@ -845,7 +846,18 @@ describe("MultiAgentRuntime over the REAL ServerAgentListProvider (production wi
         agentInfo({ name: "plan", mode: "primary" }),
       ]),
   } as unknown as Agent.Interface
-  const realProvider = ServerAgentListProviderLive.pipe(Layer.provide(Layer.succeed(Agent.Service, agentMock)))
+  // InstanceStore stub — the provider uses it to establish a context around agents.list() on a bare
+  // daemon fiber (the BLOCKER fix). These events carry a "wrk_" workspaceID (no directory), so the
+  // provider degrades to the built-in autonomous descriptors — which is exactly what binds CodeFixAgent
+  // as the "auto" agent below; it never dies.
+  const instanceStoreStub = {
+    load: (input: { directory: string }) =>
+      Effect.succeed({ directory: input.directory, worktree: input.directory, project: {} }),
+  } as unknown as InstanceStore.Interface
+  const realProvider = ServerAgentListProviderLive.pipe(
+    Layer.provide(Layer.succeed(Agent.Service, agentMock)),
+    Layer.provide(Layer.succeed(InstanceStore.Service, instanceStoreStub)),
+  )
 
   const makeRealLayer = () => {
     const database = Database.layerFromPath(":memory:")
