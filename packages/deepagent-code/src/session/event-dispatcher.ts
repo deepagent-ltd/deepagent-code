@@ -436,10 +436,18 @@ export const layerWith = (options?: LayerOptions) =>
                     yield* fireOrDefer(schedule, at)
                   : false
               if (didFire) {
-                // advance the recheck so a still-satisfied window doesn't refire next tick (markFired
-                // already advanced fireAt when a cadence exists; for cadence-less, push it forward here).
-                if (schedule.intervalMs == null)
-                  yield* scheduler.recheckCondition(schedule.id, at + (spec.windowMs || 1))
+                // A fired condition must not re-fire while the SAME trigger events are still inside the
+                // window. markFired (called inside fireOrDefer / firePerRepoOrDefer) advances fire_at by
+                // only the recheck CADENCE (e.g. 60s), so a cadenced condition (the production 3×-CI
+                // trigger: recheck 60s, window 30min) would otherwise become due again 60s later with the
+                // same ≥3 failures still in-window and re-fire ~once per recheck for the whole window
+                // (~30 duplicate high-priority repair goals — the bus idempotency key is per-fireAt, and
+                // the router only dedups LOW priority, so nothing collapses them). Push the next recheck
+                // PAST the window so those events have aged out before the condition is eligible again.
+                // This applies to EVERY fired condition, cadenced or not (the old `intervalMs == null`
+                // guard left the cadenced production trigger unprotected). New events landing after this
+                // still start a fresh window and legitimately re-trigger.
+                yield* scheduler.recheckCondition(schedule.id, at + (spec.windowMs || 1))
                 fired++
               } else {
                 const nextCheck = at + (schedule.intervalMs ?? (spec.windowMs || 1))

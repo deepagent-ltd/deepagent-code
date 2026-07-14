@@ -285,6 +285,40 @@ describe("EventDispatcher condition tick", () => {
       expect(fired[0]?.workspaceID).toBe("wrk_pb")
     }),
   )
+
+  // REGRESSION (deep-dig #1): a CADENCED condition (recheckEveryMs < windowMs — the production 3×-CI
+  // trigger) must NOT re-fire on every recheck while the SAME trigger events are still inside the window.
+  // markFired advances fire_at by only the recheck cadence, so before the fix the condition re-fired
+  // ~once per recheck for the whole window (~30 duplicate high-priority repair goals). After firing, the
+  // next recheck is pushed PAST the window so the triggering events age out first.
+  it.effect("§A4 cadenced condition does NOT re-fire while the window still holds the triggers", () =>
+    Effect.gen(function* () {
+      resetRecorder()
+      setNow(0)
+      const scheduler = yield* Scheduler.Service
+      const bus = yield* DeepAgentEventBus.Service
+      const dispatcher = yield* EventDispatcher.Service
+      yield* scheduler.scheduleCondition({
+        workspaceID: "wrk_1",
+        // recheck every 1s, but a 60s window — the exact cadenced shape production ships.
+        condition: { eventType: "ci.failure", threshold: 2, windowMs: 60_000 },
+        firstCheckAt: 0,
+        recheckEveryMs: 1_000,
+        eventTemplate: { type: "git.push", source: "schedule", workspaceID: "wrk_1", priority: "high", payload: {} },
+      })
+      yield* bus.publish(input({ idempotencyKey: "cf-1", type: "ci.failure" }))
+      yield* bus.publish(input({ idempotencyKey: "cf-2", type: "ci.failure" }))
+      // First eligible tick fires once (threshold met).
+      expect(yield* dispatcher.tick(1_000)).toBe(1)
+      // Subsequent ticks WITHIN the window (the same 2 failures are still in-window) must NOT re-fire —
+      // the post-fire recheck was pushed to ~at + windowMs, not at + recheckCadence.
+      expect(yield* dispatcher.tick(2_000)).toBe(0)
+      expect(yield* dispatcher.tick(3_000)).toBe(0)
+      expect(yield* dispatcher.tick(30_000)).toBe(0)
+      const fired = yield* bus.recentByType({ type: "git.push", windowMs: Number.MAX_SAFE_INTEGER, now: 30_000 })
+      expect(fired.length).toBe(1) // exactly ONE repair, not one per recheck
+    }),
+  )
 })
 
 // §E4/§N (P3.13) — quiet-hours filter for the scheduler tick. The dispatcher resolves the workspace's

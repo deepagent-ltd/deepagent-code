@@ -135,8 +135,15 @@ export class InvalidGoalError extends Schema.TaggedErrorClass<InvalidGoalError>(
 export type GraderPorts = {
   /** Run the given validation commands; `pass` iff ALL succeeded. */
   readonly runTests: (commands: readonly string[]) => Effect.Effect<{ readonly pass: boolean }>
-  /** Highest diagnostic severity currently present, or null when there are none. */
-  readonly diagnostics: () => Effect.Effect<{ readonly maxSeverity: string | null }>
+  /**
+   * Highest diagnostic severity currently present, or null when there are none. `checked` MUST be false
+   * when the port could not actually compute diagnostics (LSP crashed/timed out, no client covered the
+   * changed files, defect fallback). A `maxSeverity: null, checked: false` result means "unknown", NOT
+   * "clean" — the grader treats an unchecked result as an unmet gap (mirrors runTests' empty-set = NOT
+   * passed), so a broken/absent LSP can never vacuously satisfy `no_diagnostics`. `checked` defaults to
+   * true only for an explicit, truthful result. See goal-loop-wiring.ts.
+   */
+  readonly diagnostics: () => Effect.Effect<{ readonly maxSeverity: string | null; readonly checked?: boolean }>
   /** Reviewer subagent verdict: `pass` iff no finding exceeds `maxSeverity`. */
   readonly reviewerClean: (maxSeverity: string) => Effect.Effect<{ readonly pass: boolean }>
   /** Expert Panel verdict (§D.7 key decision point) — `decision` is approve/revise/block/needs_human. */
@@ -175,8 +182,12 @@ const evaluateOne = (
         return pass ? null : `tests_pass: one or more of [${criterion.commands.join(", ")}] failed`
       }
       case "no_diagnostics": {
-        const { maxSeverity } = yield* ports.diagnostics()
-        if (maxSeverity == null) return null // no diagnostics at all → always met
+        const { maxSeverity, checked } = yield* ports.diagnostics()
+        // A port that could NOT actually check (LSP down/timeout, no client for the changed files,
+        // defect fallback) reports checked:false. That is UNKNOWN, not clean — treat it as an unmet gap
+        // so a broken/absent LSP never vacuously satisfies no_diagnostics (mirrors runTests empty = fail).
+        if (checked === false) return "no_diagnostics: could not verify diagnostics (no diagnostic provider reported)"
+        if (maxSeverity == null) return null // genuinely checked and no diagnostics at all → met
         // With no severityAtMost, ANY diagnostic is a gap (strict "no diagnostics"). With a bound, a
         // diagnostic is a gap only when it is strictly more severe than the allowed ceiling.
         if (criterion.severityAtMost == null)
@@ -296,6 +307,13 @@ export type StepExecutorResult = {
   readonly cost?: number
   /** A critical / unrecoverable failure — the tick rolls back rather than continuing. */
   readonly critical?: boolean
+  /**
+   * The session the executor actually RAN the step in. The Controller runs in a parent goal session but
+   * the executor may run each turn in a fresh CHILD session (that is where the file mutations live). On a
+   * critical failure the Controller must roll back THAT session, not the parent (which has no edits) — so
+   * the executor surfaces it here. Absent ⇒ the executor ran in the goal session itself.
+   */
+  readonly executedSessionId?: string
 }
 
 /**
@@ -310,7 +328,13 @@ export type StepExecutor = (input: {
   readonly activeStepId: string | null
 }) => Effect.Effect<StepExecutorResult>
 
-/** §D.6 可回滚: injected rollback (production wires the existing revert). Best-effort, never fatal. */
+/**
+ * §D.6 可回滚: injected rollback (production wires the existing revert). Best-effort, never fatal.
+ * `sessionId` is the session whose changes must be reverted — the executor's ACTUAL run session (a child
+ * session where the edits live) when it reported one, else the goal session. Reverting the wrong session
+ * (e.g. the parent, which has no edits) makes `rolled_back` reported-but-false, leaving the workspace
+ * dirty after a critical failure.
+ */
 export type RollbackPort = (input: {
   readonly goalId: string
   readonly sessionId: string
@@ -786,10 +810,13 @@ export const makeGoalLoop = (deps: ControllerDeps): GoalLoop => {
         )
         // A DEFECT in the injected rollback port must not escape tick's never-fail contract — the audit
         // trail above is already durable, so swallow a rollback defect (best-effort / never fatal).
+        // Revert the session the executor ACTUALLY ran the step in (the child session that holds the file
+        // mutations), falling back to the goal session only when the executor ran there directly. Passing
+        // the parent goal session here would revert nothing (it has no edits) — the wrong-session bug.
         yield* deps
           .rollback({
             goalId: state.goalId,
-            sessionId: state.sessionId,
+            sessionId: execResult.executedSessionId ?? state.sessionId,
             reason: `critical failure at tick ${ledger.ticks}`,
           })
           .pipe(Effect.catchCause(() => Effect.void))

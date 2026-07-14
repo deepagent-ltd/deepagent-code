@@ -156,8 +156,12 @@ export type SubagentTurnRunner = (input: SubagentTurnInput) => Effect.Effect<Sub
 export type GraderPortsDeps = {
   /** Reuses the workspace validation runner (same as the multi-round loop). */
   readonly runValidation: (commands: readonly string[]) => Effect.Effect<{ readonly pass: boolean }>
-  /** Live LSP diagnostics reduced to the single highest severity label, or null. */
-  readonly diagnostics: () => Effect.Effect<{ readonly maxSeverity: string | null }>
+  /**
+   * Live LSP diagnostics reduced to the single highest severity label, or null when genuinely clean.
+   * `checked: false` signals the diagnostics could NOT be computed (see the port doc in goal-loop.ts) —
+   * the grader treats that as an unmet gap rather than a vacuous pass.
+   */
+  readonly diagnostics: () => Effect.Effect<{ readonly maxSeverity: string | null; readonly checked: boolean }>
   /** Drives ONE reviewer / panelist subagent turn. */
   readonly runTurn: SubagentTurnRunner
   /** The Expert Panel question builder — the caller pins the concrete question / lens set. */
@@ -195,7 +199,9 @@ const safe = <A>(effect: Effect.Effect<A, unknown>, fallback: A): Effect.Effect<
 
 export const buildGraderPorts = (deps: GraderPortsDeps): GraderPorts => ({
   runTests: (commands) => safe(deps.runValidation(commands), { pass: false }),
-  diagnostics: () => safe(deps.diagnostics(), { maxSeverity: null }),
+  // A defect fallback is UNKNOWN, not clean: checked:false so the grader counts it as an unmet gap
+  // rather than vacuously satisfying no_diagnostics (the fail-open this replaced).
+  diagnostics: () => safe(deps.diagnostics(), { maxSeverity: null, checked: false }),
   reviewerClean: (maxSeverity) =>
     safe(
       deps
@@ -310,6 +316,10 @@ export const buildStepExecutor = (
         return {
           tokensUsed: turn.tokensUsed,
           cost: turn.cost,
+          // Surface the CHILD session the turn ran in so a critical-failure rollback reverts THAT
+          // session (where the file edits live), not the parent goal session (which has none). Without
+          // this the loop reports `rolled_back` while the child's mutations stay on disk.
+          ...(turn.sessionID ? { executedSessionId: turn.sessionID } : {}),
           // A turn that could not run at all is a critical failure for THIS tick → the loop rolls back.
           ...(turn.ok ? {} : { critical: true }),
         }
@@ -512,7 +522,10 @@ export type GoalLoopWiringInput = {
   /** Builds the Expert Panel question convened at a decision point (§D.7). */
   readonly panelQuestion: () => PanelQuestionInput
   /** Live LSP diagnostics accessor (production: LSP.Service.diagnostics). */
-  readonly diagnostics: () => Effect.Effect<Record<string, readonly LSPClient.Diagnostic[]>>
+  readonly diagnostics: () => Effect.Effect<{
+    readonly diagnostics: Record<string, readonly LSPClient.Diagnostic[]>
+    readonly checked: boolean
+  }>
   /** Best-effort rollback (production: SessionRevert). */
   readonly rollback: RollbackPort
   /**
@@ -548,7 +561,9 @@ export const makeGoalLoopWiring = (
           Effect.map((results) => ({ pass: AgentGateway.DeepAgentValidation.allPassed(results) })),
         ),
       diagnostics: () =>
-        input.diagnostics().pipe(Effect.map((d) => ({ maxSeverity: highestDiagnosticSeverity(d) }))),
+        input
+          .diagnostics()
+          .pipe(Effect.map((d) => ({ maxSeverity: highestDiagnosticSeverity(d.diagnostics), checked: d.checked }))),
       runTurn: input.runTurn,
       panelQuestion: input.panelQuestion,
       parentSessionID: input.parentSessionID,
@@ -577,15 +592,23 @@ export const makeGoalLoopWiring = (
  * service-agnostic (testable with an injected diagnostics fn) while production reads live LSP.
  */
 export const liveDiagnostics = (): Effect.Effect<
-  Record<string, readonly LSPClient.Diagnostic[]>,
+  { readonly diagnostics: Record<string, readonly LSPClient.Diagnostic[]>; readonly checked: boolean },
   never,
   LSP.Service
 > =>
   Effect.gen(function* () {
     const lsp = yield* LSP.Service
+    // An LSP crash/timeout is UNKNOWN, not clean — surface checked:false so no_diagnostics does not
+    // vacuously pass on a broken LSP (the fail-open this replaced). A genuine (possibly empty) result is
+    // checked:true. NOTE: an empty map from a healthy LSP that simply has no client for the changed
+    // files still reports checked:true → "clean"; hardening that (assert a client covered the edited
+    // files) is a follow-up, but the defect path — the unconditional fail-open — is now closed.
     return yield* lsp
       .diagnostics()
-      .pipe(Effect.catchCause(() => Effect.succeed({} as Record<string, LSPClient.Diagnostic[]>)))
+      .pipe(
+        Effect.map((diagnostics) => ({ diagnostics, checked: true })),
+        Effect.catchCause(() => Effect.succeed({ diagnostics: {} as Record<string, LSPClient.Diagnostic[]>, checked: false })),
+      )
   })
 
 /** The production rollback port backed by SessionRevert (best-effort, never fatal). */
