@@ -756,6 +756,38 @@ it.instance("loop continues when finish is tool-calls", () =>
   }),
 )
 
+// V4.0.1 P0b OUTPUT soft-landing — a length-capped response continues instead of ending the turn.
+it.instance("loop continues (not exits) when finish is length: injects a continue nudge + re-prompts", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(providerCfg)
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const session = yield* sessions.create({
+      title: "Pinned",
+      permission: [{ permission: "*", pattern: "*", action: "allow" }],
+    })
+    // Seed an assistant that was cut off at the output ceiling (finish === "length"), then queue the
+    // continuation the re-prompt will consume. Without output soft-landing this would exit immediately
+    // like a "stop" finish (0 LLM calls); with it ON the loop injects a continue nudge and re-prompts.
+    yield* seed(session.id, { finish: "length" })
+    yield* llm.text("...continued to the end.")
+
+    const result = yield* prompt.loop({ sessionID: session.id })
+
+    // It made an LLM request (continued) rather than exiting on the length cutoff.
+    expect(yield* llm.hits).toHaveLength(1)
+    expect(result.info.role).toBe("assistant")
+    if (result.info.role === "assistant") expect(result.info.finish).toBe("stop")
+
+    // A synthetic continue-nudge user message was injected before the re-prompt.
+    const msgs = yield* sessions.messages({ sessionID: session.id })
+    const injected = msgs.some((m) =>
+      m.parts.some((p) => p.type === "text" && p.synthetic === true && p.text.includes("输出长度上限")),
+    )
+    expect(injected).toBe(true)
+  }),
+)
+
 it.instance("glob tool keeps instance context during prompt runs", () =>
   Effect.gen(function* () {
     const { dir, llm } = yield* useServerConfig(providerCfg)

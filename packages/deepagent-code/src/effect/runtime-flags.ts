@@ -111,6 +111,15 @@ export class Service extends ConfigService.Service<Service>()("@deepagent-code/R
   // With `=false`, overflowStatus() collapses to the pre-V4.0.1 single-threshold ok/hard behavior (逐字节
   // equivalent). Also respects DEEPAGENT_CODE_DISABLE_AUTOCOMPACT (no compaction → no soft-landing).
   softLandingCompaction: stableOn("DEEPAGENT_CODE_SOFT_LANDING_COMPACTION"),
+  // V4.0.1 P0b: OUTPUT soft-landing — when a response is cut off at the output-token ceiling
+  // (finish === "length") with no pending tool call, instead of ending the turn (the pre-V4.0.1 behavior),
+  // inject a "continue from where you were cut off, do not repeat" tail message and loop once more so the
+  // model resumes. Bounded by OUTPUT_CONTINUATION_MAX consecutive continuations (reset on any natural stop)
+  // to prevent an infinite loop. Improves on Codex, which treats an output-cap hit as a retryable stream
+  // error and re-sends the identical request (re-hitting the same cap). Pure-additive, strictly better
+  // default (a truncated long answer now completes instead of stopping mid-sentence) → SHIPS ON. With
+  // `=false` a length-capped response ends the turn exactly as before V4.0.1.
+  outputSoftLanding: stableOn("DEEPAGENT_CODE_OUTPUT_SOFT_LANDING"),
   // V4.0.1 P2: goal BUDGET soft-notify — when cost/maxCost crosses tiered fractions (default [0.7, 0.9]),
   // inject a "converge, don't expand" reminder into the next tick's step-prompt TAIL (never the prefix),
   // mirroring Codex's <rollout_budget>. Pure-additive reminder with NO halting behavior change → SHIPS ON.

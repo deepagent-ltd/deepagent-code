@@ -50,12 +50,34 @@ export const CompactionSoftLandingState = Schema.Struct({
   windowEpoch: Schema.Int, // 每次硬压缩 +1，用于世代隔离
   reminderDeliveredAtTurn: Schema.optional(Schema.Int),
   autoCompactFallbackDelivered: Schema.Boolean, // 本 epoch 是否已注入 fallback
+  // V4.0.1 P0 §2.3 BodyAfterPrefix — the per-window input-token BASELINE (Codex's `prefill_input_tokens`,
+  // core/src/state/auto_compact_window.rs). Captured (latched) from the provider-reported input side of
+  // the FIRST response after a window opens; `overflowStatus` subtracts it so the soft/fallback/hard lines
+  // fire on BODY growth, not on the fixed static prefix. Cleared (undefined) when windowEpoch bumps — the
+  // next generation re-latches. server-observed only: we take the real billed input, never a tokenizer.
+  prefillInputTokens: Schema.optional(Schema.Int),
+  // V4.0.1 P0b OUTPUT soft-landing — how many times we have auto-continued the CURRENT run of length-capped
+  // responses. Reset to 0 on any non-"length" finish (a natural stop breaks the run). A hard cap on this
+  // (OUTPUT_CONTINUATION_MAX) prevents an infinite continue loop — the knob Codex lacks (it only has the
+  // transport-retry cap, the wrong lever for output truncation).
+  outputContinuationCount: Schema.optional(Schema.Int),
 }).annotate({ identifier: "CompactionSoftLandingState" })
 export type CompactionSoftLandingState = Schema.Schema.Type<typeof CompactionSoftLandingState>
 
 export const initialSoftLandingState: CompactionSoftLandingState = {
   windowEpoch: 0,
   autoCompactFallbackDelivered: false,
+}
+
+// V4.0.1 P0b — the hard ceiling on consecutive output-length auto-continuations, independent of the
+// transport-retry cap. After this many "continue from where you were cut off" injections in a row without
+// a natural stop, we give up and end the turn (avoids a model that keeps hitting the output cap forever).
+// Env-overridable for tuning per model.
+export const OUTPUT_CONTINUATION_MAX = 3
+
+export function outputContinuationMax(): number {
+  const raw = Number(process.env["DEEPAGENT_CODE_OUTPUT_CONTINUATION_MAX"])
+  return Number.isInteger(raw) && raw >= 0 ? raw : OUTPUT_CONTINUATION_MAX
 }
 
 export function usable(input: { cfg: ConfigV1.Info; model: Provider.Model; outputTokenMax?: number }) {
@@ -94,8 +116,11 @@ export function overflowStatus(input: {
 }): OverflowStatus {
   const hardLine = usable(input)
   const softLandingEnabled = input.softLanding ?? true
-  // Body-after-prefix: never let a prefix estimate drive `used` negative.
-  const used = Math.max(0, input.tokens - (input.prefixTokens ?? 0))
+  const prefix = Math.max(0, input.prefixTokens ?? 0)
+  // Body-after-prefix (§2.3, Codex core/src/session/context_window.rs): subtract the per-window prefix
+  // BASELINE so the soft/fallback/hard lines fire on BODY growth, not on the fixed static prefix. Never
+  // let the baseline drive `used` negative.
+  const used = Math.max(0, input.tokens - prefix)
 
   // Reminder line first, then clamp the fallback line into [softLine, hardLine] so the three lines stay
   // monotonic even on small windows where hardLine - buffer would otherwise fall below the soft line.
@@ -107,8 +132,18 @@ export function overflowStatus(input: {
     return { phase: "ok", used, softLine, fallbackLine, hardLine }
   }
 
+  // Full-window SAFETY CAP (Codex's second, independent check — core/src/session/context_window.rs: body
+  // >= 0.9*window OR total >= full window). body-after-prefix is the PRIMARY trigger, but a huge prefix
+  // must never let the RAW un-deducted total silently blow past the real input window. So a hard
+  // compaction ALSO fires when the raw total reaches the model's actual input limit (the true window,
+  // ABOVE the reserved-output `hardLine`), whichever crosses first. When we have no input limit, fall
+  // back to context. Only meaningful once a prefix is deducted (prefix>0); with prefix=0, used==raw so
+  // this is redundant and byte-for-byte the pre-BodyAfterPrefix behavior.
+  const fullWindow = input.model.limit.input || input.model.limit.context
+  const rawOverFullWindow = prefix > 0 && input.tokens >= fullWindow
+
   const phase: CompactionPhase =
-    used >= hardLine
+    used >= hardLine || rawOverFullWindow
       ? "hard"
       : !softLandingEnabled
         ? "ok"
@@ -143,7 +178,9 @@ export function softLandingDecision(input: {
   switch (status.phase) {
     case "hard":
       // Real LLM-summary compaction happens. Bump the generation and clear the soft-landing flags so the
-      // NEXT window can warn + flush again from scratch.
+      // NEXT window can warn + flush again from scratch. Note the fresh object also DROPS
+      // prefillInputTokens (§2.3 clear_prefill: the new window re-latches its own baseline from the first
+      // post-compaction response) and outputContinuationCount (a fresh window resets the output run).
       return {
         action: "hard",
         nextState: { windowEpoch: state.windowEpoch + 1, autoCompactFallbackDelivered: false },
