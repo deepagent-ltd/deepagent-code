@@ -131,6 +131,12 @@ const collectFromStore = (
   const consider = (id: string, distance: number): boolean => {
     const doc = ds.get(id)
     if (!doc) return false
+    // INV-7: sealed docs never surface (list()/neighbors()/getRefsIn() all skip them). `consider` is also
+    // reached from the EXPLICIT-seed frontier (caller-supplied ids resolved via raw get()), so the seal
+    // filter must live HERE too — otherwise a sealed seed id leaks its body into graph-query / wiki
+    // traversal results. Mirrors the list() exclusion; latent today (no writer emits scope:"sealed") but
+    // this closes the accessor before any sealed-writer ships.
+    if (doc.scope === "sealed") return false
     const existing = found.get(id)
     if (existing && existing.distance <= distance) return false
     found.set(id, { doc, distance })

@@ -40,6 +40,34 @@ describe("session-state panel arming (§C)", () => {
   })
 })
 
+describe("session-state panel debate depth (V4.0 three-state control)", () => {
+  beforeEach(() => {
+    SessionState.configure(mkdtempSync(path.join(tmpdir(), "panel-rounds-")))
+  })
+
+  test("defaults to single when never chosen; setPanelRounds persists the choice", () => {
+    SessionState.getOrCreate("pr-1", "high")
+    expect(SessionState.panelRounds("pr-1")).toBe("single") // default
+    SessionState.setPanelRounds("pr-1", "multi")
+    expect(SessionState.panelRounds("pr-1")).toBe("multi")
+    SessionState.setPanelRounds("pr-1", "single")
+    expect(SessionState.panelRounds("pr-1")).toBe("single")
+  })
+
+  test("depth is independent of armed state (decoupled dimensions)", () => {
+    SessionState.getOrCreate("pr-2", "high")
+    SessionState.setPanelRounds("pr-2", "multi")
+    SessionState.setPanelArmed("pr-2", false) // disarm must NOT wipe the chosen depth
+    expect(SessionState.panelRounds("pr-2")).toBe("multi")
+    expect(SessionState.resolvePanelArmed("pr-2", false)).toBe(false)
+  })
+
+  test("setting depth on an unknown session is a no-op and still reads the default", () => {
+    SessionState.setPanelRounds("pr-missing", "multi") // must not throw / create state
+    expect(SessionState.panelRounds("pr-missing")).toBe("single")
+  })
+})
+
 describe("session-state active-goal pointer (§D)", () => {
   beforeEach(() => {
     SessionState.configure(mkdtempSync(path.join(tmpdir(), "goal-ptr-")))

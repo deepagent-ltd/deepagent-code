@@ -88,7 +88,10 @@ export const Prompted = EventV2.define({
     ...Base,
     messageID: SessionMessageID.ID,
     prompt: Prompt,
-    delivery: Schema.Literals(["steer", "queue"]),
+    // Mirrors SessionInput.Delivery (input.ts). `goal_steer` (§S1.3) never actually travels this dormant
+    // V2 event path — it is written directly to the session_steer table — but the literal stays a superset
+    // so the union is consistent and a future producer cannot silently narrow it.
+    delivery: Schema.Literals(["steer", "queue", "goal_steer"]),
   },
 })
 export type Prompted = typeof Prompted.Type
@@ -101,7 +104,8 @@ export namespace PromptLifecycle {
       ...Base,
       messageID: SessionMessageID.ID,
       prompt: Prompt,
-      delivery: Schema.Literals(["steer", "queue"]),
+      // Superset of SessionInput.Delivery; `goal_steer` (§S1.3) does not flow this dormant V2 path.
+      delivery: Schema.Literals(["steer", "queue", "goal_steer"]),
     },
   })
   export type Admitted = typeof Admitted.Type
