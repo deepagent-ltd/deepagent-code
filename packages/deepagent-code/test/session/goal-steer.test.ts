@@ -147,6 +147,26 @@ describe("§S1.3 renderStepPrompt — mid-run steering threads into the step pro
     expect(prompt).toContain("- skip step 3")
     expect(prompt).toContain("- prefer the async API")
   })
+
+  // V4.0.1 P1 §3.3 — the World State block rides the tail after the advance instruction, before the
+  // budget notice; omitting it is byte-for-byte the base prompt (so the flag OFF path is unchanged).
+  test("worldState is threaded into the tail after the advance line and before the budget notice", () => {
+    const prompt = renderStepPrompt({
+      ...base,
+      worldState: "<world-state>\n## Version Control\nbranch main\n</world-state>",
+      budgetNotice: "预算已用 80% used",
+    })
+    expect(prompt).toContain("<world-state>")
+    expect(prompt.indexOf("<world-state>")).toBeGreaterThan(prompt.indexOf("Advance goal"))
+    expect(prompt.indexOf("<world-state>")).toBeLessThan(prompt.indexOf("BUDGET NOTICE"))
+  })
+
+  test("no worldState ⇒ prompt is unchanged (base behaviour)", () => {
+    const withNull = renderStepPrompt({ ...base, worldState: null })
+    const without = renderStepPrompt(base)
+    expect(withNull).toBe(without)
+    expect(withNull).not.toContain("<world-state>")
+  })
 })
 
 describe("§S1.3 goal-tick steering — absorb a steer between ticks, consumed exactly once", () => {

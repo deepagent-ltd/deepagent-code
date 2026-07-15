@@ -1270,8 +1270,14 @@ export function providerOptions(model: Provider.Model, options: { [x: string]: a
   return { [key]: options }
 }
 
-export function maxOutputTokens(model: Provider.Model, outputTokenMax = OUTPUT_TOKEN_MAX): number {
-  return Math.min(model.limit.output, outputTokenMax) || outputTokenMax
+export function maxOutputTokens(model: Provider.Model, outputTokenMax?: number): number {
+  // (c) per-model 输出上限: prefer the model's real output limit. outputTokenMax is
+  // the global env override (DEEPAGENT_CODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX), undefined
+  // when unset. When unset, use the model's own output limit (falling back to the
+  // legacy OUTPUT_TOKEN_MAX=32k only when the model reports no limit) so a >32k model
+  // is no longer pinned to 32k. When set, it acts as a hard cap that can only tighten.
+  if (outputTokenMax === undefined) return model.limit.output || OUTPUT_TOKEN_MAX
+  return Math.min(model.limit.output || outputTokenMax, outputTokenMax) || outputTokenMax
 }
 
 export function schema(model: Provider.Model, schema: JSONSchema7): JSONSchema7 {
