@@ -84,6 +84,18 @@ import { configHandlers } from "./handlers/config"
 import { controlHandlers } from "./handlers/control"
 import { controlPlaneHandlers } from "./handlers/control-plane"
 import { deepagentHandlers } from "./handlers/deepagent"
+import { oversightHandlers } from "./handlers/oversight"
+import { webhookHandlers } from "./handlers/webhook"
+import { Observability as OversightObservability } from "@deepagent-code/core/deepagent/observability"
+import { ApprovalQueue } from "@deepagent-code/core/deepagent/approval-queue"
+import { HumanTakeover } from "@deepagent-code/core/deepagent/human-takeover"
+import { RollbackAudit } from "@deepagent-code/core/deepagent/rollback-audit"
+import { DeepAgentEventBus } from "@deepagent-code/core/deepagent/deepagent-event-bus"
+import { Scheduler } from "@deepagent-code/core/deepagent/scheduler"
+import { WorkspaceConfig } from "@deepagent-code/core/deepagent/workspace-config"
+import { WorkspaceConcurrency } from "@deepagent-code/core/deepagent/workspace-concurrency"
+import { SecurityResolvers } from "@deepagent-code/core/deepagent/security-resolvers"
+import { V4EventRuntime } from "@/session/v4-event-runtime"
 import { experimentalHandlers } from "./handlers/experimental"
 import { debugHandlers } from "./handlers/debug"
 import { fileHandlers } from "./handlers/file"
@@ -139,6 +151,18 @@ const ptyConnectHttpApiAuthLayer = ptyConnectAuthorizationLayer.pipe(Layer.provi
 const serverHttpApiAuthLayer = serverAuthorizationLayer.pipe(Layer.provide(ServerAuth.Config.defaultLayer))
 const workspaceRoutingLive = workspaceRoutingLayer.pipe(Layer.provide(Socket.layerWebSocketConstructorGlobal))
 const imRepositoryLayer = IMRepositoryLive.pipe(Layer.provide(Database.defaultLayer))
+// V4.0 §D2/§F — Oversight services (read-only projection of the durable V4 substrate). Both need only
+// the Database layer; provided independently to the oversight handler.
+const oversightServicesLayer = Layer.mergeAll(
+  OversightObservability.layer,
+  ApprovalQueue.layer,
+  // §D2/§F — the human-takeover recorder the Takeover endpoint calls + the human_takeover_total metric.
+  HumanTakeover.layer,
+  // §D2/§F — the rollback audit recorder the Rollback endpoint calls + the rollback_total metric. The
+  // Rollback handler also uses Session + SessionRevert (the revert primitive), which are drawn from the
+  // shared instance runtime graph below (Session.defaultLayer / SessionRevert.defaultLayer).
+  RollbackAudit.layer,
+).pipe(Layer.provide(Database.defaultLayer))
 // IM agent execution is driven by the deepagent-code session stack (Session +
 // SessionPrompt), NOT core SessionV2 (which binds a no-op execution layer and
 // never runs an agent). ServerAgentExecutorLive / ServerAgentListProviderLive
@@ -155,6 +179,34 @@ const imRuntimeLayer = Layer.mergeAll(
   ServerAgentReplySinkLive,
   AgentContextBuilderLive.pipe(Layer.provide(imRepositoryLayer)),
 )
+// V4.0 §A4/§C — the PRODUCTION event-runtime daemons (EventDispatcher router + tick + retry pump,
+// MultiAgentRuntime DispatchPort, RetentionSweeper). Without this the V4 daemons never start and
+// published events are logged-then-ignored. Composed here so it shares the ONE DeepAgentEventBus +
+// ApprovalQueue + Database with the IM double-write and goal-manager (module-const layers memoize to a
+// single instance under the shared memoMap — publishers and the dispatcher must not split-brain). The
+// session stack (Session/SessionPrompt/Agent/Provider) + RuntimeFlags are drawn from the shared graph
+// below. Daemon startup is gated on the V4 flags inside V4EventRuntime.layer, so with flags off (the
+// default) it is inert — nothing subscribes, ticks, or prunes.
+const v4EventRuntimeLayer = V4EventRuntime.layer.pipe(
+  // §E1 — the PRODUCTION four-layer security resolvers. Providing this makes the MultiAgentRuntime gate
+  // evaluate REAL facts (L1 event-source trust per workspace, L2 actor workspace membership, L4 runtime
+  // pre-gate) and FAIL CLOSED, instead of the default-open lenient stubs. Its deps (WorkspaceConfig +
+  // AgentListProvider + IMRepository) are satisfied by the same provide stack below, so it shares the ONE
+  // instance the runtime + IM double-write use — no split-brain.
+  Layer.provide(SecurityResolvers.layer),
+  // §C3.1 — the process-wide file-lock singleton (Layer.succeed). Providing the SAME layer the file HTTP
+  // handlers use means a human editing a file (human lock) blocks an agent subtask from touching it.
+  Layer.provide(FileLock.layer),
+  Layer.provide(DeepAgentEventBus.defaultLayer),
+  Layer.provide(ApprovalQueue.layer.pipe(Layer.provide(Database.defaultLayer))),
+  Layer.provide(Scheduler.defaultLayer),
+  Layer.provide(WorkspaceConfig.defaultLayer),
+  Layer.provide(WorkspaceConcurrency.defaultLayer),
+  Layer.provide(ServerAgentListProviderLive),
+  // §E1 layer-2 needs IM group membership; imRepositoryLayer self-provides the Database.
+  Layer.provide(imRepositoryLayer),
+)
+
 const rootApiRoutes = HttpApiBuilder.layer(RootHttpApi).pipe(
   Layer.provide([controlHandlers, controlPlaneHandlers, globalHandlers]),
   Layer.provide(schemaErrorLayer),
@@ -179,6 +231,8 @@ const instanceApiRoutes = HttpApiBuilder.layer(InstanceHttpApi).pipe(
     debugHandlers,
     profileHandlers,
     deepagentHandlers,
+    oversightHandlers,
+    webhookHandlers,
     experimentalHandlers,
     fileHandlers,
     imHandlers,
@@ -201,6 +255,10 @@ const instanceApiRoutes = HttpApiBuilder.layer(InstanceHttpApi).pipe(
 const instanceRoutes = instanceApiRoutes.pipe(
   Layer.provide([httpApiAuthLayer, workspaceRoutingLive, instanceContextLayer, schemaErrorLayer]),
   Layer.provide(imRuntimeLayer),
+  Layer.provide(oversightServicesLayer),
+  // §B1 — the IM handler double-writes im.message.created onto the bus (flag-gated). Provide the bus
+  // service to the instance route graph.
+  Layer.provide(DeepAgentEventBus.defaultLayer),
 )
 const serverRoutes = HttpApiBuilder.layer(Api).pipe(
   Layer.provide(handlers),
@@ -248,6 +306,9 @@ export function createRoutes(
     serverRoutes,
     docRoute,
     uiRoute,
+    // §A4/§C — start the V4 event-runtime daemons with the server (inert unless V4 flags are on). Draws
+    // the session stack + RuntimeFlags from the provide stack below.
+    v4EventRuntimeLayer,
   ).pipe(
     Layer.provide([
       errorLayer,

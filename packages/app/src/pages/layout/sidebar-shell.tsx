@@ -90,7 +90,7 @@ export const SidebarContent = (props: {
                 }
               >
                 <IconButton
-                  icon="plus"
+                  icon="folder-add-left"
                   variant="ghost"
                   size="large"
                   onClick={props.onOpenProject}
@@ -104,7 +104,7 @@ export const SidebarContent = (props: {
         <div class="shrink-0 w-full pt-3 pb-6 flex flex-col items-center gap-2">
           <Tooltip placement={placement()} value={props.historyLabel()}>
             <IconButton
-              icon="folder"
+              icon="history"
               variant="ghost"
               size="large"
               onClick={props.onOpenHistory}
@@ -113,7 +113,7 @@ export const SidebarContent = (props: {
           </Tooltip>
           <Tooltip placement={placement()} value={props.archivedLabel()}>
             <IconButton
-              icon="arrow-undo-down"
+              icon="archive"
               variant="ghost"
               size="large"
               onClick={props.onOpenArchived}
@@ -123,7 +123,7 @@ export const SidebarContent = (props: {
           <Tooltip placement={placement()} value={props.reviewLabel()}>
             <div class="relative">
               <IconButton
-                icon="checklist"
+                icon="knowledge-check"
                 variant="ghost"
                 size="large"
                 onClick={props.onOpenReview}
@@ -137,7 +137,7 @@ export const SidebarContent = (props: {
           <Show when={props.wikiAvailable?.() && !!props.onOpenWiki}>
             <Tooltip placement={placement()} value={props.wikiLabel?.() ?? ""}>
               <IconButton
-                icon="file-tree"
+                icon="wiki"
                 variant="ghost"
                 size="large"
                 onClick={props.onOpenWiki}
@@ -157,7 +157,7 @@ export const SidebarContent = (props: {
           <Show when={!!props.onOpenPacks}>
             <Tooltip placement={placement()} value={props.packsLabel?.() ?? ""}>
               <IconButton
-                icon="archive"
+                icon="package"
                 variant="ghost"
                 size="large"
                 onClick={props.onOpenPacks}

@@ -188,8 +188,12 @@ describe("HttpApi UI fallback", () => {
     Effect.gen(function* () {
       let proxiedUrl: string | undefined
 
+      // Exercise the upstream-proxy fallback: it is reached only when the embedded UI
+      // is enabled (disableEmbeddedWebUi: false) but the built bundle is absent (as in
+      // the test env, where the gen import resolves to null). With the UI disabled the
+      // handler now fail-closes with 404 and never proxies.
       const response = yield* uiApp({
-        disableEmbeddedWebUi: true,
+        disableEmbeddedWebUi: false,
         client: httpClient(
           new Response("<html>deepagent-code</html>", { headers: { "content-type": "text/html" } }),
           (request) => {
@@ -221,7 +225,7 @@ describe("HttpApi UI fallback", () => {
       }).pipe(
         Effect.provide(
           Layer.mergeAll(
-            RuntimeFlags.layer({ disableEmbeddedWebUi: true }),
+            RuntimeFlags.layer({ disableEmbeddedWebUi: false }),
             Layer.succeed(
               HttpClient.HttpClient,
               HttpClient.make((request) => {
@@ -271,7 +275,7 @@ describe("HttpApi UI fallback", () => {
       }).pipe(
         Effect.provide(
           Layer.mergeAll(
-            RuntimeFlags.layer({ disableEmbeddedWebUi: true }),
+            RuntimeFlags.layer({ disableEmbeddedWebUi: false }),
             Layer.succeed(
               HttpClient.HttpClient,
               HttpClient.make((request) =>
@@ -380,10 +384,12 @@ describe("HttpApi UI fallback", () => {
 
   it.live("accepts auth token for the web UI", () =>
     Effect.gen(function* () {
+      // Enable the UI (disableEmbeddedWebUi: false) so a valid credential lands on the
+      // served UI; with the UI disabled the route fail-closes with 404 after auth.
       const response = yield* uiApp({
         password: "secret",
         username: "deepagent-code",
-        disableEmbeddedWebUi: true,
+        disableEmbeddedWebUi: false,
         client: httpClient(new Response("<html>deepagent-code</html>", { headers: { "content-type": "text/html" } })),
       }).request(`/?auth_token=${btoa("deepagent-code:secret")}`)
 
@@ -397,7 +403,7 @@ describe("HttpApi UI fallback", () => {
       const response = yield* uiApp({
         password: "secret",
         username: "deepagent-code",
-        disableEmbeddedWebUi: true,
+        disableEmbeddedWebUi: false,
       }).request("/", {
         headers: { authorization: `Basic ${btoa("deepagent-code:secret")}` },
       })
@@ -411,7 +417,7 @@ describe("HttpApi UI fallback", () => {
       const response = yield* uiApp({
         password: "sec:ret",
         username: "deepagent-code",
-        disableEmbeddedWebUi: true,
+        disableEmbeddedWebUi: false,
       }).request("/", {
         headers: { authorization: `Basic ${btoa("deepagent-code:sec:ret")}` },
       })
