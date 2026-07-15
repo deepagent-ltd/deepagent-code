@@ -93,7 +93,6 @@ describe("instance HttpApi", () => {
           v4EventDrivenIm: false,
           v4AgentPushEnabled: false,
           v4MultiAgentRuntime: false,
-          v4AgentAutonomyLevel2: false,
           v4ThreadEnabled: false,
           v4FileUploadEnabled: false,
         },
