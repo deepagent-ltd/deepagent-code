@@ -12,7 +12,7 @@
 
 import { afterEach, describe, expect } from "bun:test"
 import { NodeHttpServer, NodeServices } from "@effect/platform-node"
-import { Config, Effect, Layer, Stream } from "effect"
+import { Config, ConfigProvider, Effect, Layer, Stream } from "effect"
 import { HttpClient, HttpClientRequest, HttpClientResponse, HttpRouter, HttpServer } from "effect/unstable/http"
 import { layerWebSocketConstructorGlobal } from "effect/unstable/socket/Socket"
 import { Flag } from "@deepagent-code/core/flag/flag"
@@ -58,6 +58,31 @@ const httpApiLayer = servedRoutes.pipe(
   Layer.provideMerge(NodeServices.layer),
 )
 
+// V4.1 — pin v4MultiAgentRuntime OFF for this file. It tests the §A1 INGRESS + persistence contract (the
+// endpoint persists exactly the webhook event, deterministic key, dedup), NOT the dispatch runtime. With
+// the runtime ON (the new production default), the EventDispatcher daemon inside the server graph would
+// consume each ingested event, the §E1 security gate would BLOCK the untrusted external source
+// (git/ci/pr/monitor — by design), and each block would publish a system `agent.task.blocked` fact into
+// the SAME workspace log — so `replayAll` would see those extra events and the "exactly the four webhook
+// events" assertion (and the TestClock-driven rate-limit case) would break on runtime behaviour this file
+// does not test. The daemon reads the flag from RuntimeFlags.defaultLayer DEEP inside the server graph, so
+// an outer Layer.provide override does NOT reach it — set the env var + inject a fresh ConfigProvider
+// (snapshotting env at BUILD time) so the deep default re-reads the pinned value. The runtime's own
+// consume/block behaviour is covered by the event-dispatcher / multi-agent-runtime suites.
+// Pin the flag via an injected ConfigProvider built from a COPY of process.env with the one key
+// overridden, so RuntimeFlags.defaultLayer — which reads from the ambient Effect ConfigProvider deep
+// inside the server graph — resolves v4MultiAgentRuntime to false for THIS test's layer scope only.
+// Crucially this does NOT write the global process.env (bun loads all test-file modules up-front, so a
+// top-level env write would leak the pinned value into other files that snapshot env). Built inside
+// Layer.suspend so the env copy is taken at BUILD time.
+const pinnedFlagProvider = Layer.suspend(() =>
+  ConfigProvider.layer(
+    ConfigProvider.fromEnv({
+      env: { ...(process.env as Record<string, string>), DEEPAGENT_CODE_V4_MULTI_AGENT_RUNTIME: "false" },
+    }),
+  ),
+)
+
 // The bus over the SAME file-backed DB the server writes to — used to replay + assert persisted events.
 const it = testEffect(
   Layer.mergeAll(
@@ -68,7 +93,7 @@ const it = testEffect(
     Database.defaultLayer,
     DeepAgentEventBus.defaultLayer,
     httpApiLayer,
-  ),
+  ).pipe(Layer.provide(pinnedFlagProvider)),
 )
 
 function request(path: string, init?: RequestInit) {
