@@ -490,6 +490,35 @@ export const readPendingPlanEdit = (store: DocumentStore, sessionId: string, goa
   return null
 }
 
+// V4.1 §N — the durable read the event-driven driver keys its self-driving chain on. Reads the persisted
+// run_context state for a goal and returns the monotonic ATTEMPT sequence + the current plan version and
+// phase, all from durable state (crash-safe: a retried consumer recomputes the same seq). `seq =
+// ledger.ticks + stallCount` — strictly monotonic per HANDLING (a progress tick bumps ledger.ticks; a
+// no-progress replay bumps stallCount — goal-loop.ts §7 stall-accrual), so a redelivered command for the
+// same seq is deduped by the bus AND a no-progress tick still advances the key (the chain never silently
+// dies; the loop's own stall guard still escalates to needs_human). `phase` lets the driver decide
+// terminal vs continue without a second load. Returns null when no state exists (unknown/unstarted goal).
+export const readGoalTickCursor = (
+  store: DocumentStore,
+  sessionId: string,
+  goalId: string,
+): { readonly seq: number; readonly planVersion: number; readonly phase: GoalPhase } | null => {
+  for (const ref of store.list({ type: "run_context", scope: planScope(sessionId) })) {
+    const doc = store.get(ref.id)
+    if (!doc) continue
+    if (doc.extensions?.goal_id !== goalId) continue
+    try {
+      const state = JSON.parse(doc.body) as GoalRuntimeState
+      const seq = (state.ledger?.ticks ?? 0) + (state.stallCount ?? 0)
+      const planVersion = readPlan(store, state.planDocId).version
+      return { seq, planVersion, phase: state.phase }
+    } catch {
+      return null
+    }
+  }
+  return null
+}
+
 // §D.6 可观测: one worklog doc per tick (audit trail into the Document Graph).
 const writeWorklog = (deps: ControllerDeps, state: GoalRuntimeState, grader: GraderResult): void => {
   deps.store.upsert({
