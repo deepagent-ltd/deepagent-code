@@ -86,6 +86,23 @@ const defaultPanelQuestion = (): PanelQuestionInput => ({
 // the consumer nacks): a config problem won't fix on retry, so we ack + halt the chain rather than spin.
 const HALT: GoalTickConsumer.GoalTickPortResult = { progress: "stopped", nextSeq: 0, nextExpectedPlanVersion: 0 }
 
+// The cursor is persisted by the tick itself, before the consumer publishes its successor or acks the
+// current delivery. An advanced cursor therefore proves this command already committed. Returning the
+// current cursor lets a retry idempotently repair a missing successor; a command ahead of durable state is
+// invalid and must be nacked instead of executing out of order.
+export const recoverGoalTickRequest = (
+  request: GoalTickConsumer.GoalTickRequest,
+  cursor: ReturnType<typeof readGoalTickCursor>,
+) => {
+  if (cursor == null || cursor.seq === request.seq) return null
+  if (cursor.seq < request.seq) return "invalid" as const
+  return {
+    progress: cursor.phase === "running" ? "continue" : cursor.phase === "stopped" ? "stopped" : "terminal",
+    nextSeq: cursor.seq,
+    nextExpectedPlanVersion: cursor.planVersion,
+  } as const
+}
+
 /**
  * Build the production GoalTickPort. One call = one cold-reconstructed tick.
  */
@@ -95,6 +112,20 @@ export const makeGoalTickPort =
     Effect.gen(function* () {
       const sessionID = request.sessionID
       const store = new DocumentStore(deps.goalStoreRoot(sessionID))
+      const recovered = recoverGoalTickRequest(request, readGoalTickCursor(store, sessionID, request.goalId))
+      if (recovered === "invalid") {
+        return yield* Effect.die(
+          new Error(`goal tick command ${request.seq} is ahead of durable state for ${request.goalId}`),
+        )
+      }
+      if (recovered != null) {
+        log.info("goal tick delivery already committed; repairing successor", {
+          goalId: request.goalId,
+          seq: request.seq,
+          nextSeq: recovered.nextSeq,
+        })
+        return recovered
+      }
 
       // Reconstruct cwd + instance context from the goal session. sessions.get itself resolves through
       // InstanceState, but it is called BEFORE we hold a ctx — so tolerate a die by loading the ctx from a
@@ -215,11 +246,8 @@ export const makeGoalTickPort =
       const handle = { goalId: request.goalId, planDocId: request.planDocId, sessionId: sessionID }
       const result = yield* GoalDriver.runOneTick(makeGoalLoop(deps_), { deps: deps_, handle, ports, steerRelay })
 
-      // POST-tick seq is read from durable state: seq = ledger.ticks + stallCount (a progress tick bumped
-      // ledger.ticks; a no-progress replay bumped stallCount — either way strictly > the request seq). This
-      // is the next command's dedup key, so the chain both dedups delivery-retries AND stays alive on a
-      // no-progress tick. Fallback to request.seq+1 only if the state vanished (then progress is terminal
-      // anyway and nextSeq is unused).
+      // The post-tick durable cursor is the next command identity and the retry checkpoint for this command.
+      // If state vanished, runOneTick cannot continue, so the fallback is unused by the consumer.
       const cursor = readGoalTickCursor(store, sessionID, request.goalId)
       const nextSeq = cursor?.seq ?? request.seq + 1
       const nextExpectedPlanVersion = cursor?.planVersion ?? request.expectedPlanVersion
