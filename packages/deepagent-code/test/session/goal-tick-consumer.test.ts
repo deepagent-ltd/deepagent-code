@@ -1,6 +1,7 @@
-import { describe, expect } from "bun:test"
+import { describe, expect, test } from "bun:test"
 import { Effect, Layer } from "effect"
 import { GoalTickConsumer } from "../../src/session/goal-tick-consumer"
+import { recoverGoalTickRequest } from "../../src/session/goal-tick-port"
 import { DeepAgentEventBus } from "@deepagent-code/core/deepagent/deepagent-event-bus"
 import { DeepAgentEvent } from "@deepagent-code/core/deepagent/deepagent-event"
 import { LMNEvents } from "@deepagent-code/core/deepagent/lmn-events"
@@ -48,6 +49,35 @@ const publishTick = (req: ReturnType<typeof seq0Command>) =>
     const bus = yield* DeepAgentEventBus.Service
     return yield* bus.publish(GoalTickConsumer.tickCommand(req))
   })
+
+describe("GoalTickConsumer — command identity", () => {
+  test("resume seeds keep the durable cursor but use a fresh namespace", () => {
+    const request = seq0Command({ seq: 8 })
+    const first = GoalTickConsumer.resumeTickCommand(request)
+    const second = GoalTickConsumer.resumeTickCommand(request)
+
+    expect(first.payload).toMatchObject({ seq: 8 })
+    expect(first.idempotencyKey).toStartWith("goal:tick:g1:resume:dae_")
+    expect(second.idempotencyKey).not.toBe(first.idempotencyKey)
+    expect(GoalTickConsumer.tickCommand(request).idempotencyKey).toBe("goal:tick:g1:8")
+  })
+
+  test("durable cursor classifies committed and out-of-order deliveries", () => {
+    const request = seq0Command({ seq: 4 })
+    expect(recoverGoalTickRequest(request, { seq: 4, planVersion: 2, phase: "running" })).toBeNull()
+    expect(recoverGoalTickRequest(request, { seq: 5, planVersion: 3, phase: "running" })).toEqual({
+      progress: "continue",
+      nextSeq: 5,
+      nextExpectedPlanVersion: 3,
+    })
+    expect(recoverGoalTickRequest(request, { seq: 5, planVersion: 3, phase: "done" })).toEqual({
+      progress: "terminal",
+      nextSeq: 5,
+      nextExpectedPlanVersion: 3,
+    })
+    expect(recoverGoalTickRequest(request, { seq: 3, planVersion: 1, phase: "running" })).toBe("invalid")
+  })
+})
 
 describe("GoalTickConsumer — command handling", () => {
   const it = testEffect(

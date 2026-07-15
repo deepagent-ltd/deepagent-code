@@ -4,6 +4,7 @@ import { tmpdir } from "node:os"
 import path from "node:path"
 import { Effect, Layer } from "effect"
 import { GoalTickConsumer } from "../../src/session/goal-tick-consumer"
+import { recoverGoalTickRequest } from "../../src/session/goal-tick-port"
 import { GoalDriver } from "../../src/session/goal-driver"
 import { DeepAgentEventBus } from "@deepagent-code/core/deepagent/deepagent-event-bus"
 import { Database } from "@deepagent-code/core/database/database"
@@ -39,10 +40,12 @@ const now = () => clock
 const database = Database.layerFromPath(":memory:")
 
 let root: string
+let executions: number
 const SESSION = "s-cold-1"
 
 beforeEach(() => {
   root = mkdtempSync(path.join(tmpdir(), "deepagent-cold-"))
+  executions = 0
 })
 afterEach(() => rmSync(root, { recursive: true, force: true }))
 
@@ -75,6 +78,7 @@ const putPlan = (rootDir: string, steps: PlanStep[]): string => {
 // exactly like the goal-worker mirror-back, so a tick makes real forward progress and bumps the version.
 const advancingExecutor = (rootDir: string): StepExecutor => (input) =>
   Effect.sync(() => {
+    executions++
     const store = new DocumentStore(rootDir)
     const doc = store.get(input.planDocId)
     if (doc) {
@@ -118,6 +122,9 @@ const spec = (planDocId: string): GoalSpec => ({
 const coldRunTick: GoalTickConsumer.GoalTickPort = (request) =>
   Effect.gen(function* () {
     const store = new DocumentStore(root)
+    const recovered = recoverGoalTickRequest(request, readGoalTickCursor(store, request.sessionID, request.goalId))
+    if (recovered === "invalid") return yield* Effect.die("goal tick request ahead of durable cursor")
+    if (recovered != null) return recovered
     const deps = { ...coldDeps(root), store }
     const handle = { goalId: request.goalId, planDocId: request.planDocId, sessionId: request.sessionID }
     const result = yield* GoalDriver.runOneTick(makeGoalLoop(deps), { deps, handle })
@@ -184,5 +191,53 @@ describe("V4.1 §N — goal-tick COLD recovery (disk-only reconstruction)", () =
         )
         expect(probe.idempotencyKey).toBe(`goal:tick:${startedHandle.goalId}:${after!.seq}`)
       }),
+  )
+
+  it.effect("redelivery after a committed tick repairs one successor without executing again", () =>
+    Effect.gen(function* () {
+      const planDocId = putPlan(root, [step("a", "active"), step("b", "pending")])
+      const handle = yield* makeGoalLoop(coldDeps(root)).start(spec(planDocId))
+      const before = readGoalTickCursor(new DocumentStore(root), SESSION, handle.goalId)!
+      const bus = yield* DeepAgentEventBus.Service
+      const consumer = yield* GoalTickConsumer.Service
+      const request = {
+        sessionID: SESSION,
+        goalId: handle.goalId,
+        planDocId,
+        seq: before.seq,
+        expectedPlanVersion: before.planVersion,
+      }
+      const command = yield* bus.publish(GoalTickConsumer.tickCommand(request))
+
+      // Simulate a crash after runOneTick persisted its cursor but before the consumer published the
+      // successor or acked this delivery. Redelivery must repair the chain without running another tick.
+      yield* coldRunTick(request)
+      const after = readGoalTickCursor(new DocumentStore(root), SESSION, handle.goalId)!
+      yield* consumer.handle(command)
+      const firstSuccessor = yield* bus.publish(
+        GoalTickConsumer.tickCommand({
+          sessionID: SESSION,
+          goalId: handle.goalId,
+          planDocId,
+          seq: after.seq,
+          expectedPlanVersion: after.planVersion,
+        }),
+      )
+
+      yield* consumer.handle(command)
+      const repairedSuccessor = yield* bus.publish(
+        GoalTickConsumer.tickCommand({
+          sessionID: SESSION,
+          goalId: handle.goalId,
+          planDocId,
+          seq: after.seq,
+          expectedPlanVersion: after.planVersion,
+        }),
+      )
+
+      expect(executions).toBe(1)
+      expect(repairedSuccessor.id).toBe(firstSuccessor.id)
+      expect(readGoalTickCursor(new DocumentStore(root), SESSION, handle.goalId)?.seq).toBe(after.seq)
+    }),
   )
 })
