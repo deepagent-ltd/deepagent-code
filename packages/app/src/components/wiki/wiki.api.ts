@@ -46,6 +46,20 @@ export type WikiSearchHit = {
   score: number
 }
 
+export type ExecutionArchiveEntry = {
+  docId: string
+  type: string
+  title: string
+  body: string
+  version: number
+}
+export type ExecutionArchive = {
+  sessionId: string
+  title: string
+  markdown: string
+  entries: ExecutionArchiveEntry[]
+}
+
 type RawSdkClient = {
   client: {
     request<TData>(options: {
@@ -90,6 +104,22 @@ export const searchWiki = async (
     url: `/deepagent/wiki/search?${params.toString()}`,
   })
   return response.data?.hits ?? []
+}
+
+/**
+ * Read a completed session's execution archive (§B.6 read side): the aggregated run-scoped trajectory
+ * (plan + worklog + diagnosis + decision + eval) as markdown + entries. Returns undefined on an older
+ * server without the route. `sessionID` is required — the archive is scoped to that session's run store.
+ */
+export const getExecutionArchive = async (
+  client: WikiClient,
+  sessionID: string,
+): Promise<ExecutionArchive | undefined> => {
+  const response = await client.client.request<ExecutionArchive>({
+    method: "GET",
+    url: `/deepagent/wiki/execution-archive?sessionID=${encodeURIComponent(sessionID)}`,
+  })
+  return response.data
 }
 
 /** Governed edit of a Knowledge/Memory page (real evidence-gate + human provenance). */
