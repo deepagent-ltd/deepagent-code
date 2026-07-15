@@ -77,9 +77,16 @@ type RawSdkClient = {
       path?: Record<string, string>
       body?: unknown
       headers?: Record<string, string>
+      parseAs?: "stream"
+      signal?: AbortSignal
     }): Promise<{ data?: TData }>
   }
 }
+
+type DeepAgentPromptPrepareStreamEvent =
+  | { type: "progress"; preview: string }
+  | { type: "result"; result: DeepAgentPromptPrepareResult }
+  | { type: "error"; message: string }
 
 type FollowupSendInput = {
   client: ReturnType<typeof useSDK>["client"]
@@ -91,7 +98,9 @@ type FollowupSendInput = {
   before?: () => Promise<boolean> | boolean
   onBeforeSubmit?: () => void
   onPromptPrepareStart?: () => void
+  onPromptPrepareProgress?: (preview: string) => void
   onPromptPrepareEnd?: () => void
+  promptPrepareSignal?: AbortSignal
   promptOutputLanguage?: DeepAgentPromptOutputLanguage
   confirmPromptDraft?: (draft: DeepAgentPromptPrepareResult) => Promise<DeepAgentPromptConfirmResult | false>
 }
@@ -111,11 +120,13 @@ async function prepareDeepAgentPromptDraft(input: {
   mode: DeepAgentPromptModeForConfirmation
   outputLanguage: DeepAgentPromptOutputLanguage
   parts: SessionPromptAsyncInput["parts"]
+  signal?: AbortSignal
+  onProgress?: (preview: string) => void
 }) {
   const raw = input.client as unknown as RawSdkClient
-  const response = await raw.client.request<DeepAgentPromptPrepareResult>({
+  const response = await raw.client.request<ReadableStream<Uint8Array>>({
     method: "POST",
-    url: "/session/{sessionID}/prompt_prepare",
+    url: "/session/{sessionID}/prompt_prepare_stream",
     path: { sessionID: input.sessionID },
     body: {
       mode: input.mode,
@@ -125,9 +136,43 @@ async function prepareDeepAgentPromptDraft(input: {
     headers: {
       "Content-Type": "application/json",
     },
+    parseAs: "stream",
+    signal: input.signal,
   })
-  if (!response.data) throw new Error("Prompt draft prepare returned no data")
-  return response.data
+  if (!response.data) throw new Error("Prompt draft prepare returned no stream")
+
+  const decoder = new TextDecoder()
+  const reader = response.data.getReader()
+  let buffer = ""
+  let prepared: DeepAgentPromptPrepareResult | undefined
+  const readEvent = (block: string) => {
+    const data = block
+      .split("\n")
+      .filter((line) => line.startsWith("data:"))
+      .map((line) => line.slice(5).trimStart())
+      .join("\n")
+    if (!data) return
+    const event = JSON.parse(data) as DeepAgentPromptPrepareStreamEvent
+    if (event.type === "progress") {
+      input.onProgress?.(event.preview)
+      return
+    }
+    if (event.type === "error") throw new Error(event.message)
+    prepared = event.result
+  }
+
+  while (true) {
+    const part = await reader.read()
+    if (part.done) break
+    buffer += decoder.decode(part.value, { stream: true })
+    const blocks = buffer.split("\n\n")
+    buffer = blocks.pop() ?? ""
+    blocks.forEach(readEvent)
+  }
+  buffer += decoder.decode()
+  if (buffer.trim()) readEvent(buffer)
+  if (!prepared) throw new Error("Prompt draft prepare returned no result")
+  return prepared
 }
 
 export type DeepAgentPromptSuggestion = {
@@ -240,10 +285,13 @@ export async function sendFollowupDraft(input: FollowupSendInput) {
         mode,
         outputLanguage: input.promptOutputLanguage ?? "english",
         parts: preparedParts.requestParts,
+        signal: input.promptPrepareSignal,
+        onProgress: input.onPromptPrepareProgress,
       })
     } catch (err) {
       setIdle()
       input.onPromptPrepareEnd?.()
+      if (input.promptPrepareSignal?.aborted) return false
       throw err
     }
     input.onPromptPrepareEnd?.()
@@ -354,6 +402,7 @@ type PromptSubmitInput = {
   onAbort?: () => void
   onSubmit?: () => void
   onPromptPrepareStart?: () => void
+  onPromptPrepareProgress?: (preview: string) => void
   onPromptPrepareEnd?: () => void
   confirmPromptDraft?: (draft: DeepAgentPromptPrepareResult) => Promise<DeepAgentPromptConfirmResult | false>
 }
@@ -381,6 +430,7 @@ export function createPromptSubmit(input: PromptSubmitInput) {
   const language = useLanguage()
   const params = useParams()
   const pendingKey = (sessionID: string) => ScopedKey.from(sdk.scope, sessionID)
+  let activePreparation: { sessionID: string; controller: AbortController } | undefined
 
   const errorMessage = (err: unknown) => {
     if (err && typeof err === "object" && "data" in err) {
@@ -392,7 +442,7 @@ export function createPromptSubmit(input: PromptSubmitInput) {
   }
 
   const abort = async () => {
-    const sessionID = params.id
+    const sessionID = activePreparation?.sessionID ?? params.id
     if (!sessionID) return Promise.resolve()
 
     // D3: any stop resets the scenario to `direct` and pauses scenario automation for this
@@ -401,6 +451,12 @@ export function createPromptSubmit(input: PromptSubmitInput) {
     resetScenarioOnStop(pendingKey(sessionID), ScopedKey.from(sdk.scope, sdk.directory))
 
     input.onAbort?.()
+
+    if (activePreparation) {
+      activePreparation.controller.abort()
+      activePreparation = undefined
+      return Promise.resolve()
+    }
 
     const key = pendingKey(sessionID)
     const queued = pending.get(key)
@@ -678,6 +734,7 @@ export function createPromptSubmit(input: PromptSubmitInput) {
     const commentItems = context.filter((item) => item.type === "file" && !!item.comment?.trim())
     const messageID = Identifier.ascending("message")
     const preparesPromptDraft = promptPipelineMode(draft.metadata) === "intelligence"
+    const preparationAbort = preparesPromptDraft ? new AbortController() : undefined
 
     const removeOptimisticMessage = () => {
       sync.session.optimistic.remove({
@@ -700,7 +757,7 @@ export function createPromptSubmit(input: PromptSubmitInput) {
         sync.set("session_status", session.id, { type: "busy" })
       }
 
-      const controller = new AbortController()
+      const controller = preparationAbort ?? new AbortController()
       const cleanup = () => {
         if (sessionDirectory === projectDirectory) {
           sync.set("session_status", session.id, { type: "idle" })
@@ -749,6 +806,12 @@ export function createPromptSubmit(input: PromptSubmitInput) {
       return true
     }
 
+    if (preparationAbort) activePreparation = { sessionID: session.id, controller: preparationAbort }
+    const clearActivePreparation = () => {
+      if (activePreparation?.controller !== preparationAbort) return
+      activePreparation = undefined
+    }
+
     void sendFollowupDraft({
       client,
       sync,
@@ -759,11 +822,14 @@ export function createPromptSubmit(input: PromptSubmitInput) {
       before: waitForWorktree,
       onBeforeSubmit: input.onSubmit,
       onPromptPrepareStart: input.onPromptPrepareStart,
+      onPromptPrepareProgress: input.onPromptPrepareProgress,
       onPromptPrepareEnd: input.onPromptPrepareEnd,
+      promptPrepareSignal: preparationAbort?.signal,
       promptOutputLanguage: promptOutputLanguage(language.locale()),
       confirmPromptDraft: input.confirmPromptDraft,
     })
       .then((sent) => {
+        clearActivePreparation()
         pending.delete(pendingKey(session.id))
         if (sent) {
           if (preparesPromptDraft) {
@@ -780,6 +846,7 @@ export function createPromptSubmit(input: PromptSubmitInput) {
         restoreInput()
       })
       .catch((err) => {
+        clearActivePreparation()
         pending.delete(pendingKey(session.id))
         if (sessionDirectory === projectDirectory) {
           sync.set("session_status", session.id, { type: "idle" })

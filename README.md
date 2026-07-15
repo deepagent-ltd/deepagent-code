@@ -6,12 +6,15 @@
   </picture>
 </p>
 
-<p align="center"><strong>AI coding agent with persistent memory and control plane</strong></p>
+<p align="center"><strong>AI coding agent with persistent memory, autonomous goals, and a control plane</strong></p>
 
 <p align="center">
   <a href="README.md">English</a> |
-  <a href="README.zh.md">简体中文</a>
+  <a href="README.zh.md">简体中文</a> |
+  <a href="https://github.com/deepagent-ltd/deepagent-code-enterprise">Enterprise</a>
 </p>
+
+<p align="center"><sub>Desktop v1.4</sub></p>
 
 ---
 
@@ -39,17 +42,47 @@ The features below start from a real need — something a plain coding agent, op
 
 **What DeepAgent does:** Fork any conversation from a chosen message. The fork opens carrying the parent's memory up to that point, shows a full-width "derived from" marker at the top of its transcript, and nests folder-style under its origin in the session tree (subagents and forks alike, up to three levels deep). Knowledge flows up a scope hierarchy — what one session learns can be promoted to the whole project, and cross-project preferences live at the user-global layer — so switching windows is a clean handoff, not a reset.
 
-### Ask roughly, and let the agent sharpen it
+### Pick how much autonomy you want, per task
 
-**The need:** A half-formed prompt gets a half-useful answer, and you don't always know how to phrase what you want.
+**The need:** Some asks want a fast answer in your exact words; others want the agent to plan first, or to run on its own until the job is done. One fixed behavior can't serve all three.
 
-**What DeepAgent does:** Two scenario modes on the composer. **Direct** sends your prompt as-is — you own the wording. **Intelligence** refines a rough ask into a sharper prompt, surfaces a draft plan and decision suggestions, and waits for your confirmation before it automates anything. You decide how much the agent shapes the request.
+**What DeepAgent does:** Three modes on the composer. **Auto** decides how to plan and act on your request. **Design** explores the problem and proposes a design before building anything. **Loop** turns a request into a supervised goal the agent works toward autonomously — iterating plan → execute → verify until the criteria are met — while you stay in control. You choose the autonomy level per task, not once for the whole tool.
+
+### Choose how much the agent drives — and who writes the plan
+
+**The need:** Sometimes you want the agent to just take a request and run; sometimes you want to steer it with a plan you control; sometimes you've already written the plan and just want it executed faithfully.
+
+**What DeepAgent does:** Three collaboration modes on the composer, picked from a single selector. **Auto** — the agent sets the objective, designs and plans as needed, and executes to completion. **Loop** — you describe the goal, the agent writes a `goal+plan.md` you can edit, then a supervised loop drives it to completion (plan → execute → verify per tick, with hard budget/step ceilings and objective completion checks). **Design** — you author `goal+plan.md` yourself and the agent executes your plan faithfully without redefining the goal. Orthogonal to mode, a permission control offers three presets — **Read-only**, **Request approval** (default), **Full access** — so autonomy and approval are separate, explicit choices.
+
+### Get a second opinion before high-risk decisions
+
+**The need:** Some decisions — a breaking migration, a security-sensitive change, an architecture call — deserve more than one confident pass agreeing with itself.
+
+**What DeepAgent does:** Convene an **Expert Panel** from the composer. Differentiated expert lenses (correctness, security, performance, architecture, repro) review the same frozen question independently, debate anonymously, and a deterministic (non-LLM) arbiter aggregates a verdict — with minority opinions preserved and a fail-closed bias toward escalating to you when the panel can't safely agree.
+
+### Read and govern what the agent knows
+
+**The need:** Persistent memory is only trustworthy if you can see it and correct it.
+
+**What DeepAgent does:** A **Repo & Wiki** view projects the four graphs into human-readable pages — browse and full-text-search the agent's knowledge, follow docs↔code cross-links, and edit governable Knowledge/Memory pages through the same evidence-gate the agent uses (Documents and Code stay read-only). A separate governance view lists learned facts grouped by project and global scope, so you approve what becomes durable.
 
 ### Go deep on genuinely hard problems
 
 **The need:** Complex work — an architecture decision, a tricky migration, a subtle bug — needs more than a single confident pass. It needs research, a second opinion, and someone actively trying to poke holes.
 
 **What DeepAgent does:** At higher work strengths the primary agent decomposes the task, fans it out to focused subagents that research modules in parallel, synthesizes their findings, and then runs independent reviewers whose job is to *break* the plan rather than agree with it. Fan-out is bounded by a configurable concurrency ceiling, and live subagents surface in a session side panel and inline in the transcript so you can watch and jump into any of them.
+
+### Set a goal and let it run — supervised, not unsupervised
+
+**The need:** Some work is a long haul — a migration, a green-the-suite push, a multi-step feature. You want to hand it off and walk away, but "walk away" can't mean "lose control."
+
+**What DeepAgent does:** Loop mode drives an autonomous goal loop against an objectively decidable finish line (tests pass, no diagnostics, reviewer clean, plan complete). It runs plan → execute → verify → iterate in the background, with hard ceilings on ticks, tokens, wall-clock, and cost so it can never run away. A status bar shows live progress; you can hot-edit the plan mid-run, pause and resume from exactly where it stopped, or take over — a takeover pauses autonomy escalation and hands control back to you. A goal with steps that need a human never reports "done"; it routes to you. Autonomy is a dial you hold, not a switch you flip and hope.
+
+### Get a second opinion that actually argues
+
+**The need:** For a high-stakes decision, one confident answer isn't enough — you want independent experts who see the same evidence, disagree, and defend their positions.
+
+**What DeepAgent does:** Convene an Expert Panel on the current conversation from the composer. Pick single-round for a quick multi-lens review, or multi-round for a real debate: panelists (correctness, security, design, …) each render a verdict, then see each other's *anonymized* opinions and revise across up to three rounds — identity stripped so nobody anchors on "the security expert said." An arbiter synthesizes the surviving verdict. Fan-out and rounds are bounded, and every opinion (including the losers') is archived. The panel convenes on demand, or a running goal loop can convene it at high-risk decision points.
 
 ### Chat with your team and your agents in one place
 
@@ -68,6 +101,8 @@ Each capability above is served by a control-plane primitive underneath. These a
 **Tiered knowledge invocation** — A monotonic strength ladder (`general → high → xhigh → max → ultra`) gates how much control-plane machinery engages. `general` stays close to the plain runtime — fast and cheap. Higher rungs progressively unlock durable knowledge, project handoff summaries, heavier strategy/methodology tiers, and multi-agent orchestration. You pay for depth only when you dial it up.
 
 **Self-learning** — After work lands, the agent proposes candidate knowledge, facts, and methodologies. Promotion is evidence-gated (a test passed, a diagnostic cleared, a validation confirmed) and user-controllable — durable knowledge is carried over deliberately, not silently guessed. Session-stable conclusions consolidate into project memory over time, so the next session starts smarter about *your* codebase.
+
+**Supervised autonomy** — The goal loop, expert panel, and multi-agent fan-out run on an event-driven substrate with the guardrails autonomy needs: hard budget ceilings (ticks/tokens/wall-clock/cost), a stall detector that stops rather than spins, layered permission and safety gates that fail closed, human takeover that pauses escalation, and a full audit trail written back to the document graph. An Agent Dashboard surfaces task success rate, conflicts, and dead-letter events. Autonomy is bounded and observable by construction — never a black box you can't stop.
 
 ## Installation
 
@@ -123,6 +158,7 @@ On your next session, when you ask to add rate limiting elsewhere, the agent alr
 │  • Domain pack system (composable, auto-activating knowledge)│
 │  • Context assembly & admission gates                       │
 │  • Multi-agent orchestration & adversarial review           │
+│  • Supervised goal loop & expert panel (event-driven)       │
 │  • Evidence-gated learning & work-strength ladder           │
 └─────────────────────────────────────────────────────────────┘
                              │

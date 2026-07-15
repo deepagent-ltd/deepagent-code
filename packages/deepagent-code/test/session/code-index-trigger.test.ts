@@ -1,5 +1,5 @@
 import { describe, expect, test, beforeEach, afterEach } from "bun:test"
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs"
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, utimesSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { Effect } from "effect"
@@ -67,13 +67,33 @@ describe("CodeIndexTrigger (Phase 3 trigger)", () => {
     expect(hits).not.toContain("README.md")
   })
 
-  test("re-running is idempotent (content-sha gating → unchanged, no new nodes)", async () => {
+  test("re-running is idempotent — no new nodes (T4.1: mtime-unchanged files are skipped without reading)", async () => {
     writeFileSync(path.join(work, "a.ts"), "export const a = 1")
     const first = await withFs((fsys) => CodeIndexTrigger.indexWorkspace({ workspacePath: work, fsys }))
     expect(first.created).toBe(1)
+    // Second pass: the file's mtime is unchanged since the first pass recorded it, so T4.1's mtime gate
+    // skips the READ + HASH entirely — the file never reaches indexFiles, so it is neither created nor
+    // counted as "unchanged" (the whole point: zero I/O, zero new versions). The node still exists.
     const second = await withFs((fsys) => CodeIndexTrigger.indexWorkspace({ workspacePath: work, fsys }))
     expect(second.created).toBe(0)
-    expect(second.unchanged).toBe(1)
+    expect(second.updated).toBe(0)
+    // The already-indexed node is still GraphQuery-hittable (not dropped by the skip).
+    expect(graphIds(work, "const a")).toContain("a.ts")
+  })
+
+  test("T4.1: a genuine content change (with a bumped mtime) is re-read and re-indexed", async () => {
+    const file = path.join(work, "b.ts")
+    writeFileSync(file, "export const b = 1")
+    const first = await withFs((fsys) => CodeIndexTrigger.indexWorkspace({ workspacePath: work, fsys }))
+    expect(first.created).toBe(1)
+    // Rewrite the content AND push mtime forward (a real edit does both) — the mtime no longer matches
+    // the recorded value, so the file is re-read and the content-sha gate sees a genuine change → update.
+    writeFileSync(file, "export const b = 2 // changed")
+    const future = new Date(Date.now() + 5_000)
+    utimesSync(file, future, future)
+    const second = await withFs((fsys) => CodeIndexTrigger.indexWorkspace({ workspacePath: work, fsys }))
+    expect(second.updated).toBe(1)
+    expect(second.created).toBe(0)
   })
 
   test("default-safe: a workspace with no code files yields an empty no-op result (no throw)", async () => {

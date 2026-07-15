@@ -294,7 +294,12 @@ describe("HttpApi Server.listen", () => {
       return true
     }) as typeof process.stderr.write
     try {
-      const response = await Server.Default().app.request("/status")
+      // Hit a real defined route (/global/health) rather than /status, which falls
+      // through to the UI /* fallback and proxies to app.deepagent-code.ai — that
+      // 500s in an offline/egress-restricted checkout. This test is about NOT
+      // emitting Effect HTTP response logs, so any 200 route through the same
+      // handler exercises the intent deterministically without the web UI/network.
+      const response = await Server.Default().app.request("/global/health")
       expect(response.status).toBe(200)
     } finally {
       process.stderr.write = original

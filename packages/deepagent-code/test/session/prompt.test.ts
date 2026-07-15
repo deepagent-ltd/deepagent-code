@@ -38,6 +38,7 @@ import { SessionProcessor } from "../../src/session/processor"
 import { SessionPrompt } from "../../src/session/prompt"
 import { SessionRevert } from "../../src/session/revert"
 import { SessionRunState } from "../../src/session/run-state"
+import { SessionSteer } from "../../src/session/steer"
 import { MessageID, PartID, SessionID } from "../../src/session/schema"
 import { SessionStatus } from "../../src/session/status"
 import { SessionV2 } from "@deepagent-code/core/session"
@@ -207,8 +208,7 @@ const stubRuntimeBaseLayer = Layer.succeed(
 // Fully-inert DebugService (D1) stub. The real DebugService.layer runs InstanceState.make
 // + registers a scope finalizer at registry-build time, perturbing the instance-context
 // lifecycle these prompt tests rely on. The debug tool is never invoked here.
-const debugStubDie = <A>(): Effect.Effect<A, never, never> =>
-  Effect.die("DebugService stub (not used in prompt tests)")
+const debugStubDie = <A>(): Effect.Effect<A, never, never> => Effect.die("DebugService stub (not used in prompt tests)")
 const stubDebugServiceLayer = Layer.succeed(
   DebugService.Service,
   DebugService.Service.of({
@@ -285,11 +285,15 @@ function makePrompt(input?: { processor?: "blocking" }) {
     Layer.provideMerge(proc),
     Layer.provideMerge(deps),
   )
+  // V4.1 §S1.1: the durable steer buffer shares the SAME Database instance as Session (built over
+  // `deps`) so drained steers are visible to the loop's history reads.
+  const steer = SessionSteer.layer.pipe(Layer.provideMerge(deps))
   return SessionPrompt.layer.pipe(
     Layer.provide(SessionRevert.defaultLayer),
     Layer.provide(Image.defaultLayer),
     Layer.provide(Reference.defaultLayer),
     Layer.provide(summary),
+    Layer.provideMerge(steer),
     Layer.provideMerge(run),
     Layer.provideMerge(compact),
     Layer.provideMerge(proc),
@@ -922,7 +926,7 @@ it.instance(
       const tool = yield* pollWithTimeout(
         Effect.gen(function* () {
           const msgs = yield* MessageV2.filterCompactedEffect(chat.id)
-          const assistant = msgs.findLast((item) => item.info.role === "assistant" && item.info.agent === "build")
+          const assistant = msgs.findLast((item) => item.info.role === "assistant" && item.info.agent === "auto")
           const tool = assistant?.parts.find(
             (part): part is SessionV1.ToolPart => part.type === "tool" && part.tool === "task",
           )
@@ -2066,7 +2070,7 @@ noLLMServer.instance(
         source: { type: "file", path: "docs", text: { value: "@docs" } },
       })
       expect(fileURLToPath(files[0].url)).toBe(docs)
-      expect(agents.map((agent) => agent.name)).toEqual(["build"])
+      expect(agents.map((agent) => agent.name)).toEqual(["auto"])
     }),
   {
     config: {
@@ -2351,7 +2355,7 @@ noLLMServer.instance(
         const err = Cause.squash(exit.cause)
         expect(NamedError.Unknown.isInstance(err)).toBe(true)
         if (NamedError.Unknown.isInstance(err)) {
-          expect(err.data.message).toContain("build")
+          expect(err.data.message).toContain("auto")
         }
       }
     }),
@@ -2512,6 +2516,7 @@ it.instance(
       const prompt = yield* SessionPrompt.Service
       const sessions = yield* Session.Service
       const session = yield* sessions.create({})
+      const progress: string[] = []
 
       yield* llm.text(
         JSON.stringify({
@@ -2530,6 +2535,7 @@ it.instance(
           sessionID: session.id,
           rawInput: "修复登录测试",
           outputLanguage: "chinese",
+          onProgress: (preview) => progress.push(preview),
         })
         .pipe(Effect.exit)
 
@@ -2542,6 +2548,7 @@ it.instance(
       expect(JSON.stringify((yield* llm.hits)[0]?.body)).toContain("in Chinese")
       expect((yield* llm.hits)[0]?.headers.authorization).toBe("Bearer upstream-test-key")
       expect(yield* llm.misses).toEqual([])
+      expect(progress.at(-1)).toContain("登录测试")
     }),
   30_000,
 )

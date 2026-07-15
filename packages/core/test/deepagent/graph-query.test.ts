@@ -95,6 +95,31 @@ describe("GraphQuery — shared graph recall (Phase 1)", () => {
     expect(ids(result, "design")).toContain(designId)
   })
 
+  test("INV-7: a SEALED doc never surfaces via the explicit-seed frontier (nor via a link)", () => {
+    // Regression for the seed-path sealed leak: consider() is reached from the explicit `seeds` frontier
+    // via raw get(), which bypassed the scope==="sealed" skip that list()/neighbors() apply. A sealed
+    // doc, whether seeded directly OR linked from a visible seed, must NOT appear in the results.
+    const proj = openProjectStore(base, WORK)
+    const sealed = proj.documentStore.create({
+      type: "design",
+      scope: "sealed",
+      body: "sealed evaluator design that must never surface",
+      description: "sealed evaluator design",
+      domain: null,
+      tags: [],
+      links: [],
+      provenance: prov,
+    })
+    const visible = node(proj, "design", "visible design linking the sealed one", {
+      links: [{ rel: "references", to: sealed.id }],
+    })
+    // Seed BOTH the sealed id directly and the visible doc that links to it.
+    const result = runQuery({ workspacePath: WORK, seeds: [sealed.id, visible], depth: 2 })
+    const seenDesigns = ids(result, "design")
+    expect(seenDesigns).toContain(visible)
+    expect(seenDesigns).not.toContain(sealed.id) // sealed never surfaces, by seed OR by link
+  })
+
   test("multi-store union: user-global + per-project results are both present", () => {
     const proj = openProjectStore(base, WORK)
     const ug = openUserGlobalStore(base)

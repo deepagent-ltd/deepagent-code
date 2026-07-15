@@ -80,28 +80,27 @@ export class Service extends ConfigService.Service<Service>()("@deepagent-code/R
   experimentalEventSystem: enabledByExperimental("DEEPAGENT_CODE_EXPERIMENTAL_EVENT_SYSTEM"),
   experimentalWorkspaces: enabledByExperimental("DEEPAGENT_CODE_EXPERIMENTAL_WORKSPACES"),
   // V3.9 §C: Expert Panel（会诊机制）— differentiated expert lenses answer one frozen high-risk
-  // question independently, aggregated by a deterministic non-LLM Arbiter. Gated OFF by default
-  // (grey rollout); enable with DEEPAGENT_CODE_EXPERIMENTAL_EXPERT_PANEL or the broad
-  // DEEPAGENT_CODE_EXPERIMENTAL flag. The Arbiter itself is a pure function with no side effects,
-  // so it is always safe to call in tests; this flag gates the session-driven Convener orchestration.
-  experimentalExpertPanel: enabledByExperimental("DEEPAGENT_CODE_EXPERIMENTAL_EXPERT_PANEL"),
+  // question independently, aggregated by a deterministic non-LLM Arbiter. SHIPS ON by default (mode
+  // redesign: mature capabilities are always present, flags are only a kill-switch — mirrors Codex's
+  // stable-default features). Set DEEPAGENT_CODE_EXPERIMENTAL_EXPERT_PANEL=false to disable. The
+  // Arbiter is a pure function; this flag only gates the session-driven Convener orchestration.
+  experimentalExpertPanel: stableOn("DEEPAGENT_CODE_EXPERIMENTAL_EXPERT_PANEL"),
   // V3.9 §B: Repo & Wiki（人向监督层）— the human-facing PROJECTION layer over the four graphs (not a
   // fifth store): render doc/code nodes as Markdown, full-text search, docs↔code cross-links, and a
   // per-session execution archive. Knowledge/Memory pages are governable (edit → new version + human
   // provenance via evidence-gate); Document/Code pages are read-only; sealed scope is NEVER projected
-  // (INV-7). Gated OFF by default (grey rollout, §F.3 rollback-safe — it is pure projection + reuse of
-  // the existing promote/reject pipeline, so turning it off never touches graph data). Enable with
-  // DEEPAGENT_CODE_EXPERIMENTAL_WIKI or the broad DEEPAGENT_CODE_EXPERIMENTAL flag.
-  experimentalWiki: enabledByExperimental("DEEPAGENT_CODE_EXPERIMENTAL_WIKI"),
+  // (INV-7). SHIPS ON by default (kill-switch only; it is pure projection + reuse of the existing
+  // promote/reject pipeline, so it is rollback-safe). Set DEEPAGENT_CODE_EXPERIMENTAL_WIKI=false to disable.
+  experimentalWiki: stableOn("DEEPAGENT_CODE_EXPERIMENTAL_WIKI"),
   // V3.9 §D: Goal Loop（自主长跑原语）— a supervised, cross-tick control loop that drives 计划→执行→验证→
   // 迭代 against an OBJECTIVELY decidable completion criterion until met or a HARD stop limit fires. The
   // Controller + deterministic Grader live in core (`deepagent/goal-loop.ts`, PURE with injected ports);
   // this flag gates the deepagent-code WIRING (GraderPorts → validation runner / LSP diagnostics /
-  // reviewer / Panel; step executor → SessionPrompt; rollback → revert) plus the goal-loop worker
-  // native agent. Gated OFF by default (grey rollout, §F.3 rollback-safe — the schemas are additive and
-  // the loop cannot start without objective criteria + hard limits). Enable with
-  // DEEPAGENT_CODE_EXPERIMENTAL_GOAL_LOOP or the broad DEEPAGENT_CODE_EXPERIMENTAL flag.
-  experimentalGoalLoop: enabledByExperimental("DEEPAGENT_CODE_EXPERIMENTAL_GOAL_LOOP"),
+  // reviewer / Panel; step executor → SessionPrompt; rollback → revert) plus the loop/design worker
+  // native agent. SHIPS ON by default (kill-switch only; the schemas are additive and the loop cannot
+  // start without objective criteria + hard limits, so it is safe on by default — this is what powers
+  // the loop/design collaboration modes). Set DEEPAGENT_CODE_EXPERIMENTAL_GOAL_LOOP=false to disable.
+  experimentalGoalLoop: stableOn("DEEPAGENT_CODE_EXPERIMENTAL_GOAL_LOOP"),
   experimentalIconDiscovery: enabledByExperimental("DEEPAGENT_CODE_EXPERIMENTAL_ICON_DISCOVERY"),
   outputTokenMax: positiveInteger("DEEPAGENT_CODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX"),
   // T3 (S1-v3.4): how many narrowing attempts a 🟡 stall is given before it escalates to 🔴.
@@ -111,6 +110,61 @@ export class Service extends ConfigService.Service<Service>()("@deepagent-code/R
   bashDefaultTimeoutMs: positiveInteger("DEEPAGENT_CODE_EXPERIMENTAL_BASH_DEFAULT_TIMEOUT_MS"),
   experimentalNativeLlm: bool("DEEPAGENT_CODE_EXPERIMENTAL_NATIVE_LLM"),
   experimentalWebSockets: bool("DEEPAGENT_CODE_EXPERIMENTAL_WEBSOCKETS"),
+  // ── V4.0 event-driven Agent-OS — DEFAULT OFF (production-safe, operator opt-in) ──────────────────
+  // Per §H3 (Feature Flags: all six ship OFF) and §H1 (staged rollout: shadow → low-risk → push
+  // manual-confirm → multi-agent gradually), every V4 CAPABILITY defaults OFF in production. This is the
+  // pre-V4 (V3.8-equivalent) behavior by default; a deployment turns capabilities on deliberately as it
+  // advances the rollout. IMPORTANT: the always-on SAFETY GATES (security-gate, rate-limit) are NOT
+  // gated by these flags — they run regardless once wired; these flags gate only the V4 capabilities
+  // themselves, never the safety checks. Each flag is an independent OPT-IN: set the env var `=true` to
+  // enable one capability for verification or a staged rollout. `bool(name)` = default false, override
+  // on with `=true`; the `RuntimeFlags.layer({...})` test helper can also force any flag on
+  // programmatically (tests opt into the behavior they exercise).
+  //
+  // §A/§B: route inbound IM messages through the DeepAgent Event Bus (im.message.created → Router →
+  // Scheduler) alongside the legacy path (double-write). Enable with DEEPAGENT_CODE_V4_EVENT_DRIVEN_IM=true.
+  v4EventDrivenIm: bool("DEEPAGENT_CODE_V4_EVENT_DRIVEN_IM"),
+  // §A4: allow the agent to PUSH proactively (monitor/schedule/ci-driven outbound), through the §B2
+  // policy gate. HIGH-RISK (side-effecting outbound) — operator opt-in. Enable with DEEPAGENT_CODE_V4_AGENT_PUSH_ENABLED=true.
+  v4AgentPushEnabled: bool("DEEPAGENT_CODE_V4_AGENT_PUSH_ENABLED"),
+  // §C: the Multi-Agent Runtime (coordinated multi-agent execution over the bus + agent.task.*
+  // coordination). This is the master switch that starts the event-runtime daemons. HIGH-RISK —
+  // operator opt-in. Enable with DEEPAGENT_CODE_V4_MULTI_AGENT_RUNTIME=true.
+  v4MultiAgentRuntime: bool("DEEPAGENT_CODE_V4_MULTI_AGENT_RUNTIME"),
+  // §D: permit autonomy level 2 (act-then-report on reversible actions, subject to the Oversight
+  // ceiling + Approval Queue). HIGH-RISK (autonomous side effects) — operator opt-in. Enable with
+  // DEEPAGENT_CODE_V4_AGENT_AUTONOMY_LEVEL_2=true.
+  v4AgentAutonomyLevel2: bool("DEEPAGENT_CODE_V4_AGENT_AUTONOMY_LEVEL_2"),
+  // §B: threaded conversations (thread query + reply grouping on the IM surface). Default OFF (known
+  // correctness bugs pending). Enable with DEEPAGENT_CODE_V4_THREAD_ENABLED=true.
+  v4ThreadEnabled: bool("DEEPAGENT_CODE_V4_THREAD_ENABLED"),
+  // §B: inbound file/attachment upload on the IM surface (im_attachments + local-disk storage). Enable
+  // with DEEPAGENT_CODE_V4_FILE_UPLOAD_ENABLED=true.
+  v4FileUploadEnabled: bool("DEEPAGENT_CODE_V4_FILE_UPLOAD_ENABLED"),
+  // §M: the Expert Panel AUTO-CONVENE consumer — auto-summons an Expert Panel for high-risk events
+  // (destructive migrations, security alerts, architecture changes) per PanelConvenePolicy, routing a
+  // needs_human verdict to the §D2 Approval Queue. HIGH-COST (fans out reviewer subagents) + autonomous
+  // — operator opt-in. Enable with DEEPAGENT_CODE_V4_PANEL_AUTO_CONVENE=true.
+  v4PanelAutoConvene: bool("DEEPAGENT_CODE_V4_PANEL_AUTO_CONVENE"),
+  // §L: the EVENT-DRIVEN execution archiver TRIGGER. When on, a completed ROOT session (its end-of-turn
+  // idle signal) is republished as a `session.completed` event onto the DeepAgent Event Bus, so the §L
+  // EventDrivenArchiver has a trigger and archives the execution trajectory as a Wiki page OFF the
+  // session loop. Independent of IM (§L is a Repo/Wiki capability, not an IM one — the archiver's own
+  // header says so), so it carries its OWN flag rather than riding v4EventDrivenIm. Default OFF (P0.3
+  // production posture): with it off the bridge is inert — nothing subscribes, nothing publishes, and
+  // the V3.9 inline archive (prompt.ts, gated by experimentalWiki) remains the only archival path.
+  // Enable with DEEPAGENT_CODE_V4_EVENT_DRIVEN_ARCHIVE=true.
+  v4EventDrivenArchive: bool("DEEPAGENT_CODE_V4_EVENT_DRIVEN_ARCHIVE"),
+  // V4.1 §S1.1: mid-turn STEERING — a user message that arrives while a turn is in flight is buffered
+  // in a durable per-session steer queue and ABSORBED at the next model-request boundary of the live
+  // turn loop (SessionPrompt.runLoop), appended as an ordinary tail user message (never aborting the
+  // in-flight stream/tools). Unlike the HIGH-RISK V4 autonomy flags, steering is a pure-additive
+  // soft-absorb with NO autonomous side effects, so it SHIPS ON by default — it is the foundational
+  // interactive primitive. It is nonetheless a real kill-switch: with `=false` the drain never runs and
+  // behavior is exactly the pre-steering path (busy sessions await / BusyError as before). This gates
+  // ONLY the runLoop steer drain — it does NOT activate the dormant experimentalEventSystem V2 runner.
+  // Disable with DEEPAGENT_CODE_V4_STEERING=false.
+  v4Steering: stableOn("DEEPAGENT_CODE_V4_STEERING"),
   client: Config.string("DEEPAGENT_CODE_CLIENT").pipe(Config.withDefault("cli")),
 }) {}
 

@@ -118,6 +118,7 @@ export const SessionPaths = {
   summarize: `${root}/:sessionID/summarize`,
   prompt: `${root}/:sessionID/message`,
   promptPrepare: `${root}/:sessionID/prompt_prepare`,
+  promptPrepareStream: `${root}/:sessionID/prompt_prepare_stream`,
   promptSuggestion: `${root}/:sessionID/prompt_suggestion`,
   promptAsync: `${root}/:sessionID/prompt_async`,
   command: `${root}/:sessionID/command`,
@@ -363,8 +364,21 @@ export const SessionApi = HttpApi.make("session")
           OpenApi.annotations({
             identifier: "session.prompt_prepare",
             summary: "Prepare prompt draft",
+            description: "Create a DeepAgent intelligence prompt draft for user confirmation before task submission.",
+          }),
+        ),
+        HttpApiEndpoint.post("promptPrepareStream", SessionPaths.promptPrepareStream, {
+          params: { sessionID: SessionID },
+          query: WorkspaceRoutingQuery,
+          payload: PromptPreparePayload,
+          success: Schema.String,
+          error: [HttpApiError.BadRequest, InvalidRequestError, ApiNotFoundError],
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "session.prompt_prepare_stream",
+            summary: "Stream prompt draft preparation",
             description:
-              "Create a DeepAgent intelligence prompt draft for user confirmation before task submission.",
+              "Create a DeepAgent intelligence prompt draft and stream progressive preview updates as server-sent events.",
           }),
         ),
         HttpApiEndpoint.get("promptSuggestion", SessionPaths.promptSuggestion, {

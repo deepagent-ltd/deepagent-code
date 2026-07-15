@@ -1,5 +1,8 @@
-import { Effect, Scope } from "effect"
+import { Cause, Effect, Scope } from "effect"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
+import nodeFs from "node:fs/promises"
+import { Global } from "@deepagent-code/core/global"
+import { AttachmentStorage } from "@deepagent-code/core/im/attachment-storage"
 import { IMRepository, IMRepositoryError } from "@deepagent-code/core/im/repository"
 import { IMBroadcasterService } from "@deepagent-code/core/im/broadcaster"
 import { InstanceHttpApi } from "../api"
@@ -8,14 +11,65 @@ import {
   IMMessageNotFoundError,
   IMMessageTooLargeError,
   IMRateLimitExceededError,
+  IMValidationFailedError,
   IMInternalServerError,
+  IMFileUploadDisabledError,
+  IMThreadDisabledError,
+  IMFileTooLargeError,
+  IMUnsupportedMediaTypeError,
 } from "../groups/im"
 import { MentionParser } from "@deepagent-code/core/im/mention-parser"
 import { AgentListProviderService } from "@deepagent-code/core/im/agent-list-provider"
 import { executeAgentMentions } from "@deepagent-code/core/im/agent-orchestrator"
+import type { IMMessage, IMAttachment } from "@deepagent-code/core/im/repository"
+import * as IMID from "@deepagent-code/core/im/id"
 import { getWorkspaceContext } from "../utils/workspace-context"
+import { RuntimeFlags } from "@/effect/runtime-flags"
+import { DeepAgentEventBus } from "@deepagent-code/core/deepagent/deepagent-event-bus"
+import { LMNEvents } from "@deepagent-code/core/deepagent/lmn-events"
+
+const IMAttachmentID = IMID.AttachmentID
 
 const IM_MAX_MESSAGE_LENGTH = 100000 // 增加到 100k，更灵活
+
+// Pagination limit clamp: default 50, hard ceiling 100 (matches listMessages' effective default and
+// prevents an unbounded page from a hostile `limit`).
+const clampLimit = (limit: number | undefined): number => {
+  if (limit === undefined || !Number.isFinite(limit) || limit <= 0) return 50
+  return Math.min(Math.floor(limit), 100)
+}
+
+const toMessageResponse = (m: IMMessage) => ({
+  id: m.id,
+  groupID: m.groupID,
+  senderID: m.senderID,
+  senderType: m.senderType,
+  type: m.type,
+  content: m.content,
+  mentions: m.mentions,
+  metadata: m.metadata,
+  replyToID: m.replyToID,
+  createdAt: m.createdAt,
+  updatedAt: m.updatedAt,
+})
+
+const toAttachmentResponse = (a: IMAttachment) => ({
+  id: a.id,
+  workspaceID: a.workspaceID,
+  projectID: a.projectID,
+  groupID: a.groupID,
+  messageID: a.messageID,
+  uploadedBy: a.uploadedBy,
+  filename: a.filename,
+  mime: a.mime,
+  sizeBytes: a.sizeBytes,
+  checksum: a.checksum,
+  createdAt: a.createdAt,
+})
+
+// Attachment mime allow-list, size cap, checksum, and server-derived storage path all live in the pure
+// AttachmentStorage core (@deepagent-code/core/im/attachment-storage) so they are unit-testable without
+// the multipart HTTP transport. The handler just calls into it.
 
 // Simple in-memory rate limiter
 class RateLimiter {
@@ -75,6 +129,9 @@ export const imHandlers = HttpApiBuilder.group(InstanceHttpApi, "im", (handlers)
     const repo = yield* IMRepository
     const broadcaster = yield* IMBroadcasterService
     const agentListProvider = yield* AgentListProviderService
+    // V4.0 §B1 — the flag + bus for the double-write (user message persist → publish im.message.created).
+    const flags = yield* RuntimeFlags.Service
+    const eventBus = yield* DeepAgentEventBus.Service
     // Long-lived scope for detached agent runs. Forking into the SERVER scope (not
     // the request scope) means the agent keeps running after the HTTP response is
     // sent, while still inheriting the request fiber's full context — crucially the
@@ -106,6 +163,55 @@ export const imHandlers = HttpApiBuilder.group(InstanceHttpApi, "im", (handlers)
         mapRepositoryError(
           Effect.gen(function* () {
             const { workspaceID, userID } = yield* getWorkspaceContext(query)
+
+            // §B3 私聊 — a "direct" group is created via createDirectGroup, which enforces the exactly-2
+            // member / user+user|user+agent constraint and de-duplicates the pair. The creator (server
+            // user) is one participant; payload.member is the counterparty.
+            if (payload.type === "direct") {
+              if (!payload.member) {
+                return yield* Effect.fail(
+                  new IMValidationFailedError({
+                    name: "VALIDATION_FAILED",
+                    data: { message: "A direct group requires a `member` (the counterparty)." },
+                  }),
+                )
+              }
+              const group = yield* repo
+                .createDirectGroup({
+                  workspaceID,
+                  projectID: payload.projectID,
+                  createdBy: userID,
+                  name: payload.name || undefined,
+                  members: [
+                    { memberID: userID, memberType: "user" },
+                    { memberID: payload.member.memberID, memberType: payload.member.memberType },
+                  ],
+                })
+                // A constraint violation surfaces as an IMRepositoryError; map it to a 400 rather than a
+                // 500 so the caller sees the validation failure.
+                .pipe(
+                  Effect.catchIf(
+                    (e): e is IMRepositoryError => e instanceof IMRepositoryError,
+                    (e) =>
+                      Effect.fail(
+                        new IMValidationFailedError({
+                          name: "VALIDATION_FAILED",
+                          data: { message: e.message },
+                        }),
+                      ),
+                  ),
+                )
+              return {
+                id: group.id,
+                workspaceID: group.workspaceID,
+                projectID: group.projectID,
+                type: group.type,
+                name: group.name,
+                createdBy: group.createdBy,
+                createdAt: group.createdAt,
+                updatedAt: group.updatedAt,
+              }
+            }
 
             const group = yield* repo.createGroup({
               workspaceID,
@@ -238,7 +344,7 @@ export const imHandlers = HttpApiBuilder.group(InstanceHttpApi, "im", (handlers)
               })
               .pipe(
                 Effect.tap((msg) =>
-                  Effect.sync(() => {
+                  Effect.gen(function* () {
                     // Broadcast message_created event via WebSocket
                     broadcaster.broadcast(groupId, {
                       type: "message_created",
@@ -256,6 +362,66 @@ export const imHandlers = HttpApiBuilder.group(InstanceHttpApi, "im", (handlers)
                         updatedAt: msg.updatedAt,
                       },
                     })
+                    // V4.0 §B1 — double-write: publish im.message.created onto the DeepAgent Event Bus
+                    // AFTER the message is durably persisted (so the legacy path stays authoritative and
+                    // the event is never emitted for an un-persisted message). Flag-gated on
+                    // v4EventDrivenIm (default OFF ⇒ no publish, byte-identical to V3.8). Best-effort:
+                    // idempotencyKey = the message id (one event per message), and a bus failure never
+                    // fails the user's send (the message already persisted + broadcast).
+                    //
+                    // §E2 RATE GATE (live): this is the primary workspace-facing, user-driven publisher —
+                    // one event per IM message — so it goes through `tryPublish`, applying the 1000/min
+                    // per-workspace publish ceiling. `im.message.created` is `normal` priority, so a
+                    // workspace flooding messages sheds the excess (`{ dropped: "rate_limited" }` ⇒ NOT
+                    // persisted, NOT dispatched). The legacy IM message + broadcast already succeeded, so
+                    // shedding the derived bus event only pauses V4 event-driven reactions for the burst —
+                    // it never loses the user's message. We record the drop as the §A4 event_dropped signal.
+                    if (flags.v4EventDrivenIm) {
+                      const outcome = yield* eventBus
+                        .tryPublish({
+                          type: LMNEvents.IM_MESSAGE_CREATED,
+                          source: "im",
+                          workspaceID: workspaceID ?? directory,
+                          actorID: userID,
+                          idempotencyKey: `im:${msg.id}`,
+                          priority: "normal",
+                          payload: {
+                            messageID: msg.id,
+                            groupID: msg.groupID,
+                            senderID: msg.senderID,
+                            senderType: msg.senderType,
+                            content: msg.content,
+                            mentions: msg.mentions,
+                            replyToID: msg.replyToID,
+                          },
+                        })
+                        // Best-effort: a bus EXCEPTION must not fail the user's send (the message already
+                        // persisted + broadcast). Catch the cause into a DISTINCT sentinel so a real error
+                        // is logged as an error — never mislabeled as a rate-limit drop (the two are
+                        // different signals: a drop is expected shedding, an exception is a fault).
+                        .pipe(
+                          Effect.catchCause((cause) => Effect.succeed({ busError: cause } as const)),
+                        )
+                      if ("busError" in outcome) {
+                        yield* Effect.logError("im.message.created publish failed").pipe(
+                          Effect.annotateLogs({
+                            reason: "publish_error",
+                            workspaceID: workspaceID ?? directory,
+                            messageID: msg.id,
+                            cause: Cause.pretty(outcome.busError),
+                          }),
+                        )
+                      } else if ("dropped" in outcome) {
+                        yield* Effect.logWarning("im.message.created dropped by publish rate gate").pipe(
+                          Effect.annotateLogs({
+                            reason: "event_dropped",
+                            cause: "rate_limited",
+                            workspaceID: workspaceID ?? directory,
+                            messageID: msg.id,
+                          }),
+                        )
+                      }
+                    }
                   }),
                 ),
                 Effect.catch((error) =>
@@ -400,6 +566,242 @@ export const imHandlers = HttpApiBuilder.group(InstanceHttpApi, "im", (handlers)
               createdAt: message.createdAt,
               updatedAt: message.updatedAt,
             }
+          }),
+        ),
+      )
+      .handle("listThread", ({ params, query }) =>
+        mapRepositoryError(
+          Effect.gen(function* () {
+            // §B3 threads — fail-closed when the flag is off (404: the endpoint does not exist for the
+            // caller), mirroring the uploadAttachment gate. Checked FIRST so no membership/thread lookup
+            // runs when threads are disabled.
+            if (!flags.v4ThreadEnabled) {
+              return yield* Effect.fail(
+                new IMThreadDisabledError({
+                  name: "THREAD_DISABLED",
+                  data: { message: "Threads are disabled." },
+                }),
+              )
+            }
+
+            const { userID } = yield* getWorkspaceContext(query)
+            const groupId = params.groupId
+
+            // Membership check (also the IDOR guard): the caller must be a member of the group before
+            // any thread rows are returned.
+            const group = yield* repo.getGroup({ groupID: groupId, userID })
+            if (!group) {
+              return yield* Effect.fail(
+                new IMGroupNotFoundError({
+                  name: "GROUP_NOT_FOUND",
+                  data: { message: `Group ${groupId} not found` },
+                }),
+              )
+            }
+
+            const limit = clampLimit(query.limit)
+            const page = yield* repo.listThread({
+              groupID: groupId,
+              replyToID: params.messageId,
+              cursor: query.cursor,
+              limit,
+            })
+
+            return {
+              messages: page.messages.map(toMessageResponse),
+              nextCursor: page.nextCursor,
+              hasMore: page.hasMore,
+            }
+          }),
+        ),
+      )
+      .handle("search", ({ query }) =>
+        mapRepositoryError(
+          Effect.gen(function* () {
+            const { workspaceID, userID } = yield* getWorkspaceContext(query)
+
+            const q = query.q.trim()
+            if (q.length === 0) {
+              return yield* Effect.fail(
+                new IMValidationFailedError({
+                  name: "VALIDATION_FAILED",
+                  data: { message: "Search query `q` must not be empty." },
+                }),
+              )
+            }
+
+            const limit = clampLimit(query.limit)
+            // Permission scoping is enforced INSIDE the repository via the membership join — a user can
+            // only ever match messages in groups they belong to, even when they pass an explicit groupId
+            // for a group they're not a member of.
+            const page = yield* repo.searchMessages({
+              workspaceID,
+              userID,
+              query: q,
+              groupID: query.groupId,
+              senderType: query.senderType,
+              type: query.type,
+              metadataType: query.metadataType,
+              cursor: query.cursor,
+              limit,
+            })
+
+            return {
+              messages: page.messages.map(toMessageResponse),
+              nextCursor: page.nextCursor,
+              hasMore: page.hasMore,
+            }
+          }),
+        ),
+      )
+      .handle("uploadAttachment", ({ query, payload }) =>
+        mapRepositoryError(
+          Effect.gen(function* () {
+            // §B3 文件 — fail-closed when the flag is off (404: the endpoint does not exist for the
+            // caller). Checked FIRST so no bytes are read / stored when uploads are disabled.
+            if (!flags.v4FileUploadEnabled) {
+              return yield* Effect.fail(
+                new IMFileUploadDisabledError({
+                  name: "FILE_UPLOAD_DISABLED",
+                  data: { message: "File upload is disabled." },
+                }),
+              )
+            }
+
+            const { workspaceID, userID } = yield* getWorkspaceContext(query)
+            const file = payload.file
+
+            // If the upload is scoped to a group, the caller must be a member (membership + IDOR guard).
+            if (payload.groupId) {
+              const group = yield* repo.getGroup({ groupID: payload.groupId, userID })
+              if (!group) {
+                return yield* Effect.fail(
+                  new IMGroupNotFoundError({
+                    name: "GROUP_NOT_FOUND",
+                    data: { message: `Group ${payload.groupId} not found` },
+                  }),
+                )
+              }
+            }
+
+            // The multipart parser persisted the bytes to a temp file (file.path). Read them so the pure
+            // policy core can validate mime + size and compute the sha256 checksum.
+            const bytes = yield* Effect.tryPromise({
+              try: () => nodeFs.readFile(file.path),
+              catch: (e) =>
+                new IMInternalServerError({
+                  name: "INTERNAL_SERVER_ERROR",
+                  data: { message: `Failed to read uploaded file: ${String(e)}` },
+                }),
+            })
+
+            // Validation policy (mime allow-list, size cap, checksum) lives in the pure
+            // AttachmentStorage core so it is unit-testable without the multipart transport.
+            const validated = AttachmentStorage.validateUpload({ contentType: file.contentType, bytes })
+            if (!validated.ok) {
+              if (validated.error === "unsupported_media_type") {
+                return yield* Effect.fail(
+                  new IMUnsupportedMediaTypeError({
+                    name: "UNSUPPORTED_MEDIA_TYPE",
+                    data: { message: `Unsupported media type: ${validated.mime}` },
+                  }),
+                )
+              }
+              return yield* Effect.fail(
+                new IMFileTooLargeError({
+                  name: "FILE_TOO_LARGE",
+                  data: {
+                    message: `File exceeds the maximum size of ${validated.maxBytes} bytes`,
+                    maxBytes: validated.maxBytes,
+                  },
+                }),
+              )
+            }
+
+            // Server-derived storage path: <data>/im-attachments/<workspaceID>/<attachmentId>. Built ONLY
+            // from server-generated ids (never the client filename) and verified to stay within the base
+            // directory — see AttachmentStorage.deriveStoragePath.
+            const attachmentId = IMAttachmentID.create()
+            const derived = AttachmentStorage.deriveStoragePath({
+              dataDir: Global.Path.data,
+              workspaceID,
+              attachmentID: attachmentId,
+            })
+            if (!derived.ok) {
+              return yield* Effect.fail(
+                new IMInternalServerError({
+                  name: "INTERNAL_SERVER_ERROR",
+                  data: { message: "Resolved storage path escaped the attachments directory" },
+                }),
+              )
+            }
+
+            yield* Effect.tryPromise({
+              try: async () => {
+                await nodeFs.mkdir(derived.baseDir, { recursive: true })
+                await nodeFs.writeFile(derived.storagePath, bytes)
+              },
+              catch: (e) =>
+                new IMInternalServerError({
+                  name: "INTERNAL_SERVER_ERROR",
+                  data: { message: `Failed to store uploaded file: ${String(e)}` },
+                }),
+            })
+
+            const attachment = yield* repo.createAttachment({
+              workspaceID,
+              groupID: payload.groupId,
+              messageID: payload.messageId,
+              uploadedBy: userID,
+              storagePath: derived.storagePath,
+              // Keep the original filename for display/download; it is never used to build a path.
+              filename: file.name || "upload",
+              mime: validated.mime,
+              sizeBytes: validated.sizeBytes,
+              checksum: validated.checksum,
+            })
+
+            return toAttachmentResponse(attachment)
+          }),
+        ),
+      )
+      .handle("listAttachments", ({ query }) =>
+        mapRepositoryError(
+          Effect.gen(function* () {
+            if (!flags.v4FileUploadEnabled) {
+              return yield* Effect.fail(
+                new IMFileUploadDisabledError({
+                  name: "FILE_UPLOAD_DISABLED",
+                  data: { message: "File upload is disabled." },
+                }),
+              )
+            }
+
+            const { workspaceID, userID } = yield* getWorkspaceContext(query)
+
+            // If scoped to a group, membership is required (IDOR guard) so a caller can't enumerate
+            // attachments in a group they don't belong to.
+            if (query.groupId) {
+              const group = yield* repo.getGroup({ groupID: query.groupId, userID })
+              if (!group) {
+                return yield* Effect.fail(
+                  new IMGroupNotFoundError({
+                    name: "GROUP_NOT_FOUND",
+                    data: { message: `Group ${query.groupId} not found` },
+                  }),
+                )
+              }
+            }
+
+            const limit = clampLimit(query.limit)
+            const attachments = yield* repo.listAttachments({
+              workspaceID,
+              groupID: query.groupId,
+              messageID: query.messageId,
+              limit,
+            })
+
+            return attachments.map(toAttachmentResponse)
           }),
         ),
       )

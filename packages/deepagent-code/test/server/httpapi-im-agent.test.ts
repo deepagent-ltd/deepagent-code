@@ -4,7 +4,7 @@
 // mentions were wired to core SessionV2 (a no-op execution layer) and never
 // actually ran an agent. It boots the real `HttpApiApp.routes` — including the
 // IM runtime layer (ServerAgentExecutorLive/ServerAgentListProviderLive) — and a
-// fake LLM server, posts an `@build` message to an IM group over HTTP, and asserts
+// fake LLM server, posts an `@auto` message to an IM group over HTTP, and asserts
 // that a real agent reply is persisted back into the group.
 //
 // The agent runs in a forked fiber (fire-and-forget from the message handler), so
@@ -111,11 +111,13 @@ describe("IM agent HttpApi (real SessionPrompt stack)", () => {
           body: JSON.stringify({ type: "project", name: "Smoke" }),
         })
 
-        // Post a user message that @mentions the built-in "build" agent.
+        // Post a user message that @mentions the default primary "auto" agent
+        // (renamed from the legacy "build"). "auto" is also reused by the hidden
+        // BUILTIN_AGENT_DESCRIPTORS, so this also guards the shadowing fix.
         const createResponse = yield* request(`/api/v1/im/groups/${group.id}/messages?${q}`, {
           method: "POST",
           headers,
-          body: JSON.stringify({ senderType: "user", type: "text", content: "@build please answer" }),
+          body: JSON.stringify({ senderType: "user", type: "text", content: "@auto please answer" }),
         })
         expect(createResponse.status).toBe(200)
 

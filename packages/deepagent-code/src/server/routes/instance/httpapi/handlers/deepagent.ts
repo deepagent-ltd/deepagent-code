@@ -21,11 +21,19 @@ import { GoalManager } from "@/session/goal-manager"
 import { SessionID } from "@/session/schema"
 import { consultPanel } from "@/panel/consult"
 import { makeTaskSubagentRunner } from "@/session/goal-loop-wiring"
+import { openWikiGraph, openWikiService, openWikiSearchIndex, buildWikiEditGate } from "@/wiki/session-archive"
+import { WIKI_EDITABLE_TYPES, type WikiPage } from "@/wiki/wiki-service"
 import type { PanelTurnRunner } from "@/panel/panelist-runner"
 import type { PanelVerdict } from "@/agent/schema/panel"
 import type { CompletionCriterion } from "@deepagent-code/core/deepagent/goal-loop"
+import type { PlanInput } from "@deepagent-code/core/deepagent/plan-controller"
 
 const dbgLog = Log.create({ service: "deepagent.packs.debug" })
+
+// §C.4 — the server-side ceiling on Expert-Panel debate rounds a single consult may request. Round 1
+// plus up to 2 debate rounds: enough for opinions to converge (the orchestrator also early-stops on a
+// stable verdict distribution) while bounding the fan-out (one subagent turn per lens per round).
+const PANEL_MAX_ROUNDS_CEILING = 3
 
 export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagent", (handlers) =>
   Effect.gen(function* () {
@@ -174,6 +182,10 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
           const asReviewType = (t: string): ReviewType =>
             REVIEW_TYPES.includes(t as ReviewType) ? (t as ReviewType) : "knowledge"
           const items = [...AgentGateway.DeepAgentKnowledgeSource.listAllForWorkspace(dir)]
+            // Skills are agent-executable procedures, not human-readable facts — the governance UI
+            // only surfaces learned facts (knowledge/memory/strategy/methodology/failure_dossier).
+            // (Domain-pack seed docs are already excluded upstream by knowledge-source.)
+            .filter((e) => e.type !== "skill")
             .map((e) => ({
               id: e.id,
               type: asReviewType(e.type),
@@ -181,6 +193,7 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
               evidence_strength: e.evidence_strength,
               evidence_refs: e.evidence_refs,
               approval_status: e.approval_status,
+              scope: e.scope,
             }))
             .sort((a, b) => a.id.localeCompare(b.id))
           return { items }
@@ -469,6 +482,15 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
         return yield* Effect.fail(new DeepAgentPromotionError({ message: "expert panel is disabled" }))
       const { sessionID } = ctx.payload
       const runTurn = yield* panelTurnRunnerFor(sessionID)
+      // Clamp the requested debate depth to [1, PANEL_MAX_ROUNDS_CEILING]. The orchestrator already
+      // floors/mins internally, but each round fans out one subagent turn PER lens, so an unbounded
+      // client-supplied maxRounds would let one request spawn arbitrarily many panelist turns. Cap it
+      // server-side (defense-in-depth) so a hostile/buggy client can't amplify a single consult.
+      const requestedRounds = ctx.payload.maxRounds
+      const maxRounds =
+        requestedRounds != null
+          ? Math.max(1, Math.min(PANEL_MAX_ROUNDS_CEILING, Math.floor(requestedRounds)))
+          : undefined
       const verdict = yield* consultPanel(
         {
           question:
@@ -476,7 +498,7 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
           codeRefs: ctx.payload.codeRefs ? [...ctx.payload.codeRefs] : [],
           parentSessionID: sessionID,
           ...(ctx.payload.lenses ? { lenses: [...ctx.payload.lenses] } : {}),
-          ...(ctx.payload.maxRounds != null ? { maxRounds: ctx.payload.maxRounds } : {}),
+          ...(maxRounds != null ? { maxRounds } : {}),
           ...(ctx.payload.policy ? { policy: ctx.payload.policy } : {}),
         },
         { runTurn },
@@ -492,20 +514,28 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
       )
 
     const panelArm = Effect.fn("DeepAgentHttpApi.panelArm")(function* (ctx) {
-      const { sessionID, armed } = ctx.payload
+      const { sessionID, armed, rounds } = ctx.payload
       AgentGateway.DeepAgentSessionState.setPanelArmed(sessionID, armed)
+      // Persist the debate depth when arming (the three-state control's Single/Multi choice). On disarm
+      // we leave the stored depth untouched so re-arming restores the user's last choice.
+      if (armed && rounds) AgentGateway.DeepAgentSessionState.setPanelRounds(sessionID, rounds)
       const globalDefault = yield* expertPanelDefault()
-      return { sessionID, armed: AgentGateway.DeepAgentSessionState.resolvePanelArmed(sessionID, globalDefault) }
+      return {
+        sessionID,
+        armed: AgentGateway.DeepAgentSessionState.resolvePanelArmed(sessionID, globalDefault),
+        rounds: AgentGateway.DeepAgentSessionState.panelRounds(sessionID),
+      }
     })
 
     const panelStatus = Effect.fn("DeepAgentHttpApi.panelStatus")(function* (ctx) {
-      const sessionID = ctx.urlParams.sessionID
+      const sessionID = ctx.query.sessionID
       const globalDefault = yield* expertPanelDefault()
       const choice = AgentGateway.DeepAgentSessionState.panelArmedChoice(sessionID)
       return {
         sessionID,
         armed: choice ?? globalDefault,
         explicit: choice != null,
+        rounds: AgentGateway.DeepAgentSessionState.panelRounds(sessionID),
       }
     })
 
@@ -540,17 +570,167 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
       return snapshot
     })
 
+    // The goal MUTATION handlers gate on experimentalGoalLoop too (defense-in-depth, matching goalStart):
+    // with the flag off no goal can be started, so these are already no-ops (getControl → null ⇒ ok:false),
+    // but gating here makes the posture explicit and uniform across the whole goal-lifecycle surface.
     const goalPause = Effect.fn("DeepAgentHttpApi.goalPause")(function* (ctx) {
+      if (!flags.experimentalGoalLoop) return { ok: false }
       return { ok: yield* goals.pause(ctx.payload.sessionID) }
     })
     const goalResume = Effect.fn("DeepAgentHttpApi.goalResume")(function* (ctx) {
+      if (!flags.experimentalGoalLoop) return { ok: false }
       return { ok: yield* goals.resume(ctx.payload.sessionID) }
     })
     const goalStop = Effect.fn("DeepAgentHttpApi.goalStop")(function* (ctx) {
+      if (!flags.experimentalGoalLoop) return { ok: false }
       return { ok: yield* goals.stop(ctx.payload.sessionID) }
     })
+    // V4.1 §S2 — hot-edit the plan of a running/paused goal. Normalize the wire payload (readonly step
+    // structs → the loose PlanInput the backend reconciles via buildPlanFromInput, preserving ids +
+    // runtime-owned evidence). GoalManager.editPlan enqueues it on the control channel (ok:false when no
+    // goal is running or the goal is terminal); the driver applies it between ticks.
+    const goalEditPlan = Effect.fn("DeepAgentHttpApi.goalEditPlan")(function* (ctx) {
+      if (!flags.experimentalGoalLoop) return { ok: false }
+      const p = ctx.payload.plan
+      const plan: PlanInput = {
+        goal: p.goal,
+        steps: p.steps.map((s: (typeof p.steps)[number]) => ({
+          ...(s.step_id != null ? { step_id: s.step_id } : {}),
+          title: s.title,
+          ...(s.status != null ? { status: s.status } : {}),
+          ...(s.acceptance !== undefined ? { acceptance: s.acceptance } : {}),
+          ...(s.assigned_agent !== undefined ? { assigned_agent: s.assigned_agent } : {}),
+          ...(s.note !== undefined ? { note: s.note } : {}),
+        })),
+        ...(p.assumptions ? { assumptions: [...p.assumptions] } : {}),
+        ...(p.active_step_id !== undefined ? { active_step_id: p.active_step_id } : {}),
+      }
+      return { ok: yield* goals.editPlan({ sessionID: ctx.payload.sessionID, plan }) }
+    })
     const goalStatus = Effect.fn("DeepAgentHttpApi.goalStatus")(function* (ctx) {
-      return { goal: yield* goals.status(ctx.urlParams.sessionID) }
+      return { goal: yield* goals.status(ctx.query.sessionID) }
+    })
+    const goalStartable = Effect.fn("DeepAgentHttpApi.goalStartable")(function* (ctx) {
+      return yield* goals.startable(ctx.query.sessionID)
+    })
+
+    // ── V3.9 §B Repo & Wiki ─────────────────────────────────────────────────
+    // Read-only projection + governed knowledge edit + full-text search. All fail-closed on the wiki
+    // flag. The graph union / search index / edit gate are all built from the active workspace dir.
+    const requireWiki = Effect.fn("DeepAgentHttpApi.requireWiki")(function* () {
+      if (!flags.experimentalWiki)
+        return yield* Effect.fail(new DeepAgentPromotionError({ message: "wiki is disabled" }))
+    })
+
+    // Flatten a rendered WikiPage into the wire shape (crossLinks lists → plain arrays).
+    const toWikiPageResult = (page: WikiPage) => ({
+      docId: page.docId,
+      type: page.type,
+      title: page.title,
+      markdown: page.markdown,
+      editable: page.editable,
+      version: page.version,
+      crossLinks: {
+        toCode: page.crossLinks.toCode.map((r) => ({
+          docId: r.docId,
+          rel: r.rel,
+          path: r.path,
+          line: r.line,
+          symbolPath: r.symbolPath,
+          stale: r.stale,
+        })),
+        toDocs: page.crossLinks.toDocs.map((r) => ({
+          docId: r.docId,
+          rel: r.rel,
+          type: r.type,
+          title: r.title,
+          stale: r.stale,
+        })),
+      },
+    })
+
+    const wikiPages = Effect.fn("DeepAgentHttpApi.wikiPages")(function* (ctx) {
+      yield* requireWiki()
+      const workspacePath = yield* workspaceDir()
+      const typeFilter = ctx.query.type
+      const graph = openWikiGraph({ workspacePath })
+      const pages = graph
+        .allDocs()
+        .filter((doc) => (typeFilter ? doc.type === typeFilter : true))
+        .map((doc) => ({
+          docId: doc.id,
+          type: doc.type,
+          title: doc.description,
+          scope: doc.scope,
+          editable: WIKI_EDITABLE_TYPES.has(doc.type),
+          version: doc.version,
+        }))
+      return { pages }
+    })
+
+    const wikiPage = Effect.fn("DeepAgentHttpApi.wikiPage")(function* (ctx) {
+      yield* requireWiki()
+      const workspacePath = yield* workspaceDir()
+      const service = openWikiService({ workspacePath })
+      const page = yield* service
+        .renderPage({ docId: ctx.query.docId, scope: ctx.query.scope })
+        .pipe(Effect.mapError((e) => new DeepAgentPromotionError({ message: e.reason ?? "page not found" })))
+      return toWikiPageResult(page)
+    })
+
+    const wikiSearch = Effect.fn("DeepAgentHttpApi.wikiSearch")(function* (ctx) {
+      yield* requireWiki()
+      const workspacePath = yield* workspaceDir()
+      const index = openWikiSearchIndex({ workspacePath })
+      // The index is a rebuildable projection with no auto-refresh — rebuild from the graph before the
+      // query, then close the sqlite handle. Both are default-safe (never fail).
+      yield* index.rebuild()
+      const hits = yield* index.search({
+        text: ctx.query.text,
+        ...(ctx.query.type ? { type: ctx.query.type as WikiPage["type"] } : {}),
+        ...(ctx.query.scope ? { scope: ctx.query.scope } : {}),
+      })
+      index.close()
+      return { hits: hits.map((h) => ({ docId: h.docId, type: h.type, scope: h.scope, title: h.title, score: h.score })) }
+    })
+
+    const wikiEdit = Effect.fn("DeepAgentHttpApi.wikiEdit")(function* (ctx) {
+      yield* requireWiki()
+      const workspacePath = yield* workspaceDir()
+      const memoryDir = yield* workspaceMemoryDir()
+      // Inject the REAL evidence-gate (same validate() promotion uses) — not the trivial default.
+      const service = openWikiService({ workspacePath, gate: buildWikiEditGate(memoryDir) })
+      const page = yield* service
+        .editKnowledge({
+          docId: ctx.payload.docId,
+          body: ctx.payload.body,
+          editor: { id: ctx.payload.editor.id, ...(ctx.payload.editor.name ? { name: ctx.payload.editor.name } : {}) },
+        })
+        .pipe(Effect.mapError((e) => new DeepAgentPromotionError({ message: e.message })))
+      return toWikiPageResult(page)
+    })
+
+    // §B.6 read side (T2.2): render a completed session's execution archive. The run-scoped trajectory
+    // stores are only unioned into the graph when the sessionID is passed to openWikiService (see
+    // openWikiGraph), so the archive is empty unless we thread sessionID through — which is exactly the
+    // gap that made renderExecutionArchive unreachable before this route existed.
+    const wikiExecutionArchive = Effect.fn("DeepAgentHttpApi.wikiExecutionArchive")(function* (ctx) {
+      yield* requireWiki()
+      const workspacePath = yield* workspaceDir()
+      const service = openWikiService({ workspacePath, sessionID: ctx.query.sessionID })
+      const archive = yield* service.renderExecutionArchive({ sessionId: ctx.query.sessionID })
+      return {
+        sessionId: archive.sessionId,
+        title: archive.title,
+        markdown: archive.markdown,
+        entries: archive.entries.map((e) => ({
+          docId: e.docId,
+          type: e.type,
+          title: e.title,
+          body: e.body,
+          version: e.version,
+        })),
+      }
     })
 
     return handlers
@@ -575,6 +755,13 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
       .handle("goalPause", goalPause)
       .handle("goalResume", goalResume)
       .handle("goalStop", goalStop)
+      .handle("goalEditPlan", goalEditPlan)
       .handle("goalStatus", goalStatus)
+      .handle("goalStartable", goalStartable)
+      .handle("wikiPages", wikiPages)
+      .handle("wikiPage", wikiPage)
+      .handle("wikiSearch", wikiSearch)
+      .handle("wikiEdit", wikiEdit)
+      .handle("wikiExecutionArchive", wikiExecutionArchive)
   }),
 )

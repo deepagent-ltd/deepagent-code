@@ -114,7 +114,11 @@ describe("UnifiedContextGraph.query degradation (Phase 3 §B.4 降级)", () => {
   })
 
   it("returns EMPTY (never throws) when the graph is unconfigured", async () => {
-    knowledgeSource.invalidateCache()
+    // reset() guarantees the UNCONFIGURED precondition (baseDir=null) even when an EARLIER test in the
+    // full-suite process already called knowledgeSource.configure() — that global setter has no other way
+    // back to null, so invalidateCache() alone (which only clears the store caches) left this test
+    // order-dependent: green in isolation, red after any configuring test. reset() makes it hermetic.
+    knowledgeSource.reset()
     // No configure() → GraphQuery.layer's isConfigured() guard yields emptyResult.
     const ctx = await Effect.runPromise(query({ workspacePath: "/work/x", task: "anything" }))
     expect(ctx).toEqual({ code: [], knowledge: [], memory: [], documents: [] })
