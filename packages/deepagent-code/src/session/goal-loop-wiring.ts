@@ -8,6 +8,7 @@ import type {
   StepExecutor,
   StepExecutorResult,
 } from "@deepagent-code/core/deepagent/goal-loop"
+import { budgetNotice } from "@deepagent-code/core/deepagent/goal-loop"
 import { SessionV1 } from "@deepagent-code/core/v1/session"
 import { ModelV2 } from "@deepagent-code/core/model"
 import { ProviderV2 } from "@deepagent-code/core/provider"
@@ -19,6 +20,7 @@ import { DEFAULT_QUORUM_POLICY, type PanelLens, type PanelVerdict } from "../age
 import { ReviewResult } from "../agent/schema/orchestration"
 import { RuntimeFlags } from "../effect/runtime-flags"
 import { SessionPrompt } from "./prompt"
+import { collectVolatileFacts, refreshWorldState } from "./context-ledger"
 import { SessionRevert } from "./revert"
 import { Session } from "./session"
 import { Agent } from "../agent/agent"
@@ -79,6 +81,17 @@ export const highestDiagnosticSeverity = (
   return best === null ? null : (LSP_SEVERITY_LABEL[best] ?? "error")
 }
 
+// V4.0.1 P1 §3.3 — render the live LSP diagnostics into a compact World State `diagnostics` slot value:
+// the highest severity present + the count of files with issues. Deliberately terse (a snapshot, not a
+// dump) so the tail stays cheap + byte-stable when diagnostics are unchanged. Empty map ⇒ "clean".
+const renderDiagnosticsSlot = (diagnostics: Record<string, readonly LSPClient.Diagnostic[]>): string => {
+  const filesWithIssues = Object.values(diagnostics).filter((issues) => issues.length > 0).length
+  if (filesWithIssues === 0) return "clean (no diagnostics)"
+  const worst = highestDiagnosticSeverity(diagnostics) ?? "error"
+  const total = Object.values(diagnostics).reduce((n, issues) => n + issues.length, 0)
+  return `highest severity: ${worst}; ${total} issue(s) across ${filesWithIssues} file(s)`
+}
+
 // review severity ordering for the reviewer_clean gate (higher = more severe).
 const REVIEW_SEVERITY_RANK: Record<string, number> = { low: 1, medium: 2, high: 3, critical: 4 }
 const reviewRank = (s: string): number => REVIEW_SEVERITY_RANK[s.trim().toLowerCase()] ?? 99
@@ -94,8 +107,20 @@ export type SubagentTurnResult = {
   readonly structured: unknown | undefined
   /** The final text part (free-text turns). */
   readonly text: string
-  /** input+output+reasoning tokens for this turn (0 when unknown). */
+  /** GROSS input+output+reasoning tokens for this turn (0 when unknown). */
   readonly tokensUsed: number
+  /**
+   * V4.0.1 P2 §4.4 — the granular breakdown feeding the goal's NET-token ledger (used only when the goal's
+   * budgetTokenScope is "net"; gross ignores them). `inputTokens` is the FULL billed input (prefix + new
+   * context, cache-adjusted); `outputTokens` is generation (output+reasoning); `carriedPrefixTokens` is
+   * the provider-reported CACHED prefix (cache.read + cache.write) — the best cheaply-available
+   * stable-prefix figure. The net ledger accrues `outputTokens + max(0, inputTokens − carriedPrefixTokens)`
+   * so a long task's ledger no longer inflates linearly from the repeated static prefix each tick. All
+   * default to undefined for stub runners (⇒ the net path falls back to tokensUsed).
+   */
+  readonly inputTokens?: number
+  readonly outputTokens?: number
+  readonly carriedPrefixTokens?: number
   /** dollar cost for this turn (0 when unknown). */
   readonly cost: number
   /**
@@ -146,6 +171,15 @@ export type SubagentTurnInput = {
 }
 
 export type SubagentTurnRunner = (input: SubagentTurnInput) => Effect.Effect<SubagentTurnResult>
+
+/**
+ * V4.0.1 P1 §3.3/§3.6 — the per-tick World State provider. Called ONCE at the start of each tick (never
+ * per turn — bounds the git/diagnostics IO cost, §3.3): it collects the latest volatile facts, snapshot-
+ * diffs them into the project's World State doc, and returns the RENDERED tail block (or "" when there is
+ * nothing to inject / on any defect — it is default-safe and never fails the tick). Production wires this
+ * to `collectVolatileFacts` + live LSP diagnostics + `refreshWorldState`; tests inject a stub or omit it.
+ */
+export type WorldStateProvider = () => Effect.Effect<string>
 
 // ---------------------------------------------------------------------------------------------------
 // GraderPorts builder — assembles the four evaluator ports from the live services + the turn runner.
@@ -290,6 +324,20 @@ export const buildStepExecutor = (
    * never drains, so nothing is consumed. Omitted ⇒ no goal-tick steering (base behaviour).
    */
   steerRelay?: GoalSteerRelay,
+  /**
+   * V4.0.1 P2 §4.4/§4.5 — the `goalBudgetSoftNotify` flag (default ON in production). When true and the
+   * tick's cost has crossed a `softNotifyFractions` tier, `budgetNotice` is threaded into THIS tick's
+   * step-prompt tail (cache-safe — the step prompt IS the child turn's user message). Omitted ⇒ treated as
+   * off (no notice), i.e. pre-V4.0.1 behaviour.
+   */
+  budgetSoftNotify?: boolean,
+  /**
+   * V4.0.1 P1 §3.3 — the per-tick World State provider. When supplied (production with
+   * `worldStateReinjection` ON), it is invoked once at tick start; its rendered block is threaded into the
+   * step-prompt TAIL (before the budget notice). Omitted / undefined ⇒ no World State (base behaviour),
+   * so `worldStateReinjection=false` is byte-for-byte the pre-V4.0.1 prompt.
+   */
+  worldStateProvider?: WorldStateProvider,
 ): StepExecutor =>
   (input) => {
     const planBridge = planBridgeFor?.(input.planDocId)
@@ -297,11 +345,20 @@ export const buildStepExecutor = (
     // turn's user-message tail via renderStepPrompt, never a system prefix). Draining marks it as
     // threaded-this-tick on the relay so the driver stamps exactly these ids consumed after the tick.
     const steer = steerRelay ? steerRelay.drainForPrompt() : []
-    return runTurn({
-      agentType: "goal-worker",
-      prompt: renderStepPrompt({ ...input, steer }),
-      ...(planBridge ? { prepareSession: (childId: string) => planBridge.seedChildPlan(childId) } : {}),
-    }).pipe(
+    // P2 §4.4: compute the tiered COST soft-notice for this tick (gated by goalBudgetSoftNotify). It rides
+    // the step-prompt TAIL (never the prefix), so prompt-cache stability is preserved.
+    const notice = budgetSoftNotify === true ? budgetNotice(input.ledger, input.limits) : null
+    // P1 §3.3: refresh + render the World State ONCE at tick start (default-safe ⇒ "" on any defect). It
+    // rides the tail (before the budget notice) so it reaches the goal-worker every tick (P3(d) recall).
+    return (worldStateProvider ? worldStateProvider() : Effect.succeed("")).pipe(
+      Effect.flatMap((worldState) =>
+        runTurn({
+          agentType: "goal-worker",
+          prompt: renderStepPrompt({ ...input, steer, budgetNotice: notice, worldState }),
+          ...(planBridge ? { prepareSession: (childId: string) => planBridge.seedChildPlan(childId) } : {}),
+        }),
+      ),
+    ).pipe(
       Effect.map((turn): StepExecutorResult => {
         // Mirror the worker's plan-state back into the goal plan doc AFTER the turn (best-effort; a
         // bridge defect must not fail the tick — the grader simply sees no plan advance and the loop
@@ -315,6 +372,11 @@ export const buildStepExecutor = (
         }
         return {
           tokensUsed: turn.tokensUsed,
+          // P2 §4.4: surface the granular breakdown so the loop's NET ledger (budgetTokenScope "net") can
+          // subtract the carried (cached) prefix. Harmless under "gross" (ignored there).
+          ...(turn.inputTokens != null ? { inputTokens: turn.inputTokens } : {}),
+          ...(turn.outputTokens != null ? { outputTokens: turn.outputTokens } : {}),
+          ...(turn.carriedPrefixTokens != null ? { carriedPrefixTokens: turn.carriedPrefixTokens } : {}),
           cost: turn.cost,
           // Surface the CHILD session the turn ran in so a critical-failure rollback reverts THAT
           // session (where the file edits live), not the parent goal session (which has none). Without
@@ -382,6 +444,21 @@ export const renderStepPrompt = (input: {
   readonly activeStepId: string | null
   /** §S1.3 — mid-run steering drained from the goal session's steer buffer, threaded into this turn. */
   readonly steer?: ReadonlyArray<PendingGoalSteer>
+  /**
+   * V4.0.1 P2 §4.4 — the tiered COST soft-notice for this tick (or null). Appended to the TAIL of the
+   * step prompt (never the prefix), so it lands in the model INPUT tail like the steering block and never
+   * perturbs any cached system prefix. It is a converge nudge, NOT a stop signal — the loop keeps ticking.
+   */
+  readonly budgetNotice?: string | null
+  /**
+   * V4.0.1 P1 §3.3 — the rendered World State block (latest volatile facts: open files / git /
+   * diagnostics / env). Injected into the step-prompt TAIL so it reaches the goal-worker EVERY tick
+   * (P3(d) goal-worker recall — this is the gate-free channel that bypasses shouldLoadBridge's general
+   * short-circuit by construction). Placed AFTER the advance instruction but BEFORE the budget notice:
+   * World State is larger + more stable (snapshot-diff byte-stable across ticks), the budget notice is
+   * short + volatile, so keeping the most volatile content LAST preserves near-end prompt-cache stability.
+   */
+  readonly worldState?: string | null
 }): string => {
   const steerLines =
     input.steer && input.steer.length > 0
@@ -392,6 +469,13 @@ export const renderStepPrompt = (input: {
           ``,
         ]
       : []
+  // P1 §3.3: the World State block rides the TAIL after the advance instruction. It is snapshot-diff
+  // byte-stable across ticks, so it sits BEFORE the (short/volatile) budget notice to keep the most
+  // volatile content last (near-end prompt-cache stability).
+  const worldStateLines = input.worldState && input.worldState.trim() ? [``, input.worldState.trim()] : []
+  // P2 §4.4: the budget notice rides the TAIL, after the fixed advance instruction, so it perturbs
+  // neither the cached system prefix nor the (also cache-relevant) leading instruction lines.
+  const budgetLines = input.budgetNotice ? [``, `BUDGET NOTICE: ${input.budgetNotice}`] : []
   return [
     ...steerLines,
     `Advance goal ${input.goalId}. Execute exactly ONE plan step of real progress this turn.`,
@@ -399,6 +483,8 @@ export const renderStepPrompt = (input: {
       ? `The active step is "${input.activeStepId}". Complete it, then mark it done and set the next step active.`
       : `No step is currently active. Read the plan, pick the next pending step, mark it active, and make progress.`,
     `Ground every "done" in a verifiable fact (a command you ran, a test that passed). Do NOT mark a step done to satisfy the gate.`,
+    ...worldStateLines,
+    ...budgetLines,
   ].join("\n")
 }
 
@@ -487,12 +573,40 @@ export const makeTaskSubagentRunner = (deps: TaskSubagentRunnerDeps): SubagentTu
       const structured =
         info.role === "assistant" && input.outputSchema ? (info.structured as unknown | undefined) : undefined
       const text = result.parts.findLast((p) => p.type === "text")?.text ?? ""
+      // GROSS throughput (input+output+reasoning) — the pre-V4.0.1 figure, always populated.
       const tokens =
         info.role === "assistant"
           ? Math.max(0, (info.tokens.input ?? 0) + (info.tokens.output ?? 0) + (info.tokens.reasoning ?? 0))
           : 0
+      // V4.0.1 P2 §4.4 — the granular breakdown for the goal's NET-token ledger (used only under
+      // budgetTokenScope "net"). `info.tokens.input` is already the cache-ADJUSTED (non-cached) input in
+      // this codebase (session.ts:437 subtracts cache.read/write from the SDK's folded inputTokens), and
+      // `cache.read + cache.write` is the provider-reported CACHED prefix — the best cheaply-available
+      // stable-prefix figure for carriedPrefixTokens. The net ledger then accrues
+      // `output(+reasoning) + max(0, (input+cachedPrefix) − cachedPrefix)`, i.e. it charges only the
+      // non-cached input delta above the repeated stable prefix. `inputTokens` is reported as the FULL
+      // billed input (non-cached input + cached prefix) so the core subtraction is symmetric; on a cache
+      // miss (cache.read=0) carriedPrefixTokens is 0 and the full input counts (correct + monotonic).
+      const inputFull =
+        info.role === "assistant"
+          ? Math.max(0, (info.tokens.input ?? 0) + (info.tokens.cache?.read ?? 0) + (info.tokens.cache?.write ?? 0))
+          : 0
+      const outputNet =
+        info.role === "assistant" ? Math.max(0, (info.tokens.output ?? 0) + (info.tokens.reasoning ?? 0)) : 0
+      const carriedPrefix =
+        info.role === "assistant" ? Math.max(0, (info.tokens.cache?.read ?? 0) + (info.tokens.cache?.write ?? 0)) : 0
       const cost = info.role === "assistant" && Number.isFinite(info.cost) ? info.cost : 0
-      return { ok: true, structured, text, tokensUsed: tokens, cost, sessionID: child.id } satisfies SubagentTurnResult
+      return {
+        ok: true,
+        structured,
+        text,
+        tokensUsed: tokens,
+        inputTokens: inputFull,
+        outputTokens: outputNet,
+        carriedPrefixTokens: carriedPrefix,
+        cost,
+        sessionID: child.id,
+      } satisfies SubagentTurnResult
     }).pipe(Effect.catchCause(() => Effect.succeed(failedTurn("subagent turn failed"))))
 
 const failedTurn = (_reason: string): SubagentTurnResult => ({
@@ -577,13 +691,45 @@ export const makeGoalLoopWiring = (
     const planBridgeFor = (planDocId: string): PlanBridge =>
       makePlanBridge({ store: input.store, planDocId, agentMode: input.agentMode ?? "general" })
 
+    // P1 §3.3 + P3(d): the per-tick World State provider, gated by worldStateReinjection. It collects the
+    // cheap volatile facts (git + env) + the live LSP diagnostics summary, snapshot-diffs them into the
+    // project's World State doc, and renders the tail block. This is the GATE-FREE goal-worker recall path
+    // (P3(d)): it reaches the goal-worker via the step-prompt tail regardless of shouldLoadBridge's general
+    // short-circuit, WITHOUT flipping bridge.ts:117 (which would leak the handoff to all general subagents).
+    // Undefined when the flag is OFF ⇒ the executor threads no World State (byte-for-byte pre-V4.0.1).
+    const worldStateProvider: WorldStateProvider | undefined = flags.worldStateReinjection
+      ? () =>
+          Effect.gen(function* () {
+            const facts = yield* collectVolatileFacts(input.cwd)
+            const diag = yield* input
+              .diagnostics()
+              .pipe(Effect.catchCause(() => Effect.succeed({ diagnostics: {}, checked: false })))
+            const diagText = diag.checked ? renderDiagnosticsSlot(diag.diagnostics) : undefined
+            return yield* refreshWorldState({
+              workspacePath: input.cwd,
+              facts: { ...facts, ...(diagText != null ? { diagnostics: diagText } : {}) },
+            })
+          })
+      : undefined
+
     return {
       store: input.store,
       ports,
       // §S1.3: thread the shared goal-steer relay so each tick's step prompt carries staged user guidance.
-      executor: buildStepExecutor(input.runTurn, planBridgeFor, input.steerRelay),
+      // P2 §4.4: pass goalBudgetSoftNotify so the executor threads a tiered cost soft-notice into the tail.
+      // P1 §3.3: pass the World State provider so each tick re-injects the latest volatile facts (tail).
+      executor: buildStepExecutor(
+        input.runTurn,
+        planBridgeFor,
+        input.steerRelay,
+        flags.goalBudgetSoftNotify,
+        worldStateProvider,
+      ),
       rollback: input.rollback,
       now: input.now ?? (() => Date.now()),
+      // P2 §4.5: stamp the goal's token-accounting convention from goalNetTokenBudget at creation (start()
+      // reads this once; tick() thereafter obeys the persisted budgetTokenScope marker, never the flag).
+      netTokenBudget: flags.goalNetTokenBudget,
     } satisfies ControllerDeps
   })
 
