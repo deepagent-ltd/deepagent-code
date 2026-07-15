@@ -32,7 +32,21 @@ export const CI_FAILURE = "ci.failure"
 export const PR_COMMENT = "pr.comment"
 export const MONITOR_ALERT = "monitor.alert"
 
-// §N Goal Loop — the tick is now an event (durable/retryable/dedup'd); terminal states go to Oversight.
+// §N Goal Loop.
+//
+// COMMAND vs FACT (V4.0 §N event-driven execution). The contract says "tick = goal.tick 事件" with
+// persistence/retry/dedup/backpressure — i.e. tick must be DRIVEN BY consuming an event, not merely
+// observed. That requires two distinct kinds of event:
+//   - GOAL_TICK_REQUESTED (COMMAND): "execute ONE tick of this goal". A consumer claims it, runs the
+//     tick through the normal StepExecutor path, then — if non-terminal — re-emits the next requested
+//     (the self-driving chain). Idempotent on plan-version (idempotencyKey = goal:tick:<goalId>:<ver>)
+//     so a redelivered command never double-executes; nack → bus retry (real work is retried, not just
+//     an observation). This is the event that carries the §N persistence/retry/dedup guarantee.
+//   - GOAL_TICK (FACT / trace): a tick HAS happened — an after-the-fact observation for tracing. It is
+//     `normal` priority and safely sheddable; it drives nothing. (Named `goal.tick` for back-compat; it
+//     is the observed counterpart to the requested command, NOT a driver.)
+// Terminal facts (completed/needs_human/rolled_back) go to Oversight/Archive as before.
+export const GOAL_TICK_REQUESTED = "goal.tick.requested"
 export const GOAL_TICK = "goal.tick"
 export const GOAL_COMPLETED = "goal.completed"
 export const GOAL_NEEDS_HUMAN = "goal.needs_human"

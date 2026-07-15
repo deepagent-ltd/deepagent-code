@@ -131,10 +131,15 @@ export class Service extends ConfigService.Service<Service>()("@deepagent-code/R
   // coordination). This is the master switch that starts the event-runtime daemons. HIGH-RISK —
   // operator opt-in. Enable with DEEPAGENT_CODE_V4_MULTI_AGENT_RUNTIME=true.
   v4MultiAgentRuntime: bool("DEEPAGENT_CODE_V4_MULTI_AGENT_RUNTIME"),
-  // §D: permit autonomy level 2 (act-then-report on reversible actions, subject to the Oversight
-  // ceiling + Approval Queue). HIGH-RISK (autonomous side effects) — operator opt-in. Enable with
-  // DEEPAGENT_CODE_V4_AGENT_AUTONOMY_LEVEL_2=true.
-  v4AgentAutonomyLevel2: bool("DEEPAGENT_CODE_V4_AGENT_AUTONOMY_LEVEL_2"),
+  // NOTE: there is deliberately NO separate "autonomy level 2" flag. The §D autonomy gate
+  // (AutonomyPolicy.decide in multi-agent-runtime.ts) is driven purely by each agent's DECLARED autonomy
+  // ceiling in its descriptor — a flag could only ever have MASKED that, and a former
+  // v4AgentAutonomyLevel2 flag was inert (advertised in /global/capabilities but wired to neither the UI
+  // nor the gate), so it was removed rather than left as a control that controls nothing. Enabling
+  // v4MultiAgentRuntime authorizes autonomous action up to each agent's own ceiling (builtin fixers are
+  // level_2 = act-then-report), guarded by the four-layer SecurityGate + Approval Queue + concurrency cap
+  // + file locks + trusted-source gating on external events. To restrict autonomy, tighten the agent
+  // descriptors' `autonomy` levels — config can only tighten a ceiling, never raise it.
   // §B: threaded conversations (thread query + reply grouping on the IM surface). Default OFF (known
   // correctness bugs pending). Enable with DEEPAGENT_CODE_V4_THREAD_ENABLED=true.
   v4ThreadEnabled: bool("DEEPAGENT_CODE_V4_THREAD_ENABLED"),
