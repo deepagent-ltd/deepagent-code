@@ -19,7 +19,11 @@ import type { SessionID } from "./schema"
 // Curator). This gives us a real, persisted, per-turn-incremental ledger to build on without touching
 // the live compaction behavior.
 
-const { SessionLedger, ProjectBridge } = DeepAgentContext
+import os from "node:os"
+import { gitGroundTruth } from "../deepagent/git-groundtruth"
+import type { WorldStateSlotKind } from "@deepagent-code/core/deepagent/context/world-state"
+
+const { SessionLedger, ProjectBridge, WorldState } = DeepAgentContext
 const { DocumentStore } = DeepAgentDocumentStore
 
 // Run-scoped DocumentStore root for a session's context docs. Reuses the SAME storage base
@@ -44,7 +48,9 @@ export const parseSummaryToEntries = (summary: string): DeepAgentContext.Session
     if (t.includes("done")) return "done"
     if (t.includes("next")) return "next"
     if (t.includes("blocked") || t.includes("open") || t.includes("in progress")) return "open"
-    if (t.includes("file")) return "artifact"
+    // V4.0.1 P1 (§3.4): the narrowed template's "Data References" bucket → artifact (reference only,
+    // never content). The legacy "Relevant Files" heading (contains "file") maps here too.
+    if (t.includes("file") || t.includes("reference") || t.includes("data")) return "artifact"
     return null
   }
   for (const raw of lines) {
@@ -213,5 +219,65 @@ export const loadForkOrigin = (sessionID: SessionID): ForkOrigin | undefined => 
     return undefined
   }
 }
+
+// --- V4.0.1 P1 (§3.3) World State — snapshot-diff volatile facts, re-injected as a tail block --------
+//
+// The seam between the live git/env/diagnostics sources (deepagent-code) and the pure core World State
+// layer. Two steps kept separate so the (bounded) IO is explicit and the store mutation stays sync:
+//   1. `collectVolatileFacts(cwd)` — cheap git + env collection (NO per-turn heavy collectors; §3.3 cost
+//      bound: callers invoke this ONCE per tick-start / post-compaction, never per turn).
+//   2. `refreshWorldState({ workspacePath, facts })` — snapshot-diff merge into the project-scoped World
+//      State doc + persist + render the tail block. Default-safe (returns "" on any defect).
+//
+// projectId derivation + the project store are the SAME single shared path carryOverToBridge uses, so the
+// goal-loop tick-start read and the post-compaction write agree on one physical World State doc per project.
+
+// Render the git working-tree state as a compact VCS slot value (branch/dirty/changed-file count). Cheap.
+const renderVcs = (git: { changed_files: readonly string[]; diff_stat: string | null }): string => {
+  const dirty = git.changed_files.length
+  const lines = [`changed files: ${dirty}`]
+  if (git.diff_stat) lines.push(git.diff_stat)
+  if (dirty > 0) lines.push(...git.changed_files.slice(0, 20).map((f) => `- ${f}`))
+  return lines.join("\n")
+}
+
+const renderEnv = (): string => [`platform: ${process.platform}`, `node: ${process.version}`, `arch: ${os.arch()}`].join("\n")
+
+// Collect the cheap volatile facts (git + env) as rendered slot values. Best-effort: a git failure just
+// omits the vcs slot (undefined ⇒ prior value preserved by collectSlots). NOT a heavy collector — plain
+// git ground-truth + process facts, bounded by gitGroundTruth's own timeout.
+export const collectVolatileFacts = (
+  cwd: string,
+): Effect.Effect<Partial<Record<WorldStateSlotKind, string | undefined>>> =>
+  Effect.promise(async () => {
+    const git = await gitGroundTruth(cwd).catch(() => null)
+    const facts: Partial<Record<WorldStateSlotKind, string | undefined>> = { env: renderEnv() }
+    if (git) facts.vcs = renderVcs(git)
+    return facts
+  }).pipe(Effect.catchCause(() => Effect.succeed({ env: renderEnv() } as Partial<Record<WorldStateSlotKind, string | undefined>>)))
+
+// Snapshot-diff the collected facts into the project's World State doc, persist, and render the tail
+// block. Returns "" when there is nothing to inject or on ANY defect (default-safe — never throws into
+// the turn/tick loop, matching carryOverToBridge's posture). The persisted doc is content-addressed, so
+// an unchanged fact set bumps NO version and the rendered tail stays byte-stable across ticks.
+export const refreshWorldState = (input: {
+  readonly workspacePath: string
+  readonly facts: Partial<Record<WorldStateSlotKind, string | undefined>>
+}): Effect.Effect<string> =>
+  Effect.sync(() => {
+    const projectStore = AgentGateway.DeepAgentKnowledgeSource.isConfigured()
+      ? AgentGateway.DeepAgentKnowledgeSource.projectStoreFor(input.workspacePath).documentStore
+      : DeepAgentDurableKnowledgeStore.openProjectStore(Global.Path.agent.data, input.workspacePath).documentStore
+    const projectId = DeepAgentDurableKnowledgeStore.projectIdForWorkspace(input.workspacePath)
+    const current = ProjectBridge.loadWorldStateForGoalWorker(projectStore, projectId)
+    const next = WorldState.collectSlots(current, input.facts)
+    ProjectBridge.persistWorldState(projectStore, next)
+    return WorldState.renderWorldState(next)
+  }).pipe(
+    Effect.matchCauseEffect({
+      onFailure: () => Effect.succeed(""),
+      onSuccess: (s) => Effect.succeed(s),
+    }),
+  )
 
 export { contextStoreRoot }
