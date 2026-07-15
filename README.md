@@ -14,7 +14,7 @@
   <a href="https://github.com/deepagent-ltd/deepagent-code-enterprise">Enterprise</a>
 </p>
 
-<p align="center"><sub>Desktop v1.3</sub></p>
+<p align="center"><sub>Desktop v1.4</sub></p>
 
 ---
 
