@@ -18,7 +18,14 @@ import { configureGateway } from "@/deepagent/config"
 import { type Tool as AITool, tool, jsonSchema, streamText, type ModelMessage } from "ai"
 import type { JSONSchema7 } from "@ai-sdk/provider"
 import { SessionCompaction } from "./compaction"
-import { overflowStatus, tokensUsed, softLandingDecision, initialSoftLandingState, CompactionSoftLandingState } from "./overflow"
+import {
+  overflowStatus,
+  tokensUsed,
+  softLandingDecision,
+  outputContinuationMax,
+  initialSoftLandingState,
+  CompactionSoftLandingState,
+} from "./overflow"
 import { SystemPrompt } from "./system"
 import { Instruction } from "./instruction"
 import { Plugin } from "../plugin"
@@ -2033,6 +2040,17 @@ export const layer = Layer.effect(
         .join("\n")
     }
 
+    // V4.0.1 P0b OUTPUT soft-landing — the "continue from the cutoff" nudge injected when a response was
+    // truncated at the output-token ceiling (finish === "length") with no pending tool call. Unlike Codex
+    // (which re-sends the identical request and re-hits the same cap), we append the model's already-
+    // streamed partial text as history and ask it to RESUME — so the pieces stitch by continuation.
+    const OUTPUT_CONTINUE_TAIL_TEXT = [
+      "<system-reminder>",
+      "你上一轮的输出因达到输出长度上限被截断（未自然结束）。请直接从被截断处继续，",
+      "不要重复已经输出的内容，也不要重新开头。若已实质完成，简短收尾即可。",
+      "</system-reminder>",
+    ].join("\n")
+
     // V4.0.1 P1 (§3.3) — post-hard-compaction World State re-injection. After a hard compaction the
     // (now-narrowed) summary deliberately dropped file/env/diagnostics; this re-injects their LATEST
     // values as a TAIL user block (reuses the SAME injectTailReminder primitive — never the static system
@@ -2135,6 +2153,27 @@ export const layer = Layer.effect(
             !hasToolCalls &&
             lastUser.id < lastAssistant.id
           ) {
+            // V4.0.1 P0b OUTPUT soft-landing — a response cut off at the output-token ceiling finishes with
+            // "length" (never "tool-calls", so it reaches here). Instead of ending the turn mid-sentence,
+            // inject a bounded "continue from the cutoff" nudge and loop once more so the model resumes; the
+            // already-streamed partial is in history, so the continuation stitches on. Bounded by
+            // OUTPUT_CONTINUATION_MAX consecutive continuations (a fresh count each turn once a natural stop
+            // resets it) to prevent an infinite loop — the knob Codex lacks. Context growth from the extra
+            // turn is caught by the top-of-loop overflow check on the next pass (compaction stays separate).
+            if (flags.outputSoftLanding && lastAssistant.finish === "length") {
+              const sls = yield* readSoftLandingState(sessionID)
+              const done = sls.outputContinuationCount ?? 0
+              if (done < outputContinuationMax()) {
+                yield* writeSoftLandingState(sessionID, { ...sls, outputContinuationCount: done + 1 })
+                yield* injectTailReminder(sessionID, OUTPUT_CONTINUE_TAIL_TEXT, lastUser.model, lastUser.agent)
+                yield* slog.info("output soft-landing: continuing after length cutoff", {
+                  continuation: done + 1,
+                  max: outputContinuationMax(),
+                })
+                continue
+              }
+              yield* slog.warn("output soft-landing: continuation cap reached, ending turn", { max: outputContinuationMax() })
+            }
             const orphan = lastAssistantMsg?.parts.find(
               (part): part is SessionV1.ToolPart => part.type === "tool" && isOrphanedInterruptedTool(part),
             )
@@ -2147,6 +2186,13 @@ export const layer = Layer.effect(
             }
             yield* slog.info("exiting loop")
             break
+          }
+          // Output soft-landing: a natural stop (or any non-length finish that keeps looping via tool
+          // calls) resets the consecutive-continuation run so a later length cutoff gets the full budget.
+          if (flags.outputSoftLanding && lastAssistant?.finish && lastAssistant.finish !== "length") {
+            const sls = yield* readSoftLandingState(sessionID)
+            if ((sls.outputContinuationCount ?? 0) !== 0)
+              yield* writeSoftLandingState(sessionID, { ...sls, outputContinuationCount: 0 })
           }
 
           step++
@@ -2194,17 +2240,28 @@ export const layer = Layer.effect(
               }
             } else {
               const cfg = yield* config.get()
+              const slState0 = yield* readSoftLandingState(sessionID)
+              // BodyAfterPrefix (§2.3, Codex core/src/state/auto_compact_window.rs): latch a per-window
+              // input-token BASELINE from the provider-reported input side of the FIRST response of this
+              // window (input + cached read/write = the full billed input, matching the goal ledger's
+              // carriedPrefix). Once set it is pinned for the window (cleared on the epoch bump at a hard
+              // compaction) — server-observed only, no tokenizer. `overflowStatus` subtracts it so the
+              // lines fire on body growth; a full-window safety cap still guards the raw total.
+              const billedInput =
+                lastFinished.tokens.input + lastFinished.tokens.cache.read + lastFinished.tokens.cache.write
+              const slState =
+                slState0.prefillInputTokens === undefined && billedInput > 0
+                  ? { ...slState0, prefillInputTokens: billedInput }
+                  : slState0
+              if (slState !== slState0) yield* writeSoftLandingState(sessionID, slState)
               const status = overflowStatus({
                 cfg,
                 model,
                 outputTokenMax: flags.outputTokenMax,
                 tokens: tokensUsed(lastFinished.tokens),
-                // BodyAfterPrefix (§2.3/§9.1): no cheap accurate static-prefix estimate yet, so 0 =
-                // whole-body accounting. Wired-but-zero enhancement; does not block P0.
-                prefixTokens: 0,
+                prefixTokens: slState.prefillInputTokens ?? 0,
                 softLanding: true,
               })
-              const slState = yield* readSoftLandingState(sessionID)
               const { action, nextState } = softLandingDecision({ status, state: slState, step })
               if (action === "reminder") {
                 yield* writeSoftLandingState(sessionID, nextState)
