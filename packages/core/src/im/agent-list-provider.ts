@@ -1,5 +1,6 @@
 import { Context, Effect, Layer } from "effect"
 import { AgentV2 } from "../agent"
+import { BUILTIN_AGENT_DESCRIPTORS } from "./builtin-agents"
 import type { AgentDescriptor } from "./mention-parser"
 
 /** Query context shared by every provider read. */
@@ -81,7 +82,14 @@ class AgentListProviderImpl implements AgentListProvider {
           visible: true,
         }))
 
-      return descriptors
+      // V4.0 §A1 — APPEND the built-in production descriptors. AgentV2.Info carries
+      // no trigger/capability metadata, so the mapped `descriptors` above never match
+      // an autonomous event's trigger/capability query (every such event blocked with
+      // `no_capable_agent`). The built-ins carry that metadata and each `name` resolves
+      // to a REAL runnable agent (auto/general/plan), so both listAgents and the
+      // findByTrigger/findByCapability matchers below now see a matchable agent. They
+      // are `visible: false` → excluded from the human @mention UI, still matchable.
+      return [...descriptors, ...BUILTIN_AGENT_DESCRIPTORS]
     })
   }
 

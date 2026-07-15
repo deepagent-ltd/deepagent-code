@@ -25,6 +25,7 @@ import { Location } from "@deepagent-code/core/location"
 import { SystemContextRegistry } from "@deepagent-code/core/system-context/registry"
 import { SystemContext } from "@deepagent-code/core/system-context"
 import { SkillGuidance } from "@deepagent-code/core/skill/guidance"
+import { AgentGateway } from "@deepagent-code/core/agent-gateway"
 import { describe, expect } from "bun:test"
 import { eq } from "drizzle-orm"
 import { Effect, Layer } from "effect"
@@ -131,6 +132,11 @@ const sessionID = SessionV2.ID.make("ses_runner_recorded")
 describe("SessionRunnerLLM recorded", () => {
   it.effect("executes one recorded V2 prompt through the recorded HTTP transport", () =>
     Effect.gen(function* () {
+      // This is a pure V2 HTTP transport-REPLAY test: the cassette was recorded with the DeepAgent
+      // runtime OFF, so the request is just the user prompt. AgentGateway is a process-global that a
+      // prior test may have left enabled — which would prepend the DeepAgent system message and break the
+      // fixture match. Force it disabled so the replayed request matches the recording deterministically.
+      AgentGateway.configure({ enabled: false, agentMode: "high" })
       const { db } = yield* Database.Service
       yield* db
         .insert(ProjectTable)
@@ -163,7 +169,7 @@ describe("SessionRunnerLLM recorded", () => {
       const messages = yield* session.context(sessionID)
       expect(messages).toHaveLength(2)
       expect(messages[0]).toMatchObject({ id: prompt.id, type: "user", text: "Say hello in one short sentence." })
-      expect(messages[1]).toMatchObject({ type: "assistant", agent: "build", finish: "stop" })
+      expect(messages[1]).toMatchObject({ type: "assistant", agent: "auto", finish: "stop" })
       expect(messages[1]?.type === "assistant" ? messages[1].content : []).toMatchObject([
         { type: "text", text: "Hello!" },
       ])
