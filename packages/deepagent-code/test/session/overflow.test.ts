@@ -7,8 +7,10 @@ import {
   softLandingDecision,
   isOverflow,
   usable,
+  outputContinuationMax,
   initialSoftLandingState,
   CompactionSoftLandingState,
+  OUTPUT_CONTINUATION_MAX,
   REMINDER_FRACTION,
   AUTO_COMPACT_FALLBACK_BUFFER,
   REMINDER_DEBOUNCE_TURNS,
@@ -233,5 +235,64 @@ describe("CompactionSoftLandingState durability (cold recovery)", () => {
     expect(Option.isNone(decode(undefined))).toBe(true)
     expect(Option.isNone(decode({ windowEpoch: "nope" }))).toBe(true)
     expect(Option.isNone(decode({}))).toBe(true) // autoCompactFallbackDelivered required
+  })
+
+  test("round-trips the new optional fields (prefillInputTokens + outputContinuationCount)", () => {
+    const state = { windowEpoch: 2, autoCompactFallbackDelivered: true, prefillInputTokens: 45_000, outputContinuationCount: 1 }
+    const decoded = decode(JSON.parse(JSON.stringify(state)))
+    expect(Option.isSome(decoded)).toBe(true)
+    const v = Option.getOrThrow(decoded)
+    expect(v.prefillInputTokens).toBe(45_000)
+    expect(v.outputContinuationCount).toBe(1)
+  })
+})
+
+// V4.0.1 P0 BodyAfterPrefix — the full-window SAFETY CAP that guards the raw total once a prefix is
+// deducted, so a huge prefix cannot let real usage silently exceed the model's input window.
+describe("overflowStatus full-window safety cap (BodyAfterPrefix)", () => {
+  const m = model() // input=110_000, usable/hardLine=100_000
+  const c = cfg()
+
+  test("raw total at/over the model input window forces hard even when body-after-prefix is small", () => {
+    // A 90k prefix makes body tiny, but raw total 110_000 hits the real input window ⇒ hard (safety cap).
+    const st = overflowStatus({ cfg: c, model: m, tokens: 110_000, prefixTokens: 90_000 })
+    expect(st.used).toBe(20_000) // body is well under every line
+    expect(st.phase).toBe("hard") // ...but the raw total hit the full window
+  })
+
+  test("safety cap is inert when prefix=0 (byte-for-byte pre-BodyAfterPrefix)", () => {
+    // With no prefix, used==raw and the cap adds nothing: below soft(80k) is ok, [soft,fallback) reminder.
+    expect(overflowStatus({ cfg: c, model: m, tokens: 70_000, prefixTokens: 0 }).phase).toBe("ok")
+    expect(overflowStatus({ cfg: c, model: m, tokens: 85_000, prefixTokens: 0 }).phase).toBe("reminder")
+  })
+
+  test("body-after-prefix stays the primary trigger below the full window", () => {
+    // raw 95_000 < fullWindow 110_000, prefix 10_000 ⇒ body 85_000 ⇒ reminder (not forced hard).
+    const st = overflowStatus({ cfg: c, model: m, tokens: 95_000, prefixTokens: 10_000 })
+    expect(st.used).toBe(85_000)
+    expect(st.phase).toBe("reminder")
+  })
+})
+
+// V4.0.1 P0b OUTPUT soft-landing — the continuation cap knob.
+describe("outputContinuationMax", () => {
+  test("defaults to OUTPUT_CONTINUATION_MAX when the env is unset/invalid", () => {
+    const saved = process.env["DEEPAGENT_CODE_OUTPUT_CONTINUATION_MAX"]
+    delete process.env["DEEPAGENT_CODE_OUTPUT_CONTINUATION_MAX"]
+    expect(outputContinuationMax()).toBe(OUTPUT_CONTINUATION_MAX)
+    process.env["DEEPAGENT_CODE_OUTPUT_CONTINUATION_MAX"] = "not-a-number"
+    expect(outputContinuationMax()).toBe(OUTPUT_CONTINUATION_MAX)
+    if (saved === undefined) delete process.env["DEEPAGENT_CODE_OUTPUT_CONTINUATION_MAX"]
+    else process.env["DEEPAGENT_CODE_OUTPUT_CONTINUATION_MAX"] = saved
+  })
+
+  test("honors a valid non-negative integer override (including 0 = disabled)", () => {
+    const saved = process.env["DEEPAGENT_CODE_OUTPUT_CONTINUATION_MAX"]
+    process.env["DEEPAGENT_CODE_OUTPUT_CONTINUATION_MAX"] = "5"
+    expect(outputContinuationMax()).toBe(5)
+    process.env["DEEPAGENT_CODE_OUTPUT_CONTINUATION_MAX"] = "0"
+    expect(outputContinuationMax()).toBe(0)
+    if (saved === undefined) delete process.env["DEEPAGENT_CODE_OUTPUT_CONTINUATION_MAX"]
+    else process.env["DEEPAGENT_CODE_OUTPUT_CONTINUATION_MAX"] = saved
   })
 })
