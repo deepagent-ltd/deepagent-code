@@ -1,5 +1,6 @@
 import type { DocumentStore, Doc } from "../document-store"
 import type { Ledger, LedgerEntry } from "./ledger"
+import { emptyWorldState, type WorldState, type WorldStateSlot } from "./world-state"
 
 // V3.8 Appendix-A C3 (Stage 3) — the Project Bridge: cross-session handoff (public axiom 2: "换对话
 // → 无损接力"). At session close / explicit carry-over, the session Ledger's ACTIVE
@@ -115,3 +116,62 @@ export const renderHandoff = (bridge: Bridge): string => {
 // Shared gate predicate (C3): the handoff is available at high+ (mode !== "general"), same door as
 // knowledge. The mode string is whatever the caller's AgentMode is.
 export const shouldLoadBridge = (mode: string): boolean => mode !== "general" && mode !== "disabled"
+
+// ---------------------------------------------------------------------------------------------------
+// V4.0.1 P1 (§3.3) — World State persistence, project-scoped. World State reuses the SAME project-level
+// carrying capability the bridge already has (project-scoped durable store), but as STRUCTURED slots
+// (snapshot-diff over the latest value), NOT the forward-looking handoff text. Persisted as its own
+// `context_snapshot` doc (idSlug `world-state-<projectId>`) so it is a NEW document that touches
+// neither the ledger nor the bridge schema (migration is purely additive, §3.5). The doc's version
+// chain is the World State snapshot history.
+//
+// GOAL-WORKER RECALL (P3(d)): `shouldLoadBridge("general")` is false, and the goal-worker's plan bridge
+// defaults to agentMode "general" — so the general knowledge/handoff short-circuit (bridge.ts:117) would
+// starve it. World State does NOT go through that gate: `loadWorldStateForGoalWorker` is a dedicated,
+// gate-free read the goal-loop wiring calls unconditionally (the flag `worldStateReinjection` is the only
+// gate). We deliberately do NOT flip the :117 predicate — that would leak the full knowledge handoff to
+// ALL general subagents; this targeted path reaches only the goal-worker with only its World State.
+// ---------------------------------------------------------------------------------------------------
+
+const WORLD_STATE_SLUG = "world-state"
+const worldStateProjectScope = (projectId: string): string => `durable:project:${projectId}`
+
+// Load the current project World State, or an empty one. Sync; Effect callers wrap with cause recovery.
+// Tolerant: a malformed/absent doc degrades to an empty World State (never throws).
+export const loadWorldState = (store: DocumentStore, projectId: string): WorldState => {
+  const scope = worldStateProjectScope(projectId)
+  for (const ref of store.list({ type: "context_snapshot", scope })) {
+    const doc = store.get(ref.id)
+    if (!doc || doc.extensions?.["snapshot_kind"] !== "world_state") continue
+    try {
+      const data = JSON.parse(doc.body) as { slots?: unknown }
+      const slots = Array.isArray(data.slots) ? (data.slots as WorldStateSlot[]) : []
+      return { projectId, slots }
+    } catch {
+      return emptyWorldState(projectId)
+    }
+  }
+  return emptyWorldState(projectId)
+}
+
+// Persist a World State by upserting the project-scoped `context_snapshot` doc. Idempotent: because the
+// body is the deterministic (KIND_ORDER-sorted) World State JSON and DocumentStore.upsert is a
+// content-addressed no-op when the body is unchanged (INV-4), a tick that changed no slot value bumps
+// NO version — which is exactly what keeps the re-injected tail byte-stable across ticks.
+export const persistWorldState = (store: DocumentStore, ws: WorldState): void => {
+  store.upsert({
+    type: "context_snapshot",
+    scope: worldStateProjectScope(ws.projectId),
+    idSlug: `${WORLD_STATE_SLUG}-${ws.projectId}`,
+    description: `world state ${ws.projectId}`,
+    body: JSON.stringify({ projectId: ws.projectId, slots: ws.slots }),
+    provenance: { source: "runner", run_ref: worldStateProjectScope(ws.projectId) },
+    extensions: { snapshot_kind: "world_state" },
+  })
+}
+
+// P3(d) — the gate-free goal-worker read. Identical to loadWorldState today; kept as a named seam so
+// the "always load World State for the goal-worker, bypassing shouldLoadBridge" intent is explicit at
+// the call site and cannot be accidentally re-gated behind the general short-circuit.
+export const loadWorldStateForGoalWorker = (store: DocumentStore, projectId: string): WorldState =>
+  loadWorldState(store, projectId)

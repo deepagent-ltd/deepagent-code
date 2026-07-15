@@ -103,6 +103,44 @@ export class Service extends ConfigService.Service<Service>()("@deepagent-code/R
   experimentalGoalLoop: stableOn("DEEPAGENT_CODE_EXPERIMENTAL_GOAL_LOOP"),
   experimentalIconDiscovery: enabledByExperimental("DEEPAGENT_CODE_EXPERIMENTAL_ICON_DISCOVERY"),
   outputTokenMax: positiveInteger("DEEPAGENT_CODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX"),
+  // V4.0.1 P0: three-layer SOFT-LANDING compaction (reminder → fallback "death notes" → hard rollover).
+  // Before a hard LLM-summary compaction, the turn loop gives the model a reminder (soft line) and then a
+  // one-shot forced "临终笔记" fallback message (all tools retained) so it can flush un-persisted decisions /
+  // next-step intent into the durable plan doc BEFORE lossy summarization. Pure-additive, strictly safer
+  // default (loses less on compaction), no autonomous side effects → SHIPS ON (mirrors v4Steering posture).
+  // With `=false`, overflowStatus() collapses to the pre-V4.0.1 single-threshold ok/hard behavior (逐字节
+  // equivalent). Also respects DEEPAGENT_CODE_DISABLE_AUTOCOMPACT (no compaction → no soft-landing).
+  softLandingCompaction: stableOn("DEEPAGENT_CODE_SOFT_LANDING_COMPACTION"),
+  // V4.0.1 P2: goal BUDGET soft-notify — when cost/maxCost crosses tiered fractions (default [0.7, 0.9]),
+  // inject a "converge, don't expand" reminder into the next tick's step-prompt TAIL (never the prefix),
+  // mirroring Codex's <rollout_budget>. Pure-additive reminder with NO halting behavior change → SHIPS ON.
+  // With `=false` no budget notice is injected (pre-V4.0.1 behavior).
+  goalBudgetSoftNotify: stableOn("DEEPAGENT_CODE_GOAL_BUDGET_SOFT_NOTIFY"),
+  // V4.0.1 P2: goal NET-token budget accounting. When on, BudgetLedger.tokens accumulates NET generation
+  // (output + max(0, input − carriedPrefixTokens)) instead of gross throughput, so a long task's ledger no
+  // longer inflates linearly from the repeated static prefix each tick. This CHANGES the accumulation
+  // semantics of an already-persisted ledger, so it defaults OFF and only applies to goals CREATED after it
+  // is enabled (each goal stamps a `budgetTokenScope: "gross" | "net"` marker; loadState picks the
+  // accumulation by marker — never mid-flight). NOTE: token overflow no longer halts a goal regardless of
+  // this flag (that halt was removed in P2); this flag only governs the ledger COUNTING convention.
+  // Promoted ON (V4.0.1): net accounting is the CORRECT ledger convention (a long task's ledger no longer
+  // inflates linearly from the repeated static prefix). Safe as a default because it is stamped PER-GOAL at
+  // creation via `budgetTokenScope` — only goals created after this is on accumulate "net"; every
+  // already-persisted ledger keeps its stamped "gross" scope and is never re-interpreted mid-flight. Set
+  // `=false` to force new goals back to the pre-V4.0.1 gross throughput accounting.
+  goalNetTokenBudget: stableOn("DEEPAGENT_CODE_GOAL_NET_TOKEN_BUDGET"),
+  // V4.0.1 P1: World State / summary responsibility separation. When on, the compaction summary is narrowed
+  // to four buckets (progress+decisions / constraints+prefs / next steps / data references) and files /
+  // env / diagnostics are carried by a snapshot-diff World State layer re-injected as a TAIL user block at
+  // tick start + after each hard compaction (never the static prefix). Also opens a "always load World
+  // State" path for the goal-worker (P3(d)), bypassing shouldLoadBridge's general short-circuit. Because it
+  // alters context assembly. Promoted ON (V4.0.1): it is a pure tail-only re-injection (never the static
+  // prefix) and the summary narrowing keeps the LLM summary focused, so it is safe as a default; with
+  // `=false` the summary keeps the legacy "record everything" template and nothing is re-injected (逐字节
+  // equivalent to V4.1). The summary
+  // narrowing and the re-injection MUST be gated by this single flag together (splitting them would create a
+  // "summary drops files, nothing re-injects" information hole).
+  worldStateReinjection: stableOn("DEEPAGENT_CODE_WORLD_STATE_REINJECTION"),
   // T3 (S1-v3.4): how many narrowing attempts a 🟡 stall is given before it escalates to 🔴.
   // Default 1 (one focused retry, then hand off). `positiveInteger` → undefined when unset/invalid,
   // so the loop applies its own default of 1.

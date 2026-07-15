@@ -15,13 +15,19 @@ import {
 import {
   makeGoalLoop,
   readGoalTickCursor,
+  persistPendingPlanEdit,
+  readPendingPlanEdit,
   evaluateForController,
+  budgetNotice,
   InvalidGoalError,
   type ControllerDeps,
   type GraderPorts,
   type StepExecutor,
+  type StepExecutorResult,
   type RollbackPort,
   type GoalSpec,
+  type BudgetLedger,
+  type GoalLimits,
   type CompletionCriterion,
 } from "../../src/deepagent/goal-loop"
 
@@ -354,19 +360,28 @@ describe("V3.9 §D — Controller tick semantics", () => {
     expect(await Effect.runPromise(loop.tick(handle))).toBe("needs_human")
   })
 
-  test("§D.6 有界性 (over-limit): exceeding maxTokens → needs_human", async () => {
+  test("V4.0.1 P2 §4.3: exceeding maxTokens does NOT halt (token is a compaction line, not a stop line)", async () => {
+    // Pre-V4.0.1 this exceeded the token cap and halted at needs_human. Under P2 the token count no longer
+    // drives a stop — context pressure is handled by compaction, halting only by wallclock/cost/stall. The
+    // tick makes forward progress (title touch is enough here since stall is high), so it must CONTINUE.
     const clock = new FakeClock()
     const planDocId = putPlan([step("a", "pending")])
     const executor: StepExecutor = ({ planDocId }) =>
       Effect.sync(() => {
-        updatePlan(planDocId, (p) => ({ ...p, steps: [{ ...p.steps[0], title: `${p.steps[0].title}.` }] }))
+        updatePlan(planDocId, (p) => ({
+          ...p,
+          steps: [{ ...p.steps[0], evidence: [...(p.steps[0].evidence ?? []), "progress"] }],
+        }))
         return { tokensUsed: 100 }
       })
     const loop = makeGoalLoop(deps({ executor }, clock))
     const handle = await Effect.runPromise(
       loop.start(spec(planDocId, { limits: { maxTicks: 99, maxTokens: 50, maxWallclockMs: 100_000 }, stallThreshold: 99 })),
     )
-    expect(await Effect.runPromise(loop.tick(handle))).toBe("needs_human")
+    expect(await Effect.runPromise(loop.tick(handle))).toBe("continue") // token cap no longer halts
+    const status = await Effect.runPromise(loop.status(handle))
+    expect(status.ledger.tokens).toBe(100) // ledger past maxTokens=50, yet running
+    expect(status.phase).toBe("running")
   })
 
   test("§D.6 有界性 (over-limit): exceeding maxWallclockMs → needs_human", async () => {
@@ -929,5 +944,304 @@ describe("V4.1 §S2 — goal plan hot-edit (applyPlanEdit)", () => {
     await Effect.runPromise(loop.applyPlanEdit(handle, edit([{ step_id: "a", title: "a", status: "pending" }])))
 
     expect(store.get(planDocId)!.version).toBe(v0)
+  })
+})
+
+// V4.0.1 P2 — budget semantic refactor: token→compaction line (never a halt), tiered cost soft-notify,
+// net-generation ledger.
+describe("V4.0.1 P2 — budgetNotice (tiered cost soft-notify)", () => {
+  const ledgerAt = (cost: number): BudgetLedger => ({ ticks: 1, tokens: 0, cost, wallclockMs: 0, startedAtMs: 0 })
+  const limitsWith = (over: Partial<GoalLimits> = {}): GoalLimits => ({
+    maxTicks: 100,
+    maxTokens: 100_000,
+    maxWallclockMs: 100_000,
+    maxCost: 10,
+    ...over,
+  })
+
+  test("returns null below the lowest tier (<70%)", () => {
+    expect(budgetNotice(ledgerAt(6), limitsWith())).toBeNull() // 60%
+  })
+
+  test("returns the 70% notice at exactly 70%", () => {
+    const notice = budgetNotice(ledgerAt(7), limitsWith())
+    expect(notice).not.toBeNull()
+    expect(notice).toMatch(/70% used/)
+    expect(notice).toMatch(/CONVERGE/)
+  })
+
+  test("returns the 90% notice at exactly 90% (highest tier crossed wins)", () => {
+    expect(budgetNotice(ledgerAt(9), limitsWith())).toMatch(/90% used/)
+  })
+
+  test("crossing the highest tier still fires (95% → non-null, reports the ACTUAL usage percent)", () => {
+    // The tier gate (descending match) decides WHETHER to notify; the message always shows the actual
+    // usage fraction (95%), matching the design's Math.round(fr*100).
+    const notice = budgetNotice(ledgerAt(9.5), limitsWith())
+    expect(notice).not.toBeNull()
+    expect(notice).toMatch(/95% used/)
+  })
+
+  test("honours custom softNotifyFractions (descending match)", () => {
+    const limits = limitsWith({ softNotifyFractions: [0.5, 0.8] })
+    expect(budgetNotice(ledgerAt(4), limits)).toBeNull() // 40% < 50%
+    expect(budgetNotice(ledgerAt(6), limits)).toMatch(/60% used/) // crosses 50%, reports actual 60%
+    expect(budgetNotice(ledgerAt(8.5), limits)).toMatch(/85% used/) // crosses 80%, reports actual 85%
+  })
+
+  test("no cost ceiling (maxCost absent / 0) ⇒ never notifies (fraction 0)", () => {
+    expect(budgetNotice(ledgerAt(1000), limitsWith({ maxCost: undefined }))).toBeNull()
+    expect(budgetNotice(ledgerAt(1000), limitsWith({ maxCost: 0 }))).toBeNull()
+  })
+})
+
+describe("V4.0.1 P2 — token count is NOT a halting line (§4.3)", () => {
+  test("massive token pressure but wallclock/cost under limit → goal CONTINUES (never needs_human)", async () => {
+    const clock = new FakeClock()
+    const planDocId = putPlan([step("a", "pending")])
+    // Every tick burns tokens WAY past maxTokens, makes forward progress (new evidence), but stays under
+    // wallclock/cost. Pre-V4.0.1 this halted at needs_human on the token cap; now it must keep ticking.
+    const executor: StepExecutor = ({ planDocId }) =>
+      Effect.sync(() => {
+        updatePlan(planDocId, (p) => ({
+          ...p,
+          steps: [{ ...p.steps[0], evidence: [...(p.steps[0].evidence ?? []), `progress ${(p.steps[0].evidence?.length ?? 0) + 1}`] }],
+        }))
+        return { tokensUsed: 1_000_000 } // 1M tokens/tick, maxTokens is 50
+      })
+    const loop = makeGoalLoop(deps({ executor }, clock))
+    const handle = await Effect.runPromise(
+      loop.start(spec(planDocId, { limits: { maxTicks: 99, maxTokens: 50, maxWallclockMs: 100_000 }, stallThreshold: 99 })),
+    )
+    const outcomes: string[] = []
+    for (let i = 0; i < 5; i++) outcomes.push(await Effect.runPromise(loop.tick(handle)))
+    expect(outcomes).toEqual(["continue", "continue", "continue", "continue", "continue"]) // never halts on tokens
+    const status = await Effect.runPromise(loop.status(handle))
+    expect(status.phase).toBe("running")
+    expect(status.ledger.tokens).toBeGreaterThan(50) // ledger well past maxTokens, yet no halt
+  })
+
+  test("maxWallclockMs STILL halts (boundedness invariant intact)", async () => {
+    const clock = new FakeClock()
+    const planDocId = putPlan([step("a", "pending")])
+    const executor: StepExecutor = ({ planDocId }) =>
+      Effect.sync(() => {
+        updatePlan(planDocId, (p) => ({ ...p, steps: [{ ...p.steps[0], title: `${p.steps[0].title}.` }] }))
+        clock.advance(10_000)
+        return { tokensUsed: 1 }
+      })
+    const loop = makeGoalLoop(deps({ executor }, clock))
+    const handle = await Effect.runPromise(
+      loop.start(spec(planDocId, { limits: { maxTicks: 99, maxTokens: 1_000, maxWallclockMs: 5_000 }, stallThreshold: 99 })),
+    )
+    expect(await Effect.runPromise(loop.tick(handle))).toBe("needs_human")
+  })
+
+  test("maxCost STILL halts (boundedness invariant intact)", async () => {
+    const clock = new FakeClock()
+    const planDocId = putPlan([step("a", "pending")])
+    const executor: StepExecutor = ({ planDocId }) =>
+      Effect.sync(() => {
+        updatePlan(planDocId, (p) => ({ ...p, steps: [{ ...p.steps[0], title: `${p.steps[0].title}.` }] }))
+        return { tokensUsed: 1, cost: 100 }
+      })
+    const loop = makeGoalLoop(deps({ executor }, clock))
+    const handle = await Effect.runPromise(
+      loop.start(spec(planDocId, { limits: { maxTicks: 99, maxTokens: 1_000, maxWallclockMs: 100_000, maxCost: 10 }, stallThreshold: 99 })),
+    )
+    // Tick 1 spends cost 100 > maxCost 10 → the post-gate (overLimit) fires this same tick → needs_human.
+    expect(await Effect.runPromise(loop.tick(handle))).toBe("needs_human")
+  })
+
+  test("maxTicks STILL halts (boundedness invariant intact)", async () => {
+    const clock = new FakeClock()
+    const planDocId = putPlan([step("a", "pending")])
+    const executor: StepExecutor = ({ planDocId }) =>
+      Effect.sync(() => {
+        updatePlan(planDocId, (p) => ({ ...p, steps: [{ ...p.steps[0], title: `${p.steps[0].title}.` }] }))
+        return { tokensUsed: 1 }
+      })
+    const loop = makeGoalLoop(deps({ executor }, clock))
+    const handle = await Effect.runPromise(
+      loop.start(spec(planDocId, { limits: { maxTicks: 1, maxTokens: 1_000, maxWallclockMs: 100_000 }, stallThreshold: 99 })),
+    )
+    expect(await Effect.runPromise(loop.tick(handle))).toBe("continue")
+    expect(await Effect.runPromise(loop.tick(handle))).toBe("needs_human") // maxTicks ceiling
+  })
+
+  test("stall STILL halts (无进展即停 intact)", async () => {
+    const clock = new FakeClock()
+    const planDocId = putPlan([step("a", "pending")])
+    const executor: StepExecutor = ({ planDocId }) =>
+      Effect.sync(() => {
+        updatePlan(planDocId, (p) => ({ ...p, goal: `${p.goal}.` })) // version bump, no progress
+        return { tokensUsed: 1 }
+      })
+    const loop = makeGoalLoop(deps({ executor }, clock))
+    const handle = await Effect.runPromise(loop.start(spec(planDocId, { stallThreshold: 2 })))
+    expect(await Effect.runPromise(loop.tick(handle))).toBe("continue")
+    expect(await Effect.runPromise(loop.tick(handle))).toBe("needs_human")
+  })
+
+  test("validateSpec STILL rejects a non-positive maxTokens (bounded field, just not a halt line)", async () => {
+    const clock = new FakeClock()
+    const planDocId = putPlan([step("a", "pending")])
+    const loop = makeGoalLoop(deps({}, clock))
+    const err = await Effect.runPromise(
+      loop.start(spec(planDocId, { limits: { maxTicks: 1, maxTokens: 0, maxWallclockMs: 1 } })).pipe(Effect.flip),
+    )
+    expect(err).toBeInstanceOf(InvalidGoalError)
+    expect(err.reason).toMatch(/maxTokens/)
+  })
+})
+
+describe("V4.0.1 P2 — net-generation token accounting (§4.4/§4.5, budgetTokenScope marker)", () => {
+  // An executor that reports the granular breakdown of a tick whose FULL input re-pays a big fixed prefix
+  // every tick (the gross-inflation scenario). input=1000 (prefix 900 + 100 new), output=50.
+  const granularExecutor: StepExecutor = ({ planDocId }) =>
+    Effect.sync(() => {
+      updatePlan(planDocId, (p) => ({
+        ...p,
+        steps: [{ ...p.steps[0], evidence: [...(p.steps[0].evidence ?? []), `e${(p.steps[0].evidence?.length ?? 0) + 1}`] }],
+      }))
+      return {
+        tokensUsed: 1_050, // gross: input+output = 1000 + 50
+        inputTokens: 1_000,
+        outputTokens: 50,
+        carriedPrefixTokens: 900,
+      } satisfies StepExecutorResult
+    })
+
+  test("GROSS scope (flag OFF): ledger sums full throughput incl. the repeated prefix (legacy path)", async () => {
+    const clock = new FakeClock()
+    const planDocId = putPlan([step("a", "active")])
+    // netTokenBudget omitted (OFF) → scope "gross".
+    const loop = makeGoalLoop(deps({ executor: granularExecutor }, clock))
+    const handle = await Effect.runPromise(loop.start(spec(planDocId, { stallThreshold: 99 })))
+    for (let i = 0; i < 3; i++) await Effect.runPromise(loop.tick(handle))
+    const status = await Effect.runPromise(loop.status(handle))
+    // gross = 3 ticks × 1050 = 3150 (the prefix is re-counted every tick).
+    expect(status.ledger.tokens).toBe(3_150)
+  })
+
+  test("NET scope (flag ON): ledger does NOT inflate from the repeated prefix", async () => {
+    const clock = new FakeClock()
+    const planDocId = putPlan([step("a", "active")])
+    const loop = makeGoalLoop(deps({ executor: granularExecutor, netTokenBudget: true }, clock))
+    const handle = await Effect.runPromise(loop.start(spec(planDocId, { stallThreshold: 99 })))
+    for (let i = 0; i < 3; i++) await Effect.runPromise(loop.tick(handle))
+    const status = await Effect.runPromise(loop.status(handle))
+    // net per tick = output 50 + max(0, input 1000 − carried 900) = 50 + 100 = 150. 3 ticks → 450.
+    // This is far below the gross 3150 — the ledger no longer inflates linearly from the prefix.
+    expect(status.ledger.tokens).toBe(450)
+  })
+
+  test("NET scope falls back to gross tokensUsed when granular fields are absent (monotonic)", async () => {
+    const clock = new FakeClock()
+    const planDocId = putPlan([step("a", "active")])
+    // Executor reports only gross tokensUsed (no breakdown) even though scope is "net".
+    const executor: StepExecutor = ({ planDocId }) =>
+      Effect.sync(() => {
+        updatePlan(planDocId, (p) => ({
+          ...p,
+          steps: [{ ...p.steps[0], evidence: [...(p.steps[0].evidence ?? []), `e${(p.steps[0].evidence?.length ?? 0) + 1}`] }],
+        }))
+        return { tokensUsed: 200 }
+      })
+    const loop = makeGoalLoop(deps({ executor, netTokenBudget: true }, clock))
+    const handle = await Effect.runPromise(loop.start(spec(planDocId, { stallThreshold: 99 })))
+    for (let i = 0; i < 2; i++) await Effect.runPromise(loop.tick(handle))
+    const status = await Effect.runPromise(loop.status(handle))
+    expect(status.ledger.tokens).toBe(400) // 2 × 200, no breakdown → gross fallback
+  })
+
+  test("the scope marker survives persist/load — a NET goal recovers as NET after restart", async () => {
+    const clock = new FakeClock()
+    const planDocId = putPlan([step("a", "active")])
+    const loop1 = makeGoalLoop(deps({ executor: granularExecutor, netTokenBudget: true }, clock))
+    const handle = await Effect.runPromise(loop1.start(spec(planDocId, { stallThreshold: 99 })))
+    await Effect.runPromise(loop1.tick(handle))
+    const before = await Effect.runPromise(loop1.status(handle))
+    expect(before.ledger.tokens).toBe(150) // net
+
+    // Rebuild the store from disk + a fresh Controller. CRUCIALLY, the new Controller has netTokenBudget
+    // UNSET (flag "off") — the persisted budgetTokenScope marker must still drive NET accumulation, proving
+    // tick() obeys the marker, not the live flag.
+    const store2 = new DocumentStore(root)
+    store = store2
+    const loop2 = makeGoalLoop(deps({ executor: granularExecutor, store: store2 }, clock))
+    const recovered = await Effect.runPromise(loop2.status(handle))
+    expect(recovered.ledger.tokens).toBe(150) // recovered net ledger, not reset
+    await Effect.runPromise(loop2.tick(handle))
+    const after = await Effect.runPromise(loop2.status(handle))
+    expect(after.ledger.tokens).toBe(300) // continues NET (150+150), NOT gross — marker survived
+  })
+
+  test("a GROSS goal stays GROSS even if the flag is later turned on (no mid-flight re-interpretation)", async () => {
+    const clock = new FakeClock()
+    const planDocId = putPlan([step("a", "active")])
+    // Start with the flag OFF (gross).
+    const loop1 = makeGoalLoop(deps({ executor: granularExecutor }, clock))
+    const handle = await Effect.runPromise(loop1.start(spec(planDocId, { stallThreshold: 99 })))
+    await Effect.runPromise(loop1.tick(handle))
+    // A new Controller with the flag now ON — but the goal was stamped "gross" at creation.
+    const loop2 = makeGoalLoop(deps({ executor: granularExecutor, netTokenBudget: true }, clock))
+    await Effect.runPromise(loop2.tick(handle))
+    const status = await Effect.runPromise(loop2.status(handle))
+    expect(status.ledger.tokens).toBe(2_100) // 2 × 1050 gross — stays gross despite the flag flip
+  })
+})
+
+// V4.0.1 P3(a) — tick idempotency / crash recovery. The infrastructure already exists (durable command
+// cursor + plan-version dedup on the event path; shared run_context doc for both drivers); these tests
+// pin the DURABILITY guarantees that the exactly-once story rests on. `persistPendingPlanEdit` /
+// `readPendingPlanEdit` are pure functions over a DocumentStore, so "cold recovery" is modeled by opening
+// a FRESH DocumentStore handle over the same on-disk root — the exact "second process" reconstruction the
+// event-driven cold-recovery test uses (goal-tick-cold-recovery.test.ts).
+describe("V4.0.1 P3(a) — pendingPlanEdit durability + cold recovery", () => {
+  const GOAL = "g-pending-1"
+  const editInput: PlanInput = { goal: "reach the goal", steps: [{ title: "revised", status: "pending" }] }
+
+  test("a persisted pending edit survives a process restart (fresh store over the same root)", () => {
+    persistPendingPlanEdit(store, SESSION, GOAL, editInput)
+
+    // Simulate a process restart: NOTHING in memory, only the run_context doc on disk. A brand-new store
+    // handle over the same root must reconstruct the pending edit byte-for-byte.
+    const recovered = readPendingPlanEdit(new DocumentStore(root), SESSION, GOAL)
+    expect(recovered).toEqual(editInput)
+  })
+
+  test("consume-once: writing the null sentinel clears the edit, and a re-read after restart stays cleared", () => {
+    persistPendingPlanEdit(store, SESSION, GOAL, editInput)
+    expect(readPendingPlanEdit(store, SESSION, GOAL)).toEqual(editInput)
+
+    // markPlanEditConsumed persists the empty-body sentinel (plan == null). Once consumed it must never
+    // re-materialize — not on this handle, and not after a cold restart.
+    persistPendingPlanEdit(store, SESSION, GOAL, null)
+    expect(readPendingPlanEdit(store, SESSION, GOAL)).toBeNull()
+    expect(readPendingPlanEdit(new DocumentStore(root), SESSION, GOAL)).toBeNull()
+  })
+
+  test("a pending edit is keyed per goal — reading a different goalId never returns another goal's edit", () => {
+    persistPendingPlanEdit(store, SESSION, GOAL, editInput)
+    // pending_edit_goal_id scopes the doc: a sibling goal in the same session sees nothing.
+    expect(readPendingPlanEdit(new DocumentStore(root), SESSION, "g-other")).toBeNull()
+    expect(readPendingPlanEdit(new DocumentStore(root), SESSION, GOAL)).toEqual(editInput)
+  })
+
+  test("the latest write wins across a restart (a newer edit persisted after read is preserved)", () => {
+    persistPendingPlanEdit(store, SESSION, GOAL, editInput)
+    const newer: PlanInput = { goal: "reach the goal", steps: [{ title: "newer step", status: "active" }] }
+    // A second edit lands (e.g. the user revised again before the first was consumed) — the durable doc
+    // reflects the newest content, and a cold reader sees it.
+    persistPendingPlanEdit(store, SESSION, GOAL, newer)
+    expect(readPendingPlanEdit(new DocumentStore(root), SESSION, GOAL)).toEqual(newer)
+  })
+
+  test("the pending-edit doc is invisible to the goal-tick cursor (kept off loadState's run_context match)", () => {
+    // The pending-edit doc uses `pending_edit_goal_id`, NOT `goal_id`, so it must never be mistaken for the
+    // goal's run-state doc — otherwise readGoalTickCursor could parse the edit body as GoalRuntimeState.
+    persistPendingPlanEdit(store, SESSION, GOAL, editInput)
+    expect(readGoalTickCursor(new DocumentStore(root), SESSION, GOAL)).toBeNull()
   })
 })

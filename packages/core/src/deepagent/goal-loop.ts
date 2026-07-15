@@ -59,11 +59,29 @@ export type CompletionCriterion = Schema.Schema.Type<typeof CompletionCriterion>
 
 export const GoalLimits = Schema.Struct({
   maxTicks: Schema.Int,
+  // V4.0.1 P2 §4.3: maxTokens is NO LONGER a HALTING line. It is a required, bounded field (statistic /
+  // net-generation soft ceiling) but the gates below never route to needs_human on it — context pressure
+  // is handled by compaction (Wave 1), and halting authority lives ONLY on real external resources
+  // (maxWallclockMs / maxCost) + stall. validateSpec still requires it positive (boundedness invariant).
   maxTokens: Schema.Int,
   maxWallclockMs: Schema.Int,
   maxCost: Schema.optional(Schema.Number),
+  // V4.0.1 P2 §4.4: tiered COST soft-notify fractions (0..1, matched descending). When ledger.cost/maxCost
+  // crosses the highest tier, a "converge, don't expand" reminder is threaded into the NEXT tick's step
+  // prompt tail (never the prefix) — a Codex-style <rollout_budget> nudge, NOT a stop line. Absent ⇒ the
+  // default [0.7, 0.9]. Only meaningful when maxCost > 0 (else the fraction is 0 and no tier is hit).
+  softNotifyFractions: Schema.optional(Schema.Array(Schema.Number)),
 }).annotate({ identifier: "GoalLimits" })
 export type GoalLimits = Schema.Schema.Type<typeof GoalLimits>
+
+// V4.0.1 P2 §4.3 — the per-goal token ACCOUNTING convention, stamped at goal creation and persisted so a
+// restart never re-interprets an in-flight ledger. "gross" = the pre-V4.0.1 cumulative throughput (every
+// tick's full input, incl. the repeated static prefix, is summed). "net" = cumulative NET generation
+// (output+reasoning + the per-tick input DELTA over the carried prefix) so a long task's ledger does not
+// inflate linearly from the prefix. The marker (not the live flag) selects the accumulation in tick(), so
+// a goal created under "gross" stays gross even if the flag is later turned on (and vice versa).
+export const BudgetTokenScope = Schema.Literals(["gross", "net"])
+export type BudgetTokenScope = Schema.Schema.Type<typeof BudgetTokenScope>
 
 export const GoalSpec = Schema.Struct({
   planDocId: Schema.String, // 复用 plan DocType 作为 Goal 载体
@@ -303,7 +321,26 @@ export const evaluateForController = (
 
 /** Result of executing the active step. Feeds the Budget Ledger; `critical` triggers rollback. */
 export type StepExecutorResult = {
+  /**
+   * GROSS throughput for the tick (input+output+reasoning). This is the pre-V4.0.1 accounting and the
+   * ONLY field consulted when the goal's budgetTokenScope is "gross" (byte-for-byte the legacy path).
+   */
   readonly tokensUsed: number
+  /**
+   * V4.0.1 P2 §4.4 — the granular token breakdown used ONLY when budgetTokenScope is "net". The net
+   * ledger accrues `outputTokens + max(0, inputTokens − carriedPrefixTokens)`, so a long task's ledger
+   * no longer inflates linearly from the repeated static prefix each tick. All three are optional: when
+   * the scope is "net" but the executor did not surface them, the net path falls back to `tokensUsed`
+   * (still correct + monotonic, just without the prefix subtraction). See the wiring for the exact figures.
+   *   - inputTokens        : the tick's FULL input the model billed (prefix + new context), pre cache-adjust.
+   *   - outputTokens       : generated tokens (output + reasoning) — always net, never a repeated prefix.
+   *   - carriedPrefixTokens: the best cheaply-available STABLE-PREFIX figure for the tick (the repeated
+   *                          system/tools/plan-seed prefix). Production uses the provider-reported cached
+   *                          prefix (cache.read+cache.write); absent ⇒ 0 (⇒ full input delta counted).
+   */
+  readonly inputTokens?: number
+  readonly outputTokens?: number
+  readonly carriedPrefixTokens?: number
   readonly cost?: number
   /** A critical / unrecoverable failure — the tick rolls back rather than continuing. */
   readonly critical?: boolean
@@ -326,6 +363,14 @@ export type StepExecutor = (input: {
   readonly sessionId: string
   readonly planDocId: string
   readonly activeStepId: string | null
+  /**
+   * V4.0.1 P2 §4.4 — the goal's budget so far (accumulated through PRIOR ticks; this tick's spend is not
+   * yet folded in) + the goal's limits, so the wiring can thread a tiered cost soft-notice into this
+   * tick's step-prompt TAIL (`budgetNotice`, gated by `goalBudgetSoftNotify`). The core loop supplies
+   * these; a stub executor may ignore them.
+   */
+  readonly ledger: BudgetLedger
+  readonly limits: GoalLimits
 }) => Effect.Effect<StepExecutorResult>
 
 /**
@@ -352,6 +397,13 @@ export type ControllerDeps = {
   readonly executor: StepExecutor
   readonly rollback: RollbackPort
   readonly now: () => number
+  /**
+   * V4.0.1 P2 §4.5 — the `goalNetTokenBudget` flag (default OFF). Consulted ONCE, at goal creation, to
+   * STAMP the goal's `budgetTokenScope` marker ("net" when on, "gross" otherwise). tick() then reads the
+   * persisted marker — never this flag — so flipping the flag mid-flight never re-interprets an existing
+   * ledger. Absent ⇒ treated as OFF (gross), i.e. byte-for-byte the pre-V4.0.1 accumulation.
+   */
+  readonly netTokenBudget?: boolean
 }
 
 // The full persisted runtime state. Serialized to the run_context state doc body as JSON.
@@ -370,6 +422,11 @@ type GoalRuntimeState = {
   readonly lastProcessedVersion: number | null
   readonly lastOutcome: TickOutcome | null
   readonly gaps: readonly string[]
+  // V4.0.1 P2 §4.5 — the token ACCOUNTING convention stamped at goal creation. Persisted so a restart (or
+  // a mid-flight flag flip) never re-interprets an existing ledger: tick() picks the accumulation by THIS
+  // marker, not the live flag. A state written before this field existed reads as undefined and is
+  // backfilled to "gross" in loadState (byte-for-byte the pre-V4.0.1 cumulative-throughput path).
+  readonly budgetTokenScope: BudgetTokenScope
 }
 
 const stateSlug = (goalId: string): string => `goal-state-${goalId}`
@@ -438,7 +495,13 @@ const loadState = (deps: ControllerDeps, handle: GoalHandle): GoalRuntimeState |
       // a state written before lastEvidenceCount existed reads as undefined; default it to 0 so the
       // first post-upgrade tick treats any existing evidence as the baseline (never a spurious stall
       // reset, never a crash on the arithmetic comparison).
-      return { ...parsed, lastEvidenceCount: parsed.lastEvidenceCount ?? 0 }
+      // Also backfill budgetTokenScope (P2 §4.5): a ledger persisted before the field existed was
+      // accumulated under the gross convention, so default to "gross" — never re-interpret it as net.
+      return {
+        ...parsed,
+        lastEvidenceCount: parsed.lastEvidenceCount ?? 0,
+        budgetTokenScope: parsed.budgetTokenScope ?? "gross",
+      }
     } catch {
       return null
     }
@@ -585,9 +648,40 @@ const writeCompletionReport = (deps: ControllerDeps, state: GoalRuntimeState, pl
   })
 }
 
+// V4.0.1 P2 §4.4 — the DEFAULT tiered cost soft-notify fractions (ascending). Applied when a goal's
+// limits omit `softNotifyFractions`.
+export const DEFAULT_SOFT_NOTIFY_FRACTIONS: readonly number[] = [0.7, 0.9]
+
+/**
+ * V4.0.1 P2 §4.4 — the tiered COST soft-notify (a bypass of the halting gates: it NEVER stops the goal,
+ * it only produces a reminder string). Computes `fraction = cost/maxCost` (0 when maxCost is absent or
+ * non-positive), then returns the converge-reminder for the HIGHEST tier already crossed, else null. The
+ * caller (wiring `renderStepPrompt`) appends the result to the NEXT tick's step-prompt tail. Gated by the
+ * `goalBudgetSoftNotify` flag at the call site — this pure function itself is always available.
+ *
+ * Fractions are matched DESCENDING so that when several tiers are crossed the message reflects the
+ * highest one (e.g. at 95% with [0.7, 0.9] it reports 90%, not 70%). Non-finite / non-positive maxCost ⇒
+ * fraction 0 ⇒ null (a goal with no cost ceiling never soft-notifies on cost).
+ */
+export const budgetNotice = (ledger: BudgetLedger, limits: GoalLimits): string | null => {
+  const maxCost = limits.maxCost
+  const fraction = maxCost != null && Number.isFinite(maxCost) && maxCost > 0 ? ledger.cost / maxCost : 0
+  const tiers = [...(limits.softNotifyFractions ?? DEFAULT_SOFT_NOTIFY_FRACTIONS)].sort((a, b) => b - a)
+  for (const tier of tiers) {
+    if (fraction >= tier)
+      return `Budget ${Math.round(fraction * 100)}% used: prioritise completing the core steps and CONVERGE — do not expand scope.`
+  }
+  return null
+}
+
+// V4.0.1 P2 §4.3 — token count is NO LONGER a halting line. `overLimit` / `atOrOverLimit` keep the SAME
+// dual-gate structure and the SAME real-resource caps (ticks / wallclock / cost) that carry the
+// boundedness invariant, but they DELIBERATELY no longer compare ledger.tokens against maxTokens: context
+// pressure is absorbed by compaction (Wave 1), so a long unmonitored task never halts on an internal token
+// tally at 3am. maxTokens remains a bounded, required field (a net-generation statistic), just not a stop
+// line. Halting authority = maxTicks + maxWallclockMs + maxCost + stall.
 const overLimit = (ledger: BudgetLedger, limits: GoalLimits): string | null => {
   if (ledger.ticks > limits.maxTicks) return `maxTicks (${limits.maxTicks}) exceeded`
-  if (ledger.tokens > limits.maxTokens) return `maxTokens (${limits.maxTokens}) exceeded`
   if (ledger.wallclockMs > limits.maxWallclockMs) return `maxWallclockMs (${limits.maxWallclockMs}) exceeded`
   if (limits.maxCost != null && ledger.cost > limits.maxCost) return `maxCost (${limits.maxCost}) exceeded`
   return null
@@ -599,7 +693,7 @@ const overLimit = (ledger: BudgetLedger, limits: GoalLimits): string | null => {
 // TRUE ceiling: it runs BEFORE the executor, so no unbounded turn is spent past the declared maximum.
 const atOrOverLimit = (ledger: BudgetLedger, limits: GoalLimits): string | null => {
   if (ledger.ticks >= limits.maxTicks) return `maxTicks (${limits.maxTicks}) reached`
-  if (ledger.tokens >= limits.maxTokens) return `maxTokens (${limits.maxTokens}) reached`
+  // P2 §4.3: NO maxTokens pre-gate — token pressure is a compaction signal, never a halt (see overLimit).
   if (ledger.wallclockMs >= limits.maxWallclockMs) return `maxWallclockMs (${limits.maxWallclockMs}) reached`
   if (limits.maxCost != null && ledger.cost >= limits.maxCost) return `maxCost (${limits.maxCost}) reached`
   return null
@@ -707,6 +801,9 @@ export const makeGoalLoop = (deps: ControllerDeps): GoalLoop => {
         lastProcessedVersion: null,
         lastOutcome: null,
         gaps: [],
+        // P2 §4.5: stamp the accounting convention ONCE, from the flag, at creation. tick() reads this
+        // marker (never the live flag) so a later flag flip never re-interprets this goal's ledger.
+        budgetTokenScope: deps.netTokenBudget === true ? "net" : "gross",
       }
       persistState(deps, state)
       return { goalId, planDocId: spec.planDocId, sessionId }
@@ -783,6 +880,10 @@ export const makeGoalLoop = (deps: ControllerDeps): GoalLoop => {
           sessionId: state.sessionId,
           planDocId: state.planDocId,
           activeStepId: plan?.active_step_id ?? null,
+          // P2 §4.4: the budget-so-far (prior ticks) + limits, so the wiring can thread a tiered cost
+          // soft-notice into THIS tick's step-prompt tail (budgetNotice). Read-only for the executor.
+          ledger: state.ledger,
+          limits: state.spec.limits,
         })
         .pipe(Effect.catchCause(() => Effect.succeed({ tokensUsed: 0, critical: true } as StepExecutorResult)))
 
@@ -795,9 +896,28 @@ export const makeGoalLoop = (deps: ControllerDeps): GoalLoop => {
 
       // Budget Ledger accumulation (injected clock for wallclock → deterministic + restart-exact).
       // Guard BOTH tokens and cost against a non-finite port result: `Math.max(0, Math.trunc(NaN))`
-      // is NaN, which would poison the ledger permanently and silently disable the token cap forever
-      // (`NaN > maxTokens` is always false). Coerce a non-finite / negative token count to 0.
-      const addTokens = Number.isFinite(execResult.tokensUsed) ? Math.max(0, Math.trunc(execResult.tokensUsed)) : 0
+      // is NaN, which would poison the ledger permanently. Coerce a non-finite / negative count to 0.
+      const trunc = (n: number | undefined): number => (Number.isFinite(n) ? Math.max(0, Math.trunc(n as number)) : 0)
+      // P2 §4.3/§4.5: the accumulation convention is chosen by the PERSISTED scope marker (never the live
+      // flag), so a restart / mid-flight flag flip is consistent.
+      //   gross → the pre-V4.0.1 cumulative throughput (input+output+reasoning), byte-for-byte unchanged.
+      //   net   → output(+reasoning) + max(0, input − carriedPrefixTokens): the per-tick input DELTA over
+      //           the repeated stable prefix, so the ledger no longer inflates linearly from the prefix.
+      //           carriedPrefixTokens is the best cheaply-available stable-prefix figure (production: the
+      //           provider-reported cached prefix); when the executor did not surface the granular
+      //           breakdown the net path falls back to `tokensUsed` — still correct + monotonic, just
+      //           without the subtraction. This is an APPROXIMATION: it counts the full input delta above
+      //           the carried prefix (it does not attempt to distinguish new-context input from any
+      //           uncached prefix churn), which is the intended net-generation soft ceiling.
+      let addTokens: number
+      if (state.budgetTokenScope === "net" && (execResult.outputTokens != null || execResult.inputTokens != null)) {
+        const out = trunc(execResult.outputTokens)
+        const inp = trunc(execResult.inputTokens)
+        const carried = trunc(execResult.carriedPrefixTokens)
+        addTokens = out + Math.max(0, inp - carried)
+      } else {
+        addTokens = trunc(execResult.tokensUsed)
+      }
       // Symmetric with tokens: a negative cost from a misbehaving port would DECREMENT the ledger (and
       // could indefinitely defer the maxCost cap), so clamp to 0 just like the token count.
       const addCost = Number.isFinite(execResult.cost) ? Math.max(0, execResult.cost as number) : 0
