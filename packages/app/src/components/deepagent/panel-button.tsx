@@ -1,23 +1,24 @@
-import { Show, createSignal, createResource } from "solid-js"
+import { createSignal, createResource } from "solid-js"
 import { Button } from "@deepagent-code/ui/button"
 import { Icon } from "@deepagent-code/ui/icon"
-import { Tooltip } from "@deepagent-code/ui/tooltip"
+import { MenuV2 } from "@deepagent-code/ui/v2/menu-v2"
 import { useDialog } from "@deepagent-code/ui/context/dialog"
 import { useSDK } from "@/context/sdk"
 import { useLanguage } from "@/context/language"
-import { armPanel, consultPanel, fetchPanelStatus, type PanelGoalClient } from "./panel-goal.api"
+import { armPanel, consultPanel, fetchPanelStatus, type PanelGoalClient, type PanelRounds } from "./panel-goal.api"
 import { PanelVerdictDialog } from "./panel-verdict-dialog"
 
 /**
- * V3.9 §C — the Expert Panel toggle button for the composer toolbar.
+ * V4.0 §C — the Expert Panel control for the composer toolbar, as a THREE-STATE menu.
  *
- * Activation semantics (per the product spec):
- *   - Armed state is per-conversation, seeded from the global `expertPanelDefault` setting.
- *   - OFF → ON (user arms mid-conversation): immediately convene a panel on the CURRENT context and
- *     show the verdict, then go quiet ("等待唤醒") — no per-turn re-runs.
- *   - While ON, pressing again re-convenes on demand.
- *   - ON → OFF: disarm (no consult).
- * The button reflects armed state; a spinner-ish disabled state covers the in-flight consult.
+ * Clicking the button opens a menu with three mutually-exclusive choices (replaces the old
+ * Shift/Alt-click "deep convene" gesture with an explicit, discoverable control):
+ *   - Off            → disarm; icon NOT lit (ghost). No convene.
+ *   - Single-round   → arm + convene ONE round now; icon lit (primary).
+ *   - Multi-round    → arm + convene up to 3 anonymized debate rounds now (§C.4); icon lit (primary).
+ * Both Single and Multi light the icon (armed); only Off is unlit. The chosen depth PERSISTS per
+ * session (server-side), so re-convening later reuses it. Arm state seeds from the server's effective
+ * status (explicit toggle, else global `expertPanelDefault`).
  */
 export function PanelButton(props: { sessionID: string }) {
   const sdk = useSDK()
@@ -25,87 +26,92 @@ export function PanelButton(props: { sessionID: string }) {
   const language = useLanguage()
   const [busy, setBusy] = createSignal(false)
   const [armedOverride, setArmedOverride] = createSignal<boolean | undefined>(undefined)
+  const [roundsOverride, setRoundsOverride] = createSignal<PanelRounds | undefined>(undefined)
 
   const client = () => sdk.client as unknown as PanelGoalClient
 
-  // Seed the armed state from the SERVER's effective status (explicit toggle, else global default),
-  // so the button reflects the server-configured default rather than a client-side guess. A local
-  // override wins once the user toggles this session.
   const [status] = createResource(
     () => props.sessionID || undefined,
     (sessionID) => fetchPanelStatus(client(), sessionID),
   )
   const armed = () => armedOverride() ?? status()?.armed ?? false
+  const rounds = (): PanelRounds => roundsOverride() ?? status()?.rounds ?? "single"
 
-  const consultNow = async () => {
-    const verdict = await consultPanel(client(), { sessionID: props.sessionID })
+  // The server clamps the ceiling; multi requests 3 debate rounds, single requests 1.
+  const DEEP_PANEL_ROUNDS = 3
+  const consultNow = async (depth: PanelRounds) => {
+    const verdict = await consultPanel(client(), {
+      sessionID: props.sessionID,
+      ...(depth === "multi" ? { maxRounds: DEEP_PANEL_ROUNDS } : {}),
+    })
     if (verdict) dialog.show(() => <PanelVerdictDialog verdict={verdict} />)
   }
 
-  const onClick = async () => {
+  // Off: disarm, no consult. Single/Multi: arm + persist the depth + convene once at that depth.
+  const choose = async (choice: "off" | PanelRounds) => {
     if (busy() || !props.sessionID) return
     setBusy(true)
     try {
-      if (!armed()) {
-        // OFF → ON: arm, then convene once on the current context.
-        await armPanel(client(), props.sessionID, true)
-        setArmedOverride(true)
-        await consultNow()
-      } else {
-        // Already armed: a press re-convenes on demand (stays armed).
-        await consultNow()
+      if (choice === "off") {
+        await armPanel(client(), props.sessionID, false)
+        setArmedOverride(false)
+        return
       }
+      await armPanel(client(), props.sessionID, true, choice)
+      setArmedOverride(true)
+      setRoundsOverride(choice)
+      await consultNow(choice)
     } finally {
       setBusy(false)
     }
   }
 
-  const onDisarm = async (e: MouseEvent) => {
-    e.stopPropagation()
-    if (busy() || !props.sessionID) return
-    setBusy(true)
-    try {
-      await armPanel(client(), props.sessionID, false)
-      setArmedOverride(false)
-    } finally {
-      setBusy(false)
-    }
-  }
+  const activeKey = (): "off" | PanelRounds => (!armed() ? "off" : rounds())
 
   return (
-    <Tooltip
-      placement="top"
-      gutter={4}
-      value={armed() ? language.t("composer.panel.armed") : language.t("composer.panel.convene")}
-    >
-      <div class="flex items-center" data-component="prompt-panel-control">
-        <Button
-          data-action="prompt-panel"
-          type="button"
-          variant={armed() ? "primary" : "ghost"}
-          size="normal"
-          class="h-7 px-2 gap-1.5 text-13-regular"
-          disabled={busy() || !props.sessionID}
-          onClick={onClick}
-          aria-pressed={armed()}
-          aria-label={language.t("composer.panel.label")}
-        >
-          <Icon name="speech-bubble" class="size-4" />
-          <span>{language.t("composer.panel.label")}</span>
-        </Button>
-        <Show when={armed()}>
-          <Button
-            variant="ghost"
-            size="small"
-            class="size-6 p-0"
-            disabled={busy()}
-            onClick={onDisarm}
-            aria-label={language.t("composer.panel.disarm")}
-          >
-            <Icon name="close-small" class="size-3.5" />
-          </Button>
-        </Show>
-      </div>
-    </Tooltip>
+    <MenuV2 gutter={4} modal={false} placement="top-start">
+      <MenuV2.Trigger
+        as={Button}
+        data-action="prompt-panel"
+        type="button"
+        variant={armed() ? "primary" : "ghost"}
+        size="normal"
+        class="h-7 px-2 gap-1.5 text-13-regular"
+        disabled={busy() || !props.sessionID}
+        aria-pressed={armed()}
+        aria-label={language.t("composer.panel.label")}
+      >
+        <Icon name="experts" class="size-4" />
+        <span>{language.t("composer.panel.label")}</span>
+      </MenuV2.Trigger>
+      <MenuV2.Portal>
+        <MenuV2.Content data-component="prompt-panel-menu">
+          <MenuV2.Group>
+            <MenuV2.GroupLabel>{language.t("composer.panel.label")}</MenuV2.GroupLabel>
+            <MenuV2.Item
+              data-action="prompt-panel-off"
+              onSelect={() => void choose("off")}
+              badge={activeKey() === "off" ? <Icon name="check" class="size-3.5" /> : undefined}
+            >
+              {language.t("composer.panel.off")}
+            </MenuV2.Item>
+            <MenuV2.Item
+              data-action="prompt-panel-single"
+              onSelect={() => void choose("single")}
+              badge={activeKey() === "single" ? <Icon name="check" class="size-3.5" /> : undefined}
+            >
+              {language.t("composer.panel.single")}
+            </MenuV2.Item>
+            <MenuV2.Item
+              data-action="prompt-panel-multi"
+              onSelect={() => void choose("multi")}
+              badge={activeKey() === "multi" ? <Icon name="check" class="size-3.5" /> : undefined}
+            >
+              {language.t("composer.panel.multi")}
+            </MenuV2.Item>
+          </MenuV2.Group>
+        </MenuV2.Content>
+      </MenuV2.Portal>
+    </MenuV2>
   )
 }

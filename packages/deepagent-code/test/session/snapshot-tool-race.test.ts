@@ -55,6 +55,7 @@ import { SessionCompaction } from "../../src/session/compaction"
 import { Instruction } from "../../src/session/instruction"
 import { SessionProcessor } from "../../src/session/processor"
 import { SessionRunState } from "../../src/session/run-state"
+import { SessionSteer } from "../../src/session/steer"
 import { SessionStatus } from "../../src/session/status"
 import { Snapshot } from "../../src/snapshot"
 import { ToolRegistry } from "@/tool/registry"
@@ -229,6 +230,7 @@ function makeHttp() {
       Layer.provide(Image.defaultLayer),
       Layer.provide(Reference.defaultLayer),
       Layer.provide(SessionSummary.defaultLayer),
+      Layer.provideMerge(SessionSteer.layer.pipe(Layer.provideMerge(deps))),
       Layer.provideMerge(run),
       Layer.provideMerge(compact),
       Layer.provideMerge(proc),

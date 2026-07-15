@@ -34,8 +34,16 @@ const DEFAULT_FILE_TREE_WIDTH = 200
 // visually consistent across screen sizes / zoom levels. px is derived live from the current
 // window width and clamped to [MIN_RIGHT_PANEL_PX, window * MAX_RIGHT_PANEL_RATIO].
 const DEFAULT_RIGHT_PANEL_RATIO = 0.26
+// T3.3 — the right panel remembers TWO widths, one per "bucket": WIDE panels (diff/files) want
+// horizontal room; NARROW panels (subagent/im/oversight lists, browser, terminal-ish) read fine in a
+// slimmer column. Each bucket keeps its own ratio so switching between a diff and a list does not drag
+// one to the other's width. A slightly slimmer default for the narrow bucket.
+const DEFAULT_RIGHT_PANEL_NARROW_RATIO = 0.2
 const MIN_RIGHT_PANEL_PX = 300
 const MAX_RIGHT_PANEL_RATIO = 0.6
+// T3.2 — the always-on vertical icon rail is a fixed, non-resizable strip beside the content area.
+export const RIGHT_PANEL_RAIL_PX = 44
+export type RightPanelWidthBucket = "wide" | "narrow"
 const FALLBACK_WINDOW_WIDTH = 1280
 const DEFAULT_SESSION_WIDTH = 600
 const DEFAULT_TERMINAL_HEIGHT = 280
@@ -74,18 +82,19 @@ type SessionView = {
   reviewOpen?: string[]
   // U3/U4/U7: added "worktree" (isolated worktree diff/merge), "subagents" (child-session list),
   // "browser" (isolated WebContentsView).
+  // T3.2: the "menu" mode is gone — an always-on icon rail replaced the full-panel menu list.
   rightPanelMode?:
-    | "menu"
     | "review"
     | "files"
-    | "status"
     | "worktree"
     | "subagents"
     | "browser"
+    | "mcp"
     | "plugins"
     | "profile"
     | "debug"
     | "im"
+    | "oversight"
   pendingMessage?: string
   pendingMessageAt?: number
   todoCollapsed?: boolean
@@ -304,7 +313,11 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
           tab: "changes" as "changes" | "all",
         },
         rightPanel: {
+          // `ratio` = the WIDE bucket (legacy field name, kept so the existing migration keeps working);
+          // `narrowRatio` = the NARROW bucket (T3.3). An older store without narrowRatio falls back to
+          // the default at read time.
           ratio: DEFAULT_RIGHT_PANEL_RATIO,
+          narrowRatio: DEFAULT_RIGHT_PANEL_NARROW_RATIO,
         },
         session: {
           width: DEFAULT_SESSION_WIDTH,
@@ -730,21 +743,31 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
       rightPanel: {
         // Stored value is a ratio of the window width; px is derived live from the current window
         // width and clamped so the panel stays proportional across screens and can stretch with the
-        // window (no fixed 720px ceiling).
+        // window (no fixed 720px ceiling). T3.3: the ratio is per-BUCKET (wide/narrow) so each panel
+        // family remembers its own width.
         maxWidth: createMemo(() => Math.round(windowWidth() * MAX_RIGHT_PANEL_RATIO)),
         minWidth: MIN_RIGHT_PANEL_PX,
-        width: createMemo(() => {
-          const ratio = store.rightPanel?.ratio ?? DEFAULT_RIGHT_PANEL_RATIO
+        // Fixed, non-resizable icon-rail strip beside the content area (T3.2).
+        railWidth: RIGHT_PANEL_RAIL_PX,
+        // Called inside a tracking scope (JSX / createMemo), so reading store.rightPanel + windowWidth()
+        // here is reactive without wrapping in its own memo. Defaults to the wide bucket for callers
+        // that don't care (e.g. the shared session-width calc).
+        width: (bucket: RightPanelWidthBucket = "wide") => {
+          const ratio =
+            bucket === "narrow"
+              ? store.rightPanel?.narrowRatio ?? DEFAULT_RIGHT_PANEL_NARROW_RATIO
+              : store.rightPanel?.ratio ?? DEFAULT_RIGHT_PANEL_RATIO
           const max = Math.max(MIN_RIGHT_PANEL_PX, Math.round(windowWidth() * MAX_RIGHT_PANEL_RATIO))
           return Math.min(max, Math.max(MIN_RIGHT_PANEL_PX, Math.round(windowWidth() * ratio)))
-        }),
-        resize(width: number) {
+        },
+        resize(width: number, bucket: RightPanelWidthBucket = "wide") {
           const ratio = windowWidth() > 0 ? width / windowWidth() : DEFAULT_RIGHT_PANEL_RATIO
+          const field = bucket === "narrow" ? "narrowRatio" : "ratio"
           if (!store.rightPanel) {
-            setStore("rightPanel", { ratio })
+            setStore("rightPanel", field === "narrowRatio" ? { narrowRatio: ratio } : { ratio })
             return
           }
-          setStore("rightPanel", "ratio", ratio)
+          setStore("rightPanel", field, ratio)
         },
       },
       session: {

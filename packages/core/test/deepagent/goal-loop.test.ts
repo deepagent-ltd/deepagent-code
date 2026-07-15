@@ -4,10 +4,16 @@ import { tmpdir } from "node:os"
 import path from "node:path"
 import { Effect } from "effect"
 import { DocumentStore } from "../../src/deepagent/document-store"
-import { createPlanDoc, planScope, type PlanDoc, type PlanStep } from "../../src/deepagent/plan-controller"
+import {
+  createPlanDoc,
+  planScope,
+  buildPlanFromInput,
+  type PlanDoc,
+  type PlanStep,
+  type PlanInput,
+} from "../../src/deepagent/plan-controller"
 import {
   makeGoalLoop,
-  evaluateCriteria,
   evaluateForController,
   InvalidGoalError,
   type ControllerDeps,
@@ -145,33 +151,58 @@ describe("V3.9 §D — Grader per-criterion evaluation (§D.3)", () => {
 
   test("each criterion met via passing ports → met:true, no gaps", async () => {
     for (const [name, c] of Object.entries(criteria)) {
-      const res = await Effect.runPromise(evaluateCriteria([c], passingPorts(), donePlan()))
-      expect(res.met).toBe(true)
-      expect(res.gaps).toEqual([])
+      const res = await Effect.runPromise(evaluateForController([c], passingPorts(), donePlan()))
+      expect(res.result.met).toBe(true)
+      expect(res.result.gaps).toEqual([])
       void name
     }
   })
 
   test("tests_pass unmet → met:false with gap", async () => {
     const ports: GraderPorts = { ...passingPorts(), runTests: () => Effect.succeed({ pass: false }) }
-    const res = await Effect.runPromise(evaluateCriteria([criteria.tests_pass], ports, donePlan()))
-    expect(res.met).toBe(false)
-    expect(res.gaps[0]).toMatch(/tests_pass/)
+    const res = await Effect.runPromise(evaluateForController([criteria.tests_pass], ports, donePlan()))
+    expect(res.result.met).toBe(false)
+    expect(res.result.gaps[0]).toMatch(/tests_pass/)
   })
 
   test("no_diagnostics: any diagnostic is a gap when unbounded; within bound is met", async () => {
     const withDiag: GraderPorts = { ...passingPorts(), diagnostics: () => Effect.succeed({ maxSeverity: "warning" }) }
-    const strict = await Effect.runPromise(evaluateCriteria([{ kind: "no_diagnostics" }], withDiag, donePlan()))
-    expect(strict.met).toBe(false)
+    const strict = await Effect.runPromise(evaluateForController([{ kind: "no_diagnostics" }], withDiag, donePlan()))
+    expect(strict.result.met).toBe(false)
     const bounded = await Effect.runPromise(
-      evaluateCriteria([{ kind: "no_diagnostics", severityAtMost: "warning" }], withDiag, donePlan()),
+      evaluateForController([{ kind: "no_diagnostics", severityAtMost: "warning" }], withDiag, donePlan()),
     )
-    expect(bounded.met).toBe(true)
+    expect(bounded.result.met).toBe(true)
     const errDiag: GraderPorts = { ...passingPorts(), diagnostics: () => Effect.succeed({ maxSeverity: "error" }) }
     const exceeded = await Effect.runPromise(
-      evaluateCriteria([{ kind: "no_diagnostics", severityAtMost: "warning" }], errDiag, donePlan()),
+      evaluateForController([{ kind: "no_diagnostics", severityAtMost: "warning" }], errDiag, donePlan()),
     )
-    expect(exceeded.met).toBe(false)
+    expect(exceeded.result.met).toBe(false)
+  })
+
+  test("no_diagnostics: an UNCHECKED result (checked:false) is a gap, NOT a vacuous pass (fail-open fix)", async () => {
+    // Regression for the seam bug: the production diagnostics port fell back to { maxSeverity: null } on
+    // an LSP crash/timeout, which the grader read as "clean → met". A port that could not actually check
+    // now reports checked:false → the grader must treat it as an unmet gap (mirrors runTests empty=fail),
+    // so a broken/absent LSP can never vacuously satisfy no_diagnostics.
+    const unchecked: GraderPorts = {
+      ...passingPorts(),
+      diagnostics: () => Effect.succeed({ maxSeverity: null, checked: false }),
+    }
+    const strict = await Effect.runPromise(evaluateForController([{ kind: "no_diagnostics" }], unchecked, donePlan()))
+    expect(strict.result.met).toBe(false)
+    // even with a severity bound, unchecked is still a gap (we never verified anything).
+    const bounded = await Effect.runPromise(
+      evaluateForController([{ kind: "no_diagnostics", severityAtMost: "warning" }], unchecked, donePlan()),
+    )
+    expect(bounded.result.met).toBe(false)
+    // sanity: an explicit checked:true with no diagnostics is still a genuine pass.
+    const cleanChecked: GraderPorts = {
+      ...passingPorts(),
+      diagnostics: () => Effect.succeed({ maxSeverity: null, checked: true }),
+    }
+    const met = await Effect.runPromise(evaluateForController([{ kind: "no_diagnostics" }], cleanChecked, donePlan()))
+    expect(met.result.met).toBe(true)
   })
 
   test("reviewer_clean / panel_approves unmet → gap", async () => {
@@ -180,27 +211,28 @@ describe("V3.9 §D — Grader per-criterion evaluation (§D.3)", () => {
       reviewerClean: () => Effect.succeed({ pass: false }),
       panelApproves: () => Effect.succeed({ decision: "block" }),
     }
-    const rev = await Effect.runPromise(evaluateCriteria([criteria.reviewer_clean], ports, donePlan()))
-    expect(rev.met).toBe(false)
-    const pan = await Effect.runPromise(evaluateCriteria([criteria.panel_approves], ports, donePlan()))
-    expect(pan.met).toBe(false)
-    expect(pan.gaps[0]).toMatch(/block/)
+    const rev = await Effect.runPromise(evaluateForController([criteria.reviewer_clean], ports, donePlan()))
+    expect(rev.result.met).toBe(false)
+    const pan = await Effect.runPromise(evaluateForController([criteria.panel_approves], ports, donePlan()))
+    expect(pan.result.met).toBe(false)
+    expect(pan.result.gaps[0]).toMatch(/block/)
   })
 
   test("plan_complete reflects outstanding steps", async () => {
-    const met = await Effect.runPromise(evaluateCriteria([criteria.plan_complete], passingPorts(), donePlan()))
-    expect(met.met).toBe(true)
-    const unmet = await Effect.runPromise(evaluateCriteria([criteria.plan_complete], passingPorts(), openPlan()))
-    expect(unmet.met).toBe(false)
-    expect(unmet.gaps[0]).toMatch(/outstanding/)
+    const met = await Effect.runPromise(evaluateForController([criteria.plan_complete], passingPorts(), donePlan()))
+    expect(met.result.met).toBe(true)
+    const unmet = await Effect.runPromise(evaluateForController([criteria.plan_complete], passingPorts(), openPlan()))
+    expect(unmet.result.met).toBe(false)
+    expect(unmet.result.gaps[0]).toMatch(/outstanding/)
   })
 
   test("AND semantics: one unmet among many → met:false", async () => {
     const ports: GraderPorts = { ...passingPorts(), runTests: () => Effect.succeed({ pass: false }) }
-    const all = Object.values(criteria)
-    const res = await Effect.runPromise(evaluateCriteria(all, ports, donePlan()))
-    expect(res.met).toBe(false)
-    expect(res.gaps.length).toBe(1)
+    // Cheap-only set so no expensive gate is deferred: the single tests_pass failure is the only gap.
+    const cheap = [criteria.plan_complete, criteria.no_diagnostics, criteria.tests_pass]
+    const res = await Effect.runPromise(evaluateForController(cheap, ports, donePlan()))
+    expect(res.result.met).toBe(false)
+    expect(res.result.gaps.length).toBe(1)
   })
 })
 
@@ -343,6 +375,46 @@ describe("V3.9 §D — Controller tick semantics", () => {
     expect(diag.length).toBeGreaterThan(0)
   })
 
+  test("§D.6 可回滚: rollback reverts the executor's ACTUAL run session, not the parent goal session", async () => {
+    // Regression for the wrong-session seam bug: the executor runs each turn in a CHILD session (where
+    // the file edits live), but rollback was called with the parent goal session (which has no edits) →
+    // `rolled_back` reported but nothing reverted. The executor now surfaces `executedSessionId`, and the
+    // controller must pass THAT to the rollback port.
+    const clock = new FakeClock()
+    const planDocId = putPlan([step("a", "pending")])
+    const CHILD = "child-session-xyz"
+    let rolledBackSession: string | undefined
+    const executor: StepExecutor = () =>
+      Effect.succeed({ tokensUsed: 1, critical: true, executedSessionId: CHILD })
+    const rollback: RollbackPort = (input) =>
+      Effect.sync(() => {
+        rolledBackSession = input.sessionId
+      })
+    const loop = makeGoalLoop(deps({ executor, rollback }, clock))
+    const handle = await Effect.runPromise(loop.start(spec(planDocId)))
+    const outcome = await Effect.runPromise(loop.tick(handle))
+    expect(outcome).toBe("rolled_back")
+    // The child session (edits live here) is reverted — NOT the parent goal session.
+    expect(rolledBackSession).toBe(CHILD)
+    expect(rolledBackSession).not.toBe(SESSION)
+  })
+
+  test("§D.6 可回滚: rollback falls back to the goal session when the executor reports none", async () => {
+    // A defect before any child session exists ⇒ no executedSessionId ⇒ revert the goal session itself.
+    const clock = new FakeClock()
+    const planDocId = putPlan([step("a", "pending")])
+    let rolledBackSession: string | undefined
+    const executor: StepExecutor = () => Effect.succeed({ tokensUsed: 0, critical: true })
+    const rollback: RollbackPort = (input) =>
+      Effect.sync(() => {
+        rolledBackSession = input.sessionId
+      })
+    const loop = makeGoalLoop(deps({ executor, rollback }, clock))
+    const handle = await Effect.runPromise(loop.start(spec(planDocId)))
+    await Effect.runPromise(loop.tick(handle))
+    expect(rolledBackSession).toBe(SESSION)
+  })
+
   test("§D.6 可接管: stop() → subsequent ticks replay terminal, no execution", async () => {
     const clock = new FakeClock()
     const planDocId = putPlan([step("a", "pending")])
@@ -455,7 +527,7 @@ describe("V3.9 §D — adversarial-review hardening (2026-07-09)", () => {
     expect(panelCalls).toBe(1)
   })
 
-  test("§D.7 非每轮: deferExpensive skips the panel gate when a cheaper criterion is already unmet", async () => {
+  test("§D.7 非每轮: the controller skips the panel gate when a cheaper criterion is already unmet", async () => {
     let panelCalls = 0
     const ports: GraderPorts = {
       ...passingPorts(),
@@ -467,14 +539,10 @@ describe("V3.9 §D — adversarial-review hardening (2026-07-09)", () => {
         }),
     }
     const criteria: CompletionCriterion[] = [{ kind: "panel_approves" }, { kind: "tests_pass", commands: ["x"] }]
-    // deferExpensive OFF (default) → panel IS called.
-    await Effect.runPromise(evaluateCriteria(criteria, ports, openPlanDoc()))
-    expect(panelCalls).toBe(1)
-    // deferExpensive ON → cheap tests_pass fails first, panel is NOT convened.
-    panelCalls = 0
-    const res = await Effect.runPromise(evaluateCriteria(criteria, ports, openPlanDoc(), { deferExpensive: true }))
+    // The controller always defers: cheap tests_pass fails first, so the panel is NOT convened.
+    const res = await Effect.runPromise(evaluateForController(criteria, ports, openPlanDoc()))
     expect(panelCalls).toBe(0)
-    expect(res.met).toBe(false) // verdict unchanged: still unmet
+    expect(res.result.met).toBe(false) // verdict unchanged: still unmet
   })
 
   test("evaluateForController flags panel block as escalate but revise as a soft gap", async () => {
@@ -597,6 +665,76 @@ describe("V3.9 §D — adversarial-review hardening (2026-07-09)", () => {
   })
 })
 
+describe("V3.9 §D — confirmed-bug regressions (2026-07-14)", () => {
+  test("BUG#6: a plan with a blocked step (all others done) routes to needs_human, NOT done", async () => {
+    const clock = new FakeClock()
+    // step a is done, step b is blocked → buildCompletionReport.complete is true (blocked counts as
+    // resolved), which previously made plan_complete report DONE and silently swallowed the blocker.
+    const planDocId = putPlan([step("a", "done"), step("b", "blocked")])
+    const loop = makeGoalLoop(deps({}, clock))
+    const handle = await Effect.runPromise(loop.start(spec(planDocId)))
+    const outcome = await Effect.runPromise(loop.tick(handle))
+    expect(outcome).toBe("needs_human")
+    expect(outcome).not.toBe("done")
+    const status = await Effect.runPromise(loop.status(handle))
+    expect(status.phase).toBe("needs_human")
+    expect(status.gaps.some((g) => /blocked/.test(g))).toBe(true)
+  })
+
+  test("BUG#6: evaluateForController surfaces a blocked plan as an unmet, escalating gap", async () => {
+    const blockedPlan = createPlanDoc(SESSION, "g", [step("a", "done"), step("b", "blocked")])
+    const res = await Effect.runPromise(
+      evaluateForController([{ kind: "plan_complete" }], passingPorts(), blockedPlan),
+    )
+    expect(res.result.met).toBe(false) // NOT a clean completion
+    expect(res.escalate).toBe(true) // route to a human on the first verdict
+  })
+
+  test("BUG#7: an executor that RUNS but leaves the plan-doc unchanged still accrues stall → needs_human", async () => {
+    const clock = new FakeClock()
+    const planDocId = putPlan([step("a", "pending")])
+    let execCount = 0
+    // A no-op executor: it runs (side effect) but NEVER bumps the plan version — the exact structural
+    // defeat of the stall guard. Every later tick hits the version-dedup replay; before the fix that was
+    // a free `return lastOutcome` with no stall accrual, so only the driver's maxIterations (10k) stopped
+    // it. Now the non-terminal replay must accrue toward the stall guard.
+    const executor: StepExecutor = () =>
+      Effect.sync(() => {
+        execCount++
+        return { tokensUsed: 3 }
+      })
+    const loop = makeGoalLoop(deps({ executor }, clock))
+    const handle = await Effect.runPromise(loop.start(spec(planDocId, { stallThreshold: 3 })))
+    const outcomes: string[] = []
+    for (let i = 0; i < 3; i++) outcomes.push(await Effect.runPromise(loop.tick(handle)))
+    // tick1 executes (no progress) → stall 1 continue; tick2/tick3 are version-dedup replays that STILL
+    // accrue stall → stall 2 continue, stall 3 == threshold → needs_human. Bounded by the stall guard.
+    expect(outcomes).toEqual(["continue", "continue", "needs_human"])
+    expect(execCount).toBe(1) // idempotency preserved: the replay never re-ran the executor
+    const status = await Effect.runPromise(loop.status(handle))
+    expect(status.phase).toBe("needs_human")
+    expect(status.ledger.ticks).toBe(1) // replay never re-accrued budget either
+  })
+
+  test("cost clamp: a negative cost from a port does NOT decrement the ledger (clamped to 0)", async () => {
+    const clock = new FakeClock()
+    const planDocId = putPlan([step("a", "pending")])
+    const executor: StepExecutor = ({ planDocId }) =>
+      Effect.sync(() => {
+        updatePlan(planDocId, (p) => ({ ...p, steps: [{ ...p.steps[0], title: `${p.steps[0].title}.` }] }))
+        return { tokensUsed: 1, cost: -100 } // a misbehaving port returning a negative cost
+      })
+    const loop = makeGoalLoop(deps({ executor }, clock))
+    const handle = await Effect.runPromise(
+      loop.start(spec(planDocId, { limits: { maxTicks: 99, maxTokens: 1_000, maxWallclockMs: 100_000, maxCost: 10 }, stallThreshold: 99 })),
+    )
+    await Effect.runPromise(loop.tick(handle))
+    const status = await Effect.runPromise(loop.status(handle))
+    expect(status.ledger.cost).toBe(0) // clamped, NOT -100
+    expect(status.ledger.cost).toBeGreaterThanOrEqual(0)
+  })
+})
+
 describe("V3.9 §D — process restart recovery (§D.6 可恢复)", () => {
   test("a fresh Controller over the same store resumes from persisted state", async () => {
     const clock = new FakeClock()
@@ -629,5 +767,136 @@ describe("V3.9 §D — process restart recovery (§D.6 可恢复)", () => {
     const after = await Effect.runPromise(loop2.status(handle))
     expect(after.ledger.ticks).toBe(3)
     expect(after.ledger.tokens).toBe(12)
+  })
+})
+
+describe("V4.1 §S2 — goal plan hot-edit (applyPlanEdit)", () => {
+  // A user plan edit expressed as the loose PlanInput the route/handler forwards.
+  const edit = (steps: { title: string; step_id?: string; status?: string }[], goal = "reach the goal"): PlanInput => ({
+    goal,
+    steps,
+  })
+
+  test("upserts the edited plan to the durable doc (version+1) so the next tick sees the revision", async () => {
+    const clock = new FakeClock()
+    const planDocId = putPlan([step("a", "pending")])
+    const v0 = store.get(planDocId)!.version
+    const loop = makeGoalLoop(deps({}, clock))
+    const handle = await Effect.runPromise(loop.start(spec(planDocId)))
+
+    await Effect.runPromise(loop.applyPlanEdit(handle, edit([{ title: "revised step", status: "pending" }])))
+
+    const doc = store.get(planDocId)!
+    expect(doc.version).toBeGreaterThan(v0)
+    const revised = JSON.parse(doc.body) as PlanDoc
+    expect(revised.steps.map((s) => s.title)).toEqual(["revised step"])
+    // Human-sourced provenance distinguishes a user edit from the model's plan-tool writes.
+    expect(doc.provenance.source).toBe("human")
+  })
+
+  test("preserves step ids + accumulated evidence across the rewrite (buildPlanFromInput reconciliation)", async () => {
+    const clock = new FakeClock()
+    // Seed a plan whose step "a" already carries evidence (as the executor's mirror-back would leave it).
+    const seeded = createPlanDoc(SESSION, "reach the goal", [{ ...step("a", "active"), evidence: ["tests pass"] }])
+    const planDocId = store.upsert({
+      type: "plan",
+      scope: planScope(SESSION),
+      description: `plan ${SESSION}`,
+      idSlug: `plan-${SESSION}`,
+      body: JSON.stringify(seeded),
+      provenance: { source: "model", run_ref: planScope(SESSION) },
+    }).id
+    const loop = makeGoalLoop(deps({}, clock))
+    const handle = await Effect.runPromise(loop.start(spec(planDocId)))
+
+    // The user re-titles the SAME step (same id) — evidence must survive (it is runtime-owned, never
+    // taken from the loose input).
+    await Effect.runPromise(loop.applyPlanEdit(handle, edit([{ step_id: "a", title: "renamed", status: "active" }])))
+
+    const revised = JSON.parse(store.get(planDocId)!.body) as PlanDoc
+    expect(revised.steps[0].step_id).toBe("a")
+    expect(revised.steps[0].title).toBe("renamed")
+    expect(revised.steps[0].evidence).toEqual(["tests pass"])
+  })
+
+  test("re-baselines stall tracking: re-opening a done step (done→pending) does NOT read as a regression stall", async () => {
+    const clock = new FakeClock()
+    // Executor bumps the version each tick (dedup never fires) but never resolves the step or records
+    // evidence — no forward progress. plan_complete stays UNMET (a pending step remains), so the loop
+    // accumulates stall ticks rather than completing.
+    const executor: StepExecutor = ({ planDocId }) =>
+      Effect.sync(() => {
+        updatePlan(planDocId, (p) => ({ ...p, goal: `${p.goal}.` }))
+        return { tokensUsed: 1 }
+      })
+    const planDocId = putPlan([step("a", "pending")])
+    const loop = makeGoalLoop(deps({ executor }, clock))
+    const handle = await Effect.runPromise(loop.start(spec(planDocId, { stallThreshold: 5 })))
+
+    // Drive it near the stall threshold with a plan that has no forward movement.
+    await Effect.runPromise(loop.tick(handle))
+    await Effect.runPromise(loop.tick(handle))
+    const beforeEdit = await Effect.runPromise(loop.status(handle))
+    expect(beforeEdit.stallCount).toBe(2)
+
+    // User re-opens the step (done→pending) + adds a new one. The re-baseline resets stallCount to 0.
+    await Effect.runPromise(
+      loop.applyPlanEdit(handle, edit([{ step_id: "a", title: "a", status: "pending" }, { title: "b", status: "pending" }])),
+    )
+    const afterEdit = await Effect.runPromise(loop.status(handle))
+    expect(afterEdit.stallCount).toBe(0)
+
+    // The tick immediately after the edit runs (lastProcessedVersion was nulled) and does not
+    // immediately stall — the revision got a fresh runway.
+    const outcome = await Effect.runPromise(loop.tick(handle))
+    expect(outcome).toBe("continue")
+  })
+
+  test("no-op on an unknown/unstarted goal (never throws, never creates a doc)", async () => {
+    const clock = new FakeClock()
+    const loop = makeGoalLoop(deps({}, clock))
+    const handle = { goalId: "nope", planDocId: "no-doc", sessionId: SESSION }
+    await Effect.runPromise(loop.applyPlanEdit(handle, edit([{ title: "x" }])))
+    expect(store.get("no-doc")).toBeNull()
+  })
+
+  test("no-op once the goal is terminal (a stopped goal cannot be re-planned)", async () => {
+    const clock = new FakeClock()
+    const planDocId = putPlan([step("a", "pending")])
+    const loop = makeGoalLoop(deps({}, clock))
+    const handle = await Effect.runPromise(loop.start(spec(planDocId)))
+    await Effect.runPromise(loop.stop(handle))
+    const vAfterStop = store.get(planDocId)!.version
+
+    await Effect.runPromise(loop.applyPlanEdit(handle, edit([{ title: "revised" }])))
+
+    // Terminal → the edit is ignored; the durable doc is untouched.
+    expect(store.get(planDocId)!.version).toBe(vAfterStop)
+    const status = await Effect.runPromise(loop.status(handle))
+    expect(status.phase).toBe("stopped")
+  })
+
+  test("a repeated identical edit is a harmless no-op write (INV-4, no version bump)", async () => {
+    const clock = new FakeClock()
+    // Seed a doc ALREADY human-authored, so the first edit below can no-op (provenance is in the
+    // fingerprint: a model→human authorship change bumps the version even on identical body — that is
+    // correct, so we start from human provenance to isolate the body no-op).
+    const seeded = createPlanDoc(SESSION, "reach the goal", [step("a", "pending")])
+    const planDocId = store.upsert({
+      type: "plan",
+      scope: planScope(SESSION),
+      description: `plan ${SESSION}`,
+      idSlug: `plan-${SESSION}`,
+      body: JSON.stringify(seeded),
+      provenance: { source: "human", run_ref: planScope(SESSION) },
+    }).id
+    const loop = makeGoalLoop(deps({}, clock))
+    const handle = await Effect.runPromise(loop.start(spec(planDocId)))
+    const v0 = store.get(planDocId)!.version
+
+    // An edit that reconciles to the exact same body + same (human) provenance ⇒ INV-4 no-op.
+    await Effect.runPromise(loop.applyPlanEdit(handle, edit([{ step_id: "a", title: "a", status: "pending" }])))
+
+    expect(store.get(planDocId)!.version).toBe(v0)
   })
 })

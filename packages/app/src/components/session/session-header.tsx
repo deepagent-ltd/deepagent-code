@@ -20,6 +20,7 @@ import { useSync } from "@/context/sync"
 import { useTerminal } from "@/context/terminal"
 import { focusTerminalById } from "@/pages/session/helpers"
 import { useSessionLayout } from "@/pages/session/session-layout"
+import { StatusPopover } from "@/components/status-popover"
 import { messageAgentColor } from "@/utils/agent"
 import { decode64 } from "@/utils/base64"
 import { Persist, persisted } from "@/utils/persist"
@@ -225,7 +226,9 @@ export function SessionHeader() {
 
     view().reviewPanel.close()
     layout.fileTree.close()
-    view().rightPanel.open("menu")
+    // T3.2: the right panel now has an always-on icon rail; there is no separate "menu" list. Opening
+    // the panel means opening a default content panel (review) — the rail lets the user switch from there.
+    view().rightPanel.open("review")
   }
 
   const [prefs, setPrefs] = persisted(Persist.global("open.app"), createStore({ app: "finder" as OpenApp }))
@@ -487,6 +490,7 @@ export function SessionHeader() {
                     </Button>
                   </TooltipKeybind>
                 </div>
+                <StatusPopover />
               </div>
             </div>
           </Portal>
