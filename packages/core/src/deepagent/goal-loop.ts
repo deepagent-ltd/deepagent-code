@@ -446,6 +446,50 @@ const loadState = (deps: ControllerDeps, handle: GoalHandle): GoalRuntimeState |
   return null
 }
 
+// V4.1 cross-process cold recovery — a durable home for a PENDING USER PLAN EDIT so the event-driven
+// GoalTickConsumer (which may run on a cold fiber with no in-memory control map) can pick it up. The
+// in-process driver historically kept the pending PlanInput ONLY in the goal-manager `controls` map;
+// that is invisible to a cold consumer. We persist it as a `run_context` doc under the SAME store, but
+// DELIBERATELY WITHOUT the `goal_id` extension (which `loadState` matches on at line ~434) — instead we
+// mark it with `pending_edit_goal_id`, so `loadState` skips it (its goal_id is undefined ≠ the handle's)
+// and never tries to parse a PlanInput as GoalRuntimeState. An empty body is the "no pending edit"
+// sentinel (there is no doc delete API). The consumer reads it via its own fresh store handle; the
+// content-equality clear in markPlanEditConsumed preserves a newer edit written between read and clear.
+const pendingEditSlug = (goalId: string): string => `goal-pending-edit-${goalId}`
+
+export const persistPendingPlanEdit = (
+  store: DocumentStore,
+  sessionId: string,
+  goalId: string,
+  plan: PlanInput | null,
+): void => {
+  store.upsert({
+    type: "run_context",
+    scope: planScope(sessionId),
+    description: `goal pending plan edit ${goalId}`,
+    idSlug: pendingEditSlug(goalId),
+    body: plan == null ? "" : JSON.stringify(plan),
+    provenance: { source: "runner", run_ref: planScope(sessionId) },
+    // NOTE: pending_edit_goal_id, NOT goal_id — keeps loadState() from ever matching this doc.
+    extensions: { pending_edit_goal_id: goalId },
+  })
+}
+
+export const readPendingPlanEdit = (store: DocumentStore, sessionId: string, goalId: string): PlanInput | null => {
+  for (const ref of store.list({ type: "run_context", scope: planScope(sessionId) })) {
+    const doc = store.get(ref.id)
+    if (!doc) continue
+    if (doc.extensions?.pending_edit_goal_id !== goalId) continue
+    if (!doc.body.trim()) return null // sentinel: consumed / never set
+    try {
+      return JSON.parse(doc.body) as PlanInput
+    } catch {
+      return null
+    }
+  }
+  return null
+}
+
 // §D.6 可观测: one worklog doc per tick (audit trail into the Document Graph).
 const writeWorklog = (deps: ControllerDeps, state: GoalRuntimeState, grader: GraderResult): void => {
   deps.store.upsert({
