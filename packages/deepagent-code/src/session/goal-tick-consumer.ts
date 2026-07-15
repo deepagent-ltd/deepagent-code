@@ -22,12 +22,10 @@ import * as Log from "@deepagent-code/core/util/log"
 // so a goal survives a process restart and resumes from the durable run_context doc. This service itself
 // holds NO per-goal state — it is a stateless bus consumer, exactly like SupervisorNotifier.
 //
-// IDEMPOTENCY: the command's idempotencyKey is `goal:tick:<goalId>:<seq>` where seq = ledger.ticks +
-// stallCount (strictly monotonic per handling, from durable loop state: a progress tick bumps
-// ledger.ticks, a no-progress replay bumps stallCount). So a redelivered command for the same seq is
-// deduped by the bus (one execution), while a no-progress tick still advances seq → the chain stays
-// alive and the loop's stall guard escalates to needs_human as designed. seq is a pure function of
-// durable state, so a crashed-then-retried consumer recomputes the same key (crash-idempotent).
+// IDEMPOTENCY: normal commands key on the strictly monotonic durable cursor. Resume seeds use a separate
+// one-shot namespace because the command that observed a pause already consumed the current cursor without
+// advancing state. The production port compares request.seq with durable state before executing, so a
+// delivery retried after its tick persisted only repairs the successor and never runs a second tick.
 //
 // FLAG-GATED: v4MultiAgentRuntime (the event-driven layer master flag). Off ⇒ handle() still ACKS every
 // delivery (discharges the durable row) but drives nothing — the in-process BackgroundJob driver
@@ -110,6 +108,14 @@ export const tickCommand = (request: {
     seq: request.seq,
     expectedPlanVersion: request.expectedPlanVersion,
   },
+})
+
+// A paused command consumes the normal cursor key without advancing durable state. Resume therefore keeps
+// the current cursor in the payload (the tick's true pre-state) but uses a fresh seed identity; successors
+// return to the normal cursor namespace immediately after the resumed tick persists.
+export const resumeTickCommand = (request: Parameters<typeof tickCommand>[0]): DeepAgentEvent.PublishInput => ({
+  ...tickCommand(request),
+  idempotencyKey: `goal:tick:${request.goalId}:resume:${DeepAgentEvent.ID.create()}`,
 })
 
 export interface Interface {

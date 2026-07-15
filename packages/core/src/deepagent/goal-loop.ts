@@ -490,14 +490,9 @@ export const readPendingPlanEdit = (store: DocumentStore, sessionId: string, goa
   return null
 }
 
-// V4.1 §N — the durable read the event-driven driver keys its self-driving chain on. Reads the persisted
-// run_context state for a goal and returns the monotonic ATTEMPT sequence + the current plan version and
-// phase, all from durable state (crash-safe: a retried consumer recomputes the same seq). `seq =
-// ledger.ticks + stallCount` — strictly monotonic per HANDLING (a progress tick bumps ledger.ticks; a
-// no-progress replay bumps stallCount — goal-loop.ts §7 stall-accrual), so a redelivered command for the
-// same seq is deduped by the bus AND a no-progress tick still advances the key (the chain never silently
-// dies; the loop's own stall guard still escalates to needs_human). `phase` lets the driver decide
-// terminal vs continue without a second load. Returns null when no state exists (unknown/unstarted goal).
+// V4.1 §N — durable command cursor. Weight ticks by one more than the maximum continuing stall count so
+// resetting stallCount after progress cannot repeat or decrease the cursor. A replay advances stallCount;
+// an executed tick advances ledger.ticks; every continuing transition therefore produces a fresh key.
 export const readGoalTickCursor = (
   store: DocumentStore,
   sessionId: string,
@@ -509,7 +504,9 @@ export const readGoalTickCursor = (
     if (doc.extensions?.goal_id !== goalId) continue
     try {
       const state = JSON.parse(doc.body) as GoalRuntimeState
-      const seq = (state.ledger?.ticks ?? 0) + (state.stallCount ?? 0)
+      const stallThreshold =
+        state.spec?.stallThreshold && state.spec.stallThreshold > 0 ? state.spec.stallThreshold : 3
+      const seq = (state.ledger?.ticks ?? 0) * (stallThreshold + 1) + (state.stallCount ?? 0)
       const planVersion = readPlan(store, state.planDocId).version
       return { seq, planVersion, phase: state.phase }
     } catch {
