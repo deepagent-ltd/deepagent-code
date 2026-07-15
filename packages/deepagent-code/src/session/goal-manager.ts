@@ -590,22 +590,19 @@ export const layer = Layer.effect(
         const store = new DocumentStore(goalStoreRoot(sessionID))
 
         // V4.1 §N DUAL-PATH resume. flag ON ⇒ RE-SEED the event chain rather than starting a BackgroundJob.
-        // The chain died when the goal paused (a paused tick acks WITHOUT re-emitting the next command), so
-        // a fresh goal.tick.requested is needed to restart it. The seed seq is read from DURABLE state
-        // (ledger.ticks + stallCount) so it does NOT collide with the already-processed seq of the tick that
-        // observed the pause — a strictly-greater key the bus has never seen, so it publishes (not deduped).
-        // We ONLY re-seed here (inside the paused guard above), so a non-paused resume never double-seeds.
+        // The paused command consumed the current normal cursor key without advancing state. Resume keeps
+        // that cursor as the tick's true pre-state but publishes it through a fresh resume-only key; the
+        // resumed tick's successor returns to the normal durable-cursor namespace.
         if (flags.v4MultiAgentRuntime) {
           const tick = readGoalTickCursor(store, sessionID, c.goalId)
-          const seq = (tick?.seq ?? 0) + 1 // strictly beyond the last-processed seq → a fresh, undeduped key
           const expectedPlanVersion = tick?.planVersion ?? store.get(c.planDocId)?.version ?? 0
           yield* eventBus
             .publish(
-              GoalTickConsumer.tickCommand({
+              GoalTickConsumer.resumeTickCommand({
                 sessionID,
                 goalId: c.goalId,
                 planDocId: c.planDocId,
-                seq,
+                seq: tick?.seq ?? 0,
                 expectedPlanVersion,
               }),
             )

@@ -14,6 +14,7 @@ import {
 } from "../../src/deepagent/plan-controller"
 import {
   makeGoalLoop,
+  readGoalTickCursor,
   evaluateForController,
   InvalidGoalError,
   type ControllerDeps,
@@ -284,6 +285,36 @@ describe("V3.9 §D — Controller tick semantics", () => {
     const status = await Effect.runPromise(loop.status(handle))
     expect(status.ledger.ticks).toBe(1) // budget accumulated once
     expect(status.ledger.tokens).toBe(7)
+  })
+
+  test("goal tick cursor stays monotonic when progress follows a stalled tick", async () => {
+    const clock = new FakeClock()
+    const planDocId = putPlan([step("a", "pending")])
+    let executions = 0
+    const executor: StepExecutor = ({ planDocId }) =>
+      Effect.sync(() => {
+        executions++
+        updatePlan(planDocId, (plan) =>
+          executions === 1
+            ? { ...plan, goal: `${plan.goal}.` }
+            : {
+                ...plan,
+                steps: [{ ...plan.steps[0], evidence: [...(plan.steps[0].evidence ?? []), "made progress"] }],
+              },
+        )
+        return { tokensUsed: 1 }
+      })
+    const loop = makeGoalLoop(deps({ executor }, clock))
+    const handle = await Effect.runPromise(loop.start(spec(planDocId)))
+
+    expect(await Effect.runPromise(loop.tick(handle))).toBe("continue")
+    const stalled = readGoalTickCursor(store, SESSION, handle.goalId)!
+    expect(stalled.seq).toBe(5) // ticks=1, stall=1, threshold=3
+
+    expect(await Effect.runPromise(loop.tick(handle))).toBe("continue")
+    const progressed = readGoalTickCursor(store, SESSION, handle.goalId)!
+    expect(progressed.seq).toBe(8) // ticks=2, stall reset to 0
+    expect(progressed.seq).toBeGreaterThan(stalled.seq)
   })
 
   test("§D.6 无进展即停: stallThreshold consecutive no-progress ticks → needs_human", async () => {
