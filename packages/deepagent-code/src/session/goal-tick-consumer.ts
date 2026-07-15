@@ -1,0 +1,254 @@
+export * as GoalTickConsumer from "./goal-tick-consumer"
+
+import { Context, Effect, Layer, Stream, Schedule, Duration, Cause } from "effect"
+import { DeepAgentEventBus } from "@deepagent-code/core/deepagent/deepagent-event-bus"
+import { DeepAgentEvent } from "@deepagent-code/core/deepagent/deepagent-event"
+import { LMNEvents } from "@deepagent-code/core/deepagent/lmn-events"
+import { RuntimeFlags } from "@/effect/runtime-flags"
+import * as Log from "@deepagent-code/core/util/log"
+
+// V4.1 §N — the GOAL TICK CONSUMER: the piece that makes the goal-loop tick GENUINELY event-driven.
+//
+// The V4.0 contract (§N) says "tick = goal.tick event" with persistence/retry/dedup, but historically a
+// tick ran in an in-process for-loop (goal-driver runToCompletion) and `goal.tick` was only an
+// after-the-fact TRACE with no consumer. This service closes that gap: it consumes the durable COMMAND
+// `goal.tick.requested`, executes EXACTLY ONE tick (via an injected `runTick` port), and — while the goal
+// is non-terminal — re-emits the next `goal.tick.requested` (the self-driving chain). Because the command
+// rides the Event Bus, the tick inherits persistence, at-least-once delivery, retry-with-backoff, and
+// dedup; a nack retries the REAL tick, not a breadcrumb.
+//
+// COLD RECOVERY: the production `runTick` port (makeGoalTickPort, wired separately) reconstructs the
+// entire goal wiring from durable state + the event payload on a COLD fiber (no in-memory control map),
+// so a goal survives a process restart and resumes from the durable run_context doc. This service itself
+// holds NO per-goal state — it is a stateless bus consumer, exactly like SupervisorNotifier.
+//
+// IDEMPOTENCY: the command's idempotencyKey is `goal:tick:<goalId>:<seq>` where seq = ledger.ticks +
+// stallCount (strictly monotonic per handling, from durable loop state: a progress tick bumps
+// ledger.ticks, a no-progress replay bumps stallCount). So a redelivered command for the same seq is
+// deduped by the bus (one execution), while a no-progress tick still advances seq → the chain stays
+// alive and the loop's stall guard escalates to needs_human as designed. seq is a pure function of
+// durable state, so a crashed-then-retried consumer recomputes the same key (crash-idempotent).
+//
+// FLAG-GATED: v4MultiAgentRuntime (the event-driven layer master flag). Off ⇒ handle() still ACKS every
+// delivery (discharges the durable row) but drives nothing — the in-process BackgroundJob driver
+// (goal-manager, flag-OFF path) is authoritative.
+
+const log = Log.create({ service: "goal-tick-consumer" })
+
+// The durable consumer group this service reads under (§A3 at-least-once: publish records a pending
+// delivery row per owed event for this group, so a crash mid-handle is recoverable via dueRetries).
+export const TICK_GROUP = "goal-tick-consumer"
+
+const DEFAULT_RETRY_PUMP_INTERVAL_MS = 30_000
+
+// The command payload carried by a goal.tick.requested event. `seq` is the dedup identity;
+// `expectedPlanVersion` is advisory (trace + sanity-check).
+export type GoalTickRequest = {
+  readonly sessionID: string
+  readonly goalId: string
+  readonly planDocId: string
+  readonly seq: number
+  readonly expectedPlanVersion: number
+}
+
+// What the injected runTick port returns after executing ONE tick. `progress` mirrors the driver's
+// OneTickResult.progress; `nextSeq`/`nextExpectedPlanVersion` are read from the POST-tick durable state
+// so the consumer can construct the next command deterministically.
+export type GoalTickPortResult = {
+  readonly progress: "stopped" | "paused" | "terminal" | "continue"
+  readonly nextSeq: number
+  readonly nextExpectedPlanVersion: number
+}
+
+// The injected execution port. Production wires makeGoalTickPort (cold reconstruction + runOneTick);
+// tests wire a deterministic stub. Lives on `never` — a defect is caught by the consumer and nacked.
+export type GoalTickPort = (request: GoalTickRequest) => Effect.Effect<GoalTickPortResult>
+
+// Parse the event payload into a GoalTickRequest. Returns null when the payload is not a well-formed
+// goal.tick.requested (defensive: a malformed command is acked-and-dropped rather than nacked forever).
+const parseRequest = (payload: unknown): GoalTickRequest | null => {
+  if (typeof payload !== "object" || payload === null) return null
+  const p = payload as Record<string, unknown>
+  if (
+    typeof p.sessionID !== "string" ||
+    typeof p.goalId !== "string" ||
+    typeof p.planDocId !== "string" ||
+    typeof p.seq !== "number" ||
+    typeof p.expectedPlanVersion !== "number"
+  )
+    return null
+  return {
+    sessionID: p.sessionID,
+    goalId: p.goalId,
+    planDocId: p.planDocId,
+    seq: p.seq,
+    expectedPlanVersion: p.expectedPlanVersion,
+  }
+}
+
+// Build the next-tick command from a port result. Exposed so goal-manager's start() reuses the SAME key
+// scheme for the FIRST command (seq=0), guaranteeing no drift between the seed and the chain.
+export const tickCommand = (request: {
+  sessionID: string
+  goalId: string
+  planDocId: string
+  seq: number
+  expectedPlanVersion: number
+}): DeepAgentEvent.PublishInput => ({
+  type: LMNEvents.GOAL_TICK_REQUESTED,
+  source: "system",
+  workspaceID: request.sessionID,
+  actorID: request.sessionID,
+  // §N: the command is the goal's own work — normal priority; it is NOT an approval-queue candidate.
+  priority: "normal",
+  // Dedup identity — a redelivered command for the same (goal, seq) is a no-op at the bus.
+  idempotencyKey: `goal:tick:${request.goalId}:${request.seq}`,
+  payload: {
+    sessionID: request.sessionID,
+    goalId: request.goalId,
+    planDocId: request.planDocId,
+    seq: request.seq,
+    expectedPlanVersion: request.expectedPlanVersion,
+  },
+})
+
+export interface Interface {
+  /**
+   * Handle ONE goal.tick.requested delivery and discharge it. Flag off ⇒ ack (discharge) + drive nothing.
+   * Otherwise: run one tick via the port, then re-emit the next command (progress==="continue") or stop
+   * the chain (terminal/paused/stopped), and ack. A port DEFECT nacks (the bus retries the real tick).
+   * Exposed for deterministic testing; the background subscription calls it.
+   */
+  readonly handle: (event: DeepAgentEvent.Event) => Effect.Effect<void>
+  /** §A3 retry pump for THIS group — re-drives pending deliveries whose backoff elapsed. */
+  readonly pumpRetries: (now?: number) => Effect.Effect<number>
+}
+
+export class Service extends Context.Service<Service, Interface>()("@deepagent-code/GoalTickConsumer") {}
+
+export interface LayerOptions {
+  /** The tick execution port. Default = production makeGoalTickPort (wired via the full layer); tests inject a stub. */
+  readonly runTick: GoalTickPort
+  /** Start the background bus subscription + retry pump. Default true; tests set false + call handle(). */
+  readonly runLoop?: boolean
+  readonly retryPumpIntervalMs?: number
+}
+
+export const layerWith = (options: LayerOptions) =>
+  Layer.effect(
+    Service,
+    Effect.gen(function* () {
+      const bus = yield* DeepAgentEventBus.Service
+      const flags = yield* RuntimeFlags.Service
+      const runTick = options.runTick
+      const runLoop = options.runLoop ?? true
+      const retryPumpIntervalMs = options.retryPumpIntervalMs ?? DEFAULT_RETRY_PUMP_INTERVAL_MS
+
+      const ack = (event: DeepAgentEvent.Event) => bus.ack(TICK_GROUP, event.id)
+
+      const handle: Interface["handle"] = (event) =>
+        Effect.gen(function* () {
+          // Flag off ⇒ the event-driven path is dormant; the in-process driver is authoritative. Still ACK
+          // to discharge the durable delivery row (this group wildcard-less-subscribes only this type, but
+          // a stray delivery must not pile up).
+          if (!flags.v4MultiAgentRuntime) {
+            yield* ack(event)
+            return
+          }
+          const request = parseRequest(event.payload)
+          if (request == null) {
+            log.warn("goal.tick.requested with malformed payload; acking (dropped)", { eventID: event.id })
+            yield* ack(event)
+            return
+          }
+
+          // Execute exactly ONE tick. A defect degrades to a nack so the bus retries the REAL tick.
+          const outcome = yield* runTick(request).pipe(
+            Effect.map((r) => ({ ok: true as const, r })),
+            Effect.catchCause((cause) => Effect.succeed({ ok: false as const, cause })),
+          )
+
+          if (!outcome.ok) {
+            log.error("goal tick execution failed; nacking for retry", {
+              eventID: event.id,
+              goalId: request.goalId,
+              cause: Cause.pretty(outcome.cause),
+            })
+            yield* bus.nack({ subscriptionGroup: TICK_GROUP, eventID: event.id, reason: "goal tick execution failed" })
+            return
+          }
+
+          const { progress, nextSeq, nextExpectedPlanVersion } = outcome.r
+          if (progress === "continue") {
+            // Self-driving chain: publish the NEXT command. nextSeq advanced (progress → ledger.ticks++,
+            // no-progress replay → stallCount++), so its key differs and the bus publishes it — the chain
+            // never silently dies on a no-progress tick (the loop's stall guard still escalates).
+            yield* bus.publish(
+              tickCommand({
+                sessionID: request.sessionID,
+                goalId: request.goalId,
+                planDocId: request.planDocId,
+                seq: nextSeq,
+                expectedPlanVersion: nextExpectedPlanVersion,
+              }),
+            )
+            log.info("goal tick executed; re-emitted next command", {
+              goalId: request.goalId,
+              seq: request.seq,
+              nextSeq,
+            })
+          } else {
+            // terminal / paused / stopped: do NOT re-emit. The terminal FACT (goal.completed /
+            // needs_human / rolled_back) is emitted by the tick's own onStatus port; resume re-seeds the
+            // chain for a paused goal.
+            log.info("goal tick chain halted", { goalId: request.goalId, seq: request.seq, progress })
+          }
+          yield* ack(event)
+        })
+
+      const pumpRetries: Interface["pumpRetries"] = (now) =>
+        Effect.gen(function* () {
+          const due = yield* bus.dueRetries(now)
+          let redriven = 0
+          for (const delivery of due) {
+            if (delivery.subscriptionGroup !== TICK_GROUP) continue // only OUR group's deliveries.
+            const event = yield* bus.getByID(delivery.eventID)
+            if (!event) {
+              log.warn("retry: event missing for pending goal-tick delivery", { eventID: delivery.eventID })
+              continue
+            }
+            yield* handle(event) // re-runs the full ack/nack cycle (idempotent via the seq key).
+            redriven++
+          }
+          return redriven
+        })
+
+      if (runLoop) {
+        yield* bus
+          .subscribe({ type: LMNEvents.GOAL_TICK_REQUESTED, group: TICK_GROUP })
+          .pipe(
+            Stream.runForEach((event) =>
+              handle(event).pipe(
+                Effect.catchCause((cause) =>
+                  Effect.sync(() => log.error("goal tick handle failed", { cause: Cause.pretty(cause) })),
+                ),
+              ),
+            ),
+            Effect.forkScoped,
+          )
+
+        yield* pumpRetries()
+          .pipe(
+            Effect.catchCause((cause) =>
+              Effect.sync(() => log.error("goal tick retry pump failed", { cause: Cause.pretty(cause) })).pipe(
+                Effect.as(0),
+              ),
+            ),
+            Effect.repeat(Schedule.spaced(Duration.millis(retryPumpIntervalMs))),
+            Effect.forkScoped,
+          )
+      }
+
+      return Service.of({ handle, pumpRetries })
+    }),
+  )
