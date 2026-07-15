@@ -32,7 +32,7 @@ const SKILL_PATTERN = "**/SKILL.md"
 // actual schemas instead of guesses.
 const CUSTOMIZE_DEEPAGENT_CODE_SKILL_NAME = "customize-deepagent-code"
 const CUSTOMIZE_DEEPAGENT_CODE_SKILL_DESCRIPTION =
-  "Use ONLY when the user is editing or creating deepagent-code's own configuration: deepagent-code.json, deepagent-code.jsonc, files under .deepagent-code/, or files under ~/.config/deepagent-code/. Also use when creating or fixing deepagent-code agents, subagents, skills, plugins, MCP servers, or permission rules. Do not use for the user's own application code, or for any project that is not configuring deepagent-code itself."
+  "Use ONLY when the user is editing or creating deepagent-code's own configuration: config.jsonc, config.json, files under .deepagent-code/, or files under ~/.deepagent/code/. Also use when creating or fixing deepagent-code agents, subagents, skills, plugins, MCP servers, or permission rules. Do not use for the user's own application code, or for any project that is not configuring deepagent-code itself."
 const CUSTOMIZE_DEEPAGENT_CODE_SKILL_BODY = SkillPlugin.CustomizeOpencodeContent
 
 export const Info = Schema.Struct({
