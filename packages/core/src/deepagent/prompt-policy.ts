@@ -142,9 +142,12 @@ export const buildSystemPrompt = (ctx: PromptContext): string => {
     sections.push(ctx.bridge)
   }
 
-  if (ctx.knowledge && knowledgeEnabled(ctx.mode)) {
-    sections.push(knowledgeSection(ctx.knowledge))
-  }
+  // BUG #5 (prompt-cache): knowledge is populated LAZILY — round 1 on a fresh/empty store returns
+  // null (no section), and a later retrieval-enabled round returns non-null, which USED to insert the
+  // section into the cached prefix mid-session and bust the cache for the rest of the session. Mirror
+  // the T4.4 fan-out guard: knowledge is per-session-volatile w.r.t. WHEN it first appears, so it does
+  // NOT belong in the byte-stable prefix. It is rendered in buildVolatileRoundContext instead (tail,
+  // after the cache breakpoint), so the model still sees it without ever churning the prefix.
 
   sections.push(constraintsSection(ctx.mode))
 
@@ -168,6 +171,13 @@ export const buildVolatileRoundContext = (ctx: PromptContext): string => {
   const roundLine = `第 ${ctx.round} 轮 · 阶段 ${ctx.activation.stage}`
   sections.push(["# 本轮状态 (round context)", "", roundLine].join("\n"))
 
+  // MEDIUM cache-buster fix: the current date was moved OUT of environmentSection (cached prefix) —
+  // it advances at midnight and would bust the whole prefix once per day. Render it here in the tail
+  // so the model still knows "today" without churning the cache.
+  if (ctx.environment.date) {
+    sections.push(["# 日期 (date)", "", `- Date: ${ctx.environment.date}`].join("\n"))
+  }
+
   // Activation guidance: the stage-specific how-to-work prose. Stage advances across rounds, so this
   // is round-derived and must not sit in the cached prefix.
   if (ctx.activation.guidance.trim()) {
@@ -183,6 +193,15 @@ export const buildVolatileRoundContext = (ctx: PromptContext): string => {
   // §5b fan-out verdict: task-complexity-derived, so it changes with the user request each turn.
   const fanout = ctx.fanoutDecision ? fanoutVerdictLines(ctx.fanoutDecision) : null
   if (fanout) sections.push(fanout)
+
+  // BUG #5 (prompt-cache): knowledge is retrieved LAZILY (null on a fresh store round 1, non-null on a
+  // later retrieval-enabled round). It used to live in the cached system prefix, so its late appearance
+  // busted the prefix mid-session (~10× cost). It is advisory, round-derived context — render it here in
+  // the volatile tail (after the cache breakpoint) so the model still sees it without ever churning the
+  // prefix. The `knowledgeEnabled(mode)` gate is preserved from the original prefix placement.
+  if (ctx.knowledge && knowledgeEnabled(ctx.mode)) {
+    sections.push(knowledgeSection(ctx.knowledge))
+  }
 
   if (ctx.previousResults && ctx.round > 1) {
     sections.push(previousResultsSection(ctx.previousResults))
@@ -229,6 +248,10 @@ const identitySection = (mode: AgentMode): string => {
 }
 
 const environmentSection = (env: EnvironmentContext): string => {
+  // NOTE (prompt-cache): `- Date` is intentionally NOT rendered here. The date advances at midnight,
+  // so baking it into the cached prefix busts the whole prefix once per day (MEDIUM cache-buster). It
+  // is rendered in buildVolatileRoundContext (tail, after the cache breakpoint) instead — same policy
+  // as every other volatile env-derived value. Everything left here is session-stable.
   const lines = [
     "# Environment",
     "",
@@ -236,7 +259,6 @@ const environmentSection = (env: EnvironmentContext): string => {
     `- Shell: ${env.shell}`,
     `- CWD: ${env.cwd}`,
     `- Platform: ${env.platform}`,
-    `- Date: ${env.date}`,
   ]
   if (env.isGitRepo) {
     lines.push(`- Git: ${env.gitBranch ?? "unknown branch"}${env.gitRoot ? ` (root: ${env.gitRoot})` : ""}`)

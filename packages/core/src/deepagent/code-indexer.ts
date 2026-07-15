@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto"
+import { Effect } from "effect"
 import type { DurableKnowledgeStore } from "./durable-knowledge-store"
 import type { Doc, DocType, LinkRel, Provenance } from "./document-store"
 
@@ -92,6 +93,25 @@ const findByPath = (store: DurableKnowledgeStore, path: string): Doc | null => {
     return doc
   }
   return null
+}
+
+// The stored `mtime_ms` for every already-indexed code_symbol node, keyed by path. Exposed for a
+// filesystem-walking caller (code-index-trigger) to skip the READ + HASH of a file whose on-disk mtime
+// EXACTLY equals the recorded one — the only layer where mtime avoids real I/O (§B.3 SEAM). This is an
+// I/O-avoidance hint, NOT a correctness gate: an EXACT match is required (not `>=`), so a rewound or
+// non-monotonic mtime (git checkout / stash pop / rebase) does NOT equal the stored value and the file
+// is re-read + content-sha-gated as before. Content-sha remains the sole skip AUTHORITY for anything
+// actually read. A node without a recorded mtime is simply absent from the map (⇒ always re-read).
+export const indexedMtimes = (store: DurableKnowledgeStore): ReadonlyMap<string, number> => {
+  const ds = store.documentStore
+  const out = new Map<string, number>()
+  for (const ref of ds.list({ type: CODE_SYMBOL })) {
+    const doc = ds.get(ref.id)
+    if (!doc || doc.status === "rejected") continue
+    const mtime = doc.extensions?.mtime_ms
+    if (typeof mtime === "number") out.set(doc.description, mtime)
+  }
+  return out
 }
 
 // Register (create or content-gated upsert) a single file as a code_symbol node. Returns the node id
@@ -538,3 +558,33 @@ export const linkCallEdges = (
   }
   return { callsEdges, callsSkipped }
 }
+
+// V4.0 §C3.3 — resolve the FULLY-QUALIFIED symbol keys ("<host_path>#<symbol_path>") of the symbol
+// nodes hosted by a set of files, from an already-open project store. This is the code-graph feed for
+// the ConflictArbiter's semantic layer: two subtasks touching the same symbol conflict, and qualifying
+// the key by host_path means the SAME symbol name in DIFFERENT files does NOT false-conflict. It scans
+// the store's code_symbol nodes and collects the symbol children whose `extensions.host_path` matches a
+// requested file (the file-level parent node carries no symbol_path, so it is naturally excluded).
+// PURE over the store + no filesystem; default-safe — a missing/empty graph yields []. Wrapped in Effect
+// so the runtime's resolver can catch any store defect and fall back to file-level detection.
+export const symbolsForFilePaths = (
+  store: DurableKnowledgeStore,
+  files: ReadonlyArray<string>,
+): Effect.Effect<ReadonlyArray<string>> =>
+  Effect.sync(() => {
+    if (files.length === 0) return []
+    const wanted = new Set(files)
+    const ds = store.documentStore
+    const keys: string[] = []
+    for (const ref of ds.list({ type: CODE_SYMBOL })) {
+      const doc = ds.get(ref.id)
+      if (!doc || doc.status === "rejected") continue
+      const hostPath = doc.extensions?.host_path
+      const symbolPath = doc.extensions?.symbol_path
+      // only symbol CHILD nodes carry host_path + symbol_path; file-level parents have neither.
+      if (typeof hostPath !== "string" || typeof symbolPath !== "string") continue
+      if (!wanted.has(hostPath)) continue
+      keys.push(symbolNodeKey(hostPath, symbolPath))
+    }
+    return keys
+  })

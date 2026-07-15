@@ -87,8 +87,122 @@ describe("instance HttpApi", () => {
           sessions: true,
           pty: true,
           workspaces: true,
+          // §H3 — the event-driven flags are advertised and default OFF in production (operator
+          // opt-in per the staged rollout). This test builds RuntimeFlags from empty env, so the
+          // capability endpoint reports the production defaults.
+          v4EventDrivenIm: false,
+          v4AgentPushEnabled: false,
+          v4MultiAgentRuntime: false,
+          v4AgentAutonomyLevel2: false,
+          v4ThreadEnabled: false,
+          v4FileUploadEnabled: false,
         },
       })
+    }),
+  )
+
+  it.live("§D2 GET /oversight/approvals returns an empty pending queue for a fresh workspace", () =>
+    Effect.gen(function* () {
+      const dir = yield* tmpdirScoped({ git: true })
+      const response = yield* HttpClientRequest.get("/oversight/approvals").pipe(directoryHeader(dir), HttpClient.execute)
+      expect(response.status).toBe(200)
+      expect(yield* response.json).toEqual({ items: [] })
+    }),
+  )
+
+  it.live("§F GET /oversight/metrics returns the metric shape (zero/​null on a fresh workspace)", () =>
+    Effect.gen(function* () {
+      const dir = yield* tmpdirScoped({ git: true })
+      const response = yield* HttpClientRequest.get("/oversight/metrics").pipe(directoryHeader(dir), HttpClient.execute)
+      expect(response.status).toBe(200)
+      const body = (yield* response.json) as Record<string, unknown>
+      expect(body).toMatchObject({
+        dlqEventsTotal: 0,
+        agentPushRejectedTotal: 0,
+        agentTaskCompleted: 0,
+        agentTaskFailed: 0,
+        // no task activity on a fresh workspace → success rate is null (distinct from 100%).
+        agentTaskSuccessRate: null,
+      })
+    }),
+  )
+
+  it.live("§D2 POST /oversight/rollback returns 404 for an UNKNOWN session (unknown-session branch)", () =>
+    Effect.gen(function* () {
+      const dir = yield* tmpdirScoped({ git: true })
+      // an unknown session id is indistinguishable from another tenant's → typed 404, never a
+      // cross-workspace revert and never an untyped 500. (Security boundary: no cross-workspace rollback.)
+      // This covers oversight.ts:112 (session not found → 404).
+      const response = yield* HttpClientRequest.post("/oversight/rollback").pipe(
+        directoryHeader(dir),
+        HttpClientRequest.bodyJson({ sessionID: "ses_does_not_exist", reason: "test" }),
+        Effect.flatMap(HttpClient.execute),
+      )
+      expect(response.status).toBe(404)
+    }),
+  )
+
+  it.live("§D2 POST /oversight/rollback refuses a REAL session owned by another workspace (key-mismatch branch)", () =>
+    Effect.gen(function* () {
+      // Two distinct workspaces, keyed by their routed directory (deriveWorkspaceKey resolves to the
+      // directory in the single-user / directory-routed model). We seed a REAL session in workspace B,
+      // then route a rollback request to workspace A targeting B's session id. Unlike the unknown-session
+      // test above, the session EXISTS and is found — so this exercises the key-mismatch branch
+      // (oversight.ts:117), the security boundary that refuses a destructive cross-tenant revert.
+      const dirA = yield* tmpdirScoped({ git: true })
+      const dirB = yield* tmpdirScoped({ git: true })
+
+      // Seed a real session that BELONGS to workspace B (its directory == dirB → its workspace key == B).
+      const createResp = yield* HttpClientRequest.post(SessionPaths.create).pipe(
+        directoryHeader(dirB),
+        HttpClientRequest.bodyJson({ title: "workspace B session" }),
+        Effect.flatMap(HttpClient.execute),
+      )
+      expect(createResp.status).toBe(200)
+      const sessionB = (yield* createResp.json) as { id: string; directory: string; revert?: unknown }
+      expect(sessionB.id.startsWith("ses_")).toBe(true)
+      expect(sessionB.directory).toBe(dirB)
+
+      // Attempt to roll back session B while routed to workspace A. The handler finds session B (global
+      // by id), derives ITS key (B), compares to the routed key (A), and refuses: 404, not a revert.
+      const rollbackResp = yield* HttpClientRequest.post("/oversight/rollback").pipe(
+        directoryHeader(dirA),
+        HttpClientRequest.bodyJson({ sessionID: sessionB.id, reason: "cross-tenant attempt" }),
+        Effect.flatMap(HttpClient.execute),
+      )
+      expect(rollbackResp.status).toBe(404)
+
+      // Prove NO revert happened + NO audit row was written. A rollback that reached SessionRevert would
+      // ALWAYS append an audit row (even a noop revert), bumping rollback_total. Since record() is strictly
+      // downstream of revert() in the handler, rollback_total == 0 for BOTH workspaces proves the handler
+      // returned at the key-mismatch check BEFORE invoking SessionRevert — no revert, no misleading
+      // "reverted" audit fact. (Windowed wide to catch any row regardless of clock.)
+      const now = Date.now()
+      const metricsQuery = `?from=0&to=${now + 60_000}`
+      const metricsB = yield* HttpClientRequest.get(`/oversight/metrics${metricsQuery}`).pipe(
+        directoryHeader(dirB),
+        HttpClient.execute,
+      )
+      expect(metricsB.status).toBe(200)
+      expect((yield* metricsB.json) as Record<string, unknown>).toMatchObject({ rollbackTotal: 0 })
+
+      const metricsA = yield* HttpClientRequest.get(`/oversight/metrics${metricsQuery}`).pipe(
+        directoryHeader(dirA),
+        HttpClient.execute,
+      )
+      expect(metricsA.status).toBe(200)
+      expect((yield* metricsA.json) as Record<string, unknown>).toMatchObject({ rollbackTotal: 0 })
+
+      // And session B itself is untouched: still retrievable in workspace B with no revert snapshot applied
+      // (a real revert would have set its `revert` field).
+      const getB = yield* HttpClientRequest.get(`${SessionPaths.list}/${sessionB.id}`).pipe(
+        directoryHeader(dirB),
+        HttpClient.execute,
+      )
+      expect(getB.status).toBe(200)
+      const reloadedB = (yield* getB.json) as { id: string; revert?: unknown }
+      expect(reloadedB.id).toBe(sessionB.id)
+      expect(reloadedB.revert ?? null).toBeNull()
     }),
   )
 

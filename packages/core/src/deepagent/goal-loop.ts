@@ -3,7 +3,10 @@ import { randomUUID } from "node:crypto"
 import type { DocumentStore } from "./document-store"
 import {
   type PlanDoc,
+  type PlanInput,
   buildCompletionReport,
+  buildPlanFromInput,
+  hasBlockedSteps,
   planScope,
 } from "./plan-controller"
 
@@ -132,8 +135,15 @@ export class InvalidGoalError extends Schema.TaggedErrorClass<InvalidGoalError>(
 export type GraderPorts = {
   /** Run the given validation commands; `pass` iff ALL succeeded. */
   readonly runTests: (commands: readonly string[]) => Effect.Effect<{ readonly pass: boolean }>
-  /** Highest diagnostic severity currently present, or null when there are none. */
-  readonly diagnostics: () => Effect.Effect<{ readonly maxSeverity: string | null }>
+  /**
+   * Highest diagnostic severity currently present, or null when there are none. `checked` MUST be false
+   * when the port could not actually compute diagnostics (LSP crashed/timed out, no client covered the
+   * changed files, defect fallback). A `maxSeverity: null, checked: false` result means "unknown", NOT
+   * "clean" — the grader treats an unchecked result as an unmet gap (mirrors runTests' empty-set = NOT
+   * passed), so a broken/absent LSP can never vacuously satisfy `no_diagnostics`. `checked` defaults to
+   * true only for an explicit, truthful result. See goal-loop-wiring.ts.
+   */
+  readonly diagnostics: () => Effect.Effect<{ readonly maxSeverity: string | null; readonly checked?: boolean }>
   /** Reviewer subagent verdict: `pass` iff no finding exceeds `maxSeverity`. */
   readonly reviewerClean: (maxSeverity: string) => Effect.Effect<{ readonly pass: boolean }>
   /** Expert Panel verdict (§D.7 key decision point) — `decision` is approve/revise/block/needs_human. */
@@ -172,8 +182,12 @@ const evaluateOne = (
         return pass ? null : `tests_pass: one or more of [${criterion.commands.join(", ")}] failed`
       }
       case "no_diagnostics": {
-        const { maxSeverity } = yield* ports.diagnostics()
-        if (maxSeverity == null) return null // no diagnostics at all → always met
+        const { maxSeverity, checked } = yield* ports.diagnostics()
+        // A port that could NOT actually check (LSP down/timeout, no client for the changed files,
+        // defect fallback) reports checked:false. That is UNKNOWN, not clean — treat it as an unmet gap
+        // so a broken/absent LSP never vacuously satisfies no_diagnostics (mirrors runTests empty = fail).
+        if (checked === false) return "no_diagnostics: could not verify diagnostics (no diagnostic provider reported)"
+        if (maxSeverity == null) return null // genuinely checked and no diagnostics at all → met
         // With no severityAtMost, ANY diagnostic is a gap (strict "no diagnostics"). With a bound, a
         // diagnostic is a gap only when it is strictly more severe than the allowed ceiling.
         if (criterion.severityAtMost == null)
@@ -193,6 +207,13 @@ const evaluateOne = (
       case "plan_complete": {
         if (plan == null) return "plan_complete: plan document not found"
         const report = buildCompletionReport(plan)
+        // U10 parity with plan-controller finalize: buildCompletionReport counts a `blocked` step as
+        // RESOLVED (so finalize isn't deadlocked behind an escape hatch), which makes report.complete
+        // true when every step is done-or-blocked. But a blocked step never finishes on its own — the
+        // goal is NOT cleanly complete, it needs a human. Guard blocked steps explicitly here rather
+        // than trusting report.complete, so a blocked plan surfaces a gap instead of a silent "done".
+        if (hasBlockedSteps(plan))
+          return `plan_complete: blocked steps need a human [${report.blocked.join(", ")}]`
         return report.complete
           ? null
           : `plan_complete: outstanding steps [${report.outstanding.join(", ")}]`
@@ -215,41 +236,6 @@ const CRITERION_COST_RANK: Record<CompletionCriterion["kind"], number> = {
 const isExpensiveCriterion = (kind: CompletionCriterion["kind"]): boolean =>
   kind === "reviewer_clean" || kind === "panel_approves"
 
-/**
- * §D.3 Grader.evaluate — ALL criteria must be met (AND). `gaps` lists every unmet criterion. Pure with
- * respect to its ports: same ports + same plan → same result.
- *
- * With `{ deferExpensive: true }` (the Controller default) the criteria are evaluated cheap-first and
- * the SUBAGENT-SPAWNING gates (reviewer_clean, panel_approves) are SKIPPED once any cheaper criterion is
- * already unmet — the goal cannot be `met` this tick regardless, so spending a panel/reviewer turn to
- * enumerate a gap we will not act on is pure waste (§D.7 非每轮). This never changes the met/unmet
- * verdict (a cheap gap already forces met=false); it only avoids convening the panel except at the key
- * decision point when everything cheaper passes. Direct callers (tests) default to the full evaluation.
- */
-export const evaluateCriteria = (
-  criteria: readonly CompletionCriterion[],
-  ports: GraderPorts,
-  plan: PlanDoc | null,
-  options: { readonly deferExpensive?: boolean } = {},
-): Effect.Effect<GraderResult> =>
-  Effect.gen(function* () {
-    const deferExpensive = options.deferExpensive ?? false
-    const ordered = deferExpensive
-      ? [...criteria].sort((a, b) => CRITERION_COST_RANK[a.kind] - CRITERION_COST_RANK[b.kind])
-      : criteria
-    const gaps: string[] = []
-    for (const c of ordered) {
-      // Defer the expensive, subagent-spawning gates until every cheaper criterion has passed.
-      if (deferExpensive && gaps.length > 0 && isExpensiveCriterion(c.kind)) {
-        gaps.push(`${c.kind}: deferred — a cheaper criterion is unmet (panel/reviewer not convened this tick)`)
-        continue
-      }
-      const gap = yield* evaluateOne(c, ports, plan)
-      if (gap != null) gaps.push(gap)
-    }
-    return { met: gaps.length === 0, gaps }
-  })
-
 // The Controller's view of grading: the spec GraderResult PLUS whether a gate ACTIVELY rejected (as
 // opposed to merely being unmet). A panel `block` / `needs_human` verdict is an active rejection — the
 // panel is telling us to stop and get a human, not "try again" — so the loop escalates on the FIRST
@@ -262,9 +248,15 @@ export type GraderDecision = {
   readonly escalateReason: string | null
 }
 
-// Evaluate for the Controller: same AND-gate + cheap-first deferral as evaluateCriteria, but also flags
-// an active panel rejection for immediate escalation. Only `panel_approves` can escalate (the panel is
-// the human-in-the-loop decision point, §D.7); a `revise` verdict is a soft gap.
+// Evaluate for the Controller — the sole grader entry point. ALL criteria must be met (AND); `gaps`
+// lists every unmet criterion. Pure w.r.t. its ports: same ports + same plan → same result. Criteria
+// are ordered cheap-first and the SUBAGENT-SPAWNING gates (reviewer_clean, panel_approves) are SKIPPED
+// once any cheaper criterion is already unmet — the goal cannot be `met` this tick regardless, so
+// spending a panel/reviewer turn to enumerate a gap we will not act on is pure waste (§D.7 非每轮).
+// This never changes the met/unmet verdict; it only avoids convening the panel except at the key
+// decision point when everything cheaper passes. It ALSO flags an active panel rejection for immediate
+// escalation: only `panel_approves` can escalate (the human-in-the-loop decision point, §D.7); a
+// `revise` verdict stays a soft gap.
 export const evaluateForController = (
   criteria: readonly CompletionCriterion[],
   ports: GraderPorts,
@@ -293,11 +285,17 @@ export const evaluateForController = (
       }
       const gap = yield* evaluateOne(c, ports, plan)
       if (gap != null) gaps.push(gap)
+      // U10 parity: a blocked plan step is an ACTIVE rejection, not a soft gap — the step will never
+      // finish on its own, so route to a human on the FIRST such verdict rather than burning ticks
+      // re-executing an unadvanceable plan until the stall threshold. Mirrors plan-controller finalize
+      // (hasBlockedSteps → needs_human).
+      if (c.kind === "plan_complete" && hasBlockedSteps(plan)) {
+        escalate = true
+        escalateReason = "plan has blocked steps"
+      }
     }
     return { result: { met: gaps.length === 0, gaps }, escalate, escalateReason }
   })
-
-export const Grader = { evaluate: evaluateCriteria, evaluateForController }
 
 // ---------------------------------------------------------------------------------------------------
 // Controller — the tick state machine. State lives entirely in a run_context doc so a restart recovers.
@@ -309,6 +307,13 @@ export type StepExecutorResult = {
   readonly cost?: number
   /** A critical / unrecoverable failure — the tick rolls back rather than continuing. */
   readonly critical?: boolean
+  /**
+   * The session the executor actually RAN the step in. The Controller runs in a parent goal session but
+   * the executor may run each turn in a fresh CHILD session (that is where the file mutations live). On a
+   * critical failure the Controller must roll back THAT session, not the parent (which has no edits) — so
+   * the executor surfaces it here. Absent ⇒ the executor ran in the goal session itself.
+   */
+  readonly executedSessionId?: string
 }
 
 /**
@@ -323,7 +328,13 @@ export type StepExecutor = (input: {
   readonly activeStepId: string | null
 }) => Effect.Effect<StepExecutorResult>
 
-/** §D.6 可回滚: injected rollback (production wires the existing revert). Best-effort, never fatal. */
+/**
+ * §D.6 可回滚: injected rollback (production wires the existing revert). Best-effort, never fatal.
+ * `sessionId` is the session whose changes must be reverted — the executor's ACTUAL run session (a child
+ * session where the edits live) when it reported one, else the goal session. Reverting the wrong session
+ * (e.g. the parent, which has no edits) makes `rolled_back` reported-but-false, leaving the workspace
+ * dirty after a critical failure.
+ */
 export type RollbackPort = (input: {
   readonly goalId: string
   readonly sessionId: string
@@ -559,6 +570,21 @@ export interface GoalLoop {
   readonly tick: (handle: GoalHandle) => Effect.Effect<TickOutcome>
   readonly status: (handle: GoalHandle) => Effect.Effect<GoalStatus>
   readonly stop: (handle: GoalHandle) => Effect.Effect<void>
+  /**
+   * V4.1 §S2 — apply a USER plan edit to a running/paused goal and RE-BASELINE stall/progress tracking.
+   * Called by the driver BETWEEN ticks (never mid-tick), using the driver's OWN store handle — that is
+   * why the edit is observed on the next tick (a separate store handle from an HTTP fiber would NOT be,
+   * since DocumentStore serves reads from an in-memory map rebuilt only at construction). It:
+   *   1. upserts the plan doc with the edited PlanDoc (version+1 — so the next tick's version-dedup does
+   *      NOT skip it; a fingerprint-identical no-op edit is a no-op upsert, harmless).
+   *   2. RE-BASELINES the persisted run_context state to the EDITED plan: stallCount→0 and
+   *      lastDoneCount/lastEvidenceCount/lastMetCount/lastFingerprint set to the edited plan's values, and
+   *      lastProcessedVersion→null (so the tick after the edit runs). Without this, a user re-opening a
+   *      done step (done→pending) reads as a progress REGRESSION and could trip the stall-stop; the
+   *      re-baseline gives the revision a fresh runway.
+   * No-op when no persisted state exists for the handle (goal not started / already gone).
+   */
+  readonly applyPlanEdit: (handle: GoalHandle, edit: PlanInput) => Effect.Effect<void>
 }
 
 // §D.4 start validation — HARD, no defaults that bypass. criteria empty → not objectively decidable;
@@ -649,7 +675,32 @@ export const makeGoalLoop = (deps: ControllerDeps): GoalLoop => {
       // dedup guarantees "a repeated no-progress tick has no side effects", not "every tick is exactly-
       // once under a mid-tick crash". The driver must therefore treat tick as at-least-once.
       if (state.lastProcessedVersion === version && state.lastOutcome != null) {
-        return state.lastOutcome
+        // 幂等: a replay at the SAME version has NO side effects — never re-execute, never re-accrue
+        // budget (ticks/tokens/cost). BUT a replay at an unchanged version is by definition a
+        // NO-PROGRESS tick: if we just returned the recorded (non-terminal) outcome forever, an
+        // executor that RUNS but leaves the plan-doc unchanged (no version bump) would bypass the
+        // stall guard entirely — only the driver's maxIterations would ever stop it. So a NON-TERMINAL
+        // replay still accrues toward the stall guard here, and escalates to needs_human once the
+        // stall threshold is reached. (A terminal outcome was already replayed by the phase check
+        // above, so `lastOutcome` here is always the non-terminal `continue`; the guard is defensive.)
+        // Capture the null-checked outcome so the narrowing survives the `let state` reassignments below.
+        const replayOutcome: TickOutcome = state.lastOutcome
+        if (isTerminalPhase(phaseForOutcome(replayOutcome))) return replayOutcome
+        const stallCount = state.stallCount + 1
+        if (stallCount >= state.spec.stallThreshold) {
+          state = {
+            ...state,
+            phase: "needs_human",
+            stallCount,
+            lastOutcome: "needs_human",
+            gaps: [`no progress for ${stallCount} consecutive ticks (plan version unchanged)`, ...state.gaps],
+          }
+          persistState(deps, state)
+          return "needs_human"
+        }
+        state = { ...state, stallCount }
+        persistState(deps, state)
+        return replayOutcome
       }
 
       // 不越权: execute the active step via the injected executor (normal perms; Loop never elevates).
@@ -677,10 +728,13 @@ export const makeGoalLoop = (deps: ControllerDeps): GoalLoop => {
       // is NaN, which would poison the ledger permanently and silently disable the token cap forever
       // (`NaN > maxTokens` is always false). Coerce a non-finite / negative token count to 0.
       const addTokens = Number.isFinite(execResult.tokensUsed) ? Math.max(0, Math.trunc(execResult.tokensUsed)) : 0
+      // Symmetric with tokens: a negative cost from a misbehaving port would DECREMENT the ledger (and
+      // could indefinitely defer the maxCost cap), so clamp to 0 just like the token count.
+      const addCost = Number.isFinite(execResult.cost) ? Math.max(0, execResult.cost as number) : 0
       const ledger: BudgetLedger = {
         ticks: state.ledger.ticks + 1,
         tokens: state.ledger.tokens + addTokens,
-        cost: state.ledger.cost + (Number.isFinite(execResult.cost) ? (execResult.cost as number) : 0),
+        cost: state.ledger.cost + addCost,
         wallclockMs: Math.max(0, deps.now() - state.ledger.startedAtMs),
         startedAtMs: state.ledger.startedAtMs,
       }
@@ -756,10 +810,13 @@ export const makeGoalLoop = (deps: ControllerDeps): GoalLoop => {
         )
         // A DEFECT in the injected rollback port must not escape tick's never-fail contract — the audit
         // trail above is already durable, so swallow a rollback defect (best-effort / never fatal).
+        // Revert the session the executor ACTUALLY ran the step in (the child session that holds the file
+        // mutations), falling back to the goal session only when the executor ran there directly. Passing
+        // the parent goal session here would revert nothing (it has no edits) — the wrong-session bug.
         yield* deps
           .rollback({
             goalId: state.goalId,
-            sessionId: state.sessionId,
+            sessionId: execResult.executedSessionId ?? state.sessionId,
             reason: `critical failure at tick ${ledger.ticks}`,
           })
           .pipe(Effect.catchCause(() => Effect.void))
@@ -792,7 +849,48 @@ export const makeGoalLoop = (deps: ControllerDeps): GoalLoop => {
       persistState(deps, { ...state, phase: "stopped", lastOutcome: state.lastOutcome })
     })
 
-  return { start, tick, status, stop }
+  const applyPlanEdit: GoalLoop["applyPlanEdit"] = (handle, edit) =>
+    Effect.sync(() => {
+      const state = loadState(deps, handle)
+      // No persisted state (goal not started / gone), or already terminal → nothing to edit/re-baseline.
+      if (state == null || isTerminalPhase(state.phase)) return
+      // Reconcile the user's revision against the CURRENT durable plan (via this driver's own store
+      // handle) so step ids + accumulated evidence are PRESERVED across the rewrite (buildPlanFromInput
+      // matches revised steps to prior steps by id). Reading `previous` here — not in the HTTP fiber —
+      // is why evidence isn't lost: the driver's handle holds the up-to-date doc incl. the last tick's
+      // mirrored-back progress.
+      const existing = deps.store.get(state.planDocId)
+      // The goal's plan doc must already exist (start materialized it). If it is somehow gone, do NOT
+      // fabricate an orphan under a fresh id — a re-baseline against a doc the tick can't read would be
+      // silent data loss. Bail (no-op) so the caller's ok:true never lies about a lost edit.
+      if (existing == null) return
+      const previous = readPlan(deps.store, state.planDocId).plan
+      const editedPlan = buildPlanFromInput(state.sessionId, edit, previous)
+      // 1) Write the edited plan back to THE SAME durable doc by id (version+1), so the next tick's
+      //    readPlan(state.planDocId) sees the revision. Writing by id — not upsert-by-logical-key —
+      //    avoids the description/idSlug matching that would otherwise mint an orphan doc (upsert's
+      //    findLogical keys on description, which need not equal the doc materialize() wrote). A
+      //    fingerprint-identical edit is a no-op (updateWithProvenance returns cur unchanged, INV-4).
+      //    provenance.source="human" records the human-authored revision (vs the model's plan-tool edits).
+      deps.store.updateWithProvenance(state.planDocId, JSON.stringify(editedPlan), {
+        source: "human",
+        run_ref: planScope(state.sessionId),
+      })
+      // 2) Re-baseline: reset stall + set the progress baselines to the EDITED plan, and null the
+      //    processed-version so the next tick runs against the revision (not deduped, not a false stall).
+      persistState(deps, {
+        ...state,
+        stallCount: 0,
+        lastFingerprint: planFingerprint(editedPlan),
+        lastDoneCount: doneStepCount(editedPlan),
+        lastEvidenceCount: evidenceCount(editedPlan),
+        // metCount is criteria-derived (independent of plan structure); leave it — a plan edit does not
+        // retroactively un-meet a satisfied criterion, and the next tick re-grades regardless.
+        lastProcessedVersion: null,
+      })
+    })
+
+  return { start, tick, status, stop, applyPlanEdit }
 }
 
 export * as GoalLoop from "./goal-loop"

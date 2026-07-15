@@ -75,6 +75,59 @@ describe("RuntimeFlags", () => {
     }),
   )
 
+  it.effect("§H3: all seven V4.0 flags default OFF in production (staged rollout is operator opt-in)", () =>
+    Effect.gen(function* () {
+      const flags = yield* readFlags.pipe(Effect.provide(fromConfig({})))
+      expect(flags.v4EventDrivenIm).toBe(false)
+      expect(flags.v4AgentPushEnabled).toBe(false)
+      expect(flags.v4MultiAgentRuntime).toBe(false)
+      expect(flags.v4AgentAutonomyLevel2).toBe(false)
+      expect(flags.v4ThreadEnabled).toBe(false)
+      expect(flags.v4FileUploadEnabled).toBe(false)
+      expect(flags.v4PanelAutoConvene).toBe(false)
+    }),
+  )
+
+  it.effect("§H1: each V4.0 flag is an independent opt-in (=true enables just that one)", () =>
+    Effect.gen(function* () {
+      // turning ONE on must not turn the others on — an operator advances the rollout capability by
+      // capability. This also proves the override path still works: the default is OFF but env `=true`
+      // enables it (verification + staged rollout depend on this).
+      const flags = yield* readFlags.pipe(
+        Effect.provide(fromConfig({ DEEPAGENT_CODE_V4_MULTI_AGENT_RUNTIME: "true" })),
+      )
+      expect(flags.v4MultiAgentRuntime).toBe(true)
+      expect(flags.v4EventDrivenIm).toBe(false)
+      expect(flags.v4AgentPushEnabled).toBe(false)
+      expect(flags.v4PanelAutoConvene).toBe(false)
+    }),
+  )
+
+  it.effect("§H1: all seven V4.0 flags can be turned ON together via env (full-stack opt-in)", () =>
+    Effect.gen(function* () {
+      const flags = yield* readFlags.pipe(
+        Effect.provide(
+          fromConfig({
+            DEEPAGENT_CODE_V4_EVENT_DRIVEN_IM: "true",
+            DEEPAGENT_CODE_V4_AGENT_PUSH_ENABLED: "true",
+            DEEPAGENT_CODE_V4_MULTI_AGENT_RUNTIME: "true",
+            DEEPAGENT_CODE_V4_AGENT_AUTONOMY_LEVEL_2: "true",
+            DEEPAGENT_CODE_V4_THREAD_ENABLED: "true",
+            DEEPAGENT_CODE_V4_FILE_UPLOAD_ENABLED: "true",
+            DEEPAGENT_CODE_V4_PANEL_AUTO_CONVENE: "true",
+          }),
+        ),
+      )
+      expect(flags.v4EventDrivenIm).toBe(true)
+      expect(flags.v4AgentPushEnabled).toBe(true)
+      expect(flags.v4MultiAgentRuntime).toBe(true)
+      expect(flags.v4AgentAutonomyLevel2).toBe(true)
+      expect(flags.v4ThreadEnabled).toBe(true)
+      expect(flags.v4FileUploadEnabled).toBe(true)
+      expect(flags.v4PanelAutoConvene).toBe(true)
+    }),
+  )
+
   it.effect("defaultLayer parses DEEPAGENT_CODE_EXPERIMENTAL_LSP_TY", () =>
     Effect.gen(function* () {
       const flags = yield* readFlags.pipe(

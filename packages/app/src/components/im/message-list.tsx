@@ -6,6 +6,8 @@ interface MessageListProps {
   messages: LocalMessage[]
   agentStatuses: Map<string, { agentID: string; status: string }>
   agentProgress: Map<string, AgentProgressPart[]>
+  // §B3 thread — when provided, each message shows a "Reply in thread" affordance.
+  onOpenThread?: (message: LocalMessage) => void
 }
 
 export function MessageList(props: MessageListProps) {
@@ -39,6 +41,7 @@ export function MessageList(props: MessageListProps) {
               message={message}
               agentStatus={props.agentStatuses.get(message.id)}
               agentProgress={props.agentProgress.get(message.id)}
+              onOpenThread={props.onOpenThread}
             />
           )}
         </For>

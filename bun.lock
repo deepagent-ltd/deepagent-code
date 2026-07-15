@@ -29,7 +29,7 @@
     },
     "packages/app": {
       "name": "@deepagent-code/app",
-      "version": "1.0.0-beta",
+      "version": "1.4.0",
       "dependencies": {
         "@codemirror/autocomplete": "6",
         "@codemirror/commands": "6",
@@ -344,7 +344,7 @@
     },
     "packages/desktop": {
       "name": "@deepagent-code/desktop",
-      "version": "1.2.0",
+      "version": "1.4.0",
       "dependencies": {
         "@zip.js/zip.js": "2.7.62",
         "effect": "catalog:",

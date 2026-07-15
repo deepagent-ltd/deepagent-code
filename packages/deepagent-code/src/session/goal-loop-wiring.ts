@@ -25,6 +25,7 @@ import { Agent } from "../agent/agent"
 import { deriveSubagentSessionPermission } from "../agent/subagent-permissions"
 import { MessageID, SessionID } from "./schema"
 import { runValidationCommands } from "../deepagent/validation-exec"
+import type { GoalSteerRelay, PendingGoalSteer } from "./goal-driver"
 
 /**
  * V3.9 §D / §F.3 — Goal Loop production WIRING.
@@ -111,6 +112,31 @@ export type SubagentTurnInput = {
   /** Optional JSON Schema forcing a structured final turn (reviewer / panelist). */
   readonly outputSchema?: Record<string, unknown>
   /**
+   * V4.0 §C — the workspace/directory the turn should be rooted in, for a runner that is NOT bound to a
+   * fixed parent session (the event-driven Multi-Agent Runtime creates a fresh root session per event
+   * in the triggering event's workspace). The goal-loop runner ignores these (it parents to the goal
+   * session). `workspaceID` is a genuine "wrk"-id or a directory-fallback; `directory` is the worktree.
+   */
+  readonly workspaceID?: string
+  readonly directory?: string
+  /**
+   * §F2 trace — the triggering event's correlationID. When present, the runner STAMPS it onto the child
+   * session's `metadata.correlationID`. This is one HALF of the §F2 back-half: `Observability.trace` READS
+   * it back (json_extract over session metadata, scoped to the same correlationID + routing key) and
+   * appends the child session as a "session" node, so the trace follows correlationID from the event down
+   * into the child session's activity (its message / tool-call turns). The stamp is inert on its own — the
+   * trace-query read is what makes it observable. The goal-loop runner leaves this unset (its turns belong
+   * to the goal session's own trace); the event-driven Multi-Agent Runtime passes `event.correlationID ??
+   * event.id` so a coordinated turn's child session joins back to the triggering event.
+   */
+  readonly correlationID?: string
+  /**
+   * §C1/§G — the executing agent's declared per-turn wall-clock ceiling (limits.maxTurnDurationMs). The
+   * event turn runner bounds the turn with THIS when set, falling back to its fixed default otherwise.
+   * The goal-loop runner ignores it (its turns are bounded by the goal ledger). Unset ⇒ default timeout.
+   */
+  readonly maxTurnDurationMs?: number
+  /**
    * §D/§E F3 — optional hook invoked with the child session id AFTER the session is created but BEFORE
    * the prompt turn runs. The goal-worker StepExecutor uses it to SEED the child session's plan-state
    * from the goal plan doc, so the worker's `plan` tool edits build on (and stay bound to) the goal's
@@ -130,8 +156,12 @@ export type SubagentTurnRunner = (input: SubagentTurnInput) => Effect.Effect<Sub
 export type GraderPortsDeps = {
   /** Reuses the workspace validation runner (same as the multi-round loop). */
   readonly runValidation: (commands: readonly string[]) => Effect.Effect<{ readonly pass: boolean }>
-  /** Live LSP diagnostics reduced to the single highest severity label, or null. */
-  readonly diagnostics: () => Effect.Effect<{ readonly maxSeverity: string | null }>
+  /**
+   * Live LSP diagnostics reduced to the single highest severity label, or null when genuinely clean.
+   * `checked: false` signals the diagnostics could NOT be computed (see the port doc in goal-loop.ts) —
+   * the grader treats that as an unmet gap rather than a vacuous pass.
+   */
+  readonly diagnostics: () => Effect.Effect<{ readonly maxSeverity: string | null; readonly checked: boolean }>
   /** Drives ONE reviewer / panelist subagent turn. */
   readonly runTurn: SubagentTurnRunner
   /** The Expert Panel question builder — the caller pins the concrete question / lens set. */
@@ -169,7 +199,9 @@ const safe = <A>(effect: Effect.Effect<A, unknown>, fallback: A): Effect.Effect<
 
 export const buildGraderPorts = (deps: GraderPortsDeps): GraderPorts => ({
   runTests: (commands) => safe(deps.runValidation(commands), { pass: false }),
-  diagnostics: () => safe(deps.diagnostics(), { maxSeverity: null }),
+  // A defect fallback is UNKNOWN, not clean: checked:false so the grader counts it as an unmet gap
+  // rather than vacuously satisfying no_diagnostics (the fail-open this replaced).
+  diagnostics: () => safe(deps.diagnostics(), { maxSeverity: null, checked: false }),
   reviewerClean: (maxSeverity) =>
     safe(
       deps
@@ -250,12 +282,24 @@ export type PlanBridge = {
 export const buildStepExecutor = (
   runTurn: SubagentTurnRunner,
   planBridgeFor?: (planDocId: string) => PlanBridge,
+  /**
+   * V4.1 §S1.3 — the goal-steer RELAY (shared with the driver). At prompt-build time the executor
+   * `drainForPrompt()`s any staged goal-directed guidance and threads it into the step prompt as a
+   * clearly-marked USER GUIDANCE section. Draining here (not in the driver) is what lets the driver
+   * stamp EXACTLY the steers a real tick threaded — a tick that short-circuits before the executor runs
+   * never drains, so nothing is consumed. Omitted ⇒ no goal-tick steering (base behaviour).
+   */
+  steerRelay?: GoalSteerRelay,
 ): StepExecutor =>
   (input) => {
     const planBridge = planBridgeFor?.(input.planDocId)
+    // §S1.3: pull the staged goal-steer into THIS tick's prompt (cache-safe — it becomes the child
+    // turn's user-message tail via renderStepPrompt, never a system prefix). Draining marks it as
+    // threaded-this-tick on the relay so the driver stamps exactly these ids consumed after the tick.
+    const steer = steerRelay ? steerRelay.drainForPrompt() : []
     return runTurn({
       agentType: "goal-worker",
-      prompt: renderStepPrompt(input),
+      prompt: renderStepPrompt({ ...input, steer }),
       ...(planBridge ? { prepareSession: (childId: string) => planBridge.seedChildPlan(childId) } : {}),
     }).pipe(
       Effect.map((turn): StepExecutorResult => {
@@ -272,6 +316,10 @@ export const buildStepExecutor = (
         return {
           tokensUsed: turn.tokensUsed,
           cost: turn.cost,
+          // Surface the CHILD session the turn ran in so a critical-failure rollback reverts THAT
+          // session (where the file edits live), not the parent goal session (which has none). Without
+          // this the loop reports `rolled_back` while the child's mutations stay on disk.
+          ...(turn.sessionID ? { executedSessionId: turn.sessionID } : {}),
           // A turn that could not run at all is a critical failure for THIS tick → the loop rolls back.
           ...(turn.ok ? {} : { critical: true }),
         }
@@ -319,19 +367,40 @@ export const makePlanBridge = (input: {
   },
 })
 
-const renderStepPrompt = (input: {
+/**
+ * Build the goal-worker's per-tick step prompt. §S1.3: when the driver staged mid-run user guidance
+ * (drained from the goal session's steer buffer BETWEEN ticks), it is rendered as a clearly-marked
+ * "USER GUIDANCE (mid-run steering)" section at the TAIL of the prompt. This is cache-safe by
+ * construction: the step prompt IS the child turn's user message, so the guidance lands in the model
+ * INPUT tail — never in any cached system prefix. Placing it FIRST (before the advance instruction)
+ * makes the controller/step-selection weigh it when picking the next step.
+ */
+export const renderStepPrompt = (input: {
   readonly goalId: string
   readonly sessionId: string
   readonly planDocId: string
   readonly activeStepId: string | null
-}): string =>
-  [
+  /** §S1.3 — mid-run steering drained from the goal session's steer buffer, threaded into this turn. */
+  readonly steer?: ReadonlyArray<PendingGoalSteer>
+}): string => {
+  const steerLines =
+    input.steer && input.steer.length > 0
+      ? [
+          `USER GUIDANCE (mid-run steering): the user sent the following while this goal was running.`,
+          `Weigh it BEFORE deciding the next step; it may add a requirement, skip work, or re-prioritise.`,
+          ...input.steer.map((s) => `- ${s.text}`),
+          ``,
+        ]
+      : []
+  return [
+    ...steerLines,
     `Advance goal ${input.goalId}. Execute exactly ONE plan step of real progress this turn.`,
     input.activeStepId
       ? `The active step is "${input.activeStepId}". Complete it, then mark it done and set the next step active.`
       : `No step is currently active. Read the plan, pick the next pending step, mark it active, and make progress.`,
     `Ground every "done" in a verifiable fact (a command you ran, a test that passed). Do NOT mark a step done to satisfy the gate.`,
   ].join("\n")
+}
 
 // ---------------------------------------------------------------------------------------------------
 // makeTaskSubagentRunner — the REAL turn runner (item 4 live wiring). One call = one SessionPrompt
@@ -372,6 +441,11 @@ export const makeTaskSubagentRunner = (deps: TaskSubagentRunnerDeps): SubagentTu
         parentID: deps.parentSessionID,
         title: `${input.agentType} (goal-loop)`,
         agent: next.name,
+        // §F2 trace back-half — stamp the correlationID onto the child session's metadata; Observability
+        // .trace reads it back (json_extract) and appends this child as a "session" node, so the trace
+        // joins the child's activity back to the event. Omitted when the caller supplies none (goal-loop
+        // turns belong to the goal session's own trace).
+        ...(input.correlationID ? { metadata: { correlationID: input.correlationID } } : {}),
         permission: deriveSubagentSessionPermission({
           parentSessionPermission: parent.permission ?? [],
           parentAgent,
@@ -448,7 +522,10 @@ export type GoalLoopWiringInput = {
   /** Builds the Expert Panel question convened at a decision point (§D.7). */
   readonly panelQuestion: () => PanelQuestionInput
   /** Live LSP diagnostics accessor (production: LSP.Service.diagnostics). */
-  readonly diagnostics: () => Effect.Effect<Record<string, readonly LSPClient.Diagnostic[]>>
+  readonly diagnostics: () => Effect.Effect<{
+    readonly diagnostics: Record<string, readonly LSPClient.Diagnostic[]>
+    readonly checked: boolean
+  }>
   /** Best-effort rollback (production: SessionRevert). */
   readonly rollback: RollbackPort
   /**
@@ -458,6 +535,13 @@ export type GoalLoopWiringInput = {
    */
   readonly agentMode?: string
   readonly now?: () => number
+  /**
+   * V4.1 §S1.3 — the goal-steer RELAY shared with the driver's `runToCompletion`. When set, the step
+   * executor threads staged goal-directed steering into each tick's step prompt. The GoalManager creates
+   * ONE relay per goal run and passes the SAME instance here and to `runToCompletion`. Omitted ⇒ the goal
+   * loop runs with no goal-tick steering (unchanged behaviour).
+   */
+  readonly steerRelay?: GoalSteerRelay
 }
 
 /**
@@ -477,7 +561,9 @@ export const makeGoalLoopWiring = (
           Effect.map((results) => ({ pass: AgentGateway.DeepAgentValidation.allPassed(results) })),
         ),
       diagnostics: () =>
-        input.diagnostics().pipe(Effect.map((d) => ({ maxSeverity: highestDiagnosticSeverity(d) }))),
+        input
+          .diagnostics()
+          .pipe(Effect.map((d) => ({ maxSeverity: highestDiagnosticSeverity(d.diagnostics), checked: d.checked }))),
       runTurn: input.runTurn,
       panelQuestion: input.panelQuestion,
       parentSessionID: input.parentSessionID,
@@ -494,7 +580,8 @@ export const makeGoalLoopWiring = (
     return {
       store: input.store,
       ports,
-      executor: buildStepExecutor(input.runTurn, planBridgeFor),
+      // §S1.3: thread the shared goal-steer relay so each tick's step prompt carries staged user guidance.
+      executor: buildStepExecutor(input.runTurn, planBridgeFor, input.steerRelay),
       rollback: input.rollback,
       now: input.now ?? (() => Date.now()),
     } satisfies ControllerDeps
@@ -505,15 +592,23 @@ export const makeGoalLoopWiring = (
  * service-agnostic (testable with an injected diagnostics fn) while production reads live LSP.
  */
 export const liveDiagnostics = (): Effect.Effect<
-  Record<string, readonly LSPClient.Diagnostic[]>,
+  { readonly diagnostics: Record<string, readonly LSPClient.Diagnostic[]>; readonly checked: boolean },
   never,
   LSP.Service
 > =>
   Effect.gen(function* () {
     const lsp = yield* LSP.Service
+    // An LSP crash/timeout is UNKNOWN, not clean — surface checked:false so no_diagnostics does not
+    // vacuously pass on a broken LSP (the fail-open this replaced). A genuine (possibly empty) result is
+    // checked:true. NOTE: an empty map from a healthy LSP that simply has no client for the changed
+    // files still reports checked:true → "clean"; hardening that (assert a client covered the edited
+    // files) is a follow-up, but the defect path — the unconditional fail-open — is now closed.
     return yield* lsp
       .diagnostics()
-      .pipe(Effect.catchCause(() => Effect.succeed({} as Record<string, LSPClient.Diagnostic[]>)))
+      .pipe(
+        Effect.map((diagnostics) => ({ diagnostics, checked: true })),
+        Effect.catchCause(() => Effect.succeed({ diagnostics: {} as Record<string, LSPClient.Diagnostic[]>, checked: false })),
+      )
   })
 
 /** The production rollback port backed by SessionRevert (best-effort, never fatal). */

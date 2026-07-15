@@ -270,12 +270,20 @@ export const DeepAgentPanelVerdict = Schema.Struct({
   dissent: Schema.Array(DeepAgentPanelDissent),
 })
 
-/** POST /deepagent/panel/arm — set the per-session armed flag (button toggle). */
+/** POST /deepagent/panel/arm — set the per-session armed flag + debate-depth (composer three-state). */
 export const DeepAgentPanelArmInput = Schema.Struct({
   sessionID: Schema.String,
   armed: Schema.Boolean,
+  // V4.0 three-state composer control: the debate depth to persist when arming. Optional so existing
+  // callers that only toggle armed keep working; ignored when `armed` is false (disarm).
+  rounds: Schema.optional(Schema.Literals(["single", "multi"])),
 })
-export const DeepAgentPanelArmResult = Schema.Struct({ sessionID: Schema.String, armed: Schema.Boolean })
+export const DeepAgentPanelArmResult = Schema.Struct({
+  sessionID: Schema.String,
+  armed: Schema.Boolean,
+  // The effective debate depth after this call (defaults to "single" when never chosen).
+  rounds: Schema.Literals(["single", "multi"]),
+})
 
 /** GET /deepagent/panel/status — the EFFECTIVE armed state (explicit toggle, else global default). */
 export const DeepAgentPanelStatusResult = Schema.Struct({
@@ -283,6 +291,8 @@ export const DeepAgentPanelStatusResult = Schema.Struct({
   armed: Schema.Boolean,
   // Whether `armed` came from an explicit per-session toggle (true) or the global default (false).
   explicit: Schema.Boolean,
+  // V4.0 the persisted debate depth for this session (defaults to "single").
+  rounds: Schema.Literals(["single", "multi"]),
 })
 
 /** POST /deepagent/goal/start */
@@ -313,6 +323,32 @@ export const DeepAgentGoalStartInput = Schema.Struct({
 
 /** Goal lifecycle mutations that only need the session id. */
 export const DeepAgentGoalSessionInput = Schema.Struct({ sessionID: Schema.String })
+
+/**
+ * POST /deepagent/goal/edit-plan — V4.1 §S2 GOAL PLAN HOT-EDIT. A user revises the plan of a RUNNING or
+ * PAUSED goal; the driver applies it BETWEEN ticks (durable-doc upsert + stall re-baseline). The step
+ * shape mirrors plan-controller PlanInput (loose input: step_id/status/acceptance optional; evidence is
+ * runtime-owned and never taken from input). `ok:false` when no goal is running or it reached a terminal
+ * phase (no orphan edit).
+ */
+export const DeepAgentGoalPlanStepInput = Schema.Struct({
+  step_id: Schema.optional(Schema.String),
+  title: Schema.String,
+  status: Schema.optional(Schema.String),
+  acceptance: Schema.optional(Schema.NullOr(Schema.String)),
+  assigned_agent: Schema.optional(Schema.NullOr(Schema.String)),
+  note: Schema.optional(Schema.NullOr(Schema.String)),
+})
+export const DeepAgentGoalPlanInput = Schema.Struct({
+  goal: Schema.String,
+  steps: Schema.Array(DeepAgentGoalPlanStepInput),
+  assumptions: Schema.optional(Schema.Array(Schema.String)),
+  active_step_id: Schema.optional(Schema.NullOr(Schema.String)),
+})
+export const DeepAgentGoalEditPlanInput = Schema.Struct({
+  sessionID: Schema.String,
+  plan: DeepAgentGoalPlanInput,
+})
 
 export const DeepAgentGoalSnapshot = Schema.Struct({
   goalId: Schema.String,
@@ -387,6 +423,25 @@ export const DeepAgentWikiEditInput = Schema.Struct({
   scope: Schema.String,
   body: Schema.String,
   editor: Schema.Struct({ id: Schema.String, name: Schema.optional(Schema.String) }),
+})
+
+/** GET /deepagent/wiki/execution-archive — the read side of §B.6: a session's aggregated execution
+ * trajectory (plan + worklog + diagnosis + decision + eval), rendered from its run-scoped Document
+ * Graph. The archive is WRITTEN by the session-completion hook / EventDrivenArchiver; this is the only
+ * route that reads it back. `sessionID` is REQUIRED — the run-scoped stores are only unioned into the
+ * graph when the session id is known (openWikiGraph). */
+export const DeepAgentExecutionArchiveEntry = Schema.Struct({
+  docId: Schema.String,
+  type: Schema.String,
+  title: Schema.String,
+  body: Schema.String,
+  version: Schema.Number,
+})
+export const DeepAgentExecutionArchive = Schema.Struct({
+  sessionId: Schema.String,
+  title: Schema.String,
+  markdown: Schema.String,
+  entries: Schema.Array(DeepAgentExecutionArchiveEntry),
 })
 
 export const DeepAgentApi = HttpApi.make("deepagent").add(
@@ -648,6 +703,21 @@ export const DeepAgentApi = HttpApi.make("deepagent").add(
       }),
     )
     .add(
+      HttpApiEndpoint.post("goalEditPlan", `${root}/goal/edit-plan`, {
+        query: WorkspaceRoutingQuery,
+        payload: DeepAgentGoalEditPlanInput,
+        success: described(DeepAgentGoalMutateResult, "Whether the plan edit was enqueued for the goal"),
+        error: DeepAgentPromotionError,
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "deepagent.goal.editPlan",
+          summary: "Hot-edit the plan of a running/paused Goal Loop",
+          description:
+            "V4.1 §S2: enqueue a user plan revision on the goal control channel. The driver applies it between ticks (durable-doc upsert + stall re-baseline). ok:false when no goal is running or it reached a terminal phase.",
+        }),
+      ),
+    )
+    .add(
       HttpApiEndpoint.get("goalStatus", `${root}/goal/status`, {
         query: Schema.Struct({ ...WorkspaceRoutingQueryFields, sessionID: Schema.String }),
         success: described(DeepAgentGoalStatusResult, "The active goal for the session, or null"),
@@ -705,6 +775,23 @@ export const DeepAgentApi = HttpApi.make("deepagent").add(
           summary: "Governed edit of a Knowledge/Memory Wiki page",
           description:
             "V3.9 §B.3: append-only new version through the real promotion evidence-gate + human provenance. Non-editable type ⇒ read-only error.",
+        }),
+      ),
+    )
+    .add(
+      HttpApiEndpoint.get("wikiExecutionArchive", `${root}/wiki/execution-archive`, {
+        query: Schema.Struct({ ...WorkspaceRoutingQueryFields, sessionID: Schema.String }),
+        success: described(
+          DeepAgentExecutionArchive,
+          "A session's aggregated execution trajectory (plan + worklog + diagnosis + decision + eval)",
+        ),
+        error: DeepAgentPromotionError,
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "deepagent.wiki.executionArchive",
+          summary: "Read a session's execution archive",
+          description:
+            "V3.9 §B.6 read side: aggregate a completed session's run-scoped Document Graph trajectory into a single archive (markdown + entries). Gated by the wiki flag.",
         }),
       ),
     )

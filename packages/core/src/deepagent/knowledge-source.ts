@@ -33,6 +33,17 @@ export const configure = (dir: string): void => {
 
 export const isConfigured = (): boolean => baseDir !== null
 
+// Reset to the unconfigured state (baseDir=null + caches cleared). `configure` is a process-global
+// setter with no other way back to null; tests that assert the UNCONFIGURED path (isConfigured()===false
+// → callers fall back to empty results) need this to guarantee their precondition regardless of a prior
+// test in the same process having called configure(). Not used by production wiring (the gateway only
+// ever configures forward).
+export const reset = (): void => {
+  baseDir = null
+  userGlobalCache = null
+  projectCache.clear()
+}
+
 // Clear cached stores so a subsequent query re-reads from disk (after approve/reject/seed).
 export const invalidateCache = (): void => {
   userGlobalCache = null
