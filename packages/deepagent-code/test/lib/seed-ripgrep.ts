@@ -35,6 +35,10 @@ const findLocalRg = async (): Promise<string | null> => {
   }
   const realHomeRg = path.join(os.homedir(), ".deepagent", "code", "cache", "bin", name)
   if (await isFile(realHomeRg)) return (cachedSource = realHomeRg)
+  // Legacy cache location (some installs download rg under ~/.cache/deepcode) — checked last so a
+  // machine that only has rg there still seeds instead of falling through to the network download.
+  const legacyCacheRg = path.join(os.homedir(), ".cache", "deepcode", "bin", name)
+  if (await isFile(legacyCacheRg)) return (cachedSource = legacyCacheRg)
   return (cachedSource = null)
 }
 

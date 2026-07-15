@@ -4,7 +4,8 @@ import { tmpdir } from "node:os"
 import path from "node:path"
 import { openProjectStore, openUserGlobalStore } from "../../src/deepagent/durable-knowledge-store"
 import type { DurableKnowledgeStore } from "../../src/deepagent/durable-knowledge-store"
-import { indexFiles, registerFile, indexSymbols, linkCallEdges, symbolNodeKey } from "../../src/deepagent/code-indexer"
+import { indexFiles, registerFile, indexSymbols, linkCallEdges, symbolNodeKey, symbolsForFilePaths } from "../../src/deepagent/code-indexer"
+import { Effect } from "effect"
 import type { SymbolExtraction } from "../../src/deepagent/code-indexer"
 import type { CreateDocInput, DocType, Provenance } from "../../src/deepagent/document-store"
 import { createHash } from "node:crypto"
@@ -447,5 +448,44 @@ describe("code-indexer §A symbol index (indexSymbols)", () => {
     expect(second.skipped).toBe(false)
     expect(second.symbolsUnchanged).toBe(1)
     expect(proj.documentStore.get(symId)!.version).toBe(v)
+  })
+})
+
+// V4.0 §C3.3 — symbolsForFilePaths: the code-graph feed for the ConflictArbiter's semantic layer.
+describe("code-indexer §C3.3 symbolsForFilePaths", () => {
+  it("returns the FULLY-QUALIFIED keys of the symbol nodes hosted by the given files", () => {
+    const proj = openProjectStore(base, WORK)
+    const content = "export class Foo { bar() {} }\nexport function baz() {}"
+    indexFiles(proj, [{ path: "src/foo.ts", content }], { buildDocEdges: false })
+    indexSymbols(proj, {
+      path: "src/foo.ts",
+      contentSha: sha256(content),
+      symbols: [
+        { symbolPath: "Foo", kind: "class", range: { start: 0, end: 0 } },
+        { symbolPath: "Foo.bar", kind: "method", range: { start: 0, end: 0 } },
+      ],
+    })
+    const keys = Effect.runSync(symbolsForFilePaths(proj, ["src/foo.ts"]))
+    // both symbol children returned as "<host_path>#<symbol_path>"; the file-level PARENT node (no
+    // symbol_path) is excluded.
+    expect([...keys].sort()).toEqual([symbolNodeKey("src/foo.ts", "Foo"), symbolNodeKey("src/foo.ts", "Foo.bar")])
+  })
+
+  it("scopes to the requested files (a symbol in another file is not returned)", () => {
+    const proj = openProjectStore(base, WORK)
+    const a = "export function f() {}"
+    const b = "export function f() {}"
+    indexFiles(proj, [{ path: "src/a.ts", content: a }, { path: "src/b.ts", content: b }], { buildDocEdges: false })
+    indexSymbols(proj, { path: "src/a.ts", contentSha: sha256(a), symbols: [{ symbolPath: "f", kind: "function" }] })
+    indexSymbols(proj, { path: "src/b.ts", contentSha: sha256(b), symbols: [{ symbolPath: "f", kind: "function" }] })
+    // the SAME symbol name "f" lives in both files; qualifying by host_path means asking for a.ts only
+    // returns a.ts's key (no false-conflict with b.ts's identically-named symbol).
+    const keys = Effect.runSync(symbolsForFilePaths(proj, ["src/a.ts"]))
+    expect([...keys]).toEqual([symbolNodeKey("src/a.ts", "f")])
+  })
+
+  it("empty files ⇒ [] (default-safe)", () => {
+    const proj = openProjectStore(base, WORK)
+    expect(Effect.runSync(symbolsForFilePaths(proj, []))).toEqual([])
   })
 })

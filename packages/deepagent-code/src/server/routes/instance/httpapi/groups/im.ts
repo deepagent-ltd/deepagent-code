@@ -1,5 +1,7 @@
 import { Schema } from "effect"
-import { HttpApi, HttpApiEndpoint, HttpApiError, HttpApiGroup, OpenApi } from "effect/unstable/httpapi"
+import { HttpApi, HttpApiEndpoint, HttpApiError, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/unstable/httpapi"
+import { Multipart } from "effect/unstable/http"
+import { AttachmentStorage } from "@deepagent-code/core/im/attachment-storage"
 import { MessageMetadata } from "@deepagent-code/core/im/sql"
 import { AgentDescriptor } from "@deepagent-code/core/im/mention-parser"
 import { Authorization } from "../middleware/authorization"
@@ -111,8 +113,18 @@ export const IMGroupResponse = Schema.Struct({
 
 export const CreateGroupPayload = Schema.Struct({
   name: Schema.String,
-  type: Schema.Literals(["project", "system"]),
+  // V4.0 §B3 — "direct" for private 1:1 groups (see DirectMemberInput / the createGroup handler).
+  type: Schema.Literals(["project", "system", "direct"]),
   projectID: Schema.optional(Schema.String),
+  // §B3 私聊 — for a "direct" group, the counterparty (the other participant). The creator (server user)
+  // is always the first participant; this names the second. Required when type === "direct", ignored
+  // otherwise. memberType selects a user↔user or user↔agent direct chat.
+  member: Schema.optional(
+    Schema.Struct({
+      memberID: Schema.String,
+      memberType: Schema.Literals(["user", "agent"]),
+    }),
+  ),
 })
 
 export const IMMessageResponse = Schema.Struct({
@@ -161,15 +173,123 @@ export const ListMessagesQuery = Schema.Struct({
   limit: Schema.optional(Schema.NumberFromString),
 })
 
+// §B3 Thread — replies to a parent message, keyset paginated (composite created_at,id cursor).
+export const ThreadQuery = Schema.Struct({
+  ...WorkspaceRoutingQueryFields,
+  cursor: Schema.optional(Schema.String),
+  limit: Schema.optional(Schema.NumberFromString),
+})
+
+// §B3 搜索 — full-text + metadata search. `q` is the FTS/LIKE query; the rest are optional filters.
+export const SearchQuery = Schema.Struct({
+  ...WorkspaceRoutingQueryFields,
+  q: Schema.String,
+  groupId: Schema.optional(Schema.String),
+  senderType: Schema.optional(Schema.Literals(["user", "agent", "system"])),
+  type: Schema.optional(Schema.Literals(["text", "code", "file", "agent_status", "system"])),
+  // Matches metadata.type via json_extract (e.g. "code_ref", "file_ref").
+  metadataType: Schema.optional(Schema.String),
+  cursor: Schema.optional(Schema.String),
+  limit: Schema.optional(Schema.NumberFromString),
+})
+
+// §B3 文件 — attachment upload response + listing.
+export const IMAttachmentResponse = Schema.Struct({
+  id: Schema.String,
+  workspaceID: Schema.String,
+  projectID: Schema.NullOr(Schema.String),
+  groupID: Schema.NullOr(Schema.String),
+  messageID: Schema.NullOr(Schema.String),
+  uploadedBy: Schema.String,
+  filename: Schema.String,
+  mime: Schema.String,
+  sizeBytes: Schema.Number,
+  checksum: Schema.String,
+  createdAt: Schema.Number,
+})
+
+export const ListAttachmentsQuery = Schema.Struct({
+  ...WorkspaceRoutingQueryFields,
+  groupId: Schema.optional(Schema.String),
+  messageId: Schema.optional(Schema.String),
+  limit: Schema.optional(Schema.NumberFromString),
+})
+
+// §B3 文件 — 50MB default upload cap (configurable via IM_MAX_ATTACHMENT_BYTES). Single source of truth
+// is the pure AttachmentStorage core; the multipart parser caps here and the handler re-checks the
+// persisted bytes (defense in depth).
+export const IM_MAX_ATTACHMENT_BYTES = AttachmentStorage.maxAttachmentBytes()
+
+// §B3 文件 — multipart upload payload. `file` is the uploaded file part; the remaining OPTIONAL text
+// fields scope the attachment (a file may be decoupled from any message: groupId/messageId omitted).
+export const UploadAttachmentPayload = Schema.Struct({
+  file: Multipart.SingleFileSchema,
+  groupId: Schema.optional(Schema.String),
+  messageId: Schema.optional(Schema.String),
+}).pipe(HttpApiSchema.asMultipart({ maxFileSize: IM_MAX_ATTACHMENT_BYTES }))
+
+export class IMFileUploadDisabledError extends Schema.ErrorClass<IMFileUploadDisabledError>(
+  "IMFileUploadDisabledError",
+)(
+  {
+    name: Schema.Literal("FILE_UPLOAD_DISABLED"),
+    data: Schema.Struct({
+      message: Schema.String,
+    }),
+  },
+  { httpApiStatus: 404 },
+) {}
+
+// §B3 threads — fail-closed error when the v4ThreadEnabled flag is off, mirroring IMFileUploadDisabledError
+// (404: the endpoint does not exist for the caller). Keeps thread gating consistent with the upload gate.
+export class IMThreadDisabledError extends Schema.ErrorClass<IMThreadDisabledError>(
+  "IMThreadDisabledError",
+)(
+  {
+    name: Schema.Literal("THREAD_DISABLED"),
+    data: Schema.Struct({
+      message: Schema.String,
+    }),
+  },
+  { httpApiStatus: 404 },
+) {}
+
+export class IMFileTooLargeError extends Schema.ErrorClass<IMFileTooLargeError>("IMFileTooLargeError")(
+  {
+    name: Schema.Literal("FILE_TOO_LARGE"),
+    data: Schema.Struct({
+      message: Schema.String,
+      maxBytes: Schema.Number,
+    }),
+  },
+  { httpApiStatus: 413 },
+) {}
+
+export class IMUnsupportedMediaTypeError extends Schema.ErrorClass<IMUnsupportedMediaTypeError>(
+  "IMUnsupportedMediaTypeError",
+)(
+  {
+    name: Schema.Literal("UNSUPPORTED_MEDIA_TYPE"),
+    data: Schema.Struct({
+      message: Schema.String,
+    }),
+  },
+  { httpApiStatus: 415 },
+) {}
+
 // Paths
 export const IMPaths = {
   groups: `${root}/groups`,
   createGroup: `${root}/groups`,
   messages: `${root}/groups/:groupId/messages`,
   createMessage: `${root}/groups/:groupId/messages`,
+  thread: `${root}/groups/:groupId/messages/:messageId/thread`,
   markRead: `${root}/groups/:groupId/read`,
   agents: `${root}/agents`,
   message: `${root}/messages/:messageId`,
+  search: `${root}/search`,
+  uploadAttachment: `${root}/attachments`,
+  listAttachments: `${root}/attachments`,
 } as const
 
 // API definition
@@ -266,6 +386,67 @@ export const IMApi = HttpApi.make("im")
             identifier: "im.messages.get",
             summary: "Get message",
             description: "Get a single message by ID.",
+          }),
+        ),
+        // §B3 Thread — list the replies to a parent message, ASC chronological, keyset paginated.
+        HttpApiEndpoint.get("listThread", IMPaths.thread, {
+          params: { groupId: Schema.String, messageId: Schema.String },
+          query: ThreadQuery,
+          success: described(MessagePageResponse, "Thread messages"),
+          error: [IMThreadDisabledError, IMGroupNotFoundError, IMPermissionDeniedError, IMInternalServerError],
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "im.messages.thread",
+            summary: "List thread",
+            description: "List the replies to a message (reply_to_id chain) with keyset pagination.",
+          }),
+        ),
+        // §B3 搜索 — full-text + metadata search scoped to the caller's group memberships.
+        HttpApiEndpoint.get("search", IMPaths.search, {
+          query: SearchQuery,
+          success: described(MessagePageResponse, "Search results"),
+          error: [IMValidationFailedError, IMInternalServerError],
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "im.messages.search",
+            summary: "Search messages",
+            description:
+              "Full-text search across messages in groups the caller belongs to, with optional group / sender / type / metadata filters and keyset pagination.",
+          }),
+        ),
+        // §B3 文件 — upload a file (multipart). Stored on local disk under the workspace data dir; the
+        // record is decoupled from any message unless groupId/messageId are supplied.
+        HttpApiEndpoint.post("uploadAttachment", IMPaths.uploadAttachment, {
+          query: WorkspaceRoutingQuery,
+          payload: UploadAttachmentPayload,
+          success: described(IMAttachmentResponse, "Uploaded attachment"),
+          error: [
+            IMFileUploadDisabledError,
+            IMFileTooLargeError,
+            IMUnsupportedMediaTypeError,
+            IMGroupNotFoundError,
+            IMValidationFailedError,
+            HttpApiError.BadRequest,
+            IMInternalServerError,
+          ],
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "im.attachments.upload",
+            summary: "Upload attachment",
+            description:
+              "Upload a file to local disk under the workspace data directory. Validates mime + size and computes a sha256 checksum. Gated on the v4FileUploadEnabled flag.",
+          }),
+        ),
+        // §B3 文件 — list attachments for a group / message (or the whole workspace).
+        HttpApiEndpoint.get("listAttachments", IMPaths.listAttachments, {
+          query: ListAttachmentsQuery,
+          success: described(Schema.Array(IMAttachmentResponse), "Attachments"),
+          error: [IMFileUploadDisabledError, IMGroupNotFoundError, IMInternalServerError],
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "im.attachments.list",
+            summary: "List attachments",
+            description: "List attachment records for a group, message, or the workspace.",
           }),
         ),
       )
