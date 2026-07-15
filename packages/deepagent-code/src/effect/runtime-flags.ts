@@ -128,9 +128,17 @@ export class Service extends ConfigService.Service<Service>()("@deepagent-code/R
   // policy gate. HIGH-RISK (side-effecting outbound) — operator opt-in. Enable with DEEPAGENT_CODE_V4_AGENT_PUSH_ENABLED=true.
   v4AgentPushEnabled: bool("DEEPAGENT_CODE_V4_AGENT_PUSH_ENABLED"),
   // §C: the Multi-Agent Runtime (coordinated multi-agent execution over the bus + agent.task.*
-  // coordination). This is the master switch that starts the event-runtime daemons. HIGH-RISK —
-  // operator opt-in. Enable with DEEPAGENT_CODE_V4_MULTI_AGENT_RUNTIME=true.
-  v4MultiAgentRuntime: bool("DEEPAGENT_CODE_V4_MULTI_AGENT_RUNTIME"),
+  // coordination). This is the master switch that starts the event-runtime daemons — including the V4.1
+  // §N event-driven goal-tick chain (GoalTickConsumer + cold-recovery port). PROMOTED ON by default (V4.1):
+  // the daemon audit is GO (every gated daemon is complete + correctly started, InstanceRef-die fix at both
+  // sites, approval keys match, goal.tick is now a real consumed command with cross-process cold recovery),
+  // and autonomous level_2 edits are the INTENDED semantic of this flag (governed by each agent descriptor's
+  // declared autonomy ceiling, guarded by the four-layer SecurityGate + Approval Queue + concurrency cap +
+  // file locks + trusted-source gating on external events — external webhooks stay fail-closed until an
+  // operator opts their source into the workspace trustedSources). Set
+  // DEEPAGENT_CODE_V4_MULTI_AGENT_RUNTIME=false to restore the pre-V4 (V3.8-equivalent) inert posture: no
+  // daemons subscribe, ticks run via the in-process BackgroundJob driver, nothing is autonomous.
+  v4MultiAgentRuntime: stableOn("DEEPAGENT_CODE_V4_MULTI_AGENT_RUNTIME"),
   // NOTE: there is deliberately NO separate "autonomy level 2" flag. The §D autonomy gate
   // (AutonomyPolicy.decide in multi-agent-runtime.ts) is driven purely by each agent's DECLARED autonomy
   // ceiling in its descriptor — a flag could only ever have MASKED that, and a former
