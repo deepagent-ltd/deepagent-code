@@ -43,6 +43,7 @@ import { LLM } from "@/session/llm"
 import { SessionPrompt } from "@/session/prompt"
 import { GoalManager } from "@/session/goal-manager"
 import { SessionRevert } from "@/session/revert"
+import { SessionSteer } from "@/session/steer"
 import { SessionRunState } from "@/session/run-state"
 import { SessionStatus } from "@/session/status"
 import { SessionSummary } from "@/session/summary"
@@ -347,6 +348,10 @@ export function createRoutes(
       SessionPrompt.defaultLayer,
       GoalManager.defaultLayer,
       SessionRevert.defaultLayer,
+      // V4.1 §N — the durable goal-steer buffer, exposed at the graph root so the v4-event-runtime's
+      // GoalTickConsumer cold port can drain goal-directed steers (GoalManager self-provides its own for
+      // the warm path; the daemon needs it at the shared graph root).
+      SessionSteer.defaultLayer,
       SessionShare.defaultLayer,
       SessionRunState.defaultLayer,
       SessionStatus.defaultLayer,
