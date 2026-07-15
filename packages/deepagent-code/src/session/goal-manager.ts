@@ -34,6 +34,9 @@ import { writeGovernanceAudit } from "./goal-governance-audit"
 import { DeepAgentEventBus } from "@deepagent-code/core/deepagent/deepagent-event-bus"
 import { ApprovalQueue } from "@deepagent-code/core/deepagent/approval-queue"
 import { LMNEvents } from "@deepagent-code/core/deepagent/lmn-events"
+import { persistPendingPlanEdit, readGoalTickCursor } from "@deepagent-code/core/deepagent/goal-loop"
+import { makeGoalStatusPublisher } from "./goal-status-publisher"
+import { GoalTickConsumer } from "./goal-tick-consumer"
 
 /**
  * V3.9 §D — the GOAL MANAGER service: the resident, in-process supervisor that OWNS running goals.
@@ -53,7 +56,7 @@ import { LMNEvents } from "@deepagent-code/core/deepagent/lmn-events"
 
 // The DocumentStore holding a session's goal docs. Co-located with the run graph under the agent data
 // root, keyed by session id, so a restart re-opens the same store (the loop state is restart-recoverable).
-const goalStoreRoot = (sessionID: string): string =>
+export const goalStoreRoot = (sessionID: string): string =>
   path.join(Global.Path.agent.data, "state", "goal", sessionID, "graph")
 
 const glog = Log.create({ service: "session.goal" })
@@ -290,180 +293,28 @@ export const layer = Layer.effect(
         return m
       })
 
-    // Low-level publisher: emit a goal.updated event over the SSE bridge. Best-effort (ignore) so a
-    // publish failure never crashes the caller (start route or background driver tick).
-    const publishGoalEvent = (
-      sessionID: string,
-      payload: {
-        goalId: string
-        planDocId: string
-        phase: string
-        ledger: { ticks: number; tokens: number; cost: number; wallclockMs: number }
-        stallCount: number
-        gaps: readonly string[]
-      },
-    ) =>
-      events
-        .publish(GoalEvent.Updated, {
-          sessionID: SessionID.make(sessionID),
-          goalId: payload.goalId,
-          planDocId: payload.planDocId,
-          phase: payload.phase,
-          ledger: payload.ledger,
-          stallCount: payload.stallCount,
-          gaps: [...payload.gaps],
-        })
-        .pipe(Effect.ignore)
-
-    // §S2 — mirror the goal's plan doc INTO the parent session's live plan state + emit plan.updated, so
-    // the client's session_plan reflects the running goal's progress tick-by-tick. Without this the parent
-    // session_plan is frozen at goal-start (the worker's plan edits land on its CHILD session + the goal
-    // doc, never republished here), so the plan-edit dialog would pre-fill from STALE data and a save would
-    // regress live progress (statuses would be reset to whatever the frozen snapshot showed). Reading the
-    // goal doc — the single source of truth the grader uses — keeps the UI and the edit pre-fill honest.
-    // Best-effort: a read/publish failure must never break the tick.
-    const mirrorGoalPlanToSession = (sessionID: string, planDocId: string) =>
-      Effect.gen(function* () {
-        const store = new DocumentStore(goalStoreRoot(sessionID))
-        const doc = store.get(planDocId)
-        if (!doc) return
-        let plan: PlanDoc
-        try {
-          plan = JSON.parse(doc.body) as PlanDoc
-        } catch {
-          return
-        }
-        // Keep the parent session's in-memory plan-state live (the dialog pre-fills from this).
-        AgentGateway.DeepAgentSessionState.setPlan(sessionID, plan as never)
-        const { done, total } = AgentGateway.DeepAgentPlanController.planProgress(plan)
-        yield* events
-          .publish(PlanEvent.Updated, {
-            sessionID: SessionID.make(sessionID),
-            plan_id: plan.plan_id,
-            goal: plan.goal,
-            active_step_id: plan.active_step_id,
-            steps: plan.steps.map((s) => ({
-              step_id: s.step_id,
-              title: s.title,
-              status: s.status,
-              acceptance: s.acceptance ?? null,
-              assigned_agent: s.assigned_agent ?? null,
-              note: s.note ?? null,
-            })),
-            done,
-            total,
-          })
-          .pipe(Effect.ignore)
-      }).pipe(Effect.catchCause(() => Effect.void))
-
-    // Publish a driver status → the goal.updated event, the session-state active-goal pointer, AND the
-    // cached last-known status on the control (so control transitions can publish the real ledger).
-    const publishStatus = (sessionID: string, status: GoalStatus) =>
-      Effect.gen(function* () {
-        const phase = status.phase as string
-        AgentGateway.DeepAgentSessionState.setActiveGoalPhase(sessionID, phase as never)
-        // Keep the parent session_plan live with the goal's plan-doc progress (see helper doc).
-        yield* mirrorGoalPlanToSession(sessionID, status.planDocId)
-        const ledger = {
-          ticks: status.ledger.ticks,
-          tokens: status.ledger.tokens,
-          cost: status.ledger.cost,
-          wallclockMs: status.ledger.wallclockMs,
-        }
-        yield* mutateControl(sessionID, (ctrl) => {
-          ctrl.ledger = ledger
-          ctrl.stallCount = status.stallCount
-          ctrl.gaps = status.gaps
-        })
-        yield* publishGoalEvent(sessionID, {
-          goalId: status.goalId,
-          planDocId: status.planDocId,
-          phase,
-          ledger,
-          stallCount: status.stallCount,
-          gaps: status.gaps,
-        })
-        // V4.0 §N — mirror the goal lifecycle onto the DeepAgent Event Bus (and escalations into the
-        // §D2 Approval Queue). Flag-gated: OFF (default) ⇒ this whole block is skipped and the V3.9
-        // goal.updated path above is unchanged. Best-effort: a bus/queue failure never breaks the loop.
-        if (flags.v4MultiAgentRuntime) {
-          yield* emitGoalLifecycleEvent(sessionID, status, phase).pipe(
-            Effect.catchCause(() => Effect.void),
-          )
-        }
-      })
-
-    // §N — publish the discrete goal lifecycle event (goal.tick for a running tick, or the terminal
-    // type) and, for a terminal escalation (needs_human / rolled_back), offer it to the Approval Queue.
-    // The workspace key is the session's directory (matches how the Oversight surface scopes).
-    const emitGoalLifecycleEvent = (sessionID: string, status: GoalStatus, phase: string) =>
-      Effect.gen(function* () {
-        const session = yield* sessions.get(SessionID.make(sessionID)).pipe(Effect.orElseSucceed(() => undefined))
-        // workspace key MUST mirror the Oversight read side, else an escalation written here is keyed on
-        // one identity while GET /oversight/approvals reads by another → invisible on the Dashboard in
-        // server edition. Both sides derive the key via the SINGLE canonical rule (ApprovalQueue.
-        // deriveWorkspaceKey): a genuine wrk_ workspaceID wins, else the directory, with sessionID as the
-        // last-resort fallback so a key is always produced.
-        const workspaceID = ApprovalQueue.deriveWorkspaceKey({
-          workspaceID: session?.workspaceID,
-          directory: session?.directory,
-          fallback: sessionID,
-        })
-        // map the driver phase → the discrete §N event type (running/paused/stopped ⇒ goal.tick).
-        const eventType = LMNEvents.goalPhaseToEventType(phase) ?? LMNEvents.GOAL_TICK
-        // idempotencyKey reuses the V3.9 plan-version idempotency intent: one event per (goal, phase,
-        // tick) so a re-published status doesn't double-emit.
-        const idempotencyKey = `goal:${status.goalId}:${phase}:${status.ledger.ticks}`
-        // §E2 RATE GATE + §D2 no-silent-loss: any event that must reach the Approval Queue MUST publish
-        // at "high" so it BYPASSES the per-workspace ceiling and always persists + offers. This is NOT
-        // just goal.needs_human — goal.rolled_back is also a terminal APPROVAL_QUEUE_TYPES member, and
-        // because the publish limiter is shared per-workspace it could otherwise be shed by an unrelated
-        // im.message.created flood in the same minute → a rollback needing human review silently lost.
-        // `isApprovalQueueCandidate` folds the full APPROVAL_QUEUE_TYPES set; goal.tick / goal.completed
-        // are NOT candidates, stay "normal", and remain correctly sheddable under load.
-        const priority = LMNEvents.isApprovalQueueCandidate(eventType) ? "high" : "normal"
-        // §E2 RATE GATE (live): the goal driver is a workspace-facing publisher (one event per tick),
-        // so it goes through `tryPublish` under the 1000/min per-workspace ceiling. A `goal.tick` /
-        // `goal.completed` is `normal` and CAN be shed under a flood; an approval-queue candidate
-        // (needs_human / rolled_back) is `high` and ALWAYS bypasses the gate — never dropped. On a drop
-        // we skip the approval offer (there is no persisted event to queue) and record §A4 event_dropped.
-        const outcome = yield* eventBus.tryPublish({
-          type: eventType,
-          source: "system",
-          workspaceID,
-          actorID: sessionID,
-          correlationID: status.goalId,
-          idempotencyKey,
-          priority,
-          // T2.4 archive contract: goal.completed is an ARCHIVE_TRIGGER, and the EventDrivenArchiver
-          // discards any trigger whose payload lacks sessionID + workspacePath (see
-          // event-driven-archiver.ts). Carry both (workspacePath = the session directory, mirroring
-          // session-completed-publisher's `facts.directory`) so a completed goal is actually archived
-          // instead of being silently dropped at the archiver. Harmless on non-archive phases.
-          payload: {
-            goalId: status.goalId,
-            planDocId: status.planDocId,
-            phase,
-            gaps: status.gaps,
-            sessionID,
-            workspacePath: session?.directory,
-          },
-        })
-        if ("dropped" in outcome) {
-          yield* Effect.logWarning("goal lifecycle event dropped by publish rate gate").pipe(
-            Effect.annotateLogs({
-              reason: "event_dropped",
-              cause: "rate_limited",
-              workspaceID,
-              goalId: status.goalId,
-              phase,
-            }),
-          )
-          return
-        }
-        // terminal escalations queue for human review (§D2). shouldQueueForApproval gates it.
-        yield* approvalQueue.offer(outcome.published)
-      })
+    // V4.1 §N — the SHARED status publisher. publishGoalEvent (raw goal.updated) + publishStatus (the
+    // full onStatus port: mirror plan → session-state, publish goal.updated, flag-on mirror to bus +
+    // approval queue). Extracted to goal-status-publisher.ts so the event-driven cold consumer's port
+    // (makeGoalTickPort) runs the IDENTICAL logic — no drift. The only goal-manager-specific step is
+    // caching the tick's ledger on the in-memory control (so pause/resume/stop publish the real ledger);
+    // that rides the optional `cacheStatus` callback here and is simply omitted on the cold path.
+    const statusPublisher = makeGoalStatusPublisher({
+      events,
+      sessions,
+      eventBus,
+      approvalQueue,
+      v4MultiAgentRuntime: flags.v4MultiAgentRuntime,
+      goalStoreRoot,
+      cacheStatus: (sessionID, cached) =>
+        mutateControl(sessionID, (ctrl) => {
+          ctrl.ledger = cached.ledger
+          ctrl.stallCount = cached.stallCount
+          ctrl.gaps = cached.gaps
+        }),
+    })
+    const publishGoalEvent = statusPublisher.publishGoalEvent
+    const publishStatus = statusPublisher.publishStatus
 
     // Publish an IMMEDIATE goal.updated for a control transition (pause/resume/stop). Reuses the control's
     // cached ledger/stall/gaps so the UI keeps its live budget readout while only the phase changes.
@@ -652,24 +503,55 @@ export const layer = Layer.effect(
           markPlanEditConsumed: planEditPort.markPlanEditConsumed,
         }
 
-        // Start the driver as a resident background task. onFinish clears the pointer / control state.
-        const job = yield* background.start({
-          type: "goal-loop",
-          title: `goal ${handle.goalId}`,
-          metadata: { sessionID, goalId: handle.goalId },
-          run: GoalDriver.runToCompletion({ deps, handle, ports, steerRelay }).pipe(
-            // A terminal outcome clears the running pointer to its terminal phase (unless the user already
-            // stopped it); a paused exit ("continue") leaves the pointer for a later resume.
-            Effect.tap((outcome) => finalizeOutcome(sessionID, outcome)),
-            Effect.map((outcome) => `goal ${handle.goalId}: ${outcome}`),
-            Effect.catchCause(() => Effect.succeed(`goal ${handle.goalId}: driver defect`)),
-          ),
-        })
+        // V4.1 §N DUAL-PATH drive. The two paths MUST be mutually exclusive — running both for one goal
+        // would double-execute every tick over the same run_context doc.
+        //   • flag ON  (v4MultiAgentRuntime): publish the FIRST goal.tick.requested command onto the Event
+        //     Bus (seq=0). The GoalTickConsumer executes each tick on a (possibly cold) fiber and re-emits
+        //     the next command — the self-driving, persistence/retry/dedup-backed chain (contract §N). NO
+        //     BackgroundJob is started, so there is exactly one driver.
+        //   • flag OFF (default): the existing in-process BackgroundJob `runToCompletion` drives the ticks
+        //     (byte-identical to V3.9). The event-driven consumer's handle() acks-and-drives-nothing when
+        //     the flag is off, so a stray command can never double-drive.
+        // In BOTH paths we still register the in-memory control (jobId="" on the event path — there is no
+        // job to cancel; stop() sets the durable phase the cold tick reads, and cancel("") is a safe no-op)
+        // so pause / resume / stop / status / editPlan keep working the same way.
+        let jobId = ""
+        if (flags.v4MultiAgentRuntime) {
+          // seq=0 is the seed; expectedPlanVersion is advisory trace. The bus dedups on goal:tick:<id>:0
+          // so a retried start() cannot seed two chains.
+          const expectedPlanVersion = store.get(planDocId)?.version ?? 0
+          yield* eventBus
+            .publish(
+              GoalTickConsumer.tickCommand({
+                sessionID,
+                goalId: handle.goalId,
+                planDocId: handle.planDocId,
+                seq: 0,
+                expectedPlanVersion,
+              }),
+            )
+            .pipe(Effect.ignore)
+        } else {
+          // Start the driver as a resident background task. onFinish clears the pointer / control state.
+          const job = yield* background.start({
+            type: "goal-loop",
+            title: `goal ${handle.goalId}`,
+            metadata: { sessionID, goalId: handle.goalId },
+            run: GoalDriver.runToCompletion({ deps, handle, ports, steerRelay }).pipe(
+              // A terminal outcome clears the running pointer to its terminal phase (unless the user already
+              // stopped it); a paused exit ("continue") leaves the pointer for a later resume.
+              Effect.tap((outcome) => finalizeOutcome(sessionID, outcome)),
+              Effect.map((outcome) => `goal ${handle.goalId}: ${outcome}`),
+              Effect.catchCause(() => Effect.succeed(`goal ${handle.goalId}: driver defect`)),
+            ),
+          })
+          jobId = job.id
+        }
 
         yield* setControl(sessionID, {
           goalId: handle.goalId,
           planDocId: handle.planDocId,
-          jobId: job.id,
+          jobId,
           paused: false,
           stopped: false,
           ledger: { ticks: 0, tokens: 0, cost: 0, wallclockMs: 0 },
@@ -706,6 +588,32 @@ export const layer = Layer.effect(
         // Re-drive: the persisted run_context doc resumes exactly where it paused. A fresh store handle
         // over the same root re-reads the loop state.
         const store = new DocumentStore(goalStoreRoot(sessionID))
+
+        // V4.1 §N DUAL-PATH resume. flag ON ⇒ RE-SEED the event chain rather than starting a BackgroundJob.
+        // The chain died when the goal paused (a paused tick acks WITHOUT re-emitting the next command), so
+        // a fresh goal.tick.requested is needed to restart it. The seed seq is read from DURABLE state
+        // (ledger.ticks + stallCount) so it does NOT collide with the already-processed seq of the tick that
+        // observed the pause — a strictly-greater key the bus has never seen, so it publishes (not deduped).
+        // We ONLY re-seed here (inside the paused guard above), so a non-paused resume never double-seeds.
+        if (flags.v4MultiAgentRuntime) {
+          const tick = readGoalTickCursor(store, sessionID, c.goalId)
+          const seq = (tick?.seq ?? 0) + 1 // strictly beyond the last-processed seq → a fresh, undeduped key
+          const expectedPlanVersion = tick?.planVersion ?? store.get(c.planDocId)?.version ?? 0
+          yield* eventBus
+            .publish(
+              GoalTickConsumer.tickCommand({
+                sessionID,
+                goalId: c.goalId,
+                planDocId: c.planDocId,
+                seq,
+                expectedPlanVersion,
+              }),
+            )
+            .pipe(Effect.ignore)
+          yield* publishControlPhase(sessionID, c, "running")
+          return true
+        }
+
         const session = yield* sessions.get(SessionID.make(sessionID)).pipe(Effect.orDie)
         // Resume can't run without a model; if none resolves, don't crash — just report "not resumed".
         const modelOpt = yield* resolveGoalModel(session).pipe(Effect.option)
@@ -831,6 +739,17 @@ export const layer = Layer.effect(
           next.set(input.sessionID, { ...ctrl, pendingPlanEdit: input.plan })
           return next
         })
+        // V4.1 cross-process cold recovery — ALSO persist the pending edit to the durable doc (under the
+        // SAME store root the cold GoalTickConsumer opens). The in-memory control slot above serves the
+        // WARM in-process driver (which holds a live store handle); the durable doc serves a COLD
+        // event-driven tick that reconstructs the wiring with a fresh store handle and reads the edit via
+        // readPendingPlanEdit. Best-effort: a durable-write hiccup must not fail editPlan (the warm path
+        // still has the in-memory slot). Cleared by the driver post-apply via persistPendingPlanEdit(null).
+        try {
+          persistPendingPlanEdit(new DocumentStore(goalStoreRoot(input.sessionID)), input.sessionID, c.goalId, input.plan)
+        } catch {
+          /* durable persist is best-effort; the warm in-memory slot above is authoritative for the live driver */
+        }
         // Audit + operational log the human plan edit (enqueue-time; the driver applies it next tick).
         writeGovernanceAudit(input.sessionID, c.goalId, "plan_edit", {
           stepCount: input.plan.steps.length,
