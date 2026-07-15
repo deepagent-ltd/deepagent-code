@@ -75,30 +75,44 @@ describe("RuntimeFlags", () => {
     }),
   )
 
-  it.effect("§H3: all six V4.0 flags default OFF in production (staged rollout is operator opt-in)", () =>
+  it.effect("§H3 / V4.1: high-risk V4.0 capability flags default OFF; v4MultiAgentRuntime is promoted ON", () =>
     Effect.gen(function* () {
       const flags = yield* readFlags.pipe(Effect.provide(fromConfig({})))
+      // The remaining high-risk / known-buggy capabilities stay operator opt-in (default OFF).
       expect(flags.v4EventDrivenIm).toBe(false)
       expect(flags.v4AgentPushEnabled).toBe(false)
-      expect(flags.v4MultiAgentRuntime).toBe(false)
       expect(flags.v4ThreadEnabled).toBe(false)
       expect(flags.v4FileUploadEnabled).toBe(false)
       expect(flags.v4PanelAutoConvene).toBe(false)
+      // V4.1: the Multi-Agent Runtime master switch is PROMOTED ON — the daemon audit is GO and the §N
+      // event-driven goal-tick chain (with cross-process cold recovery) is now the live driver. Autonomous
+      // level_2 edits are the intended semantic (governed by agent descriptors, guarded by the safety gates).
+      expect(flags.v4MultiAgentRuntime).toBe(true)
     }),
   )
 
-  it.effect("§H1: each V4.0 flag is an independent opt-in (=true enables just that one)", () =>
+  it.effect("V4.1: v4MultiAgentRuntime is a real kill-switch (=false restores the inert posture)", () =>
+    Effect.gen(function* () {
+      const flags = yield* readFlags.pipe(
+        Effect.provide(fromConfig({ DEEPAGENT_CODE_V4_MULTI_AGENT_RUNTIME: "false" })),
+      )
+      expect(flags.v4MultiAgentRuntime).toBe(false)
+    }),
+  )
+
+  it.effect("§H1: each remaining V4.0 flag is an independent opt-in (=true enables just that one)", () =>
     Effect.gen(function* () {
       // turning ONE on must not turn the others on — an operator advances the rollout capability by
       // capability. This also proves the override path still works: the default is OFF but env `=true`
-      // enables it (verification + staged rollout depend on this).
+      // enables it (verification + staged rollout depend on this). Uses v4AgentPushEnabled, which stays
+      // OFF-by-default after the V4.1 v4MultiAgentRuntime promotion.
       const flags = yield* readFlags.pipe(
-        Effect.provide(fromConfig({ DEEPAGENT_CODE_V4_MULTI_AGENT_RUNTIME: "true" })),
+        Effect.provide(fromConfig({ DEEPAGENT_CODE_V4_AGENT_PUSH_ENABLED: "true" })),
       )
-      expect(flags.v4MultiAgentRuntime).toBe(true)
+      expect(flags.v4AgentPushEnabled).toBe(true)
       expect(flags.v4EventDrivenIm).toBe(false)
-      expect(flags.v4AgentPushEnabled).toBe(false)
       expect(flags.v4PanelAutoConvene).toBe(false)
+      expect(flags.v4ThreadEnabled).toBe(false)
     }),
   )
 
