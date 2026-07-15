@@ -105,7 +105,7 @@ export function GoalStartButton(props: { sessionID: string }) {
         data-component="goal-start-button"
         class="flex items-center gap-2 px-2.5 py-1.5 rounded-md bg-surface-raised border border-border-subtle text-13-regular"
       >
-        <Icon name="status-active" class="size-4 shrink-0 text-text-muted" />
+        <Icon name="goal" class="size-4 shrink-0 text-text-muted" />
         <span class="text-text-muted truncate">{language.t("goal.start.hint")}</span>
         <Button
           variant="primary"

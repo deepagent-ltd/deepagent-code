@@ -25,3 +25,13 @@ export const MessageID = Schema.String.check(Schema.isStartsWith("imsg_")).pipe(
   })),
 )
 export type MessageID = typeof MessageID.Type
+
+// V4.0 §B3/§B4 — IM file attachment id. Distinct prefix ("ima_") so an attachment id can never be
+// mistaken for a group/member/message id in a shared code path.
+export const AttachmentID = Schema.String.check(Schema.isStartsWith("ima_")).pipe(
+  Schema.brand("IM.Attachment.ID"),
+  withStatics((schema) => ({
+    create: () => schema.make("ima_" + Identifier.ascending()),
+  })),
+)
+export type AttachmentID = typeof AttachmentID.Type

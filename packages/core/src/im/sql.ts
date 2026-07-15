@@ -4,8 +4,8 @@ import { Timestamps } from "../database/schema.sql"
 import { ProjectTable } from "../project/sql"
 import * as IMID from "./id"
 
-// V3.8: project / system
-export const GroupType = Schema.Literals(["project", "system"])
+// V3.8: project / system  ·  V4.0 §B3: direct (private 1:1 — user+user or user+agent, exactly 2 members)
+export const GroupType = Schema.Literals(["project", "system", "direct"])
 export type GroupType = Schema.Schema.Type<typeof GroupType>
 
 // V3.8: owner / member / agent
@@ -140,6 +140,13 @@ export const MessageTable = sqliteTable(
     mentions: text({ mode: "json" }).$type<string[]>(),
     metadata: text({ mode: "json" }).$type<MessageMetadata>(),
     reply_to_id: text().$type<IMID.MessageID>(),
+    // V4.0 §B4 — the DeepAgent Event Bus event this message was produced from (agent replies / proactive
+    // pushes carry it; user messages that publish im.message.created link back via it). NULL for legacy
+    // V3.8 messages — nullable so the V3.8 write path is unchanged (§H compatibility).
+    event_id: text(),
+    // V4.0 §B4 — delivery lifecycle for event-driven messages: pending | delivered | failed. NULL ⇒
+    // the legacy synchronous path (no delivery tracking). Nullable for V3.8 compatibility.
+    delivery_status: text().$type<"pending" | "delivered" | "failed">(),
     created_at: integer().notNull().$default(() => Date.now()),
     updated_at: integer().notNull().$onUpdate(() => Date.now()),
     deleted_at: integer(),
@@ -149,5 +156,44 @@ export const MessageTable = sqliteTable(
     // migration. Drizzle's sqlite-core types in this repo version do not expose
     // `.where()` on indexes, so the partial predicate lives in the migration.
     index("idx_im_messages_active").on(table.group_id, table.created_at, table.id),
+    // V4.0 §B4 — thread pagination (reply_to_id chains) + event linkage lookups.
+    index("idx_im_messages_thread").on(table.group_id, table.reply_to_id, table.created_at),
+    index("idx_im_messages_event").on(table.event_id),
+  ],
+)
+
+// V4.0 §B3/§B4 schema: im_attachments
+//
+// A file record is DECOUPLED from a message ("文件记录与消息解耦"): `message_id` is nullable so a file
+// can be uploaded first (returning its id/checksum) and only later referenced by a message — or never
+// referenced at all. `storage_path` is a SERVER-DERIVED absolute path on local disk (workspace data
+// dir), never the client filename, which eliminates path-traversal. `checksum` is the sha256 of the
+// bytes (integrity + dedup signal). Soft delete via `deleted_at` mirrors the rest of the IM schema.
+export const AttachmentTable = sqliteTable(
+  "im_attachments",
+  {
+    id: text().$type<IMID.AttachmentID>().primaryKey(),
+    // Grouping key (routed workspace id or working directory) — same semantics as im_groups.workspace_id.
+    workspace_id: text().notNull(),
+    project_id: text().references(() => ProjectTable.id, { onDelete: "cascade" }),
+    // Nullable: an attachment MAY be scoped to a group / bound to a message, or exist standalone.
+    group_id: text().$type<IMID.GroupID>(),
+    message_id: text().$type<IMID.MessageID>(),
+    uploaded_by: text().notNull(),
+    // Absolute on-disk path, server-derived from ids (never the client filename).
+    storage_path: text().notNull(),
+    // Original client filename — retained for display/download only, never used to build a path.
+    filename: text().notNull(),
+    mime: text().notNull(),
+    size_bytes: integer().notNull(),
+    // sha256 hex digest of the stored bytes.
+    checksum: text().notNull(),
+    created_at: integer().notNull().$default(() => Date.now()),
+    deleted_at: integer(),
+  },
+  (table) => [
+    index("idx_im_attachments_workspace").on(table.workspace_id, table.created_at),
+    index("idx_im_attachments_message").on(table.message_id),
+    index("idx_im_attachments_group").on(table.group_id),
   ],
 )
