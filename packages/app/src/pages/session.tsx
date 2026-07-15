@@ -35,7 +35,7 @@ import { useComments } from "@/context/comments"
 import { getSessionPrefetch, SESSION_PREFETCH_TTL } from "@/context/global-sync/session-prefetch"
 import { useServerSync } from "@/context/server-sync"
 import { useLanguage } from "@/context/language"
-import { useLayout } from "@/context/layout"
+import { RIGHT_PANEL_RAIL_PX, useLayout } from "@/context/layout"
 import { usePrompt } from "@/context/prompt"
 import { deepAgentModeFromConfig } from "@/utils/deepagent-settings"
 import { useSDK } from "@/context/sdk"
@@ -303,10 +303,18 @@ export default function Page() {
   const desktopReviewOpen = createMemo(() => isDesktop() && view().rightPanel.mode() === "review")
   const desktopFileTreeOpen = createMemo(() => isDesktop() && view().rightPanel.mode() === "files")
   const desktopRightPanelOpen = createMemo(() => isDesktop() && view().rightPanel.opened())
+  // T3.2: the icon rail is ALWAYS present on desktop, so the session content always yields the rail
+  // width; the content-panel width (wide bucket for review/files, else narrow) is subtracted on top only
+  // when a panel is open.
   const sessionPanelWidth = createMemo(() => {
-    if (!desktopRightPanelOpen()) return "100%"
-    return `calc(100% - ${layout.rightPanel.width()}px)`
+    if (!isDesktop()) return "100%"
+    const mode = view().rightPanel.mode()
+    const bucket = mode === "review" || mode === "files" ? "wide" : "narrow"
+    const content = desktopRightPanelOpen() ? layout.rightPanel.width(bucket) : 0
+    return `calc(100% - ${RIGHT_PANEL_RAIL_PX + content}px)`
   })
+  // The composer is only truly centered when the panel content is closed AND the rail (a thin 44px
+  // strip) is the only thing on the right — visually still effectively centered.
   const centered = createMemo(() => isDesktop() && !desktopRightPanelOpen())
 
   function normalizeTab(tab: string) {
