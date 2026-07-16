@@ -42,7 +42,10 @@ export const Model = Schema.Struct({
     Schema.Struct({
       context: Schema.Finite,
       input: Schema.optional(Schema.Finite),
-      output: Schema.Finite,
+      // Optional: a custom/third-party model override may set only the context window and let the
+      // catalog/backend fill the output limit (the build loop defaults it). Existing configs that set
+      // output stay valid.
+      output: Schema.optional(Schema.Finite),
     }),
   ),
   modalities: Schema.optional(

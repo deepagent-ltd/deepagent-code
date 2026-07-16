@@ -1900,7 +1900,7 @@ export type ProviderConfig = {
       limit?: {
         context: number
         input?: number
-        output: number
+        output?: number
       }
       modalities?: {
         input?: Array<"text" | "audio" | "image" | "video" | "pdf">
@@ -11693,10 +11693,26 @@ export type ProviderModelsDiscoverResponses = {
     models: Array<{
       id: string
       name: string
+      spec?: {
+        context: number
+        output: number
+        reasoning: boolean
+        temperature: boolean
+        toolcall: boolean
+        matchedFrom: string
+      }
     }>
     selected: {
       id: string
       name: string
+      spec?: {
+        context: number
+        output: number
+        reasoning: boolean
+        temperature: boolean
+        toolcall: boolean
+        matchedFrom: string
+      }
     }
   }
 }
