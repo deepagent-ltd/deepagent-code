@@ -252,71 +252,89 @@ export type RunToCompletionInput = {
  * when it exited due to pause — the caller learns pause via the ports). Never throws: the loop's tick
  * lives on `never`, and the driver wraps status/port calls so a defect cannot crash the background task.
  */
+// The result of ONE driver iteration. `progress` says what the caller should do next:
+//   - "stopped"  : a cooperative stop fired (loop.stop called) — terminal, do not continue.
+//   - "paused"   : a cooperative pause fired — NOT terminal; the persisted state resumes later.
+//   - "terminal" : the tick produced a terminal outcome (done/needs_human/rolled_back).
+//   - "continue" : a normal tick ran; the caller should drive the NEXT tick.
+// This is the SINGLE shared iteration body used by BOTH the in-process for-loop (`runToCompletion`,
+// flag OFF) AND the event-driven consumer (one `goal.tick.requested` = one `runOneTick`, flag ON), so
+// the delicate pause / plan-edit / steer / status logic lives in exactly one place and can't drift.
+export type OneTickResult = {
+  readonly outcome: TickOutcome
+  readonly progress: "stopped" | "paused" | "terminal" | "continue"
+}
+
+/**
+ * Execute exactly ONE tick iteration: stop/pause checks → apply a pending plan edit → absorb steer →
+ * `loop.tick` → stamp consumed steer → publish status. Never throws (all port/status calls are wrapped).
+ * The caller decides whether to loop again (`continue`) or stop (`stopped`/`paused`/`terminal`).
+ */
+export const runOneTick = (
+  loop: ReturnType<typeof makeGoalLoop>,
+  input: RunToCompletionInput,
+): Effect.Effect<OneTickResult> =>
+  Effect.gen(function* () {
+    const ports = input.ports ?? noopPorts
+
+    if (yield* safeBool(ports.shouldStop())) {
+      yield* safe(loop.stop(input.handle))
+      return { outcome: "needs_human", progress: "stopped" }
+    }
+    if (yield* safeBool(ports.shouldPause())) {
+      // Cooperative suspend: do NOT tick, do NOT mark terminal — the persisted state resumes later.
+      // A steer staged BEFORE a pause is NOT stamped consumed (the tick that would absorb it never ran),
+      // so it stays pending and is re-drained on resume — no guidance is lost across a pause. A plan edit
+      // enqueued during pause likewise stays pending and is applied on the first post-resume iteration.
+      return { outcome: "continue", progress: "paused" }
+    }
+
+    // §S2 — apply a pending USER PLAN EDIT BETWEEN ticks (after the PREVIOUS tick's mirror-back, before
+    // THIS tick). Draining here — not mid-tick — prevents the child-bridge clobber: the prior tick's
+    // mirrorChildPlan already wrote the child's progress back, so applying the user edit on top preserves
+    // both. consume-once: stamp consumed ONLY after a successful apply; a crash before markPlanEditConsumed
+    // leaves the edit pending → re-applied next iteration (idempotent re-upsert / re-baseline is a no-op).
+    if (ports.pendingPlanEdit) {
+      const editedPlan = yield* safePlanEdit(ports.pendingPlanEdit())
+      if (editedPlan != null) {
+        yield* safe(loop.applyPlanEdit(input.handle, editedPlan))
+        if (ports.markPlanEditConsumed) yield* safe(ports.markPlanEditConsumed(editedPlan))
+      }
+    }
+
+    // §S1.3 — absorb any GOAL-directed steer BETWEEN ticks. READ-STAGE-THEN-STAMP (at-least-once advisory
+    // delivery): drain (non-consuming read) → stage on the relay so THIS tick's step prompt carries it →
+    // run the tick → stamp ONLY what the executor threaded as consumed.
+    if (input.steerRelay && ports.pendingSteer) {
+      const pending = yield* safeSteers(ports.pendingSteer())
+      input.steerRelay.stage(pending)
+    }
+
+    const outcome = yield* loop.tick(input.handle)
+
+    // Consume-after: stamp ONLY the steers the executor actually threaded into the prompt this tick.
+    if (input.steerRelay && ports.markSteerConsumed) {
+      const threaded = input.steerRelay.takeDrained()
+      if (threaded.length > 0) yield* safe(ports.markSteerConsumed(threaded.map((s) => s.id)))
+    }
+
+    const status = yield* safeStatus(loop, input.handle)
+    if (status) yield* safe(ports.onStatus(status))
+
+    return { outcome, progress: isTerminalOutcome(outcome) ? "terminal" : "continue" }
+  })
+
 export const runToCompletion = (input: RunToCompletionInput): Effect.Effect<TickOutcome> =>
   Effect.gen(function* () {
     const loop = makeGoalLoop(input.deps)
-    const ports = input.ports ?? noopPorts
     const maxIterations = input.maxIterations ?? 10_000
     let last: TickOutcome = "continue"
 
     for (let i = 0; i < maxIterations; i++) {
-      if (yield* safeBool(ports.shouldStop())) {
-        yield* safe(loop.stop(input.handle))
-        return "needs_human"
-      }
-      if (yield* safeBool(ports.shouldPause())) {
-        // Cooperative suspend: do NOT tick, do NOT mark terminal — the persisted state resumes later.
-        // A steer staged BEFORE a pause is NOT stamped consumed (the tick that would absorb it never
-        // ran), so it stays pending and is re-drained on resume — no guidance is lost across a pause.
-        // A plan edit enqueued during pause likewise stays pending on the control channel and is applied
-        // on resume (drained here on the first post-resume iteration), so no edit is lost across a pause.
-        return "continue"
-      }
-
-      // §S2 — apply a pending USER PLAN EDIT BETWEEN ticks (after the PREVIOUS tick's mirror-back, before
-      // THIS tick). Draining here — not mid-tick — is what prevents the child-bridge clobber: the prior
-      // tick's mirrorChildPlan has already written the child's progress back, so applying the user edit on
-      // top preserves both (child progress + user revision). loop.applyPlanEdit upserts the durable doc
-      // via the DRIVER's store handle (so the next tick's readPlan sees it) and re-baselines stall/version.
-      // consume-once: stamp consumed ONLY after a successful apply; a crash before markPlanEditConsumed
-      // leaves the edit pending → re-applied next iteration (idempotent: a fingerprint-identical re-upsert
-      // is a no-op, and re-baseline to the same values is harmless).
-      if (ports.pendingPlanEdit) {
-        const editedPlan = yield* safePlanEdit(ports.pendingPlanEdit())
-        if (editedPlan != null) {
-          yield* safe(loop.applyPlanEdit(input.handle, editedPlan))
-          // Pass the exact edit we applied so the port clears the slot ONLY if it still holds THIS edit —
-          // a newer edit admitted while we were applying stays pending and is drained next iteration.
-          if (ports.markPlanEditConsumed) yield* safe(ports.markPlanEditConsumed(editedPlan))
-        }
-      }
-
-      // §S1.3 — absorb any GOAL-directed steer BETWEEN ticks. READ-STAGE-THEN-STAMP (at-least-once
-      // advisory delivery, NOT exactly-once): drain (non-consuming read) → stage on the relay so THIS
-      // tick's step prompt carries it → run the tick → stamp ONLY what the executor threaded as consumed.
-      // A crash after staging but before markSteerConsumed leaves the steer pending → RE-THREADED next
-      // iteration (guidance is never lost, but MAY be threaded twice — harmless for advisory steering, and
-      // a tick is at-least-once anyway). `pendingSteer` is optional, so a caller wiring only pause/stop (or
-      // noopPorts without a relay) behaves exactly as before.
-      if (input.steerRelay && ports.pendingSteer) {
-        const pending = yield* safeSteers(ports.pendingSteer())
-        input.steerRelay.stage(pending)
-      }
-
-      last = yield* loop.tick(input.handle)
-
-      // Consume-after: stamp ONLY the steers the executor actually threaded into the prompt this tick.
-      // If the tick short-circuited without running the executor (terminal replay / pre-breach limit),
-      // `takeDrained` is empty and nothing is stamped — the steer stays pending for the next real tick.
-      if (input.steerRelay && ports.markSteerConsumed) {
-        const threaded = input.steerRelay.takeDrained()
-        if (threaded.length > 0) yield* safe(ports.markSteerConsumed(threaded.map((s) => s.id)))
-      }
-
-      const status = yield* safeStatus(loop, input.handle)
-      if (status) yield* safe(ports.onStatus(status))
-
-      if (isTerminalOutcome(last)) return last
+      const step = yield* runOneTick(loop, input)
+      last = step.outcome
+      // stopped / paused / terminal all end the in-process drive loop; only "continue" iterates.
+      if (step.progress !== "continue") return last
     }
     // Exhausted the driver guard without a terminal outcome — treat as needs_human (never loop forever).
     return "needs_human"
