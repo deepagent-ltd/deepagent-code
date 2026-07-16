@@ -1,6 +1,7 @@
-import { mkdirSync, readdirSync, readFileSync, writeFileSync, existsSync } from "node:fs"
+import { mkdirSync, readdirSync, readFileSync, existsSync } from "node:fs"
 import { createHash } from "node:crypto"
 import path from "node:path"
+import { writeFileAtomic, writeFileExclusive } from "./atomic-write"
 
 // V3 Document System (docs/28): the bedrock. All persistent state is a typed-document
 // graph — small files, content-addressed, append-only with a supersede chain, bidirectional
@@ -194,6 +195,29 @@ export type DocFilter = {
 export type IntegrityViolation = { readonly invariant: string; readonly docId: string; readonly detail: string }
 export type IntegrityReport = { readonly ok: boolean; readonly violations: readonly IntegrityViolation[] }
 
+// F30-1 (deepagentcore-v4.0.3 storage prereq): a CAS write conflict. Thrown when persist() tries to
+// create an append-only version file (`id@vN.json`) that already exists on disk with a DIFFERENT
+// content hash — i.e. another writer (a second handle or a second process) already produced version
+// N of this doc from a different base. Append-only + content-addressed means same-hash collisions
+// are idempotent no-ops (a retried write); only a hash MISMATCH is a genuine lost-update race, and
+// the losing writer must re-read the latest version and re-apply its mutation rather than clobber.
+export class DocumentConflictError extends Error {
+  readonly _tag = "DocumentConflictError"
+  constructor(
+    readonly docId: string,
+    readonly version: number,
+    readonly existingHash: string,
+    readonly incomingHash: string,
+  ) {
+    super(
+      `DocumentStore CAS conflict: ${docId}@v${version} already exists with a different body ` +
+        `(on-disk ${existingHash.slice(0, 16)}… vs incoming ${incomingHash.slice(0, 16)}…). ` +
+        `Another writer produced this version concurrently; re-read the latest and re-apply.`,
+    )
+    this.name = "DocumentConflictError"
+  }
+}
+
 const toRef = (d: Doc): DocRef => ({
   id: d.id,
   version: d.version,
@@ -283,12 +307,61 @@ const strongerEvidence = (a: EvidenceStrength, b: EvidenceStrength): EvidenceStr
 
 const idToFile = (id: string): string => id.replace(/:/g, "__")
 
+// F30-1 Part 2 (deepagentcore-v4.0.3 storage prereq): same-process SHARED AUTHORITY. Each
+// `new DocumentStore(root)` builds its OWN in-memory index (rebuilt from disk in the constructor),
+// so two long-lived handles to the same root in one process do NOT see each other's writes — a
+// latent divergence the goal code today routes around with an out-of-band control channel. This
+// process-level registry, keyed by the RESOLVED absolute root, lets callers opt into a single shared
+// in-memory index via `DocumentStore.shared(root)`: every shared handle for a root reuses the same
+// `docs` Map, so a write through one handle is immediately visible through every other. The plain
+// constructor is intentionally UNCHANGED (unshared, disk-rebuilt) so it keeps faithfully simulating a
+// cold/second-process reconstruction (the shape several recovery tests depend on). Cross-process
+// safety is provided by Part 1's exclusive-create CAS + atomic writes, not by this in-memory registry.
+const sharedIndexRegistry = new Map<string, Map<string, Map<number, Doc>>>()
+
 export class DocumentStore {
   // id -> version -> Doc
-  private docs = new Map<string, Map<number, Doc>>()
-  constructor(private readonly root: string) {
+  private docs: Map<string, Map<number, Doc>>
+  // `new DocumentStore(root)` stays the UNSHARED, disk-rebuilt handle it always was (all existing
+  // callers and restart-simulation tests keep working unchanged). Shared handles are obtained via the
+  // `DocumentStore.shared(root)` factory, which passes shared=true.
+  constructor(
+    private readonly root: string,
+    shared = false,
+  ) {
     mkdirSync(path.join(root, "docs"), { recursive: true })
+    if (shared) {
+      const key = path.resolve(root)
+      let index = sharedIndexRegistry.get(key)
+      if (!index) {
+        // First shared handle for this root: build the authoritative shared index from disk once.
+        index = new Map<string, Map<number, Doc>>()
+        sharedIndexRegistry.set(key, index)
+        this.docs = index
+        this.rebuildIndex()
+      } else {
+        // Subsequent shared handles reuse the live shared index (already coherent with prior writes).
+        this.docs = index
+      }
+      return
+    }
+    // Unshared (default): own index, rebuilt from disk — byte-identical to the pre-F30-1 behavior.
+    this.docs = new Map<string, Map<number, Doc>>()
     this.rebuildIndex()
+  }
+
+  // F30-1 Part 2: a SHARED handle over `root` — all shared handles for the same resolved root in this
+  // process share ONE in-memory index, so writes through any handle are immediately visible through
+  // the others. Use for coherent same-process authority (e.g. a long-lived driver handle that must see
+  // an edit written by a request fiber). Cross-process writers are still reconciled by CAS on persist.
+  static shared(root: string): DocumentStore {
+    return new DocumentStore(root, true)
+  }
+
+  // Test-only: drop the shared-index registry so a fresh process is simulated. Not part of the durable
+  // contract — only used to keep unit tests hermetic when they exercise DocumentStore.shared.
+  static __resetSharedRegistryForTests(): void {
+    sharedIndexRegistry.clear()
   }
 
   // ---- write ----
@@ -526,15 +599,53 @@ export class DocumentStore {
   }
 
   // ---- internals ----
+  // F30-1: persist() writes a NEW append-only version file with EXCLUSIVE-create CAS semantics. In
+  // the normal single-writer flow each `id@vN.json` is written exactly once (create=v1, every
+  // update/upsert bumps version+1), so the exclusive create never collides and behavior is
+  // byte-identical to the old bare writeFileSync. A collision (EEXIST) only happens when a second
+  // handle/process already produced this version: if that on-disk version is byte-identical (same
+  // content hash) the write is an idempotent no-op (a retried/duplicated write) and we simply adopt
+  // it into the index; if it differs, it is a genuine lost-update race and we throw
+  // DocumentConflictError rather than silently clobber.
   private persist(doc: Doc): void {
     const dir = path.join(this.root, "docs", doc.type)
     mkdirSync(dir, { recursive: true })
-    writeFileSync(path.join(dir, `${idToFile(doc.id)}@v${doc.version}.json`), JSON.stringify(doc, null, 2))
+    const file = path.join(dir, `${idToFile(doc.id)}@v${doc.version}.json`)
+    const payload = JSON.stringify(doc, null, 2)
+    try {
+      writeFileExclusive(file, payload)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException)?.code !== "EEXIST") throw error
+      // CAS collision: reconcile against what is already on disk.
+      const existing = this.readVersionFile(file)
+      if (existing && existing.hash === doc.hash) {
+        // Idempotent: the same content already landed (retried write / concurrent identical write).
+        this.indexDoc(doc)
+        return
+      }
+      throw new DocumentConflictError(doc.id, doc.version, existing?.hash ?? "<unreadable>", doc.hash)
+    }
     this.indexDoc(doc)
   }
   private replace(doc: Doc): void {
-    // rewrites the same version with new status/superseded_by; rehash so INV-2 holds
-    this.persist({ ...doc, hash: computeHash({ ...doc, hash: "" }) })
+    // rewrites the SAME version in place with new status/superseded_by; rehash so INV-2 holds. This
+    // is an intentional overwrite (not a new version), so it uses the crash-safe atomic OVERWRITE
+    // primitive (temp+fsync+rename) rather than the exclusive-create CAS path.
+    const hashed: Doc = { ...doc, hash: computeHash({ ...doc, hash: "" }) }
+    const dir = path.join(this.root, "docs", hashed.type)
+    const file = path.join(dir, `${idToFile(hashed.id)}@v${hashed.version}.json`)
+    writeFileAtomic(file, JSON.stringify(hashed, null, 2))
+    this.indexDoc(hashed)
+  }
+  // F30-1: read+parse a single on-disk version file for CAS reconciliation. Returns null if the file
+  // is missing or corrupt (a torn concurrent write) — the caller treats an unreadable existing file
+  // as a conflict, never as an idempotent match.
+  private readVersionFile(file: string): Doc | null {
+    try {
+      return JSON.parse(readFileSync(file, "utf8")) as Doc
+    } catch {
+      return null
+    }
   }
   private indexDoc(doc: Doc): void {
     const versions = this.docs.get(doc.id) ?? new Map<number, Doc>()
