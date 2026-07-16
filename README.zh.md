@@ -117,6 +117,62 @@ deepagent-code
 deepagent
 ```
 
+## 添加供应商
+
+在运行任务之前，DeepAgent Code 至少需要一个模型供应商。它通过
+[AI SDK](https://ai-sdk.dev/) 和 [models.dev](https://models.dev) 支持 75+ 家供应商，
+以及任意 OpenAI 或 Anthropic 兼容的接口。按你习惯的方式选一种即可。
+
+### 桌面应用（推荐）
+
+打开 **设置 → 供应商（Settings → Providers）**：
+
+- **官方供应商**（OpenAI、Anthropic、DeepSeek、Google、xAI、智谱/GLM）：点击
+  **连接**，粘贴你的 API Key。
+- **其他供应商或网关**：在「自定义供应商」上点击 **连接**，填入 **Base URL** 和
+  **API Key**。DeepAgent Code 会自动探测协议（OpenAI 兼容或 Anthropic），并从接口的
+  `/models` 列表自动发现可用模型——其余字段无需填写。
+
+模型规格（上下文窗口、推理能力）会通过与 models.dev 目录按模型 id 匹配来自动补全。
+你可以再次打开自定义供应商，覆盖某个模型的上下文/推理/温度；这些覆盖为尽力而为的默认值，
+修改后不保证模型仍能正常使用。
+
+### 终端
+
+```bash
+# 登录供应商（官方供应商，或插件鉴权流程）
+deepagent auth login
+
+# 查看已连接的供应商
+deepagent auth list
+```
+
+### 配置文件
+
+供应商也保存在 `~/.deepagent/code/config.jsonc` 中。一个自定义 OpenAI 兼容接口如下——
+设 `discovery: true` 让模型在运行时从接口刷新，或在 `models` 下显式列出：
+
+```jsonc
+{
+  "$schema": "https://deepagent-code.ai/config.json",
+  "provider": {
+    "myprovider": {
+      "name": "My Provider",
+      "npm": "@ai-sdk/openai-compatible",
+      "discovery": true,
+      "options": {
+        "baseURL": "https://api.myprovider.com/v1",
+        "apiKey": "sk-..."
+      }
+    }
+  }
+}
+```
+
+通过应用/CLI 添加的官方供应商密钥单独存放在 `~/.deepagent/code/auth.json`，不在配置文件里。
+完整参考（Base URL 覆盖、请求头、逐模型配置、网关）见
+[供应商文档](https://deepagent-code.ai/docs/providers/)。
+
 ## 快速示例
 
 启动智能体并交给它一个任务：
@@ -216,6 +272,7 @@ bun run --cwd packages/deepagent-code dev import-history --from codex --dry-run
 
 ## 文档
 
+- [供应商与模型](https://deepagent-code.ai/docs/providers/)
 - [架构与设计](design/README.md)
 - [安全策略](SECURITY.md)
 - [隐私策略](PRIVACY.md)

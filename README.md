@@ -117,6 +117,67 @@ deepagent-code
 deepagent
 ```
 
+## Adding a Provider
+
+Before you can run a task, DeepAgent Code needs at least one model provider. It
+supports 75+ providers through the [AI SDK](https://ai-sdk.dev/) and
+[models.dev](https://models.dev), plus any OpenAI- or Anthropic-compatible
+endpoint. Pick whichever path fits how you work.
+
+### Desktop app (recommended)
+
+Open **Settings → Providers**:
+
+- **Official providers** (OpenAI, Anthropic, DeepSeek, Google, xAI, ZhipuAI/GLM):
+  click **Connect**, paste your API key.
+- **Any other provider or gateway**: click **Connect** on *Custom provider*, paste
+  the **Base URL** and **API key**. DeepAgent Code auto-detects the protocol
+  (OpenAI-compatible or Anthropic) and discovers the available models from the
+  endpoint's `/models` list — you don't have to fill anything else.
+
+Model specs (context window, reasoning) are auto-filled by matching each model
+against the models.dev catalog. You can reopen a custom provider to override a
+model's context/reasoning/temperature; those overrides are best-effort and not
+guaranteed to keep the model working.
+
+### Terminal
+
+```bash
+# Log in to a provider (official providers, or a plugin auth flow)
+deepagent auth login
+
+# See what's connected
+deepagent auth list
+```
+
+### Config file
+
+Providers also live in `~/.deepagent/code/config.jsonc`. A custom
+OpenAI-compatible endpoint looks like this — set `discovery: true` to have models
+refreshed from the endpoint at runtime, or list them explicitly under `models`:
+
+```jsonc
+{
+  "$schema": "https://deepagent-code.ai/config.json",
+  "provider": {
+    "myprovider": {
+      "name": "My Provider",
+      "npm": "@ai-sdk/openai-compatible",
+      "discovery": true,
+      "options": {
+        "baseURL": "https://api.myprovider.com/v1",
+        "apiKey": "sk-..."
+      }
+    }
+  }
+}
+```
+
+Official-provider keys added via the app/CLI are stored separately in
+`~/.deepagent/code/auth.json`, not in the config file. See the
+[providers guide](https://deepagent-code.ai/docs/providers/) for the full
+reference (base URL overrides, headers, per-model config, gateways).
+
 ## Quick Example
 
 Start the agent and give it a task:
@@ -216,6 +277,7 @@ bun run --cwd packages/deepagent-code dev import-history --from codex --dry-run
 
 ## Documentation
 
+- [Providers & Models](https://deepagent-code.ai/docs/providers/)
 - [Architecture & Design](design/README.md)
 - [Security Policy](SECURITY.md)
 - [Privacy Policy](PRIVACY.md)
