@@ -85,26 +85,34 @@ describe("I33-1 plan-store single authority", () => {
     expect(PlanStore.planStoreRoot("s4")).toBe(path.join(stateDir, "goal", "s4", "graph"))
   })
 
-  test("a plan written via a goal-style handle is read back by the tool path (single doc)", () => {
-    // Simulate the goal path: write the SAME doc identity (type plan, scope run:<sid>, slug plan-<sid>)
-    // through a shared handle at the goal root, then read it via the tool path (plan-store). One doc.
-    const goalRoot = path.join(stateDir, "goal", "s5", "graph")
+  test("goal path and tool path converge on ONE doc (realistic id; no plan-<sid>-2 split)", () => {
+    // Regression for the P0 the adversarial review found: upsert() dedups on `description`, so the goal
+    // path (goal-driver.materializePlanDoc) and the tool path (setPlanDoc) MUST use the identical doc
+    // identity — type/scope/idSlug AND description — or upsert creates a SECOND doc (plan-<sid>-2) and
+    // getPlan (list[0]) returns whichever is first, re-splitting the store. This replicates the goal
+    // path's write FAITHFULLY using the shared identity helpers (planDescription/planScope) — the same
+    // ones goal-driver now imports — with a realistic session id (the earlier test masked the bug by
+    // hand-rolling "session plan s5" and using a trivial id).
+    const sid = `ses_goal_conv_${"z".repeat(24)}_beef`
+    const goalRoot = path.join(stateDir, "goal", sid, "graph")
     const goalHandle = DocumentStore.shared(goalRoot)
+    // Goal-path write (must match plan-store identity exactly):
     goalHandle.upsert({
       type: "plan",
-      scope: "run:s5",
-      description: "session plan s5",
-      idSlug: "plan-s5",
-      body: JSON.stringify(plan("s5", [step("step_1", "active")])),
-      provenance: { source: "model", run_ref: "run:s5" },
+      scope: PlanStore.planScope(sid),
+      description: PlanStore.planDescription(sid),
+      idSlug: `plan-${sid}`,
+      body: JSON.stringify(plan(sid, [step("step_1", "active")])),
+      provenance: { source: "model", run_ref: PlanStore.planScope(sid) },
     })
-    // The tool path (plan-store, shared handle on the SAME root) sees the goal's write immediately.
-    expect(PlanStore.getPlanDoc("s5")?.steps[0].status).toBe("active")
-    // And a subsequent tool write is visible to the goal handle (bidirectional single authority).
-    SessionState.getOrCreate("s5", "high")
-    SessionState.setPlan("s5", plan("s5", [step("step_1", "done")]))
-    const fromGoal = goalHandle.get("doc:plan:plan-s5")
-    expect((JSON.parse(fromGoal!.body) as PlanDoc).steps[0].status).toBe("done")
+    expect(PlanStore.getPlanDoc(sid)?.steps[0].status).toBe("active")
+    // Tool-path write lands on the SAME doc (new version), NOT a second doc.
+    SessionState.getOrCreate(sid, "high")
+    SessionState.setPlan(sid, plan(sid, [step("step_1", "done")]))
+    expect(PlanStore.getPlanDoc(sid)?.steps[0].status).toBe("done")
+    // Exactly ONE plan doc exists under this session's root (no plan-<sid>-2 split).
+    const planDocs = DocumentStore.shared(goalRoot).list({ type: "plan", scope: PlanStore.planScope(sid) })
+    expect(planDocs.length).toBe(1)
   })
 
   test("legacy inline plan on sessions.json is migrated into the store on load", () => {
