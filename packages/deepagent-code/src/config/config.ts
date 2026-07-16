@@ -182,7 +182,7 @@ export class Service extends Context.Service<Service, Interface>()("@deepagent-c
 export const use = serviceUse(Service)
 
 function globalConfigFile() {
-  const candidates = ["deepagent-code.jsonc", "deepagent-code.json", "config.json"].map((file) =>
+  const candidates = ["config.jsonc", "config.json", "deepagent-code.jsonc", "deepagent-code.json"].map((file) =>
     path.join(Global.Path.config, file),
   )
   for (const file of candidates) {
@@ -193,10 +193,11 @@ function globalConfigFile() {
 
 // Single canonical global config file. We still LOAD the legacy names for backward compatibility
 // (loadGlobal merges all of them), but users should only ever have to edit ONE file. This
-// consolidates any legacy config.json / deepagent-code.json into deepagent-code.jsonc at startup
-// and removes the old files, so plugins and providers no longer end up split across files.
-const CANONICAL_GLOBAL_CONFIG = "deepagent-code.jsonc"
-const LEGACY_GLOBAL_CONFIGS = ["config.json", "deepagent-code.json"]
+// consolidates any legacy config.json / deepagent-code.json / deepagent-code.jsonc into the single
+// canonical config.jsonc at startup and removes the old files, so plugins and providers no longer end
+// up split across files. config.jsonc lives at the data root (~/.deepagent/code) after unification.
+const CANONICAL_GLOBAL_CONFIG = "config.jsonc"
+const LEGACY_GLOBAL_CONFIGS = ["config.json", "deepagent-code.json", "deepagent-code.jsonc"]
 
 async function migrateGlobalConfigFiles() {
   const dir = Global.Path.config
@@ -220,8 +221,9 @@ async function migrateGlobalConfigFiles() {
     }
   }
 
-  // Load order = config.json -> deepagent-code.json -> deepagent-code.jsonc, so the canonical
-  // .jsonc wins over legacy. Build the merged object in that precedence.
+  // Load order = config.json -> deepagent-code.json -> deepagent-code.jsonc, so the newest legacy
+  // (.jsonc) wins over older ones. Build the merged object in that precedence; the canonical
+  // config.jsonc (patched below) then wins over all of them.
   let merged: Record<string, unknown> = {}
   for (const file of legacyPaths) {
     const parsed = parseStrict(await fsNode.readFile(file, "utf8").catch(() => ""))
@@ -245,9 +247,23 @@ async function migrateGlobalConfigFiles() {
     }
     await fsNode.writeFile(canonicalPath, text)
   } else {
-    merged.$schema ??= "https://deepagent-code.ai/config.json"
+    // No canonical file yet. Prefer renaming from a legacy .jsonc so we carry the user's comments
+    // over (the common upgrade path: deepagent-code.jsonc -> config.jsonc). Fold in keys from any
+    // .json-only legacy files on top. Fall back to a plain serialize when no .jsonc legacy exists.
+    const jsoncBase = [...legacyPaths].reverse().find((file) => file.endsWith(".jsonc"))
     await fsNode.mkdir(dir, { recursive: true }).catch(() => {})
-    await fsNode.writeFile(canonicalPath, JSON.stringify(merged, null, 2))
+    if (jsoncBase) {
+      let text = await fsNode.readFile(jsoncBase, "utf8").catch(() => "{}")
+      const baseParsed = parseStrict(text) ?? {}
+      for (const [key, value] of Object.entries(merged)) {
+        if (key in baseParsed) continue
+        text = patchJsonc(text, { [key]: value })
+      }
+      await fsNode.writeFile(canonicalPath, text)
+    } else {
+      merged.$schema ??= "https://deepagent-code.ai/config.json"
+      await fsNode.writeFile(canonicalPath, JSON.stringify(merged, null, 2))
+    }
   }
 
   for (const file of legacyPaths) await fsNode.unlink(file).catch(() => {})
@@ -547,9 +563,13 @@ export const layer = Layer.effect(
             .pipe(Effect.catch(() => Effect.void))
         }
       }
+      // Merge in precedence order: legacy names first, then the canonical config.jsonc last so it
+      // wins. All names are still loaded for backward compatibility until migration removes the old
+      // files; migrateGlobalConfigFiles() consolidates them into config.jsonc on startup.
       result = mergeConfig(result, yield* loadFileSafe(path.join(Global.Path.config, "config.json")))
       result = mergeConfig(result, yield* loadFileSafe(path.join(Global.Path.config, "deepagent-code.json")))
       result = mergeConfig(result, yield* loadFileSafe(path.join(Global.Path.config, "deepagent-code.jsonc")))
+      result = mergeConfig(result, yield* loadFileSafe(path.join(Global.Path.config, "config.jsonc")))
 
       const legacy = path.join(Global.Path.config, "config")
       if (existsSync(legacy)) {
