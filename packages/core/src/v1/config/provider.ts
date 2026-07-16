@@ -81,6 +81,10 @@ export const Info = Schema.Struct({
   npm: Schema.optional(Schema.String),
   whitelist: Schema.optional(Schema.mutable(Schema.Array(Schema.String))),
   blacklist: Schema.optional(Schema.mutable(Schema.Array(Schema.String))),
+  discovery: Schema.optional(Schema.Boolean).annotate({
+    description:
+      "Discover this provider's models at runtime from its /models endpoint instead of listing them in config. Discovered models are cached locally and refreshed periodically; manual `models` entries always take precedence.",
+  }),
   options: Schema.optional(
     Schema.StructWithRest(
       Schema.Struct({

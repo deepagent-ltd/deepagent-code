@@ -5,7 +5,7 @@ import { OFFICIAL_PROVIDER_ID_SET } from "@deepagent-code/core/provider-official
 
 /**
  * First-party settings store — the single home for settings that must NOT live in the
- * user-editable config file (`deepagent-code.jsonc`, which is reserved for third-party
+ * user-editable config file (`config.jsonc`, which is reserved for third-party
  * providers). Two families live here:
  *
  *   1. `deepagent`  — first-party runtime settings (prompt/intelligence/agent-mode/self-learning +
