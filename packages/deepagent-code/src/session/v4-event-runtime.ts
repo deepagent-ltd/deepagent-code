@@ -15,6 +15,7 @@ import { Session } from "./session"
 import { SessionPrompt } from "./prompt"
 import { Agent } from "../agent/agent"
 import { Provider } from "../provider/provider"
+import { LSP } from "../lsp/lsp"
 import { InstanceStore } from "@/project/instance-store"
 import { InstanceRef, WorkspaceRef } from "@/effect/instance-ref"
 import { WorkspaceV2 } from "@deepagent-code/core/workspace"
@@ -33,6 +34,13 @@ import { makeTaskSubagentRunner } from "./goal-loop-wiring"
 import { AgentPush } from "./agent-push"
 import { DigestBuilder } from "./digest-builder"
 import { SupervisorNotifier } from "./supervisor-notifier"
+// V4.1 §N — the event-driven goal-tick consumer + its production cold-reconstruction port.
+import { GoalTickConsumer } from "./goal-tick-consumer"
+import { GoalTickPort } from "./goal-tick-port"
+import { goalStoreRoot } from "./goal-manager"
+import { SessionRevert } from "./revert"
+import { SessionSteer } from "./steer"
+import { EventV2Bridge } from "@/event-v2-bridge"
 // §C3 (P2.9) — file locks + code-graph symbols.
 import { FileLock } from "@deepagent-code/core/file-lock"
 import { openProjectStore } from "@deepagent-code/core/deepagent/durable-knowledge-store"
@@ -684,6 +692,51 @@ const panelConsumerLayer = Layer.unwrap(
   }),
 )
 
+// V4.1 §N — the GOAL TICK CONSUMER. Subscribes goal.tick.requested and executes each tick via the
+// production cold-reconstruction port (makeGoalTickPort), then re-emits the next command. This is what
+// makes the goal-loop tick GENUINELY event-driven with cross-process cold recovery: a goal survives a
+// process restart because every tick rebuilds its wiring from the durable run_context doc + the event
+// payload (no in-memory control map needed). Draws the SAME session stack makeEventTurnRunner uses, plus
+// SessionRevert / SessionSteer / LSP / EventV2Bridge for the rollback / goal-steer / diagnostics / SSE
+// ports, all from the shared graph.
+//
+// FLAG COUPLING: runLoop = v4MultiAgentRuntime (the master event-driven switch — the goal-manager's
+// dual-path start publishes the FIRST command only on this flag). Default posture matches the flag: with
+// it off, runLoop is false ⇒ NO subscription ⇒ the "goal-tick-consumer" group is never registered ⇒ no
+// pending-row pileup, and handle() additionally acks-and-drives-nothing on a stray delivery.
+const goalTickConsumerLayer = Layer.unwrap(
+  Effect.gen(function* () {
+    const flags = yield* RuntimeFlags.Service
+    const sessions = yield* Session.Service
+    const agents = yield* Agent.Service
+    const sessionPrompt = yield* SessionPrompt.Service
+    const revert = yield* SessionRevert.Service
+    const steerBuffer = yield* SessionSteer.Service
+    const provider = yield* Provider.Service
+    const lsp = yield* LSP.Service
+    const instanceStore = yield* InstanceStore.Service
+    const events = yield* EventV2Bridge.Service
+    const eventBus = yield* DeepAgentEventBus.Service
+    const approvalQueue = yield* ApprovalQueue.Service
+    const runTick = GoalTickPort.makeGoalTickPort({
+      sessions,
+      agents,
+      sessionPrompt,
+      revert,
+      steerBuffer,
+      provider,
+      lsp,
+      instanceStore,
+      events,
+      eventBus,
+      approvalQueue,
+      flags,
+      goalStoreRoot,
+    })
+    return GoalTickConsumer.layerWith({ runTick, runLoop: flags.v4MultiAgentRuntime })
+  }),
+)
+
 /**
  * The full V4 event-runtime, ready to merge into the instance app graph. Starts (as scoped daemons):
  * the EventDispatcher (router + scheduler tick + retry pump), the MultiAgentRuntime (DispatchPort),
@@ -717,6 +770,9 @@ export const layer = Layer.mergeAll(
   // All flag-gated on v4AgentPushEnabled; inert (no push, no flush) when off. Draws DeepAgentEventBus /
   // Database / WorkspaceConfig / IMRepository / RuntimeFlags from the shared graph.
   pushStackLayer,
+  // V4.1 §N — the event-driven goal-tick consumer. Gated on v4MultiAgentRuntime (see goalTickConsumerLayer).
+  // Shares the ONE DeepAgentEventBus + ApprovalQueue + session stack with the rest of the runtime.
+  goalTickConsumerLayer,
 ).pipe(
   Layer.provideMerge(runtimeLayer),
 )
