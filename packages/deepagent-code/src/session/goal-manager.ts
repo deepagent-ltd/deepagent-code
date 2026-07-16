@@ -395,7 +395,10 @@ export const layer = Layer.effect(
                 },
               ])
             : (fromFile?.plan ?? null))
-        const store = new DocumentStore(goalStoreRoot(sessionID))
+        // I33-1: SHARED handle so the goal's plan doc and the `plan` tool's writes (core plan-store,
+        // same root + slug) share ONE in-memory index — a goal-side plan edit is immediately visible to
+        // the tool path and vice versa, structurally preventing the two-store divergence.
+        const store = DocumentStore.shared(goalStoreRoot(sessionID))
         const planDocId =
           plan != null
             ? GoalDriver.materializePlanDoc({ store, sessionId: sessionID, plan })
@@ -585,9 +588,10 @@ export const layer = Layer.effect(
         if (!c.paused) return true
         yield* mutateControl(sessionID, (ctrl) => (ctrl.paused = false))
         AgentGateway.DeepAgentSessionState.setActiveGoalPhase(sessionID, "running")
-        // Re-drive: the persisted run_context doc resumes exactly where it paused. A fresh store handle
-        // over the same root re-reads the loop state.
-        const store = new DocumentStore(goalStoreRoot(sessionID))
+        // Re-drive: the persisted run_context doc resumes exactly where it paused. I33-1: SHARED handle
+        // (same shared index as the tool path + the first driver) so the resumed loop's plan reads/writes
+        // stay coherent with any concurrent `plan` tool write on the same session.
+        const store = DocumentStore.shared(goalStoreRoot(sessionID))
 
         // V4.1 §N DUAL-PATH resume. flag ON ⇒ RE-SEED the event chain rather than starting a BackgroundJob.
         // The paused command consumed the current normal cursor key without advancing state. Resume keeps

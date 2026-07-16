@@ -1,4 +1,4 @@
-import { describe, expect, test, afterEach } from "bun:test"
+import { describe, expect, test, beforeEach, afterEach } from "bun:test"
 import { Effect } from "effect"
 import type { Diagnostic } from "../../src/lsp/client"
 import {
@@ -319,6 +319,12 @@ describe("V3.9 §D wiring — buildStepExecutor", () => {
 
 describe("V3.9 §E F3 wiring — plan bridge (worker plan edits reach the goal plan doc)", () => {
   const roots: string[] = []
+  // I33-1: the structural plan now lives in the DocumentStore authority reached via session-state's
+  // configured root (plan-store). Configure a fresh state dir per case so the child session's
+  // getPlan/setPlan (used by seedChildPlan/mirrorChildPlan) has a plan-store root.
+  beforeEach(() => {
+    AgentGateway.DeepAgentSessionState.configure(mkdtempSync(path.join(tmpdir(), "deepagent-f3-state-")))
+  })
   const step = (id: string, status: PlanStep["status"]): PlanStep => ({
     step_id: id,
     title: id,
