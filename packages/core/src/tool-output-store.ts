@@ -3,6 +3,7 @@ export * as ToolOutputStore from "./tool-output-store"
 import path from "path"
 import { Context, Duration, Effect, Layer, Option, Schedule, Schema } from "effect"
 import { Config } from "./config"
+import { makeLocationNode } from "./effect/app-node"
 import { FSUtil } from "./fs-util"
 import { Global } from "./global"
 import { SessionSchema } from "./session/schema"
@@ -185,6 +186,8 @@ export const layer = Layer.effect(
     return Service.of({ limits, bound, cleanup })
   }),
 )
+
+export const node = makeLocationNode({ service: Service, layer, deps: [FSUtil.node, Global.node, Config.node] })
 
 export const defaultLayer = layer.pipe(Layer.provide(FSUtil.defaultLayer), Layer.provide(Global.defaultLayer))
 

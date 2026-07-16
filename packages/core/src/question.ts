@@ -1,6 +1,7 @@
 export * as QuestionV2 from "./question"
 
 import { Context, Deferred, Effect, Layer, Schema } from "effect"
+import { makeLocationNode } from "./effect/app-node"
 import { EventV2 } from "./event"
 import { Identifier } from "./id/id"
 import { withStatics } from "./schema"
@@ -194,5 +195,7 @@ export const layer = Layer.effect(
     return Service.of({ ask, reply, reject, list })
   }),
 )
+
+export const node = makeLocationNode({ service: Service, layer, deps: [EventV2.node] })
 
 export const locationLayer = layer

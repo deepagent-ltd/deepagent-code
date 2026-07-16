@@ -5,6 +5,7 @@ import { Context, Effect, Layer, Schema } from "effect"
 import { castDraft } from "immer"
 import { AgentV2 } from "./agent"
 import { ConfigMarkdown } from "./config/markdown"
+import { makeLocationNode } from "./effect/app-node"
 import { FSUtil } from "./fs-util"
 import { PermissionV2 } from "./permission"
 import { AbsolutePath, withStatics } from "./schema"
@@ -157,5 +158,7 @@ export const layer = Layer.effect(
     })
   }),
 )
+
+export const node = makeLocationNode({ service: Service, layer, deps: [SkillDiscovery.node, FSUtil.node] })
 
 export const locationLayer = layer.pipe(Layer.provide(SkillDiscovery.defaultLayer))

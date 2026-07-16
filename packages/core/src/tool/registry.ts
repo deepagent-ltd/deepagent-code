@@ -3,6 +3,7 @@ export * as ToolRegistry from "./registry"
 import { ToolOutput, type ToolCall, type ToolDefinition, type ToolSettlement } from "@deepagent-code/llm"
 import { Context, Effect, Layer, Scope } from "effect"
 import { AgentV2 } from "../agent"
+import { makeLocationNode } from "../effect/app-node"
 import { PermissionV2 } from "../permission"
 import { SessionMessage } from "../session/message"
 import { SessionSchema } from "../session/schema"
@@ -130,6 +131,18 @@ function whollyDisabled(action: string, rules: PermissionV2.Ruleset) {
   const rule = rules.findLast((rule) => Wildcard.match(action, rule.action))
   return rule?.resource === "*" && rule.effect === "deny"
 }
+
+export const node = makeLocationNode({
+  service: Service,
+  layer,
+  deps: [ApplicationTools.node, ToolOutputStore.node],
+})
+
+export const toolsNode = makeLocationNode({
+  service: Tools.Service,
+  layer,
+  deps: [ApplicationTools.node, ToolOutputStore.node],
+})
 
 export const defaultLayer = layer.pipe(
   Layer.provide(ApplicationTools.layer),
