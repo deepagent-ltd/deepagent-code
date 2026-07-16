@@ -103,26 +103,79 @@ V4.1 brings the complete DeepAgent control plane together:
 - **Human oversight:** approval queues, trace correlation, takeover, rollback, Wiki archives, notifications, and organization/workspace isolation remain part of the execution path.
 - **Secure integrations:** MCP credentials use environment references or native OS secret storage; catalog risk, runtime permissions, trusted sources, and tool capability checks fail closed.
 
+## Installation
+
+```bash
+npm install -g deepagent-code
+```
+
+Then run:
+
+```bash
+deepagent-code
+# or use the alias:
+deepagent
+```
+
+## Quick Example
+
+Start the agent and give it a task:
+
+```bash
+deepagent-code "add rate limiting to /api/users endpoint"
+```
+
+The agent will:
+
+1. Use LSP to find the endpoint definition and understand its structure
+2. Check project memory for existing middleware patterns
+3. Activate the relevant domain packs (backend API, the project's language)
+4. Implement rate limiting following project conventions
+5. Run tests, capture diagnostics, and propose a candidate memory: "This project uses express-rate-limit middleware"
+
+On your next session, when you ask to add rate limiting elsewhere, the agent already knows the pattern.
+
+## Core Concepts
+
+**Document graph** — All persistent state lives in typed documents: `knowledge`, `strategy`, `methodology`, `skill`, `memory`, `design`, `worklog`, `diagnosis`, `eval`. Documents link to each other (supports/blocks/conflicts/validates), forming a graph you can traverse.
+
+**Scope layers** — `session-private` (current conversation), `project-shared` (all sessions in this project), `user-global` (cross-project preferences), `public-system` (built-in skills), `sealed` (audit-only, never enters context).
+
+**Context admission** — Retrieval hits pass through admission gates. Full tool output (raw LSP dumps, diagnostics, capability indexes) is written to evidence artifacts, ref-linked and tool-only; only summaries and `file:line` snippets enter the model context. Sensitive values (SSH hosts, tokens, internal paths) are suggested, never auto-expanded.
+
+**AI IDE microservice** — Query code by symbol name and intent (e.g. `code_intel({ symbol: "AgentGateway.open", intent: "overview" })`), not file:line coordinates. Get definitions, references, call chains, type hierarchies, and diagnostics in one call. Built on LSP with 38 language servers; degrades gracefully to grep/read when no server is configured.
+
+**Preset MCP catalog** — Curated MCP servers for Git platforms, file search, read-only databases, and browser automation. Risk tiers are derived at load time from the catalog template (not user config, so they can't be injected), and servers default to not-connected with write and external-fetch operations behind approval gates.
+
 ## Architecture
 
 ```text
-Desktop / Web / TUI / IM
-          |
-          v
-Session V2 + System Context + Steering
-          |
-          v
-DeepAgent Control Plane
-  - Plan and Goal controllers
-  - Context and graph query
-  - Learning and governance
-  - Event Router and Worker Pool
-          |
-          v
-Durable DocumentStore + Event Bus + Audit
-          |
-          v
-Provider / Tool / LSP / MCP / Git runtimes
+┌─────────────────────────────────────────────────────────────┐
+│  Control Plane (DeepAgent additions)                        │
+│  • Four-graph unified store (code + knowledge + memory + doc)│
+│  • Continuously maintained working state (memory + compaction)│
+│  • Domain pack system (composable, auto-activating knowledge)│
+│  • Context assembly & admission gates                       │
+│  • Multi-agent orchestration & adversarial review           │
+│  • Supervised goal loop & expert panel (event-driven)       │
+│  • Evidence-gated learning & work-strength ladder           │
+└─────────────────────────────────────────────────────────────┘
+                             │
+┌─────────────────────────────────────────────────────────────┐
+│  Runtime Foundations (from opencode)                        │
+│  • Agent loop & tool execution                              │
+│  • Session, fork & provider management                      │
+│  • MCP client runtime                                       │
+│  • Permission system                                        │
+└─────────────────────────────────────────────────────────────┘
+                             │
+┌─────────────────────────────────────────────────────────────┐
+│  Intelligence Layers                                        │
+│  • LSP microservice (38 language servers)                   │
+│  • Preset MCP servers (git/files/db/browser)                │
+│  • Domain adapters (validation & diagnostics)               │
+│  • Diagnostic & validation loops                            │
+└─────────────────────────────────────────────────────────────┘
 ```
 
 The full architecture and its invariants are documented in [Architecture & Design](design/README.md).
