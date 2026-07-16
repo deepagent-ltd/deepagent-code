@@ -43,6 +43,19 @@ describe("I33-1 plan-store single authority", () => {
     expect(read?.steps.map((s) => s.step_id)).toEqual(["step_1", "step_2"])
   })
 
+  test("round-trips for a REALISTIC session id (slugify mangles the id — resolve by type+scope)", () => {
+    // Regression: the doc id is allocated via slugify(idSlug) (lowercase, `_`→`-`, truncate 48), so a
+    // raw `doc:plan:plan-<sid>` reconstruction misses for real ids. A production session id has
+    // underscores + a uuid and exceeds 48 chars — getPlanDoc must still resolve it.
+    const sid = `ses_planstatus_render_${"a".repeat(20)}_0123456789abcdef`
+    const p = plan(sid, [step("step_1", "active"), step("step_2")])
+    PlanStore.setPlanDoc(sid, p)
+    const read = PlanStore.getPlanDoc(sid)
+    expect(read).not.toBeNull()
+    expect(read?.steps[0].status).toBe("active")
+    expect(PlanStore.planDocRef(sid)?.version).toBe(1)
+  })
+
   test("identical body is an INV-4 no-op (no version bump); a change appends a version", () => {
     const p = plan("s2", [step("step_1")])
     expect(PlanStore.setPlanDoc("s2", p).version).toBe(1)

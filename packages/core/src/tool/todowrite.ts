@@ -4,6 +4,8 @@ import { ToolFailure, toolText } from "@deepagent-code/llm"
 import { Effect, Layer, Schema } from "effect"
 import { PermissionV2 } from "../permission"
 import { SessionTodo } from "../session/todo"
+import { makeLocationNode } from "../effect/app-node"
+import { ToolRegistry } from "./registry"
 import { Tool } from "./tool"
 import { Tools } from "./tools"
 
@@ -52,3 +54,9 @@ export const layer = Layer.effectDiscard(
       .pipe(Effect.orDie)
   }),
 )
+
+export const node = makeLocationNode({
+  name: "tool/todowrite",
+  layer,
+  deps: [ToolRegistry.node, PermissionV2.node, SessionTodo.node],
+})

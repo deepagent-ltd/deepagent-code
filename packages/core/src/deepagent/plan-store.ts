@@ -44,10 +44,22 @@ export const planStoreRoot = (sessionId: string): string => {
 // tool path, the goal driver, and the UI/archive readers all see one coherent in-memory index.
 const store = (sessionId: string): DocumentStore => DocumentStore.shared(planStoreRoot(sessionId))
 
+// Resolve a session's plan doc ref. The doc id is NOT reconstructable from the slug — allocateId runs
+// idSlug through slugify() (lowercase, `_`→`-`, truncate 48), so a raw `doc:plan:plan-<sid>` guess
+// misses for realistic session ids. Instead resolve by (type "plan", scope "run:<sid>"): the plan-store
+// root is per-session (<state>/goal/<sid>/graph), and there is exactly one plan doc per session, so this
+// filter yields at most one ref. list() returns the LATEST version per id (F30-1 shared index lookup).
+const resolveRef = (sessionId: string) => {
+  const refs = store(sessionId).list({ type: "plan", scope: planScope(sessionId) })
+  return refs.length > 0 ? refs[0] : null
+}
+
 // Read the current structural plan for a session (latest version), or null if none exists yet. Pure
 // in-memory lookup over the shared index (+ JSON.parse) — safe on the hot path (every tool call).
 export const getPlanDoc = (sessionId: string): PlanDoc | null => {
-  const doc = store(sessionId).get(`doc:plan:${planSlug(sessionId)}`)
+  const ref = resolveRef(sessionId)
+  if (!ref) return null
+  const doc = store(sessionId).get(ref.id)
   if (!doc) return null
   try {
     return JSON.parse(doc.body) as PlanDoc
@@ -58,7 +70,9 @@ export const getPlanDoc = (sessionId: string): PlanDoc | null => {
 
 // The doc id + current version for a session's plan (for the SessionRunState latch pointer), or null.
 export const planDocRef = (sessionId: string): { id: string; version: number } | null => {
-  const doc = store(sessionId).get(`doc:plan:${planSlug(sessionId)}`)
+  const ref = resolveRef(sessionId)
+  if (!ref) return null
+  const doc = store(sessionId).get(ref.id)
   return doc ? { id: doc.id, version: doc.version } : null
 }
 

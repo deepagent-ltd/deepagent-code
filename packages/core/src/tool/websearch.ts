@@ -7,6 +7,9 @@ import { truthy } from "../flag/flag"
 import { InstallationVersion } from "../installation/version"
 import { PositiveInt } from "../schema"
 import { PermissionV2 } from "../permission"
+import { makeLocationNode } from "../effect/app-node"
+import { LayerNodePlatform } from "../effect/app-node-platform"
+import { ToolRegistry } from "./registry"
 import { Tool } from "./tool"
 import { Tools } from "./tools"
 import { checksum } from "../util/encode"
@@ -82,6 +85,8 @@ export const defaultConfigLayer = Layer.sync(ConfigService, () =>
     parallelApiKey: process.env.PARALLEL_API_KEY,
   }),
 )
+
+export const configNode = makeLocationNode({ service: ConfigService, layer: defaultConfigLayer, deps: [] })
 
 export function selectProvider(
   sessionID: string,
@@ -248,3 +253,9 @@ export const layer = Layer.effectDiscard(
       .pipe(Effect.orDie)
   }),
 )
+
+export const node = makeLocationNode({
+  name: "tool/websearch",
+  layer,
+  deps: [ToolRegistry.node, PermissionV2.node, LayerNodePlatform.httpClient, configNode],
+})
