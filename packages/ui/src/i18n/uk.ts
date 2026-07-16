@@ -50,6 +50,8 @@ export const dict: Record<string, string> = {
   "ui.sessionTurn.retry.attempt": "спроба №{{attempt}}",
   "ui.sessionTurn.retry.attemptLine": "{{line}} — спроба №{{attempt}}",
   "ui.sessionTurn.retry.geminiHot": "gemini зараз перевантажений",
+  "ui.sessionTurn.retry.noChannel":
+    "the gateway lists this model but has no available channel for it — pick another model or fix the gateway's group config",
   "ui.sessionTurn.error.freeUsageExceeded": "Перевищено ліміт безкоштовного використання",
   "ui.sessionTurn.error.addCredits": "Додати кредити",
 

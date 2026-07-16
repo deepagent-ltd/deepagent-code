@@ -16,12 +16,14 @@ import {
   type FormState,
   type ProviderProtocol,
   deriveProviderIdentity,
+  formStateFromProvider,
   headerRow,
   modelRow,
   validateCustomProvider,
 } from "./dialog-custom-provider-form"
 import { DialogSelectProvider } from "./dialog-select-provider"
 import { Select } from "@deepagent-code/ui/select"
+import { Switch } from "@deepagent-code/ui/switch"
 
 // "auto" keeps the zero-config behavior (probe openai-compatible then anthropic and persist whichever
 // answered). The explicit choices let the user pin the protocol when auto-detection is wrong or the
@@ -32,6 +34,9 @@ const PROTOCOL_CHOICES: ProtocolChoice[] = ["auto", "openai-compatible", "anthro
 
 type Props = {
   back?: "providers" | "close"
+  // Edit mode: the id of an existing custom provider to load and edit. When set, the dialog prefills
+  // from config + resolved provider data and persists spec overrides (keeping discovery on if it was).
+  edit?: string
 }
 
 export function DialogCustomProvider(props: Props) {
@@ -40,21 +45,37 @@ export function DialogCustomProvider(props: Props) {
   const serverSDK = useServerSDK()
   const language = useLanguage()
 
-  const [form, setForm] = createStore<FormState>({
-    providerID: "",
-    name: "",
-    baseURL: "",
-    apiKey: "",
-    models: [modelRow()],
-    headers: [headerRow()],
-    err: {},
-  })
+  const editConfig = () => (props.edit ? serverSync.data.config.provider?.[props.edit] : undefined)
+  const editResolved = () => (props.edit ? serverSync.data.provider.all.get(props.edit) : undefined)
+  // A provider persisted with `discovery: true`: on save we keep discovery on and layer the spec
+  // overrides, so runtime model refresh survives the edit.
+  const isEditDiscovery = () => props.edit != null && editConfig()?.discovery === true
+
+  const initialForm = (): FormState => {
+    const cfg = editConfig()
+    if (props.edit && cfg) return formStateFromProvider({ config: cfg, resolved: editResolved() })
+    return {
+      providerID: "",
+      name: "",
+      baseURL: "",
+      apiKey: "",
+      models: [modelRow()],
+      headers: [headerRow()],
+      err: {},
+    }
+  }
+
+  const [form, setForm] = createStore<FormState>(initialForm())
 
   // Advanced section (provider id / display name / headers / manual models) is collapsed by default:
-  // the zero-config path only needs Base URL + API key. Protocol detected during discovery decides
-  // which SDK npm gets persisted.
-  const [showAdvanced, setShowAdvanced] = createSignal(false)
-  const [detectedProtocol, setDetectedProtocol] = createSignal<ProviderProtocol | undefined>(undefined)
+  // the zero-config path only needs Base URL + API key. In edit mode we open it so the user sees the
+  // model rows they came to edit. Protocol detected during discovery decides which SDK npm persists.
+  const [showAdvanced, setShowAdvanced] = createSignal(!!props.edit)
+  // In edit mode, seed the detected protocol from the persisted SDK npm so a save that skips
+  // re-discovery still writes the correct npm.
+  const [detectedProtocol, setDetectedProtocol] = createSignal<ProviderProtocol | undefined>(
+    editConfig()?.npm === "@ai-sdk/anthropic" ? "anthropic" : props.edit ? "openai-compatible" : undefined,
+  )
   // User's explicit protocol choice. "auto" (default) preserves auto-detection; an explicit choice
   // pins both the discovery probe kind and the persisted npm.
   const [protocolChoice, setProtocolChoice] = createSignal<ProtocolChoice>("auto")
@@ -116,11 +137,16 @@ export function DialogCustomProvider(props: Props) {
     setForm("err", key, undefined)
   }
 
-  const setModel = (index: number, key: "id" | "name", value: string) => {
+  const setModel = (index: number, key: "id" | "name" | "context", value: string) => {
     batch(() => {
       setForm("models", index, key, value)
-      setForm("models", index, "err", key, undefined)
+      const errKey = key === "context" ? "context" : key
+      setForm("models", index, "err", errKey, undefined)
     })
+  }
+
+  const setModelBool = (index: number, key: "reasoning" | "temperature", value: boolean) => {
+    setForm("models", index, key, value)
   }
 
   const setHeader = (index: number, key: "key" | "value", value: string) => {
@@ -146,6 +172,8 @@ export function DialogCustomProvider(props: Props) {
       existingProviderIDs: new Set(serverSync.data.provider.all.keys()),
       protocol: resolvedProtocol(),
       discovery,
+      editDiscovery: isEditDiscovery(),
+      editingProviderID: props.edit,
     })
     batch(() => {
       setForm("err", output.err)
@@ -203,7 +231,9 @@ export function DialogCustomProvider(props: Props) {
       // endpoint answers discovery, persist `discovery: true` with an empty model list so the backend
       // refreshes models on every load instead of freezing this snapshot into config.
       let discoveryMode = false
-      if (baseURL && key && !env) {
+      // Edit mode never re-runs discovery: we're persisting spec overrides for an already-connected
+      // provider. editDiscovery in the validator keeps `discovery: true` when it was set originally.
+      if (!props.edit && baseURL && key && !env) {
         // Model discovery is a convenience, not a requirement: many OpenAI-compatible servers
         // (some vLLM setups, local runtimes) don't implement GET /v1/models and return 400/404.
         // Treat discovery as best-effort — probe to detect the protocol (→ SDK npm) and confirm the
@@ -212,19 +242,24 @@ export function DialogCustomProvider(props: Props) {
         // Auto (kind omitted) lets the backend probe openai-compatible then anthropic and report which
         // protocol answered. An explicit choice pins the probe to that protocol.
         const choice = protocolChoice()
-        const res = await serverSDK.client.provider.models
-          .discover(
-            {
-              providerID: discoverID,
-              baseURL,
-              apiKey: key,
-              headers: headerConfig(),
-              ...(choice === "auto" ? {} : { kind: choice }),
-            },
-            { throwOnError: true },
-          )
-          .then((res) => res.data)
-          .catch(() => undefined)
+        // Defensive client-side timeout: the backend already caps its /models fetch, but guard the
+        // whole round-trip too so a stalled request can never leave the submit button hung. On
+        // timeout (or any error) we fall through to manual/validation handling instead of blocking.
+        const res = await Promise.race([
+          serverSDK.client.provider.models
+            .discover(
+              {
+                providerID: discoverID,
+                baseURL,
+                apiKey: key,
+                headers: headerConfig(),
+                ...(choice === "auto" ? {} : { kind: choice }),
+              },
+              { throwOnError: true },
+            )
+            .then((res) => res.data),
+          new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), 20_000)),
+        ]).catch(() => undefined)
         if (res?.kind) setDetectedProtocol(res.kind)
         const discovered = res?.models ?? []
         if (discovered.length > 0 && !hasManualModels) {
@@ -260,7 +295,9 @@ export function DialogCustomProvider(props: Props) {
       <div class="flex flex-col gap-6 px-2.5 pb-3 overflow-y-auto max-h-[60vh]">
         <div class="px-2.5 flex gap-4 items-center">
           <ProviderIcon id="synthetic" class="size-5 shrink-0 icon-strong-base" />
-          <div class="text-16-medium text-text-strong">{language.t("provider.custom.title")}</div>
+          <div class="text-16-medium text-text-strong">
+            {language.t(props.edit ? "provider.custom.edit.title" : "provider.custom.title")}
+          </div>
         </div>
 
         <form onSubmit={save} class="px-2.5 pb-6 flex flex-col gap-6">
@@ -270,6 +307,10 @@ export function DialogCustomProvider(props: Props) {
               {language.t("provider.custom.description.link")}
             </Link>
             {language.t("provider.custom.description.suffix")}
+          </p>
+
+          <p class="text-12-regular text-text-base rounded-md border border-border-warning-base bg-surface-warning-base/20 px-3 py-2">
+            {language.t("provider.custom.specWarning")}
           </p>
 
           <div class="flex flex-col gap-4">
@@ -344,38 +385,62 @@ export function DialogCustomProvider(props: Props) {
             <p class="text-12-regular text-text-weak">{language.t("provider.custom.models.autoHint")}</p>
             <For each={form.models}>
               {(m, i) => (
-                <div class="flex gap-2 items-start" data-row={m.row}>
-                  <div class="flex-1">
-                    <TextField
-                      label={language.t("provider.custom.models.id.label")}
-                      hideLabel
-                      placeholder={language.t("provider.custom.models.id.placeholder")}
-                      value={m.id}
-                      onChange={(v) => setModel(i(), "id", v)}
-                      validationState={m.err.id ? "invalid" : undefined}
-                      error={m.err.id}
+                <div class="flex flex-col gap-1.5 border-b border-border-weak pb-3 last:border-b-0 last:pb-0" data-row={m.row}>
+                  <div class="flex gap-2 items-start">
+                    <div class="flex-1">
+                      <TextField
+                        label={language.t("provider.custom.models.id.label")}
+                        hideLabel
+                        placeholder={language.t("provider.custom.models.id.placeholder")}
+                        value={m.id}
+                        onChange={(v) => setModel(i(), "id", v)}
+                        validationState={m.err.id ? "invalid" : undefined}
+                        error={m.err.id}
+                      />
+                    </div>
+                    <div class="flex-1">
+                      <TextField
+                        label={language.t("provider.custom.models.name.label")}
+                        hideLabel
+                        placeholder={language.t("provider.custom.models.name.placeholder")}
+                        value={m.name}
+                        onChange={(v) => setModel(i(), "name", v)}
+                        validationState={m.err.name ? "invalid" : undefined}
+                        error={m.err.name}
+                      />
+                    </div>
+                    <IconButton
+                      type="button"
+                      icon="trash"
+                      variant="ghost"
+                      class="mt-1.5"
+                      onClick={() => removeModel(i())}
+                      disabled={form.models.length <= 1}
+                      aria-label={language.t("provider.custom.models.remove")}
                     />
                   </div>
-                  <div class="flex-1">
-                    <TextField
-                      label={language.t("provider.custom.models.name.label")}
-                      hideLabel
-                      placeholder={language.t("provider.custom.models.name.placeholder")}
-                      value={m.name}
-                      onChange={(v) => setModel(i(), "name", v)}
-                      validationState={m.err.name ? "invalid" : undefined}
-                      error={m.err.name}
-                    />
+                  <div class="flex gap-3 items-center flex-wrap pr-9">
+                    <div class="w-[140px]">
+                      <TextField
+                        label={language.t("provider.custom.models.context.label")}
+                        hideLabel
+                        inputmode="numeric"
+                        placeholder={language.t("provider.custom.models.context.placeholder")}
+                        value={m.context}
+                        onChange={(v) => setModel(i(), "context", v)}
+                        validationState={m.err.context ? "invalid" : undefined}
+                        error={m.err.context}
+                      />
+                    </div>
+                    <label class="flex gap-1.5 items-center text-12-regular text-text-base">
+                      <Switch checked={m.reasoning} onChange={(v) => setModelBool(i(), "reasoning", v)} />
+                      {language.t("provider.custom.models.reasoning.label")}
+                    </label>
+                    <label class="flex gap-1.5 items-center text-12-regular text-text-base">
+                      <Switch checked={m.temperature} onChange={(v) => setModelBool(i(), "temperature", v)} />
+                      {language.t("provider.custom.models.temperature.label")}
+                    </label>
                   </div>
-                  <IconButton
-                    type="button"
-                    icon="trash"
-                    variant="ghost"
-                    class="mt-1.5"
-                    onClick={() => removeModel(i())}
-                    disabled={form.models.length <= 1}
-                    aria-label={language.t("provider.custom.models.remove")}
-                  />
                 </div>
               )}
             </For>

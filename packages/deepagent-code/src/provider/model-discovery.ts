@@ -66,6 +66,12 @@ export async function discoverWithProtocol(
   throw lastError instanceof Error ? lastError : new Error("No provider models were returned")
 }
 
+// Discovery must never hang forever. An unreachable or silent /models endpoint (wrong URL, a host
+// that accepts the TCP connection but never responds) would otherwise leave the fetch pending
+// indefinitely — the interactive "connect provider" submit awaits this call, so a hang shows up as a
+// dead button. Cap the request so it always resolves (with an error the caller can fall back on).
+const DISCOVERY_TIMEOUT_MS = 15_000
+
 export async function discoverProviderModels(input: {
   baseURL: string
   // Optional: some gateways authenticate discovery entirely via custom headers (no bearer/x-api-key).
@@ -91,7 +97,17 @@ export async function discoverProviderModels(input: {
     headers["anthropic-version"] ??= "2023-06-01"
   }
 
-  const response = await fetch(listURL(input.baseURL), { headers })
+  const response = await fetch(listURL(input.baseURL), {
+    headers,
+    signal: AbortSignal.timeout(DISCOVERY_TIMEOUT_MS),
+  }).catch((error) => {
+    // A timeout surfaces as an AbortError/TimeoutError; give a discovery-specific message so the
+    // interactive flow reports "endpoint didn't respond" instead of a raw abort.
+    if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) {
+      throw new Error(`${input.providerID} model discovery timed out after ${DISCOVERY_TIMEOUT_MS}ms`)
+    }
+    throw error
+  })
   if (!response.ok) throw new Error(`${input.providerID} model discovery failed: HTTP ${response.status}`)
   const body = (await response.json()) as { data?: unknown[] }
 

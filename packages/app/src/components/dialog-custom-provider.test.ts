@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test"
-import { deriveProviderIdentity, validateCustomProvider } from "./dialog-custom-provider-form"
+import {
+  deriveProviderIdentity,
+  formStateFromProvider,
+  modelRow,
+  validateCustomProvider,
+} from "./dialog-custom-provider-form"
 
 const t = (key: string) => key
 
@@ -11,7 +16,7 @@ describe("validateCustomProvider", () => {
         name: " Custom Provider ",
         baseURL: "https://api.example.com ",
         apiKey: " {env: CUSTOM_PROVIDER_KEY} ",
-        models: [{ row: "m0", id: " model-a ", name: " Model A ", err: {} }],
+        models: [modelRow({ id: " model-a ", name: " Model A " })],
         headers: [
           { row: "h0", key: " X-Test ", value: " enabled ", err: {} },
           { row: "h1", key: "", value: "", err: {} },
@@ -51,10 +56,7 @@ describe("validateCustomProvider", () => {
         name: "Provider",
         baseURL: "https://api.example.com",
         apiKey: "secret",
-        models: [
-          { row: "m0", id: "model-a", name: "Model A", err: {} },
-          { row: "m1", id: "model-a", name: "Model A 2", err: {} },
-        ],
+        models: [modelRow({ id: "model-a", name: "Model A" }), modelRow({ id: "model-a", name: "Model A 2" })],
         headers: [
           { row: "h0", key: "Authorization", value: "one", err: {} },
           { row: "h1", key: "authorization", value: "two", err: {} },
@@ -71,6 +73,7 @@ describe("validateCustomProvider", () => {
     expect(result.models[1]).toEqual({
       id: "provider.custom.error.duplicate",
       name: undefined,
+      context: undefined,
     })
     expect(result.headers[1]).toEqual({
       key: "provider.custom.error.duplicate",
@@ -87,7 +90,7 @@ describe("validateCustomProvider", () => {
         apiKey: "secret",
         // No manual models: discovery would fill these; validation must not require them here since
         // the dialog auto-fills discovered models before calling validate. Simulate a filled row.
-        models: [{ row: "m0", id: "kimi", name: "Kimi", err: {} }],
+        models: [modelRow({ id: "kimi", name: "Kimi" })],
         headers: [{ row: "h0", key: "", value: "", err: {} }],
         err: {},
       },
@@ -109,7 +112,7 @@ describe("validateCustomProvider", () => {
         name: "Claude Relay",
         baseURL: "https://relay.example.com",
         apiKey: "secret",
-        models: [{ row: "m0", id: "claude-x", name: "Claude X", err: {} }],
+        models: [modelRow({ id: "claude-x", name: "Claude X" })],
         headers: [{ row: "h0", key: "", value: "", err: {} }],
         err: {},
       },
@@ -129,7 +132,7 @@ describe("validateCustomProvider", () => {
         name: "Relay",
         baseURL: "https://relay.example.com",
         apiKey: "secret",
-        models: [{ row: "m0", id: "m", name: "M", err: {} }],
+        models: [modelRow({ id: "m", name: "M" })],
         headers: [{ row: "h0", key: "", value: "", err: {} }],
         err: {},
       },
@@ -149,7 +152,7 @@ describe("validateCustomProvider", () => {
         baseURL: "https://api.moonshot.cn/v1",
         apiKey: "secret",
         // No manual models: the backend owns the list at runtime.
-        models: [{ row: "m0", id: "", name: "", err: {} }],
+        models: [modelRow()],
         headers: [{ row: "h0", key: "", value: "", err: {} }],
         err: {},
       },
@@ -174,7 +177,7 @@ describe("validateCustomProvider", () => {
         name: "Relay",
         baseURL: "https://relay.example.com",
         apiKey: "secret",
-        models: [{ row: "m0", id: "m", name: "M", err: {} }],
+        models: [modelRow({ id: "m", name: "M" })],
         headers: [{ row: "h0", key: "", value: "", err: {} }],
         err: {},
       },
@@ -194,7 +197,7 @@ describe("validateCustomProvider", () => {
         name: "Relay",
         baseURL: "https://relay.example.com",
         apiKey: "secret",
-        models: [{ row: "m0", id: "custom-model", name: "Custom Model", err: {} }],
+        models: [modelRow({ id: "custom-model", name: "Custom Model" })],
         headers: [{ row: "h0", key: "", value: "", err: {} }],
         err: {},
       },
@@ -207,6 +210,132 @@ describe("validateCustomProvider", () => {
 
     expect(result.result?.config.discovery).toBeUndefined()
     expect(result.result?.config.models).toEqual({ "custom-model": { name: "Custom Model" } })
+  })
+
+  test("emits spec overrides only for fields the user set", () => {
+    const result = validateCustomProvider({
+      form: {
+        providerID: "relay",
+        name: "Relay",
+        baseURL: "https://relay.example.com",
+        apiKey: "secret",
+        models: [
+          modelRow({ id: "with-specs", name: "With Specs", context: "128000", reasoning: true, temperature: true }),
+          modelRow({ id: "bare", name: "Bare" }),
+        ],
+        headers: [{ row: "h0", key: "", value: "", err: {} }],
+        err: {},
+      },
+      t,
+      disabledProviders: [],
+      existingProviderIDs: new Set(),
+    })
+
+    expect(result.result?.config.models).toEqual({
+      "with-specs": { name: "With Specs", reasoning: true, temperature: true, limit: { context: 128000 } },
+      bare: { name: "Bare" },
+    })
+  })
+
+  test("rejects a non-numeric context and produces no result", () => {
+    const result = validateCustomProvider({
+      form: {
+        providerID: "relay",
+        name: "Relay",
+        baseURL: "https://relay.example.com",
+        apiKey: "secret",
+        models: [modelRow({ id: "m", name: "M", context: "12x" })],
+        headers: [{ row: "h0", key: "", value: "", err: {} }],
+        err: {},
+      },
+      t,
+      disabledProviders: [],
+      existingProviderIDs: new Set(),
+    })
+
+    expect(result.result).toBeUndefined()
+    expect(result.models[0].context).toBe("provider.custom.error.context")
+  })
+
+  test("edit mode keeps discovery on and layers spec overrides", () => {
+    const result = validateCustomProvider({
+      form: {
+        providerID: "relay",
+        name: "Relay",
+        baseURL: "https://relay.example.com",
+        apiKey: "secret",
+        models: [modelRow({ id: "gpt-4o", name: "GPT-4o", context: "200000" })],
+        headers: [{ row: "h0", key: "", value: "", err: {} }],
+        err: {},
+      },
+      t,
+      disabledProviders: [],
+      // Its own id is "already in use" but must not be flagged when editing it.
+      existingProviderIDs: new Set(["relay"]),
+      editDiscovery: true,
+      editingProviderID: "relay",
+    })
+
+    expect(result.err.providerID).toBeUndefined()
+    expect(result.result?.config.discovery).toBe(true)
+    expect(result.result?.config.models).toEqual({ "gpt-4o": { name: "GPT-4o", limit: { context: 200000 } } })
+  })
+})
+
+describe("formStateFromProvider", () => {
+  test("prefills fields from config and specs from the resolved provider", () => {
+    const form = formStateFromProvider({
+      config: {
+        name: "My Relay",
+        npm: "@ai-sdk/openai-compatible",
+        discovery: true,
+        options: { baseURL: "https://relay.example.com", apiKey: "secret", headers: { "X-Env": "prod" } },
+      },
+      resolved: {
+        id: "relay",
+        name: "My Relay",
+        source: "custom",
+        env: [],
+        options: {},
+        models: {
+          "gpt-4o": {
+            id: "gpt-4o",
+            providerID: "relay",
+            api: { id: "gpt-4o", url: "", npm: "@ai-sdk/openai-compatible" },
+            name: "GPT-4o",
+            capabilities: {
+              temperature: true,
+              reasoning: false,
+              attachment: false,
+              toolcall: true,
+              input: { text: true, audio: false, image: false, video: false, pdf: false },
+              output: { text: true, audio: false, image: false, video: false, pdf: false },
+              interleaved: false,
+            },
+            cost: { input: 0, output: 0, cache: { read: 0, write: 0 } },
+            limit: { context: 128000, output: 16384 },
+            status: "active",
+            options: {},
+            headers: {},
+            release_date: "",
+          },
+        },
+      },
+    })
+
+    expect(form.providerID).toBe("relay")
+    expect(form.name).toBe("My Relay")
+    expect(form.baseURL).toBe("https://relay.example.com")
+    expect(form.apiKey).toBe("secret")
+    expect(form.headers[0]).toMatchObject({ key: "X-Env", value: "prod" })
+    expect(form.models).toHaveLength(1)
+    expect(form.models[0]).toMatchObject({
+      id: "gpt-4o",
+      name: "GPT-4o",
+      context: "128000",
+      reasoning: false,
+      temperature: true,
+    })
   })
 })
 
