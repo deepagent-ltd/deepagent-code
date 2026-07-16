@@ -8,3 +8,5 @@ export * as ContextConfig from "./config"
 export * as SessionLedger from "./ledger"
 export * as ConversationLog from "./conversation-log"
 export * as ProjectBridge from "./bridge"
+// V4.0.1 P1 — World State (snapshot-diff volatile facts, re-injected as a tail block, never the prefix).
+export * as WorldState from "./world-state"

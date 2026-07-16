@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test"
+import { afterAll, afterEach, beforeAll, expect, test } from "bun:test"
 import { mkdir, unlink } from "fs/promises"
 import path from "path"
 import { pathToFileURL } from "url"
@@ -17,6 +17,7 @@ import { Plugin } from "../../src/plugin/index"
 import { Provider } from "@/provider/provider"
 
 import { RuntimeFlags } from "@/effect/runtime-flags"
+import { EffectFlock } from "@deepagent-code/core/util/effect-flock"
 import { Filesystem } from "@/util/filesystem"
 import { InstanceLayer } from "@/project/instance-layer"
 import { testEffect } from "../lib/effect"
@@ -77,6 +78,7 @@ const providerLayer = (flags: Partial<RuntimeFlags.Info> = {}) =>
     Layer.provide(Plugin.defaultLayer),
     Layer.provide(ModelsDev.defaultLayer),
     Layer.provide(RuntimeFlags.layer(flags)),
+    Layer.provide(EffectFlock.defaultLayer),
   )
 
 const list = Provider.use.list()
@@ -106,6 +108,41 @@ const connect = (providerID: ProviderV2.ID, key: string) =>
       key,
     })
   })
+
+// A tiny OpenAI-compatible /models endpoint so runtime discovery has something real to fetch. The
+// provider loader uses the live HTTP path (no injected stub), so an actual server is the cleanest
+// way to exercise the discovery pre-pass end to end.
+let discoveryServer: ReturnType<typeof Bun.serve> | undefined
+let discoveryServerURL = ""
+let discoveryEmptyURL = ""
+
+beforeAll(() => {
+  discoveryServer = Bun.serve({
+    port: 0,
+    fetch(req) {
+      const url = new URL(req.url)
+      if (url.pathname.endsWith("/models")) {
+        // `/empty/models` returns a 200 with no models (provisioning / not-implemented shape); every
+        // other path returns two chat models plus one embedding model that runtime filtering must drop.
+        if (url.pathname.startsWith("/empty")) return Response.json({ data: [] })
+        return Response.json({
+          data: [
+            { id: "runtime-a", display_name: "Runtime A" },
+            { id: "runtime-b", display_name: "Runtime B" },
+            { id: "text-embedding-3-large", display_name: "Embeddings" },
+          ],
+        })
+      }
+      return new Response("not found", { status: 404 })
+    },
+  })
+  discoveryServerURL = `http://localhost:${discoveryServer.port}/v1`
+  discoveryEmptyURL = `http://localhost:${discoveryServer.port}/empty`
+})
+
+afterAll(() => {
+  discoveryServer?.stop(true)
+})
 
 const alphaProviderConfig = {
   provider: {
@@ -159,6 +196,90 @@ it.instance(
         },
       },
     },
+  },
+)
+
+it.instance(
+  "discovery:true third-party provider populates models from its /models endpoint at runtime",
+  Effect.gen(function* () {
+    const providers = yield* list
+    const provider = providers[ProviderV2.ID.make("runtime-disc")]
+    expect(provider).toBeDefined()
+    expect(provider.source).toBe("custom")
+    // Models come entirely from the live endpoint (config listed none). The embedding model the
+    // endpoint also returns is filtered out by isChatModel in the runtime pre-pass, so only the two
+    // chat models remain — proving a URL+key-only provider is no longer dropped for having zero models.
+    expect(Object.keys(provider.models).sort()).toEqual(["runtime-a", "runtime-b"])
+    expect(provider.models["runtime-a"].name).toBe("Runtime A")
+    expect(provider.models["text-embedding-3-large"]).toBeUndefined()
+  }),
+  {
+    config: () => ({
+      provider: {
+        "runtime-disc": {
+          name: "Runtime Discovery",
+          npm: "@ai-sdk/openai-compatible",
+          discovery: true,
+          options: { apiKey: "k", baseURL: discoveryServerURL },
+        },
+      },
+    }),
+  },
+)
+
+it.instance(
+  "manual models win over discovered models for the same id",
+  Effect.gen(function* () {
+    const providers = yield* list
+    const provider = providers[ProviderV2.ID.make("runtime-disc-manual")]
+    expect(provider).toBeDefined()
+    // Discovery returns runtime-a/runtime-b; config pins a custom name for runtime-a and adds an
+    // extra manual model. The manual name must survive the merge.
+    expect(provider.models["runtime-a"].name).toBe("Pinned A")
+    expect(provider.models["runtime-b"]).toBeDefined()
+    expect(provider.models["manual-only"].name).toBe("Manual Only")
+  }),
+  {
+    config: () => ({
+      provider: {
+        "runtime-disc-manual": {
+          name: "Runtime Discovery Manual",
+          npm: "@ai-sdk/openai-compatible",
+          discovery: true,
+          options: { apiKey: "k", baseURL: discoveryServerURL },
+          models: {
+            "runtime-a": { name: "Pinned A" },
+            "manual-only": { name: "Manual Only" },
+          },
+        },
+      },
+    }),
+  },
+)
+
+it.instance(
+  "discovery provider that yields no models surfaces a config error instead of vanishing silently",
+  Effect.gen(function* () {
+    const providers = yield* list
+    // The provider still can't load (no models to route to), but instead of disappearing with zero
+    // diagnostics it leaves a config error the UI can surface.
+    expect(providers[ProviderV2.ID.make("runtime-empty")]).toBeUndefined()
+    const errors = yield* Provider.use.errors()
+    const err = errors.find((e) => e.source === "provider.runtime-empty")
+    expect(err).toBeDefined()
+    expect(err?.message).toContain("discovery")
+  }),
+  {
+    config: () => ({
+      provider: {
+        "runtime-empty": {
+          name: "Runtime Empty",
+          npm: "@ai-sdk/openai-compatible",
+          discovery: true,
+          options: { apiKey: "k", baseURL: discoveryEmptyURL },
+        },
+      },
+    }),
   },
 )
 

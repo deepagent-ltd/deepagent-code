@@ -59,7 +59,6 @@ const makeLayer = (flags?: Partial<RuntimeFlags.Info>) => {
     v4EventDrivenIm: true,
     v4AgentPushEnabled: true,
     v4MultiAgentRuntime: true,
-    v4AgentAutonomyLevel2: true,
     ...flags,
   })
   const core = Layer.mergeAll(

@@ -38,7 +38,6 @@ const GlobalCapabilities = Schema.Struct({
     v4EventDrivenIm: Schema.optional(Schema.Boolean),
     v4AgentPushEnabled: Schema.optional(Schema.Boolean),
     v4MultiAgentRuntime: Schema.optional(Schema.Boolean),
-    v4AgentAutonomyLevel2: Schema.optional(Schema.Boolean),
     v4ThreadEnabled: Schema.optional(Schema.Boolean),
     v4FileUploadEnabled: Schema.optional(Schema.Boolean),
   }),
