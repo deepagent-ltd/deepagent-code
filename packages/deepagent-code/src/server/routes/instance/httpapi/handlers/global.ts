@@ -106,7 +106,6 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
           v4EventDrivenIm: flags.v4EventDrivenIm,
           v4AgentPushEnabled: flags.v4AgentPushEnabled,
           v4MultiAgentRuntime: flags.v4MultiAgentRuntime,
-          v4AgentAutonomyLevel2: flags.v4AgentAutonomyLevel2,
           v4ThreadEnabled: flags.v4ThreadEnabled,
           v4FileUploadEnabled: flags.v4FileUploadEnabled,
         },

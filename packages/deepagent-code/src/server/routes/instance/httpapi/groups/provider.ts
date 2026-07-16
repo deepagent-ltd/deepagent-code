@@ -58,6 +58,10 @@ export const ProviderDiscoveredModel = Schema.Struct({
 export const ProviderModelDiscoverResult = Schema.Struct({
   providerID: Schema.String,
   baseURL: Schema.String,
+  // The protocol that actually answered discovery. When the client omits `kind`, the server probes
+  // openai-compatible then anthropic and reports whichever succeeded so the client can persist the
+  // matching SDK npm.
+  kind: Schema.Literals(["openai-compatible", "anthropic"]),
   models: Schema.Array(ProviderDiscoveredModel),
   selected: ProviderDiscoveredModel,
 })
