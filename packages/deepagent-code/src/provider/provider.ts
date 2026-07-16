@@ -23,6 +23,9 @@ import { EffectBridge } from "@/effect/bridge"
 import { InstanceState } from "@/effect/instance-state"
 import { EffectPromise } from "@/effect/promise"
 import { FSUtil } from "@deepagent-code/core/fs-util"
+import { EffectFlock } from "@deepagent-code/core/util/effect-flock"
+import { discoverModelsCached } from "./discovery-cache"
+import type { DiscoveredModel, ProviderDiscoveryKind } from "./model-discovery"
 import { isRecord } from "@/util/record"
 import { optionalOmitUndefined } from "@deepagent-code/core/schema"
 import { ProviderTransform } from "./transform"
@@ -49,6 +52,8 @@ const THIRD_PARTY_PROVIDER_CONFLICT_MESSAGE =
   "Provider id conflicts with an official provider. Rename this third-party provider in your config."
 const LEGACY_AUTH_KEY_MESSAGE =
   "Saved API key is no longer used. Only official providers read keys from the key store. Re-add this as a third-party provider in your config and set the key under options.apiKey."
+const DISCOVERY_EMPTY_MESSAGE =
+  "Runtime model discovery returned no models. Check the base URL, API key, and that the endpoint implements GET /models, or list models explicitly under provider.<id>.models."
 
 function providerEnvKey(configuredEnv: string[], envs: Record<string, string | undefined>) {
   const configured = configuredEnv.find((item) => envs[item])
@@ -1290,6 +1295,7 @@ export const layer = Layer.effect(
     const plugin = yield* Plugin.Service
     const modelsDevSvc = yield* ModelsDev.Service
     const runtimeFlags = yield* RuntimeFlags.Service
+    const flock = yield* EffectFlock.Service
 
     const state = yield* InstanceState.make<State>(() =>
       Effect.gen(function* () {
@@ -1416,6 +1422,54 @@ export const layer = Layer.effect(
           }
         }
 
+        // Runtime model discovery (opt-in via `provider.<id>.discovery: true`). For each third-party
+        // provider that opts in, fetch its live /models list (disk-cached, TTL + flock) and expose it
+        // as config-model entries so the loop below runs them through the same parse/inference path as
+        // hand-listed models. This is what lets a URL+Key-only provider surface models at runtime
+        // instead of freezing them into config at save time. Best-effort: failures yield no entries.
+        type ConfigModels = NonNullable<(typeof configProviders)[number][1]["models"]>
+        const discoveredModels: Record<string, ConfigModels> = {}
+        // Track providers that opted into discovery so the zero-model deletion below can tell a
+        // discovery provider that came up empty (worth an error) apart from a normal empty provider.
+        const discoveryProviders = new Set<string>()
+        yield* Effect.forEach(
+          configProviders.filter(
+            ([providerID, provider]) =>
+              provider.discovery === true &&
+              // Both reserved hosted ids (the product gateway "deepagent-code" and the routed
+              // "deepagent") own their catalog identity — never run third-party discovery against them.
+              providerID !== "deepagent-code" &&
+              providerID !== "deepagent" &&
+              !isOfficialProviderID(providerID) &&
+              isProviderAllowed(ProviderV2.ID.make(providerID)),
+          ),
+          ([providerID, provider]) =>
+            Effect.gen(function* () {
+              discoveryProviders.add(providerID)
+              const baseURL = provider.options?.baseURL
+              if (!baseURL) return
+              const envKey = provider.env ? providerEnvKey(provider.env, envs) : undefined
+              const apiKey = provider.options?.apiKey ?? (envKey ? envs[envKey] : undefined)
+              const headers = provider.options?.headers as Record<string, string> | undefined
+              // A key OR custom auth headers must be present; a bare baseURL can't authenticate.
+              if (!apiKey && !headers) return
+              const kind: ProviderDiscoveryKind = provider.npm === "@ai-sdk/anthropic" ? "anthropic" : "openai-compatible"
+              const models = yield* discoverModelsCached(fs, flock, { providerID, baseURL, apiKey, kind, headers })
+              if (!models.length) return
+              discoveredModels[providerID] = Object.fromEntries(
+                models.map((m: DiscoveredModel) => [m.id, { name: m.name || m.id }]),
+              )
+            }).pipe(
+              // Discovery is best-effort and must never take down the whole provider-state build. The
+              // cache already handles ordinary failures; this also swallows defects (e.g. a flock
+              // release die on a corrupt lock file) so one provider's discovery fault can't abort all.
+              Effect.catchDefect((defect) =>
+                Effect.sync(() => log.warn("discovery pre-pass defect", { providerID, defect })),
+              ),
+            ),
+          { concurrency: 5 },
+        )
+
         // Configured providers are always third-party providers. They must not share ids with
         // official catalog providers; otherwise a custom endpoint can silently hijack official
         // provider semantics and auth.
@@ -1441,7 +1495,10 @@ export const layer = Layer.effect(
             models: existing?.models ?? {},
           }
 
-          for (const [modelID, model] of Object.entries(provider.models ?? {})) {
+          // Discovered models seed the source map; hand-listed `provider.models` override them so an
+          // explicit config entry always wins over the runtime-discovered version of the same id.
+          const modelSource = { ...(discoveredModels[providerID] ?? {}), ...(provider.models ?? {}) }
+          for (const [modelID, model] of Object.entries(modelSource)) {
             const existingModel = parsed.models[model.id ?? modelID]
             const apiID = model.id ?? existingModel?.api.id ?? modelID
             const apiNpm =
@@ -1704,6 +1761,13 @@ export const layer = Layer.effect(
           }
 
           if (Object.keys(provider.models).length === 0) {
+            // A provider that opted into runtime discovery but produced no models (endpoint
+            // unreachable/offline at launch, no /models, empty list, or everything filtered out) would
+            // otherwise vanish from the picker with zero diagnostics. Surface a config error so the
+            // user knows discovery is why their configured provider isn't showing up.
+            if (discoveryProviders.has(providerID)) {
+              errors.push(providerConfigError(providerID, DISCOVERY_EMPTY_MESSAGE))
+            }
             delete providers[providerID]
             continue
           }
@@ -2070,6 +2134,7 @@ export const defaultLayer = Layer.suspend(() =>
     Layer.provide(Plugin.defaultLayer),
     Layer.provide(ModelsDev.defaultLayer),
     Layer.provide(RuntimeFlags.defaultLayer),
+    Layer.provide(EffectFlock.defaultLayer),
   ),
 )
 
