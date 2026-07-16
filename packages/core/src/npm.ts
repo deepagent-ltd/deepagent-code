@@ -8,6 +8,8 @@ import { FSUtil } from "./fs-util"
 import { Global } from "./global"
 import { EffectFlock } from "./util/effect-flock"
 import { makeRuntime } from "./effect/runtime"
+import { makeGlobalNode } from "./effect/app-node"
+import { filesystem } from "./effect/app-node-platform"
 import { NpmConfig } from "./npm-config"
 
 export class InstallFailedError extends Schema.TaggedErrorClass<InstallFailedError>()("NpmInstallFailedError", {
@@ -243,6 +245,12 @@ export const layer = Layer.effect(
     })
   }),
 )
+
+export const node = makeGlobalNode({
+  service: Service,
+  layer: layer,
+  deps: [FSUtil.node, Global.node, filesystem, EffectFlock.node],
+})
 
 export const defaultLayer = layer.pipe(
   Layer.provide(EffectFlock.layer),
