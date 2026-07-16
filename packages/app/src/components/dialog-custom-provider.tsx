@@ -6,14 +6,29 @@ import { ProviderIcon } from "@deepagent-code/ui/provider-icon"
 import { useMutation } from "@tanstack/solid-query"
 import { TextField } from "@deepagent-code/ui/text-field"
 import { showToast } from "@/utils/toast"
-import { batch, For } from "solid-js"
+import { batch, createSignal, For, Show } from "solid-js"
 import { createStore, produce } from "solid-js/store"
 import { Link } from "@/components/link"
 import { useServerSDK } from "@/context/server-sdk"
 import { useServerSync } from "@/context/server-sync"
 import { useLanguage } from "@/context/language"
-import { type FormState, headerRow, modelRow, validateCustomProvider } from "./dialog-custom-provider-form"
+import {
+  type FormState,
+  type ProviderProtocol,
+  deriveProviderIdentity,
+  headerRow,
+  modelRow,
+  validateCustomProvider,
+} from "./dialog-custom-provider-form"
 import { DialogSelectProvider } from "./dialog-select-provider"
+import { Select } from "@deepagent-code/ui/select"
+
+// "auto" keeps the zero-config behavior (probe openai-compatible then anthropic and persist whichever
+// answered). The explicit choices let the user pin the protocol when auto-detection is wrong or the
+// endpoint doesn't implement /models. The choice decides both the discovery probe `kind` and the SDK
+// npm persisted to config.
+type ProtocolChoice = "auto" | ProviderProtocol
+const PROTOCOL_CHOICES: ProtocolChoice[] = ["auto", "openai-compatible", "anthropic"]
 
 type Props = {
   back?: "providers" | "close"
@@ -34,6 +49,20 @@ export function DialogCustomProvider(props: Props) {
     headers: [headerRow()],
     err: {},
   })
+
+  // Advanced section (provider id / display name / headers / manual models) is collapsed by default:
+  // the zero-config path only needs Base URL + API key. Protocol detected during discovery decides
+  // which SDK npm gets persisted.
+  const [showAdvanced, setShowAdvanced] = createSignal(false)
+  const [detectedProtocol, setDetectedProtocol] = createSignal<ProviderProtocol | undefined>(undefined)
+  // User's explicit protocol choice. "auto" (default) preserves auto-detection; an explicit choice
+  // pins both the discovery probe kind and the persisted npm.
+  const [protocolChoice, setProtocolChoice] = createSignal<ProtocolChoice>("auto")
+
+  // The protocol persisted to config: an explicit choice wins; otherwise the detected one (or
+  // openai-compatible default when nothing was detected).
+  const resolvedProtocol = (): ProviderProtocol | undefined =>
+    protocolChoice() === "auto" ? detectedProtocol() : (protocolChoice() as ProviderProtocol)
 
   const goBack = () => {
     if (props.back === "close") {
@@ -109,15 +138,14 @@ export function DialogCustomProvider(props: Props) {
         .map((h) => [h.key, h.value]),
     )
 
-  const discoveredRows = (models: Array<{ id: string; name: string }>) =>
-    models.map((model) => ({ ...modelRow(), id: model.id, name: model.name || model.id }))
-
-  const validate = (nextForm: FormState = form) => {
+  const validate = (nextForm: FormState = form, discovery = false) => {
     const output = validateCustomProvider({
       form: nextForm,
       t: language.t,
       disabledProviders: serverSync.data.config.disabled_providers ?? [],
       existingProviderIDs: new Set(serverSync.data.provider.all.keys()),
+      protocol: resolvedProtocol(),
+      discovery,
     })
     batch(() => {
       setForm("err", output.err)
@@ -159,39 +187,55 @@ export function DialogCustomProvider(props: Props) {
 
     void (async () => {
       let nextForm: FormState = form
-      const providerID = form.providerID.trim()
       const baseURL = form.baseURL.trim()
       const key = form.apiKey.trim()
       const env = key.match(/^\{env:([^}]+)\}$/)?.[1]?.trim()
       // Whether the user already typed at least one model id by hand.
       const hasManualModels = form.models.some((m) => m.id.trim().length > 0)
-      if (providerID && baseURL && key && !env) {
+      // providerID is optional now (derived from URL when blank); discovery only needs URL + key.
+      // Pass a best-effort id so the backend has something to label the request with.
+      const discoverID = form.providerID.trim() || deriveProviderIdentity({
+        baseURL,
+        existingProviderIDs: new Set(serverSync.data.provider.all.keys()),
+        disabledProviders: serverSync.data.config.disabled_providers ?? [],
+      }).providerID
+      // Runtime discovery mode: when the user provides only URL+key (no manual models) and the
+      // endpoint answers discovery, persist `discovery: true` with an empty model list so the backend
+      // refreshes models on every load instead of freezing this snapshot into config.
+      let discoveryMode = false
+      if (baseURL && key && !env) {
         // Model discovery is a convenience, not a requirement: many OpenAI-compatible servers
         // (some vLLM setups, local runtimes) don't implement GET /v1/models and return 400/404.
-        // Treat discovery as best-effort — only use its result to auto-fill models when the user
-        // hasn't entered any. If it fails (or returns nothing) we keep the user's manual models and
-        // let validation handle the empty case, instead of blocking save on a missing endpoint.
-        const discovered = await serverSDK.client.provider.models
+        // Treat discovery as best-effort — probe to detect the protocol (→ SDK npm) and confirm the
+        // endpoint works. If it fails we fall back to manual models and let validation handle the
+        // empty case instead of blocking save on a missing endpoint.
+        // Auto (kind omitted) lets the backend probe openai-compatible then anthropic and report which
+        // protocol answered. An explicit choice pins the probe to that protocol.
+        const choice = protocolChoice()
+        const res = await serverSDK.client.provider.models
           .discover(
             {
-              providerID,
+              providerID: discoverID,
               baseURL,
               apiKey: key,
               headers: headerConfig(),
-              kind: "openai-compatible",
+              ...(choice === "auto" ? {} : { kind: choice }),
             },
             { throwOnError: true },
           )
-          .then((res) => res.data?.models ?? [])
-          .catch(() => [])
+          .then((res) => res.data)
+          .catch(() => undefined)
+        if (res?.kind) setDetectedProtocol(res.kind)
+        const discovered = res?.models ?? []
         if (discovered.length > 0 && !hasManualModels) {
-          const rows = discoveredRows(discovered)
-          setForm("models", rows)
-          nextForm = { ...form, models: rows }
+          // Backend owns the model list at runtime, so we leave the form's manual-model rows empty
+          // and persist `discovery: true` instead of freezing this snapshot. (nextForm stays the
+          // empty-models form, keeping the validator in discovery mode.)
+          discoveryMode = true
         }
       }
 
-      const result = validate(nextForm)
+      const result = validate(nextForm, discoveryMode)
       if (!result) return
       saveMutation.mutate(result)
     })().catch((err) => {
@@ -231,23 +275,6 @@ export function DialogCustomProvider(props: Props) {
           <div class="flex flex-col gap-4">
             <TextField
               autofocus
-              label={language.t("provider.custom.field.providerID.label")}
-              placeholder={language.t("provider.custom.field.providerID.placeholder")}
-              description={language.t("provider.custom.field.providerID.description")}
-              value={form.providerID}
-              onChange={(v) => setField("providerID", v)}
-              validationState={form.err.providerID ? "invalid" : undefined}
-              error={form.err.providerID}
-            />
-            <TextField
-              label={language.t("provider.custom.field.name.label")}
-              placeholder={language.t("provider.custom.field.name.placeholder")}
-              value={form.name}
-              onChange={(v) => setField("name", v)}
-              validationState={form.err.name ? "invalid" : undefined}
-              error={form.err.name}
-            />
-            <TextField
               label={language.t("provider.custom.field.baseURL.label")}
               placeholder={language.t("provider.custom.field.baseURL.placeholder")}
               value={form.baseURL}
@@ -262,10 +289,59 @@ export function DialogCustomProvider(props: Props) {
               value={form.apiKey}
               onChange={(v) => setField("apiKey", v)}
             />
+            <div class="flex flex-col gap-1.5">
+              <label class="text-12-medium text-text-weak">{language.t("provider.custom.field.protocol.label")}</label>
+              <Select
+                size="normal"
+                options={PROTOCOL_CHOICES}
+                current={protocolChoice()}
+                value={(o) => o}
+                label={(o) => language.t(`provider.custom.field.protocol.option.${o}`)}
+                onSelect={(o) => o && setProtocolChoice(o)}
+                class="max-w-[220px] text-text-base"
+                variant="secondary"
+              />
+              <p class="text-12-regular text-text-weak">
+                {language.t("provider.custom.field.protocol.description")}
+              </p>
+            </div>
+          </div>
+
+          <Button
+            type="button"
+            size="small"
+            variant="ghost"
+            icon={showAdvanced() ? "chevron-down" : "chevron-right"}
+            onClick={() => setShowAdvanced((v) => !v)}
+            class="self-start"
+          >
+            {language.t("provider.custom.advanced.toggle")}
+          </Button>
+
+          <Show when={showAdvanced()}>
+          <div class="flex flex-col gap-4">
+            <TextField
+              label={language.t("provider.custom.field.providerID.label")}
+              placeholder={language.t("provider.custom.field.providerID.placeholder")}
+              description={language.t("provider.custom.field.providerID.autoDescription")}
+              value={form.providerID}
+              onChange={(v) => setField("providerID", v)}
+              validationState={form.err.providerID ? "invalid" : undefined}
+              error={form.err.providerID}
+            />
+            <TextField
+              label={language.t("provider.custom.field.name.label")}
+              placeholder={language.t("provider.custom.field.name.placeholder")}
+              value={form.name}
+              onChange={(v) => setField("name", v)}
+              validationState={form.err.name ? "invalid" : undefined}
+              error={form.err.name}
+            />
           </div>
 
           <div class="flex flex-col gap-3">
             <label class="text-12-medium text-text-weak">{language.t("provider.custom.models.label")}</label>
+            <p class="text-12-regular text-text-weak">{language.t("provider.custom.models.autoHint")}</p>
             <For each={form.models}>
               {(m, i) => (
                 <div class="flex gap-2 items-start" data-row={m.row}>
@@ -351,6 +427,7 @@ export function DialogCustomProvider(props: Props) {
               {language.t("provider.custom.headers.add")}
             </Button>
           </div>
+          </Show>
 
           <Button
             class="w-auto self-start"

@@ -32,9 +32,44 @@ function parseModelList(body: { data?: unknown[] }): DiscoveredModel[] {
     .filter((item): item is DiscoveredModel => Boolean(item))
 }
 
+export type ProtocolDiscoveryResult = {
+  kind: ProviderDiscoveryKind
+  models: DiscoveredModel[]
+}
+
+// Resolve the provider protocol and its model list in one pass. When `kind` is given we probe only
+// that protocol; otherwise we try openai-compatible first (the common case), then anthropic, and
+// return whichever yields models. The last error message is surfaced when nothing succeeds so the
+// caller can report a useful failure. `probe` is injectable for testing.
+export async function discoverWithProtocol(
+  input: {
+    baseURL: string
+    apiKey: string
+    providerID: string
+    kind?: ProviderDiscoveryKind
+    headers?: Record<string, string>
+  },
+  probe: (kind: ProviderDiscoveryKind) => Promise<DiscoveredModel[]> = (kind) =>
+    discoverProviderModels({ ...input, kind }),
+): Promise<ProtocolDiscoveryResult> {
+  const candidates: ProviderDiscoveryKind[] = input.kind ? [input.kind] : ["openai-compatible", "anthropic"]
+  let lastError: unknown
+  for (const kind of candidates) {
+    try {
+      const models = await probe(kind)
+      if (models.length > 0) return { kind, models }
+      lastError = new Error("No provider models were returned")
+    } catch (error) {
+      lastError = error
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error("No provider models were returned")
+}
+
 export async function discoverProviderModels(input: {
   baseURL: string
-  apiKey: string
+  // Optional: some gateways authenticate discovery entirely via custom headers (no bearer/x-api-key).
+  apiKey?: string
   providerID: string
   kind?: ProviderDiscoveryKind
   headers?: Record<string, string>
@@ -44,11 +79,16 @@ export async function discoverProviderModels(input: {
     accept: "application/json",
     ...(input.headers ?? {}),
   }
-  if (kind === "anthropic") {
-    headers["x-api-key"] = input.apiKey
+  // Only attach a credential header when a key is present; header-only auth comes from input.headers.
+  if (input.apiKey) {
+    if (kind === "anthropic") {
+      headers["x-api-key"] = input.apiKey
+      headers["anthropic-version"] ??= "2023-06-01"
+    } else {
+      headers.authorization = `Bearer ${input.apiKey}`
+    }
+  } else if (kind === "anthropic") {
     headers["anthropic-version"] ??= "2023-06-01"
-  } else {
-    headers.authorization = `Bearer ${input.apiKey}`
   }
 
   const response = await fetch(listURL(input.baseURL), { headers })
