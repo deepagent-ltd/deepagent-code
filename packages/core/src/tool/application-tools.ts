@@ -2,6 +2,7 @@ export * as ApplicationTools from "./application-tools"
 
 import { Context, Effect, Layer, Scope } from "effect"
 import { enableMapSet } from "immer"
+import { makeGlobalNode } from "../effect/app-node"
 import { State } from "../state"
 import { Tool } from "./tool"
 
@@ -56,3 +57,5 @@ export const layer = Layer.effect(
     })
   }),
 )
+
+export const node = makeGlobalNode({ service: Service, layer, deps: [] })
