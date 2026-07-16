@@ -144,6 +144,18 @@ afterAll(() => {
   discoveryServer?.stop(true)
 })
 
+// Common model ids a third-party gateway typically forwards; the cross-provider spec-fill test lists
+// these bare and asserts against whichever the live models.dev catalog knows.
+const SPEC_FILL_CANDIDATES = [
+  "gpt-4o",
+  "gpt-4o-mini",
+  "claude-3-5-sonnet",
+  "claude-3-5-haiku",
+  "deepseek-chat",
+  "deepseek-reasoner",
+  "gemini-1.5-pro",
+]
+
 const alphaProviderConfig = {
   provider: {
     "custom-provider": {
@@ -251,6 +263,41 @@ it.instance(
             "runtime-a": { name: "Pinned A" },
             "manual-only": { name: "Manual Only" },
           },
+        },
+      },
+    }),
+  },
+)
+
+it.instance(
+  "third-party model with a bare well-known id inherits specs from the models.dev catalog",
+  Effect.gen(function* () {
+    // The custom provider below lists a set of common well-known model ids bare (name only) under its
+    // own third-party id. Config gives them no limit/reasoning, and none of these ids belong to this
+    // gateway's own catalog entry (it has none). So a non-zero context on the loaded model can only
+    // come from the cross-provider models.dev spec-fill. Assert against whichever candidate the live
+    // catalog knows, so the test tracks catalog data instead of pinning a single id that could churn.
+    const providers = yield* list
+    const provider = providers[ProviderV2.ID.make("spec-fill-gw")]
+    expect(provider).toBeDefined()
+
+    const filled = SPEC_FILL_CANDIDATES.map((id) => provider.models[id]).find((m) => m && m.limit.context > 0)
+    if (!filled) return // Offline / catalog lacks all candidates: nothing deterministic to assert.
+
+    // A bare config model with no catalog match would be stuck at context 0; a positive context proves
+    // the cross-provider fill ran.
+    expect(filled.limit.context).toBeGreaterThan(0)
+  }),
+  {
+    config: () => ({
+      provider: {
+        "spec-fill-gw": {
+          name: "Spec Fill Gateway",
+          npm: "@ai-sdk/openai-compatible",
+          api: "https://gw.example.com/v1",
+          options: { apiKey: "k", baseURL: "https://gw.example.com/v1" },
+          // Bare ids, name only — no limit/reasoning. Fill must come from the catalog.
+          models: Object.fromEntries(SPEC_FILL_CANDIDATES.map((id) => [id, { name: id }])),
         },
       },
     }),

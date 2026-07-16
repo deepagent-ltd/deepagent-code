@@ -47,6 +47,7 @@ export const dict = {
   "ui.sessionTurn.retry.attempt": "第 {{attempt}} 次",
   "ui.sessionTurn.retry.attemptLine": "{{line}} - 第 {{attempt}} 次",
   "ui.sessionTurn.retry.geminiHot": "gemini 当前过载",
+  "ui.sessionTurn.retry.noChannel": "网关列出了该模型，但当前分组没有可用渠道——请换一个模型，或修正网关的分组配置",
   "ui.sessionTurn.error.freeUsageExceeded": "免费使用额度已用完",
   "ui.sessionTurn.error.addCredits": "添加积分",
 
