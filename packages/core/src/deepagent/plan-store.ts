@@ -17,10 +17,15 @@ import path from "node:path"
 import { DocumentStore } from "./document-store"
 import type { PlanDoc } from "./plan-controller"
 
-// The stable identity of a session's plan doc: type "plan", scope "run:<sid>", slug "plan-<sid>". This
-// MUST match goal-driver.materializePlanDoc so the tool path and the goal path upsert the same doc.
+// The stable identity of a session's plan doc: type "plan", scope "run:<sid>", slug "plan-<sid>",
+// description planDescription(sid). ALL FOUR must match between the `plan` tool path (setPlanDoc) and
+// the goal path (goal-driver.materializePlanDoc) or upsert()'s findLogical dedup (which keys on
+// description + domain) splits them into two docs (plan-<sid> vs plan-<sid>-2) and reintroduces the
+// two-store divergence I33-1 removes. goal-driver imports planDescription/planScope from here so the
+// identity can never drift across the package boundary.
 const planSlug = (sessionId: string): string => `plan-${sessionId}`
 export const planScope = (sessionId: string): string => `run:${sessionId}`
+export const planDescription = (sessionId: string): string => `session plan ${sessionId}`
 
 // The state dir session-state was configured with. plan-store roots UNDER it at the same location the
 // goal store uses, so the two paths converge on one doc. Set by configureRoot (called from the same
@@ -84,7 +89,7 @@ export const setPlanDoc = (sessionId: string, plan: PlanDoc): { id: string; vers
   const doc = store(sessionId).upsert({
     type: "plan",
     scope: planScope(sessionId),
-    description: `session plan ${sessionId}`,
+    description: planDescription(sessionId),
     idSlug: planSlug(sessionId),
     body: JSON.stringify(plan),
     provenance: { source: "model", run_ref: planScope(sessionId) },
