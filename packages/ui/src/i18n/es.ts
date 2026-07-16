@@ -43,6 +43,8 @@ export const dict = {
   "ui.sessionTurn.retry.attempt": "intento #{{attempt}}",
   "ui.sessionTurn.retry.attemptLine": "{{line}} - intento #{{attempt}}",
   "ui.sessionTurn.retry.geminiHot": "gemini está demasiado saturado",
+  "ui.sessionTurn.retry.noChannel":
+    "the gateway lists this model but has no available channel for it — pick another model or fix the gateway's group config",
   "ui.sessionTurn.error.freeUsageExceeded": "Límite de uso gratuito excedido",
   "ui.sessionTurn.error.addCredits": "Añadir créditos",
 

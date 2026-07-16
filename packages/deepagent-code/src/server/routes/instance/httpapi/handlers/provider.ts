@@ -4,6 +4,7 @@ import { Config } from "@/config/config"
 import { ModelsDev } from "@deepagent-code/core/models-dev"
 import { Provider } from "@/provider/provider"
 import { discoverWithProtocol, isChatModel, normalizeBaseURL } from "@/provider/model-discovery"
+import { buildCatalogIndex, projectSpec, specMatchFor } from "@/provider/catalog-spec"
 
 import { mapValues } from "remeda"
 import { Effect, Schema } from "effect"
@@ -104,7 +105,17 @@ export const providerHandlers = HttpApiBuilder.group(InstanceHttpApi, "provider"
       })
 
       const models = result.models.filter((model) => isChatModel(model.id))
-      const selectable = models.length ? models : result.models
+      const chatModels = models.length ? models : result.models
+
+      // Attach best-effort catalog specs (context/reasoning/…) matched by model id, cross-provider, so
+      // the dialog can preview and pre-fill the editable spec fields. Undefined when there's no match.
+      const catalog = yield* ModelsDev.Service.use((s) => s.get())
+      const catalogIndex = buildCatalogIndex(catalog)
+      const selectable = chatModels.map((model) => {
+        const match = specMatchFor(model.id, model.id, catalogIndex)
+        return match ? { ...model, spec: projectSpec(match) } : model
+      })
+
       const requested = ctx.payload.modelID?.trim()
       const selected = requested
         ? (selectable.find((model) => model.id === requested) ?? { id: requested, name: requested })
