@@ -14,7 +14,7 @@
   <a href="https://github.com/deepagent-ltd/deepagent-code-enterprise">Enterprise 版本</a>
 </p>
 
-<p align="center"><sub>桌面版 1.4.0 · DeepAgent Core V4.1</sub></p>
+<p align="center"><sub>桌面版 1.4.1 · DeepAgent Core V4.1</sub></p>
 
 ---
 
@@ -149,7 +149,7 @@ deepagent-code "为 /api/users 端点添加限流"
 
 ## 架构
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────┐
 │  控制平面（DeepAgent 新增）                                  │
 │  • 四图合一存储（代码 + 知识 + 记忆 + 文档）                 │
