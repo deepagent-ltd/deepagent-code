@@ -52,10 +52,16 @@ const planScope = (sessionId: string): string => `run:${sessionId}`
  * Returns the plan doc id the GoalSpec references.
  */
 export const materializePlanDoc = (input: MaterializePlanInput): string => {
+  // I33-1: the goal path and the `plan` tool MUST write ONE doc. upsert() dedups on `description`
+  // (findLogical), so any description drift between the two callers splits them into two docs
+  // (plan-<sid> vs plan-<sid>-2) and reintroduces the two-store divergence. Use the SAME identity as
+  // plan-store.setPlanDoc — same type/scope/idSlug AND description — so the goal write lands on the
+  // tool-path doc (and vice versa). `input.store` is the shared handle at goalStoreRoot(sid), which is
+  // byte-identical to plan-store's planStoreRoot(sid), so both resolve the same on-disk + in-memory doc.
   const doc = input.store.upsert({
     type: "plan",
     scope: planScope(input.sessionId),
-    description: `goal plan ${input.sessionId}`,
+    description: `session plan ${input.sessionId}`,
     idSlug: `plan-${input.sessionId}`,
     body: JSON.stringify(input.plan),
     provenance: { source: "model", run_ref: planScope(input.sessionId) },
