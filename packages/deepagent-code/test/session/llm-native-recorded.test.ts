@@ -1,6 +1,7 @@
 import { ConfigV1 } from "@deepagent-code/core/v1/config/config"
 import { SessionV1 } from "@deepagent-code/core/v1/session"
 import { FSUtil } from "@deepagent-code/core/fs-util"
+import { EffectFlock } from "@deepagent-code/core/util/effect-flock"
 import { ModelsDev } from "@deepagent-code/core/models-dev"
 import { HttpRecorder } from "@deepagent-code/http-recorder"
 import { HttpRecorderInternal } from "@deepagent-code/http-recorder/internal"
@@ -280,6 +281,7 @@ function recordedNativeLLMLayer(scenario: RecordedScenario) {
     Layer.provide(Plugin.defaultLayer),
     Layer.provide(ModelsDev.defaultLayer),
     Layer.provide(RuntimeFlags.defaultLayer),
+    Layer.provide(EffectFlock.defaultLayer),
   )
   // Only the HTTP client is recorded; RequestExecutor and the deepagent-code LLM stack remain real.
   const metadata = {
