@@ -8,6 +8,8 @@ import { Hash } from "./util/hash"
 import { FSUtil } from "./fs-util"
 import { InstallationChannel, InstallationVersion } from "./installation/version"
 import { EventV2 } from "./event"
+import { makeGlobalNode } from "./effect/app-node"
+import { httpClient } from "./effect/app-node-platform"
 
 export const CatalogModelStatus = Schema.Literals(["alpha", "beta", "deprecated"])
 export type CatalogModelStatus = typeof CatalogModelStatus.Type
@@ -242,6 +244,8 @@ export const layer = Layer.effect(
     return Service.of({ get, refresh })
   }),
 )
+
+export const node = makeGlobalNode({ service: Service, layer: layer, deps: [FSUtil.node, EventV2.node, httpClient] })
 
 export const defaultLayer = layer.pipe(
   Layer.provide(FetchHttpClient.layer),
