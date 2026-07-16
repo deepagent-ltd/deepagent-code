@@ -3,6 +3,7 @@ export * as FileMutation from "./file-mutation"
 import { Context, Effect, Layer, Schema } from "effect"
 import { dirname } from "path"
 import { KeyedMutex } from "./effect/keyed-mutex"
+import { makeLocationNode } from "./effect/app-node"
 import { FSUtil } from "./fs-util"
 
 export interface Target {
@@ -189,6 +190,8 @@ function sameBytes(left: Uint8Array, right: Uint8Array) {
   if (left.length !== right.length) return false
   return left.every((byte, index) => byte === right[index])
 }
+
+export const node = makeLocationNode({ service: Service, layer, deps: [FSUtil.node] })
 
 export const locationLayer = layer
 

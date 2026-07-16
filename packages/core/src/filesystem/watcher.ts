@@ -6,6 +6,7 @@ import type ParcelWatcher from "@parcel/watcher"
 import { Cause, Context, Effect, Layer, Schema } from "effect"
 import path from "path"
 import { Config } from "../config"
+import { makeLocationNode } from "../effect/app-node"
 import { EventV2 } from "../event"
 import { Flag } from "../flag/flag"
 import { FSUtil } from "../fs-util"
@@ -146,5 +147,11 @@ export const layer = Layer.effect(
     }),
   ),
 )
+
+export const node = makeLocationNode({
+  service: Service,
+  layer,
+  deps: [FSUtil.node, Location.node, Config.node, Git.node, EventV2.node],
+})
 
 export const locationLayer = layer.pipe(Layer.provide(Config.locationLayer), Layer.provide(Git.defaultLayer))

@@ -2,6 +2,7 @@ export * as InstructionContext from "./instruction-context"
 
 import { Array, Effect, Layer, Schema } from "effect"
 import { isAbsolute, join, relative, sep } from "path"
+import { makeLocationNode } from "./effect/app-node"
 import { FSUtil } from "./fs-util"
 import { Flag } from "./flag/flag"
 import { Global } from "./global"
@@ -86,6 +87,12 @@ export const layer = Layer.effectDiscard(
     })
   }),
 )
+
+export const node = makeLocationNode({
+  name: "instruction-context",
+  layer,
+  deps: [FSUtil.node, Global.node, Location.node, SystemContextRegistry.node],
+})
 
 function render(files: ReadonlyArray<File>) {
   return files.map((file) => `Instructions from: ${file.path}\n${file.content}`).join("\n\n")
