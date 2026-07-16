@@ -5,6 +5,7 @@ import { Git } from "./git"
 import { Global } from "./global"
 import { Repository } from "./repository"
 import { EffectFlock } from "./util/effect-flock"
+import { makeGlobalNode } from "./effect/app-node"
 
 export type Result = {
   readonly repository: string
@@ -258,6 +259,12 @@ export const defaultLayer: Layer.Layer<Service> = layer.pipe(
   Layer.provide(Git.defaultLayer),
   Layer.provide(Global.defaultLayer),
 )
+
+export const node = makeGlobalNode({
+  service: Service,
+  layer,
+  deps: [EffectFlock.node, FSUtil.node, Git.node, Global.node],
+})
 
 function statusForRepository(input: { reuse: boolean; refresh?: boolean; branchMatches?: boolean }) {
   if (!input.reuse) return "cloned" as const
