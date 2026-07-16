@@ -1,8 +1,9 @@
 import { describe, expect, test, beforeEach, afterEach } from "bun:test"
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs"
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
-import { DocumentStore, knowledgeSimilarity, tokenizeForSimilarity } from "../../src/deepagent/document-store"
+import { DocumentStore, DocumentConflictError, knowledgeSimilarity, tokenizeForSimilarity } from "../../src/deepagent/document-store"
+import { writeFileAtomic, writeFileExclusive } from "../../src/deepagent/atomic-write"
 import { DurableKnowledgeStore } from "../../src/deepagent/durable-knowledge-store"
 
 let root: string
@@ -165,6 +166,141 @@ describe("V3 DocumentStore", () => {
     expect(store.get(k.id)!.version).toBe(2)
     // provenance is part of the fingerprint → identical body+provenance is an INV-4 no-op
     expect(store.updateWithProvenance(k.id, "v2 body edited by human", { source: "human" }).version).toBe(2)
+  })
+})
+
+// F30-1 (deepagentcore-v4.0.3 storage prereq): DocumentStore is the single crash-safe, concurrency-
+// safe durable body. persist() writes append-only version files with exclusive-create CAS; replace()
+// overwrites the same version atomically (temp+fsync+rename). These tests pin the CAS + durability
+// behavior that H32-1 (v4.0.4) builds on.
+describe("F30-1 DocumentStore CAS + atomic durability", () => {
+  test("normal single-writer flow is unchanged (create + updates land byte-identically)", () => {
+    const a = store.create(design("v1"))
+    const a2 = store.update(a.id, "v2")
+    const a3 = store.update(a.id, "v3")
+    expect(a3.version).toBe(3)
+    // reopened from files only — every version file was written exactly once via exclusive create
+    const reopened = new DocumentStore(root)
+    expect(reopened.get(a.id)!.body).toBe("v3")
+    expect(reopened.get(a.id, 1)!.status).toBe("superseded")
+    expect(reopened.get(a.id, 2)!.status).toBe("superseded")
+    expect(reopened.verify().ok).toBe(true)
+  })
+
+  test("two handles writing DIFFERENT content at the same version -> DocumentConflictError", () => {
+    // Both handles are built over the same on-disk root but hold independent in-memory indexes, so
+    // both compute the SAME next version (v2) from the SAME base (v1) — the lost-update race F30-1
+    // must catch instead of silently clobbering.
+    const a = store.create(design("base"))
+    const h1 = new DocumentStore(root)
+    const h2 = new DocumentStore(root)
+    h1.update(a.id, "from h1") // writes id@v2 (h1's content)
+    // h2 still thinks latest is v1; its update also targets v2 but with different content -> conflict
+    expect(() => h2.update(a.id, "from h2")).toThrow(DocumentConflictError)
+    // h1's write survives intact; nothing was clobbered
+    expect(new DocumentStore(root).get(a.id)!.body).toBe("from h1")
+  })
+
+  test("idempotent re-persist of byte-identical version is a no-op (same-hash CAS collision)", () => {
+    // Two handles writing the SAME content at the same version must NOT conflict — a retried/mirrored
+    // write of identical bytes is idempotent (content-addressed: same hash).
+    const a = store.create(design("base"))
+    const h1 = new DocumentStore(root)
+    const h2 = new DocumentStore(root)
+    const w1 = h1.update(a.id, "same body")
+    const w2 = h2.update(a.id, "same body") // same version, same content -> idempotent, no throw
+    expect(w1.version).toBe(2)
+    expect(w2.version).toBe(2)
+    expect(w1.hash).toBe(w2.hash)
+    expect(new DocumentStore(root).get(a.id)!.body).toBe("same body")
+  })
+
+  test("setStatus/replace rewrites the same version file in place without a version bump", () => {
+    const a = store.create(design("body"))
+    expect(a.version).toBe(1)
+    store.setStatus(a.id, "active")
+    expect(store.get(a.id)!.status).toBe("active")
+    expect(store.get(a.id)!.version).toBe(1) // in-place rewrite, not a new version
+    // exactly one version file on disk for this doc (no orphan versions from the rewrite)
+    const dir = path.join(root, "docs", "design")
+    const files = readdirSync(dir).filter((f) => f.endsWith(".json"))
+    expect(files.length).toBe(1)
+    expect(new DocumentStore(root).get(a.id)!.status).toBe("active")
+  })
+
+  test("writeFileExclusive throws EEXIST on an existing path (the CAS primitive)", () => {
+    const f = path.join(root, "cas-probe.json")
+    writeFileExclusive(f, "first")
+    let code: string | undefined
+    try {
+      writeFileExclusive(f, "second")
+    } catch (e) {
+      code = (e as NodeJS.ErrnoException).code
+    }
+    expect(code).toBe("EEXIST")
+    expect(readFileSync(f, "utf8")).toBe("first") // original never clobbered
+  })
+
+  test("writeFileAtomic overwrites durably and leaves no temp files behind", () => {
+    const f = path.join(root, "atomic-probe.json")
+    writeFileAtomic(f, "one")
+    writeFileAtomic(f, "two")
+    expect(readFileSync(f, "utf8")).toBe("two")
+    // no leftover .tmp-* siblings from the temp+rename
+    const leftover = readdirSync(root).filter((n) => n.includes(".tmp-"))
+    expect(leftover).toEqual([])
+  })
+})
+
+// F30-1 Part 2: same-process SHARED AUTHORITY. `DocumentStore.shared(root)` handles for the same root
+// share ONE in-memory index (a write through one is visible through all); `new DocumentStore(root)`
+// stays unshared (own disk-rebuilt index) so it keeps faithfully simulating a cold/second-process open.
+describe("F30-1 DocumentStore.shared same-process authority", () => {
+  afterEach(() => DocumentStore.__resetSharedRegistryForTests())
+
+  test("two shared handles to the same root see each other's writes without a disk reopen", () => {
+    const h1 = DocumentStore.shared(root)
+    const h2 = DocumentStore.shared(root)
+    const a = h1.create(design("written via h1"))
+    // h2 shares h1's live index — the doc is visible immediately, no rebuild/reopen needed
+    expect(h2.get(a.id)?.body).toBe("written via h1")
+    // and a write through h2 is visible through h1 (bidirectional shared authority)
+    const a2 = h2.update(a.id, "updated via h2")
+    expect(a2.version).toBe(2)
+    expect(h1.get(a.id)?.body).toBe("updated via h2")
+    expect(h1.get(a.id)?.version).toBe(2)
+  })
+
+  test("an UNSHARED handle does NOT see another handle's in-memory write until it rebuilds from disk", () => {
+    // This is the pre-F30-1 divergence the shared registry fixes — pinned here so the distinction is
+    // explicit: an unshared handle only reflects writes that were on disk at ITS construction time.
+    const shared = DocumentStore.shared(root)
+    const a = shared.create(design("only in shared index at first"))
+    // A separate shared handle constructed AFTER the write still sees it (shared index)...
+    expect(DocumentStore.shared(root).get(a.id)?.body).toBe("only in shared index at first")
+    // ...and an unshared handle also sees it here, because create() persisted it to disk and the
+    // unshared handle rebuilds from disk in its constructor. (Persistence is synchronous — Part 1.)
+    expect(new DocumentStore(root).get(a.id)?.body).toBe("only in shared index at first")
+  })
+
+  test("shared index is rebuilt from disk on first open of a root (survives a simulated restart)", () => {
+    // Seed via an unshared handle (writes to disk), then open the FIRST shared handle for the root —
+    // it must rebuild the shared index from disk so pre-existing docs are visible.
+    const seed = new DocumentStore(root).create(design("seeded on disk"))
+    DocumentStore.__resetSharedRegistryForTests() // simulate a fresh process (empty registry)
+    const shared = DocumentStore.shared(root)
+    expect(shared.get(seed.id)?.body).toBe("seeded on disk")
+  })
+
+  test("shared handles for DIFFERENT roots are isolated", () => {
+    const otherRoot = mkdtempSync(path.join(tmpdir(), "deepagent-ds-shared-other-"))
+    try {
+      const a = DocumentStore.shared(root).create(design("in root"))
+      const other = DocumentStore.shared(otherRoot)
+      expect(other.get(a.id)).toBeNull() // different root -> different shared index
+    } finally {
+      rmSync(otherRoot, { recursive: true, force: true })
+    }
   })
 })
 
