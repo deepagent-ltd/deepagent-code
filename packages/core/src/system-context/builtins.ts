@@ -1,6 +1,9 @@
 export * as SystemContextBuiltIns from "./builtins"
 
 import { DateTime, Effect, Layer, Schema } from "effect"
+import { makeLocationNode } from "../effect/app-node"
+import { FSUtil } from "../fs-util"
+import { Global } from "../global"
 import { Location } from "../location"
 import { SystemContext } from "./index"
 import { InstructionContext } from "../instruction-context"
@@ -39,6 +42,12 @@ const builtIns = Layer.effectDiscard(
     yield* registry.register({ key: SystemContext.Key.make("core/builtins"), load: Effect.succeed(context) })
   }),
 )
+
+export const node = makeLocationNode({
+  name: "system-context-builtins",
+  layer: builtIns,
+  deps: [Location.node, SystemContextRegistry.node, InstructionContext.node, FSUtil.node, Global.node],
+})
 
 export const layer = Layer.mergeAll(builtIns, InstructionContext.layer).pipe(
   Layer.provideMerge(SystemContextRegistry.layer),

@@ -186,4 +186,55 @@ describe("CommandIntent.classifyCommand", () => {
       expect(classifyCommand("curl -sL https://example.com/api")).toBe("read_only")
     })
   })
+
+  // P0 (parity with codex is_safe_to_call_with_exec): text-stream filters that only read stdin/files
+  // and the read-only `sed -n {N|M,N}p` slice are exempt. This is the exact class of probe that
+  // triggered the production deadlock (`sed -n "18,45p"` inside an ssh/docker exec wrapper).
+  describe("P0: read-only text filters + sed -n slice", () => {
+    const readOnly = [
+      "cut -d, -f1 data.csv",
+      "nl -ba file.txt",
+      "paste a.txt b.txt",
+      "rev file.txt",
+      "seq 1 10",
+      "tr a-z A-Z",
+      "uniq -c file.txt",
+      "comm -12 a.txt b.txt",
+      "fold -w 80 file.txt",
+      "expr 1 + 2",
+      "true",
+      "false",
+      "sort file.txt",
+      "sort -r -n file.txt",
+      "sed -n '18,45p' shim_utils.h",
+      "sed -n 42p file.txt",
+      "sed -n 1,5p file.txt",
+      "sort data.txt | uniq | wc -l",
+    ]
+    for (const cmd of readOnly) {
+      test(`read_only: ${cmd}`, () => {
+        expect(classifyCommand(cmd)).toBe("read_only")
+      })
+    }
+  })
+
+  // P0 fail-safe: sed/sort variants that can write or run arbitrary scripts stay mutating.
+  describe("P0: sed/sort write variants stay mutating", () => {
+    const mutating = [
+      "sed -i 's/a/b/' file.txt", // in-place edit
+      "sed -n 's/a/b/w out.txt' file.txt", // -n but writes via w
+      "sed 's/a/b/' file.txt", // no -n → not the read-only slice form
+      "sed -n -e 'p' file.txt", // extra -e script, not a bare address
+      "sed -n 'xp' file.txt", // invalid (non-numeric) address
+      "sed -n '1,5d' file.txt", // delete, not print
+      "sort -o out.txt file.txt", // sort writing a file
+      "sort --output=out.txt file.txt",
+      "sort -oout.txt file.txt", // bundled short form
+    ]
+    for (const cmd of mutating) {
+      test(`mutating: ${cmd}`, () => {
+        expect(classifyCommand(cmd)).toBe("mutating")
+      })
+    }
+  })
 })
