@@ -117,6 +117,59 @@ export const Commands = Spec.make(
           }),
         ],
       }),
+      Spec.make("packs", {
+        description: "Manage domain packs",
+        params: {
+          action: Argument.choice("action", ["list", "pin", "unpin"]),
+          packId: Argument.string("packId").pipe(Argument.optional),
+        },
+      }),
+      Spec.make("wiki", {
+        description: "Search and browse the project Wiki",
+        params: {
+          action: Argument.choice("action", ["list", "get", "search"]),
+          args: Argument.string("args").pipe(Argument.variadic),
+          type: Flag.string("type").pipe(Flag.optional),
+          scope: Flag.string("scope").pipe(Flag.optional),
+        },
+      }),
+      Spec.make("oversight", {
+        description: "Oversight dashboard: metrics, approvals, trace",
+        params: {
+          action: Argument.choice("action", ["metrics", "queue", "approve", "reject", "ack", "trace"]),
+          id: Argument.string("id").pipe(Argument.optional),
+        },
+      }),
+      Spec.make("review", {
+        description: "Review pending DeepAgent knowledge",
+        params: {
+          action: Argument.choice("action", ["pending", "approve", "reject"]),
+          ids: Argument.string("ids").pipe(Argument.variadic),
+        },
+      }),
+      Spec.make("env-facts", {
+        description: "Manage environment facts",
+        params: {
+          action: Argument.choice("action", ["list", "decide"]),
+          factId: Argument.string("factId").pipe(Argument.optional),
+          decision: Argument.choice("decision", ["adopt", "reject"]).pipe(Argument.optional),
+        },
+      }),
+      Spec.make("goal", {
+        description: "Manage Goal Loop for a session",
+        params: {
+          action: Argument.choice("action", ["start", "status", "pause", "resume", "stop"]),
+          sessionID: Argument.string("sessionID"),
+          objective: Flag.string("objective").pipe(Flag.optional),
+        },
+      }),
+      Spec.make("panel", {
+        description: "Expert Panel status",
+        params: {
+          action: Argument.choice("action", ["status"]),
+          sessionID: Argument.string("sessionID"),
+        },
+      }),
       Spec.make("service", {
         description: "Manage the background server",
         commands: [

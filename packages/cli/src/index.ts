@@ -34,6 +34,13 @@ const Handlers = Runtime.handlers(Commands, {
     list: () => import("./commands/handlers/session/list"),
     delete: () => import("./commands/handlers/session/delete"),
   },
+  packs: () => import("./commands/handlers/deepagent/packs"),
+  wiki: () => import("./commands/handlers/deepagent/wiki"),
+  oversight: () => import("./commands/handlers/deepagent/oversight"),
+  review: () => import("./commands/handlers/deepagent/review"),
+  "env-facts": () => import("./commands/handlers/deepagent/env-facts"),
+  goal: () => import("./commands/handlers/deepagent/goal"),
+  panel: () => import("./commands/handlers/deepagent/panel"),
   service: {
     start: () => import("./commands/handlers/service/start"),
     restart: () => import("./commands/handlers/service/restart"),
