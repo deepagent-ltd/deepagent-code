@@ -19,7 +19,7 @@
     "prepare": "husky",
     "random": "echo 'Random script'",
     "sso": "aws sso login --sso-session=deepagent-code --no-browser",
-    "test": "echo 'do not run tests from root' && exit 1"
+    "test": "bun run --cwd packages/app test && bun run --cwd packages/ui test"
   },
   "workspaces": {
     "packages": [
