@@ -27,7 +27,8 @@ export default Runtime.handler(Commands.commands.run, (input) =>
     const client = yield* daemon.client()
     const sessionID = yield* resolveSession(input)
 
-    const events = yield* Effect.tryPromise(() => client.event.subscribe())
+    const abort = new AbortController()
+    const events = yield* Effect.tryPromise(() => client.event.subscribe(undefined, { signal: abort.signal }))
 
     const model = pickModel(input.model)
     const promptResult = yield* SessionClient.promptAsync({
@@ -43,7 +44,7 @@ export default Runtime.handler(Commands.commands.run, (input) =>
       return yield* Effect.fail(new Error(formatError(promptResult.error)))
     }
 
-    yield* consumeEvents(client, events, sessionID, input.format, input["dangerously-skip-permissions"])
+    yield* consumeEvents(client, events, sessionID, input.format, input["dangerously-skip-permissions"], abort)
   }),
 )
 
@@ -124,6 +125,7 @@ function consumeEvents(
   sessionID: string,
   format: string,
   skipPermissions: boolean,
+  abort: AbortController,
 ) {
   return Effect.promise(async () => {
     let error: string | undefined
@@ -164,6 +166,9 @@ function consumeEvents(
           event.properties.sessionID === sessionID &&
           event.properties.status.type === "idle"
         ) {
+          // Abort BEFORE break: the SSE generator only cancels the underlying
+          // fetch reader via its abort listener, which its own finally removes.
+          abort.abort()
           break
         }
 
