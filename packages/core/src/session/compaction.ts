@@ -50,36 +50,6 @@ Rules:
 - Preserve exact file paths, commands, error strings, and identifiers when known.
 - Do not mention the summary process or that context was compacted.`
 
-// V4.0.1 P1 (§3.4) — the NARROWED, four-bucket summary template. Responsibility separation: the summary
-// records ONLY 思路 + 待办 (progress+decisions / constraints+prefs / next steps / data references) and
-// explicitly does NOT record file contents / env values / diagnostics snapshots — those volatile facts
-// are re-injected at their LATEST value by the World State layer (never captured here, where they would
-// go stale). "Data References" keeps only the reference (path/identifier/link), never the content.
-// Gated by `worldStateReinjection` at the deepagent-code call site: with the flag OFF, buildPrompt uses
-// the legacy SUMMARY_TEMPLATE and NOTHING is re-injected (no information hole).
-const NARROW_SUMMARY_TEMPLATE = `Output exactly the Markdown structure shown inside <template> and keep the section order unchanged. Do not include the <template> tags in your response.
-<template>
-## Progress & Key Decisions
-- [what has been done + the key decisions made and WHY, or "(none)"]
-
-## Constraints & Preferences
-- [user constraints, preferences, specs, or "(none)"]
-
-## Next Steps
-- [ordered next actions, or "(none)"]
-
-## Data References
-- [only path / identifier / link + why it matters — NOT its contents, or "(none)"]
-</template>
-
-Rules:
-- Summarize ONLY the four sections above: progress+decisions, constraints+preferences, next steps, data references.
-- Do NOT record file contents, environment values, or diagnostics snapshots — the system re-injects their latest values automatically. Recording them here would only go stale.
-- Under "Data References" record just the reference (path / identifier / link) and why it matters, never the content itself.
-- Keep every section, even when empty. Use terse bullets, not prose paragraphs.
-- Preserve exact file paths, commands, error strings, and identifiers when known.
-- Do not mention the summary process or that context was compacted.`
-
 type Entry = {
   readonly seq: number
   readonly message: SessionMessage.Message
@@ -193,18 +163,12 @@ const select = (
   }
 }
 
-export const buildPrompt = (input: {
-  readonly previousSummary?: string
-  readonly context: readonly string[]
-  // V4.0.1 P1 — when true, use the four-bucket NARROW template (no file/env/diagnostics snapshots; those
-  // are World-State re-injected). Default false ⇒ legacy SUMMARY_TEMPLATE (byte-for-byte pre-V4.0.1).
-  readonly narrow?: boolean
-}) =>
+export const buildPrompt = (input: { readonly previousSummary?: string; readonly context: readonly string[] }) =>
   [
     input.previousSummary
       ? `Update the anchored summary below using the conversation history above.\nPreserve still-true details, remove stale details, and merge in the new facts.\n<previous-summary>\n${input.previousSummary}\n</previous-summary>`
       : "Create a new anchored summary from the conversation history.",
-    input.narrow ? NARROW_SUMMARY_TEMPLATE : SUMMARY_TEMPLATE,
+    SUMMARY_TEMPLATE,
     ...input.context,
   ].join("\n\n")
 

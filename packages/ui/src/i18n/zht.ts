@@ -47,7 +47,6 @@ export const dict = {
   "ui.sessionTurn.retry.attempt": "第 {{attempt}} 次",
   "ui.sessionTurn.retry.attemptLine": "{{line}} - 第 {{attempt}} 次",
   "ui.sessionTurn.retry.geminiHot": "gemini 目前過載",
-  "ui.sessionTurn.retry.noChannel": "閘道列出了該模型，但目前分組沒有可用通道——請換一個模型，或修正閘道的分組設定",
   "ui.sessionTurn.error.freeUsageExceeded": "免費使用額度已用完",
   "ui.sessionTurn.error.addCredits": "新增點數",
 

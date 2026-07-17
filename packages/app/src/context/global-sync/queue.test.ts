@@ -43,24 +43,4 @@ describe("createRefreshQueue", () => {
     expect(calls).toEqual(["C:\\tmp\\demo"])
     queue.dispose()
   })
-
-  test("does not enqueue rejected directories", async () => {
-    const calls: string[] = []
-    const queue = createRefreshQueue({
-      paused: () => false,
-      accept: (directory) => directory !== "/",
-      bootstrap: async () => {},
-      bootstrapInstance: (directory) => {
-        calls.push(directory)
-      },
-    })
-
-    queue.push("/")
-    queue.push("/project")
-
-    await tick()
-
-    expect(calls).toEqual(["/project"])
-    queue.dispose()
-  })
 })

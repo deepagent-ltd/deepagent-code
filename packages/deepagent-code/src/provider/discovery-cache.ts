@@ -75,7 +75,8 @@ export const discoverModelsCached = Effect.fn("ProviderDiscovery.cached")(functi
   fs: FSUtil.Interface,
   flock: EffectFlock.Interface,
   input: DiscoverModelsCachedInput,
-  fetch: (input: DiscoverModelsCachedInput) => Promise<DiscoveredModel[]> = discoverProviderModels,
+  fetch: (input: DiscoverModelsCachedInput) => Promise<DiscoveredModel[]> = (input) =>
+    discoverProviderModels({ ...input, apiKey: input.apiKey ?? "" }),
 ) {
   const ttl = input.ttl ?? DEFAULT_DISCOVERY_TTL
   const filepath = cacheFile(input)

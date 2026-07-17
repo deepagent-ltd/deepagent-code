@@ -37,7 +37,7 @@ describe("IM Agent Orchestrator", () => {
     yield* db.run(`
       CREATE TABLE im_messages (
         id TEXT PRIMARY KEY, group_id TEXT NOT NULL, sender_id TEXT NOT NULL, sender_type TEXT NOT NULL,
-        type TEXT NOT NULL, content TEXT NOT NULL, mentions TEXT, metadata TEXT, reply_to_id TEXT, event_id TEXT, delivery_status TEXT,
+        type TEXT NOT NULL, content TEXT NOT NULL, mentions TEXT, metadata TEXT, reply_to_id TEXT,
         created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, deleted_at INTEGER,
         FOREIGN KEY (group_id) REFERENCES im_groups(id)
       )`)
@@ -178,77 +178,6 @@ describe("IM Agent Orchestrator", () => {
     expect(kinds).not.toContain("message_created")
   })
 
-  // ── §S1.2 FIX C: a STEERED agent result broadcasts "steered", NOT "failed", and posts NO message ────
-  //
-  // The seam (agent-orchestrator.ts broadcastAgentResult): `steered:true` is handled FIRST → broadcast a
-  // single agent_status status:"steered" and RETURN — no createMessage, no "failed". The prior bug: a
-  // steered result (success:true but empty content, because the running turn replies through its own path)
-  // fell through to the success-with-content check (skipped on empty content) and landed in the "failed"
-  // branch, while any message path posted an empty-content success. We drive the real public
-  // executeAgentMentions with a fake executor returning a steered result and assert the exact broadcast +
-  // that nothing was persisted.
-  it("a steered result broadcasts status:steered (not failed) and posts no message", async () => {
-    captured.length = 0
-    let createCalls = 0
-    // Wrap the real repo so we can assert createMessage is NEVER called for a steered result (no empty
-    // agent reply posted), while listMessages still works to confirm zero agent messages landed.
-    const program = Effect.gen(function* () {
-      yield* setupDatabase
-      const realRepo = yield* IMRepository
-      const group = yield* realRepo.createGroup({
-        workspaceID: "ws1",
-        name: "G",
-        type: "project",
-        createdBy: "server",
-      })
-
-      const spyRepo = {
-        ...realRepo,
-        createMessage: (input: Parameters<typeof realRepo.createMessage>[0]) => {
-          createCalls += 1
-          return realRepo.createMessage(input)
-        },
-      }
-
-      yield* executeAgentMentions({
-        workspaceID: "ws1",
-        directory: "/tmp/ws1",
-        groupID: group.id,
-        messageID: "msg-steer",
-        userID: "server",
-        content: "@code-agent do the thing",
-        mentionedAgentNames: ["code-agent"],
-      }).pipe(Effect.provideService(IMRepository, spyRepo))
-
-      const page = yield* realRepo.listMessages({ groupID: group.id, limit: 10 })
-      return page.messages
-    })
-
-    // The steered outcome: success:true + timeout:false + steered:true + empty content — precisely the
-    // shape that used to fall through to "failed"/empty-post.
-    const layer = Layer.merge(
-      baseLayer,
-      makeExecutor({ success: true, timeout: false, steered: true, content: "" }),
-    )
-    const messages = await Effect.runPromise(program.pipe(Effect.provide(layer)))
-
-    // No agent message was persisted at all (createMessage never invoked, no agent row in history).
-    expect(createCalls).toBe(0)
-    expect(messages.find((m) => m.senderType === "agent")).toBeUndefined()
-
-    // Exactly ONE agent_status broadcast — status:"steered" — and NEITHER "failed" NOR "message_created".
-    const statuses = captured
-      .filter((c) => c.event.type === "agent_status")
-      .map((c) => (c.event as any).data.status as string)
-    expect(statuses).toContain("started")
-    expect(statuses).toContain("steered")
-    expect(statuses).not.toContain("failed")
-    expect(statuses).not.toContain("success")
-    // Exactly one "steered" event, and no message_created event on the group.
-    expect(statuses.filter((s) => s === "steered")).toHaveLength(1)
-    expect(captured.some((c) => c.event.type === "message_created")).toBe(false)
-  })
-
   it("ignores mentions of unknown or invisible agents", async () => {
     captured.length = 0
     const program = Effect.gen(function* () {
@@ -280,90 +209,5 @@ describe("IM Agent Orchestrator", () => {
 
     expect(messages.length).toBe(0)
     expect(captured.length).toBe(0)
-  })
-
-  // ── REGRESSION: a hidden built-in must NOT shadow a visible config agent of the same name ────────────
-  //
-  // The production provider (ServerAgentListProvider.listAgents) returns the real VISIBLE config agents
-  // first, then appends BUILTIN_AGENT_DESCRIPTORS which REUSE the names "auto"/"general" with
-  // `visible:false` (matchable-but-hidden, for autonomous trigger/capability routing — NOT @mentions).
-  // The old `new Map(list.map(...))` was last-write-wins, so a hidden built-in shadowed the visible agent
-  // and the `visible` filter dropped @auto/@general to nothing (0 agent calls). This asserts that when a
-  // hidden built-in named "auto" comes AFTER a visible config "auto", the @mention resolves to the VISIBLE
-  // agent and actually runs — regardless of list order.
-  it("resolves @mention to the VISIBLE agent when a hidden built-in reuses its name", async () => {
-    captured.length = 0
-
-    const visibleAuto: AgentDescriptor = {
-      id: "config:auto",
-      name: "auto",
-      displayName: "Auto",
-      description: "the real primary agent",
-      visible: true,
-    }
-    // Hidden built-in reusing the same name, appended AFTER the visible one (production order).
-    const hiddenAuto: AgentDescriptor = {
-      id: "builtin:codefix",
-      name: "auto",
-      displayName: "Code Fix Agent",
-      description: "autonomous fixer",
-      visible: false,
-    }
-    const ShadowingAgentListLive = Layer.succeed(AgentListProviderService, {
-      listAgents: () => Effect.succeed([visibleAuto, hiddenAuto]),
-      findByTrigger: () => Effect.succeed([]),
-      findByCapability: () => Effect.succeed([]),
-    })
-
-    const program = Effect.gen(function* () {
-      yield* setupDatabase
-      const repo = yield* IMRepository
-      const group = yield* repo.createGroup({
-        workspaceID: "ws1",
-        name: "G",
-        type: "project",
-        createdBy: "server",
-      })
-
-      yield* executeAgentMentions({
-        workspaceID: "ws1",
-        directory: "/tmp/ws1",
-        groupID: group.id,
-        messageID: "msg-shadow",
-        userID: "server",
-        content: "@auto please help",
-        mentionedAgentNames: ["auto"],
-      })
-
-      const page = yield* repo.listMessages({ groupID: group.id, limit: 10 })
-      return page.messages
-    })
-
-    const layer = Layer.merge(
-      Layer.mergeAll(
-        Database.defaultLayer,
-        IMRepositoryLive.pipe(Layer.provide(Database.defaultLayer)),
-        FakeBroadcasterLive,
-        ShadowingAgentListLive,
-        FakeContextBuilderLive,
-      ),
-      makeExecutor({ success: true, timeout: false, content: "ran as the visible auto agent" }),
-    )
-    const messages = await Effect.runPromise(program.pipe(Effect.provide(layer)))
-
-    // The agent DID run (not silently dropped): a reply was persisted.
-    const agentReply = messages.find((m) => m.senderType === "agent")
-    expect(agentReply).toBeDefined()
-    expect(agentReply?.content).toBe("ran as the visible auto agent")
-
-    // And it ran under the VISIBLE config agent's id, not the hidden built-in's.
-    const startedForVisible = captured.some(
-      (c) => c.event.type === "agent_status" && (c.event as any).data.agentID === "config:auto",
-    )
-    const startedForHidden = captured.some(
-      (c) => c.event.type === "agent_status" && (c.event as any).data.agentID === "builtin:codefix",
-    )
-    expect(startedForVisible).toBe(true)
-    expect(startedForHidden).toBe(false)
   })
 })

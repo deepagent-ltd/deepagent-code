@@ -15,8 +15,7 @@ import PROMPT_EXPLORE from "./prompt/explore.txt"
 import PROMPT_RESEARCHER from "./prompt/researcher.txt"
 import PROMPT_REVIEWER from "./prompt/reviewer.txt"
 import PROMPT_GOAL_WORKER from "./prompt/goal-worker.txt"
-import PROMPT_LOOP_MODE from "./prompt/loop-mode.txt"
-import PROMPT_DESIGN_MODE from "./prompt/design-mode.txt"
+import PROMPT_GOAL_MODE from "./prompt/goal-mode.txt"
 import { PLAN_WRITE_OWN_GOAL } from "./subagent-permissions"
 import PROMPT_SUMMARY from "./prompt/summary.txt"
 import PROMPT_TITLE from "./prompt/title.txt"
@@ -169,11 +168,9 @@ export const layer = Layer.effect(
         const user = Permission.fromConfig(cfg.permission ?? {})
 
         const agents: Record<string, Info> = {
-          // AUTO mode (mode redesign; renamed from "build"). The default collaboration mode: the agent
-          // autonomously sets the objective, produces design/plan as needed, and executes it end-to-end.
-          auto: {
-            name: "auto",
-            description: "Autonomous mode. The agent sets the objective, designs and plans as needed, then executes to completion.",
+          build: {
+            name: "build",
+            description: "The default agent. Executes tools based on configured permissions.",
             options: {},
             permission: Permission.merge(
               defaults,
@@ -186,15 +183,10 @@ export const layer = Layer.effect(
             mode: "primary",
             native: true,
           },
-          // PLAN — hidden from the mode switcher in the redesign (auto/loop/design are the visible
-          // collaboration modes). Retained as the read-only "produce a plan, don't edit" permission
-          // set, reused internally by loop mode's plan-generation phase and still selectable via config
-          // / API for callers that want a pure planning turn.
           plan: {
             name: "plan",
             description: "Plan mode. Disallows all edit tools.",
             options: {},
-            hidden: true,
             permission: Permission.merge(
               defaults,
               Permission.fromConfig({
@@ -214,39 +206,27 @@ export const layer = Layer.effect(
             mode: "primary",
             native: true,
           },
-          // LOOP + DESIGN modes (mode redesign) — the two supervised-autonomous collaboration modes,
-          // both powered by the Goal Loop engine. They differ only in WHO authors the goal+plan:
-          //   - loop:   the agent turns the user's request into `.deepagent-code/plans/goal+plan.md`,
-          //             then the loop drives it. (This replaces the old "goal" mode.)
-          //   - design: the USER authored goal+plan.md; the agent reads it and executes faithfully.
-          // Same working permission ruleset as auto. Registered unless the goal-loop kill-switch is off
-          // (default ON) — the goal.start route also fail-closes when the flag is off.
+          // V3.9 §D: GOAL mode — the third primary agent (alongside build/plan). Selecting it is the
+          // entry point for defining a bounded, objectively-decidable goal and producing the plan the
+          // Goal Loop drives autonomously. Same working permission ruleset as build (goal setup reads
+          // and plans; the actual autonomous execution runs in goal-worker child sessions). Only
+          // registered when experimentalGoalLoop is on, so the mode never appears without a backend
+          // that can start a goal (the goal.start route also fail-closes when the flag is off).
           ...(flags.experimentalGoalLoop
             ? {
-                loop: {
-                  name: "loop",
+                goal: {
+                  name: "goal",
                   description:
-                    "Goal loop. Describe what you want; the agent writes goal+plan.md, then a supervised loop drives it to completion (plan→execute→verify per tick). You can edit the plan before it runs.",
+                    "Goal mode (V3.9 §D). Define a bounded, objectively-decidable goal and produce a plan; the supervised Goal Loop then drives it to completion autonomously (plan→execute→verify per tick).",
                   permission: Permission.merge(
                     defaults,
-                    Permission.fromConfig({ question: "allow", plan_enter: "allow" }),
+                    Permission.fromConfig({
+                      question: "allow",
+                      plan_enter: "allow",
+                    }),
                     user,
                   ),
-                  prompt: PROMPT_LOOP_MODE,
-                  options: {},
-                  mode: "primary" as const,
-                  native: true,
-                },
-                design: {
-                  name: "design",
-                  description:
-                    "Design-driven. You author goal+plan.md yourself; the agent reads it and executes your plan faithfully under the supervised loop, without redefining the goal.",
-                  permission: Permission.merge(
-                    defaults,
-                    Permission.fromConfig({ question: "allow", plan_enter: "allow" }),
-                    user,
-                  ),
-                  prompt: PROMPT_DESIGN_MODE,
+                  prompt: PROMPT_GOAL_MODE,
                   options: {},
                   mode: "primary" as const,
                   native: true,
@@ -483,26 +463,17 @@ export const layer = Layer.effect(
           )
         }
 
-        // Back-compat alias: the default primary agent "build" was renamed to "auto" in the mode
-        // redesign. Older sessions, saved configs (incl. `default_agent: "build"`), and API callers may
-        // still reference "build" — normalize it to "auto" unless an agent literally named "build"
-        // exists (a user could still define one). Applied at EVERY resolution path (get / defaultInfo /
-        // list sort) so no lookup misses the alias.
-        const canonicalAgentName = (name: string) =>
-          name === "build" && !agents["build"] && agents["auto"] ? "auto" : name
-
         const get = Effect.fnUntraced(function* (agent: string) {
-          return agents[canonicalAgentName(agent)]
+          return agents[agent]
         })
 
         const list = Effect.fnUntraced(function* () {
           const cfg = yield* config.get()
-          const preferred = cfg.default_agent ? canonicalAgentName(cfg.default_agent) : "auto"
           return pipe(
             agents,
             values(),
             sortBy(
-              [(x) => x.name === preferred, "desc"],
+              [(x) => (cfg.default_agent ? x.name === cfg.default_agent : x.name === "build"), "desc"],
               [(x) => x.name, "asc"],
             ),
           )
@@ -511,8 +482,7 @@ export const layer = Layer.effect(
         const defaultInfo = Effect.fnUntraced(function* () {
           const c = yield* config.get()
           if (c.default_agent) {
-            const resolved = canonicalAgentName(c.default_agent)
-            const agent = agents[resolved]
+            const agent = agents[c.default_agent]
             if (!agent) throw new Error(`default agent "${c.default_agent}" not found`)
             if (agent.mode === "subagent") throw new Error(`default agent "${c.default_agent}" is a subagent`)
             if (agent.hidden === true) throw new Error(`default agent "${c.default_agent}" is hidden`)

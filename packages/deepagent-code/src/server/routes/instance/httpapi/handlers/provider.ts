@@ -3,8 +3,7 @@ import { Auth } from "@/auth"
 import { Config } from "@/config/config"
 import { ModelsDev } from "@deepagent-code/core/models-dev"
 import { Provider } from "@/provider/provider"
-import { discoverWithProtocol, isChatModel, normalizeBaseURL } from "@/provider/model-discovery"
-import { buildCatalogIndex, projectSpec, specMatchFor } from "@/provider/catalog-spec"
+import { discoverProviderModels, isChatModel, normalizeBaseURL } from "@/provider/model-discovery"
 
 import { mapValues } from "remeda"
 import { Effect, Schema } from "effect"
@@ -89,11 +88,9 @@ export const providerHandlers = HttpApiBuilder.group(InstanceHttpApi, "provider"
       })
       if (!apiKey) return yield* Effect.fail(new ProviderModelDiscoverError({ message: "Missing provider API key" }))
 
-      // Honor an explicit kind; otherwise probe openai-compatible then anthropic and report which
-      // protocol answered so the client persists the matching SDK npm.
-      const result = yield* Effect.tryPromise({
+      const discovered = yield* Effect.tryPromise({
         try: () =>
-          discoverWithProtocol({
+          discoverProviderModels({
             providerID,
             baseURL,
             apiKey,
@@ -103,25 +100,18 @@ export const providerHandlers = HttpApiBuilder.group(InstanceHttpApi, "provider"
         catch: (error) =>
           new ProviderModelDiscoverError({ message: error instanceof Error ? error.message : String(error) }),
       })
+      if (discovered.length === 0) {
+        return yield* Effect.fail(new ProviderModelDiscoverError({ message: "No provider models were returned" }))
+      }
 
-      const models = result.models.filter((model) => isChatModel(model.id))
-      const chatModels = models.length ? models : result.models
-
-      // Attach best-effort catalog specs (context/reasoning/…) matched by model id, cross-provider, so
-      // the dialog can preview and pre-fill the editable spec fields. Undefined when there's no match.
-      const catalog = yield* ModelsDev.Service.use((s) => s.get())
-      const catalogIndex = buildCatalogIndex(catalog)
-      const selectable = chatModels.map((model) => {
-        const match = specMatchFor(model.id, model.id, catalogIndex)
-        return match ? { ...model, spec: projectSpec(match) } : model
-      })
-
+      const models = discovered.filter((model) => isChatModel(model.id))
+      const selectable = models.length ? models : discovered
       const requested = ctx.payload.modelID?.trim()
       const selected = requested
         ? (selectable.find((model) => model.id === requested) ?? { id: requested, name: requested })
         : selectable[0]
 
-      return { providerID, baseURL, kind: result.kind, models: selectable, selected }
+      return { providerID, baseURL, models: selectable, selected }
     })
 
     const authorize = Effect.fn("ProviderHttpApi.authorize")(function* (ctx: {

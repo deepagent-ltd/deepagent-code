@@ -74,7 +74,7 @@ describe("cli.error", () => {
     const expected = [
       "Model not found: anthropic/claude-sonet-4",
       "Did you mean: claude-sonnet-4",
-      "Try: `deepagent-code models` to list available models",
+      "Try: `deepagentCode models` to list available models",
       "Or check your config (deepagent-code.json) provider/model names",
     ].join("\n")
 

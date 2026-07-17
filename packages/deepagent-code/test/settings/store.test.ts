@@ -157,33 +157,6 @@ describe("SettingsStore", () => {
     expect(cleared.settings.providers).toBeUndefined()
   })
 
-  test("baseURL override for an official provider round-trips (proxy/gateway routing)", async () => {
-    const result = await SettingsStore.update({
-      providers: { openai: { baseURL: "https://proxy.corp.internal/openai/v1", maxRetries: 5 } },
-    })
-    expect(result.settings.providers).toEqual({
-      openai: { baseURL: "https://proxy.corp.internal/openai/v1", maxRetries: 5 },
-    })
-  })
-
-  test("http(s) baseURL accepted; malformed / non-http endpoints dropped", async () => {
-    const ok = await SettingsStore.update({ providers: { openai: { baseURL: "http://localhost:8080/v1" } } })
-    expect(ok.settings.providers).toEqual({ openai: { baseURL: "http://localhost:8080/v1" } })
-
-    await SettingsStore.update({ providers: { openai: { baseURL: undefined as never } } })
-    SettingsStore.invalidate()
-    // file:// (non-http), a bare non-URL string, and empty string are all rejected so a hand-edited
-    // settings file can never route an official provider somewhere unexpected.
-    const bad = await SettingsStore.update({
-      providers: {
-        openai: { baseURL: "file:///etc/passwd" as never },
-        anthropic: { baseURL: "not a url" as never },
-        google: { baseURL: "" as never },
-      },
-    })
-    expect(bad.settings.providers).toBeUndefined()
-  })
-
   test("ignores unknown/garbage on read", async () => {
     await fs.writeFile(
       settingsFile(),

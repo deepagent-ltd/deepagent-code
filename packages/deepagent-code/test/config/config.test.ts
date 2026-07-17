@@ -312,7 +312,7 @@ it.effect("creates global jsonc config with schema when no global configs exist"
     Effect.gen(function* () {
       yield* Config.use.get().pipe(provideInstanceEffect(dir))
 
-      const content = yield* FSUtil.use.readFileString(path.join(dir, "config.jsonc"))
+      const content = yield* FSUtil.use.readFileString(path.join(dir, "deepagent-code.jsonc"))
       expect(content).toContain('"$schema": "https://deepagent-code.ai/config.json"')
     }).pipe(Effect.provide(testInstanceStoreLayer), Effect.provide(CrossSpawnSpawner.defaultLayer)),
   ),
@@ -328,7 +328,7 @@ it.effect("does not create global config when DEEPAGENT_CODE_CONFIG_DIR is set",
         Effect.gen(function* () {
           yield* Config.use.get().pipe(provideInstanceEffect(dir))
 
-          expect(yield* FSUtil.use.existsSafe(path.join(dir, "config.jsonc"))).toBe(false)
+          expect(yield* FSUtil.use.existsSafe(path.join(dir, "deepagent-code.jsonc"))).toBe(false)
         }).pipe(Effect.provide(testInstanceStoreLayer), Effect.provide(CrossSpawnSpawner.defaultLayer)),
       ),
     )
@@ -675,7 +675,7 @@ it.effect("captures invalid fields in a global config file as a schema error", (
   }),
 )
 
-it.effect("consolidates legacy global config files into config.jsonc and removes them", () =>
+it.effect("consolidates legacy global config files into deepagent-code.jsonc and removes them", () =>
   Effect.gen(function* () {
     const globalDir = yield* tmpdirScoped()
     const projectDir = yield* tmpdirScoped()
@@ -702,7 +702,7 @@ it.effect("consolidates legacy global config files into config.jsonc and removes
           // Legacy files are gone; the single canonical file remains.
           expect(existsSync(path.join(globalDir, "config.json"))).toBe(false)
           expect(existsSync(path.join(globalDir, "deepagent-code.json"))).toBe(false)
-          expect(existsSync(path.join(globalDir, "config.jsonc"))).toBe(true)
+          expect(existsSync(path.join(globalDir, "deepagent-code.jsonc"))).toBe(true)
         }),
       ),
     )
@@ -732,11 +732,9 @@ it.effect("merges legacy keys into an existing .jsonc while preserving its comme
           expect(config.model).toBe("canonical/wins")
           expect(config.plugin).toContain("legacy-plugin")
 
-          // The legacy .jsonc is renamed to the canonical config.jsonc, carrying its comments over.
-          const text = yield* FSUtil.use.readFileString(path.join(globalDir, "config.jsonc"))
+          const text = yield* FSUtil.use.readFileString(path.join(globalDir, "deepagent-code.jsonc"))
           expect(text).toContain("// my providers")
           expect(existsSync(path.join(globalDir, "deepagent-code.json"))).toBe(false)
-          expect(existsSync(path.join(globalDir, "deepagent-code.jsonc"))).toBe(false)
         }),
       ),
     )
