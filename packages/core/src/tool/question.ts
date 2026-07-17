@@ -4,6 +4,8 @@ import { ToolFailure, toolText } from "@deepagent-code/llm"
 import { Effect, Layer, Schema } from "effect"
 import { PermissionV2 } from "../permission"
 import { QuestionV2 } from "../question"
+import { makeLocationNode } from "../effect/app-node"
+import { ToolRegistry } from "./registry"
 import { Tool } from "./tool"
 import { Tools } from "./tools"
 
@@ -84,3 +86,9 @@ export const layer = Layer.effectDiscard(
       .pipe(Effect.orDie)
   }),
 )
+
+export const node = makeLocationNode({
+  name: "tool/question",
+  layer,
+  deps: [ToolRegistry.node, PermissionV2.node, QuestionV2.node],
+})
