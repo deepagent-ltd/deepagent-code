@@ -29,7 +29,7 @@
     },
     "packages/app": {
       "name": "@deepagent-code/app",
-      "version": "1.4.0",
+      "version": "1.4.1",
       "dependencies": {
         "@codemirror/autocomplete": "6",
         "@codemirror/commands": "6",
@@ -117,6 +117,7 @@
         "@opentui/core": "catalog:",
         "@opentui/solid": "catalog:",
         "@parcel/watcher": "2.5.1",
+        "deepagent-code": "workspace:*",
         "effect": "catalog:",
         "solid-js": "catalog:",
       },
@@ -344,7 +345,7 @@
     },
     "packages/desktop": {
       "name": "@deepagent-code/desktop",
-      "version": "1.4.0",
+      "version": "1.4.1",
       "dependencies": {
         "@zip.js/zip.js": "2.7.62",
         "effect": "catalog:",

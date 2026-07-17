@@ -27,11 +27,15 @@ export const Commands = Spec.make(
         ],
       }),
       Spec.make("serve", {
-        description: "Start the v2 API server",
+        description: "Start the deepagent-code server",
         params: {
           hostname: Flag.string("hostname").pipe(Flag.withDefault("127.0.0.1")),
           port: Flag.integer("port").pipe(Flag.optional),
           register: Flag.boolean("register").pipe(Flag.withDefault(false)),
+          mdns: Flag.boolean("mdns").pipe(Flag.withDefault(false)),
+          "mdns-domain": Flag.string("mdns-domain").pipe(Flag.withDefault("deepagent-code.local")),
+          // Comma-separated additional CORS origins, e.g. --cors "http://a:1,http://b:2".
+          cors: Flag.string("cors").pipe(Flag.optional),
         },
       }),
     ],

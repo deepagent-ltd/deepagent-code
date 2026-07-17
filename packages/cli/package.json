@@ -22,6 +22,7 @@
     "@deepagent-code/sdk": "workspace:*",
     "@deepagent-code/server": "workspace:*",
     "@deepagent-code/tui": "workspace:*",
+    "deepagent-code": "workspace:*",
     "@opentui/core": "catalog:",
     "@opentui/solid": "catalog:",
     "@parcel/watcher": "2.5.1",
