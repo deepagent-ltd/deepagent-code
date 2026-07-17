@@ -84,8 +84,6 @@ export const DEFAULT_AUTONOMY_LEVEL: AutonomyLevel = "level_0"
  *   maxConcurrency    — unset ⇒ unlimited concurrent turns
  *   maxTokensPerTurn  — unset ⇒ no per-turn token budget
  *   maxTurnDurationMs — unset ⇒ no per-turn time budget
- *   maxFilesChanged   — unset ⇒ no per-subtask file-scope ceiling (§C1 max_files_changed)
- *   maxTokensPerHour  — unset ⇒ no per-agent-per-hour LLM token budget (§E2 token budget)
  *   writablePaths     — unset ⇒ no extra path restriction (kernel permissions apply)
  *   toolWhitelist     — unset ⇒ all tools allowed (kernel permissions apply)
  */
@@ -93,16 +91,6 @@ export const AgentLimits = Schema.Struct({
   maxConcurrency: Schema.optional(Schema.Int),
   maxTokensPerTurn: Schema.optional(Schema.Int),
   maxTurnDurationMs: Schema.optional(Schema.Int),
-  // §C1 max_files_changed — the maximum number of files a single subtask may write. A subtask whose
-  // declared fileScope exceeds this is BLOCKED (terminal) — the partition won't shrink on retry, so
-  // blocking (not deferring) is the honest outcome. Unset ⇒ no ceiling.
-  maxFilesChanged: Schema.optional(Schema.Int),
-  // §E2 max_tokens_per_hour — a per-agent-per-hour LLM token budget. Enforced where real token usage is
-  // available (the multi-agent runtime debits the runner's reported tokensUsed against a per-agent
-  // fixed-window counter; a subtask that would run with the agent already over budget is deferred).
-  // Unset ⇒ no budget. NOTE: event-driven turns currently report tokensUsed:0 (usage not yet threaded
-  // through the event turn runner), so this budget only bites for runners that DO report usage.
-  maxTokensPerHour: Schema.optional(Schema.Int),
   // mutable arrays: this schema flows into the deep-merged Config.Info agent map (config.ts
   // mergeDeep), whose target type has mutable arrays; a readonly decode would be unassignable.
   // Mutable is a safe superset — assignable to any readonly consumer.

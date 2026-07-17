@@ -158,18 +158,12 @@ describe("SecurityResolvers.actorHasWorkspacePermission — lookup error fails c
     IMRepository.of({
       listGroups: err,
       createGroup: err,
-      createDirectGroup: err,
       getGroup: err,
       addMember: err,
       listMessages: err,
-      listThread: err,
-      searchMessages: err,
       createMessage: err,
       getMessage: err,
       markRead: err,
-      createAttachment: err,
-      getAttachment: err,
-      listAttachments: err,
     }),
   )
 

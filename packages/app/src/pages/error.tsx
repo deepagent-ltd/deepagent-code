@@ -6,6 +6,7 @@ import { Component, createSignal, onMount, Show } from "solid-js"
 import { createStore } from "solid-js/store"
 import { usePlatform } from "@/context/platform"
 import { useLanguage } from "@/context/language"
+import { Icon } from "@deepagent-code/ui/icon"
 import { errorDescriptionKey } from "./error-description"
 
 export type InitError = {
@@ -15,7 +16,6 @@ export type InitError = {
 
 type Translator = ReturnType<typeof useLanguage>["t"]
 const CHAIN_SEPARATOR = "\n" + "─".repeat(40) + "\n"
-const OFFICIAL_FEEDBACK_URL: string = ""
 
 function isIssue(value: unknown): value is { message: string; path: string[] } {
   if (!value || typeof value !== "object") return false
@@ -346,20 +346,17 @@ export const ErrorPage: Component<ErrorPageProps> = (props) => {
           {(message) => <p class="text-xs text-text-danger-base text-center max-w-2xl">{message()}</p>}
         </Show>
         <div class="flex flex-col items-center gap-2">
-          <Show when={OFFICIAL_FEEDBACK_URL}>
-            {(url) => (
-              <div class="flex items-center justify-center gap-1">
-                {language.t("error.page.report.prefix")}
-                <button
-                  type="button"
-                  class="text-text-interactive-base"
-                  onClick={() => platform.openLink(url())}
-                >
-                  {url()}
-                </button>
-              </div>
-            )}
-          </Show>
+          <div class="flex items-center justify-center gap-1">
+            {language.t("error.page.report.prefix")}
+            <button
+              type="button"
+              class="flex items-center text-text-interactive-base gap-1"
+              onClick={() => platform.openLink("https://deepagent-code.ai/desktop-feedback")}
+            >
+              <div>{language.t("error.page.report.discord")}</div>
+              <Icon name="discord" class="text-text-interactive-base" />
+            </button>
+          </div>
           <Show when={platform.version}>
             {(version) => (
               <p class="text-xs text-text-weak">{language.t("error.page.version", { version: version() })}</p>

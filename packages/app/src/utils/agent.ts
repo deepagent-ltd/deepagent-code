@@ -1,12 +1,8 @@
 const defaults: Record<string, string> = {
   ask: "var(--icon-agent-ask-base)",
-  // auto is the renamed default mode (was "build"); keep "build" mapped for older sessions.
-  auto: "var(--icon-agent-build-base)",
   build: "var(--icon-agent-build-base)",
   docs: "var(--icon-agent-docs-base)",
   plan: "var(--icon-agent-plan-base)",
-  loop: "var(--syntax-info)",
-  design: "var(--syntax-property)",
 }
 
 const palette = [

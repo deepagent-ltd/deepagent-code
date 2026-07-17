@@ -748,9 +748,7 @@ export function DialogConnectProvider(props: { provider: string }) {
       const result = await serverSDK.client.provider.oauth
         .callback({
           providerID: props.provider,
-          // This view only renders under an oauth method (see method()?.type gate), so methodIndex
-          // is always set here; default to 0 to satisfy the required-number API type.
-          method: store.methodIndex ?? 0,
+          method: store.methodIndex,
           code,
         })
         .then((value) => (value.error ? { ok: false as const, error: value.error } : { ok: true as const }))
@@ -803,8 +801,7 @@ export function DialogConnectProvider(props: { provider: string }) {
         const result = await serverSDK.client.provider.oauth
           .callback({
             providerID: props.provider,
-            // Reached only via the oauth "auto" method branch, so methodIndex is set; default to 0.
-            method: store.methodIndex ?? 0,
+            method: store.methodIndex,
           })
           .then((value) => (value.error ? { ok: false as const, error: value.error } : { ok: true as const }))
           .catch((error) => ({ ok: false as const, error }))

@@ -624,12 +624,6 @@ export const dict = {
   "settings.general.section.updates": "Обновления",
   "settings.general.section.sounds": "Звуковые эффекты",
   "settings.general.section.feed": "Лента",
-  "settings.general.section.sharing": "Общий доступ",
-  "settings.general.row.shareUrl.title": "URL сервера для общего доступа",
-  "settings.general.row.shareUrl.description": "Базовый URL сервера, используемого при общем доступе к сеансам. Оставьте пустым для значения по умолчанию.",
-  "settings.general.row.shareUrl.placeholder": "https://opncd.ai",
-  "settings.general.row.expertPanelDefault.title": "Включить экспертную панель по умолчанию",
-  "settings.general.row.expertPanelDefault.description": "Начинать новые беседы с включённой экспертной панелью, чтобы её кнопка по запросу проверяла текущий контекст.",
   "settings.general.section.display": "Дисплей",
 
   "settings.general.row.language.title": "Язык",

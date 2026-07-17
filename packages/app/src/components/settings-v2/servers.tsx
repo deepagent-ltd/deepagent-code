@@ -2,7 +2,6 @@ import { ButtonV2 } from "@deepagent-code/ui/v2/button-v2"
 import { Tag } from "@deepagent-code/ui/v2/badge-v2"
 import { Icon as IconV2 } from "@deepagent-code/ui/v2/icon"
 import { IconButtonV2 } from "@deepagent-code/ui/v2/icon-button-v2"
-import { MenuV2 } from "@deepagent-code/ui/v2/menu-v2"
 import { TextInputV2 } from "@deepagent-code/ui/v2/text-input-v2"
 import { useDialog } from "@deepagent-code/ui/context/dialog"
 import fuzzysort from "fuzzysort"
@@ -61,23 +60,12 @@ export const SettingsServersV2: Component = () => {
       >
         <div class="settings-v2-tab-header-row">
           <h2 class="settings-v2-tab-title">{language.t("status.popover.tab.servers")}</h2>
-          {/* Single "Add server" entry: a menu picks either a direct HTTP server or a Server Edition
-              gateway connection — two distinct flows behind one button (no more duplicate buttons). */}
-          <MenuV2 gutter={4} modal={false} placement="bottom-start">
-            <MenuV2.Trigger as={ButtonV2} variant="ghost-muted" icon="plus">
-              {language.t("dialog.server.add.button")}
-            </MenuV2.Trigger>
-            <MenuV2.Portal>
-              <MenuV2.Content>
-                <MenuV2.Group>
-                  <MenuV2.Item onSelect={openAdd}>{language.t("dialog.server.add.menu.http")}</MenuV2.Item>
-                  <MenuV2.Item onSelect={openConnectServer}>
-                    {language.t("dialog.server.connect.button")}
-                  </MenuV2.Item>
-                </MenuV2.Group>
-              </MenuV2.Content>
-            </MenuV2.Portal>
-          </MenuV2>
+          <ButtonV2 variant="ghost-muted" icon="plus" onClick={openAdd}>
+            {language.t("dialog.server.add.button")}
+          </ButtonV2>
+          <ButtonV2 variant="ghost-muted" icon="server" onClick={openConnectServer}>
+            {language.t("dialog.server.connect.button")}
+          </ButtonV2>
           <WslAddServerButton />
         </div>
         <Show when={showSearch()}>

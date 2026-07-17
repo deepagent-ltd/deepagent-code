@@ -10,7 +10,6 @@ import { Plugin } from "@/plugin"
 import { Snapshot } from "@/snapshot"
 import { Session } from "./session"
 import { LLM } from "./llm"
-import { LLMRequestPrep } from "./llm/request"
 import { MessageV2 } from "./message-v2"
 import { isOverflow } from "./overflow"
 import { PartID } from "./schema"
@@ -702,12 +701,6 @@ export const layer = Layer.effect(
               usage: value.usage ?? new Usage({}),
               metadata: value.providerMetadata,
             })
-            // Response-side prompt-cache monitor: compare this step's real cache-read ratio to the
-            // previous step and warn if it collapsed while the prompt didn't shrink (suspected cache
-            // break the static system-hash tripwire can't see). Diagnostic only; never throws.
-            yield* Effect.sync(() =>
-              LLMRequestPrep.recordCacheHitOutcome(ctx.sessionID, usage.tokens),
-            ).pipe(Effect.ignore)
             if (!ctx.assistantMessage.summary) {
               // TODO(v2): Temporary dual-write while migrating session messages to v2 events.
               if (mirrorAssistant) {

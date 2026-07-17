@@ -228,7 +228,7 @@ export const ImportSection: Component = () => {
                 value={customPath()}
                 onInput={(e) => setCustomPath(e.currentTarget.value)}
                 disabled={running()}
-                placeholder="~/.codex_backup"
+                placeholder="/Users/you/.codex_backup"
                 spellcheck={false}
                 autocorrect="off"
                 autocomplete="off"
@@ -296,7 +296,7 @@ export const ImportSection: Component = () => {
               value={cwdFilter()}
               onInput={(e) => setCwdFilter(e.currentTarget.value)}
               disabled={running()}
-              placeholder="~/projects/..."
+              placeholder="/Users/you/projects/..."
               spellcheck={false}
               autocorrect="off"
               autocomplete="off"
@@ -305,22 +305,18 @@ export const ImportSection: Component = () => {
           </div>
         </SettingsRowV2>
 
-        <div class="settings-v2-import-actions" data-action="settings-import-run">
-          <ButtonV2
-            size="large"
-            variant="contrast"
-            class="settings-v2-import-run"
-            disabled={running() || scopes().length === 0}
-            onClick={run}
-          >
-            {running() ? t("settings.import.running", "Importing…") : t("settings.import.run.btn", "Import")}
-          </ButtonV2>
-          <Show when={running()}>
-            <ButtonV2 size="large" variant="ghost" onClick={cancel}>
-              {t("settings.import.cancel", "Cancel")}
+        <SettingsRowV2 title={t("settings.import.run.btn", "Import")} description={t("settings.import.run.hint", "Runs the import with the options above.")}>
+          <div class="flex gap-2" data-action="settings-import-run">
+            <ButtonV2 size="normal" variant="contrast" disabled={running() || scopes().length === 0} onClick={run}>
+              {running() ? t("settings.import.running", "Importing…") : t("settings.import.run.btn", "Import")}
             </ButtonV2>
-          </Show>
-        </div>
+            <Show when={running()}>
+              <ButtonV2 size="normal" variant="ghost" onClick={cancel}>
+                {t("settings.import.cancel", "Cancel")}
+              </ButtonV2>
+            </Show>
+          </div>
+        </SettingsRowV2>
 
         <Show when={summary()}>
           <SettingsRowV2 title={t("settings.import.result", "Result")} description="">

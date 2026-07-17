@@ -77,48 +77,33 @@ const walkCodeFiles = (fsys: FSUtil.Interface, root: string): Effect.Effect<read
     }),
   )
 
-// A file the walk skipped because its on-disk mtime EXACTLY matches the already-indexed node's mtime —
-// no read/hash performed (the §B.3 mtime I/O-avoidance shortcut). Distinct from `undefined`
-// (read failure / oversize), which drops the file from this pass entirely.
-const MTIME_UNCHANGED = Symbol("mtime-unchanged")
-
-// Read + build a CodeFile for a repo-relative path (bounded). Returns:
-//   - a CodeFile           → read + ready to index (content-sha gated downstream),
-//   - MTIME_UNCHANGED      → on-disk mtime exactly equals the indexed node's mtime → skip READ + HASH,
-//   - undefined            → read failure / oversize → drop from this pass.
-// The mtime shortcut is an I/O-avoidance hint only: it requires an EXACT match (git checkout/stash/rebase
-// rewind mtime to a DIFFERENT value ⇒ no match ⇒ re-read + content-sha gate). Content-sha stays the sole
-// skip authority for any file actually read.
+// Read + build a CodeFile for a repo-relative path (bounded). Undefined on any read failure / oversize.
 const buildCodeFile = (
   fsys: FSUtil.Interface,
   root: string,
   rel: string,
-  knownMtimes: ReadonlyMap<string, number>,
-): Effect.Effect<DeepAgentCodeIndexer.CodeFile | typeof MTIME_UNCHANGED | undefined> =>
+): Effect.Effect<DeepAgentCodeIndexer.CodeFile | undefined> =>
   Effect.gen(function* () {
     const abs = path.join(root, rel)
     const info = yield* fsys.stat(abs).pipe(Effect.option)
     // Skip files larger than the cap (avoids hashing/holding a huge blob for a first-version index).
     const size = Option.isSome(info) ? Number(info.value.size) : 0
     if (size > MAX_FILE_BYTES()) return undefined
+    const content = yield* fsys.readFileStringSafe(abs)
+    if (content === undefined) return undefined
     const mtime = Option.isSome(info)
       ? Option.getOrUndefined(Option.map(info.value.mtime, (d) => d.getTime()))
       : undefined
-    // mtime I/O-avoidance: an indexed node with an EXACTLY-equal mtime is unchanged → skip the read+hash.
-    const posixRel = rel.split(path.sep).join("/")
-    if (typeof mtime === "number" && knownMtimes.get(posixRel) === mtime) return MTIME_UNCHANGED
-    const content = yield* fsys.readFileStringSafe(abs)
-    if (content === undefined) return undefined
     return {
       // Normalize to forward slashes so the node's logical identity is stable across platforms and
       // matches the path form docs reference for the `references` edge.
-      path: posixRel,
+      path: rel.split(path.sep).join("/"),
       content,
       ...(typeof mtime === "number" ? { mtimeMs: mtime } : {}),
     } satisfies DeepAgentCodeIndexer.CodeFile
   }).pipe(
     Effect.matchCauseEffect({
-      onFailure: () => Effect.succeed(undefined as DeepAgentCodeIndexer.CodeFile | typeof MTIME_UNCHANGED | undefined),
+      onFailure: () => Effect.succeed(undefined),
       onSuccess: (file) => Effect.succeed(file),
     }),
   )
@@ -379,22 +364,10 @@ export const indexWorkspace = (input: {
     const files = yield* walkCodeFiles(input.fsys, input.workspacePath)
     if (files.length === 0) return EMPTY_RESULT
 
-    // T4.1 — the recorded mtime of every already-indexed file, so buildCodeFile can skip the READ + HASH
-    // of a file whose on-disk mtime is byte-identical. On the FIRST pass this map is empty (every file is
-    // read); on later passes only genuinely-touched files are read. Best-effort: an unreadable store
-    // yields an empty map ⇒ full re-read (correct, just not optimized).
-    const knownMtimes = yield* Effect.sync(() =>
-      DeepAgentCodeIndexer.indexedMtimes(AgentGateway.DeepAgentKnowledgeSource.projectStoreFor(input.workspacePath)),
-    ).pipe(Effect.catchCause(() => Effect.succeed(new Map<string, number>() as ReadonlyMap<string, number>)))
-
-    const built = yield* Effect.forEach(
-      files,
-      (rel) => buildCodeFile(input.fsys, input.workspacePath, rel, knownMtimes),
-      { concurrency: 16 },
-    )
-    // MTIME_UNCHANGED files were skipped without reading — their nodes already exist and are current, so
-    // they simply don't participate in this pass (no re-register, no version bump).
-    const codeFiles = built.filter((f): f is DeepAgentCodeIndexer.CodeFile => f !== undefined && f !== MTIME_UNCHANGED)
+    const built = yield* Effect.forEach(files, (rel) => buildCodeFile(input.fsys, input.workspacePath, rel), {
+      concurrency: 16,
+    })
+    const codeFiles = built.filter((f): f is DeepAgentCodeIndexer.CodeFile => f !== undefined)
     if (codeFiles.length === 0) return EMPTY_RESULT
 
     // File-level pass: write to the SAME cached project store instance GraphQuery unions via

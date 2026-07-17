@@ -39,9 +39,7 @@ export const AgentStatusEvent = Schema.Struct({
   data: Schema.Struct({
     messageID: Schema.String,
     agentID: Schema.String,
-    // V4.1 §S1.2: "steered" = the trigger message was absorbed as a mid-turn steer into an already-
-    // running turn (the reply streams through that turn), so there is no separate agent reply. Additive.
-    status: Schema.Literals(["started", "running", "success", "failed", "timeout", "steered"]),
+    status: Schema.Literals(["started", "running", "success", "failed", "timeout"]),
     error: Schema.optional(
       Schema.Struct({
         code: Schema.String,

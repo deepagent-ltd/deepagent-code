@@ -43,8 +43,6 @@ export const dict = {
   "ui.sessionTurn.retry.attempt": "{{attempt}}번째",
   "ui.sessionTurn.retry.attemptLine": "{{line}} - {{attempt}}번째",
   "ui.sessionTurn.retry.geminiHot": "gemini가 현재 과부하 상태입니다",
-  "ui.sessionTurn.retry.noChannel":
-    "the gateway lists this model but has no available channel for it — pick another model or fix the gateway's group config",
   "ui.sessionTurn.error.freeUsageExceeded": "무료 사용량 초과",
   "ui.sessionTurn.error.addCredits": "크레딧 추가",
 

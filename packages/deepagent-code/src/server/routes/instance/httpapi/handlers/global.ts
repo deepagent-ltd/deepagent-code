@@ -100,14 +100,6 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
           // env-backed RuntimeFlags the routes fail-close on, so UI availability == route availability.
           expertPanel: flags.experimentalExpertPanel,
           goalLoop: flags.experimentalGoalLoop,
-          wiki: flags.experimentalWiki,
-          // V4.0 §H3 — advertise the event-driven Agent-OS flags (all default OFF) so UI availability
-          // == route availability. The routes fail-close on the same flags.
-          v4EventDrivenIm: flags.v4EventDrivenIm,
-          v4AgentPushEnabled: flags.v4AgentPushEnabled,
-          v4MultiAgentRuntime: flags.v4MultiAgentRuntime,
-          v4ThreadEnabled: flags.v4ThreadEnabled,
-          v4FileUploadEnabled: flags.v4FileUploadEnabled,
         },
       }
     })

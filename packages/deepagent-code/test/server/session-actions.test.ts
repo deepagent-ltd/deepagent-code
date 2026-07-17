@@ -58,14 +58,7 @@ describe("session action routes", () => {
         expect(forked.status).toBe(200)
 
         const fork = (yield* forked.json) as SessionNs.Info
-        // Fork carries the parent's metadata verbatim PLUS an injected `forkedFrom`
-        // lineage marker (parentSessionID/parentTitle + a volatile forkedAt timestamp).
-        const { forkedFrom, ...forkedMetadata } = (fork.metadata ?? {}) as Record<string, unknown> & {
-          forkedFrom?: { parentSessionID?: string; parentTitle?: string; forkedAt?: number }
-        }
-        expect(forkedMetadata).toEqual((next.metadata ?? {}) as Record<string, unknown>)
-        expect(forkedFrom).toMatchObject({ parentSessionID: session.id })
-        expect(typeof forkedFrom?.forkedAt).toBe("number")
+        expect(fork.metadata).toEqual(next.metadata)
 
         const reset = yield* requestInDirectory(`/session/${session.id}`, test.directory, {
           method: "PATCH",

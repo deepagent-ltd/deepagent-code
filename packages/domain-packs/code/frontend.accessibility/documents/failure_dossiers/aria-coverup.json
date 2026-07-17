@@ -2,7 +2,7 @@
   "ref_id": "failure:frontend_accessibility:aria-coverup",
   "type": "failure_dossier",
   "description": "Adding ARIA to non-interactive elements without behavior creates false accessibility.",
-  "body": "Use native controls or implement full behavior.\n\nDerived from reviewed skill survey outputs, including canonical rules, coverage reports, and trusted skill notes. Paraphrased into domain-pack seed form.\n\nDiagnostic use only: keep this out of index.json and use it only as a blocked/do-not-use signal.",
+  "body": "Use native controls or implement full behavior.\n\nDerived from local skill survey outputs under /Users/xiuranli/code/agent/skill, especially reviewed canonical rules, coverage reports, and trusted local skill notes. Paraphrased into domain-pack seed form.\n\nDiagnostic use only: keep this out of index.json and use it only as a blocked/do-not-use signal.",
   "domain": "accessibility",
   "scope_hint": "code.frontend.accessibility:failure_dossiers",
   "evidence_strength": "medium",

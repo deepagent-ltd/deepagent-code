@@ -728,12 +728,6 @@ export const dict = {
   "settings.general.section.updates": "Оновлення",
   "settings.general.section.sounds": "Звукові ефекти",
   "settings.general.section.feed": "Стрічка",
-  "settings.general.section.sharing": "Спільний доступ",
-  "settings.general.row.shareUrl.title": "URL сервера спільного доступу",
-  "settings.general.row.shareUrl.description": "Базовий URL сервера, що використовується під час надання спільного доступу до сеансів. Залиште порожнім для типового.",
-  "settings.general.row.shareUrl.placeholder": "https://opncd.ai",
-  "settings.general.row.expertPanelDefault.title": "Типово вмикати експертну панель",
-  "settings.general.row.expertPanelDefault.description": "Починати нові розмови з увімкненою експертною панеллю, щоб її кнопка за потреби переглядала поточний контекст.",
   "settings.general.section.display": "Дисплей",
 
   "settings.general.row.language.title": "Мова",

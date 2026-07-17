@@ -29,7 +29,6 @@ const preparedDrafts: Array<{
 }> = []
 const sentPromptAsync: Array<{ directory: string; metadata?: unknown; text?: string }> = []
 const promptPrepareEvents: string[] = []
-const promptPrepareProgress: string[] = []
 
 let params: { id?: string } = {}
 let selected = "/repo/worktree-a"
@@ -73,10 +72,8 @@ const clientFor = (directory: string) => {
     },
     client: {
       request: async (payload: {
-        url?: string
         path?: { sessionID?: string }
         body?: { mode?: string; output_language?: string; parts?: Array<{ type: string; text?: string }> }
-        signal?: AbortSignal
       }) => {
         const text = payload.body?.parts?.find((part) => part.type === "text")?.text
         preparedDrafts.push({
@@ -94,43 +91,16 @@ const clientFor = (directory: string) => {
             },
           })
         }
-        if (text === "prepare waits") {
-          return {
-            data: new ReadableStream<Uint8Array>({
-              start(controller) {
-                payload.signal?.addEventListener(
-                  "abort",
-                  () => controller.error(new DOMException("Aborted", "AbortError")),
-                  { once: true },
-                )
-              },
-            }),
-          }
-        }
-        const result = {
-          prompt_draft_id: "prompt_draft:test:1",
-          context_plan_id: "context_plan:test:1",
-          state: "draft_ready",
-          mode: payload.body?.mode ?? "intelligence",
-          route: text === "hello" ? "general" : "code",
-          goal: "Prepared goal",
-          preview: "# Prepared prompt",
-        }
         return {
-          data: new ReadableStream<Uint8Array>({
-            start(controller) {
-              controller.enqueue(
-                new TextEncoder().encode(
-                  [
-                    `data: ${JSON.stringify({ type: "progress", preview: "Prepared" })}\n\n`,
-                    `data: ${JSON.stringify({ type: "progress", preview: "Prepared goal" })}\n\n`,
-                    `data: ${JSON.stringify({ type: "result", result })}\n\n`,
-                  ].join(""),
-                ),
-              )
-              controller.close()
-            },
-          }),
+          data: {
+            prompt_draft_id: "prompt_draft:test:1",
+            context_plan_id: "context_plan:test:1",
+            state: "draft_ready",
+            mode: payload.body?.mode ?? "intelligence",
+            route: text === "hello" ? "general" : "code",
+            goal: "Prepared goal",
+            preview: "# Prepared prompt",
+          },
         }
       },
     },
@@ -313,7 +283,6 @@ beforeEach(() => {
   preparedDrafts.length = 0
   sentPromptAsync.length = 0
   promptPrepareEvents.length = 0
-  promptPrepareProgress.length = 0
   promptValue[0] = { type: "text", content: "ls", start: 0, end: 2 }
   selected = "/repo/worktree-a"
   variant = undefined
@@ -470,7 +439,6 @@ describe("prompt submit worktree selection", () => {
       setMode: () => undefined,
       setPopover: () => undefined,
       onPromptPrepareStart: () => promptPrepareEvents.push("start"),
-      onPromptPrepareProgress: (preview) => promptPrepareProgress.push(preview),
       onPromptPrepareEnd: () => promptPrepareEvents.push("end"),
       confirmPromptDraft: async () => ({ editedGoal: "Edited prepared goal" }),
       onSubmit: () => undefined,
@@ -482,7 +450,6 @@ describe("prompt submit worktree selection", () => {
     await flushAsyncSubmit()
 
     expect(promptPrepareEvents).toEqual(["start", "end"])
-    expect(promptPrepareProgress).toEqual(["Prepared", "Prepared goal"])
     expect(preparedDrafts).toEqual([
       { directory: "/repo/main", sessionID: "session-1", mode: "intelligence", outputLanguage: "english", text: "ls" },
     ])
@@ -565,13 +532,7 @@ describe("prompt submit worktree selection", () => {
 
     expect(confirms).toEqual([])
     expect(preparedDrafts).toEqual([
-      {
-        directory: "/repo/main",
-        sessionID: "session-1",
-        mode: "intelligence",
-        outputLanguage: "english",
-        text: "hello",
-      },
+      { directory: "/repo/main", sessionID: "session-1", mode: "intelligence", outputLanguage: "english", text: "hello" },
     ])
     expect(sentPromptAsync[0]?.text).toBe("hello")
     expect(sentPromptAsync[0]?.metadata).toEqual({
@@ -621,40 +582,6 @@ describe("prompt submit worktree selection", () => {
         text: "prepare fails",
       },
     ])
-    expect(sentPromptAsync).toEqual([])
-    promptValue[0] = { type: "text", content: "ls", start: 0, end: 2 }
-  })
-
-  test("stops intelligence prompt preparation without submitting", async () => {
-    params = { id: "session-1" }
-    promptMode = "intelligence"
-    promptValue[0] = { type: "text", content: "prepare waits", start: 0, end: 13 }
-
-    const submit = createPromptSubmit({
-      info: () => ({ id: "session-1" }),
-      imageAttachments: () => [],
-      commentCount: () => 0,
-      autoAccept: () => false,
-      mode: () => "normal",
-      working: () => false,
-      editor: () => undefined,
-      queueScroll: () => undefined,
-      promptLength: (value) => value.reduce((sum, part) => sum + ("content" in part ? part.content.length : 0), 0),
-      addToHistory: () => undefined,
-      resetHistoryNavigation: () => undefined,
-      setMode: () => undefined,
-      setPopover: () => undefined,
-      onPromptPrepareStart: () => promptPrepareEvents.push("start"),
-      onPromptPrepareEnd: () => promptPrepareEvents.push("end"),
-      onSubmit: () => undefined,
-    })
-
-    await submit.handleSubmit({ preventDefault: () => undefined } as unknown as Event)
-    await flushAsyncSubmit()
-    await submit.abort()
-    await flushAsyncSubmit()
-
-    expect(promptPrepareEvents).toEqual(["start", "end"])
     expect(sentPromptAsync).toEqual([])
     promptValue[0] = { type: "text", content: "ls", start: 0, end: 2 }
   })

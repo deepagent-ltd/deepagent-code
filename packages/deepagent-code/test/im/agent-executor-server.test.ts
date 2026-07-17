@@ -49,13 +49,8 @@ function makeLayer(opts: {
       }),
   } as unknown as Session.Interface
 
-  // V4.1 §S1.2: the executor drives the turn through `promptOrSteer`, which returns a discriminated
-  // outcome. For an idle session that's `{ kind: "turn", message }` — wrap the scenario's WithParts so
-  // the executor's text-extraction / error paths exercise exactly as before.
   const promptMock = {
     prompt: opts.prompt,
-    promptOrSteer: (input: unknown) =>
-      opts.prompt(input).pipe(Effect.map((message) => ({ kind: "turn" as const, message }))),
   } as unknown as SessionPrompt.Interface
 
   return ServerAgentExecutorLive.pipe(

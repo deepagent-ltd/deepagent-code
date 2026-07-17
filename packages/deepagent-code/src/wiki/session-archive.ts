@@ -3,17 +3,10 @@ import { existsSync, readdirSync, statSync } from "node:fs"
 import path from "node:path"
 import { Global } from "@deepagent-code/core/global"
 import { AgentGateway } from "@deepagent-code/core/agent-gateway"
-import { DocumentStore, type Doc } from "@deepagent-code/core/deepagent/document-store"
+import { DocumentStore } from "@deepagent-code/core/deepagent/document-store"
 import * as KnowledgeSource from "@deepagent-code/core/deepagent/knowledge-source"
 import { DeepAgentCodeHome } from "@deepagent-code/core/deepagent/workspace"
-import {
-  WikiGraph,
-  WikiService,
-  buildExecutionArchive,
-  type ExecutionArchive,
-  type WikiEditGate,
-} from "./wiki-service"
-import { WikiSearchIndex } from "./search-index"
+import { WikiGraph, WikiService, buildExecutionArchive, type ExecutionArchive } from "./wiki-service"
 
 /**
  * V3.9 §B — production wiring for the Wiki projection.
@@ -91,80 +84,9 @@ export const openWikiGraph = (input: { workspacePath?: string; sessionID?: strin
   return new WikiGraph(stores)
 }
 
-/**
- * Open a WikiService over the production graph union. `gate` is the governance evidence-gate for
- * editKnowledge — omitted, the WikiService falls back to its DEFAULT_WIKI_EDIT_GATE (the minimum
- * floor). Production passes `buildWikiEditGate(memoryDir)` so a human edit goes through the SAME
- * validation gate (§B.3) as knowledge promotion (dedupe vs RejectedBuffer + replay/regression).
- */
-export const openWikiService = (input: {
-  workspacePath?: string
-  sessionID?: string
-  gate?: WikiEditGate
-}): WikiService => (input.gate ? new WikiService(openWikiGraph(input), input.gate) : new WikiService(openWikiGraph(input)))
-
-// A knowledge doc's type maps to the learning-candidate type space (which has no bare "knowledge" —
-// it is memory/strategy/methodology/anti_pattern). knowledge/memory → "memory"; strategy/methodology
-// pass through. This keeps the fingerprint (type+summary) meaningful for the RejectedBuffer.
-const candidateTypeForDoc = (docType: Doc["type"]): "memory" | "strategy" | "methodology" | "anti_pattern" => {
-  if (docType === "strategy") return "strategy"
-  if (docType === "methodology") return "methodology"
-  return "memory"
-}
-
-/**
- * §B.3 — the REAL governance evidence-gate for a human Wiki knowledge edit. Bridges the sync,
- * Doc-based `WikiEditGate` shape onto the core promotion `validate` (the same gate knowledge
- * promotion uses): it maps the edited doc + body into a LearningCandidate, then runs
- * `DeepAgentPromotion.validate` against the workspace RejectedBuffer with the evidence-refs-nonempty
- * replay runner (identical to the `promote` handler). An edit whose page carries no supporting
- * evidence links, or whose (type,summary) fingerprint was previously rejected, fails the gate.
- */
-export const buildWikiEditGate = (memoryDir: string): WikiEditGate => {
-  const buffer = new AgentGateway.DeepAgentPromotion.RejectedBuffer(memoryDir)
-  const replay: AgentGateway.DeepAgentPromotion.ReplayRunner = (candidate) => ({
-    pass: candidate.evidence_refs.length > 0,
-    metricDelta: 0,
-    evidenceRef: candidate.evidence_refs[0],
-  })
-  return ({ current, body, editor }) => {
-    if (!editor || editor.id.trim().length === 0)
-      return { pass: false, reason: "missing editor identity: a governed edit must record who made it" }
-    // Evidence = the edited page's outbound links (references/produces_evidence/etc.) — the supporting
-    // refs the validate gate requires. A knowledge page with no links has no evidence to stand on.
-    const evidenceRefs = current.links.map((l) => l.to)
-    const candidate = {
-      candidate_id: current.id,
-      type: candidateTypeForDoc(current.type),
-      status: "staged" as const,
-      source_run_id: current.scope,
-      source_round: current.version,
-      summary: body.trim(),
-      evidence_refs: evidenceRefs,
-      confidence: current.confidence?.support_count ?? 0,
-    }
-    const verdict = AgentGateway.DeepAgentPromotion.validate(candidate, buffer, replay)
-    return { pass: verdict.pass, reason: verdict.reason }
-  }
-}
-
-// The dedicated on-disk sqlite path for a workspace's wiki search index (§B.4 — a rebuildable
-// projection in its OWN file, never the main app DB). Keyed by projectId so workspaces don't collide.
-const wikiSearchDbPath = (workspacePath?: string): string => {
-  const projectId = workspacePath
-    ? AgentGateway.DeepAgentDurableKnowledgeStore.projectIdForWorkspace(workspacePath)
-    : "global"
-  return path.join(Global.Path.agent.data, "state", "wiki", projectId, "search.sqlite")
-}
-
-/**
- * §B.4 — production factory for the WikiSearchIndex. Opens the dedicated sqlite FTS index over the
- * workspace's wiki graph union. The index is a rebuildable projection: nothing auto-refreshes it, so
- * the caller must `yield* rebuild()` before `search()` and `close()` when done (the wiki search
- * handler does exactly this per request). Returns a fresh index each call — cheap (WAL sqlite open).
- */
-export const openWikiSearchIndex = (input: { workspacePath?: string; sessionID?: string }): WikiSearchIndex =>
-  new WikiSearchIndex(wikiSearchDbPath(input.workspacePath), openWikiGraph(input))
+/** Open a WikiService over the production graph union. */
+export const openWikiService = (input: { workspacePath?: string; sessionID?: string }): WikiService =>
+  new WikiService(openWikiGraph(input))
 
 /**
  * §B.6 session-completion trigger. Aggregates the session's trajectory into an ExecutionArchive.

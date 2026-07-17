@@ -15,9 +15,8 @@ import { ProviderTest } from "../fake/provider"
 import { SkillTest } from "../fake/skill"
 import { testEffect } from "../lib/effect"
 
-// Mode redesign: the goal-loop-powered collaboration modes are `loop` and `design`. They are
-// registered unless the goal-loop kill-switch is off (default ON). `auto` (renamed from build) and the
-// hidden `plan` permission-set remain unconditionally.
+// V3.9 §D: the `goal` primary agent is registered ONLY when experimentalGoalLoop is on, so goal mode
+// never appears in the mode switcher without a backend that can start a goal.
 
 const provider = ProviderTest.fake()
 const configLayer = Config.layer.pipe(
@@ -46,26 +45,22 @@ const agentLayerWithFlags = (overrides: Parameters<typeof RuntimeFlags.layer>[0]
 }
 
 const whenOn = testEffect(agentLayerWithFlags({ experimentalGoalLoop: true, disableDefaultPlugins: true }))
-whenOn.instance("loop + design primary agents ARE registered when the goal-loop flag is on", () =>
+whenOn.instance("goal primary agent IS registered when experimentalGoalLoop is on", () =>
   Effect.gen(function* () {
     const agents = yield* Agent.use.list()
-    const loop = agents.find((a) => a.name === "loop")
-    const design = agents.find((a) => a.name === "design")
-    expect(loop).toBeDefined()
-    expect(loop?.mode).toBe("primary")
-    expect(design).toBeDefined()
-    expect(design?.mode).toBe("primary")
+    const goal = agents.find((a) => a.name === "goal")
+    expect(goal).toBeDefined()
+    expect(goal?.mode).toBe("primary")
   }),
 )
 
 const whenOff = testEffect(agentLayerWithFlags({ experimentalGoalLoop: false, disableDefaultPlugins: true }))
-whenOff.instance("loop + design are NOT registered when the goal-loop kill-switch is off", () =>
+whenOff.instance("goal primary agent is NOT registered when experimentalGoalLoop is off", () =>
   Effect.gen(function* () {
     const agents = yield* Agent.use.list()
-    expect(agents.find((a) => a.name === "loop")).toBeUndefined()
-    expect(agents.find((a) => a.name === "design")).toBeUndefined()
-    // auto (renamed from build) + the hidden plan set remain unconditionally.
-    expect(agents.find((a) => a.name === "auto")).toBeDefined()
+    expect(agents.find((a) => a.name === "goal")).toBeUndefined()
+    // build + plan remain unconditionally.
+    expect(agents.find((a) => a.name === "build")).toBeDefined()
     expect(agents.find((a) => a.name === "plan")).toBeDefined()
   }),
 )
