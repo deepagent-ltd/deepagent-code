@@ -404,3 +404,83 @@ describe("DeepAgent request prep", () => {
     })
   })
 })
+
+// S41-2: goal-loop scorer false positives. extractValidationResults must only treat outputs of the
+// DECLARED validation commands as validation evidence (diagnostic bash calls like grep/tail of logs
+// must not poison the score), and per declared command the LATEST run must win so a fixed failure
+// does not stay "failed" forever.
+describe("extractValidationResults (S41-2)", () => {
+  const validationCommands = ["bun run typecheck", "bun run lint", "bun run test"]
+
+  const bashCall = (id: string, command: string) =>
+    ({
+      role: "assistant",
+      content: [{ type: "tool-call", toolCallId: id, toolName: "bash", input: { command } }],
+    }) as any
+
+  const bashResult = (id: string, output: string) =>
+    ({
+      role: "tool",
+      content: [
+        { type: "tool-result", toolCallId: id, toolName: "bash", output: { type: "text", value: output } },
+      ],
+    }) as any
+
+  test("ignores diagnostic bash outputs that merely mention errors", () => {
+    const results = LLMRequestPrep.extractValidationResults(
+      [
+        bashCall("c1", "grep '(fail)' /tmp/turbo-test.log | tail -5"),
+        bashResult("c1", "ERROR run failed: command exited (1)\nerror: script exited with code 1"),
+        bashCall("c2", "bun run typecheck >/dev/null 2>&1 && echo done"),
+        bashResult("c2", "typecheck validation exit code: 0"),
+      ],
+      validationCommands,
+    )
+    expect(results).toHaveLength(1)
+    expect(results[0]).toMatchObject({ command: "bun run typecheck", passed: true, exit_code: 0 })
+  })
+
+  test("latest run per declared command wins over an older failure", () => {
+    const results = LLMRequestPrep.extractValidationResults(
+      [
+        bashCall("c1", "bun run test"),
+        bashResult("c1", "error: script \"test\" exited with code 1"),
+        bashCall("c2", "bun run test >/dev/null 2>&1 && echo done"),
+        bashResult("c2", "test validation exit code: 0"),
+      ],
+      validationCommands,
+    )
+    expect(results).toHaveLength(1)
+    expect(results[0]).toMatchObject({ command: "bun run test", passed: true, exit_code: 0 })
+  })
+
+  test("keeps a genuinely failing declared command as failed with its real command name", () => {
+    const results = LLMRequestPrep.extractValidationResults(
+      [bashCall("c1", "bun run test"), bashResult("c1", "20 passed, 1 failed")],
+      validationCommands,
+    )
+    expect(results).toHaveLength(1)
+    expect(results[0]).toMatchObject({ command: "bun run test", passed: false, exit_code: 1 })
+  })
+
+  test("one combined invocation covers every declared command it contains", () => {
+    const results = LLMRequestPrep.extractValidationResults(
+      [
+        bashCall("c1", "bun run typecheck && bun run lint && bun run test"),
+        bashResult("c1", "all three declared validation commands exit code: 0"),
+      ],
+      validationCommands,
+    )
+    expect(results).toHaveLength(3)
+    expect(results.map((item) => item.command).sort()).toEqual([...validationCommands].sort())
+    expect(results.every((item) => item.passed)).toBe(true)
+  })
+
+  test("returns nothing when no validation commands are declared", () => {
+    const results = LLMRequestPrep.extractValidationResults(
+      [bashCall("c1", "bun run test"), bashResult("c1", "FAILED")],
+      [],
+    )
+    expect(results).toHaveLength(0)
+  })
+})

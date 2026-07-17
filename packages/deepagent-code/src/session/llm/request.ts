@@ -472,11 +472,11 @@ const buildDeepAgentPromptContext = Effect.fn("LLMRequestPrep.buildDeepAgentProm
     platform: process.platform,
   }
 
-  const userRequest = extractLatestUserContent(input.messages)
-  const previousValidationResults = extractValidationResults(input.messages)
-
   const workspaceInfo = yield* Effect.promise(() => DeepAgentWorkspace.detect(envCtx.cwd))
   const validationCommands = workspaceInfo.validationCommands
+
+  const userRequest = extractLatestUserContent(input.messages)
+  const previousValidationResults = extractValidationResults(input.messages, validationCommands)
 
   const tools: AgentGateway.ToolContext = { availableTools: toolRefs, mcpServers, totalToolCount: toolRefs.length }
 
@@ -573,8 +573,31 @@ const deepAgentRoundControl = (metadata: unknown): "continue" | undefined => {
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value)
 
-function extractValidationResults(messages: ModelMessage[]): AgentGateway.ValidationResult[] {
-  const results: AgentGateway.ValidationResult[] = []
+// S41-2: only outputs produced by the DECLARED validation commands count as validation evidence.
+// The old heuristic scanned EVERY bash/shell/exec tool result for the words "error"/"failed" and
+// recorded each match as a failed validation — so diagnostic calls (grep/tail of test logs, ad-hoc
+// package test runs) permanently poisoned the goal-loop score even when the declared commands were
+// green. Map toolCallId → command from assistant tool-call parts and keep only declared commands.
+export function extractValidationResults(
+  messages: ModelMessage[],
+  validationCommands: readonly string[] = [],
+): AgentGateway.ValidationResult[] {
+  if (validationCommands.length === 0) return []
+  const toolCommands = new Map<string, string>()
+  for (const msg of messages) {
+    if (msg.role !== "assistant" || !Array.isArray(msg.content)) continue
+    for (const part of msg.content) {
+      if (!isRecord(part) || part.type !== "tool-call") continue
+      const toolCallId = part.toolCallId
+      const input = part.input
+      if (typeof toolCallId !== "string" || !isRecord(input)) continue
+      const command = input.command
+      if (typeof command === "string") toolCommands.set(toolCallId, command)
+    }
+  }
+  // Latest per declared command wins: the loop re-scans the whole transcript each round, so without
+  // dedupe a fixed failure would stay "failed" forever even after the same command passes.
+  const latest = new Map<string, AgentGateway.ValidationResult>()
   for (const msg of messages) {
     if (msg.role !== "tool") continue
     if (!Array.isArray(msg.content)) continue
@@ -583,6 +606,10 @@ function extractValidationResults(messages: ModelMessage[]): AgentGateway.Valida
       if (!("toolName" in part)) continue
       const toolName = (part as { toolName: string }).toolName
       if (!toolName.includes("shell") && !toolName.includes("bash") && !toolName.includes("exec")) continue
+      const toolCallId = (part as { toolCallId?: unknown }).toolCallId
+      const command = typeof toolCallId === "string" ? toolCommands.get(toolCallId) : undefined
+      const declared = command ? validationCommands.filter((candidate) => command.includes(candidate)) : []
+      if (declared.length === 0) continue
       const output =
         "output" in part &&
         part.output &&
@@ -603,10 +630,18 @@ function extractValidationResults(messages: ModelMessage[]): AgentGateway.Valida
       const textPassed = /\bPASS(ED)?\b/i.test(output) && !/\bFAIL(ED)?\b/i.test(output)
       const exit_code = exitMatch ? Number(exitMatch[1]) : textPassed ? 0 : 1
       const passed = exit_code === 0
-      results.push({ command: toolName, passed, exit_code, output: output.slice(0, 2000), duration_ms: 0 })
+      for (const candidate of declared) {
+        latest.set(candidate, {
+          command: candidate,
+          passed,
+          exit_code,
+          output: output.slice(0, 2000),
+          duration_ms: 0,
+        })
+      }
     }
   }
-  return results
+  return [...latest.values()]
 }
 
 export * as LLMRequestPrep from "./request"
