@@ -44,7 +44,7 @@ import { GoalDriver, type GoalDriverPorts } from "./goal-driver"
 
 // The DocumentStore holding a session's goal docs. Co-located with the run graph under the agent data
 // root, keyed by session id, so a restart re-opens the same store (the loop state is restart-recoverable).
-const goalStoreRoot = (sessionID: string): string =>
+export const goalStoreRoot = (sessionID: string): string =>
   path.join(Global.Path.agent.data, "state", "goal", sessionID, "graph")
 
 // Per-session control state the driver ports read. Held in a SynchronizedRef so pause/stop from a route

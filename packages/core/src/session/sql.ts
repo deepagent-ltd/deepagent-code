@@ -172,6 +172,27 @@ export const SessionInputTable = sqliteTable(
   ],
 )
 
+export const SessionSteerTable = sqliteTable(
+  "session_steer",
+  {
+    seq: integer().primaryKey({ autoIncrement: true }),
+    id: text().$type<SessionMessage.ID>().notNull().unique(),
+    session_id: text()
+      .$type<SessionSchema.ID>()
+      .notNull()
+      .references(() => SessionTable.id, { onDelete: "cascade" }),
+    prompt: text({ mode: "json" }).notNull().$type<Prompt>(),
+    delivery: text().$type<SessionInput.Delivery>().notNull(),
+    consumed_seq: integer(),
+    time_created: integer()
+      .notNull()
+      .$default(() => Date.now()),
+  },
+  (table) => [
+    index("session_steer_session_pending_seq_idx").on(table.session_id, table.consumed_seq, table.seq),
+  ],
+)
+
 export const SessionContextEpochTable = sqliteTable("session_context_epoch", {
   session_id: text()
     .$type<SessionSchema.ID>()

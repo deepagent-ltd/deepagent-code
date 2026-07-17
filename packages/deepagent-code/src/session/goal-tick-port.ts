@@ -2,13 +2,7 @@ export * as GoalTickPort from "./goal-tick-port"
 
 import { Effect, Option } from "effect"
 import { DocumentStore } from "@deepagent-code/core/deepagent/document-store"
-import {
-  makeGoalLoop,
-  readGoalTickCursor,
-  readPendingPlanEdit,
-  persistPendingPlanEdit,
-} from "@deepagent-code/core/deepagent/goal-loop"
-import type { PlanInput } from "@deepagent-code/core/deepagent/plan-controller"
+import { makeGoalLoop, readGoalTickCursor } from "@deepagent-code/core/deepagent/goal-loop"
 import { DeepAgentEventBus } from "@deepagent-code/core/deepagent/deepagent-event-bus"
 import { ApprovalQueue } from "@deepagent-code/core/deepagent/approval-queue"
 import { WorkspaceV2 } from "@deepagent-code/core/workspace"
@@ -221,7 +215,6 @@ export const makeGoalTickPort =
       // Ports from DURABLE sources (no in-memory control map on the cold fiber):
       //   • shouldPause / shouldStop — the session-state active-goal pointer phase (pause/stop persist it).
       //   • goal-steer — the SessionSteer buffer on the goal session id + goal_steer delivery channel.
-      //   • pendingPlanEdit — the durable pending-edit doc (persistPendingPlanEdit / readPendingPlanEdit).
       const goalPhase = () => AgentGateway.DeepAgentSessionState.getActiveGoal(sessionID)?.phase
       const ports: GoalDriverPorts = {
         onStatus: (status) => statusPublisher.publishStatus(sessionID, status),
@@ -236,11 +229,6 @@ export const makeGoalTickPort =
           deps.steerBuffer
             .markConsumed(SessionID.make(sessionID), [...ids], GoalDriver.GOAL_STEER_DELIVERY)
             .pipe(Effect.catchCause(() => Effect.void)),
-        pendingPlanEdit: () =>
-          Effect.sync(() => readPendingPlanEdit(store, sessionID, request.goalId) as PlanInput | null),
-        markPlanEditConsumed: () =>
-          // Clear the durable slot (sentinel empty body) after the driver applied+re-baselined the edit.
-          Effect.sync(() => persistPendingPlanEdit(store, sessionID, request.goalId, null)),
       }
 
       const handle = { goalId: request.goalId, planDocId: request.planDocId, sessionId: sessionID }

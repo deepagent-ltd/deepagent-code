@@ -435,6 +435,32 @@ const loadState = (deps: ControllerDeps, handle: GoalHandle): GoalRuntimeState |
   return null
 }
 
+// V4.1 §N — durable command cursor. Weight ticks by one more than the maximum continuing stall count so
+// resetting stallCount after progress cannot repeat or decrease the cursor. A replay advances stallCount;
+// an executed tick advances ledger.ticks; every continuing transition therefore produces a fresh key.
+export const readGoalTickCursor = (
+  store: DocumentStore,
+  sessionId: string,
+  goalId: string,
+): { readonly seq: number; readonly planVersion: number; readonly phase: GoalPhase } | null => {
+  for (const ref of store.list({ type: "run_context", scope: planScope(sessionId) })) {
+    const doc = store.get(ref.id)
+    if (!doc) continue
+    if (doc.extensions?.goal_id !== goalId) continue
+    try {
+      const state = JSON.parse(doc.body) as GoalRuntimeState
+      const stallThreshold =
+        state.spec?.stallThreshold && state.spec.stallThreshold > 0 ? state.spec.stallThreshold : 3
+      const seq = (state.ledger?.ticks ?? 0) * (stallThreshold + 1) + (state.stallCount ?? 0)
+      const planVersion = readPlan(store, state.planDocId).version
+      return { seq, planVersion, phase: state.phase }
+    } catch {
+      return null
+    }
+  }
+  return null
+}
+
 // §D.6 可观测: one worklog doc per tick (audit trail into the Document Graph).
 const writeWorklog = (deps: ControllerDeps, state: GoalRuntimeState, grader: GraderResult): void => {
   deps.store.upsert({
