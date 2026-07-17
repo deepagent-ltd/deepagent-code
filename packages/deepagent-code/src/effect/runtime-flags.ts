@@ -111,6 +111,12 @@ export class Service extends ConfigService.Service<Service>()("@deepagent-code/R
   bashDefaultTimeoutMs: positiveInteger("DEEPAGENT_CODE_EXPERIMENTAL_BASH_DEFAULT_TIMEOUT_MS"),
   experimentalNativeLlm: bool("DEEPAGENT_CODE_EXPERIMENTAL_NATIVE_LLM"),
   experimentalWebSockets: bool("DEEPAGENT_CODE_EXPERIMENTAL_WEBSOCKETS"),
+  v4MultiAgentRuntime: bool("DEEPAGENT_CODE_V4_MULTI_AGENT_RUNTIME"),
+  v4AgentPushEnabled: bool("DEEPAGENT_CODE_V4_AGENT_PUSH_ENABLED"),
+  v4EventDrivenIm: bool("DEEPAGENT_CODE_V4_EVENT_DRIVEN_IM"),
+  v4PanelAutoConvene: bool("DEEPAGENT_CODE_V4_PANEL_AUTO_CONVENE"),
+  v4EventDrivenArchive: bool("DEEPAGENT_CODE_V4_EVENT_DRIVEN_ARCHIVE"),
+  v4Steering: bool("DEEPAGENT_CODE_V4_STEERING"),
   client: Config.string("DEEPAGENT_CODE_CLIENT").pipe(Config.withDefault("cli")),
 }) {}
 
