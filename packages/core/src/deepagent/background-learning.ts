@@ -8,7 +8,6 @@ import type { ProjectPaths } from "./workspace"
 import { DurableKnowledgeStore, openProjectStore, type KnowledgeDocInput } from "./durable-knowledge-store"
 import type { DocType, EvidenceStrength } from "./document-store"
 import { evidenceFromConfidence } from "./knowledge-retriever"
-import { fingerprint as candidateFingerprint, type RejectedBuffer } from "./promotion"
 import * as Governance from "./memory-governance"
 
 export const MEMORY_INBOX_SCHEMA_VERSION = "deepagent-code.memory_inbox_item.v1"
@@ -76,11 +75,6 @@ export class LearningWorker {
     private readonly paths: ProjectPaths,
     private readonly projectID = readProjectID(paths),
     store?: DurableKnowledgeStore,
-    // The durable RejectedBuffer (the human-`reject` fingerprint cache). Gate 3 (R3 anti-pollution)
-    // consults it so a pattern a human explicitly rejected is NOT silently re-learned + auto-admitted on
-    // a later run. Injected by the caller that owns the memory-dir path (the reject handler writes the
-    // SAME buffer). Omitted ⇒ gate 3 is inert (back-compat for tests / callers without a buffer).
-    private readonly rejectedBuffer?: RejectedBuffer,
   ) {
     // ProjectPaths.root is <baseDir>/project/<pid>; the durable knowledge store roots at
     // <baseDir>/project/<pid>/knowledge — i.e. a "knowledge" subdir of the project root.
@@ -111,13 +105,9 @@ export class LearningWorker {
       const contradictsHighTrust = this.detectHighTrustContradiction(candidate, classification)
       const govRoute = Governance.route({
         classification,
-        // Gate 3 (R3): consult the durable RejectedBuffer by fingerprint so a pattern a human explicitly
-        // rejected is dropped, not silently re-learned + auto-admitted. Extraction always emits fresh
-        // candidates as status "staged" (never "rejected"), so the old `status === "rejected"` check was
-        // ALWAYS false — the gate was vacuous and the buffer was never consulted on this path. When no
-        // buffer is injected the gate stays inert (back-compat), matching the prior effective behavior.
-        inRejectedBuffer:
-          (this.rejectedBuffer?.has(candidateFingerprint(candidate)) ?? false) || candidate.status === "rejected",
+        // RejectedBuffer is consulted upstream (promote path); learning candidates carry status
+        // "rejected" when extraction already rejected them.
+        inRejectedBuffer: candidate.status === "rejected",
         contradictsHighTrust,
         // Learning candidates never self-promote into a pack or to global scope; those are explicit
         // human actions (gate 6/7) handled in the review/promote path, so false here.

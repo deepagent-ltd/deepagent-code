@@ -95,25 +95,6 @@ const findByPath = (store: DurableKnowledgeStore, path: string): Doc | null => {
   return null
 }
 
-// The stored `mtime_ms` for every already-indexed code_symbol node, keyed by path. Exposed for a
-// filesystem-walking caller (code-index-trigger) to skip the READ + HASH of a file whose on-disk mtime
-// EXACTLY equals the recorded one — the only layer where mtime avoids real I/O (§B.3 SEAM). This is an
-// I/O-avoidance hint, NOT a correctness gate: an EXACT match is required (not `>=`), so a rewound or
-// non-monotonic mtime (git checkout / stash pop / rebase) does NOT equal the stored value and the file
-// is re-read + content-sha-gated as before. Content-sha remains the sole skip AUTHORITY for anything
-// actually read. A node without a recorded mtime is simply absent from the map (⇒ always re-read).
-export const indexedMtimes = (store: DurableKnowledgeStore): ReadonlyMap<string, number> => {
-  const ds = store.documentStore
-  const out = new Map<string, number>()
-  for (const ref of ds.list({ type: CODE_SYMBOL })) {
-    const doc = ds.get(ref.id)
-    if (!doc || doc.status === "rejected") continue
-    const mtime = doc.extensions?.mtime_ms
-    if (typeof mtime === "number") out.set(doc.description, mtime)
-  }
-  return out
-}
-
 // Register (create or content-gated upsert) a single file as a code_symbol node. Returns the node id
 // plus whether it was created/updated/unchanged. CONTENT-SHA gating avoids version bloat.
 export const registerFile = (

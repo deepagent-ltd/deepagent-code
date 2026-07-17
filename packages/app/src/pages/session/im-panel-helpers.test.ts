@@ -16,9 +16,7 @@ const group = (id: string, name: string): IMGroup => ({
 
 describe("submitCreateGroup", () => {
   test("creates a group via the client (never window.prompt)", async () => {
-    const createGroup = mock(async (p: { name: string; type: "project" | "system" | "direct" }) =>
-      group("grp_1", p.name),
-    )
+    const createGroup = mock(async (p: { name: string; type: "project" | "system" }) => group("grp_1", p.name))
     const result = await submitCreateGroup("  Design  ", createGroup)
 
     expect(createGroup).toHaveBeenCalledTimes(1)

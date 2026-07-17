@@ -628,12 +628,6 @@ export const dict = {
   "settings.general.section.updates": "Actualizaciones",
   "settings.general.section.sounds": "Efectos de sonido",
   "settings.general.section.feed": "Feed",
-  "settings.general.section.sharing": "Compartir",
-  "settings.general.row.shareUrl.title": "URL del servidor para compartir",
-  "settings.general.row.shareUrl.description": "URL base del servidor usado al compartir sesiones. Déjalo en blanco para usar el predeterminado.",
-  "settings.general.row.shareUrl.placeholder": "https://opncd.ai",
-  "settings.general.row.expertPanelDefault.title": "Activar el panel de expertos por defecto",
-  "settings.general.row.expertPanelDefault.description": "Iniciar nuevas conversaciones con el panel de expertos activado, para que su botón revise el contexto actual cuando se solicite.",
   "settings.general.section.display": "Pantalla",
 
   "settings.general.row.language.title": "Idioma",

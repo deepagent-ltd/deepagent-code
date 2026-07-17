@@ -1,11 +1,12 @@
 import { Button } from "@deepagent-code/ui/button"
 import { useDialog } from "@deepagent-code/ui/context/dialog"
 import { Icon } from "@deepagent-code/ui/icon"
+import { Switch } from "@deepagent-code/ui/switch"
 import { Tabs } from "@deepagent-code/ui/tabs"
+import { showToast } from "@/utils/toast"
 import { useNavigate } from "@solidjs/router"
-import { type Accessor, createEffect, createMemo, For, onCleanup, Show } from "solid-js"
+import { type Accessor, createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js"
 import { createStore } from "solid-js/store"
-import { McpManagement } from "@/components/mcp-management"
 import { ServerHealthIndicator, ServerRow } from "@/components/server/server-row"
 import { useLanguage } from "@/context/language"
 import { usePlatform } from "@/context/platform"
@@ -13,6 +14,9 @@ import { ServerConnection, useServer } from "@/context/server"
 import { useSync } from "@/context/sync"
 import { type ServerHealth } from "@/utils/server-health"
 import { useGlobal } from "@/context/global"
+import { useMcpRemove, useMcpToggle } from "@/context/mcp"
+import { DialogAddMcp } from "@/components/dialog-add-mcp"
+import { DialogConfigureMcp } from "@/components/dialog-configure-mcp"
 
 const listServersByHealth = (
   list: ServerConnection.Any[],
@@ -242,6 +246,14 @@ export function StatusPopoverBody(props: { shown: Accessor<boolean> }) {
   const language = useLanguage()
   const navigate = useNavigate()
 
+  const fail = (err: unknown) => {
+    showToast({
+      variant: "error",
+      title: language.t("common.requestFailed"),
+      description: err instanceof Error ? err.message : String(err),
+    })
+  }
+
   createEffect(() => {
     if (!props.shown()) return
   })
@@ -253,10 +265,29 @@ export function StatusPopoverBody(props: { shown: Accessor<boolean> }) {
     dialogRun += 1
   })
   const sortedServers = createMemo(() => listServersByHealth(global.servers.list(), server.key, global.servers.health))
+  const toggleMcp = useMcpToggle()
+  const removeMcp = useMcpRemove()
   const defaultServer = useDefaultServerKey(platform.getDefaultServer)
   const mcpNames = createMemo(() => Object.keys(sync.data.mcp ?? {}).sort((a, b) => a.localeCompare(b)))
+  const [selectedMcp, setSelectedMcp] = createSignal<string>()
   const mcpStatus = (name: string) => sync.data.mcp?.[name]?.status
   const mcpConnected = createMemo(() => mcpNames().filter((name) => mcpStatus(name) === "connected").length)
+
+  createEffect(() => {
+    const names = mcpNames()
+    if (names.length === 0) {
+      setSelectedMcp(undefined)
+      return
+    }
+    if (!selectedMcp() || !names.includes(selectedMcp()!)) setSelectedMcp(names[0])
+  })
+
+  const deleteSelectedMcp = () => {
+    const name = selectedMcp()
+    if (!name || removeMcp.isPending) return
+    if (!window.confirm(language.t("dialog.mcp.delete.confirm", { name }))) return
+    removeMcp.mutate(name)
+  }
 
   return (
     <div class="flex items-center gap-1 w-[360px] rounded-xl shadow-[var(--shadow-lg-border-base)]">
@@ -346,7 +377,89 @@ export function StatusPopoverBody(props: { shown: Accessor<boolean> }) {
 
         <Tabs.Content value="mcp">
           <div class="flex flex-col px-2 pb-2">
-            <McpManagement />
+            <div class="flex items-center gap-2 px-1 pt-2 pb-2">
+              <Button variant="secondary" icon="plus" onClick={() => dialog.show(() => <DialogAddMcp />)}>
+                {language.t("dialog.mcp.add")}
+              </Button>
+              <Button
+                variant="secondary"
+                icon="settings-gear"
+                disabled={!selectedMcp()}
+                onClick={() => {
+                  const name = selectedMcp()
+                  if (!name) return
+                  dialog.show(() => <DialogConfigureMcp name={name} />)
+                }}
+              >
+                {language.t("dialog.mcp.configure")}
+              </Button>
+              <Button
+                variant="secondary"
+                icon="trash"
+                disabled={!selectedMcp() || removeMcp.isPending}
+                onClick={deleteSelectedMcp}
+              >
+                {language.t("dialog.mcp.delete")}
+              </Button>
+            </div>
+            <div class="flex flex-col p-3 bg-background-base rounded-sm min-h-14">
+              <Show
+                when={mcpNames().length > 0}
+                fallback={
+                  <div class="text-14-regular text-text-base text-center my-auto">{language.t("dialog.mcp.empty")}</div>
+                }
+              >
+                <For each={mcpNames()}>
+                  {(name) => {
+                    const status = () => mcpStatus(name)
+                    const enabled = () => status() === "connected"
+                    return (
+                      <button
+                        type="button"
+                        class="flex items-center gap-2 w-full min-h-8 pl-3 pr-2 py-1 rounded-md hover:bg-surface-raised-base-hover transition-colors text-left"
+                        classList={{
+                          "bg-surface-raised-base": selectedMcp() === name,
+                        }}
+                        onClick={() => {
+                          setSelectedMcp(name)
+                        }}
+                      >
+                        <div
+                          classList={{
+                            "size-1.5 rounded-full shrink-0": true,
+                            "bg-icon-success-base": status() === "connected",
+                            "bg-icon-critical-base": status() === "failed",
+                            "bg-border-weak-base": status() === "disabled",
+                            "bg-icon-warning-base":
+                              status() === "needs_auth" || status() === "needs_client_registration",
+                          }}
+                        />
+                        <span class="flex flex-col min-w-0 flex-1">
+                          <span class="flex items-center gap-2 min-w-0">
+                            <span class="text-14-regular text-text-base truncate">{name}</span>
+                          </span>
+                          <Show when={status() === "needs_auth"}>
+                            <span class="text-11-regular text-text-weaker truncate">
+                              {language.t("mcp.auth.clickToAuthenticate")}
+                            </span>
+                          </Show>
+                        </span>
+                        <div onClick={(event) => event.stopPropagation()}>
+                          <Switch
+                            checked={enabled()}
+                            disabled={toggleMcp.isPending && toggleMcp.variables === name}
+                            onChange={() => {
+                              if (toggleMcp.isPending) return
+                              toggleMcp.mutate(name)
+                            }}
+                          />
+                        </div>
+                      </button>
+                    )
+                  }}
+                </For>
+              </Show>
+            </div>
           </div>
         </Tabs.Content>
       </Tabs>

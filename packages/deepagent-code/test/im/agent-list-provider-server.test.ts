@@ -11,11 +11,6 @@ import { AgentListProviderService } from "@deepagent-code/core/im/agent-list-pro
 import type { AgentDescriptor } from "@deepagent-code/core/im/mention-parser"
 import { Agent } from "@/agent/agent"
 import { ServerAgentListProviderLive } from "@/im/agent-executor-server"
-import { InstanceRef, WorkspaceRef } from "@/effect/instance-ref"
-import { InstanceStore } from "@/project/instance-store"
-import type { InstanceContext } from "@/project/instance-context"
-import { WorkspaceV2 } from "@deepagent-code/core/workspace"
-import { ProjectV2 } from "@deepagent-code/core/project"
 
 // Minimal Agent.Info records (only fields the provider reads). Cast through
 // unknown so tests don't have to build a full permission ruleset etc.
@@ -23,52 +18,15 @@ function agentInfo(partial: Record<string, unknown>): Agent.Info {
   return { options: {}, permission: [], mode: "all", ...partial } as unknown as Agent.Info
 }
 
-// Stub InstanceStore.load — returns a minimal InstanceContext for the requested directory. The
-// provider only uses it to provide an InstanceRef around agents.list() on a bare daemon fiber (the
-// BLOCKER fix); the mock Agent.list below does not read InstanceState, so the ctx shape is inert here.
-const instanceStoreStub = {
-  load: (input: { directory: string }) =>
-    Effect.succeed({
-      directory: input.directory,
-      worktree: input.directory,
-      project: {
-        id: ProjectV2.ID.global,
-        worktree: input.directory,
-        time: { created: 0, updated: 0 },
-        sandboxes: [],
-      },
-    }),
-} as unknown as InstanceStore.Interface
-
-// A minimal InstanceContext for a per-request fiber routed to `directory` (used by the `run` helper).
-const reqCtx = (directory: string) =>
-  ({
-    directory,
-    worktree: directory,
-    project: {
-      id: ProjectV2.ID.global,
-      worktree: directory,
-      time: { created: 0, updated: 0 },
-      sandboxes: [],
-    },
-  }) as unknown as InstanceContext
-
 function makeLayer(agents: Agent.Info[]) {
   const mock = {
     list: () => Effect.succeed(agents),
   } as unknown as Agent.Interface
-  return ServerAgentListProviderLive.pipe(
-    Layer.provide(Layer.succeed(Agent.Service, mock)),
-    Layer.provide(Layer.succeed(InstanceStore.Service, instanceStoreStub)),
-  )
+  return ServerAgentListProviderLive.pipe(Layer.provide(Layer.succeed(Agent.Service, mock)))
 }
 
 const scope = { workspaceID: "wrk_1", userID: "u1" }
 
-// These mapping/matching suites exercise a NORMAL per-request fiber: the instance-context middleware
-// has set an InstanceRef/WorkspaceRef matching the routed scope, so listAgents runs in-scope and lists
-// the config agents directly. (The dedicated scope-gating + bare-daemon-fiber suites below drive the
-// unset-context paths explicitly.) WorkspaceRef = scope.workspaceID makes ownScope === queryScope.
 const run = (
   layer: Layer.Layer<AgentListProviderService>,
   f: (p: AgentListProvider) => Effect.Effect<AgentDescriptor[], Error, never>,
@@ -76,14 +34,7 @@ const run = (
   Effect.gen(function* () {
     const provider = yield* AgentListProviderService
     return yield* f(provider)
-  }).pipe(
-    // A per-request fiber carries an InstanceRef (so agents.list() runs directly, no context load) and a
-    // routed WorkspaceRef matching the query scope (so ownScope === queryScope ⇒ in-scope ⇒ config listed).
-    Effect.provideService(InstanceRef, reqCtx(scope.workspaceID)),
-    Effect.provideService(WorkspaceRef, WorkspaceV2.ID.make(scope.workspaceID)),
-    Effect.provide(layer),
-    Effect.runPromise,
-  )
+  }).pipe(Effect.provide(layer), Effect.runPromise)
 
 describe("ServerAgentListProvider — metadata mapping & defaults", () => {
   it("maps declared metadata onto the descriptor", async () => {
@@ -149,8 +100,7 @@ describe("ServerAgentListProvider — metadata mapping & defaults", () => {
       agentInfo({ name: "sub", mode: "subagent" }),
     ])
     const listed = await run(layer, (p) => p.listAgents(scope))
-    // config agents (excluding the appended built-ins) still filter hidden/subagent exactly as V3.8.
-    expect(listed.filter((d) => !d.id.startsWith("builtin:")).map((d) => d.name)).toEqual(["visible"])
+    expect(listed.map((d) => d.name)).toEqual(["visible"])
   })
 })
 
@@ -161,175 +111,18 @@ describe("ServerAgentListProvider — findByTrigger / findByCapability", () => {
     agentInfo({ name: "legacy", mode: "all" }),
   ])
 
-  // These assert on the CONFIG agents only; the appended built-ins are filtered out (they're covered by
-  // the dedicated built-ins suite below). "code.changed" is a config-only trigger no built-in declares.
   it("findByTrigger returns only matching agents", async () => {
     const r = await run(layer, (p) => p.findByTrigger({ ...scope, event: "code.changed" }))
-    expect(r.filter((d) => !d.id.startsWith("builtin:")).map((d) => d.name)).toEqual(["alpha"])
+    expect(r.map((d) => d.name)).toEqual(["alpha"])
   })
 
   it("findByCapability returns only matching agents", async () => {
     const r = await run(layer, (p) => p.findByCapability({ ...scope, capability: "review" }))
-    // "beta" is the only CONFIG agent with `review`; the built-in CodeReviewAgent also declares it.
-    expect(r.filter((d) => !d.id.startsWith("builtin:")).map((d) => d.name)).toEqual(["beta"])
+    expect(r.map((d) => d.name)).toEqual(["beta"])
   })
 
-  it("no-match returns empty for a capability no agent (built-in or config) declares; legacy agent never matches", async () => {
-    // NOTE: "ci.failure" now DOES match — the built-in CodeFixAgent carries that trigger (see the
-    // built-ins suite below). A capability no built-in declares (doc.write) still returns empty.
+  it("no-match returns empty; legacy agent never matches", async () => {
+    expect(await run(layer, (p) => p.findByTrigger({ ...scope, event: "ci.failure" }))).toEqual([])
     expect(await run(layer, (p) => p.findByCapability({ ...scope, capability: "doc.write" }))).toEqual([])
-    // the config agents ("alpha"/"beta"/"legacy") alone never match ci.failure — only the built-in does.
-    const ciMatches = await run(layer, (p) => p.findByTrigger({ ...scope, event: "ci.failure" }))
-    expect(ciMatches.map((d) => d.name)).not.toContain("alpha")
-    expect(ciMatches.map((d) => d.name)).not.toContain("legacy")
-  })
-})
-
-// V4.0 §A1 CRITICAL — the PRODUCTION provider (ServerAgentListProviderLive, wired into
-// v4EventRuntimeLayer via server.ts) must carry the built-in autonomous descriptors. The real
-// deepagent-code agents (auto/general/plan) declare NO trigger/capability metadata, so without the
-// built-in append every autonomous event would still block with `no_capable_agent` in production. These
-// tests drive the REAL ServerAgentListProvider (not a fake registry) to prove the built-ins are present.
-describe("ServerAgentListProvider — built-in autonomous descriptors (production path)", () => {
-  // a registry of ONLY config agents that carry no autonomous metadata — mirrors production, where
-  // auto/general/plan have no triggers/capabilities. Any match therefore comes from the built-ins.
-  const layer = makeLayer([
-    agentInfo({ name: "auto", mode: "primary", description: "default" }),
-    agentInfo({ name: "general", mode: "all" }),
-    agentInfo({ name: "plan", mode: "primary" }),
-  ])
-
-  it("findByTrigger('ci.failure') returns the built-in CodeFixAgent (metadata now present in production)", async () => {
-    const r = await run(layer, (p) => p.findByTrigger({ ...scope, event: "ci.failure" }))
-    expect(r.some((d) => d.id === "builtin:codefix")).toBe(true)
-  })
-
-  it("findByCapability('code_edit') returns a built-in (CodeFixAgent/ChangeAgent) in production", async () => {
-    const r = await run(layer, (p) => p.findByCapability({ ...scope, capability: "code_edit" }))
-    expect(r.some((d) => d.id === "builtin:codefix" || d.id === "builtin:change")).toBe(true)
-  })
-
-  it("every autonomous trigger resolves to >=1 capable agent via the production provider", async () => {
-    for (const evt of ["ci.failure", "ci.repair.requested", "pr.comment", "monitor.alert", "git.push", "schedule.scan"]) {
-      const r = await run(layer, (p) => p.findByTrigger({ ...scope, event: evt }))
-      expect(r.length).toBeGreaterThan(0)
-    }
-  })
-
-  it("built-ins are visible:false so they don't leak into the human @mention list, but ARE listed for matching", async () => {
-    const listed = await run(layer, (p) => p.listAgents(scope))
-    const builtins = listed.filter((d) => d.id.startsWith("builtin:"))
-    expect(builtins.length).toBeGreaterThan(0)
-    expect(builtins.every((d) => d.visible === false)).toBe(true)
-    // the config agents remain visible.
-    expect(listed.some((d) => d.name === "auto" && d.visible === true)).toBe(true)
-  })
-})
-
-// V4.x defense-in-depth — listAgents must respect the requesting actor's workspace scope. The provider
-// is bound to a single routed instance (deepagent-code is single-user, one workspace/directory per
-// instance): its CONFIG agents belong to that instance's scope, while the appended built-ins are
-// workspace-independent GLOBALS. A query for a workspace this instance was NOT routed to must therefore
-// see only the globals — never this instance's config agents. When the instance's own scope is
-// unresolvable (a bare fiber, no InstanceRef/WorkspaceRef) the provider DEFERS (includes config agents)
-// rather than over-filter, since Layer-1 trusted-source already fails closed on untrusted events.
-describe("ServerAgentListProvider — workspace scope gating", () => {
-  // Build an InstanceContext for a routed instance located at `directory`.
-  const instanceCtx = (directory: string) => ({
-    directory,
-    worktree: directory,
-    project: {
-      id: ProjectV2.ID.global,
-      worktree: directory,
-      time: { created: 0, updated: 0 },
-      sandboxes: [],
-    },
-  })
-
-  // Run listAgents for `queryScope` while the provider believes it is bound to the given instance scope.
-  // `routedWorkspaceID` (WorkspaceRef) and/or `directory` (InstanceRef) set the instance's own identity;
-  // omit both to simulate a bare fiber with no resolvable scope.
-  const runScoped = (
-    agents: Agent.Info[],
-    queryScope: { workspaceID: string; userID: string },
-    own: { routedWorkspaceID?: string; directory?: string },
-  ): Promise<AgentDescriptor[]> => {
-    let eff = Effect.gen(function* () {
-      const provider = yield* AgentListProviderService
-      return yield* provider.listAgents(queryScope)
-    }).pipe(Effect.provide(makeLayer(agents)))
-    // In PRODUCTION the instance-context middleware / turn-runner always provide InstanceRef and
-    // WorkspaceRef TOGETHER — a fiber "routed to an instance" carries a real InstanceRef (so agents.list()
-    // never dies). So a non-bare fiber (either own field set) gets an InstanceRef here; its directory is
-    // the routed directory when given, else the routed workspace id. A bare daemon fiber (own={}) carries
-    // NEITHER — that path is exercised by the dedicated bare-fiber tests below (and healed via the
-    // InstanceStore load inside the provider).
-    const ownDirectory = own.directory ?? own.routedWorkspaceID
-    if (ownDirectory !== undefined) {
-      eff = eff.pipe(Effect.provideService(InstanceRef, instanceCtx(ownDirectory)))
-    }
-    if (own.routedWorkspaceID !== undefined) {
-      eff = eff.pipe(Effect.provideService(WorkspaceRef, WorkspaceV2.ID.make(own.routedWorkspaceID)))
-    }
-    return Effect.runPromise(eff)
-  }
-
-  const configAgents = [
-    agentInfo({ name: "reviewer", mode: "all" }),
-    agentInfo({ name: "auto", mode: "primary" }),
-  ]
-  const configNames = (list: AgentDescriptor[]) => list.filter((d) => !d.id.startsWith("builtin:")).map((d) => d.name)
-  const builtinCount = (list: AgentDescriptor[]) => list.filter((d) => d.id.startsWith("builtin:")).length
-
-  it("returns this instance's config agents when the requested workspaceID matches the routed workspace", async () => {
-    const listed = await runScoped(configAgents, { workspaceID: "wrk_alpha", userID: "u1" }, {
-      routedWorkspaceID: "wrk_alpha",
-    })
-    expect(configNames(listed)).toEqual(["reviewer", "auto"])
-    expect(builtinCount(listed)).toBeGreaterThan(0)
-  })
-
-  it("withholds config agents (globals only) when the requested workspaceID is NOT the routed workspace", async () => {
-    const listed = await runScoped(configAgents, { workspaceID: "wrk_other", userID: "u1" }, {
-      routedWorkspaceID: "wrk_alpha",
-    })
-    // out-of-scope query sees NO config agents, but the workspace-independent built-ins remain.
-    expect(configNames(listed)).toEqual([])
-    expect(builtinCount(listed)).toBeGreaterThan(0)
-  })
-
-  it("matches on the directory fallback when the instance has no routed workspace id", async () => {
-    const dir = "/tmp/project-x"
-    // in-scope: the query addresses the instance by its directory grouping key.
-    const inScope = await runScoped(configAgents, { workspaceID: dir, userID: "u1" }, { directory: dir })
-    expect(configNames(inScope)).toEqual(["reviewer", "auto"])
-    // out-of-scope: a different directory sees globals only.
-    const outScope = await runScoped(configAgents, { workspaceID: "/tmp/project-y", userID: "u1" }, { directory: dir })
-    expect(configNames(outScope)).toEqual([])
-    expect(builtinCount(outScope)).toBeGreaterThan(0)
-  })
-
-  // BLOCKER (v4-daemon-instanceref-die, residual): on a bare DAEMON fiber (no InstanceRef) — the
-  // autonomous path (event-dispatcher / multi-agent-runtime) — `agents.list()` would resolve through
-  // InstanceState.context and `Effect.die`, which the dispatcher captured as "registry lookup failed" →
-  // nack → 3× retry → DLQ, silently killing ALL autonomous dispatch. The provider now ESTABLISHES a
-  // context (InstanceStore.load) for a directory-shaped scope before listing, and falls back to built-ins
-  // (never dies) when no directory can be derived.
-  it("bare daemon fiber with a directory-shaped scope loads context and lists config agents (no die)", async () => {
-    // no InstanceRef/WorkspaceRef, but the scope is a real directory ⇒ the provider loads a context for it
-    // and lists config agents — instead of dying. This is the exact autonomous-path scenario.
-    const dir = "/tmp/daemon-project"
-    const listed = await runScoped(configAgents, { workspaceID: dir, userID: "u1" }, {})
-    expect(configNames(listed)).toEqual(["reviewer", "auto"])
-    expect(builtinCount(listed)).toBeGreaterThan(0)
-  })
-
-  it("bare daemon fiber with a non-directory (wrk_) scope returns built-ins only — never dies", async () => {
-    // no InstanceRef/WorkspaceRef and a bare "wrk_"-id (not a path) ⇒ no directory to load a context from.
-    // The provider must NOT die (the old behavior would call agents.list() on a bare fiber → die). It
-    // degrades to the workspace-independent built-ins so the autonomous router still has runnable agents.
-    const listed = await runScoped(configAgents, { workspaceID: "wrk_whatever", userID: "u1" }, {})
-    expect(configNames(listed)).toEqual([])
-    expect(builtinCount(listed)).toBeGreaterThan(0)
   })
 })

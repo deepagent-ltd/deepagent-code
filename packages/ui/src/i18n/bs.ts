@@ -47,8 +47,6 @@ export const dict = {
   "ui.sessionTurn.retry.attempt": "pokušaj #{{attempt}}",
   "ui.sessionTurn.retry.attemptLine": "{{line}} - pokušaj #{{attempt}}",
   "ui.sessionTurn.retry.geminiHot": "gemini je trenutno preopterećen",
-  "ui.sessionTurn.retry.noChannel":
-    "the gateway lists this model but has no available channel for it — pick another model or fix the gateway's group config",
   "ui.sessionTurn.error.freeUsageExceeded": "Besplatna upotreba premašena",
   "ui.sessionTurn.error.addCredits": "Dodaj kredite",
 

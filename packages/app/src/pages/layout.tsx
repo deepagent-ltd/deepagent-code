@@ -64,14 +64,12 @@ import { useCommand, type CommandOption } from "@/context/command"
 import { ConstrainDragXAxis, getDraggableId } from "@/utils/solid-dnd"
 import { DebugBar } from "@/components/debug-bar"
 import { listPending } from "@/components/review/dialog-review.api"
-import { fetchCapabilities } from "@/components/deepagent/panel-goal.api"
 import { Titlebar, type TitlebarUpdate } from "@/components/titlebar"
 import { useDirectoryPicker } from "@/components/directory-picker"
 import { ServerConnection, useServer } from "@/context/server"
 import { useLanguage, type Locale } from "@/context/language"
 import type { UpdaterState } from "@/updater"
 import { pathKey } from "@/utils/path-key"
-import { isFilesystemRootDir } from "@/utils/filesystem-root"
 import {
   displayName,
   effectiveWorkspaceOrder,
@@ -142,7 +140,6 @@ export default function Layout(props: ParentProps) {
     if (!slug) return { slug, dir: "" }
     const dir = decode64(slug)
     if (!dir) return { slug, dir: "" }
-    if (isFilesystemRootDir(dir)) return { slug, dir: "" }
     const store = serverSync.peek(dir, { bootstrap: false })
     return {
       slug,
@@ -169,18 +166,6 @@ export default function Layout(props: ParentProps) {
       const sdk = serverSDK.createDirSdkContext(dir)
       const items = await listPending(sdk.client as never)
       return items.some((item) => item.approval_status === "pending")
-    } catch {
-      return false
-    }
-  })
-
-  // V3.9 §B — whether the server has the wiki flag on, so the Repo & Wiki sidebar entry only appears
-  // when the capability is available (matching the panel/goal UI-gating rule).
-  const [wikiAvailable] = createResource(currentDir, async (dir) => {
-    if (!dir) return false
-    try {
-      const sdk = serverSDK.createDirSdkContext(dir)
-      return (await fetchCapabilities(sdk.client as never)).wiki
     } catch {
       return false
     }
@@ -464,12 +449,7 @@ export default function Layout(props: ParentProps) {
         const icon = e.details.type === "permission.asked" ? ("checklist" as const) : ("bubble-5" as const)
         const directory = e.name
         const props = e.details.properties
-        if (
-          e.details.type === "permission.asked" &&
-          (permission.autoResponds(e.details.properties, directory) ||
-            permission.autoRejects(e.details.properties, directory))
-        )
-          return
+        if (e.details.type === "permission.asked" && permission.autoResponds(e.details.properties, directory)) return
 
         const [store] = serverSync.child(directory, { bootstrap: false })
         const session = store.session.find((s) => s.id === props.sessionID)
@@ -782,7 +762,7 @@ export default function Layout(props: ParentProps) {
             const next = items.map((x) => x.info).filter((m): m is Message => !!m?.id)
             const sorted = mergeByID([], next)
             const stale = markPrefetched(directory, sessionID)
-            const cursor = messages.response?.headers.get("x-next-cursor") ?? undefined
+            const cursor = messages.response.headers.get("x-next-cursor") ?? undefined
             const meta = {
               limit: sorted.length,
               cursor,
@@ -1284,16 +1264,6 @@ export default function Layout(props: ParentProps) {
     })
     // Refresh the sidebar badge once the reviewer closes.
     setTimeout(() => void refetchReviewPending(), 1500)
-  }
-
-  function openWiki() {
-    const run = ++dialogRun
-    const dir = currentDir()
-    const sdk = serverSDK.createDirSdkContext(dir)
-    void import("@/components/wiki/dialog-wiki").then((x) => {
-      if (dialogDead || dialogRun !== run) return
-      dialog.show(() => <x.DialogWiki client={sdk.client as never} />)
-    })
   }
 
   function openHistoryProjects() {
@@ -2463,9 +2433,6 @@ export default function Layout(props: ParentProps) {
       reviewLabel={() => language.t("sidebar.review")}
       onOpenReview={openReview}
       reviewPending={() => !!reviewPending.latest}
-      wikiLabel={() => language.t("sidebar.wiki")}
-      onOpenWiki={openWiki}
-      wikiAvailable={() => !!wikiAvailable.latest}
       historyLabel={() => language.t("sidebar.history")}
       onOpenHistory={openHistoryProjects}
       packsLabel={() => language.t("packs.title")}

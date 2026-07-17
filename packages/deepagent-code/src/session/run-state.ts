@@ -9,11 +9,6 @@ import { SessionStatus } from "./status"
 
 export interface Interface {
   readonly assertNotBusy: (sessionID: SessionID) => Effect.Effect<void, Session.BusyError>
-  // V4.1 §S1.2: non-throwing busy probe for the steering ingress decision. Returns true iff a runner
-  // for this session currently holds a live (busy) turn. The result is advisory — busy state can flip
-  // between this read and a subsequent admit — so callers must handle the race (a steer admitted right
-  // as the turn ends is still durably buffered and re-drained; see the ingress `promptOrSteer`).
-  readonly isBusy: (sessionID: SessionID) => Effect.Effect<boolean>
   readonly cancel: (sessionID: SessionID) => Effect.Effect<void>
   readonly ensureRunning: (
     sessionID: SessionID,
@@ -78,11 +73,6 @@ export const layer = Layer.effect(
       if (existing?.busy) yield* busyError(sessionID)
     })
 
-    const isBusy = Effect.fn("SessionRunState.isBusy")(function* (sessionID: SessionID) {
-      const data = yield* InstanceState.get(state)
-      return data.runners.get(sessionID)?.busy ?? false
-    })
-
     const cancel = Effect.fn("SessionRunState.cancel")(function* (sessionID: SessionID) {
       yield* cancelBackgroundJobs(background, sessionID)
       const data = yield* InstanceState.get(state)
@@ -113,7 +103,7 @@ export const layer = Layer.effect(
         .pipe(Effect.catchTag("RunnerBusy", () => Effect.fail(busyError(sessionID))))
     })
 
-    return Service.of({ assertNotBusy, isBusy, cancel, ensureRunning, startShell })
+    return Service.of({ assertNotBusy, cancel, ensureRunning, startShell })
   }),
 )
 

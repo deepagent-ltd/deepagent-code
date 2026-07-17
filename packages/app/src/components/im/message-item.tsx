@@ -9,8 +9,6 @@ interface MessageItemProps {
   agentStatus?: { agentID: string; status: string }
   /** Live reasoning/tool/text parts for the turn this message triggered. */
   agentProgress?: AgentProgressPart[]
-  /** §B3 thread — open this message's reply chain. Hidden when undefined. */
-  onOpenThread?: (message: LocalMessage) => void
 }
 
 export function MessageItem(props: MessageItemProps) {
@@ -58,16 +56,6 @@ export function MessageItem(props: MessageItemProps) {
           <div class="px-2">
             <AgentStatusChip agentID={props.agentStatus!.agentID} status={props.agentStatus!.status} />
           </div>
-        </Show>
-
-        <Show when={props.onOpenThread}>
-          <button
-            type="button"
-            class="px-2 text-xs text-text-link hover:underline text-left"
-            onClick={() => props.onOpenThread!(props.message)}
-          >
-            Reply in thread
-          </button>
         </Show>
 
       </div>

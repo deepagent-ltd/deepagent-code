@@ -23,7 +23,7 @@ export const Plugin = PluginV2.define({
           skill: new SkillV2.Info({
             name: "customize-deepagent-code",
             description:
-              "Use ONLY when the user is editing or creating deepagent-code's own configuration: config.jsonc, config.json, files under .deepagent-code/, or files under ~/.deepagent/code/. Also use when creating or fixing deepagent-code agents, subagents, skills, plugins, MCP servers, or permission rules. Do not use for the user's own application code, or for any project that is not configuring deepagent-code itself.",
+              "Use ONLY when the user is editing or creating deepagent-code's own configuration: deepagent-code.json, deepagent-code.jsonc, files under .deepagent-code/, or files under ~/.config/deepagent-code/. Also use when creating or fixing deepagent-code agents, subagents, skills, plugins, MCP servers, or permission rules. Do not use for the user's own application code, or for any project that is not configuring deepagent-code itself.",
             location: AbsolutePath.make("/builtin/customize-deepagent-code.md"),
             content: CustomizeOpencodeContent,
           }),

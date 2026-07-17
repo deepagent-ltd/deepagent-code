@@ -1,11 +1,9 @@
 import { Effect } from "effect"
+import { Database } from "bun:sqlite"
+import { mkdirSync } from "node:fs"
+import path from "node:path"
 import type { Doc, DocType } from "@deepagent-code/core/deepagent/document-store"
 import { WikiGraph } from "./wiki-service"
-// Runtime-split SQLite handle (bun:sqlite under bun, node:sqlite under node). NEVER import a
-// `bun:`/`node:` sqlite module directly here — that would pull a runtime-specific builtin into the
-// wrong module graph (the desktop server runs under Node/Electron). See wiki-fts-db.ts.
-import { openWikiFtsDb } from "#wiki-fts-db"
-import type { WikiFtsDb } from "./wiki-fts-db"
 
 /**
  * V3.9 §B.4 — WikiSearchIndex: embedded full-text search over the Wiki projection.
@@ -20,11 +18,10 @@ import type { WikiFtsDb } from "./wiki-fts-db"
  * (so a code-symbol search surfaces the function/class). sealed docs are NEVER indexed (INV-7) — the
  * WikiGraph.allDocs() feed already excludes them, and rebuild() re-confirms.
  *
- * Storage: SQLite FTS5 (built into both bun:sqlite and node:sqlite — no external search engine, §B.4;
- * the driver is runtime-selected via #wiki-fts-db). One FTS5 virtual table
- * `wiki_fts(doc_id UNINDEXED, type UNINDEXED, scope UNINDEXED, title, body, tags)`. `doc_id`, `type`,
- * `scope` are UNINDEXED columns so exact scope/type filtering is a cheap WHERE, while the text columns
- * feed the MATCH.
+ * Storage: SQLite FTS5 (built into bun:sqlite — no external search engine, §B.4). One FTS5 virtual
+ * table `wiki_fts(doc_id UNINDEXED, type UNINDEXED, scope UNINDEXED, title, body, tags)`. `doc_id`,
+ * `type`, `scope` are UNINDEXED columns so exact scope/type filtering is a cheap WHERE, while the
+ * text columns feed the MATCH.
  */
 
 export type WikiSearchHit = {
@@ -68,18 +65,18 @@ const codeSymbolTokens = (doc: Doc): string => {
 const bodyText = (doc: Doc): string => (doc.type === "code_symbol" ? codeSymbolTokens(doc) : doc.body)
 
 export class WikiSearchIndex {
-  private readonly db: WikiFtsDb
+  private readonly db: Database
 
   // `dbPath` is the dedicated wiki index file; `graph` is the projection source for rebuild(). The
   // caller wires both (production: openWikiSearchIndex; tests: an in-memory or tmp path + stub graph).
-  // The SQLite handle is opened via the runtime-split factory (bun:sqlite / node:sqlite) — WAL and
-  // the dir are handled inside openWikiFtsDb.
   constructor(
     dbPath: string,
     private readonly graph: WikiGraph,
   ) {
-    this.db = openWikiFtsDb(dbPath)
-    this.db.exec(
+    if (dbPath !== ":memory:") mkdirSync(path.dirname(dbPath), { recursive: true })
+    this.db = new Database(dbPath, { create: true })
+    this.db.run("PRAGMA journal_mode = WAL;")
+    this.db.run(
       `CREATE VIRTUAL TABLE IF NOT EXISTS wiki_fts USING fts5(
          doc_id UNINDEXED, type UNINDEXED, scope UNINDEXED, title, body, tags,
          tokenize = 'unicode61'
@@ -96,13 +93,9 @@ export class WikiSearchIndex {
       const insert = this.db.prepare(
         "INSERT INTO wiki_fts (doc_id, type, scope, title, body, tags) VALUES (?, ?, ?, ?, ?, ?)",
       )
-      // Wrap the clear+reinsert in an explicit transaction (BEGIN/COMMIT via exec — portable across
-      // bun:sqlite and node:sqlite, neither of which shares the other's transaction helper). On any
-      // failure roll back so a partial rebuild never leaves the index half-populated.
-      this.db.exec("BEGIN;")
-      try {
-        this.db.exec("DELETE FROM wiki_fts;")
-        for (const doc of docs) {
+      const tx = this.db.transaction((rows: readonly Doc[]) => {
+        this.db.run("DELETE FROM wiki_fts;")
+        for (const doc of rows) {
           if (doc.scope === "sealed") continue // defense-in-depth: never index sealed (INV-7)
           try {
             insert.run(doc.id, doc.type, doc.scope, doc.description, bodyText(doc), doc.tags.join(" "))
@@ -110,14 +103,8 @@ export class WikiSearchIndex {
             /* skip a single un-insertable row; the graph remains the source of truth */
           }
         }
-        this.db.exec("COMMIT;")
-      } catch {
-        try {
-          this.db.exec("ROLLBACK;")
-        } catch {
-          /* already rolled back / no active tx */
-        }
-      }
+      })
+      tx(docs)
     })
   }
 
@@ -140,14 +127,14 @@ export class WikiSearchIndex {
       params.push(query.limit ?? DEFAULT_LIMIT)
       try {
         const rows = this.db
-          .prepare(
+          .query(
             `SELECT doc_id AS docId, type, scope, title, bm25(wiki_fts) AS rank
                FROM wiki_fts
               WHERE ${clauses.join(" AND ")}
               ORDER BY rank ASC
               LIMIT ?`,
           )
-          .all<{ docId: string; type: DocType; scope: string; title: string; rank: number }>(...params)
+          .all(...(params as never[])) as { docId: string; type: DocType; scope: string; title: string; rank: number }[]
         // bm25 returns a negative number where MORE negative = more relevant; flip so higher = better.
         return rows.map((r) => ({ docId: r.docId, type: r.type, scope: r.scope, title: r.title, score: -r.rank }))
       } catch {

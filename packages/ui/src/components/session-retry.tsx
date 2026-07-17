@@ -31,12 +31,6 @@ export function SessionRetry(props: { status: SessionStatus; show?: boolean }) {
     if (current.message.includes("exceeded your current quota") && current.message.includes("gemini")) {
       return i18n.t("ui.sessionTurn.retry.geminiHot")
     }
-    // Third-party gateway (distributor) reports the model in its /models list but has no live route
-    // for it under the selected group. Retrying won't help — the user should pick another model or
-    // fix the gateway's group config. Surface a clear hint instead of the raw upstream error.
-    if (/no available channel|no channel available/i.test(current.message)) {
-      return i18n.t("ui.sessionTurn.retry.noChannel")
-    }
     if (current.message.length > 80) return current.message.slice(0, 80) + "..."
     return current.message
   })

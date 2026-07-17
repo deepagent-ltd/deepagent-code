@@ -46,8 +46,6 @@ export const dict: Record<Keys, string> = {
   "ui.sessionTurn.retry.attempt": "forsøk #{{attempt}}",
   "ui.sessionTurn.retry.attemptLine": "{{line}} - forsøk #{{attempt}}",
   "ui.sessionTurn.retry.geminiHot": "gemini er veldig overbelastet nå",
-  "ui.sessionTurn.retry.noChannel":
-    "the gateway lists this model but has no available channel for it — pick another model or fix the gateway's group config",
   "ui.sessionTurn.error.freeUsageExceeded": "Gratis bruk overskredet",
   "ui.sessionTurn.error.addCredits": "Legg til kreditt",
 

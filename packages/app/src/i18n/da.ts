@@ -620,12 +620,6 @@ export const dict = {
   "settings.general.section.updates": "Opdateringer",
   "settings.general.section.sounds": "Lydeffekter",
   "settings.general.section.feed": "Feed",
-  "settings.general.section.sharing": "Deling",
-  "settings.general.row.shareUrl.title": "Delings-server-URL",
-  "settings.general.row.shareUrl.description": "Basis-URL for serveren, der bruges ved deling af sessioner. Lad stå tomt for standard.",
-  "settings.general.row.shareUrl.placeholder": "https://opncd.ai",
-  "settings.general.row.expertPanelDefault.title": "Aktivér ekspertpanel som standard",
-  "settings.general.row.expertPanelDefault.description": "Start nye samtaler med ekspertpanelet aktiveret, så knappen kan gennemgå den aktuelle kontekst efter behov.",
   "settings.general.section.display": "Skærm",
 
   "settings.general.row.language.title": "Sprog",

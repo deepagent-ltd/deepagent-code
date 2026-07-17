@@ -8,7 +8,6 @@ import {
   resumeGoal,
   stopGoal,
   goalStatus,
-  editPlanGoal,
   fetchCapabilities,
 } from "./panel-goal.api"
 
@@ -52,30 +51,25 @@ describe("Expert Panel route contract (§C)", () => {
     expect(result).toEqual(verdict)
   })
 
-  test("armPanel POSTs /deepagent/panel/arm with rounds and returns the effective armed state + depth", async () => {
+  test("armPanel POSTs /deepagent/panel/arm and returns the effective armed state", async () => {
     const calls: Recorded[] = []
-    const result = await armPanel(client(calls, { sessionID: "ses_1", armed: true, rounds: "multi" }), "ses_1", true, "multi")
+    const armed = await armPanel(client(calls, { sessionID: "ses_1", armed: true }), "ses_1", true)
     expect(calls).toEqual([
-      {
-        method: "POST",
-        url: "/deepagent/panel/arm",
-        body: { sessionID: "ses_1", armed: true, rounds: "multi" },
-        headers: JSON_HEADERS,
-      },
+      { method: "POST", url: "/deepagent/panel/arm", body: { sessionID: "ses_1", armed: true }, headers: JSON_HEADERS },
     ])
-    expect(result).toEqual({ armed: true, rounds: "multi" })
+    expect(armed).toBe(true)
   })
 
-  test("fetchPanelStatus GETs /deepagent/panel/status and reports armed + explicit + rounds", async () => {
+  test("fetchPanelStatus GETs /deepagent/panel/status and reports armed + explicit", async () => {
     const calls: Recorded[] = []
-    const status = await fetchPanelStatus(client(calls, { armed: true, explicit: false, rounds: "multi" }), "ses 1")
+    const status = await fetchPanelStatus(client(calls, { armed: true, explicit: false }), "ses 1")
     expect(calls).toEqual([{ method: "GET", url: "/deepagent/panel/status?sessionID=ses%201" }])
-    expect(status).toEqual({ armed: true, explicit: false, rounds: "multi" })
+    expect(status).toEqual({ armed: true, explicit: false })
   })
 
-  test("fetchPanelStatus tolerates a missing body (disarmed, not explicit, single-round default)", async () => {
+  test("fetchPanelStatus tolerates a missing body (disarmed, not explicit)", async () => {
     const calls: Recorded[] = []
-    expect(await fetchPanelStatus(client(calls, {}), "ses_1")).toEqual({ armed: false, explicit: false, rounds: "single" })
+    expect(await fetchPanelStatus(client(calls, {}), "ses_1")).toEqual({ armed: false, explicit: false })
   })
 })
 
@@ -117,39 +111,14 @@ describe("Goal Loop route contract (§D)", () => {
     const calls: Recorded[] = []
     expect(await goalStatus(client(calls, { goal: null }), "ses_1")).toBeNull()
   })
-
-  test("editPlanGoal POSTs /deepagent/goal/edit-plan with { sessionID, plan } and returns ok", async () => {
-    const calls: Recorded[] = []
-    const plan = {
-      goal: "ship it",
-      steps: [
-        { step_id: "step_1", title: "revised", status: "pending" },
-        { title: "new step" },
-      ],
-    }
-    const ok = await editPlanGoal(client(calls, { ok: true }), "ses_1", plan)
-    expect(calls).toEqual([
-      { method: "POST", url: "/deepagent/goal/edit-plan", body: { sessionID: "ses_1", plan }, headers: JSON_HEADERS },
-    ])
-    expect(ok).toBe(true)
-  })
-
-  test("editPlanGoal returns false when the server refuses (no goal / terminal)", async () => {
-    const calls: Recorded[] = []
-    expect(await editPlanGoal(client(calls, { ok: false }), "ses_1", { goal: "g", steps: [] })).toBe(false)
-    // ...and tolerates a missing body (older server) as false.
-    expect(await editPlanGoal(client(calls, {}), "ses_1", { goal: "g", steps: [] })).toBe(false)
-  })
 })
 
 describe("capabilities gating", () => {
   test("fetchCapabilities GETs /global/capabilities and reads the feature flags", async () => {
     const calls: Recorded[] = []
-    const caps = await fetchCapabilities(
-      client(calls, { features: { expertPanel: true, goalLoop: false, wiki: true, v4MultiAgentRuntime: true } }),
-    )
+    const caps = await fetchCapabilities(client(calls, { features: { expertPanel: true, goalLoop: false } }))
     expect(calls).toEqual([{ method: "GET", url: "/global/capabilities" }])
-    expect(caps).toEqual({ expertPanel: true, goalLoop: false, wiki: true, v4MultiAgentRuntime: true })
+    expect(caps).toEqual({ expertPanel: true, goalLoop: false })
   })
 
   test("fetchCapabilities treats a server that omits the fields as disabled", async () => {
@@ -157,15 +126,8 @@ describe("capabilities gating", () => {
     expect(await fetchCapabilities(client(calls, { features: {} }))).toEqual({
       expertPanel: false,
       goalLoop: false,
-      wiki: false,
-      v4MultiAgentRuntime: false,
     })
     // and a server with no features object at all
-    expect(await fetchCapabilities(client(calls, {}))).toEqual({
-      expertPanel: false,
-      goalLoop: false,
-      wiki: false,
-      v4MultiAgentRuntime: false,
-    })
+    expect(await fetchCapabilities(client(calls, {}))).toEqual({ expertPanel: false, goalLoop: false })
   })
 })

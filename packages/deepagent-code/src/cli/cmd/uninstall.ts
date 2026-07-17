@@ -88,31 +88,12 @@ export const UninstallCommand = {
 }
 
 async function collectRemovalTargets(args: UninstallArgs, method: Installation.Method): Promise<RemovalTargets> {
-  const raw: RemovalTargets["directories"] = [
+  const directories: RemovalTargets["directories"] = [
     { path: Global.Path.data, label: "Data", keep: args.keepData },
     { path: Global.Path.cache, label: "Cache", keep: false },
     { path: Global.Path.config, label: "Config", keep: args.keepConfig },
     { path: Global.Path.state, label: "State", keep: false },
   ]
-
-  // After config/data unification, Config, Cache and State are all nested under (or equal to) the
-  // data root. Collapse entries that resolve to the same path or that sit inside a kept ancestor so
-  // we never (a) list the same dir twice, or (b) delete Data out from under a --keep-config request.
-  // keep is unioned: if any alias of a path is kept, the path is kept.
-  const byPath = new Map<string, RemovalTargets["directories"][number]>()
-  for (const dir of raw) {
-    const key = path.resolve(dir.path)
-    const existing = byPath.get(key)
-    if (existing) existing.keep = existing.keep || dir.keep
-    else byPath.set(key, { ...dir, path: key })
-  }
-  const directories = [...byPath.values()].filter((dir) => {
-    // Drop a dir if a *different* kept dir is an ancestor of it — that ancestor's removal is skipped,
-    // so the nested dir survives too and must not be independently deleted.
-    return ![...byPath.values()].some(
-      (other) => other !== dir && other.keep && (dir.path === other.path || dir.path.startsWith(other.path + path.sep)),
-    )
-  })
 
   const shellConfig = method === "curl" ? await getShellConfigFile() : null
   const binary = method === "curl" ? process.execPath : null

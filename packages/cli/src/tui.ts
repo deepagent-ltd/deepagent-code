@@ -1,36 +1,73 @@
 import { run } from "@deepagent-code/tui"
-import { TuiConfig } from "@deepagent-code/tui/config"
+import type { Args } from "@deepagent-code/tui/context/args"
 import { Effect } from "effect"
 import { Global } from "@deepagent-code/core/global"
+import { ensureRuntimePluginSupport } from "@opentui/solid/runtime-plugin-support/configure"
+import { runtimeModules as keymapRuntimeModules } from "@opentui/keymap/runtime-modules"
 
-export function runTui(transport: { url: string; headers: RequestInit["headers"] }) {
-  const config = TuiConfig.resolve({}, { terminalSuspend: false })
-  return run({
-    ...transport,
-    args: {},
-    config,
-    fetch: gracefulFetch,
-    pluginHost: {
-      async start() {},
-      async dispose() {},
+ensureRuntimePluginSupport({ additional: keymapRuntimeModules })
+
+export function runTui(
+  transport: { url: string; headers: RequestInit["headers"] },
+  args: Args,
+  directory?: string,
+) {
+  return Effect.tryPromise({
+    try: async () => {
+      const origStderrWrite = process.stderr.write.bind(process.stderr)
+      const origConsoleLog = console.log
+      const origConsoleInfo = console.info
+      const origConsoleError = console.error
+      const origConsoleWarn = console.warn
+      const noop = () => {}
+      const stderrWritable = process.stderr.write
+      try {
+        Object.defineProperty(process.stderr, "write", {
+          value: () => true,
+          writable: true,
+          configurable: true,
+        })
+      } catch {
+        process.stderr.write = () => true
+      }
+      console.log = noop
+      console.info = noop
+      console.error = noop
+      console.warn = noop
+
+      let config: unknown
+      let pluginHost: unknown
+      try {
+        const { TuiConfig: LegacyTuiConfig } = await import("deepagent-code/config/tui")
+        config = await LegacyTuiConfig.get()
+        const { createLegacyTuiPluginHost } = await import("deepagent-code/plugin/tui/runtime")
+        pluginHost = createLegacyTuiPluginHost()
+
+        await Effect.runPromise(
+          run({
+            ...transport,
+            args,
+            config: config as never,
+            directory,
+            pluginHost: pluginHost as never,
+          }).pipe(Effect.provide(Global.defaultLayer)),
+        )
+      } finally {
+        try {
+          Object.defineProperty(process.stderr, "write", {
+            value: stderrWritable,
+            writable: true,
+            configurable: true,
+          })
+        } catch {
+          process.stderr.write = stderrWritable
+        }
+        console.log = origConsoleLog
+        console.info = origConsoleInfo
+        console.error = origConsoleError
+        console.warn = origConsoleWarn
+      }
     },
-  }).pipe(Effect.provide(Global.defaultLayer))
+    catch: (e) => (e instanceof Error ? e : new Error(String(e))),
+  })
 }
-
-const legacyDefaults: Record<string, unknown> = {
-  "/config/providers": { providers: [], default: {} },
-  "/provider": { all: [], default: {}, connected: [] },
-  "/agent": [],
-  "/config": {},
-}
-
-const gracefulFetch = Object.assign(
-  async (input: RequestInfo | URL, init?: RequestInit) => {
-    const response = await fetch(input, init)
-    if (response.status !== 404) return response
-    const fallback = legacyDefaults[new URL(input instanceof Request ? input.url : input).pathname]
-    if (fallback === undefined) return response
-    return Response.json(fallback)
-  },
-  { preconnect: fetch.preconnect },
-)

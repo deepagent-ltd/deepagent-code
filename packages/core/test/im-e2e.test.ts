@@ -188,23 +188,6 @@ describe("IM System E2E Tests", () => {
       }),
     )
 
-    // AgentV2-derived descriptors surfaced to humans (visible: true) are exactly the
-    // non-hidden all/primary agents; hidden-agent and subagent-only are excluded.
-    expect(
-      agents
-        .filter((agent) => agent.visible)
-        .map((agent) => agent.name)
-        .sort(),
-    ).toEqual(["all-agent", "primary-agent"])
-    // V4.0 §A1: the built-in autonomous descriptors are always appended. They are
-    // matchable-but-hidden (visible: false → excluded from the human @mention UI). Six
-    // distinct descriptors run AS one of two real agents, so "auto" and "general" each
-    // appear once per descriptor (auto×3, general×3) — by design, not a dedup bug.
-    expect(
-      agents
-        .filter((agent) => !agent.visible)
-        .map((agent) => agent.name)
-        .sort(),
-    ).toEqual(["auto", "auto", "auto", "general", "general", "general"])
+    expect(agents.map((agent) => agent.name).sort()).toEqual(["all-agent", "primary-agent"])
   })
 })

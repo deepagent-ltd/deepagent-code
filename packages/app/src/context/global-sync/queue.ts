@@ -3,7 +3,6 @@ type QueueInput = {
   bootstrap: () => Promise<void>
   bootstrapInstance: (directory: string) => Promise<void> | void
   key?: (directory: string) => string
-  accept?: (directory: string) => boolean
 }
 
 export function createRefreshQueue(input: QueueInput) {
@@ -37,7 +36,6 @@ export function createRefreshQueue(input: QueueInput) {
 
   const push = (directory: string) => {
     if (!directory) return
-    if (input.accept && !input.accept(directory)) return
     queued.set(key(directory), directory)
     if (input.paused()) return
     schedule()
