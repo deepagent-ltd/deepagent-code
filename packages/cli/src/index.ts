@@ -36,7 +36,6 @@ const Handlers = Runtime.handlers(Commands, {
   },
   packs: () => import("./commands/handlers/deepagent/packs"),
   wiki: () => import("./commands/handlers/deepagent/wiki"),
-  oversight: () => import("./commands/handlers/deepagent/oversight"),
   review: () => import("./commands/handlers/deepagent/review"),
   "env-facts": () => import("./commands/handlers/deepagent/env-facts"),
   goal: () => import("./commands/handlers/deepagent/goal"),

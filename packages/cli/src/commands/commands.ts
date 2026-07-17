@@ -133,13 +133,6 @@ export const Commands = Spec.make(
           scope: Flag.string("scope").pipe(Flag.optional),
         },
       }),
-      Spec.make("oversight", {
-        description: "Oversight dashboard: metrics, approvals, trace",
-        params: {
-          action: Argument.choice("action", ["metrics", "queue", "approve", "reject", "ack", "trace"]),
-          id: Argument.string("id").pipe(Argument.optional),
-        },
-      }),
       Spec.make("review", {
         description: "Review pending DeepAgent knowledge",
         params: {
