@@ -13,6 +13,15 @@ const Handlers = Runtime.handlers(Commands, {
     agents: () => import("./commands/handlers/debug/agents"),
   },
   migrate: () => import("./commands/handlers/migrate"),
+  models: () => import("./commands/handlers/models"),
+  run: () => import("./commands/handlers/run"),
+  export: () => import("./commands/handlers/export"),
+  stats: () => import("./commands/handlers/stats"),
+  import: () => import("./commands/handlers/import"),
+  session: {
+    list: () => import("./commands/handlers/session/list"),
+    delete: () => import("./commands/handlers/session/delete"),
+  },
   service: {
     start: () => import("./commands/handlers/service/start"),
     restart: () => import("./commands/handlers/service/restart"),
