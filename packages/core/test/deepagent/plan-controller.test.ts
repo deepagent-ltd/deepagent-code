@@ -133,14 +133,36 @@ describe("planGate (before_tool_use soft gate)", () => {
     expect(gate({ name: "before_tool_use", payload: { planStale: true, isMutating: false } }).decision).toBe("allow")
   })
 
-  test("blocks mutating tools when stale in high+ mode", () => {
+  // DESIGN (aligned with codex exec_policy): a stale plan ledger NEVER denies tool execution — it
+  // WARNS (tool runs, reminder attached) so the model is nudged to re-sync without being deadlocked.
+  // This holds in every mode, including high+ (the old code hard-blocked here, which caused the
+  // production deadlock). The only remaining hard block is the U9 per-step binding gate, covered below.
+  test("warns (never blocks) on a mutating tool when stale in high+ mode", () => {
     const d = gate({ name: "before_tool_use", payload: { planStale: true, isMutating: true, lightweight: false } })
-    expect(d.decision).toBe("block")
+    expect(d.decision).toBe("warn")
     expect(d.blockReason).toContain("stale")
   })
 
-  test("only warns (never blocks) in lightweight mode", () => {
+  test("warns (never blocks) in lightweight mode too", () => {
     const d = gate({ name: "before_tool_use", payload: { planStale: true, isMutating: true, lightweight: true } })
+    expect(d.decision).toBe("warn")
+  })
+
+  // U9 per-step binding remains a hard block (strict hard modes) but gains a runtime grace release so
+  // it can never permanently deadlock a model that fails to mark a step active.
+  test("U9 binding: strict hard mode blocks a mutating tool with no active step", () => {
+    const d = gate({
+      name: "before_tool_use",
+      payload: { planStale: false, isMutating: true, lightweight: false, hardGate: true, hasActiveStep: false, hardGateMissBlocks: true },
+    })
+    expect(d.decision).toBe("block")
+  })
+
+  test("U9 binding: grace release downgrades the strict block to a warn", () => {
+    const d = gate({
+      name: "before_tool_use",
+      payload: { planStale: false, isMutating: true, lightweight: false, hardGate: true, hasActiveStep: false, hardGateMissBlocks: true, graceRelease: true },
+    })
     expect(d.decision).toBe("warn")
   })
 })
