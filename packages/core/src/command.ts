@@ -2,6 +2,7 @@ export * as CommandV2 from "./command"
 
 import { Context, Effect, Layer, Schema } from "effect"
 import { castDraft, type Draft } from "immer"
+import { makeLocationNode } from "./effect/app-node"
 import { ModelV2 } from "./model"
 import { State } from "./state"
 
@@ -66,5 +67,7 @@ export const layer = Layer.effect(
     })
   }),
 )
+
+export const node = makeLocationNode({ service: Service, layer, deps: [] })
 
 export const locationLayer = layer

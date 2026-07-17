@@ -3,6 +3,7 @@ export * as Config from "./config"
 import path from "path"
 import { type ParseError, parse } from "jsonc-parser"
 import { Context, Effect, Layer, Option, Schema } from "effect"
+import { makeLocationNode } from "./effect/app-node"
 import { FSUtil } from "./fs-util"
 import { Global } from "./global"
 import { Location } from "./location"
@@ -222,5 +223,11 @@ export const layer = Layer.effect(
     })
   }),
 )
+
+export const node = makeLocationNode({
+  service: Service,
+  layer,
+  deps: [FSUtil.node, Global.node, Location.node, Policy.node],
+})
 
 export const locationLayer = layer.pipe(Layer.provideMerge(Policy.locationLayer))

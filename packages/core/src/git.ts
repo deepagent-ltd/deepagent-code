@@ -6,6 +6,7 @@ import { ChildProcess } from "effect/unstable/process"
 import { AbsolutePath } from "./schema"
 import { FSUtil } from "./fs-util"
 import { AppProcess } from "./process"
+import { makeGlobalNode } from "./effect/app-node"
 
 export interface Repo {
   /**
@@ -400,6 +401,8 @@ export const layer = Layer.effect(
 )
 
 export const defaultLayer = layer.pipe(Layer.provide(FSUtil.defaultLayer), Layer.provide(AppProcess.defaultLayer))
+
+export const node = makeGlobalNode({ service: Service, layer: layer, deps: [FSUtil.node, AppProcess.node] })
 
 export interface Result {
   readonly exitCode: number

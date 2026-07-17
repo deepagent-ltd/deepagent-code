@@ -1,6 +1,7 @@
 export * as PermissionV2 from "./permission"
 
 import { Context, Deferred, Effect as EffectRuntime, Layer, Schema } from "effect"
+import { makeLocationNode } from "./effect/app-node"
 import { EventV2 } from "./event"
 import { Location } from "./location"
 import { AgentV2 } from "./agent"
@@ -325,5 +326,11 @@ export const layer = Layer.effect(
     return Service.of({ ask, assert, reply, get, forSession, list })
   }),
 )
+
+export const node = makeLocationNode({
+  service: Service,
+  layer,
+  deps: [EventV2.node, Location.node, AgentV2.node, SessionStore.node, PermissionSaved.node],
+})
 
 export const locationLayer = layer.pipe(Layer.provideMerge(AgentV2.locationLayer))
