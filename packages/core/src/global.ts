@@ -6,6 +6,7 @@ import { Context, Effect, Layer } from "effect"
 import { Flock } from "./util/flock"
 import { Flag } from "./flag/flag"
 import { resolveDataPath, resolveHomeBase } from "./global-path"
+import { makeGlobalNode } from "./effect/app-node"
 
 const app = "deepagent-code"
 const legacyData = path.join(xdgData!, app)
@@ -198,6 +199,8 @@ export const layer = Layer.effect(
 )
 
 export const defaultLayer = layer
+
+export const node = makeGlobalNode({ service: Service, layer: layer, deps: [] })
 
 export const layerWith = (input: Partial<Interface>) =>
   Layer.effect(

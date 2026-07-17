@@ -2,6 +2,7 @@ export * as LocationMutation from "./location-mutation"
 
 import path from "path"
 import { Context, Effect, Layer, Schema } from "effect"
+import { makeLocationNode } from "./effect/app-node"
 import { FSUtil } from "./fs-util"
 import { Location } from "./location"
 
@@ -151,5 +152,11 @@ export const layer = Layer.effect(
     return Service.of({ resolve })
   }),
 )
+
+export const node = makeLocationNode({
+  service: Service,
+  layer: layer.pipe(Layer.orDie),
+  deps: [FSUtil.node, Location.node],
+})
 
 export const locationLayer = layer

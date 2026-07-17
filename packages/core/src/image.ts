@@ -1,6 +1,7 @@
 export * as Image from "./image"
 
 import { Context, Effect, Layer, Schema } from "effect"
+import { makeLocationNode } from "./effect/app-node"
 import { Config } from "./config"
 import { FileSystem } from "./filesystem"
 
@@ -68,5 +69,7 @@ export const layer = Layer.effect(
     return Service.of({ normalize })
   }),
 )
+
+export const node = makeLocationNode({ service: Service, layer, deps: [Config.node] })
 
 export const locationLayer = layer.pipe(Layer.provide(Config.locationLayer))

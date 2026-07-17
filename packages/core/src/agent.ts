@@ -2,6 +2,7 @@ export * as AgentV2 from "./agent"
 
 import { Array, Context, Effect, Layer, Schema, Scope } from "effect"
 import { castDraft, enableMapSet, type Draft } from "immer"
+import { makeLocationNode } from "./effect/app-node"
 import { ModelV2 } from "./model"
 import { PermissionSchema } from "./permission/schema"
 import { ProviderV2 } from "./provider"
@@ -163,5 +164,7 @@ export const layer = Layer.effect(
     })
   }),
 )
+
+export const node = makeLocationNode({ service: Service, layer, deps: [] })
 
 export const locationLayer = layer
