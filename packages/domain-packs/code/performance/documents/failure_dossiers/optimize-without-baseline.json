@@ -2,7 +2,7 @@
   "ref_id": "failure:performance:optimize-without-baseline",
   "type": "failure_dossier",
   "description": "Optimizing without a baseline cannot prove improvement.",
-  "body": "Require a baseline and same workload comparison.\n\nDerived from reviewed skill survey outputs, including canonical rules, coverage reports, and trusted skill notes. Paraphrased into domain-pack seed form.\n\nDiagnostic use only: keep this out of index.json and use it only as a blocked/do-not-use signal.",
+  "body": "Require a baseline and same workload comparison.\n\nDerived from local skill survey outputs under /Users/xiuranli/code/agent/skill, especially reviewed canonical rules, coverage reports, and trusted local skill notes. Paraphrased into domain-pack seed form.\n\nDiagnostic use only: keep this out of index.json and use it only as a blocked/do-not-use signal.",
   "domain": "performance",
   "scope_hint": "code.performance:failure_dossiers",
   "evidence_strength": "medium",

@@ -28,11 +28,6 @@
       "bun": "./src/storage/db.bun.ts",
       "node": "./src/storage/db.node.ts",
       "default": "./src/storage/db.bun.ts"
-    },
-    "#wiki-fts-db": {
-      "bun": "./src/wiki/wiki-fts-db.bun.ts",
-      "node": "./src/wiki/wiki-fts-db.node.ts",
-      "default": "./src/wiki/wiki-fts-db.bun.ts"
     }
   },
   "devDependencies": {

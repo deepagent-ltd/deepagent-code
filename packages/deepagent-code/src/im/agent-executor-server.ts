@@ -9,7 +9,6 @@ import {
 } from "@deepagent-code/core/im/agent-list-provider"
 import type { AgentDescriptor } from "@deepagent-code/core/im/mention-parser"
 import { DEFAULT_AUTONOMY_LEVEL } from "@deepagent-code/core/im/mention-parser"
-import { BUILTIN_AGENT_DESCRIPTORS } from "@deepagent-code/core/im/builtin-agents"
 import { Option } from "effect"
 import type { AgentProgressPart } from "@deepagent-code/core/im/agent-reply-sink"
 import { ServerCapabilities } from "@deepagent-code/core/server-capabilities"
@@ -19,9 +18,6 @@ import { SessionV1 } from "@deepagent-code/core/v1/session"
 import { WorkspaceV2 } from "@deepagent-code/core/workspace"
 import { Agent } from "@/agent/agent"
 import { EventV2Bridge } from "@/event-v2-bridge"
-import { InstanceRef } from "@/effect/instance-ref"
-import { InstanceState } from "@/effect/instance-state"
-import { InstanceStore } from "@/project/instance-store"
 import { Session } from "@/session/session"
 import { SessionPrompt } from "@/session/prompt"
 import { withAgentProgress } from "./agent-progress-stream"
@@ -94,12 +90,9 @@ class ServerAgentExecutor implements AgentExecutor {
         ? { providerID: ProviderV2.ID.make(imModelRef.providerID), modelID: ModelV2.ID.make(imModelRef.modelID) }
         : undefined
 
-      // Run the agent to completion. V4.1 §S1.2: route through promptOrSteer — if the session is already
-      // mid-turn (e.g. a goal is running, or a prior IM turn is still executing), this message is absorbed
-      // as a STEER into that running turn instead of erroring/blocking; the running turn produces the
-      // reply through its own progress bridge / IM output, so THIS call returns a steering-accepted ack
-      // (no fabricated reply). If the session is idle, promptOrSteer runs a normal turn exactly as before.
-      const runPrompt = prompts.promptOrSteer({
+      // Run the agent to completion. `prompt` returns the assistant message with
+      // its parts; extract the concatenated text as the IM reply.
+      const runPrompt = prompts.prompt({
         sessionID: session.id,
         agent: input.agentID,
         ...(imModel ? { model: imModel } : {}),
@@ -111,11 +104,11 @@ class ServerAgentExecutor implements AgentExecutor {
       // forward throttled reasoning/tool/text batches. The bridge is resolved at
       // RUNTIME via serviceOption (adds no static requirement, so execute stays
       // R = never); it's part of the instance runtime this executor runs in.
-      // `withAgentProgress` is transparent — returns exactly promptOrSteer's result and
+      // `withAgentProgress` is transparent — returns exactly prompt's result and
       // never fails the run. No sink or no bridge → run bare, unchanged.
       const onProgress = input.onProgress
       const eventBridge = Option.getOrUndefined(yield* Effect.serviceOption(EventV2Bridge.Service))
-      const outcome =
+      const reply =
         onProgress && eventBridge !== undefined
           ? yield* withAgentProgress({
               sessionID: session.id,
@@ -123,19 +116,6 @@ class ServerAgentExecutor implements AgentExecutor {
               body: runPrompt,
             }).pipe(Effect.provideService(EventV2Bridge.Service, eventBridge))
           : yield* runPrompt
-
-      // Steer branch: the message was absorbed into the already-running turn (its reply streams through
-      // that turn's own IM/progress path). Ack success without a synthesized reply of our own.
-      if (outcome.kind === "steer") {
-        return {
-          success: true,
-          timeout: false,
-          content: "",
-          messageID: outcome.admitted.id,
-          steered: true,
-        } satisfies AgentExecutionResult
-      }
-      const reply = outcome.message
 
       const text = reply.parts
         .filter((part): part is SessionV1.TextPart => part.type === "text")
@@ -217,57 +197,13 @@ export const ServerAgentExecutorLive = Layer.effect(
  * ever matches and no agent runs. Mentions match on `name` (the agent's name).
  */
 class ServerAgentListProvider implements AgentListProvider {
-  constructor(
-    private readonly agents: Agent.Interface,
-    private readonly instanceStore: InstanceStore.Interface,
-  ) {}
+  constructor(private readonly agents: Agent.Interface) {}
 
-  listAgents(input: AgentQueryScope): Effect.Effect<AgentDescriptor[], Error, never> {
+  listAgents(_input: AgentQueryScope): Effect.Effect<AgentDescriptor[], Error, never> {
     const agents = this.agents
-    const instanceStore = this.instanceStore
     return Effect.gen(function* () {
-      // Scope gate (V4.x defense-in-depth). deepagent-code is a single-user, one-workspace-per-instance
-      // server: `Agent.list()` returns the CONFIG agents of THIS routed instance only, so the correct
-      // scope check is "does the requested scope address the instance this provider is bound to?" We
-      // resolve the instance's own identity exactly like `getWorkspaceContext`: the routed workspace id,
-      // else the working directory (the grouping key IM falls back to). Both reads are R=never and never
-      // fail — `InstanceState.workspaceID` swallows a missing context, and `InstanceRef` is a reference
-      // whose default is `undefined`.
-      //
-      // When the requested `workspaceID` does NOT match the instance's own scope, the caller is asking
-      // about a workspace this instance was not routed to, so only the workspace-independent BUILT-INS
-      // (globals) are returned; the instance's config agents are withheld.
-      const routedWorkspaceID = yield* InstanceState.workspaceID
-      const instanceCtx = yield* InstanceRef
-      const ownScope = routedWorkspaceID ?? instanceCtx?.directory
-      const inScope = ownScope === undefined || ownScope === input.workspaceID
-
-      // BLOCKER (v4-daemon-instanceref-die, residual): `agents.list()` resolves through InstanceState →
-      // `InstanceState.context`, which `Effect.die`s when NO InstanceRef is present (instance-state.ts).
-      // On a per-REQUEST fiber the middleware set it, so this is fine. But the AUTONOMOUS path calls this
-      // provider from a bare DAEMON fiber (event-dispatcher / multi-agent-runtime), which carries no
-      // InstanceRef — so `agents.list()` would die, the dispatcher captures the defect as "registry
-      // lookup failed", nacks → 3× retry → DLQ, and EVERY autonomous event silently fails to dispatch
-      // while looking handled. The prior InstanceRef-die fix wrapped the turn-runner + panel port but not
-      // this earlier call site. Heal it the same way: when there is no InstanceRef, ESTABLISH one by
-      // loading an InstanceContext for the event's directory (a non-"wrk" workspaceID doubles as a real
-      // directory in the single-user / directory-routed model), then run `agents.list()` inside it. When
-      // we cannot derive a directory (a bare "wrk_"-id is not a path), fall back to built-ins only —
-      // never die. A genuine load/list ERROR still propagates so the dispatcher nacks+retries (transient).
-      const listAgentsSafely = inScope
-        ? instanceCtx
-          ? agents.list() // per-request fiber already carries the context
-          : (() => {
-              const directory =
-                input.workspaceID && !input.workspaceID.startsWith("wrk") ? input.workspaceID : undefined
-              if (!directory) return Effect.succeed<Agent.Info[]>([])
-              return instanceStore
-                .load({ directory })
-                .pipe(Effect.flatMap((ctx) => agents.list().pipe(Effect.provideService(InstanceRef, ctx))))
-            })()
-        : Effect.succeed<Agent.Info[]>([])
-      const all = yield* listAgentsSafely
-      const mapped = all
+      const all = yield* agents.list()
+      return all
         .filter((agent) => !agent.hidden && (agent.mode === "all" || agent.mode === "primary"))
         .map((agent): AgentDescriptor => {
           // Resolve autonomy to its conservative default when the agent didn't
@@ -295,14 +231,6 @@ class ServerAgentListProvider implements AgentListProvider {
             ...(agent.limits !== undefined ? { limits: agent.limits } : {}),
           } satisfies AgentDescriptor
         })
-      // V4.0 §A1 — this is the PRODUCTION provider (ServerAgentListProviderLive is what
-      // server.ts wires into v4EventRuntimeLayer + what multi-agent-runtime resolves).
-      // The real deepagent-code agents (auto/general/plan) carry NO trigger/capability
-      // metadata, so without this every autonomous event (ci.failure/pr.comment/…) would
-      // still block with `no_capable_agent` here. Append the built-ins (each `name`
-      // resolves to a real runnable agent) so the autonomous path is live in production.
-      // `visible: false` keeps them out of the @mention UI while staying matchable.
-      return [...mapped, ...BUILTIN_AGENT_DESCRIPTORS]
     })
   }
 
@@ -319,7 +247,6 @@ export const ServerAgentListProviderLive = Layer.effect(
   AgentListProviderService,
   Effect.gen(function* () {
     const agents = yield* Agent.Service
-    const instanceStore = yield* InstanceStore.Service
-    return new ServerAgentListProvider(agents, instanceStore)
+    return new ServerAgentListProvider(agents)
   }),
 )

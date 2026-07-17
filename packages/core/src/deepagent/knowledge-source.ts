@@ -33,17 +33,6 @@ export const configure = (dir: string): void => {
 
 export const isConfigured = (): boolean => baseDir !== null
 
-// Reset to the unconfigured state (baseDir=null + caches cleared). `configure` is a process-global
-// setter with no other way back to null; tests that assert the UNCONFIGURED path (isConfigured()===false
-// → callers fall back to empty results) need this to guarantee their precondition regardless of a prior
-// test in the same process having called configure(). Not used by production wiring (the gateway only
-// ever configures forward).
-export const reset = (): void => {
-  baseDir = null
-  userGlobalCache = null
-  projectCache.clear()
-}
-
 // Clear cached stores so a subsequent query re-reads from disk (after approve/reject/seed).
 export const invalidateCache = (): void => {
   userGlobalCache = null
@@ -184,10 +173,6 @@ export type ReviewItem = {
   readonly evidence_strength: import("./document-store").EvidenceStrength
   readonly evidence_refs: readonly string[]
   readonly approval_status: "pending" | "approved" | "rejected"
-  // The doc's storage scope, so the Review UI can group by project vs global:
-  //   "durable" (or legacy untagged)  → user-global bucket
-  //   "durable:project:<project_id>"  → that project's bucket
-  readonly scope: string
 }
 
 // A built-in seeded pack doc carries a pack id (extensions.pack_id or a "pack:" tag). These are the
@@ -224,7 +209,6 @@ export const listByStatusForWorkspace = (
         evidence_strength: doc.confidence?.evidence_strength ?? "none",
         evidence_refs: doc.provenance.evidence_refs ?? [],
         approval_status: statusToApproval(doc.status),
-        scope: doc.scope,
       })
     }
   }

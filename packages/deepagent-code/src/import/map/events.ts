@@ -23,7 +23,7 @@ export interface MapContext {
 }
 
 const DEFAULT_MODEL = { id: "imported", providerID: "imported" } as const
-const DEFAULT_AGENT = "auto"
+const DEFAULT_AGENT = "build"
 
 /** Build events with a monotonically increasing seq and matching stable id. */
 class Builder {

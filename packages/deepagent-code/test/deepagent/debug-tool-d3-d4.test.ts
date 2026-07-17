@@ -1,5 +1,4 @@
 import { describe, expect } from "bun:test"
-import path from "node:path"
 import { Effect, Layer } from "effect"
 import { FSUtil } from "@deepagent-code/core/fs-util"
 import { CrossSpawnSpawner } from "@deepagent-code/core/cross-spawn-spawner"
@@ -108,11 +107,8 @@ describe("D3 debug tool", () => {
       () =>
         Effect.gen(function* () {
           // Verify the D4/P4A artifacts are registered in the gateway (evidence kinds).
-          // Resolve relative to THIS test file (…/packages/deepagent-code/test/deepagent) so the check
-          // works regardless of where the repo is checked out — the old hardcoded absolute path pointed
-          // at a stale ~/code/agent/… location that no longer exists and always failed to read.
           const fs = yield* FSUtil.Service
-          const gatewayPath = path.resolve(import.meta.dir, "../../../core/src/agent-gateway.ts")
+          const gatewayPath = "/Users/xiuranli/code/agent/deepagent-code/packages/core/src/agent-gateway.ts"
           const content = yield* fs.readFileStringSafe(gatewayPath)
           expect(content).toContain("DEBUG_SESSION.json")
           expect(content).toContain("debug_session")

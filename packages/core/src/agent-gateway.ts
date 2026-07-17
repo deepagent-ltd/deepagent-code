@@ -377,12 +377,7 @@ export const isActiveDeepAgentRuntime = () => current.enabled && !current.killSw
 const isManagedDeepAgentRuntimeWith = (config: CurrentConfig) =>
   config.enabled && !config.killSwitch && config.agentMode !== "general"
 
-import {
-  buildSystemPrompt,
-  buildVolatileRoundContext,
-  type KnowledgeRefProjection,
-  type PromptContext,
-} from "./deepagent/prompt-policy"
+import { buildSystemPrompt, type KnowledgeRefProjection, type PromptContext } from "./deepagent/prompt-policy"
 import * as DeepAgentOrchestrator from "./deepagent/orchestrator"
 import * as DeepAgentSessionState from "./deepagent/session-state"
 import * as DeepAgentPlanController from "./deepagent/plan-controller"
@@ -449,14 +444,6 @@ import type { RoundState as DeepAgentRoundState } from "./deepagent/round-state"
 // signature stability but no longer gates injection.
 export const systemPrompt = (_providerID: string, context?: PromptContext) =>
   isActiveDeepAgentRuntime() ? [context ? buildSystemPrompt(context) : bootMessage(current.agentMode)] : []
-
-// Prompt-cache split (see docs/deepagent-cache-hit-fix-plan.md): the per-turn volatile state that must
-// NOT ride the cached system prefix. The caller appends this to the tail of the message array (after
-// the cache breakpoint) so the model still sees round/stage/previous-results/budget without churning
-// the prefix. Returns "" when there is nothing round-specific (⇒ caller skips injection). Only emitted
-// when the DeepAgent runtime is active, matching systemPrompt().
-export const volatileRoundContext = (context: PromptContext): string =>
-  isActiveDeepAgentRuntime() ? buildVolatileRoundContext(context) : ""
 
 export const preflight = (input: RunInput): Effect.Effect<void, LLMError> => preflightWith(input, current)
 
@@ -725,14 +712,8 @@ const runBackgroundLearning = (run: RunRecord, finalStatus: "completed" | "faile
       // docs/34 §8: the worker stages into THIS workspace's durable project store (opened from the
       // same baseDir + path the retriever reads), so learned knowledge is immediately consistent.
       const durable = DeepAgentKnowledgeSource.projectStoreFor(workspacePath)
-      // Gate 3 (R3 anti-pollution): the worker must consult the SAME durable RejectedBuffer the human
-      // `reject` handler writes, so a rejected pattern is not re-learned + auto-admitted on a later run.
-      // The handler roots it at dirname(runsDir)/memory; construct the reader at the identical path.
-      const rejectedBuffer = current.runsDir
-        ? new DeepAgentPromotion.RejectedBuffer(path.join(path.dirname(current.runsDir), "memory"))
-        : undefined
       return {
-        worker: new DeepAgentBackgroundLearning.LearningWorker(project, projectID, durable, rejectedBuffer),
+        worker: new DeepAgentBackgroundLearning.LearningWorker(project, projectID, durable),
         input: {
           projectID,
           sessionID: sessionId,

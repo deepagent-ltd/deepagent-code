@@ -18,12 +18,4 @@ describe("global paths", () => {
     expect(Global.Path.data).toBe(path.join(Global.Path.home, ".deepagent", "code"))
     expect(Global.Path.agent.runs).toBe(path.join(Global.Path.data, "runs"))
   })
-
-  test("config shares the data root after unification", () => {
-    expect(Global.Path.config).toBe(Global.Path.data)
-  })
-
-  test("config directory is created on module load", async () => {
-    expect((await fs.stat(Global.Path.config)).isDirectory()).toBe(true)
-  })
 })

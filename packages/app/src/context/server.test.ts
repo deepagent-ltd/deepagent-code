@@ -118,23 +118,6 @@ describe("createServerProjects", () => {
 })
 
 describe("migrateCanonicalLocalServerState", () => {
-  test("removes persisted filesystem-root projects and last-project pointers", () => {
-    expect(
-      migrateCanonicalLocalServerState({
-        projects: {
-          local: [
-            { worktree: "/", expanded: true },
-            { worktree: "/project", expanded: true },
-          ],
-        },
-        lastProject: { local: "/", remote: "/project" },
-      }),
-    ).toEqual({
-      projects: { local: [{ worktree: "/project", expanded: true }] },
-      lastProject: { remote: "/project" },
-    })
-  })
-
   test("moves an existing canonical web bucket into local scope", () => {
     expect(
       migrateCanonicalLocalServerState(

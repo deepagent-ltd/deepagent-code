@@ -15,12 +15,7 @@ import { SessionInputTable, SessionMessageTable } from "./sql"
 
 type DatabaseService = Database.Interface["db"]
 
-// V4.1: `steer` = mid-turn user input absorbed at the next turn boundary by the parent session's own
-// runLoop (S1.1). `queue` = deferred user input promoted between turns. `goal_steer` (§S1.3) = guidance
-// directed at a RUNNING goal, drained by the goal DRIVER between ticks and threaded into the next step
-// prompt — a DISTINCT delivery dimension so the parent runLoop's `steer` drain and the goal driver's
-// `goal_steer` drain read DISJOINT rows on the same session id and never contend for the same buffer.
-export const Delivery = Schema.Literals(["steer", "queue", "goal_steer"])
+export const Delivery = Schema.Literals(["steer", "queue"])
 export type Delivery = typeof Delivery.Type
 
 export class Admitted extends Schema.Class<Admitted>("SessionInput.Admitted")({

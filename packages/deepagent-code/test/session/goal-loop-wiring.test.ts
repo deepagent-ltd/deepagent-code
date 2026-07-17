@@ -41,22 +41,6 @@ const turnFrom = (over: Partial<SubagentTurnResult> = {}): SubagentTurnResult =>
   ...over,
 })
 
-// V4.0.1 P2 — the StepExecutor input now also carries the goal's ledger + limits (so the wiring can
-// thread a tiered cost soft-notice into the step-prompt tail). This helper builds a minimal valid input
-// for the buildStepExecutor unit tests; individual tests override ledger/limits when they exercise the
-// budget notice.
-const execInput = (
-  over: Partial<Parameters<ReturnType<typeof buildStepExecutor>>[0]> = {},
-): Parameters<ReturnType<typeof buildStepExecutor>>[0] => ({
-  goalId: "g",
-  sessionId: "s",
-  planDocId: "p",
-  activeStepId: null,
-  ledger: { ticks: 0, tokens: 0, cost: 0, wallclockMs: 0, startedAtMs: 0 },
-  limits: { maxTicks: 100, maxTokens: 100_000, maxWallclockMs: 100_000 },
-  ...over,
-})
-
 const reviewTurn = (result: ReviewResult): SubagentTurnRunner => () =>
   Effect.succeed(turnFrom({ structured: result }))
 
@@ -69,7 +53,7 @@ const panelQuestion = (): PanelQuestionInput => ({
 
 const baseDeps = (over: Partial<Parameters<typeof buildGraderPorts>[0]> = {}) => ({
   runValidation: () => Effect.succeed({ pass: true }),
-  diagnostics: () => Effect.succeed({ maxSeverity: null as string | null, checked: true }),
+  diagnostics: () => Effect.succeed({ maxSeverity: null as string | null }),
   runTurn: (() => Effect.succeed(turnFrom())) as SubagentTurnRunner,
   panelQuestion,
   parentSessionID: "parent-1",
@@ -95,16 +79,9 @@ describe("V3.9 §D wiring — highestDiagnosticSeverity (LSP severity reduction)
 describe("V3.9 §D wiring — GraderPorts.diagnostics", () => {
   test("maps live diagnostics through the reducer", async () => {
     const ports = buildGraderPorts(
-      baseDeps({ diagnostics: () => Effect.succeed({ maxSeverity: "warning", checked: true }) }),
+      baseDeps({ diagnostics: () => Effect.succeed({ maxSeverity: "warning" }) }),
     )
-    expect(await Effect.runPromise(ports.diagnostics())).toEqual({ maxSeverity: "warning", checked: true })
-  })
-
-  test("a diagnostics DEFECT surfaces checked:false (unknown, not clean) — fail-open fix", async () => {
-    // The safe() wrapper catches a defect from the injected diagnostics fn. It must fall back to
-    // checked:false so the grader treats it as an unmet gap, NOT { maxSeverity: null } read as clean.
-    const ports = buildGraderPorts(baseDeps({ diagnostics: () => Effect.die("LSP crashed") }))
-    expect(await Effect.runPromise(ports.diagnostics())).toEqual({ maxSeverity: null, checked: false })
+    expect(await Effect.runPromise(ports.diagnostics())).toEqual({ maxSeverity: "warning" })
   })
 })
 
@@ -195,125 +172,24 @@ describe("V3.9 §D wiring — GraderPorts.panelApproves (real runPanel + arbiter
 describe("V3.9 §D wiring — buildStepExecutor", () => {
   test("maps a good turn → tokens/cost, no critical", async () => {
     const exec = buildStepExecutor(() => Effect.succeed(turnFrom({ ok: true, tokensUsed: 42, cost: 0.1 })))
-    const res = await Effect.runPromise(exec(execInput({ activeStepId: "a" })))
+    const res = await Effect.runPromise(
+      exec({ goalId: "g", sessionId: "s", planDocId: "p", activeStepId: "a" }),
+    )
     expect(res.tokensUsed).toBe(42)
     expect(res.cost).toBe(0.1)
     expect(res.critical).toBeUndefined()
   })
   test("a failed turn → critical (loop rolls back)", async () => {
     const exec = buildStepExecutor(() => Effect.succeed(turnFrom({ ok: false })))
-    const res = await Effect.runPromise(exec(execInput()))
+    const res = await Effect.runPromise(
+      exec({ goalId: "g", sessionId: "s", planDocId: "p", activeStepId: null }),
+    )
     expect(res.critical).toBe(true)
   })
   test("a defect → critical, never thrown", async () => {
     const exec = buildStepExecutor(() => Effect.die("boom"))
-    const res = await Effect.runPromise(exec(execInput()))
+    const res = await Effect.runPromise(exec({ goalId: "g", sessionId: "s", planDocId: "p", activeStepId: null }))
     expect(res.critical).toBe(true)
-  })
-
-  // V4.0.1 P2 §4.4 — tiered cost soft-notice threaded into the step-prompt TAIL.
-  test("budgetSoftNotify ON: a tick past the cost tier threads a BUDGET NOTICE into the prompt tail", async () => {
-    let seenPrompt = ""
-    const runTurn: SubagentTurnRunner = (input) => {
-      seenPrompt = input.prompt
-      return Effect.succeed(turnFrom({ ok: true }))
-    }
-    // 8/10 = 80% cost → crosses the default 0.7 tier.
-    const exec = buildStepExecutor(runTurn, undefined, undefined, true)
-    await Effect.runPromise(
-      exec(
-        execInput({
-          ledger: { ticks: 1, tokens: 0, cost: 8, wallclockMs: 0, startedAtMs: 0 },
-          limits: { maxTicks: 100, maxTokens: 100_000, maxWallclockMs: 100_000, maxCost: 10 },
-        }),
-      ),
-    )
-    expect(seenPrompt).toMatch(/BUDGET NOTICE/)
-    expect(seenPrompt).toMatch(/80% used/)
-    // The notice is in the TAIL (after the fixed advance instruction), never a prefix.
-    expect(seenPrompt.indexOf("BUDGET NOTICE")).toBeGreaterThan(seenPrompt.indexOf("Advance goal"))
-  })
-
-  test("budgetSoftNotify OFF: no notice is threaded even when the cost tier is crossed", async () => {
-    let seenPrompt = ""
-    const runTurn: SubagentTurnRunner = (input) => {
-      seenPrompt = input.prompt
-      return Effect.succeed(turnFrom({ ok: true }))
-    }
-    const exec = buildStepExecutor(runTurn, undefined, undefined, false)
-    await Effect.runPromise(
-      exec(
-        execInput({
-          ledger: { ticks: 1, tokens: 0, cost: 9, wallclockMs: 0, startedAtMs: 0 },
-          limits: { maxTicks: 100, maxTokens: 100_000, maxWallclockMs: 100_000, maxCost: 10 },
-        }),
-      ),
-    )
-    expect(seenPrompt).not.toMatch(/BUDGET NOTICE/)
-  })
-
-  // V4.0.1 P2 §4.4 — the real turn runner surfaces the granular breakdown feeding the NET-token ledger.
-  test("surfaces granular net-token fields (input/output/carriedPrefix) from a turn", async () => {
-    const exec = buildStepExecutor(() =>
-      Effect.succeed(turnFrom({ ok: true, tokensUsed: 100, inputTokens: 80, outputTokens: 20, carriedPrefixTokens: 60 })),
-    )
-    const res = await Effect.runPromise(exec(execInput()))
-    expect(res.tokensUsed).toBe(100)
-    expect(res.inputTokens).toBe(80)
-    expect(res.outputTokens).toBe(20)
-    expect(res.carriedPrefixTokens).toBe(60)
-  })
-
-  // V4.0.1 P1 §3.3 — the World State provider re-injects the latest volatile facts into the step-prompt
-  // TAIL every tick (P3(d) gate-free goal-worker recall). Ordering: World State BEFORE the budget notice.
-  test("worldStateProvider ON: the rendered block is threaded into the prompt tail, before the budget notice", async () => {
-    let seenPrompt = ""
-    const runTurn: SubagentTurnRunner = (input) => {
-      seenPrompt = input.prompt
-      return Effect.succeed(turnFrom({ ok: true }))
-    }
-    const provider = () => Effect.succeed("<world-state>\n## Version Control\nbranch main\n</world-state>")
-    const exec = buildStepExecutor(runTurn, undefined, undefined, true, provider)
-    await Effect.runPromise(
-      exec(
-        execInput({
-          ledger: { ticks: 1, tokens: 0, cost: 8, wallclockMs: 0, startedAtMs: 0 },
-          limits: { maxTicks: 100, maxTokens: 100_000, maxWallclockMs: 100_000, maxCost: 10 },
-        }),
-      ),
-    )
-    expect(seenPrompt).toContain("<world-state>")
-    expect(seenPrompt).toContain("branch main")
-    // World State rides the tail AFTER the advance instruction …
-    expect(seenPrompt.indexOf("<world-state>")).toBeGreaterThan(seenPrompt.indexOf("Advance goal"))
-    // … and BEFORE the (more volatile) budget notice (most volatile content stays last).
-    expect(seenPrompt.indexOf("<world-state>")).toBeLessThan(seenPrompt.indexOf("BUDGET NOTICE"))
-  })
-
-  test("worldStateProvider omitted ⇒ no World State block (byte-for-byte pre-V4.0.1)", async () => {
-    let seenPrompt = ""
-    const runTurn: SubagentTurnRunner = (input) => {
-      seenPrompt = input.prompt
-      return Effect.succeed(turnFrom({ ok: true }))
-    }
-    const exec = buildStepExecutor(runTurn, undefined, undefined, false)
-    await Effect.runPromise(exec(execInput()))
-    expect(seenPrompt).not.toContain("<world-state>")
-  })
-
-  test("a defect in the World State provider never fails the tick (default-safe: '' ⇒ turn still runs)", async () => {
-    let ran = false
-    const runTurn: SubagentTurnRunner = () => {
-      ran = true
-      return Effect.succeed(turnFrom({ ok: true, tokensUsed: 7 }))
-    }
-    // The provider itself is default-safe in production; here it returns "" (as refreshWorldState does on
-    // any defect) and the tick proceeds normally.
-    const exec = buildStepExecutor(runTurn, undefined, undefined, false, () => Effect.succeed(""))
-    const res = await Effect.runPromise(exec(execInput()))
-    expect(ran).toBe(true)
-    expect(res.tokensUsed).toBe(7)
-    expect(res.critical).toBeUndefined()
   })
 })
 
@@ -420,7 +296,9 @@ describe("V3.9 §E F3 wiring — plan bridge (worker plan edits reach the goal p
       return Effect.succeed(turnFrom({ ok: true, tokensUsed: 5, sessionID: childId }))
     }
     const exec = buildStepExecutor(runTurn, bridgeFor)
-    const res = await Effect.runPromise(exec(execInput({ sessionId: goalSession, planDocId, activeStepId: "a" })))
+    const res = await Effect.runPromise(
+      exec({ goalId: "g", sessionId: goalSession, planDocId, activeStepId: "a" }),
+    )
     expect(res.critical).toBeUndefined()
     // The worker's advance is now visible in the GOAL plan doc (what the grader reads).
     const goalPlan = JSON.parse(store.get(planDocId)!.body) as PlanDoc
@@ -435,7 +313,7 @@ describe("V3.9 §D/§F.3 wiring — makeGoalLoopWiring flag gate", () => {
     cwd: "/tmp",
     runTurn: (() => Effect.succeed(turnFrom())) as SubagentTurnRunner,
     panelQuestion,
-    diagnostics: () => Effect.succeed({ diagnostics: {} as Record<string, Diagnostic[]>, checked: true }),
+    diagnostics: () => Effect.succeed({} as Record<string, Diagnostic[]>),
     rollback: () => Effect.void,
   }
   test("flag OFF → null (goal loop unavailable, no wiring constructed)", async () => {

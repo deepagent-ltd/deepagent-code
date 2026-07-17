@@ -1,6 +1,6 @@
 {
   "name": "@deepagent-code/app",
-  "version": "1.4.1",
+  "version": "1.0.0-beta",
   "description": "",
   "type": "module",
   "exports": {

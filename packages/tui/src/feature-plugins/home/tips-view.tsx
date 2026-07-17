@@ -211,7 +211,7 @@ const TIPS: Tip[] = [
     return `Use ${items.map(shortcutText).join(" / ")} to move between parent and child sessions`
   },
   "Create {highlight}deepagent-code.json{/highlight} for server settings and {highlight}tui.json{/highlight} for TUI settings",
-  "Place TUI settings in {highlight}~/.deepagent/code/tui.json{/highlight} for global config",
+  "Place TUI settings in {highlight}~/.config/deepagent-code/tui.json{/highlight} for global config",
   "Add {highlight}$schema{/highlight} to your config for autocomplete in your editor",
   "Configure {highlight}model{/highlight} in config to set your default model",
   "Override any keybind in {highlight}tui.json{/highlight} via the {highlight}keybinds{/highlight} section",

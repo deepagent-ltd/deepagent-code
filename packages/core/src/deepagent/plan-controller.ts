@@ -11,7 +11,6 @@
 // models whose self-reporting is unreliable.
 import { randomUUID } from "node:crypto"
 import type { AgentMode } from "./mode"
-import { classifyCommand } from "./command-intent"
 
 // Why the plan went stale. Each value maps 1:1 to a signal the live loop already produces, so the
 // latch can be flipped from runtime truth without any model cooperation (S1 U1 §plan_stale 触发源).
@@ -66,12 +65,6 @@ export type PlanLatchState = {
   readonly latch: PlanLatch
   readonly stale_reason: StaleReason | null
   readonly replan_count: number
-  // Runtime-driven grace counter (U1 anti-deadlock). Incremented every time the gate BLOCKS a
-  // mutating tool while the plan is stale; reset to 0 whenever forward progress happens (the plan is
-  // updated with a real status change, or a mutating tool actually executes). Unlike replan_count —
-  // which only advances when the MODEL cooperates by calling the plan tool — this advances from the
-  // runtime alone, so the grace release can fire even against a model that never repairs the plan.
-  readonly consecutive_blocks: number
 }
 
 export const initialPlanLatch = (planId: string | null = null): PlanLatchState => ({
@@ -79,7 +72,6 @@ export const initialPlanLatch = (planId: string | null = null): PlanLatchState =
   latch: "fresh",
   stale_reason: null,
   replan_count: 0,
-  consecutive_blocks: 0,
 })
 
 // Flip to stale (idempotent on reason). Pure: the caller persists. The runtime calls this from the
@@ -88,42 +80,18 @@ export const markStale = (state: PlanLatchState, reason: StaleReason): PlanLatch
   state.latch === "stale" && state.stale_reason === reason ? state : { ...state, latch: "stale", stale_reason: reason }
 
 // Clear the latch after the plan was updated. Bumps replan_count so the escape hatch can fire if the
-// model thrashes (keeps producing a plan that immediately goes stale again). Also resets the runtime
-// grace counter, since updating the plan is genuine forward progress.
+// model thrashes (keeps producing a plan that immediately goes stale again).
 export const clearStale = (state: PlanLatchState): PlanLatchState =>
   state.latch === "fresh"
     ? state
-    : { ...state, latch: "fresh", stale_reason: null, replan_count: state.replan_count + 1, consecutive_blocks: 0 }
-
-// U1 anti-deadlock: record that the gate just BLOCKED a mutating tool on a stale plan. Advances the
-// runtime grace counter. Pure; the caller persists.
-export const recordGateBlock = (state: PlanLatchState): PlanLatchState => ({
-  ...state,
-  consecutive_blocks: state.consecutive_blocks + 1,
-})
-
-// U1 anti-deadlock: forward progress happened (a mutating tool executed), so the model is not stuck
-// hammering a blocked gate. Reset the grace counter without touching the latch/replan bookkeeping.
-export const resetGateBlocks = (state: PlanLatchState): PlanLatchState =>
-  state.consecutive_blocks === 0 ? state : { ...state, consecutive_blocks: 0 }
+    : { ...state, latch: "fresh", stale_reason: null, replan_count: state.replan_count + 1 }
 
 // Escape hatch (mirrors the existing no-progress -> needs_human pattern): after too many replans we
 // STOP forcing the model to update the plan and hand off to a human, instead of looping forever on a
-// model that can't produce a stable plan. Default limit 3 (S1 U1). This is the MODEL-cooperative
-// hatch: it only advances when the model actually re-plans.
+// model that can't produce a stable plan. Default limit 3 (S1 U1).
 export const DEFAULT_REPLAN_LIMIT = 3
 export const shouldEscapeToHuman = (state: PlanLatchState, limit: number = DEFAULT_REPLAN_LIMIT): boolean =>
   state.replan_count > limit
-
-// U1 anti-deadlock grace release: after the gate has blocked the SAME stale plan this many times
-// without any forward progress, stop blocking and let the next mutating tool through (with a strong
-// reminder injected by the caller). This is the RUNTIME-driven hatch — it fires without any model
-// cooperation, so a model that never repairs the plan (e.g. one that degrades to giving the user
-// manual commands instead of calling the plan tool) can never be permanently denied its tools. This
-// is the direct fix for the production deadlock where 280 consecutive bash calls were blocked.
-export const DEFAULT_GRACE_BLOCK_LIMIT = 3
-export const shouldGraceRelease = (state: PlanLatchState, limit: number = DEFAULT_GRACE_BLOCK_LIMIT): boolean =>
-  state.consecutive_blocks >= limit
 
 // general/direct take the lightweight path: the soft gate WARNS but never blocks, so ordinary
 // implement/debug/chat tasks are never slowed by the plan machinery (docs/38 §9). high+ get the real
@@ -137,19 +105,13 @@ export const isLightweightMode = (mode: AgentMode | string): boolean => mode ===
 const MUTATING_TOOLS = new Set(["edit", "write", "patch", "apply_patch", "multiedit"])
 const ALWAYS_ALLOWED_TOOLS = new Set(["read", "grep", "glob", "list", "ls", "search", "task", "webfetch"])
 
-export const isMutatingTool = (toolName: string, command?: string | null): boolean => {
+export const isMutatingTool = (toolName: string): boolean => {
   const name = toolName.toLowerCase()
   if (ALWAYS_ALLOWED_TOOLS.has(name)) return false
   if (MUTATING_TOOLS.has(name)) return true
-  // bash/shell is mutating UNLESS the command is provably read-only (docs/38 §7.2 read-only default
-  // for deterministic queries). A read-only shell command (ls/cat/grep/git status/curl probe/…) is
-  // the agent's eyes: it must NEVER be blocked by the plan gate, otherwise a stale plan could never
-  // be diagnosed and repaired. The classifier is fail-safe — any ambiguity resolves to mutating —
-  // so a missing/empty command (nothing to classify) is treated as mutating.
-  if (name === "bash" || name === "shell") {
-    if (command == null || command.trim() === "") return true
-    return classifyCommand(command) === "mutating"
-  }
+  // bash/shell is mutating UNLESS the caller already classified it read-only (docs/38 §7.2 read-only
+  // default for deterministic queries). The payload may carry readOnly:true for `git status` etc.
+  if (name === "bash" || name === "shell") return true
   return false
 }
 

@@ -9,22 +9,6 @@ export function directoryAcceptKey(directory: string) {
   return `${base64Encode(directory)}/*`
 }
 
-// Directory-scoped read-only state reuses the same directory key space as auto-accept
-// (the two are mutually exclusive per directory).
-export function isDirectoryReadOnly(readOnly: Record<string, boolean>, directory: string) {
-  const key = directoryAcceptKey(directory)
-  return readOnly[key] ?? false
-}
-
-// Tools that write, execute, or otherwise mutate state — denied in read-only mode.
-// Everything else (read/glob/grep/list/lsp/webfetch/websearch/todowrite/…) is left to the
-// normal permission flow so the agent can still inspect the workspace.
-const MUTATING_PERMISSIONS = new Set(["edit", "write", "patch", "bash", "task", "external_directory"])
-
-export function isMutatingPermission(permission: string) {
-  return MUTATING_PERMISSIONS.has(permission)
-}
-
 function accepted(autoAccept: Record<string, boolean>, sessionID: string, directory?: string) {
   const key = acceptKey(sessionID, directory)
   const directoryKey = directory ? directoryAcceptKey(directory) : undefined

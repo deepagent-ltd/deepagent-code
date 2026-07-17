@@ -1,7 +1,7 @@
 import { useSDK } from "@/context/sdk"
 import { useServer } from "@/context/server"
 import { authTokenFromCredentials } from "@/utils/server"
-import type { AgentDescriptor, IMAttachment, IMGroup, IMMessage } from "@/components/im/types"
+import type { AgentDescriptor, IMGroup, IMMessage } from "@/components/im/types"
 
 export interface IMClientConfig {
   /** Server base URL (e.g. http://127.0.0.1:PORT, or <gateway>/w in server mode). */
@@ -82,37 +82,10 @@ export function createIMClient(config: () => IMClientConfig) {
     return (await response.json()) as T
   }
 
-  // Multipart request for file uploads — the JSON `request` helper can't carry a
-  // FormData body. Reuses the same auth + directory/workspace routing headers,
-  // but lets the browser set the multipart Content-Type (with its boundary).
-  const uploadRequest = async <T>(
-    path: string,
-    form: FormData,
-    query?: Record<string, string | undefined>,
-  ): Promise<T> => {
-    const c = config()
-    const headers: Record<string, string> = { ...authHeaders(c) }
-    if (c.directory) headers["x-deepagent-code-directory"] = c.directory
-    if (c.workspace) headers["x-deepagent-code-workspace"] = c.workspace
-    const response = await fetch(buildURL(path, query), { method: "POST", headers, body: form })
-    if (!response.ok) {
-      const text = await response.text().catch(() => "")
-      throw new Error(`IM upload failed (${response.status}): ${text || response.statusText}`)
-    }
-    return (await response.json()) as T
-  }
-
   return {
     listGroups: () => request<IMGroup[]>(`/api/v1/im/groups`),
-    // §B3: `direct` groups carry a `member` (the counterparty) alongside the
-    // server-user creator. `member` is required by the backend when type ===
-    // "direct" and ignored otherwise.
-    createGroup: (payload: {
-      name: string
-      type: "project" | "system" | "direct"
-      projectID?: string
-      member?: { memberID: string; memberType: "user" | "agent" }
-    }) => request<IMGroup>(`/api/v1/im/groups`, { method: "POST", body: payload }),
+    createGroup: (payload: { name: string; type: "project" | "system"; projectID?: string }) =>
+      request<IMGroup>(`/api/v1/im/groups`, { method: "POST", body: payload }),
     listMessages: (groupID: string, limit = 50, cursor?: string) =>
       request<IMMessagePage>(`/api/v1/im/groups/${groupID}/messages`, {
         query: { limit: String(limit), cursor },
@@ -131,49 +104,6 @@ export function createIMClient(config: () => IMClientConfig) {
         body: { readAt },
       }),
     listAgents: () => request<AgentDescriptor[]>(`/api/v1/im/agents`),
-    // §B3 Thread — the replies to a parent message, keyset paginated (ASC chronological).
-    listThread: (groupID: string, messageID: string, limit = 50, cursor?: string) =>
-      request<IMMessagePage>(`/api/v1/im/groups/${groupID}/messages/${messageID}/thread`, {
-        query: { limit: String(limit), cursor },
-      }),
-    // §B3 搜索 — full-text + metadata search across the caller's group memberships.
-    searchMessages: (params: {
-      q: string
-      groupId?: string
-      senderType?: "user" | "agent" | "system"
-      type?: "text" | "code" | "file" | "agent_status" | "system"
-      metadataType?: string
-      limit?: number
-      cursor?: string
-    }) =>
-      request<IMMessagePage>(`/api/v1/im/search`, {
-        query: {
-          q: params.q,
-          groupId: params.groupId,
-          senderType: params.senderType,
-          type: params.type,
-          metadataType: params.metadataType,
-          limit: params.limit !== undefined ? String(params.limit) : undefined,
-          cursor: params.cursor,
-        },
-      }),
-    // §B3 文件 — upload a file (multipart). `groupId`/`messageId` optionally scope it to a message.
-    uploadAttachment: (file: File, opts?: { groupId?: string; messageId?: string }) => {
-      const form = new FormData()
-      form.append("file", file, file.name)
-      if (opts?.groupId) form.append("groupId", opts.groupId)
-      if (opts?.messageId) form.append("messageId", opts.messageId)
-      return uploadRequest<IMAttachment>(`/api/v1/im/attachments`, form)
-    },
-    // §B3 文件 — list attachment records for a group / message / the workspace.
-    listAttachments: (opts?: { groupId?: string; messageId?: string; limit?: number }) =>
-      request<IMAttachment[]>(`/api/v1/im/attachments`, {
-        query: {
-          groupId: opts?.groupId,
-          messageId: opts?.messageId,
-          limit: opts?.limit !== undefined ? String(opts.limit) : undefined,
-        },
-      }),
     // Server Edition only: set the `access_token` cookie the gateway reads to
     // authenticate the WebSocket upgrade (browsers can't set WS headers). No-op
     // for self-hosted (which uses the `auth_token` query instead) or outside a

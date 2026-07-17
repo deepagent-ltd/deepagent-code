@@ -172,36 +172,6 @@ export const SessionInputTable = sqliteTable(
   ],
 )
 
-// V4.1 §S1.1: durable mid-turn STEER queue. A user message that arrives while a session is busy is
-// admitted here (delivery="steer") and drained at the next model-request boundary of the LIVE turn
-// loop (SessionPrompt.runLoop), where it is persisted as an ordinary tail user message. This is a
-// PLAIN durable buffer (direct row writes, NOT event-sourced) — deliberately distinct from
-// SessionInputTable, which is projected only by the dormant experimentalEventSystem V2 runner and
-// feeds a different (V2) history store. Consume-once is enforced by `consumed_seq`: `drainSteer`
-// atomically stamps every pending row it returns in one transaction, so a second drain (or a
-// concurrent one) sees no pending rows. `seq` is a per-session monotonic admission order (autoincrement
-// PK) so a drain returns steers in the exact order the user sent them.
-export const SessionSteerTable = sqliteTable(
-  "session_steer",
-  {
-    seq: integer().primaryKey({ autoIncrement: true }),
-    id: text().$type<SessionMessage.ID>().notNull().unique(),
-    session_id: text()
-      .$type<SessionSchema.ID>()
-      .notNull()
-      .references(() => SessionTable.id, { onDelete: "cascade" }),
-    prompt: text({ mode: "json" }).notNull().$type<Prompt>(),
-    delivery: text().$type<SessionInput.Delivery>().notNull(),
-    consumed_seq: integer(),
-    time_created: integer()
-      .notNull()
-      .$default(() => Date.now()),
-  },
-  (table) => [
-    index("session_steer_session_pending_seq_idx").on(table.session_id, table.consumed_seq, table.seq),
-  ],
-)
-
 export const SessionContextEpochTable = sqliteTable("session_context_epoch", {
   session_id: text()
     .$type<SessionSchema.ID>()

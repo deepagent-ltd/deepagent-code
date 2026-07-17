@@ -3997,32 +3997,3 @@ describe("ProviderTransform.providerOptions - ai-gateway-provider", () => {
     expect(result).toEqual({ openaiCompatible: { reasoningEffort: "high" } })
   })
 })
-
-describe("ProviderTransform.maxOutputTokens - per-model output cap (4c)", () => {
-  const modelWithOutput = (output: number | undefined) => ({ limit: { output } }) as any
-
-  test("no env override: uses the model's real output limit above legacy 32k", () => {
-    expect(ProviderTransform.maxOutputTokens(modelWithOutput(64_000))).toBe(64_000)
-  })
-
-  test("env override tightens a >32k model down to the cap", () => {
-    expect(ProviderTransform.maxOutputTokens(modelWithOutput(64_000), 40_000)).toBe(40_000)
-  })
-
-  test("no env override: model below legacy default is used as-is", () => {
-    expect(ProviderTransform.maxOutputTokens(modelWithOutput(8_000))).toBe(8_000)
-  })
-
-  test("no env override + model reports no output limit: falls back to legacy 32k", () => {
-    expect(ProviderTransform.maxOutputTokens(modelWithOutput(0))).toBe(ProviderTransform.OUTPUT_TOKEN_MAX)
-    expect(ProviderTransform.maxOutputTokens(modelWithOutput(undefined))).toBe(ProviderTransform.OUTPUT_TOKEN_MAX)
-  })
-
-  test("env override raising above the model cap cannot loosen it", () => {
-    expect(ProviderTransform.maxOutputTokens(modelWithOutput(8_000), 40_000)).toBe(8_000)
-  })
-
-  test("env override with no model limit falls back to the override value", () => {
-    expect(ProviderTransform.maxOutputTokens(modelWithOutput(0), 40_000)).toBe(40_000)
-  })
-})

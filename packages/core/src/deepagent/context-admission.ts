@@ -74,10 +74,7 @@ export const admitIndexRefs = (
   for (const e of candidates) {
     if (admitted.length >= p.max_index_refs) break
     const eTokens = Math.ceil((e.title.length + e.summary.length) / 4)
-    // Skip (not break) over-budget refs: candidates are in filter order, not sorted by size,
-    // so a large ref must not starve smaller admittable refs behind it. Budget is only charged
-    // for refs actually admitted, so skipped entries leave `tokens` unchanged.
-    if (tokens + eTokens > p.max_estimated_tokens) continue
+    if (tokens + eTokens > p.max_estimated_tokens) break
     admitted.push(e)
     tokens += eTokens
   }
