@@ -9,16 +9,23 @@ import { resolveDataPath, resolveHomeBase } from "./global-path"
 
 const app = "deepagent-code"
 const legacyData = path.join(xdgData!, app)
-const config = path.join(xdgConfig!, app)
+// Pre-unification global-config location (XDG config, e.g. ~/.config/deepagent-code). We no longer
+// treat this as the config root — user-editable config now lives at the data root (~/.deepagent/code),
+// alongside the db/auth/state, in the style of ~/.claude and ~/.codex. This constant is kept only so
+// migrateLegacyConfig() can relocate anything left behind here.
+const legacyConfig = path.join(xdgConfig!, app)
 const tmp = path.join(os.tmpdir(), app)
 
 // P2-F single storage-root source: delegate to the shared pure resolver (global-path.ts) so the
 // control-plane resolver (deepagent/workspace.ts) computes the identical root for every env.
 const homePath = () => resolveHomeBase(process.env)
 const dataPath = () => resolveDataPath(process.env)
+// Config now shares the data root: user-editable config (config.jsonc, themes/, plugins/…) lives
+// directly under ~/.deepagent/code so everything DeepAgent owns is under one visible directory.
+const configPath = () => dataPath()
 const cachePath = () => path.join(dataPath(), "cache")
 const statePath = () => path.join(dataPath(), "state")
-const overrides: { log?: string } = {}
+const overrides: { log?: string; config?: string } = {}
 
 const paths = {
   get home() {
@@ -42,7 +49,12 @@ const paths = {
   get cache() {
     return cachePath()
   },
-  config,
+  get config() {
+    return overrides.config ?? configPath()
+  },
+  set config(value: string) {
+    overrides.config = value
+  },
   get state() {
     return statePath()
   },
@@ -98,7 +110,29 @@ async function migrateLegacyData() {
   )
 }
 
+// Relocate the pre-unification global config (~/.config/deepagent-code) into the data root so
+// existing users keep their providers/plugins/themes. Non-destructive and idempotent: files that
+// already exist at the destination are never overwritten (force:false), and the legacy dir is left
+// in place — matching migrateLegacyData. The canonical rename (deepagent-code.jsonc -> config.jsonc)
+// is handled by the config layer once the file is at the data root.
+async function migrateLegacyConfig() {
+  if (path.resolve(legacyConfig) === path.resolve(Path.config)) return
+  const entries = await fs.readdir(legacyConfig, { withFileTypes: true }).catch(() => [])
+  if (entries.length === 0) return
+  await fs.mkdir(Path.config, { recursive: true })
+  await Promise.all(
+    entries.map((entry) =>
+      fs.cp(path.join(legacyConfig, entry.name), path.join(Path.config, entry.name), {
+        recursive: true,
+        force: false,
+        errorOnExist: false,
+      }),
+    ),
+  )
+}
+
 await migrateLegacyData()
+await migrateLegacyConfig()
 
 await Promise.all([
   fs.mkdir(Path.data, { recursive: true }),

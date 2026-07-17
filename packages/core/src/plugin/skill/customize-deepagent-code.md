@@ -40,11 +40,11 @@ already-loaded config until then.
 | Scope                         | Path                                                                                                                      |
 | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
 | Project config                | `./deepagent-code.json`, `./deepagent-code.jsonc`, or `.deepagent-code/deepagent-code.json` (deepagent-code walks up from the cwd to the worktree root) |
-| Global config                 | `~/.config/deepagent-code/deepagent-code.json` (NOT `~/.deepagent-code/`)                                                                   |
+| Global config                 | `~/.deepagent/code/config.jsonc` (or `config.json`)                                                                       |
 | Project agents                | `.deepagent-code/agent/<name>.md` or `.deepagent-code/agents/<name>.md`                                                               |
-| Global agents                 | `~/.config/deepagent-code/agent(s)/<name>.md`                                                                                   |
+| Global agents                 | `~/.deepagent/code/agent(s)/<name>.md`                                                                                    |
 | Project skills                | `.deepagent-code/skill(s)/<name>/SKILL.md`                                                                                      |
-| Global skills                 | `~/.config/deepagent-code/skill(s)/<name>/SKILL.md`                                                                             |
+| Global skills                 | `~/.deepagent/code/skill(s)/<name>/SKILL.md`                                                                              |
 | External skills (auto-loaded) | `~/.claude/skills/<name>/SKILL.md`, `~/.agents/skills/<name>/SKILL.md`                                                    |
 
 Configs from each scope are deep-merged. Project overrides global. Unknown

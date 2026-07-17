@@ -18,6 +18,14 @@ import { configureGateway } from "@/deepagent/config"
 import { type Tool as AITool, tool, jsonSchema, streamText, type ModelMessage } from "ai"
 import type { JSONSchema7 } from "@ai-sdk/provider"
 import { SessionCompaction } from "./compaction"
+import {
+  overflowStatus,
+  tokensUsed,
+  softLandingDecision,
+  outputContinuationMax,
+  initialSoftLandingState,
+  CompactionSoftLandingState,
+} from "./overflow"
 import { SystemPrompt } from "./system"
 import { Instruction } from "./instruction"
 import { Plugin } from "../plugin"
@@ -84,6 +92,7 @@ import { SessionReminders } from "./reminders"
 import { SessionTools } from "./tools"
 import { LLMEvent } from "@deepagent-code/llm"
 import { ConversationLogWriter } from "./conversation-log-writer"
+import { collectVolatileFacts, refreshWorldState } from "./context-ledger"
 import { CodeIndexTrigger } from "./code-index-trigger"
 
 // @ts-ignore
@@ -1946,6 +1955,125 @@ export const layer = Layer.effect(
       return pending.length
     })
 
+    // ── V4.0.1 P0: three-layer SOFT-LANDING compaction ─────────────────────────────────────────────
+    // The durable soft-landing state lives on session metadata (survives cold recovery, same store as
+    // every other durable session field). This key namespaces it so it never collides with other
+    // metadata producers.
+    const SOFT_LANDING_METADATA_KEY = "compactionSoftLanding"
+    const decodeSoftLanding = Schema.decodeUnknownOption(CompactionSoftLandingState)
+
+    const readSoftLandingState: (sessionID: SessionID) => Effect.Effect<CompactionSoftLandingState> = Effect.fn(
+      "SessionPrompt.readSoftLandingState",
+    )(function* (sessionID: SessionID) {
+      const session = yield* sessions.get(sessionID).pipe(Effect.orElseSucceed(() => undefined))
+      const raw = session?.metadata?.[SOFT_LANDING_METADATA_KEY]
+      return Option.getOrElse(decodeSoftLanding(raw), () => initialSoftLandingState)
+    })
+
+    const writeSoftLandingState: (
+      sessionID: SessionID,
+      state: CompactionSoftLandingState,
+    ) => Effect.Effect<void> = Effect.fn("SessionPrompt.writeSoftLandingState")(function* (sessionID, state) {
+      const session = yield* sessions.get(sessionID).pipe(Effect.orElseSucceed(() => undefined))
+      // Merge into existing metadata so we never clobber a co-tenant key.
+      const metadata = { ...(session?.metadata ?? {}), [SOFT_LANDING_METADATA_KEY]: state }
+      yield* sessions.setMetadata({ sessionID, metadata }).pipe(Effect.ignore)
+    })
+
+    // reminder (soft line): a lightweight, non-compacting tail nudge asking the model to persist key
+    // decisions/findings into the plan's evidence/worklog. Reuses the SAME tail-user-message channel as
+    // steering (never mutates the static system prefix → prompt cache stays intact). `synthetic` marks
+    // it internal so it doesn't leak into previews/archives; it still reaches the model as a user text.
+    const REMINDER_TAIL_TEXT = [
+      "<system-reminder>",
+      "上下文接近上限。请把关键决策 / 发现 / 下一步意图写进 plan 的 evidence 或 worklog，避免压缩时丢失。",
+      "文件与环境的当前值无需复述，系统会自动重注入。",
+      "</system-reminder>",
+    ].join("\n")
+
+    const injectTailReminder: (
+      sessionID: SessionID,
+      text: string,
+      model: { providerID: ProviderV2.ID; modelID: ModelV2.ID },
+      agentName: string,
+    ) => Effect.Effect<void> = Effect.fn("SessionPrompt.injectTailReminder")(function* (
+      sessionID,
+      text,
+      model,
+      agentName,
+    ) {
+      const msg = yield* sessions.updateMessage({
+        id: MessageID.ascending(),
+        role: "user",
+        sessionID,
+        agent: agentName,
+        model,
+        time: { created: Date.now() },
+      })
+      yield* sessions.updatePart({
+        id: PartID.ascending(),
+        messageID: msg.id,
+        sessionID,
+        type: "text",
+        synthetic: true,
+        text,
+      })
+    })
+
+    // fallback ("临终笔记" line): the last chance before a hard compaction. All tools stay available so
+    // the model can call the plan-edit tool to固化 un-persisted state. Under a goal (loop/design) mode we
+    // additionally name the plan tool. §2.4 template — short, natural language.
+    const fallbackTailText = (sessionID: SessionID) => {
+      const goalActive = AgentGateway.DeepAgentSessionState.getActiveGoal(sessionID) != null
+      return [
+        "<system-reminder>",
+        "上下文即将压缩。这是压缩前最后一次机会。",
+        "请立刻把以下内容写入持久状态，不要开始新的探索：",
+        "- 尚未记录的关键决策与理由",
+        "- 已经得到但未落盘的中间结论 / 数据引用",
+        "- 明确的下一步意图（写进 plan 的 next / worklog）",
+        goalActive ? "用 `plan` 工具更新 goal+plan，把上述内容落进 evidence/worklog。" : "",
+        "完成落盘后停止本轮。文件与环境的当前值无需复述，系统会自动重注入。",
+        "</system-reminder>",
+      ]
+        .filter(Boolean)
+        .join("\n")
+    }
+
+    // V4.0.1 P0b OUTPUT soft-landing — the "continue from the cutoff" nudge injected when a response was
+    // truncated at the output-token ceiling (finish === "length") with no pending tool call. Unlike Codex
+    // (which re-sends the identical request and re-hits the same cap), we append the model's already-
+    // streamed partial text as history and ask it to RESUME — so the pieces stitch by continuation.
+    const OUTPUT_CONTINUE_TAIL_TEXT = [
+      "<system-reminder>",
+      "你上一轮的输出因达到输出长度上限被截断（未自然结束）。请直接从被截断处继续，",
+      "不要重复已经输出的内容，也不要重新开头。若已实质完成，简短收尾即可。",
+      "</system-reminder>",
+    ].join("\n")
+
+    // V4.0.1 P1 (§3.3) — post-hard-compaction World State re-injection. After a hard compaction the
+    // (now-narrowed) summary deliberately dropped file/env/diagnostics; this re-injects their LATEST
+    // values as a TAIL user block (reuses the SAME injectTailReminder primitive — never the static system
+    // prefix, so prompt cache is preserved) so the model sees current truth, not a stale summary value.
+    // Gated by worldStateReinjection (the same flag that narrowed the summary — no information hole).
+    // Bounded IO: git + env only, collected once per compaction. Default-safe: any defect ⇒ no-op.
+    const injectWorldStateTail: (
+      sessionID: SessionID,
+      workspacePath: string | undefined,
+      model: { providerID: ProviderV2.ID; modelID: ModelV2.ID },
+      agentName: string,
+    ) => Effect.Effect<void> = Effect.fn("SessionPrompt.injectWorldStateTail")(function* (
+      sessionID,
+      workspacePath,
+      model,
+      agentName,
+    ) {
+      if (!workspacePath) return
+      const facts = yield* collectVolatileFacts(workspacePath)
+      const rendered = yield* refreshWorldState({ workspacePath, facts })
+      if (rendered.trim().length > 0) yield* injectTailReminder(sessionID, rendered, model, agentName)
+    })
+
     const runLoop: (sessionID: SessionID, drainFirst?: boolean) => Effect.Effect<SessionV1.WithParts> = Effect.fn(
       "SessionPrompt.run",
     )(
@@ -2025,6 +2153,27 @@ export const layer = Layer.effect(
             !hasToolCalls &&
             lastUser.id < lastAssistant.id
           ) {
+            // V4.0.1 P0b OUTPUT soft-landing — a response cut off at the output-token ceiling finishes with
+            // "length" (never "tool-calls", so it reaches here). Instead of ending the turn mid-sentence,
+            // inject a bounded "continue from the cutoff" nudge and loop once more so the model resumes; the
+            // already-streamed partial is in history, so the continuation stitches on. Bounded by
+            // OUTPUT_CONTINUATION_MAX consecutive continuations (a fresh count each turn once a natural stop
+            // resets it) to prevent an infinite loop — the knob Codex lacks. Context growth from the extra
+            // turn is caught by the top-of-loop overflow check on the next pass (compaction stays separate).
+            if (flags.outputSoftLanding && lastAssistant.finish === "length") {
+              const sls = yield* readSoftLandingState(sessionID)
+              const done = sls.outputContinuationCount ?? 0
+              if (done < outputContinuationMax()) {
+                yield* writeSoftLandingState(sessionID, { ...sls, outputContinuationCount: done + 1 })
+                yield* injectTailReminder(sessionID, OUTPUT_CONTINUE_TAIL_TEXT, lastUser.model, lastUser.agent)
+                yield* slog.info("output soft-landing: continuing after length cutoff", {
+                  continuation: done + 1,
+                  max: outputContinuationMax(),
+                })
+                continue
+              }
+              yield* slog.warn("output soft-landing: continuation cap reached, ending turn", { max: outputContinuationMax() })
+            }
             const orphan = lastAssistantMsg?.parts.find(
               (part): part is SessionV1.ToolPart => part.type === "tool" && isOrphanedInterruptedTool(part),
             )
@@ -2037,6 +2186,13 @@ export const layer = Layer.effect(
             }
             yield* slog.info("exiting loop")
             break
+          }
+          // Output soft-landing: a natural stop (or any non-length finish that keeps looping via tool
+          // calls) resets the consecutive-continuation run so a later length cutoff gets the full budget.
+          if (flags.outputSoftLanding && lastAssistant?.finish && lastAssistant.finish !== "length") {
+            const sls = yield* readSoftLandingState(sessionID)
+            if ((sls.outputContinuationCount ?? 0) !== 0)
+              yield* writeSoftLandingState(sessionID, { ...sls, outputContinuationCount: 0 })
           }
 
           step++
@@ -2070,13 +2226,73 @@ export const layer = Layer.effect(
             continue
           }
 
-          if (
-            lastFinished &&
-            lastFinished.summary !== true &&
-            (yield* compaction.isOverflow({ tokens: lastFinished.tokens, model }))
-          ) {
-            yield* compaction.create({ sessionID, agent: lastUser.agent, model: lastUser.model, auto: true })
-            continue
+          // V4.0.1 P0 — turn-start soft-landing / overflow check. With softLandingCompaction OFF this is
+          // byte-for-byte the pre-V4.0.1 single-threshold path (isOverflow → compaction.create). With it
+          // ON, overflowStatus layers ok → reminder → fallback → hard: warn (tail nudge), then one forced
+          // "临终笔记" fallback (all tools retained), then the SAME hard compaction. `phase === "hard"` is
+          // exactly `isOverflow`, and the reminder/fallback layers never move the hard line, so the
+          // compaction trigger is unchanged.
+          if (lastFinished && lastFinished.summary !== true) {
+            if (!flags.softLandingCompaction) {
+              if (yield* compaction.isOverflow({ tokens: lastFinished.tokens, model })) {
+                yield* compaction.create({ sessionID, agent: lastUser.agent, model: lastUser.model, auto: true })
+                continue
+              }
+            } else {
+              const cfg = yield* config.get()
+              const slState0 = yield* readSoftLandingState(sessionID)
+              // BodyAfterPrefix (§2.3, Codex core/src/state/auto_compact_window.rs): latch a per-window
+              // input-token BASELINE from the provider-reported input side of the FIRST response of this
+              // window (input + cached read/write = the full billed input, matching the goal ledger's
+              // carriedPrefix). Once set it is pinned for the window (cleared on the epoch bump at a hard
+              // compaction) — server-observed only, no tokenizer. `overflowStatus` subtracts it so the
+              // lines fire on body growth; a full-window safety cap still guards the raw total.
+              const billedInput =
+                lastFinished.tokens.input + lastFinished.tokens.cache.read + lastFinished.tokens.cache.write
+              const slState =
+                slState0.prefillInputTokens === undefined && billedInput > 0
+                  ? { ...slState0, prefillInputTokens: billedInput }
+                  : slState0
+              if (slState !== slState0) yield* writeSoftLandingState(sessionID, slState)
+              const status = overflowStatus({
+                cfg,
+                model,
+                outputTokenMax: flags.outputTokenMax,
+                tokens: tokensUsed(lastFinished.tokens),
+                prefixTokens: slState.prefillInputTokens ?? 0,
+                softLanding: true,
+              })
+              const { action, nextState } = softLandingDecision({ status, state: slState, step })
+              if (action === "reminder") {
+                yield* writeSoftLandingState(sessionID, nextState)
+                yield* injectTailReminder(sessionID, REMINDER_TAIL_TEXT, lastUser.model, lastUser.agent)
+                yield* slog.info("soft-landing reminder injected", { used: status.used, softLine: status.softLine })
+                continue
+              }
+              if (action === "fallback") {
+                yield* writeSoftLandingState(sessionID, nextState)
+                yield* injectTailReminder(sessionID, fallbackTailText(sessionID), lastUser.model, lastUser.agent)
+                yield* slog.info("soft-landing fallback injected", {
+                  used: status.used,
+                  fallbackLine: status.fallbackLine,
+                })
+                continue
+              }
+              if (action === "hard") {
+                // Bump the generation + reset flags BEFORE compaction so a mid-compaction crash still
+                // recovers into the fresh window (the durable write is the世代 marker).
+                yield* writeSoftLandingState(sessionID, nextState)
+                yield* compaction.create({ sessionID, agent: lastUser.agent, model: lastUser.model, auto: true })
+                // P1 §3.3: re-inject the latest World State as a TAIL block right after the hard compaction
+                // so the model sees current file/env values, not the summary's (now-narrowed) stale ones.
+                // Ordered after compaction.create ⇒ higher message id ⇒ sits at the tail after the summary.
+                if (flags.worldStateReinjection)
+                  yield* injectWorldStateTail(sessionID, ctx.directory, lastUser.model, lastUser.agent)
+                continue
+              }
+              // action === "none": fallback already delivered this epoch (still under hard line), reminder
+              // debounced, or below the soft line — proceed with the turn normally.
+            }
           }
 
           const agent = yield* agents.get(lastUser.agent)
@@ -2227,6 +2443,16 @@ export const layer = Layer.effect(
 
             if (result === "stop") return "break" as const
             if (result === "compact") {
+              // V4.0.1 P0 — a turn-internal hard compaction (the provider signalled overflow mid-stream).
+              // This IS a hard rollover, so bump the soft-landing generation + reset its flags so the next
+              // window can warn + flush again. Gated by softLandingCompaction; OFF ⇒ unchanged behavior.
+              if (flags.softLandingCompaction) {
+                const slState = yield* readSoftLandingState(sessionID)
+                yield* writeSoftLandingState(sessionID, {
+                  windowEpoch: slState.windowEpoch + 1,
+                  autoCompactFallbackDelivered: false,
+                })
+              }
               yield* compaction.create({
                 sessionID,
                 agent: lastUser.agent,
@@ -2234,6 +2460,10 @@ export const layer = Layer.effect(
                 auto: true,
                 overflow: !handle.message.finish,
               })
+              // P1 §3.3: re-inject the latest World State as a TAIL block right after this hard rollover
+              // (same responsibility-separation intent as the turn-start branch). Gated by the same flag.
+              if (flags.worldStateReinjection)
+                yield* injectWorldStateTail(sessionID, ctx.directory, lastUser.model, lastUser.agent)
             }
             return "continue" as const
           }).pipe(

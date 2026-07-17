@@ -706,6 +706,23 @@ DeepAgent Code can be configured using environment variables.
 
 ---
 
+### Long-running tasks (V4.0.1)
+
+These control the long-task hardening for goal/loop/design modes: three-layer soft-landing compaction, World State re-injection, budget semantics, and output-length continuation. All ship ON by default; set the kill-switches to `false` to restore pre-V4.0.1 behavior. The tuning knobs are optional.
+
+| Variable                                          | Type    | Default | Description                                                                 |
+| ------------------------------------------------- | ------- | ------- | --------------------------------------------------------------------------- |
+| `DEEPAGENT_CODE_SOFT_LANDING_COMPACTION`          | boolean | on      | Three-layer soft-landing compaction (reminder → fallback → hard); `false` restores the single-threshold behavior |
+| `DEEPAGENT_CODE_REMINDER_FRACTION`                | number  | 0.8     | Fraction of the usable window at which the soft reminder fires (0–1)          |
+| `DEEPAGENT_CODE_AUTO_COMPACT_FALLBACK_BUFFER`     | number  | 12000   | Tokens reserved inside the hard line for the one-shot "flush to plan" fallback |
+| `DEEPAGENT_CODE_OUTPUT_SOFT_LANDING`              | boolean | on      | Auto-continue a response cut off at the output-token ceiling (`finish=length`) instead of ending the turn |
+| `DEEPAGENT_CODE_OUTPUT_CONTINUATION_MAX`          | number  | 3       | Max consecutive output-length continuations before ending the turn (0 disables continuation) |
+| `DEEPAGENT_CODE_WORLD_STATE_REINJECTION`          | boolean | on      | Narrow the compaction summary to four buckets and re-inject files/env/diagnostics as a tail block |
+| `DEEPAGENT_CODE_GOAL_BUDGET_SOFT_NOTIFY`          | boolean | on      | Inject a tiered "converge" reminder into the goal step prompt as cost approaches `maxCost`     |
+| `DEEPAGENT_CODE_GOAL_NET_TOKEN_BUDGET`            | boolean | on      | Account the goal token ledger as net generation (excludes the repeated static prefix); applies to newly created goals |
+
+---
+
 ### Experimental
 
 These environment variables enable experimental features that may change or be removed.

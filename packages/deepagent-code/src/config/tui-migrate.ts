@@ -136,6 +136,9 @@ async function backupAndStripLegacy(file: string, source: string) {
 
 async function deepagentCodeFiles(input: { directories: string[]; cwd: string }) {
   const files = [
+    // Global config after unification is config.jsonc/config.json at the data root; keep the old
+    // deepagent-code.* names too so legacy tui keys are still stripped from un-migrated files.
+    ...ConfigPaths.fileInDirectory(Global.Path.config, "config"),
     ...ConfigPaths.fileInDirectory(Global.Path.config, "deepagent-code"),
     ...(await Filesystem.findUp(["deepagent-code.json", "deepagent-code.jsonc"], input.cwd, undefined, {
       rootFirst: true,

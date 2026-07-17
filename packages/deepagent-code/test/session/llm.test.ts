@@ -30,6 +30,7 @@ import { Session as SessionNs } from "@/session/session"
 import { ProviderV2 } from "@deepagent-code/core/provider"
 import { ModelV2 } from "@deepagent-code/core/model"
 import { FSUtil } from "@deepagent-code/core/fs-util"
+import { EffectFlock } from "@deepagent-code/core/util/effect-flock"
 import { Env } from "@/env"
 
 const it = testEffect(Layer.mergeAll(LLM.defaultLayer, Provider.defaultLayer, Auth.defaultLayer))
@@ -97,6 +98,7 @@ function officialProviderMocks(providerID: string, apiKey: string, baseURL: stri
     Layer.provide(pluginMock),
     Layer.provide(modelsDevMock),
     Layer.provide(RuntimeFlags.layer(flags)),
+    Layer.provide(EffectFlock.defaultLayer),
   )
   return { authMock, pluginMock, providerLayer }
 }

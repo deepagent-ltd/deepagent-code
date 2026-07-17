@@ -23,6 +23,10 @@ import { EffectBridge } from "@/effect/bridge"
 import { InstanceState } from "@/effect/instance-state"
 import { EffectPromise } from "@/effect/promise"
 import { FSUtil } from "@deepagent-code/core/fs-util"
+import { EffectFlock } from "@deepagent-code/core/util/effect-flock"
+import { discoverModelsCached } from "./discovery-cache"
+import type { DiscoveredModel, ProviderDiscoveryKind } from "./model-discovery"
+import { buildCatalogIndex, catalogSpecFor } from "./catalog-spec"
 import { isRecord } from "@/util/record"
 import { optionalOmitUndefined } from "@deepagent-code/core/schema"
 import { ProviderTransform } from "./transform"
@@ -49,6 +53,8 @@ const THIRD_PARTY_PROVIDER_CONFLICT_MESSAGE =
   "Provider id conflicts with an official provider. Rename this third-party provider in your config."
 const LEGACY_AUTH_KEY_MESSAGE =
   "Saved API key is no longer used. Only official providers read keys from the key store. Re-add this as a third-party provider in your config and set the key under options.apiKey."
+const DISCOVERY_EMPTY_MESSAGE =
+  "Runtime model discovery returned no models. Check the base URL, API key, and that the endpoint implements GET /models, or list models explicitly under provider.<id>.models."
 
 function providerEnvKey(configuredEnv: string[], envs: Record<string, string | undefined>) {
   const configured = configuredEnv.find((item) => envs[item])
@@ -1290,6 +1296,7 @@ export const layer = Layer.effect(
     const plugin = yield* Plugin.Service
     const modelsDevSvc = yield* ModelsDev.Service
     const runtimeFlags = yield* RuntimeFlags.Service
+    const flock = yield* EffectFlock.Service
 
     const state = yield* InstanceState.make<State>(() =>
       Effect.gen(function* () {
@@ -1301,6 +1308,10 @@ export const layer = Layer.effect(
         // place the connect dialog's advanced section persists it (never the config file).
         const officialTransport = (yield* Effect.promise(() => SettingsStore.read())).providers ?? {}
         const modelsDev = yield* modelsDevSvc.get()
+        // Cross-provider spec index: lets a discovered/custom model whose id is NOT under its own
+        // provider (e.g. a gateway forwarding "deepseek-chat") inherit context/reasoning/cost/modality
+        // specs from the canonical catalog entry. Built once — the per-model loop below only looks up.
+        const catalogIndex = buildCatalogIndex(modelsDev)
         const catalog = mapValues(modelsDev, fromModelsDevProvider)
         const database = mapValues(catalog, toPublicInfo)
         // "Official" is a fixed, curated set (openai/deepseek/anthropic/zhipuai/xai/google) — NOT the
@@ -1416,6 +1427,54 @@ export const layer = Layer.effect(
           }
         }
 
+        // Runtime model discovery (opt-in via `provider.<id>.discovery: true`). For each third-party
+        // provider that opts in, fetch its live /models list (disk-cached, TTL + flock) and expose it
+        // as config-model entries so the loop below runs them through the same parse/inference path as
+        // hand-listed models. This is what lets a URL+Key-only provider surface models at runtime
+        // instead of freezing them into config at save time. Best-effort: failures yield no entries.
+        type ConfigModels = NonNullable<(typeof configProviders)[number][1]["models"]>
+        const discoveredModels: Record<string, ConfigModels> = {}
+        // Track providers that opted into discovery so the zero-model deletion below can tell a
+        // discovery provider that came up empty (worth an error) apart from a normal empty provider.
+        const discoveryProviders = new Set<string>()
+        yield* Effect.forEach(
+          configProviders.filter(
+            ([providerID, provider]) =>
+              provider.discovery === true &&
+              // Both reserved hosted ids (the product gateway "deepagent-code" and the routed
+              // "deepagent") own their catalog identity — never run third-party discovery against them.
+              providerID !== "deepagent-code" &&
+              providerID !== "deepagent" &&
+              !isOfficialProviderID(providerID) &&
+              isProviderAllowed(ProviderV2.ID.make(providerID)),
+          ),
+          ([providerID, provider]) =>
+            Effect.gen(function* () {
+              discoveryProviders.add(providerID)
+              const baseURL = provider.options?.baseURL
+              if (!baseURL) return
+              const envKey = provider.env ? providerEnvKey(provider.env, envs) : undefined
+              const apiKey = provider.options?.apiKey ?? (envKey ? envs[envKey] : undefined)
+              const headers = provider.options?.headers as Record<string, string> | undefined
+              // A key OR custom auth headers must be present; a bare baseURL can't authenticate.
+              if (!apiKey && !headers) return
+              const kind: ProviderDiscoveryKind = provider.npm === "@ai-sdk/anthropic" ? "anthropic" : "openai-compatible"
+              const models = yield* discoverModelsCached(fs, flock, { providerID, baseURL, apiKey, kind, headers })
+              if (!models.length) return
+              discoveredModels[providerID] = Object.fromEntries(
+                models.map((m: DiscoveredModel) => [m.id, { name: m.name || m.id }]),
+              )
+            }).pipe(
+              // Discovery is best-effort and must never take down the whole provider-state build. The
+              // cache already handles ordinary failures; this also swallows defects (e.g. a flock
+              // release die on a corrupt lock file) so one provider's discovery fault can't abort all.
+              Effect.catchDefect((defect) =>
+                Effect.sync(() => log.warn("discovery pre-pass defect", { providerID, defect })),
+              ),
+            ),
+          { concurrency: 5 },
+        )
+
         // Configured providers are always third-party providers. They must not share ids with
         // official catalog providers; otherwise a custom endpoint can silently hijack official
         // provider semantics and auth.
@@ -1441,9 +1500,17 @@ export const layer = Layer.effect(
             models: existing?.models ?? {},
           }
 
-          for (const [modelID, model] of Object.entries(provider.models ?? {})) {
+          // Discovered models seed the source map; hand-listed `provider.models` override them so an
+          // explicit config entry always wins over the runtime-discovered version of the same id.
+          const modelSource = { ...(discoveredModels[providerID] ?? {}), ...(provider.models ?? {}) }
+          for (const [modelID, model] of Object.entries(modelSource)) {
             const existingModel = parsed.models[model.id ?? modelID]
             const apiID = model.id ?? existingModel?.api.id ?? modelID
+            // Cross-provider catalog spec-fill: only when this id didn't already match its own catalog
+            // provider (no existingModel). Fills capability/limit/cost/modality/metadata specs from the
+            // canonical catalog entry so a gateway-forwarded well-known id isn't stuck at zero context /
+            // reasoning=false. Never used for api.url/api.npm — routing stays the user's gateway.
+            const catalogModel = existingModel ? undefined : catalogSpecFor(apiID, modelID, catalogIndex)
             const apiNpm =
               model.provider?.npm ??
               provider.npm ??
@@ -1466,52 +1533,93 @@ export const layer = Layer.effect(
               name,
               providerID: ProviderV2.ID.make(providerID),
               capabilities: {
-                temperature: model.temperature ?? existingModel?.capabilities.temperature ?? false,
+                temperature: model.temperature ?? existingModel?.capabilities.temperature ?? catalogModel?.temperature ?? false,
                 reasoning:
-                  model.reasoning ?? (existingModel?.capabilities.reasoning || inferredReasoning(providerID, apiID, modelID)),
-                attachment: model.attachment ?? existingModel?.capabilities.attachment ?? false,
-                toolcall: model.tool_call ?? existingModel?.capabilities.toolcall ?? true,
+                  model.reasoning ??
+                  (existingModel?.capabilities.reasoning ||
+                    catalogModel?.reasoning ||
+                    inferredReasoning(providerID, apiID, modelID)),
+                attachment: model.attachment ?? existingModel?.capabilities.attachment ?? catalogModel?.attachment ?? false,
+                toolcall: model.tool_call ?? existingModel?.capabilities.toolcall ?? catalogModel?.tool_call ?? true,
                 input: {
-                  text: model.modalities?.input?.includes("text") ?? existingModel?.capabilities.input.text ?? true,
-                  audio: model.modalities?.input?.includes("audio") ?? existingModel?.capabilities.input.audio ?? false,
-                  image: model.modalities?.input?.includes("image") ?? existingModel?.capabilities.input.image ?? false,
-                  video: model.modalities?.input?.includes("video") ?? existingModel?.capabilities.input.video ?? false,
-                  pdf: model.modalities?.input?.includes("pdf") ?? existingModel?.capabilities.input.pdf ?? false,
+                  text:
+                    model.modalities?.input?.includes("text") ??
+                    existingModel?.capabilities.input.text ??
+                    catalogModel?.modalities?.input?.includes("text") ??
+                    true,
+                  audio:
+                    model.modalities?.input?.includes("audio") ??
+                    existingModel?.capabilities.input.audio ??
+                    catalogModel?.modalities?.input?.includes("audio") ??
+                    false,
+                  image:
+                    model.modalities?.input?.includes("image") ??
+                    existingModel?.capabilities.input.image ??
+                    catalogModel?.modalities?.input?.includes("image") ??
+                    false,
+                  video:
+                    model.modalities?.input?.includes("video") ??
+                    existingModel?.capabilities.input.video ??
+                    catalogModel?.modalities?.input?.includes("video") ??
+                    false,
+                  pdf:
+                    model.modalities?.input?.includes("pdf") ??
+                    existingModel?.capabilities.input.pdf ??
+                    catalogModel?.modalities?.input?.includes("pdf") ??
+                    false,
                 },
                 output: {
-                  text: model.modalities?.output?.includes("text") ?? existingModel?.capabilities.output.text ?? true,
+                  text:
+                    model.modalities?.output?.includes("text") ??
+                    existingModel?.capabilities.output.text ??
+                    catalogModel?.modalities?.output?.includes("text") ??
+                    true,
                   audio:
-                    model.modalities?.output?.includes("audio") ?? existingModel?.capabilities.output.audio ?? false,
+                    model.modalities?.output?.includes("audio") ??
+                    existingModel?.capabilities.output.audio ??
+                    catalogModel?.modalities?.output?.includes("audio") ??
+                    false,
                   image:
-                    model.modalities?.output?.includes("image") ?? existingModel?.capabilities.output.image ?? false,
+                    model.modalities?.output?.includes("image") ??
+                    existingModel?.capabilities.output.image ??
+                    catalogModel?.modalities?.output?.includes("image") ??
+                    false,
                   video:
-                    model.modalities?.output?.includes("video") ?? existingModel?.capabilities.output.video ?? false,
-                  pdf: model.modalities?.output?.includes("pdf") ?? existingModel?.capabilities.output.pdf ?? false,
+                    model.modalities?.output?.includes("video") ??
+                    existingModel?.capabilities.output.video ??
+                    catalogModel?.modalities?.output?.includes("video") ??
+                    false,
+                  pdf:
+                    model.modalities?.output?.includes("pdf") ??
+                    existingModel?.capabilities.output.pdf ??
+                    catalogModel?.modalities?.output?.includes("pdf") ??
+                    false,
                 },
                 interleaved:
                   model.interleaved ??
                   existingModel?.capabilities.interleaved ??
+                  catalogModel?.interleaved ??
                   (!existingModel && apiNpm === "@ai-sdk/openai-compatible" && apiID.includes("deepseek")
                     ? { field: "reasoning_content" }
                     : false),
               },
               cost: {
-                input: model?.cost?.input ?? existingModel?.cost?.input ?? 0,
-                output: model?.cost?.output ?? existingModel?.cost?.output ?? 0,
+                input: model?.cost?.input ?? existingModel?.cost?.input ?? catalogModel?.cost?.input ?? 0,
+                output: model?.cost?.output ?? existingModel?.cost?.output ?? catalogModel?.cost?.output ?? 0,
                 cache: {
-                  read: model?.cost?.cache_read ?? existingModel?.cost?.cache.read ?? 0,
-                  write: model?.cost?.cache_write ?? existingModel?.cost?.cache.write ?? 0,
+                  read: model?.cost?.cache_read ?? existingModel?.cost?.cache.read ?? catalogModel?.cost?.cache_read ?? 0,
+                  write: model?.cost?.cache_write ?? existingModel?.cost?.cache.write ?? catalogModel?.cost?.cache_write ?? 0,
                 },
               },
               options: mergeDeep(existingModel?.options ?? {}, model.options ?? {}),
               limit: {
-                context: model.limit?.context ?? existingModel?.limit?.context ?? 0,
-                input: model.limit?.input ?? existingModel?.limit?.input,
-                output: model.limit?.output ?? existingModel?.limit?.output ?? 0,
+                context: model.limit?.context ?? existingModel?.limit?.context ?? catalogModel?.limit.context ?? 0,
+                input: model.limit?.input ?? existingModel?.limit?.input ?? catalogModel?.limit.input,
+                output: model.limit?.output ?? existingModel?.limit?.output ?? catalogModel?.limit.output ?? 0,
               },
               headers: mergeDeep(existingModel?.headers ?? {}, model.headers ?? {}),
-              family: model.family ?? existingModel?.family ?? "",
-              release_date: model.release_date ?? existingModel?.release_date ?? "",
+              family: model.family ?? existingModel?.family ?? catalogModel?.family ?? "",
+              release_date: model.release_date ?? existingModel?.release_date ?? catalogModel?.release_date ?? "",
               variants: {},
             }
             const merged = mergeDeep(ProviderTransform.variants(parsedModel), model.variants ?? {})
@@ -1704,6 +1812,13 @@ export const layer = Layer.effect(
           }
 
           if (Object.keys(provider.models).length === 0) {
+            // A provider that opted into runtime discovery but produced no models (endpoint
+            // unreachable/offline at launch, no /models, empty list, or everything filtered out) would
+            // otherwise vanish from the picker with zero diagnostics. Surface a config error so the
+            // user knows discovery is why their configured provider isn't showing up.
+            if (discoveryProviders.has(providerID)) {
+              errors.push(providerConfigError(providerID, DISCOVERY_EMPTY_MESSAGE))
+            }
             delete providers[providerID]
             continue
           }
@@ -2070,6 +2185,7 @@ export const defaultLayer = Layer.suspend(() =>
     Layer.provide(Plugin.defaultLayer),
     Layer.provide(ModelsDev.defaultLayer),
     Layer.provide(RuntimeFlags.defaultLayer),
+    Layer.provide(EffectFlock.defaultLayer),
   ),
 )
 
