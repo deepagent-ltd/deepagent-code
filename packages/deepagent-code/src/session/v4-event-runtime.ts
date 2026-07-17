@@ -39,7 +39,6 @@ import { GoalTickConsumer } from "./goal-tick-consumer"
 import { GoalTickPort } from "./goal-tick-port"
 import { goalStoreRoot } from "./goal-manager"
 import { SessionRevert } from "./revert"
-import { SessionSteer } from "./steer"
 import { EventV2Bridge } from "@/event-v2-bridge"
 // §C3 (P2.9) — file locks + code-graph symbols.
 import { FileLock } from "@deepagent-code/core/file-lock"
@@ -697,8 +696,8 @@ const panelConsumerLayer = Layer.unwrap(
 // makes the goal-loop tick GENUINELY event-driven with cross-process cold recovery: a goal survives a
 // process restart because every tick rebuilds its wiring from the durable run_context doc + the event
 // payload (no in-memory control map needed). Draws the SAME session stack makeEventTurnRunner uses, plus
-// SessionRevert / SessionSteer / LSP / EventV2Bridge for the rollback / goal-steer / diagnostics / SSE
-// ports, all from the shared graph.
+// SessionRevert / LSP / EventV2Bridge for the rollback / diagnostics / SSE ports, all from the shared
+// graph.
 //
 // FLAG COUPLING: runLoop = v4MultiAgentRuntime (the master event-driven switch — the goal-manager's
 // dual-path start publishes the FIRST command only on this flag). Default posture matches the flag: with
@@ -711,7 +710,6 @@ const goalTickConsumerLayer = Layer.unwrap(
     const agents = yield* Agent.Service
     const sessionPrompt = yield* SessionPrompt.Service
     const revert = yield* SessionRevert.Service
-    const steerBuffer = yield* SessionSteer.Service
     const provider = yield* Provider.Service
     const lsp = yield* LSP.Service
     const instanceStore = yield* InstanceStore.Service
@@ -723,7 +721,6 @@ const goalTickConsumerLayer = Layer.unwrap(
       agents,
       sessionPrompt,
       revert,
-      steerBuffer,
       provider,
       lsp,
       instanceStore,

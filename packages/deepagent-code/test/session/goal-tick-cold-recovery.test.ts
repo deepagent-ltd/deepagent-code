@@ -5,7 +5,6 @@ import path from "node:path"
 import { Effect, Layer } from "effect"
 import { GoalTickConsumer } from "../../src/session/goal-tick-consumer"
 import { recoverGoalTickRequest } from "../../src/session/goal-tick-port"
-import { GoalDriver } from "../../src/session/goal-driver"
 import { DeepAgentEventBus } from "@deepagent-code/core/deepagent/deepagent-event-bus"
 import { Database } from "@deepagent-code/core/database/database"
 import { RuntimeFlags } from "../../src/effect/runtime-flags"
@@ -127,10 +126,10 @@ const coldRunTick: GoalTickConsumer.GoalTickPort = (request) =>
     if (recovered != null) return recovered
     const deps = { ...coldDeps(root), store }
     const handle = { goalId: request.goalId, planDocId: request.planDocId, sessionId: request.sessionID }
-    const result = yield* GoalDriver.runOneTick(makeGoalLoop(deps), { deps, handle })
+    const outcome = yield* makeGoalLoop(deps).tick(handle)
     const cursor = readGoalTickCursor(store, request.sessionID, request.goalId)
     return {
-      progress: result.progress,
+      progress: outcome === "continue" ? ("continue" as const) : ("terminal" as const),
       nextSeq: cursor?.seq ?? request.seq + 1,
       nextExpectedPlanVersion: cursor?.planVersion ?? request.expectedPlanVersion,
     }
