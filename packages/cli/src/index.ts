@@ -41,6 +41,17 @@ const Handlers = Runtime.handlers(Commands, {
   "env-facts": () => import("./commands/handlers/deepagent/env-facts"),
   goal: () => import("./commands/handlers/deepagent/goal"),
   panel: () => import("./commands/handlers/deepagent/panel"),
+  attach: () => import("./commands/handlers/attach"),
+  db: {
+    $: () => import("./commands/handlers/db"),
+    path: () => import("./commands/handlers/db/path"),
+  },
+  web: () => import("./commands/handlers/web"),
+  upgrade: () => import("./commands/handlers/upgrade"),
+  uninstall: () => import("./commands/handlers/uninstall"),
+  pr: () => import("./commands/handlers/pr"),
+  acp: () => import("./commands/handlers/acp"),
+  github: () => import("./commands/handlers/github"),
   service: {
     start: () => import("./commands/handlers/service/start"),
     restart: () => import("./commands/handlers/service/restart"),

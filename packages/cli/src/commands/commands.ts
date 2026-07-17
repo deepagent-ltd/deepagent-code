@@ -170,6 +170,71 @@ export const Commands = Spec.make(
           sessionID: Argument.string("sessionID"),
         },
       }),
+      Spec.make("attach", {
+        description: "Attach to a running deepagent-code server",
+        params: {
+          url: Argument.string("url"),
+          dir: Flag.string("dir").pipe(Flag.optional),
+          continue: Flag.boolean("continue").pipe(Flag.withAlias("c"), Flag.withDefault(false)),
+          session: Flag.string("session").pipe(Flag.withAlias("s"), Flag.optional),
+          fork: Flag.boolean("fork").pipe(Flag.withDefault(false)),
+          password: Flag.string("password").pipe(Flag.withAlias("p"), Flag.optional),
+          username: Flag.string("username").pipe(Flag.withAlias("u"), Flag.optional),
+        },
+      }),
+      Spec.make("db", {
+        description: "Database tools",
+        params: {
+          query: Argument.string("query").pipe(Argument.optional),
+          format: Flag.string("format").pipe(Flag.withDefault("tsv")),
+        },
+        commands: [Spec.make("path", { description: "Print the database path" })],
+      }),
+      Spec.make("web", {
+        description: "Start server and open web interface",
+        params: {
+          hostname: Flag.string("hostname").pipe(Flag.withDefault("127.0.0.1")),
+          port: Flag.integer("port").pipe(Flag.optional),
+          mdns: Flag.boolean("mdns").pipe(Flag.withDefault(false)),
+          "mdns-domain": Flag.string("mdns-domain").pipe(Flag.withDefault("deepagent-code.local")),
+          cors: Flag.string("cors").pipe(Flag.optional),
+        },
+      }),
+      Spec.make("upgrade", {
+        description: "Upgrade deepagent-code to the latest or a specific version",
+        params: {
+          target: Argument.string("target").pipe(Argument.optional),
+          method: Flag.string("method").pipe(Flag.withAlias("m"), Flag.optional),
+        },
+      }),
+      Spec.make("uninstall", {
+        description: "Uninstall deepagent-code and remove all related files",
+        params: {
+          "keep-config": Flag.boolean("keep-config").pipe(Flag.withAlias("c"), Flag.withDefault(false)),
+          "keep-data": Flag.boolean("keep-data").pipe(Flag.withAlias("d"), Flag.withDefault(false)),
+          "dry-run": Flag.boolean("dry-run").pipe(Flag.withDefault(false)),
+          force: Flag.boolean("force").pipe(Flag.withAlias("f"), Flag.withDefault(false)),
+        },
+      }),
+      Spec.make("pr", {
+        description: "Fetch and checkout a GitHub PR branch, then run deepagent-code",
+        params: { number: Argument.integer("number") },
+      }),
+      Spec.make("acp", {
+        description: "Start ACP (Agent Client Protocol) server",
+        params: {
+          hostname: Flag.string("hostname").pipe(Flag.withDefault("127.0.0.1")),
+          port: Flag.integer("port").pipe(Flag.optional),
+        },
+      }),
+      Spec.make("github", {
+        description: "Manage GitHub agent",
+        params: {
+          action: Argument.choice("action", ["install", "run"]),
+          event: Flag.string("event").pipe(Flag.optional),
+          token: Flag.string("token").pipe(Flag.optional),
+        },
+      }),
       Spec.make("service", {
         description: "Manage the background server",
         commands: [
