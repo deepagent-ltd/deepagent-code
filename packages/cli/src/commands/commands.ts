@@ -80,6 +80,43 @@ export const Commands = Spec.make(
           }),
         ],
       }),
+      Spec.make("auth", {
+        description: "Manage AI provider credentials",
+        commands: [
+          Spec.make("login", {
+            description: "Log in to a provider",
+            params: {
+              provider: Argument.string("provider").pipe(Argument.optional),
+              key: Flag.string("key").pipe(Flag.optional),
+            },
+          }),
+          Spec.make("list", { description: "List configured credentials" }),
+          Spec.make("logout", {
+            description: "Log out from a provider",
+            params: { provider: Argument.string("provider").pipe(Argument.optional) },
+          }),
+        ],
+      }),
+      Spec.make("agent", {
+        description: "Manage agents",
+        commands: [Spec.make("list", { description: "List all available agents" })],
+      }),
+      Spec.make("mcp", {
+        description: "Manage MCP servers",
+        commands: [
+          Spec.make("list", { description: "List MCP servers and their status" }),
+          Spec.make("add", {
+            description: "Add an MCP server",
+            params: {
+              name: Argument.string("name"),
+              url: Flag.string("url").pipe(Flag.optional),
+              command: Flag.string("command").pipe(Flag.optional),
+              env: Flag.string("env").pipe(Flag.optional),
+              header: Flag.string("header").pipe(Flag.optional),
+            },
+          }),
+        ],
+      }),
       Spec.make("service", {
         description: "Manage the background server",
         commands: [

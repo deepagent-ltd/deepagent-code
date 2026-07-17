@@ -27,6 +27,7 @@
     "@opentui/solid": "catalog:",
     "@parcel/watcher": "2.5.1",
     "effect": "catalog:",
+    "jsonc-parser": "^3.3.1",
     "solid-js": "catalog:"
   },
   "devDependencies": {

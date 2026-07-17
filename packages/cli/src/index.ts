@@ -18,6 +18,18 @@ const Handlers = Runtime.handlers(Commands, {
   export: () => import("./commands/handlers/export"),
   stats: () => import("./commands/handlers/stats"),
   import: () => import("./commands/handlers/import"),
+  auth: {
+    login: () => import("./commands/handlers/auth/login"),
+    list: () => import("./commands/handlers/auth/list"),
+    logout: () => import("./commands/handlers/auth/logout"),
+  },
+  agent: {
+    list: () => import("./commands/handlers/agent/list"),
+  },
+  mcp: {
+    list: () => import("./commands/handlers/mcp/list"),
+    add: () => import("./commands/handlers/mcp/add"),
+  },
   session: {
     list: () => import("./commands/handlers/session/list"),
     delete: () => import("./commands/handlers/session/delete"),
