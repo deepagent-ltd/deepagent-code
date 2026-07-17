@@ -260,9 +260,14 @@ export function SessionComposerRegion(props: {
                 <GoalStartButton sessionID={route.params.id!} />
               </Show>
               <Show when={working()}>
+                {/* S41-1: the composer stack is pulled up over the todo dock by a negative margin
+                    (the "sacrificial overlap" the opaque PromptInput normally absorbs). A transparent
+                    hint row inside that zone draws directly over the todo window's scrolled content.
+                    Give the hint its own opaque surface so it reads as a reserved status row
+                    (codex-style: hint occupies its own row, never blended into other content). */}
                 <div
                   data-component="steer-hint"
-                  class="flex items-center gap-1.5 px-2.5 py-1 text-11-regular text-text-muted"
+                  class="flex items-center gap-1.5 px-2.5 py-1 text-11-regular text-text-muted bg-background-stronger"
                 >
                   <Icon name="intelligence" class="size-3.5 shrink-0" />
                   <span class="truncate">{language.t("composer.steer.hint")}</span>
