@@ -6,6 +6,9 @@ import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstab
 import { Parser } from "htmlparser2"
 import TurndownService from "turndown"
 import { PermissionV2 } from "../permission"
+import { makeLocationNode } from "../effect/app-node"
+import { LayerNodePlatform } from "../effect/app-node-platform"
+import { ToolRegistry } from "./registry"
 import { Tool } from "./tool"
 import { Tools } from "./tools"
 
@@ -184,6 +187,12 @@ export const layer = Layer.effectDiscard(
       .pipe(Effect.orDie)
   }),
 )
+
+export const node = makeLocationNode({
+  name: "tool/webfetch",
+  layer,
+  deps: [ToolRegistry.node, PermissionV2.node, LayerNodePlatform.httpClient],
+})
 
 export function extractTextFromHTML(html: string) {
   let text = ""

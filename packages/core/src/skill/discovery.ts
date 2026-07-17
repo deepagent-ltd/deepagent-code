@@ -3,6 +3,8 @@ export * as SkillDiscovery from "./discovery"
 import path from "path"
 import { Context, Effect, Layer, Schedule, Schema } from "effect"
 import { FetchHttpClient, HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
+import { makeGlobalNode } from "../effect/app-node"
+import { httpClient } from "../effect/app-node-platform"
 import { FSUtil } from "../fs-util"
 import { Global } from "../global"
 import { AbsolutePath } from "../schema"
@@ -166,6 +168,8 @@ export const layer = Layer.effect(
     })
   }),
 )
+
+export const node = makeGlobalNode({ service: Service, layer, deps: [httpClient, FSUtil.node, Global.node] })
 
 export const defaultLayer = layer.pipe(
   Layer.provide(FetchHttpClient.layer),

@@ -2,6 +2,7 @@ import { mkdirSync, readFileSync } from "node:fs"
 import { randomUUID } from "node:crypto"
 import path from "node:path"
 import { writeFileAtomic } from "./atomic-write"
+import * as PlanStore from "./plan-store"
 import type { AgentMode } from "./mode"
 import {
   createInitialRoundState,
@@ -21,6 +22,8 @@ import {
   initialPlanLatch,
   markStale,
   clearStale,
+  recordGateBlock,
+  resetGateBlocks,
   planStatusesChanged,
   type PlanLatchState,
   type StaleReason,
@@ -40,12 +43,10 @@ export type SessionRunState = {
   workspacePath: string | null
   runId: string
   // U1 PlanController: the runtime plan latch (fresh/stale + reason + replan count). The structural
-  // plan lives in DocumentStore; only this hot-path value object is carried on session state.
+  // plan lives in DocumentStore (I33-1, plan-store.ts) as the single authority; only this hot-path
+  // value object — the latch, carrying the plan_id pointer — is on session state. The plan body is
+  // NOT stored here (getPlan/setPlan delegate to plan-store).
   planLatch: PlanLatchState
-  // U1: the live working plan (goal/steps) the model writes via the `plan` tool and the UI renders.
-  // Kept on run state (hot path, atomically persisted) — graduated into the durable run-graph as a
-  // `plan` doc at run close, mirroring how DESIGN.md is materialized.
-  plan: PlanDoc | null
   // U10 step-reporting: count of mutating tool calls since the model last CHANGED a plan step's
   // status. Drives the progress-nudge count backstop (nudgeTrigger). Reset to 0 only when setPlan
   // detects a real status change — a no-op plan re-write must not silence the nudge.
@@ -60,6 +61,12 @@ export type SessionRunState = {
   // client round-trip guess). Armed means the user may convene a panel (button press) and — when a goal
   // loop is running — the loop may convene the panel at high-risk decision points (§C activation).
   panelArmed: boolean | null
+  // V4.0: the DEBATE DEPTH preference for on-demand convenes from the composer's three-state control
+  // (Off / Single-round / Multi-round). Decoupled from `panelArmed` (arm/disarm) on purpose: arming
+  // gates WHETHER a panel may convene; this gates HOW MANY rounds a convene runs. `null` = never chosen
+  // → defaults to "single". Replaces the former Shift/Alt-click gesture with an explicit, discoverable
+  // choice that PERSISTS per session. "multi" requests up to PANEL_MAX_ROUNDS_CEILING debate rounds.
+  panelRounds: "single" | "multi" | null
   // V3.9 §D: a lightweight pointer to the goal currently driven for this session (the authoritative
   // loop state lives in the DocumentStore run_context doc — this is only enough to find/resume it and
   // reflect its phase in the UI). Null when no goal is running.
@@ -88,6 +95,17 @@ const sessions = new Map<string, SessionRunState>()
 export const configure = (dir: string) => {
   stateDir = dir
   mkdirSync(dir, { recursive: true })
+  // I33-1: the structural plan authority (DocumentStore `type:"plan"` doc) roots under the SAME state
+  // dir (<dir>/goal/<sid>/graph), so the `plan` tool (via session-state) and the goal path write the
+  // same doc. Set the plan-store root here — including for tests that call configure() directly
+  // (bypassing the gateway) — so every plan read/write has a configured root.
+  PlanStore.configureRoot(dir)
+  // Pointing at a (new) state dir means a fresh session set: clear the in-memory map BEFORE loading, so
+  // configure() reflects exactly what's on disk at `dir` and never merges stale sessions from a prior
+  // dir. Production calls configure once at gateway init (nothing to lose); tests that configure a fresh
+  // tmp dir per case were previously polluted by in-memory sessions surviving across cases/files
+  // (loadFromDisk only ADDED entries, never reset), making id-keyed state (e.g. grace counters) leak.
+  sessions.clear()
   loadFromDisk()
 }
 
@@ -107,10 +125,10 @@ export const getOrCreate = (sessionId: string, mode: AgentMode): SessionRunState
     workspacePath: null,
     runId: `run_${randomUUID()}`,
     planLatch: initialPlanLatch(),
-    plan: null,
     mutationsSinceReport: 0,
     validationPassedSinceReport: false,
     panelArmed: null,
+    panelRounds: null,
     activeGoal: null,
     createdAt: new Date().toISOString(),
     completedAt: null,
@@ -185,17 +203,22 @@ export const setPlan = (sessionId: string, plan: PlanDoc): void => {
   if (!state) return
   // U10: reset the progress-nudge state ONLY when the model actually moved a step's status (or
   // added a step). A no-op re-write leaves the counter/flag running so the nudge is not silenced by
-  // an empty update ("report theater").
-  if (planStatusesChanged(state.plan, plan)) {
+  // an empty update ("report theater"). Compare against the CURRENT structural plan in the store.
+  const previous = PlanStore.getPlanDoc(sessionId)
+  if (planStatusesChanged(previous, plan)) {
     state.mutationsSinceReport = 0
     state.validationPassedSinceReport = false
   }
-  state.plan = plan
+  // I33-1: the plan body is written to the single DocumentStore authority (plan-store); session state
+  // keeps only the latch pointer (plan_id). The store upsert is content-addressed + CAS-protected.
+  PlanStore.setPlanDoc(sessionId, plan)
   state.planLatch = clearStale({ ...state.planLatch, plan_id: plan.plan_id })
   saveToDisk()
 }
 
-export const getPlan = (sessionId: string): PlanDoc | null => sessions.get(sessionId)?.plan ?? null
+// I33-1: read the structural plan from the single DocumentStore authority (plan-store). This is an
+// in-memory shared-index lookup + JSON.parse (F30-1 Part 2), safe on the hot path (every tool call).
+export const getPlan = (sessionId: string): PlanDoc | null => PlanStore.getPlanDoc(sessionId)
 
 // V3.9 §C — Expert Panel per-session arming.
 // The raw per-session toggle (null = never explicitly toggled). setPanelArmed writes an explicit
@@ -224,6 +247,18 @@ export const resolvePanelArmed = (sessionId: string, globalDefault: boolean): bo
 /** Back-compat: effective armed state with a hard `false` fallback (no global default available). */
 export const isPanelArmed = (sessionId: string): boolean => sessions.get(sessionId)?.panelArmed ?? false
 
+// V4.0 — Expert Panel debate-depth preference (composer three-state control). Decoupled from arming.
+export const setPanelRounds = (sessionId: string, rounds: "single" | "multi"): void => {
+  const state = sessions.get(sessionId)
+  if (!state) return
+  state.panelRounds = rounds
+  saveToDisk()
+}
+
+/** The chosen debate depth, defaulting to "single" when never explicitly chosen. */
+export const panelRounds = (sessionId: string): "single" | "multi" =>
+  sessions.get(sessionId)?.panelRounds ?? "single"
+
 // V3.9 §D — active-goal pointer. The GoalLoop status doc in the DocumentStore is authoritative; this
 // pointer is the session-local index the server/UI use to find and reflect the running goal.
 export const setActiveGoal = (sessionId: string, pointer: ActiveGoalPointer | null): void => {
@@ -250,7 +285,9 @@ export const setActiveGoalPhase = (sessionId: string, phase: GoalPointerPhase): 
 // against).
 export const recordMutation = (sessionId: string): void => {
   const state = sessions.get(sessionId)
-  if (!state || state.plan == null) return
+  // I33-1: the nudge only applies once a plan exists — the latch's plan_id is the hot-path pointer
+  // (set by setPlan), so we gate on it instead of a stored body.
+  if (!state || state.planLatch.plan_id == null) return
   state.mutationsSinceReport += 1
   saveToDisk()
 }
@@ -286,6 +323,26 @@ export const clearPlanStale = (sessionId: string): void => {
   const state = sessions.get(sessionId)
   if (!state) return
   state.planLatch = clearStale(state.planLatch)
+  saveToDisk()
+}
+
+// U1 anti-deadlock: record that the plan gate just blocked a mutating tool on a stale plan. Advances
+// the runtime grace counter so shouldGraceRelease can fire without the model cooperating.
+export const recordPlanGateBlock = (sessionId: string): void => {
+  const state = sessions.get(sessionId)
+  if (!state) return
+  state.planLatch = recordGateBlock(state.planLatch)
+  saveToDisk()
+}
+
+// U1 anti-deadlock: a mutating tool actually executed (forward progress), so reset the grace counter.
+// No-op when already zero to avoid churning disk writes on the hot path.
+export const resetPlanGateBlocks = (sessionId: string): void => {
+  const state = sessions.get(sessionId)
+  if (!state) return
+  const next = resetGateBlocks(state.planLatch)
+  if (next === state.planLatch) return
+  state.planLatch = next
   saveToDisk()
 }
 
@@ -358,15 +415,21 @@ function normalizeState(state: SessionRunState): SessionRunState {
       maxTotalTokens: nextBudget.maxTotalTokens,
       maxRounds: nextBudget.maxRounds,
     },
-    // Backfill: sessions persisted before U1 have no planLatch/plan on disk.
-    planLatch: state.planLatch ?? initialPlanLatch(),
-    plan: state.plan ?? null,
+    // Backfill: sessions persisted before U1 have no planLatch/plan on disk. Sessions persisted
+    // between U1 and the anti-deadlock change have a planLatch WITHOUT consecutive_blocks — backfill
+    // that field to 0 so shouldGraceRelease reads a defined counter (an undefined would make
+    // `>= limit` false forever, silently disabling the grace release for older sessions).
+    planLatch: state.planLatch
+      ? { ...state.planLatch, consecutive_blocks: state.planLatch.consecutive_blocks ?? 0 }
+      : initialPlanLatch(),
     // Backfill: sessions persisted before U10 have no counter on disk.
     mutationsSinceReport: state.mutationsSinceReport ?? 0,
     validationPassedSinceReport: state.validationPassedSinceReport ?? false,
     // Backfill: sessions persisted before V3.9 §C/§D have neither slot on disk. panelArmed backfills to
     // null (= not explicitly toggled → follows the global default), NOT false.
     panelArmed: state.panelArmed ?? null,
+    // Backfill: sessions persisted before V4.0 have no panelRounds → null (defaults to "single").
+    panelRounds: state.panelRounds ?? null,
     activeGoal: state.activeGoal ?? null,
   }
   sessions.set(state.sessionId, normalized)
@@ -377,9 +440,23 @@ function loadFromDisk() {
   if (!stateDir) return
   try {
     const content = readFileSync(path.join(stateDir, "sessions.json"), "utf8")
-    const data = JSON.parse(content) as Record<string, SessionRunState>
+    // Legacy sessions.json (pre-I33-1) carried the structural plan body on `state.plan`. Read it as an
+    // optional field so we can migrate it into the DocumentStore authority, then drop it from state.
+    const data = JSON.parse(content) as Record<string, SessionRunState & { plan?: PlanDoc | null }>
     for (const [id, state] of Object.entries(data)) {
-      if (!state.completedAt) sessions.set(id, normalizeState(state))
+      if (state.completedAt) continue
+      // I33-1 migration: if this session still has an inline plan body from before the store became the
+      // authority, seed it into the plan-store (idempotent upsert) so nothing is lost, then let it fall
+      // away (normalizeState no longer carries `plan`). Only migrate when the store has no plan yet, so
+      // a newer store doc (e.g. a goal edit) is never overwritten by a stale inline body.
+      if (state.plan && !PlanStore.getPlanDoc(id)) {
+        try {
+          PlanStore.setPlanDoc(id, state.plan)
+        } catch {
+          /* best-effort migration: a store hiccup must not block loading session state */
+        }
+      }
+      sessions.set(id, normalizeState(state))
     }
   } catch {}
 }

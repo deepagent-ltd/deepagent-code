@@ -104,6 +104,22 @@ export class Service extends ConfigService.Service<Service>()("@deepagent-code/R
   experimentalGoalLoop: enabledByExperimental("DEEPAGENT_CODE_EXPERIMENTAL_GOAL_LOOP"),
   experimentalIconDiscovery: enabledByExperimental("DEEPAGENT_CODE_EXPERIMENTAL_ICON_DISCOVERY"),
   outputTokenMax: positiveInteger("DEEPAGENT_CODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX"),
+  // V4.0.1 P2: goal BUDGET soft-notify — when cost/maxCost crosses tiered fractions (default [0.7, 0.9]),
+  // inject a "converge, don't expand" reminder into the next tick's step-prompt TAIL (never the prefix),
+  // mirroring Codex's <rollout_budget>. Pure-additive reminder with NO halting behavior change → SHIPS ON.
+  // With `=false` no budget notice is injected (pre-V4.0.1 behavior).
+  goalBudgetSoftNotify: stableOn("DEEPAGENT_CODE_GOAL_BUDGET_SOFT_NOTIFY"),
+  // V4.0.1 P2: goal NET-token budget accounting. When on, BudgetLedger.tokens accumulates NET generation
+  // (output + max(0, input − carriedPrefixTokens)) instead of gross throughput. The convention is stamped
+  // PER-GOAL at creation via `budgetTokenScope` — only goals created after this is on accumulate "net";
+  // every already-persisted ledger keeps its stamped "gross" scope and is never re-interpreted mid-flight.
+  // Set `=false` to force new goals back to the pre-V4.0.1 gross throughput accounting.
+  goalNetTokenBudget: stableOn("DEEPAGENT_CODE_GOAL_NET_TOKEN_BUDGET"),
+  // V4.0.1 P1: World State / summary responsibility separation. When on, the compaction summary is narrowed
+  // to four buckets and files / env / diagnostics are carried by a snapshot-diff World State layer
+  // re-injected as a TAIL user block at tick start + after each hard compaction (never the static prefix).
+  // With `=false` the summary keeps the legacy "record everything" template and nothing is re-injected.
+  worldStateReinjection: stableOn("DEEPAGENT_CODE_WORLD_STATE_REINJECTION"),
   // T3 (S1-v3.4): how many narrowing attempts a 🟡 stall is given before it escalates to 🔴.
   // Default 1 (one focused retry, then hand off). `positiveInteger` → undefined when unset/invalid,
   // so the loop applies its own default of 1.

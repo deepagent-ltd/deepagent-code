@@ -50,6 +50,24 @@ const READ_ONLY_PREFIXES: ReadonlyArray<readonly string[]> = [
   ["rg"],
   ["ag"],
   ["ripgrep"],
+  // ── text stream inspection (read-only filters; parity with codex is_safe_to_call_with_exec) ──
+  // These only transform stdin/named files to stdout. `sort`/`sed` have file-writing variants and are
+  // guarded below; the rest cannot write the filesystem, process table, or environment.
+  ["cut"],
+  ["nl"],
+  ["paste"],
+  ["rev"],
+  ["seq"],
+  ["tr"],
+  ["uniq"],
+  ["comm"],
+  ["fold"],
+  ["expr"],
+  ["true"],
+  ["false"],
+  ["column"],
+  ["sort"], // read-only UNLESS it writes with -o/--output (guarded below)
+  ["sed"], // mutating by default (in MUTATING_COMMANDS); the read-only `sed -n …p` form is allowed via a guard below
   // ── environment / introspection (query forms only) ──
   ["which"],
   ["whereis"],
@@ -149,7 +167,10 @@ const MUTATING_COMMANDS = new Set<string>([
   "shred",
   "tee",
   "install",
-  "sed", // sed alone is read-only, but `sed -i` mutates; treat as mutating unless we prove otherwise (guarded)
+  // NOTE: `sed` is intentionally NOT a blanket mutating command. `sed -i` mutates but `sed -n {N|M,N}p`
+  // is a pure read-only slice (the common "show me lines X..Y" probe). It is matched as a read-only
+  // prefix and then constrained by a guard in isReadOnlySegment to ONLY the `-n …p` form (parity with
+  // codex is_safe_to_call_with_exec). Any other sed invocation fails the guard → mutating.
   "kill",
   "killall",
   "pkill",
@@ -217,6 +238,23 @@ const matchReadOnlyPrefix = (tokens: string[]): number => {
 // `find` is read-only unless it carries an action predicate that executes or deletes.
 const FIND_MUTATING_ACTIONS = new Set(["-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprintf"])
 
+// `sed -n {N|M,N}p` is a pure read-only line slice. Port of codex is_valid_sed_n_arg: the address
+// must match /^(\d+,)?\d+p$/ — one or two numeric line numbers followed by the `p` (print) command,
+// nothing else. Any other sed script can substitute/delete/write (`-i`, `w`, `s///w file`), so only
+// this exact shape is treated as read-only.
+const isValidSedNArg = (arg: string | undefined): boolean => {
+  if (arg == null) return false
+  const core = arg.endsWith("p") ? arg.slice(0, -1) : null
+  if (core == null) return false
+  const parts = core.split(",")
+  if (parts.length === 1) return parts[0].length > 0 && /^\d+$/.test(parts[0])
+  if (parts.length === 2) return parts[0].length > 0 && parts[1].length > 0 && /^\d+$/.test(parts[0]) && /^\d+$/.test(parts[1])
+  return false
+}
+
+// `sort` writes a file with -o/--output; everything else it does is read-only (stdin/files → stdout).
+const SORT_WRITE_LONG = /^--output(=|$)/
+
 // `env` is read-only only as a bare query (`env`); `env FOO=bar cmd` runs a command with a mutated
 // environment, so anything past the command word makes it mutating.
 const isReadOnlySegment = (segment: string): boolean => {
@@ -256,6 +294,29 @@ const isReadOnlySegment = (segment: string): boolean => {
     // Only a bare `env` (optionally with -i/-u flags but no command/assignment) is read-only.
     const rest = words.slice(1).filter((token) => !isFlag(token))
     if (rest.length > 0) return false
+  }
+  // `sed` is read-only ONLY as `sed -n {N|M,N}p [file]` (line slice). The prefix matcher accepts a
+  // bare `sed`, so we must reject every other form here. Require exactly: -n, a valid `…p` address,
+  // and at most one trailing operand (the file). No -i, no -e, no `w`/`s///w`, no extra scripts.
+  if (head === "sed") {
+    const rest = words.slice(1)
+    const nIdx = rest.indexOf("-n")
+    if (nIdx === -1) return false
+    // Only -n may be a flag; any other flag (e.g. -i, -e, -E) makes it non-readonly.
+    if (rest.some((token, i) => i !== nIdx && isFlag(token))) return false
+    const nonFlags = rest.filter((token) => !isFlag(token))
+    // nonFlags[0] must be the address (…p); an optional nonFlags[1] is the file. More → reject.
+    if (nonFlags.length < 1 || nonFlags.length > 2) return false
+    if (!isValidSedNArg(nonFlags[0])) return false
+  }
+  // `sort -o file` / `sort --output=file` writes a file. Everything else sort does is read-only.
+  if (head === "sort") {
+    for (let i = 1; i < words.length; i++) {
+      const token = words[i]
+      if (token === "-o" || SORT_WRITE_LONG.test(token)) return false
+      // bundled short form `-ofile` (sort's only single-letter value-flag that writes)
+      if (/^-o./.test(token)) return false
+    }
   }
   // curl writes a file with -o/-O/--output/--remote-name. A short-flag TOKEN can glue or bundle the
   // output flag (`-ofile.txt`, `-sofile`), and since curl short flags are single-letter and `o`/`O`

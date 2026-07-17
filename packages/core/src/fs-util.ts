@@ -7,6 +7,8 @@ import { Context, Effect, FileSystem, Layer, Schema } from "effect"
 import type { PlatformError } from "effect/PlatformError"
 import { Glob } from "./util/glob"
 import { serviceUse } from "./effect/service-use"
+import { makeGlobalNode } from "./effect/app-node"
+import { filesystem } from "./effect/app-node-platform"
 
 export namespace FSUtil {
   export class FileSystemError extends Schema.TaggedErrorClass<FileSystemError>()("FileSystemError", {
@@ -194,6 +196,8 @@ export namespace FSUtil {
   )
 
   export const defaultLayer = layer.pipe(Layer.provide(NodeFileSystem.layer))
+
+  export const node = makeGlobalNode({ service: Service, layer: layer, deps: [filesystem] })
 
   // Pure helpers that don't need Effect (path manipulation, sync operations)
   export function mimeType(p: string): string {

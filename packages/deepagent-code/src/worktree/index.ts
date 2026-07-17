@@ -216,6 +216,28 @@ export class Service extends Context.Service<Service, Interface>()("@deepagent-c
 
 type GitResult = { code: number; text: string; stderr: string }
 
+// I33-5: build the argument list for a HARDENED read-only git invocation inside a possibly
+// attacker-controlled worktree. Neutralizes the content-driven code paths git otherwise runs on
+// ordinary reads (each empirically verified against a hostile repo):
+//   - `-c core.hooksPath=/dev/null` → no hook execution (any subcommand)
+//   - `diff --no-ext-diff`          → ignore any `[diff "x"] external=` driver (use git's built-in diff)
+//   - `diff --no-textconv`          → ignore any `[diff "x"] textconv=` filter
+// `--no-ext-diff` / `--no-textconv` are DIFF-SUBCOMMAND flags (they must follow `diff`, and status/
+// rev-list reject them), so they are appended only for the diff subcommand. NOTE: an empty
+// `-c diff.external=` does NOT work — git then tries to execute the empty string and dies with
+// "cannot run"; `--no-ext-diff` is the correct neutralizer.
+// Clean/smudge/process filters (`[filter "x"] clean=/process=`) are keyed by ATTACKER-CHOSEN names and
+// cannot be disabled by name; the mitigation is behavioral — safeGit only runs read ops (status
+// --porcelain / diff --numstat / rev-list) that never add or canonicalize worktree content, so clean
+// filters are never invoked. safeGit must NEVER be used for `git add`/checkout. Exported pure so the
+// hardening is unit-testable without the full worktree layer.
+export const hardenedGitArgs = (args: readonly string[]): string[] => {
+  const hooks = ["-c", "core.hooksPath=/dev/null"]
+  return args[0] === "diff"
+    ? [...hooks, "diff", "--no-ext-diff", "--no-textconv", ...args.slice(1)]
+    : [...hooks, ...args]
+}
+
 export const layer: Layer.Layer<
   Service,
   never,
@@ -697,10 +719,11 @@ export const layer: Layer.Layer<
       return true
     })
 
-    // U3: read-only git for informational reads inside a worktree. Adds codex's hooksPath override
-    // so merely rendering a diff / counting changes can never execute a malicious repo's hooks. The
-    // base Git.Service already disables fsmonitor + optional locks; mutating ops keep normal hooks.
-    const safeGit = (args: string[], cwd: string) => git(["-c", "core.hooksPath=/dev/null", ...args], { cwd })
+    // U3 / I33-5: read-only git for informational reads inside a possibly attacker-controlled worktree.
+    // Hardening (hooks + external-diff + textconv neutralized) lives in the exported pure
+    // `hardenedGitArgs` so it is unit-testable; see its comment for the threat model. safeGit must only
+    // ever run read ops (status/diff/rev-list), never `git add`/checkout.
+    const safeGit = (args: string[], cwd: string) => git(hardenedGitArgs(args), { cwd })
 
     // U3: locate a worktree entry by directory, the shared lookup the new ops need.
     const resolveEntry = Effect.fnUntraced(function* (directory: string) {

@@ -268,6 +268,11 @@ export const configure = (config: Config = {}) => {
   // knowledge/state diverge from project-memory whenever runsDir pointed outside <home>/runs.
   const baseDir = config.baseDir ?? resolveDeepAgentCodeHome()
   DeepAgentSessionState.configure(path.join(baseDir, "state"))
+  // I33-1: the structural plan lives in the single DocumentStore under <baseDir>/state/goal/<sid>/graph
+  // (co-located with the goal/run graph so the `plan` tool and the goal path write the SAME doc). Root
+  // it from the SAME baseDir/state session-state uses, so the two paths converge (planStoreRoot ≡
+  // goalStoreRoot). Must be set before any plan read/write.
+  DeepAgentPlanStore.configureRoot(path.join(baseDir, "state"))
   // docs/34 §7.2/§8: durable knowledge stores root under baseDir (public/knowledge + project/<id>/
   // knowledge). The retriever's knowledge-source reads from here. Same injected baseDir, no self-resolve.
   DeepAgentKnowledgeSource.configure(baseDir)
@@ -381,6 +386,7 @@ import { buildSystemPrompt, type KnowledgeRefProjection, type PromptContext } fr
 import * as DeepAgentOrchestrator from "./deepagent/orchestrator"
 import * as DeepAgentSessionState from "./deepagent/session-state"
 import * as DeepAgentPlanController from "./deepagent/plan-controller"
+import * as DeepAgentPlanStore from "./deepagent/plan-store"
 import * as DeepAgentDiagnosis from "./deepagent/diagnosis"
 import * as DeepAgentFailureTriage from "./deepagent/failure-triage"
 import * as DeepAgentValidation from "./deepagent/validation"
@@ -409,6 +415,7 @@ export {
   DeepAgentOrchestrator,
   DeepAgentSessionState,
   DeepAgentPlanController,
+  DeepAgentPlanStore,
   DeepAgentDiagnosis,
   DeepAgentFailureTriage,
   DeepAgentValidation,

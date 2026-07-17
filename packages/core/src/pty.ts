@@ -2,6 +2,7 @@ export * as Pty from "./pty"
 
 import type { Disp, Proc } from "#pty"
 import { Context, Effect, Layer, Schema, Types } from "effect"
+import { makeLocationNode } from "./effect/app-node"
 import { EventV2 } from "./event"
 import { Location } from "./location"
 import { NonNegativeInt, PositiveInt } from "./schema"
@@ -327,5 +328,7 @@ export const layer = Layer.effect(
     return Service.of({ list, get, create, update, remove, resize, write, connect })
   }),
 )
+
+export const node = makeLocationNode({ service: Service, layer, deps: [EventV2.node, Location.node] })
 
 export const locationLayer = layer

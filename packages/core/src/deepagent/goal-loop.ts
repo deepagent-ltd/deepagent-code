@@ -3,7 +3,10 @@ import { randomUUID } from "node:crypto"
 import type { DocumentStore } from "./document-store"
 import {
   type PlanDoc,
+  type PlanInput,
   buildCompletionReport,
+  buildPlanFromInput,
+  hasBlockedSteps,
   planScope,
 } from "./plan-controller"
 
@@ -56,11 +59,29 @@ export type CompletionCriterion = Schema.Schema.Type<typeof CompletionCriterion>
 
 export const GoalLimits = Schema.Struct({
   maxTicks: Schema.Int,
+  // V4.0.1 P2 §4.3: maxTokens is NO LONGER a HALTING line. It is a required, bounded field (statistic /
+  // net-generation soft ceiling) but the gates below never route to needs_human on it — context pressure
+  // is handled by compaction (Wave 1), and halting authority lives ONLY on real external resources
+  // (maxWallclockMs / maxCost) + stall. validateSpec still requires it positive (boundedness invariant).
   maxTokens: Schema.Int,
   maxWallclockMs: Schema.Int,
   maxCost: Schema.optional(Schema.Number),
+  // V4.0.1 P2 §4.4: tiered COST soft-notify fractions (0..1, matched descending). When ledger.cost/maxCost
+  // crosses the highest tier, a "converge, don't expand" reminder is threaded into the NEXT tick's step
+  // prompt tail (never the prefix) — a Codex-style <rollout_budget> nudge, NOT a stop line. Absent ⇒ the
+  // default [0.7, 0.9]. Only meaningful when maxCost > 0 (else the fraction is 0 and no tier is hit).
+  softNotifyFractions: Schema.optional(Schema.Array(Schema.Number)),
 }).annotate({ identifier: "GoalLimits" })
 export type GoalLimits = Schema.Schema.Type<typeof GoalLimits>
+
+// V4.0.1 P2 §4.3 — the per-goal token ACCOUNTING convention, stamped at goal creation and persisted so a
+// restart never re-interprets an in-flight ledger. "gross" = the pre-V4.0.1 cumulative throughput (every
+// tick's full input, incl. the repeated static prefix, is summed). "net" = cumulative NET generation
+// (output+reasoning + the per-tick input DELTA over the carried prefix) so a long task's ledger does not
+// inflate linearly from the prefix. The marker (not the live flag) selects the accumulation in tick(), so
+// a goal created under "gross" stays gross even if the flag is later turned on (and vice versa).
+export const BudgetTokenScope = Schema.Literals(["gross", "net"])
+export type BudgetTokenScope = Schema.Schema.Type<typeof BudgetTokenScope>
 
 export const GoalSpec = Schema.Struct({
   planDocId: Schema.String, // 复用 plan DocType 作为 Goal 载体
@@ -132,8 +153,15 @@ export class InvalidGoalError extends Schema.TaggedErrorClass<InvalidGoalError>(
 export type GraderPorts = {
   /** Run the given validation commands; `pass` iff ALL succeeded. */
   readonly runTests: (commands: readonly string[]) => Effect.Effect<{ readonly pass: boolean }>
-  /** Highest diagnostic severity currently present, or null when there are none. */
-  readonly diagnostics: () => Effect.Effect<{ readonly maxSeverity: string | null }>
+  /**
+   * Highest diagnostic severity currently present, or null when there are none. `checked` MUST be false
+   * when the port could not actually compute diagnostics (LSP crashed/timed out, no client covered the
+   * changed files, defect fallback). A `maxSeverity: null, checked: false` result means "unknown", NOT
+   * "clean" — the grader treats an unchecked result as an unmet gap (mirrors runTests' empty-set = NOT
+   * passed), so a broken/absent LSP can never vacuously satisfy `no_diagnostics`. `checked` defaults to
+   * true only for an explicit, truthful result. See goal-loop-wiring.ts.
+   */
+  readonly diagnostics: () => Effect.Effect<{ readonly maxSeverity: string | null; readonly checked?: boolean }>
   /** Reviewer subagent verdict: `pass` iff no finding exceeds `maxSeverity`. */
   readonly reviewerClean: (maxSeverity: string) => Effect.Effect<{ readonly pass: boolean }>
   /** Expert Panel verdict (§D.7 key decision point) — `decision` is approve/revise/block/needs_human. */
@@ -172,8 +200,12 @@ const evaluateOne = (
         return pass ? null : `tests_pass: one or more of [${criterion.commands.join(", ")}] failed`
       }
       case "no_diagnostics": {
-        const { maxSeverity } = yield* ports.diagnostics()
-        if (maxSeverity == null) return null // no diagnostics at all → always met
+        const { maxSeverity, checked } = yield* ports.diagnostics()
+        // A port that could NOT actually check (LSP down/timeout, no client for the changed files,
+        // defect fallback) reports checked:false. That is UNKNOWN, not clean — treat it as an unmet gap
+        // so a broken/absent LSP never vacuously satisfies no_diagnostics (mirrors runTests empty = fail).
+        if (checked === false) return "no_diagnostics: could not verify diagnostics (no diagnostic provider reported)"
+        if (maxSeverity == null) return null // genuinely checked and no diagnostics at all → met
         // With no severityAtMost, ANY diagnostic is a gap (strict "no diagnostics"). With a bound, a
         // diagnostic is a gap only when it is strictly more severe than the allowed ceiling.
         if (criterion.severityAtMost == null)
@@ -193,6 +225,13 @@ const evaluateOne = (
       case "plan_complete": {
         if (plan == null) return "plan_complete: plan document not found"
         const report = buildCompletionReport(plan)
+        // U10 parity with plan-controller finalize: buildCompletionReport counts a `blocked` step as
+        // RESOLVED (so finalize isn't deadlocked behind an escape hatch), which makes report.complete
+        // true when every step is done-or-blocked. But a blocked step never finishes on its own — the
+        // goal is NOT cleanly complete, it needs a human. Guard blocked steps explicitly here rather
+        // than trusting report.complete, so a blocked plan surfaces a gap instead of a silent "done".
+        if (hasBlockedSteps(plan))
+          return `plan_complete: blocked steps need a human [${report.blocked.join(", ")}]`
         return report.complete
           ? null
           : `plan_complete: outstanding steps [${report.outstanding.join(", ")}]`
@@ -215,41 +254,6 @@ const CRITERION_COST_RANK: Record<CompletionCriterion["kind"], number> = {
 const isExpensiveCriterion = (kind: CompletionCriterion["kind"]): boolean =>
   kind === "reviewer_clean" || kind === "panel_approves"
 
-/**
- * §D.3 Grader.evaluate — ALL criteria must be met (AND). `gaps` lists every unmet criterion. Pure with
- * respect to its ports: same ports + same plan → same result.
- *
- * With `{ deferExpensive: true }` (the Controller default) the criteria are evaluated cheap-first and
- * the SUBAGENT-SPAWNING gates (reviewer_clean, panel_approves) are SKIPPED once any cheaper criterion is
- * already unmet — the goal cannot be `met` this tick regardless, so spending a panel/reviewer turn to
- * enumerate a gap we will not act on is pure waste (§D.7 非每轮). This never changes the met/unmet
- * verdict (a cheap gap already forces met=false); it only avoids convening the panel except at the key
- * decision point when everything cheaper passes. Direct callers (tests) default to the full evaluation.
- */
-export const evaluateCriteria = (
-  criteria: readonly CompletionCriterion[],
-  ports: GraderPorts,
-  plan: PlanDoc | null,
-  options: { readonly deferExpensive?: boolean } = {},
-): Effect.Effect<GraderResult> =>
-  Effect.gen(function* () {
-    const deferExpensive = options.deferExpensive ?? false
-    const ordered = deferExpensive
-      ? [...criteria].sort((a, b) => CRITERION_COST_RANK[a.kind] - CRITERION_COST_RANK[b.kind])
-      : criteria
-    const gaps: string[] = []
-    for (const c of ordered) {
-      // Defer the expensive, subagent-spawning gates until every cheaper criterion has passed.
-      if (deferExpensive && gaps.length > 0 && isExpensiveCriterion(c.kind)) {
-        gaps.push(`${c.kind}: deferred — a cheaper criterion is unmet (panel/reviewer not convened this tick)`)
-        continue
-      }
-      const gap = yield* evaluateOne(c, ports, plan)
-      if (gap != null) gaps.push(gap)
-    }
-    return { met: gaps.length === 0, gaps }
-  })
-
 // The Controller's view of grading: the spec GraderResult PLUS whether a gate ACTIVELY rejected (as
 // opposed to merely being unmet). A panel `block` / `needs_human` verdict is an active rejection — the
 // panel is telling us to stop and get a human, not "try again" — so the loop escalates on the FIRST
@@ -262,9 +266,15 @@ export type GraderDecision = {
   readonly escalateReason: string | null
 }
 
-// Evaluate for the Controller: same AND-gate + cheap-first deferral as evaluateCriteria, but also flags
-// an active panel rejection for immediate escalation. Only `panel_approves` can escalate (the panel is
-// the human-in-the-loop decision point, §D.7); a `revise` verdict is a soft gap.
+// Evaluate for the Controller — the sole grader entry point. ALL criteria must be met (AND); `gaps`
+// lists every unmet criterion. Pure w.r.t. its ports: same ports + same plan → same result. Criteria
+// are ordered cheap-first and the SUBAGENT-SPAWNING gates (reviewer_clean, panel_approves) are SKIPPED
+// once any cheaper criterion is already unmet — the goal cannot be `met` this tick regardless, so
+// spending a panel/reviewer turn to enumerate a gap we will not act on is pure waste (§D.7 非每轮).
+// This never changes the met/unmet verdict; it only avoids convening the panel except at the key
+// decision point when everything cheaper passes. It ALSO flags an active panel rejection for immediate
+// escalation: only `panel_approves` can escalate (the human-in-the-loop decision point, §D.7); a
+// `revise` verdict stays a soft gap.
 export const evaluateForController = (
   criteria: readonly CompletionCriterion[],
   ports: GraderPorts,
@@ -293,11 +303,17 @@ export const evaluateForController = (
       }
       const gap = yield* evaluateOne(c, ports, plan)
       if (gap != null) gaps.push(gap)
+      // U10 parity: a blocked plan step is an ACTIVE rejection, not a soft gap — the step will never
+      // finish on its own, so route to a human on the FIRST such verdict rather than burning ticks
+      // re-executing an unadvanceable plan until the stall threshold. Mirrors plan-controller finalize
+      // (hasBlockedSteps → needs_human).
+      if (c.kind === "plan_complete" && hasBlockedSteps(plan)) {
+        escalate = true
+        escalateReason = "plan has blocked steps"
+      }
     }
     return { result: { met: gaps.length === 0, gaps }, escalate, escalateReason }
   })
-
-export const Grader = { evaluate: evaluateCriteria, evaluateForController }
 
 // ---------------------------------------------------------------------------------------------------
 // Controller — the tick state machine. State lives entirely in a run_context doc so a restart recovers.
@@ -305,10 +321,36 @@ export const Grader = { evaluate: evaluateCriteria, evaluateForController }
 
 /** Result of executing the active step. Feeds the Budget Ledger; `critical` triggers rollback. */
 export type StepExecutorResult = {
+  /**
+   * GROSS throughput for the tick (input+output+reasoning). This is the pre-V4.0.1 accounting and the
+   * ONLY field consulted when the goal's budgetTokenScope is "gross" (byte-for-byte the legacy path).
+   */
   readonly tokensUsed: number
+  /**
+   * V4.0.1 P2 §4.4 — the granular token breakdown used ONLY when budgetTokenScope is "net". The net
+   * ledger accrues `outputTokens + max(0, inputTokens − carriedPrefixTokens)`, so a long task's ledger
+   * no longer inflates linearly from the repeated static prefix each tick. All three are optional: when
+   * the scope is "net" but the executor did not surface them, the net path falls back to `tokensUsed`
+   * (still correct + monotonic, just without the prefix subtraction). See the wiring for the exact figures.
+   *   - inputTokens        : the tick's FULL input the model billed (prefix + new context), pre cache-adjust.
+   *   - outputTokens       : generated tokens (output + reasoning) — always net, never a repeated prefix.
+   *   - carriedPrefixTokens: the best cheaply-available STABLE-PREFIX figure for the tick (the repeated
+   *                          system/tools/plan-seed prefix). Production uses the provider-reported cached
+   *                          prefix (cache.read+cache.write); absent ⇒ 0 (⇒ full input delta counted).
+   */
+  readonly inputTokens?: number
+  readonly outputTokens?: number
+  readonly carriedPrefixTokens?: number
   readonly cost?: number
   /** A critical / unrecoverable failure — the tick rolls back rather than continuing. */
   readonly critical?: boolean
+  /**
+   * The session the executor actually RAN the step in. The Controller runs in a parent goal session but
+   * the executor may run each turn in a fresh CHILD session (that is where the file mutations live). On a
+   * critical failure the Controller must roll back THAT session, not the parent (which has no edits) — so
+   * the executor surfaces it here. Absent ⇒ the executor ran in the goal session itself.
+   */
+  readonly executedSessionId?: string
 }
 
 /**
@@ -321,9 +363,23 @@ export type StepExecutor = (input: {
   readonly sessionId: string
   readonly planDocId: string
   readonly activeStepId: string | null
+  /**
+   * V4.0.1 P2 §4.4 — the goal's budget so far (accumulated through PRIOR ticks; this tick's spend is not
+   * yet folded in) + the goal's limits, so the wiring can thread a tiered cost soft-notice into this
+   * tick's step-prompt TAIL (`budgetNotice`, gated by `goalBudgetSoftNotify`). The core loop supplies
+   * these; a stub executor may ignore them.
+   */
+  readonly ledger: BudgetLedger
+  readonly limits: GoalLimits
 }) => Effect.Effect<StepExecutorResult>
 
-/** §D.6 可回滚: injected rollback (production wires the existing revert). Best-effort, never fatal. */
+/**
+ * §D.6 可回滚: injected rollback (production wires the existing revert). Best-effort, never fatal.
+ * `sessionId` is the session whose changes must be reverted — the executor's ACTUAL run session (a child
+ * session where the edits live) when it reported one, else the goal session. Reverting the wrong session
+ * (e.g. the parent, which has no edits) makes `rolled_back` reported-but-false, leaving the workspace
+ * dirty after a critical failure.
+ */
 export type RollbackPort = (input: {
   readonly goalId: string
   readonly sessionId: string
@@ -341,6 +397,13 @@ export type ControllerDeps = {
   readonly executor: StepExecutor
   readonly rollback: RollbackPort
   readonly now: () => number
+  /**
+   * V4.0.1 P2 §4.5 — the `goalNetTokenBudget` flag (default OFF). Consulted ONCE, at goal creation, to
+   * STAMP the goal's `budgetTokenScope` marker ("net" when on, "gross" otherwise). tick() then reads the
+   * persisted marker — never this flag — so flipping the flag mid-flight never re-interprets an existing
+   * ledger. Absent ⇒ treated as OFF (gross), i.e. byte-for-byte the pre-V4.0.1 accumulation.
+   */
+  readonly netTokenBudget?: boolean
 }
 
 // The full persisted runtime state. Serialized to the run_context state doc body as JSON.
@@ -359,6 +422,11 @@ type GoalRuntimeState = {
   readonly lastProcessedVersion: number | null
   readonly lastOutcome: TickOutcome | null
   readonly gaps: readonly string[]
+  // V4.0.1 P2 §4.5 — the token ACCOUNTING convention stamped at goal creation. Persisted so a restart (or
+  // a mid-flight flag flip) never re-interprets an existing ledger: tick() picks the accumulation by THIS
+  // marker, not the live flag. A state written before this field existed reads as undefined and is
+  // backfilled to "gross" in loadState (byte-for-byte the pre-V4.0.1 cumulative-throughput path).
+  readonly budgetTokenScope: BudgetTokenScope
 }
 
 const stateSlug = (goalId: string): string => `goal-state-${goalId}`
@@ -427,7 +495,57 @@ const loadState = (deps: ControllerDeps, handle: GoalHandle): GoalRuntimeState |
       // a state written before lastEvidenceCount existed reads as undefined; default it to 0 so the
       // first post-upgrade tick treats any existing evidence as the baseline (never a spurious stall
       // reset, never a crash on the arithmetic comparison).
-      return { ...parsed, lastEvidenceCount: parsed.lastEvidenceCount ?? 0 }
+      // Also backfill budgetTokenScope (P2 §4.5): a ledger persisted before the field existed was
+      // accumulated under the gross convention, so default to "gross" — never re-interpret it as net.
+      return {
+        ...parsed,
+        lastEvidenceCount: parsed.lastEvidenceCount ?? 0,
+        budgetTokenScope: parsed.budgetTokenScope ?? "gross",
+      }
+    } catch {
+      return null
+    }
+  }
+  return null
+}
+
+// V4.1 cross-process cold recovery — a durable home for a PENDING USER PLAN EDIT so the event-driven
+// GoalTickConsumer (which may run on a cold fiber with no in-memory control map) can pick it up. The
+// in-process driver historically kept the pending PlanInput ONLY in the goal-manager `controls` map;
+// that is invisible to a cold consumer. We persist it as a `run_context` doc under the SAME store, but
+// DELIBERATELY WITHOUT the `goal_id` extension (which `loadState` matches on at line ~434) — instead we
+// mark it with `pending_edit_goal_id`, so `loadState` skips it (its goal_id is undefined ≠ the handle's)
+// and never tries to parse a PlanInput as GoalRuntimeState. An empty body is the "no pending edit"
+// sentinel (there is no doc delete API). The consumer reads it via its own fresh store handle; the
+// content-equality clear in markPlanEditConsumed preserves a newer edit written between read and clear.
+const pendingEditSlug = (goalId: string): string => `goal-pending-edit-${goalId}`
+
+export const persistPendingPlanEdit = (
+  store: DocumentStore,
+  sessionId: string,
+  goalId: string,
+  plan: PlanInput | null,
+): void => {
+  store.upsert({
+    type: "run_context",
+    scope: planScope(sessionId),
+    description: `goal pending plan edit ${goalId}`,
+    idSlug: pendingEditSlug(goalId),
+    body: plan == null ? "" : JSON.stringify(plan),
+    provenance: { source: "runner", run_ref: planScope(sessionId) },
+    // NOTE: pending_edit_goal_id, NOT goal_id — keeps loadState() from ever matching this doc.
+    extensions: { pending_edit_goal_id: goalId },
+  })
+}
+
+export const readPendingPlanEdit = (store: DocumentStore, sessionId: string, goalId: string): PlanInput | null => {
+  for (const ref of store.list({ type: "run_context", scope: planScope(sessionId) })) {
+    const doc = store.get(ref.id)
+    if (!doc) continue
+    if (doc.extensions?.pending_edit_goal_id !== goalId) continue
+    if (!doc.body.trim()) return null // sentinel: consumed / never set
+    try {
+      return JSON.parse(doc.body) as PlanInput
     } catch {
       return null
     }
@@ -530,9 +648,40 @@ const writeCompletionReport = (deps: ControllerDeps, state: GoalRuntimeState, pl
   })
 }
 
+// V4.0.1 P2 §4.4 — the DEFAULT tiered cost soft-notify fractions (ascending). Applied when a goal's
+// limits omit `softNotifyFractions`.
+export const DEFAULT_SOFT_NOTIFY_FRACTIONS: readonly number[] = [0.7, 0.9]
+
+/**
+ * V4.0.1 P2 §4.4 — the tiered COST soft-notify (a bypass of the halting gates: it NEVER stops the goal,
+ * it only produces a reminder string). Computes `fraction = cost/maxCost` (0 when maxCost is absent or
+ * non-positive), then returns the converge-reminder for the HIGHEST tier already crossed, else null. The
+ * caller (wiring `renderStepPrompt`) appends the result to the NEXT tick's step-prompt tail. Gated by the
+ * `goalBudgetSoftNotify` flag at the call site — this pure function itself is always available.
+ *
+ * Fractions are matched DESCENDING so that when several tiers are crossed the message reflects the
+ * highest one (e.g. at 95% with [0.7, 0.9] it reports 90%, not 70%). Non-finite / non-positive maxCost ⇒
+ * fraction 0 ⇒ null (a goal with no cost ceiling never soft-notifies on cost).
+ */
+export const budgetNotice = (ledger: BudgetLedger, limits: GoalLimits): string | null => {
+  const maxCost = limits.maxCost
+  const fraction = maxCost != null && Number.isFinite(maxCost) && maxCost > 0 ? ledger.cost / maxCost : 0
+  const tiers = [...(limits.softNotifyFractions ?? DEFAULT_SOFT_NOTIFY_FRACTIONS)].sort((a, b) => b - a)
+  for (const tier of tiers) {
+    if (fraction >= tier)
+      return `Budget ${Math.round(fraction * 100)}% used: prioritise completing the core steps and CONVERGE — do not expand scope.`
+  }
+  return null
+}
+
+// V4.0.1 P2 §4.3 — token count is NO LONGER a halting line. `overLimit` / `atOrOverLimit` keep the SAME
+// dual-gate structure and the SAME real-resource caps (ticks / wallclock / cost) that carry the
+// boundedness invariant, but they DELIBERATELY no longer compare ledger.tokens against maxTokens: context
+// pressure is absorbed by compaction (Wave 1), so a long unmonitored task never halts on an internal token
+// tally at 3am. maxTokens remains a bounded, required field (a net-generation statistic), just not a stop
+// line. Halting authority = maxTicks + maxWallclockMs + maxCost + stall.
 const overLimit = (ledger: BudgetLedger, limits: GoalLimits): string | null => {
   if (ledger.ticks > limits.maxTicks) return `maxTicks (${limits.maxTicks}) exceeded`
-  if (ledger.tokens > limits.maxTokens) return `maxTokens (${limits.maxTokens}) exceeded`
   if (ledger.wallclockMs > limits.maxWallclockMs) return `maxWallclockMs (${limits.maxWallclockMs}) exceeded`
   if (limits.maxCost != null && ledger.cost > limits.maxCost) return `maxCost (${limits.maxCost}) exceeded`
   return null
@@ -544,7 +693,7 @@ const overLimit = (ledger: BudgetLedger, limits: GoalLimits): string | null => {
 // TRUE ceiling: it runs BEFORE the executor, so no unbounded turn is spent past the declared maximum.
 const atOrOverLimit = (ledger: BudgetLedger, limits: GoalLimits): string | null => {
   if (ledger.ticks >= limits.maxTicks) return `maxTicks (${limits.maxTicks}) reached`
-  if (ledger.tokens >= limits.maxTokens) return `maxTokens (${limits.maxTokens}) reached`
+  // P2 §4.3: NO maxTokens pre-gate — token pressure is a compaction signal, never a halt (see overLimit).
   if (ledger.wallclockMs >= limits.maxWallclockMs) return `maxWallclockMs (${limits.maxWallclockMs}) reached`
   if (limits.maxCost != null && ledger.cost >= limits.maxCost) return `maxCost (${limits.maxCost}) reached`
   return null
@@ -585,6 +734,21 @@ export interface GoalLoop {
   readonly tick: (handle: GoalHandle) => Effect.Effect<TickOutcome>
   readonly status: (handle: GoalHandle) => Effect.Effect<GoalStatus>
   readonly stop: (handle: GoalHandle) => Effect.Effect<void>
+  /**
+   * V4.1 §S2 — apply a USER plan edit to a running/paused goal and RE-BASELINE stall/progress tracking.
+   * Called by the driver BETWEEN ticks (never mid-tick), using the driver's OWN store handle — that is
+   * why the edit is observed on the next tick (a separate store handle from an HTTP fiber would NOT be,
+   * since DocumentStore serves reads from an in-memory map rebuilt only at construction). It:
+   *   1. upserts the plan doc with the edited PlanDoc (version+1 — so the next tick's version-dedup does
+   *      NOT skip it; a fingerprint-identical no-op edit is a no-op upsert, harmless).
+   *   2. RE-BASELINES the persisted run_context state to the EDITED plan: stallCount→0 and
+   *      lastDoneCount/lastEvidenceCount/lastMetCount/lastFingerprint set to the edited plan's values, and
+   *      lastProcessedVersion→null (so the tick after the edit runs). Without this, a user re-opening a
+   *      done step (done→pending) reads as a progress REGRESSION and could trip the stall-stop; the
+   *      re-baseline gives the revision a fresh runway.
+   * No-op when no persisted state exists for the handle (goal not started / already gone).
+   */
+  readonly applyPlanEdit: (handle: GoalHandle, edit: PlanInput) => Effect.Effect<void>
 }
 
 // §D.4 start validation — HARD, no defaults that bypass. criteria empty → not objectively decidable;
@@ -637,6 +801,9 @@ export const makeGoalLoop = (deps: ControllerDeps): GoalLoop => {
         lastProcessedVersion: null,
         lastOutcome: null,
         gaps: [],
+        // P2 §4.5: stamp the accounting convention ONCE, from the flag, at creation. tick() reads this
+        // marker (never the live flag) so a later flag flip never re-interprets this goal's ledger.
+        budgetTokenScope: deps.netTokenBudget === true ? "net" : "gross",
       }
       persistState(deps, state)
       return { goalId, planDocId: spec.planDocId, sessionId }
@@ -675,7 +842,32 @@ export const makeGoalLoop = (deps: ControllerDeps): GoalLoop => {
       // dedup guarantees "a repeated no-progress tick has no side effects", not "every tick is exactly-
       // once under a mid-tick crash". The driver must therefore treat tick as at-least-once.
       if (state.lastProcessedVersion === version && state.lastOutcome != null) {
-        return state.lastOutcome
+        // 幂等: a replay at the SAME version has NO side effects — never re-execute, never re-accrue
+        // budget (ticks/tokens/cost). BUT a replay at an unchanged version is by definition a
+        // NO-PROGRESS tick: if we just returned the recorded (non-terminal) outcome forever, an
+        // executor that RUNS but leaves the plan-doc unchanged (no version bump) would bypass the
+        // stall guard entirely — only the driver's maxIterations would ever stop it. So a NON-TERMINAL
+        // replay still accrues toward the stall guard here, and escalates to needs_human once the
+        // stall threshold is reached. (A terminal outcome was already replayed by the phase check
+        // above, so `lastOutcome` here is always the non-terminal `continue`; the guard is defensive.)
+        // Capture the null-checked outcome so the narrowing survives the `let state` reassignments below.
+        const replayOutcome: TickOutcome = state.lastOutcome
+        if (isTerminalPhase(phaseForOutcome(replayOutcome))) return replayOutcome
+        const stallCount = state.stallCount + 1
+        if (stallCount >= state.spec.stallThreshold) {
+          state = {
+            ...state,
+            phase: "needs_human",
+            stallCount,
+            lastOutcome: "needs_human",
+            gaps: [`no progress for ${stallCount} consecutive ticks (plan version unchanged)`, ...state.gaps],
+          }
+          persistState(deps, state)
+          return "needs_human"
+        }
+        state = { ...state, stallCount }
+        persistState(deps, state)
+        return replayOutcome
       }
 
       // 不越权: execute the active step via the injected executor (normal perms; Loop never elevates).
@@ -688,6 +880,10 @@ export const makeGoalLoop = (deps: ControllerDeps): GoalLoop => {
           sessionId: state.sessionId,
           planDocId: state.planDocId,
           activeStepId: plan?.active_step_id ?? null,
+          // P2 §4.4: the budget-so-far (prior ticks) + limits, so the wiring can thread a tiered cost
+          // soft-notice into THIS tick's step-prompt tail (budgetNotice). Read-only for the executor.
+          ledger: state.ledger,
+          limits: state.spec.limits,
         })
         .pipe(Effect.catchCause(() => Effect.succeed({ tokensUsed: 0, critical: true } as StepExecutorResult)))
 
@@ -700,13 +896,35 @@ export const makeGoalLoop = (deps: ControllerDeps): GoalLoop => {
 
       // Budget Ledger accumulation (injected clock for wallclock → deterministic + restart-exact).
       // Guard BOTH tokens and cost against a non-finite port result: `Math.max(0, Math.trunc(NaN))`
-      // is NaN, which would poison the ledger permanently and silently disable the token cap forever
-      // (`NaN > maxTokens` is always false). Coerce a non-finite / negative token count to 0.
-      const addTokens = Number.isFinite(execResult.tokensUsed) ? Math.max(0, Math.trunc(execResult.tokensUsed)) : 0
+      // is NaN, which would poison the ledger permanently. Coerce a non-finite / negative count to 0.
+      const trunc = (n: number | undefined): number => (Number.isFinite(n) ? Math.max(0, Math.trunc(n as number)) : 0)
+      // P2 §4.3/§4.5: the accumulation convention is chosen by the PERSISTED scope marker (never the live
+      // flag), so a restart / mid-flight flag flip is consistent.
+      //   gross → the pre-V4.0.1 cumulative throughput (input+output+reasoning), byte-for-byte unchanged.
+      //   net   → output(+reasoning) + max(0, input − carriedPrefixTokens): the per-tick input DELTA over
+      //           the repeated stable prefix, so the ledger no longer inflates linearly from the prefix.
+      //           carriedPrefixTokens is the best cheaply-available stable-prefix figure (production: the
+      //           provider-reported cached prefix); when the executor did not surface the granular
+      //           breakdown the net path falls back to `tokensUsed` — still correct + monotonic, just
+      //           without the subtraction. This is an APPROXIMATION: it counts the full input delta above
+      //           the carried prefix (it does not attempt to distinguish new-context input from any
+      //           uncached prefix churn), which is the intended net-generation soft ceiling.
+      let addTokens: number
+      if (state.budgetTokenScope === "net" && (execResult.outputTokens != null || execResult.inputTokens != null)) {
+        const out = trunc(execResult.outputTokens)
+        const inp = trunc(execResult.inputTokens)
+        const carried = trunc(execResult.carriedPrefixTokens)
+        addTokens = out + Math.max(0, inp - carried)
+      } else {
+        addTokens = trunc(execResult.tokensUsed)
+      }
+      // Symmetric with tokens: a negative cost from a misbehaving port would DECREMENT the ledger (and
+      // could indefinitely defer the maxCost cap), so clamp to 0 just like the token count.
+      const addCost = Number.isFinite(execResult.cost) ? Math.max(0, execResult.cost as number) : 0
       const ledger: BudgetLedger = {
         ticks: state.ledger.ticks + 1,
         tokens: state.ledger.tokens + addTokens,
-        cost: state.ledger.cost + (Number.isFinite(execResult.cost) ? (execResult.cost as number) : 0),
+        cost: state.ledger.cost + addCost,
         wallclockMs: Math.max(0, deps.now() - state.ledger.startedAtMs),
         startedAtMs: state.ledger.startedAtMs,
       }
@@ -782,10 +1000,13 @@ export const makeGoalLoop = (deps: ControllerDeps): GoalLoop => {
         )
         // A DEFECT in the injected rollback port must not escape tick's never-fail contract — the audit
         // trail above is already durable, so swallow a rollback defect (best-effort / never fatal).
+        // Revert the session the executor ACTUALLY ran the step in (the child session that holds the file
+        // mutations), falling back to the goal session only when the executor ran there directly. Passing
+        // the parent goal session here would revert nothing (it has no edits) — the wrong-session bug.
         yield* deps
           .rollback({
             goalId: state.goalId,
-            sessionId: state.sessionId,
+            sessionId: execResult.executedSessionId ?? state.sessionId,
             reason: `critical failure at tick ${ledger.ticks}`,
           })
           .pipe(Effect.catchCause(() => Effect.void))
@@ -818,7 +1039,48 @@ export const makeGoalLoop = (deps: ControllerDeps): GoalLoop => {
       persistState(deps, { ...state, phase: "stopped", lastOutcome: state.lastOutcome })
     })
 
-  return { start, tick, status, stop }
+  const applyPlanEdit: GoalLoop["applyPlanEdit"] = (handle, edit) =>
+    Effect.sync(() => {
+      const state = loadState(deps, handle)
+      // No persisted state (goal not started / gone), or already terminal → nothing to edit/re-baseline.
+      if (state == null || isTerminalPhase(state.phase)) return
+      // Reconcile the user's revision against the CURRENT durable plan (via this driver's own store
+      // handle) so step ids + accumulated evidence are PRESERVED across the rewrite (buildPlanFromInput
+      // matches revised steps to prior steps by id). Reading `previous` here — not in the HTTP fiber —
+      // is why evidence isn't lost: the driver's handle holds the up-to-date doc incl. the last tick's
+      // mirrored-back progress.
+      const existing = deps.store.get(state.planDocId)
+      // The goal's plan doc must already exist (start materialized it). If it is somehow gone, do NOT
+      // fabricate an orphan under a fresh id — a re-baseline against a doc the tick can't read would be
+      // silent data loss. Bail (no-op) so the caller's ok:true never lies about a lost edit.
+      if (existing == null) return
+      const previous = readPlan(deps.store, state.planDocId).plan
+      const editedPlan = buildPlanFromInput(state.sessionId, edit, previous)
+      // 1) Write the edited plan back to THE SAME durable doc by id (version+1), so the next tick's
+      //    readPlan(state.planDocId) sees the revision. Writing by id — not upsert-by-logical-key —
+      //    avoids the description/idSlug matching that would otherwise mint an orphan doc (upsert's
+      //    findLogical keys on description, which need not equal the doc materialize() wrote). A
+      //    fingerprint-identical edit is a no-op (updateWithProvenance returns cur unchanged, INV-4).
+      //    provenance.source="human" records the human-authored revision (vs the model's plan-tool edits).
+      deps.store.updateWithProvenance(state.planDocId, JSON.stringify(editedPlan), {
+        source: "human",
+        run_ref: planScope(state.sessionId),
+      })
+      // 2) Re-baseline: reset stall + set the progress baselines to the EDITED plan, and null the
+      //    processed-version so the next tick runs against the revision (not deduped, not a false stall).
+      persistState(deps, {
+        ...state,
+        stallCount: 0,
+        lastFingerprint: planFingerprint(editedPlan),
+        lastDoneCount: doneStepCount(editedPlan),
+        lastEvidenceCount: evidenceCount(editedPlan),
+        // metCount is criteria-derived (independent of plan structure); leave it — a plan edit does not
+        // retroactively un-meet a satisfied criterion, and the next tick re-grades regardless.
+        lastProcessedVersion: null,
+      })
+    })
+
+  return { start, tick, status, stop, applyPlanEdit }
 }
 
 export * as GoalLoop from "./goal-loop"

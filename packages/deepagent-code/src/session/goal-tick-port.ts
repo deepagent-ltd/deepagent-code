@@ -2,7 +2,13 @@ export * as GoalTickPort from "./goal-tick-port"
 
 import { Effect, Option } from "effect"
 import { DocumentStore } from "@deepagent-code/core/deepagent/document-store"
-import { makeGoalLoop, readGoalTickCursor } from "@deepagent-code/core/deepagent/goal-loop"
+import {
+  makeGoalLoop,
+  readGoalTickCursor,
+  readPendingPlanEdit,
+  persistPendingPlanEdit,
+} from "@deepagent-code/core/deepagent/goal-loop"
+import type { PlanInput } from "@deepagent-code/core/deepagent/plan-controller"
 import { DeepAgentEventBus } from "@deepagent-code/core/deepagent/deepagent-event-bus"
 import { ApprovalQueue } from "@deepagent-code/core/deepagent/approval-queue"
 import { WorkspaceV2 } from "@deepagent-code/core/workspace"
@@ -14,11 +20,12 @@ import type { Session } from "./session"
 import type { Agent } from "../agent/agent"
 import type { SessionPrompt } from "./prompt"
 import type { SessionRevert } from "./revert"
+import type { SessionSteer } from "./steer"
 import type { Provider } from "../provider/provider"
 import type { LSP } from "../lsp/lsp"
 import type { RuntimeFlags } from "../effect/runtime-flags"
 import { SessionID } from "./schema"
-import { type GoalDriverPorts } from "./goal-driver"
+import { GoalDriver, type GoalDriverPorts } from "./goal-driver"
 import {
   GoalLoopWiring,
   liveDiagnostics,
@@ -56,6 +63,7 @@ export type GoalTickPortDeps = {
   readonly agents: Agent.Interface
   readonly sessionPrompt: SessionPrompt.Interface
   readonly revert: SessionRevert.Interface
+  readonly steerBuffer: SessionSteer.Interface
   readonly provider: Provider.Interface
   readonly lsp: LSP.Interface
   readonly instanceStore: InstanceStore.Interface
@@ -180,6 +188,9 @@ export const makeGoalTickPort =
       )
       const wrappedRollback: typeof rollback = (rbInput) => withContext(rollback(rbInput))
 
+      // One goal-steer relay per tick, shared by the wiring (executor threads staged guidance) + the driver.
+      const steerRelay = GoalDriver.makeGoalSteerRelay()
+
       const deps_ = yield* GoalLoopWiring.makeGoalLoopWiring({
         store,
         parentSessionID: sessionID,
@@ -188,6 +199,7 @@ export const makeGoalTickPort =
         panelQuestion: defaultPanelQuestion,
         diagnostics,
         rollback: wrappedRollback,
+        steerRelay,
       }).pipe(Effect.provideService(RuntimeFlagsService.Service, deps.flags))
       if (deps_ == null) {
         log.warn("goal tick: goal loop disabled (experimentalGoalLoop off); halting chain", { sessionID })
@@ -207,40 +219,40 @@ export const makeGoalTickPort =
       })
 
       // Ports from DURABLE sources (no in-memory control map on the cold fiber):
-      // shouldPause / shouldStop read the session-state active-goal pointer phase (pause/stop persist it).
+      //   • shouldPause / shouldStop — the session-state active-goal pointer phase (pause/stop persist it).
+      //   • goal-steer — the SessionSteer buffer on the goal session id + goal_steer delivery channel.
+      //   • pendingPlanEdit — the durable pending-edit doc (persistPendingPlanEdit / readPendingPlanEdit).
       const goalPhase = () => AgentGateway.DeepAgentSessionState.getActiveGoal(sessionID)?.phase
       const ports: GoalDriverPorts = {
         onStatus: (status) => statusPublisher.publishStatus(sessionID, status),
         shouldPause: () => Effect.sync(() => goalPhase() === "paused"),
         shouldStop: () => Effect.sync(() => goalPhase() === "stopped"),
+        pendingSteer: () =>
+          deps.steerBuffer.pending(SessionID.make(sessionID), GoalDriver.GOAL_STEER_DELIVERY).pipe(
+            Effect.map((rows) => rows.map((r) => ({ id: r.id, text: r.prompt.text }))),
+            Effect.catchCause(() => Effect.succeed([] as ReadonlyArray<GoalDriver.PendingGoalSteer>)),
+          ),
+        markSteerConsumed: (ids) =>
+          deps.steerBuffer
+            .markConsumed(SessionID.make(sessionID), [...ids], GoalDriver.GOAL_STEER_DELIVERY)
+            .pipe(Effect.catchCause(() => Effect.void)),
+        pendingPlanEdit: () =>
+          Effect.sync(() => readPendingPlanEdit(store, sessionID, request.goalId) as PlanInput | null),
+        markPlanEditConsumed: () =>
+          // Clear the durable slot (sentinel empty body) after the driver applied+re-baselined the edit.
+          Effect.sync(() => persistPendingPlanEdit(store, sessionID, request.goalId, null)),
       }
 
-      // One tick with the driver's cooperative pause/stop checks (the body of runToCompletion, minus the
-      // iteration — the event chain re-emits the next command instead of looping in-process).
-      const loop = makeGoalLoop(deps_)
       const handle = { goalId: request.goalId, planDocId: request.planDocId, sessionId: sessionID }
-      const progress = yield* Effect.gen(function* () {
-        if (yield* ports.shouldStop().pipe(Effect.catchCause(() => Effect.succeed(false)))) {
-          yield* loop.stop(handle).pipe(Effect.catchCause(() => Effect.void))
-          return "stopped" as const
-        }
-        if (yield* ports.shouldPause().pipe(Effect.catchCause(() => Effect.succeed(false)))) {
-          return "paused" as const
-        }
-        const outcome = yield* loop.tick(handle)
-        const status = yield* loop.status(handle).pipe(Effect.catchCause(() => Effect.succeed(null)))
-        if (status) yield* ports.onStatus(status).pipe(Effect.catchCause(() => Effect.void))
-        if (outcome === "continue") return "continue" as const
-        return "terminal" as const
-      })
+      const result = yield* GoalDriver.runOneTick(makeGoalLoop(deps_), { deps: deps_, handle, ports, steerRelay })
 
       // The post-tick durable cursor is the next command identity and the retry checkpoint for this command.
-      // If state vanished, the tick cannot continue, so the fallback is unused by the consumer.
+      // If state vanished, runOneTick cannot continue, so the fallback is unused by the consumer.
       const cursor = readGoalTickCursor(store, sessionID, request.goalId)
       const nextSeq = cursor?.seq ?? request.seq + 1
       const nextExpectedPlanVersion = cursor?.planVersion ?? request.expectedPlanVersion
 
-      return { progress, nextSeq, nextExpectedPlanVersion }
+      return { progress: result.progress, nextSeq, nextExpectedPlanVersion }
     }).pipe(
       // The port lives on `never` — a defect here (unexpected) must NOT crash the consumer's stream. But we
       // WANT a genuine transient failure to nack for retry, so we RE-RAISE as a die: the consumer's

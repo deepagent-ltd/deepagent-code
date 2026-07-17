@@ -2,6 +2,8 @@ import { Context, Effect, Layer, Schema } from "effect"
 import { Project } from "./project"
 import { AbsolutePath } from "./schema"
 import { WorkspaceV2 } from "./workspace"
+import { LayerNode } from "./effect/layer-node"
+import { tags } from "./effect/app-node"
 
 export * as Location from "./location"
 
@@ -29,6 +31,8 @@ export function response<S extends Schema.Top>(data: S) {
 }
 
 export class Service extends Context.Service<Service, Interface>()("@deepagent-code/Location") {}
+
+export const node = LayerNode.unbound(Service, tags.values.location)
 
 export const layer = (ref: Ref) =>
   Layer.effect(
