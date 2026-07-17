@@ -1,14 +1,20 @@
 import { run } from "@deepagent-code/tui"
+import type { Args } from "@deepagent-code/tui/context/args"
 import { TuiConfig } from "@deepagent-code/tui/config"
 import { Effect } from "effect"
 import { Global } from "@deepagent-code/core/global"
 
-export function runTui(transport: { url: string; headers: RequestInit["headers"] }) {
+export function runTui(
+  transport: { url: string; headers: RequestInit["headers"] },
+  args: Args,
+  directory?: string,
+) {
   const config = TuiConfig.resolve({}, { terminalSuspend: false })
   return run({
     ...transport,
-    args: {},
+    args,
     config,
+    directory,
     fetch: gracefulFetch,
     pluginHost: {
       async start() {},

@@ -7,6 +7,15 @@ export const Commands = Spec.make(
   typeof DEEPAGENT_CODE_CLI_NAME === "string" ? DEEPAGENT_CODE_CLI_NAME : "deepagent-code",
   {
     description: "DeepAgent Code 2.0 preview command line interface",
+    params: {
+      project: Argument.string("project").pipe(Argument.optional),
+      continue: Flag.boolean("continue").pipe(Flag.withAlias("c"), Flag.withDefault(false)),
+      session: Flag.string("session").pipe(Flag.withAlias("s"), Flag.optional),
+      fork: Flag.boolean("fork").pipe(Flag.withDefault(false)),
+      model: Flag.string("model").pipe(Flag.withAlias("m"), Flag.optional),
+      agent: Flag.string("agent").pipe(Flag.optional),
+      prompt: Flag.string("prompt").pipe(Flag.optional),
+    },
     commands: [
       Spec.make("debug", {
         description: "Debugging and troubleshooting tools",

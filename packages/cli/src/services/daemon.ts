@@ -128,7 +128,7 @@ export const layer = Layer.effect(
       })
 
       return yield* compatible().pipe(
-        Effect.retry(Schedule.spaced("50 millis").pipe(Schedule.both(Schedule.recurs(100)))),
+        Effect.retry(Schedule.spaced("100 millis").pipe(Schedule.both(Schedule.recurs(600)))),
         Effect.map((info) => info.url),
         Effect.mapError(() => new Error("Failed to start server")),
       )
