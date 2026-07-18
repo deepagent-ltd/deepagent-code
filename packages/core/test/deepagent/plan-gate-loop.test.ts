@@ -112,13 +112,14 @@ describe("U1 soft-gate loop (chokepoint contract)", () => {
   })
 })
 
-// ── U9 per-step binding: the one remaining hard block, with a runtime grace release ───────────────
-// The binding gate (strict hard modes: xhigh/max/ultra) requires a mutating tool to be bound to an
-// active plan step. This is workflow discipline, not a safety property, so it must never permanently
-// deadlock: after repeated blocks with no forward progress the runtime grace release downgrades it to
-// a warn WITHOUT any model cooperation — the same anti-deadlock invariant as the stale layer.
-describe("U9 binding gate + grace release", () => {
-  const decideBinding = (opts: { hasActiveStep: boolean; hardGateMissBlocks: boolean; graceRelease: boolean }) =>
+// ── U9 per-step binding: WARN-ONLY (deadlock fixed for real) ──────────────────────────────────────
+// The binding layer used to hard-BLOCK a mutating tool with no active step in strict modes. Across 68
+// real sessions that block denied 677 commands (49/68 sessions; worst: 120 consecutive), because its
+// "grace release" was non-sticky (reset to 0 on every tool that passed → block-block-block-pass). Plan
+// discipline is not a safety property, so the binding layer is now a NUDGE at the tool call and is
+// ENFORCED only at finalization (stopHookGate). It must NEVER return "block".
+describe("U9 binding gate — warn-only", () => {
+  const decideBinding = (opts: { hasActiveStep: boolean; planExists: boolean }) =>
     gate.evaluate({
       name: "before_tool_use",
       payload: {
@@ -126,39 +127,34 @@ describe("U9 binding gate + grace release", () => {
         isMutating: true,
         lightweight: false,
         hardGate: true,
+        planExists: opts.planExists,
         hasActiveStep: opts.hasActiveStep,
-        hardGateMissBlocks: opts.hardGateMissBlocks,
-        graceRelease: opts.graceRelease,
       },
     })
 
-  test("strict hard mode blocks a mutating tool with no active step", () => {
-    expect(decideBinding({ hasActiveStep: false, hardGateMissBlocks: true, graceRelease: false }).decision).toBe(
-      "block",
-    )
+  test("warns (never blocks) when a plan exists but no active step is bound", () => {
+    const d = decideBinding({ hasActiveStep: false, planExists: true })
+    expect(d.decision).toBe("warn")
+    expect(d.decision).not.toBe("block")
   })
 
-  test("lenient hard mode (high) only warns on a missing active step", () => {
-    expect(decideBinding({ hasActiveStep: false, hardGateMissBlocks: false, graceRelease: false }).decision).toBe(
-      "warn",
-    )
+  test("a run with NO plan is not nagged about binding (planExists guard)", () => {
+    expect(decideBinding({ hasActiveStep: false, planExists: false }).decision).toBe("allow")
   })
 
   test("an active step passes the binding gate", () => {
-    expect(decideBinding({ hasActiveStep: true, hardGateMissBlocks: true, graceRelease: false }).decision).toBe(
-      "allow",
-    )
+    expect(decideBinding({ hasActiveStep: true, planExists: true }).decision).toBe("allow")
   })
 
-  test("grace release downgrades the strict binding block to a warn (never permanently deadlocks)", () => {
-    // Even in the strictest mode with no active step, once the runtime grace release fires the tool is
-    // allowed through with a reminder rather than blocked forever.
-    expect(decideBinding({ hasActiveStep: false, hardGateMissBlocks: true, graceRelease: true }).decision).toBe(
-      "warn",
-    )
+  test("the binding layer never blocks under any interleaving", () => {
+    for (const planExists of [true, false]) {
+      for (const hasActiveStep of [true, false]) {
+        expect(decideBinding({ hasActiveStep, planExists }).decision).not.toBe("block")
+      }
+    }
   })
 
-  test("grace counter machinery: blocks accumulate, forward progress resets", () => {
+  test("grace counter machinery still tracks blocks/resets (telemetry, no longer gates)", () => {
     SessionState.configure(mkdtempSync(path.join(tmpdir(), "plan-gate-bind-")))
     SessionState.getOrCreate("gate-bind", "xhigh")
     SessionState.markPlanStale("gate-bind", "validation_failed")
