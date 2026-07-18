@@ -163,6 +163,118 @@ describe("Git", () => {
     }),
   )
 
+  it.live("collaboration primitives initialize repositories and report porcelain paths", () =>
+    Effect.gen(function* () {
+      const tmp = yield* scopedTmpdir()
+      const git = yield* Git.Service
+
+      expect(yield* git.repository(tmp.path)).toBeUndefined()
+      expect((yield* git.initialize(tmp.path)).exitCode).toBe(0)
+      expect(yield* git.repository(tmp.path)).toEqual(expect.objectContaining({ root: tmp.path, prefix: "" }))
+
+      yield* Effect.promise(() => fs.writeFile(path.join(tmp.path, "new.txt"), "new\n", "utf-8"))
+      expect(yield* git.porcelainStatus(tmp.path)).toEqual(
+        expect.objectContaining({ clean: false, paths: ["new.txt"] }),
+      )
+    }),
+  )
+
+  it.live("commitScoped() uses scoped identity and stages only declared paths", () =>
+    Effect.gen(function* () {
+      const tmp = yield* scopedTmpdir({ git: true })
+      const git = yield* Git.Service
+      yield* Effect.promise(() => fs.writeFile(path.join(tmp.path, "owned.txt"), "owned\n", "utf-8"))
+      yield* Effect.promise(() => fs.writeFile(path.join(tmp.path, "user.txt"), "user\n", "utf-8"))
+
+      const commit = yield* git.commitScoped(tmp.path, {
+        paths: ["owned.txt"],
+        message: "commit owned path",
+        author: { name: "Scoped Author", email: "author@example.test" },
+      })
+      expect(commit.exitCode).toBe(0)
+      expect((yield* git.status(tmp.path)).map((item) => item.file)).toEqual(["user.txt"])
+
+      const metadata = yield* git.commitMetadata(tmp.path, "HEAD")
+      expect(metadata).toEqual(
+        expect.objectContaining({
+          author: { name: "Scoped Author", email: "author@example.test" },
+          committer: { name: "Scoped Author", email: "author@example.test" },
+          subject: "commit owned path",
+        }),
+      )
+      expect((yield* git.commitScoped(tmp.path, {
+        paths: ["../outside.txt"],
+        message: "unsafe",
+        author: { name: "Scoped Author", email: "author@example.test" },
+      })).exitCode).not.toBe(0)
+    }),
+  )
+
+  it.live("commitRange() verifies exact commits and changed paths", () =>
+    Effect.gen(function* () {
+      const tmp = yield* scopedTmpdir({ git: true })
+      const git = yield* Git.Service
+      const base = yield* git.resolveRef(tmp.path)
+      yield* Effect.promise(() => fs.writeFile(path.join(tmp.path, "range.txt"), "range\n", "utf-8"))
+      expect((yield* git.commitScoped(tmp.path, {
+        paths: ["range.txt"],
+        message: "range commit",
+        author: { name: "Range Author", email: "range@example.test" },
+      })).exitCode).toBe(0)
+
+      const range = yield* git.commitRange(tmp.path, base!)
+      expect(range?.commits).toHaveLength(1)
+      expect(range?.paths).toEqual(["range.txt"])
+      expect(yield* git.changedPaths(tmp.path, base!)).toEqual(["range.txt"])
+    }),
+  )
+
+  it.live("mergeInto() merges cleanly and reports abortable conflicts", () =>
+    Effect.gen(function* () {
+      const tmp = yield* scopedTmpdir({ git: true })
+      const git = yield* Git.Service
+      yield* Effect.promise(() => fs.writeFile(path.join(tmp.path, "shared.txt"), "base\n", "utf-8"))
+      expect((yield* git.commitScoped(tmp.path, {
+        paths: ["shared.txt"],
+        message: "base shared",
+        author: { name: "Merge Author", email: "merge@example.test" },
+      })).exitCode).toBe(0)
+      yield* Effect.promise(() => $`git branch -M main`.cwd(tmp.path).quiet())
+      yield* Effect.promise(() => $`git checkout -b feature/clean`.cwd(tmp.path).quiet())
+      yield* Effect.promise(() => fs.writeFile(path.join(tmp.path, "clean.txt"), "clean\n", "utf-8"))
+      expect((yield* git.commitScoped(tmp.path, {
+        paths: ["clean.txt"],
+        message: "clean feature",
+        author: { name: "Merge Author", email: "merge@example.test" },
+      })).exitCode).toBe(0)
+      yield* Effect.promise(() => $`git checkout main`.cwd(tmp.path).quiet())
+
+      const clean = yield* git.mergeInto(tmp.path, "feature/clean")
+      expect(clean.type).toBe("merged")
+      expect(yield* git.changedPaths(tmp.path, "HEAD~1", "HEAD")).toEqual(["clean.txt"])
+
+      yield* Effect.promise(() => $`git checkout -b feature/conflict HEAD~1`.cwd(tmp.path).quiet())
+      yield* Effect.promise(() => fs.writeFile(path.join(tmp.path, "shared.txt"), "feature\n", "utf-8"))
+      expect((yield* git.commitScoped(tmp.path, {
+        paths: ["shared.txt"],
+        message: "conflicting feature",
+        author: { name: "Merge Author", email: "merge@example.test" },
+      })).exitCode).toBe(0)
+      yield* Effect.promise(() => $`git checkout main`.cwd(tmp.path).quiet())
+      yield* Effect.promise(() => fs.writeFile(path.join(tmp.path, "shared.txt"), "main\n", "utf-8"))
+      expect((yield* git.commitScoped(tmp.path, {
+        paths: ["shared.txt"],
+        message: "conflicting main",
+        author: { name: "Merge Author", email: "merge@example.test" },
+      })).exitCode).toBe(0)
+
+      const conflict = yield* git.mergeInto(tmp.path, "feature/conflict")
+      expect(conflict).toEqual(expect.objectContaining({ type: "conflict", paths: ["shared.txt"] }))
+      expect((yield* git.abortMerge(tmp.path)).exitCode).toBe(0)
+      expect((yield* git.status(tmp.path)).map((item) => item.file)).toEqual([])
+    }),
+  )
+
   it.live("show() returns empty text for binary blobs", () =>
     Effect.gen(function* () {
       const tmp = yield* scopedTmpdir({ git: true })
