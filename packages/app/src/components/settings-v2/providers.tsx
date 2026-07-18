@@ -22,7 +22,14 @@ const PROVIDER_NOTES = [
   { match: (id: string) => id === "anthropic", key: "dialog.provider.anthropic.note" },
   { match: (id: string) => id === "openai", key: "dialog.provider.openai.note" },
   { match: (id: string) => id === "deepseek", key: "dialog.provider.deepseek.note" },
+  { match: (id: string) => id === "google", key: "dialog.provider.google.note" },
+  { match: (id: string) => id === "xai", key: "dialog.provider.xai.note" },
   { match: (id: string) => id === "zhipuai", key: "dialog.provider.zhipuai.note" },
+  { match: (id: string) => id === "zhipuai-coding-plan", key: "dialog.provider.zhipuai-coding-plan.note" },
+  { match: (id: string) => id === "zai", key: "dialog.provider.zai.note" },
+  { match: (id: string) => id === "zai-coding-plan", key: "dialog.provider.zai-coding-plan.note" },
+  { match: (id: string) => id === "kimi-for-coding", key: "dialog.provider.kimi-for-coding.note" },
+  { match: (id: string) => id === "moonshotai-cn", key: "dialog.provider.moonshotai-cn.note" },
 ] as const
 
 const PROVIDER_ICON_SIZE = 16

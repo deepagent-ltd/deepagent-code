@@ -22,7 +22,7 @@ export function normalizeModelID(id: string): string {
   // Drop a leading vendor prefix separated by "/" (e.g. "openai/gpt-4o", "some-router/claude-3").
   out = out.replace(/^[a-z0-9][a-z0-9-]*\//, "")
   // Drop a leading known-vendor prefix separated by "." (e.g. bedrock-style "anthropic.claude-…").
-  out = out.replace(/^(openai|anthropic|google|meta|deepseek|mistral|qwen|zhipuai|zai|xai|cohere)[.]/, "")
+  out = out.replace(/^(openai|anthropic|google|meta|deepseek|mistral|qwen|zhipuai|zai|xai|cohere|moonshotai|kimi)[.]/, "")
   // Collapse "." and "_" separators to "-" so "glm-4.6" and "glm-4-6" match.
   out = out.replace(/[._]/g, "-")
   return out

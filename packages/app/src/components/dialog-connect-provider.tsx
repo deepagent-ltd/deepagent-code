@@ -33,6 +33,8 @@ const providerBaseURL: Record<string, string> = {
   "zhipuai-coding-plan": "https://open.bigmodel.cn/api/coding/paas/v4",
   zai: "https://api.z.ai/api/paas/v4",
   "zai-coding-plan": "https://api.z.ai/api/coding/paas/v4",
+  "kimi-for-coding": "https://api.kimi.com/coding/v1",
+  "moonshotai-cn": "https://api.moonshot.cn/v1",
   xai: "https://api.x.ai/v1",
   google: "https://generativelanguage.googleapis.com/v1beta",
 }
