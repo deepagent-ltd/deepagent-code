@@ -259,8 +259,14 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
     addSelectionToContext(path, selectionFromLines(range))
   }
 
+  // Location-aware terminal open/toggle: honor where the terminal is docked (bottom dock vs side).
+  const terminalDockedSide = () => layout.dock.location("terminal") === "side"
   const openTerminal = () => {
     if (terminal.all().length > 0) terminal.new()
+    if (terminalDockedSide()) {
+      view().rightPanel.open("terminal")
+      return
+    }
     view().terminal.open()
   }
 
@@ -501,6 +507,10 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
       keybind: "ctrl+`",
       slash: "terminal",
       onSelect: () => {
+        if (terminalDockedSide()) {
+          view().rightPanel.toggle("terminal")
+          return
+        }
         view().terminal.toggle()
       },
     }),
@@ -532,7 +542,9 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
     }),
   ]
 
-  const terminalOpen = () => view().terminal.opened()
+  // "Terminal is currently visible" — in whichever location it's docked. Gates split/close/focus cmds.
+  const terminalOpen = () =>
+    terminalDockedSide() ? view().rightPanel.mode() === "terminal" : view().terminal.opened()
   const focusedPane = () => terminal.focusedPaneId()
   const terminalCmds = () => [
     terminalCommand({
