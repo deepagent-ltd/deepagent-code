@@ -8,6 +8,7 @@ import { GlobTool } from "./glob"
 import { GrepTool } from "./grep"
 import { ReadTool } from "./read"
 import { TaskTool } from "./task"
+import { TaskStatusTool } from "./task_status"
 import { Database } from "@deepagent-code/core/database/database"
 import { WebFetchTool } from "./webfetch"
 import { WriteTool } from "./write"
@@ -126,6 +127,7 @@ export const layer: Layer.Layer<
 
     const invalid = yield* InvalidTool
     const task = yield* TaskTool
+    const taskstatus = yield* TaskStatusTool
     const read = yield* ReadTool
     const question = yield* QuestionTool
     const lsptool = yield* LspTool
@@ -254,6 +256,7 @@ export const layer: Layer.Layer<
           edit: Tool.init(edit),
           write: Tool.init(writetool),
           task: Tool.init(task),
+          task_status: Tool.init(taskstatus),
           fetch: Tool.init(webfetch),
           search: Tool.init(websearch),
           skill: Tool.init(skilltool),
@@ -280,6 +283,7 @@ export const layer: Layer.Layer<
             tool.edit,
             tool.write,
             tool.task,
+            tool.task_status,
             tool.fetch,
             tool.search,
             tool.skill,
