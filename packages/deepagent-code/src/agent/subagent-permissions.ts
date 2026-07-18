@@ -1,6 +1,27 @@
 import { PermissionV1 } from "@deepagent-code/core/v1/permission"
+import { evaluate as evaluatePermission } from "../permission"
 import type { Permission } from "../permission"
 import type { Agent } from "./agent"
+
+// I33-3: the edit-class tool permissions that mark a subagent as WRITE-type. A subagent that can run
+// ANY of these (effective action !== "deny") mutates the working tree and therefore defaults to git
+// worktree isolation (its edits are propagated back to the parent on completion). A subagent denied
+// all of them is READ-ONLY and defaults to sharing the parent's directory. Keep in sync with the
+// mutating-tool set the plan gate uses (session/tools.ts: write/edit/patch/shell).
+const EDIT_CLASS_PERMISSIONS = ["edit", "write", "patch", "bash"] as const
+
+/**
+ * I33-3: is this subagent WRITE-type (defaults to worktree isolation) or READ-ONLY (defaults to
+ * shared parent dir)? Evaluates the subagent's own permission ruleset for each edit-class tool via the
+ * same `Permission.evaluate` the runtime uses (last matching rule wins; unmatched ⇒ "ask", which is
+ * NOT "deny" ⇒ still write-capable). A subagent is read-only only when EVERY edit-class permission
+ * resolves to "deny". Pure + exported for unit testing; no I/O.
+ */
+export function subagentIsWriteType(subagent: Agent.Info): boolean {
+  return EDIT_CLASS_PERMISSIONS.some(
+    (perm) => evaluatePermission(perm, "**", subagent.permission).action !== "deny",
+  )
+}
 
 /**
  * V3.9 §E — Registry capability that grants a Goal Loop worker subagent a
