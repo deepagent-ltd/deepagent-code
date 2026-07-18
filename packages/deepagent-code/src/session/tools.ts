@@ -28,6 +28,17 @@ import { AgentGateway } from "@deepagent-code/core/agent-gateway"
 
 const log = Log.create({ service: "session.tools" })
 
+// Plan-gate WARN reminder placement. Prepending "⚠️ Plan gate: …" AHEAD of a tool's own output was
+// actively harmful: the plan gate is a soft nudge — the tool ALREADY RAN and the output below the
+// banner is its real (usually successful, exit 0) result. But a leading "⚠️ … gate …" line reads as a
+// FAILURE/denial, so the model recorded the call as a plan-gate-blocked failure, then re-diagnosed that
+// same false negative every round ("the previous 'failures' are again plan-gate artifacts — the bash
+// actually returned data"). Append the note AFTER the output and state plainly that the command ran, so
+// the real result leads and the nudge cannot be misread as a block. (Hard-BLOCK denials are unaffected —
+// they return their own message and never reach here because the tool did not execute.)
+export const appendPlanGateNote = (output: string, reason: string): string =>
+  `${output}\n\n---\n[plan-note] This command executed normally; the output above is its real result. Nudge: ${reason}.`
+
 // U1 PlanController soft gate: a HookPolicy with the before_tool_use plan gate. While the runtime
 // has flagged the plan as stale, mutating tools (write/edit/patch/shell) are soft-blocked until the
 // model calls `plan` to update it; read/diagnosis/`plan` always pass. Lightweight modes
@@ -143,20 +154,23 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
     const lightweight = AgentGateway.DeepAgentPlanController.isLightweightMode(agentMode)
     const hardGate = !lightweight && AgentGateway.DeepAgentPlanController.hardGateEnabled(agentMode)
     const plan = AgentGateway.DeepAgentSessionState.getPlan(sessionID)
-    const graceRelease = latch != null && AgentGateway.DeepAgentPlanController.shouldGraceRelease(latch)
     const gateDecision = PlanHook.evaluate({
       name: "before_tool_use",
       payload: {
         planStale,
         staleReason: latch?.stale_reason ?? null,
-        graceRelease,
         isMutating,
         lightweight,
         hardGate,
+        // planExists guards the per-step-binding nudge: a run that never created a plan has no step to
+        // bind to, so it must not be nagged (mirrors stopHookGate's planExists guard).
+        planExists: plan != null,
         hasActiveStep: AgentGateway.DeepAgentPlanController.hasActiveStep(plan),
-        hardGateMissBlocks: hardGate && AgentGateway.DeepAgentPlanController.hardGateStrict(agentMode),
       },
     })
+    // DEFENSIVE: planGate never returns "block" anymore (plan discipline is warn-only at the tool call;
+    // enforcement lives at finalization). We keep this branch only so a FUTURE safety hook that returns
+    // "block" still fails closed. recordPlanGateBlock is retained for that path's telemetry.
     if (gateDecision.decision === "block") {
       AgentGateway.DeepAgentSessionState.recordPlanGateBlock(sessionID)
       const output =
@@ -219,7 +233,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
             const result = yield* item.execute(args, ctx)
             const withReminder =
               gateWarnReason && typeof result.output === "string"
-                ? { ...result, output: `⚠️ Plan gate: ${gateWarnReason}.\n\n${result.output}` }
+                ? { ...result, output: appendPlanGateNote(result.output, gateWarnReason) }
                 : result
             const output = {
               ...withReminder,
@@ -357,7 +371,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
           }
 
           const joinedText = mcpGateWarnReason
-            ? `⚠️ Plan gate: ${mcpGateWarnReason}.\n\n${textParts.join("\n\n")}`
+            ? appendPlanGateNote(textParts.join("\n\n"), mcpGateWarnReason)
             : textParts.join("\n\n")
           const truncated = yield* truncate.output(joinedText, {}, input.agent)
           const metadata = {

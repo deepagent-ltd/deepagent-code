@@ -484,3 +484,51 @@ describe("extractValidationResults (S41-2)", () => {
     expect(results).toHaveLength(0)
   })
 })
+
+// STALE-REHARVEST GUARD: extractValidationResults re-scans the WHOLE transcript every turn, so a single
+// early test run (e.g. "✓ cancel with queued callers [3882.11ms]") is re-extracted verbatim on every
+// later turn as long as it stays in history. validationFingerprint lets the caller tell a genuine NEW
+// run apart from a stale re-harvest, so the same result is not re-recorded as a fresh candidate N times
+// (the "26轮逐字不变" duplication).
+describe("validationFingerprint (stale-reharvest guard)", () => {
+  const vr = (command: string, exit_code: number, output: string): AgentGateway.ValidationResult => ({
+    command,
+    passed: exit_code === 0,
+    exit_code,
+    output,
+    duration_ms: 0,
+  })
+
+  test("identical result sets fingerprint equal (a stale re-harvest is detected)", () => {
+    const a = [vr("bun run test", 0, "✓ cancel with queued callers [3882.11ms]")]
+    const b = [vr("bun run test", 0, "✓ cancel with queued callers [3882.11ms]")]
+    expect(LLMRequestPrep.validationFingerprint(a)).toBe(LLMRequestPrep.validationFingerprint(b))
+  })
+
+  test("is order-independent across map-iteration order", () => {
+    const a = [vr("bun run typecheck", 0, "ok"), vr("bun run test", 0, "ok")]
+    const b = [vr("bun run test", 0, "ok"), vr("bun run typecheck", 0, "ok")]
+    expect(LLMRequestPrep.validationFingerprint(a)).toBe(LLMRequestPrep.validationFingerprint(b))
+  })
+
+  test("a genuine state change (pass→fail via exit code) fingerprints differently", () => {
+    const pass = [vr("bun run test", 0, "20 passed")]
+    const fail = [vr("bun run test", 1, "19 passed, 1 failed")]
+    expect(LLMRequestPrep.validationFingerprint(pass)).not.toBe(LLMRequestPrep.validationFingerprint(fail))
+  })
+
+  test("volatile output with the SAME exit code fingerprints EQUAL (guard not defeated by noise)", () => {
+    // Same command, same exit 0, but the output carries a volatile duration/timestamp. Keying on
+    // command+exit_code (not output) means this is correctly seen as the SAME evidence, so a noisy
+    // re-harvest does not masquerade as a new run.
+    const run1 = [vr("bun run test", 0, "✓ cancel with queued callers [3882.11ms]")]
+    const run2 = [vr("bun run test", 0, "✓ cancel with queued callers [4021.55ms]")]
+    expect(LLMRequestPrep.validationFingerprint(run1)).toBe(LLMRequestPrep.validationFingerprint(run2))
+  })
+
+  test("an empty set differs from any non-empty set (first evidence is always new)", () => {
+    expect(LLMRequestPrep.validationFingerprint([])).not.toBe(
+      LLMRequestPrep.validationFingerprint([vr("bun run test", 0, "ok")]),
+    )
+  })
+})

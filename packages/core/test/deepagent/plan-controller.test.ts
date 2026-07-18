@@ -148,22 +148,35 @@ describe("planGate (before_tool_use soft gate)", () => {
     expect(d.decision).toBe("warn")
   })
 
-  // U9 per-step binding remains a hard block (strict hard modes) but gains a runtime grace release so
-  // it can never permanently deadlock a model that fails to mark a step active.
-  test("U9 binding: strict hard mode blocks a mutating tool with no active step", () => {
+  // U9 per-step binding is now WARN-ONLY (deadlock fix): plan discipline never blocks a tool at the
+  // call site — it is a nudge here and is enforced only at finalization (stopHookGate). The binding
+  // nudge fires only when a plan actually EXISTS (planExists guard); a run with no plan is not nagged.
+  test("U9 binding: warns (never blocks) when a plan exists with no active step", () => {
     const d = gate({
       name: "before_tool_use",
-      payload: { planStale: false, isMutating: true, lightweight: false, hardGate: true, hasActiveStep: false, hardGateMissBlocks: true },
-    })
-    expect(d.decision).toBe("block")
-  })
-
-  test("U9 binding: grace release downgrades the strict block to a warn", () => {
-    const d = gate({
-      name: "before_tool_use",
-      payload: { planStale: false, isMutating: true, lightweight: false, hardGate: true, hasActiveStep: false, hardGateMissBlocks: true, graceRelease: true },
+      payload: { planStale: false, isMutating: true, lightweight: false, hardGate: true, planExists: true, hasActiveStep: false },
     })
     expect(d.decision).toBe("warn")
+  })
+
+  test("U9 binding: a run with NO plan is not nagged (planExists guard)", () => {
+    const d = gate({
+      name: "before_tool_use",
+      payload: { planStale: false, isMutating: true, lightweight: false, hardGate: true, planExists: false, hasActiveStep: false },
+    })
+    expect(d.decision).toBe("allow")
+  })
+
+  test("U9 binding: never returns block under any interleaving", () => {
+    for (const planExists of [true, false]) {
+      for (const hasActiveStep of [true, false]) {
+        const d = gate({
+          name: "before_tool_use",
+          payload: { planStale: false, isMutating: true, lightweight: false, hardGate: true, planExists, hasActiveStep },
+        })
+        expect(d.decision).not.toBe("block")
+      }
+    }
   })
 })
 
