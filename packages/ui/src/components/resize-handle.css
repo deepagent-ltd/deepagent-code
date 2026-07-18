@@ -55,4 +55,28 @@
       transform: translateY(-50%);
     }
   }
+
+  /* Persistent, VSCode-style dock divider: the drag bar is ALWAYS visible (not
+     hover-only) and carries a real background so it reads as THE grabbable line —
+     higher priority than any adjacent panel border. Opt-in via `.resize-handle--dock`
+     so other handles keep their subtle hover-only behavior. Thickens + brightens on
+     hover/active for the drag affordance. */
+  &.resize-handle--dock::after {
+    opacity: 1;
+    background: var(--border-base);
+  }
+
+  &.resize-handle--dock:hover::after,
+  &.resize-handle--dock:active::after {
+    background: var(--border-strong-base);
+  }
+
+  &[data-direction="vertical"].resize-handle--dock::after {
+    height: 1px;
+  }
+
+  &[data-direction="vertical"].resize-handle--dock:hover::after,
+  &[data-direction="vertical"].resize-handle--dock:active::after {
+    height: 2px;
+  }
 }
