@@ -30,6 +30,7 @@ import { SidePanelDebug } from "@/pages/session/side-panel-debug"
 import { SidePanelProfile } from "@/pages/session/side-panel-profile"
 import { SidePanelIM } from "@/pages/session/side-panel-im"
 import { SidePanelOversight } from "@/pages/session/side-panel-oversight"
+import { SidePanelTerminal, SidePanelDebugConsole } from "@/pages/session/side-panel-terminal"
 
 type RenderDiff = (SnapshotFileDiff & { file: string }) | VcsFileDiff
 
@@ -49,8 +50,14 @@ type PanelMode =
   | "plugins"
   | "debug"
   | "profile"
+  | "terminal"
+  | "debug-console"
 
-type PanelGroup = "code" | "agents" | "env" | "dev"
+type PanelGroup = "code" | "agents" | "env" | "dev" | "dock"
+
+// The movable dock panels (terminal / debug-console) appear in the rail only when their location is
+// "side" (see layout.dock). Everything else is side-native and always eligible.
+const DOCK_PANEL_MODES: readonly PanelMode[] = ["terminal", "debug-console"]
 
 type PanelDef = {
   readonly mode: PanelMode
@@ -82,9 +89,12 @@ const PANELS: readonly PanelDef[] = [
   { mode: "plugins", icon: "plugin", titleKey: "status.popover.tab.plugins", group: "dev", bucket: "narrow" },
   { mode: "debug", icon: "debug", titleKey: "session.panel.debug", group: "dev", bucket: "narrow" },
   { mode: "profile", icon: "profile", titleKey: "session.panel.profile", group: "dev", bucket: "narrow" },
+  // Dock — the movable panels; only surface here when docked to the side (see gating below).
+  { mode: "terminal", icon: "terminal-active", titleKey: "session.panel.terminal", group: "dock", bucket: "narrow", keybind: "terminal.toggle" },
+  { mode: "debug-console", icon: "code-lines", titleKey: "session.panel.debugConsole", group: "dock", bucket: "narrow" },
 ]
 
-const GROUP_ORDER: readonly PanelGroup[] = ["code", "agents", "env", "dev"]
+const GROUP_ORDER: readonly PanelGroup[] = ["code", "agents", "env", "dev", "dock"]
 
 function renderDiff(value: SnapshotFileDiff | VcsFileDiff): value is RenderDiff {
   return typeof value.file === "string"
@@ -312,13 +322,17 @@ export function SessionSidePanel(props: {
     return undefined
   }
   const railItems = createMemo(() =>
-    PANELS.filter((p) => (p.capability === "oversight" ? oversightEnabled() : true)).map((p) => ({
-      ...p,
-      title: language.t(p.titleKey),
-      keybindLabel: p.keybind ? command.keybind(p.keybind) : undefined,
-      active: isActive(p.mode),
-      badge: badgeFor(p.mode),
-    })),
+    PANELS.filter((p) => (p.capability === "oversight" ? oversightEnabled() : true))
+      // Dock panels (terminal / debug-console) only appear in the rail when docked to the side; when
+      // in the bottom dock they're reached there instead.
+      .filter((p) => (DOCK_PANEL_MODES.includes(p.mode) ? layout.dock.location(p.mode as "terminal" | "debug-console") === "side" : true))
+      .map((p) => ({
+        ...p,
+        title: language.t(p.titleKey),
+        keybindLabel: p.keybind ? command.keybind(p.keybind) : undefined,
+        active: isActive(p.mode),
+        badge: badgeFor(p.mode),
+      })),
   )
 
   createEffect(() => {
@@ -560,6 +574,12 @@ export function SessionSidePanel(props: {
               </Match>
               <Match when={isActive("oversight")}>
                 <SidePanelOversight onClose={closePanel} />
+              </Match>
+              <Match when={isActive("terminal")}>
+                <SidePanelTerminal onClose={closePanel} />
+              </Match>
+              <Match when={isActive("debug-console")}>
+                <SidePanelDebugConsole onClose={closePanel} />
               </Match>
             </Switch>
             </div>

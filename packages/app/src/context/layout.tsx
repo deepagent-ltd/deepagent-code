@@ -49,6 +49,19 @@ const DEFAULT_SESSION_WIDTH = 600
 const DEFAULT_TERMINAL_HEIGHT = 280
 export type AvatarColorKey = (typeof AVATAR_COLOR_KEYS)[number]
 
+// ── Dock panels ────────────────────────────────────────────────────────────────
+// The set of panels that can be docked in EITHER the bottom dock or the right side panel.
+// Everything else (review/files/subagents/…) is side-native and not movable. See
+// docs/app-dock-panel-redesign.md.
+export type DockPanelID = "terminal" | "debug-console"
+export type DockLocation = "bottom" | "side"
+export const DOCK_PANEL_IDS: readonly DockPanelID[] = ["terminal", "debug-console"]
+// Both movable panels are born in the bottom dock (their historical home).
+const DOCK_DEFAULT_LOCATION: Record<DockPanelID, DockLocation> = {
+  terminal: "bottom",
+  "debug-console": "bottom",
+}
+
 export function getAvatarColors(key?: string) {
   if (key && AVATAR_COLOR_KEYS.includes(key as AvatarColorKey)) {
     return {
@@ -95,6 +108,9 @@ type SessionView = {
     | "debug"
     | "im"
     | "oversight"
+    // Movable dock panels can also live in the side panel (see DockPanelID / layout.dock).
+    | "terminal"
+    | "debug-console"
   pendingMessage?: string
   pendingMessageAt?: number
   todoCollapsed?: boolean
@@ -302,6 +318,13 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
         terminal: {
           height: DEFAULT_TERMINAL_HEIGHT,
           opened: false,
+        },
+        // Dock-panel location (global, matching terminal.opened's global scope). Each movable panel
+        // (terminal / debug-console) remembers whether it lives in the bottom dock or the right side
+        // panel. Absent entries fall back to DOCK_DEFAULT_LOCATION at read time, so an older store with
+        // no `dock` field keeps working with no migration.
+        dock: {
+          location: {} as Record<DockPanelID, DockLocation>,
         },
         review: {
           diffStyle: "split" as ReviewDiffStyle,
@@ -689,6 +712,34 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
         resize(height: number) {
           setStore("terminal", "height", height)
         },
+      },
+      dock: {
+        // Where a movable panel currently lives. Reactive read (used in JSX/memos).
+        location(id: DockPanelID): DockLocation {
+          return store.dock?.location?.[id] ?? DOCK_DEFAULT_LOCATION[id]
+        },
+        setLocation(id: DockPanelID, location: DockLocation) {
+          if (!store.dock) {
+            setStore("dock", { location: { [id]: location } as Record<DockPanelID, DockLocation> })
+            return
+          }
+          setStore("dock", "location", id, location)
+        },
+        // Toggle a panel between bottom and side.
+        move(id: DockPanelID) {
+          const current = store.dock?.location?.[id] ?? DOCK_DEFAULT_LOCATION[id]
+          const next: DockLocation = current === "bottom" ? "side" : "bottom"
+          if (!store.dock) {
+            setStore("dock", { location: { [id]: next } as Record<DockPanelID, DockLocation> })
+            return
+          }
+          setStore("dock", "location", id, next)
+        },
+        // How many movable panels currently live in the bottom dock (drives whether the bottom
+        // dock renders at all).
+        bottomCount: createMemo(
+          () => DOCK_PANEL_IDS.filter((id) => (store.dock?.location?.[id] ?? DOCK_DEFAULT_LOCATION[id]) === "bottom").length,
+        ),
       },
       review: {
         diffStyle: createMemo(() => store.review?.diffStyle ?? "split"),
