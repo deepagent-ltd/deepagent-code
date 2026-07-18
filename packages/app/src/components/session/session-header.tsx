@@ -206,7 +206,23 @@ export function SessionHeader() {
     ]
   })
 
+  // Where the terminal currently lives (bottom dock vs right side panel). The header button toggles
+  // the terminal in-place: if it's docked to the side, toggle the side panel's terminal mode; else the
+  // bottom dock.
+  const terminalDockedSide = createMemo(() => layout.dock.location("terminal") === "side")
+  const terminalOpen = createMemo(() =>
+    terminalDockedSide() ? view().rightPanel.mode() === "terminal" : view().terminal.opened(),
+  )
+
   const toggleTerminal = () => {
+    if (terminalDockedSide()) {
+      view().rightPanel.toggle("terminal")
+      if (view().rightPanel.mode() !== "terminal") return
+      const id = terminal.active()
+      if (id) focusTerminalById(id)
+      return
+    }
+
     const next = !view().terminal.opened()
     view().terminal.toggle()
     if (!next) return
@@ -458,10 +474,10 @@ export function SessionHeader() {
                       class="group/terminal-toggle titlebar-icon w-8 h-6 p-0 box-border shrink-0"
                       onClick={toggleTerminal}
                       aria-label={language.t("command.terminal.toggle")}
-                      aria-expanded={view().terminal.opened()}
+                      aria-expanded={terminalOpen()}
                       aria-controls="terminal-panel"
                     >
-                      <Icon size="small" name={view().terminal.opened() ? "terminal-active" : "terminal"} />
+                      <Icon size="small" name={terminalOpen() ? "terminal-active" : "terminal"} />
                     </Button>
                   </TooltipKeybind>
                 </Show>
