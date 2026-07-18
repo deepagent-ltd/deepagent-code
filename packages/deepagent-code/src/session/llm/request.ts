@@ -500,9 +500,23 @@ const buildDeepAgentPromptContext = Effect.fn("LLMRequestPrep.buildDeepAgentProm
   }
 
   if (previousValidationResults.length > 0) {
-    const output = previousValidationResults.map((r) => `${r.command}: ${r.passed ? "PASS" : "FAIL"}`).join("\n")
-    AgentGateway.DeepAgentSessionState.recordValidation(input.sessionID, previousValidationResults, output)
-    AgentGateway.DeepAgentOrchestrator.processValidationResults(input.sessionID, previousValidationResults)
+    // STALE-REHARVEST GUARD: extractValidationResults re-scans the WHOLE transcript every turn, so a
+    // test result from an earlier round (with its frozen `[Nms]` duration) is re-extracted verbatim on
+    // every subsequent turn as long as it stays in history. Without this guard, each turn re-ran
+    // recordValidation + processValidationResults, and processValidationResults → recordCandidate →
+    // addCandidate APPENDS a new candidate unconditionally (no dedupe). After N turns the candidate list
+    // held N copies of the SAME stale ValidationResult, so collectValidationFailureText (and any other
+    // candidate/validation walker) emitted that identical block N times — the "26轮逐字不变" symptom.
+    // Only (re)record when the extracted evidence actually DIFFERS from what we last recorded: a genuine
+    // new validation run changes the fingerprint; a stale re-harvest does not.
+    const existing = AgentGateway.DeepAgentSessionState.get(input.sessionID)
+    const isNewEvidence =
+      !existing || validationFingerprint(existing.lastValidationResults) !== validationFingerprint(previousValidationResults)
+    if (isNewEvidence) {
+      const output = previousValidationResults.map((r) => `${r.command}: ${r.passed ? "PASS" : "FAIL"}`).join("\n")
+      AgentGateway.DeepAgentSessionState.recordValidation(input.sessionID, previousValidationResults, output)
+      AgentGateway.DeepAgentOrchestrator.processValidationResults(input.sessionID, previousValidationResults)
+    }
   } else if (deepAgentRoundControl(input.user.metadata) === "continue") {
     const state = AgentGateway.DeepAgentSessionState.get(input.sessionID)
     if (state) {
@@ -573,6 +587,21 @@ const deepAgentRoundControl = (metadata: unknown): "continue" | undefined => {
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value)
 
+// A stable identity for a set of validation results, used to tell a GENUINE new validation run apart
+// from a stale re-harvest of the same transcript. Order-independent (sorted by command) so the same
+// results in a different map-iteration order still compare equal. Keyed on command + exit_code ONLY —
+// deliberately NOT the raw output: output carries volatile substrings (durations like "[3882.11ms]",
+// timestamps, temp paths, PIDs) that would make two logically-identical results fingerprint differently
+// and defeat the guard. The exit code is the authoritative pass/fail identity now that the shell tool
+// emits a ground-truth exit trailer, so a real state change (pass→fail / fail→pass) still changes the
+// fingerprint while noisy re-runs of the same outcome do not.
+export function validationFingerprint(results: readonly AgentGateway.ValidationResult[]): string {
+  return results
+    .map((r) => `${r.command} ${r.exit_code}`)
+    .sort()
+    .join("\n")
+}
+
 // S41-2: only outputs produced by the DECLARED validation commands count as validation evidence.
 // The old heuristic scanned EVERY bash/shell/exec tool result for the words "error"/"failed" and
 // recorded each match as a failed validation — so diagnostic calls (grep/tail of test logs, ad-hoc
@@ -586,7 +615,7 @@ export function extractValidationResults(
   const toolCommands = new Map<string, string>()
   for (const msg of messages) {
     if (msg.role !== "assistant" || !Array.isArray(msg.content)) continue
-    for (const part of msg.content) {
+    for (const part of msg.content as readonly unknown[]) {
       if (!isRecord(part) || part.type !== "tool-call") continue
       const toolCallId = part.toolCallId
       const input = part.input
@@ -619,16 +648,30 @@ export function extractValidationResults(
           ? (part.output as { type: "text"; value: string }).value
           : ""
       if (!output) continue
+      // The shell tool now always appends a ground-truth `exit code: N` trailer as the LAST line
+      // (shell.ts). Take the LAST occurrence so an incidental "exit code: 1" inside the command's own
+      // output (e.g. a build log the command printed) never shadows the authoritative trailer.
+      const exitMatches = [...output.matchAll(/exit\s*code\s*[:=]\s*(\d+)/gi)]
+      const lastExit = exitMatches.length > 0 ? exitMatches[exitMatches.length - 1] : null
+      // A "terminated" trailer (abort/timeout, code null) is a genuine non-success but has no numeric
+      // code — treat it as failed so a killed validation is not read as a pass.
+      const terminated = /exit\s*code\s*:\s*null\b/i.test(output)
       const hasValidationSignal =
-        /exit\s*code\s*[:=]\s*\d+/i.test(output) || /\b(PASS|FAIL|passed|failed|error|Error)\b/.test(output)
+        lastExit !== null || terminated || /\b(PASS|FAIL|passed|failed|error|Error)\b/.test(output)
       if (!hasValidationSignal) continue
-      // T1 (S1-v3.4): recover the exit code from the tool output when present (e.g. "exit code: 127").
-      // When an explicit code is present it is AUTHORITATIVE: derive `passed` from it so the
-      // `passed === (exit_code === 0)` invariant (round-state.ts) holds even for outputs like
-      // "Tests passed. exit code: 1". Only when no code is present do we fall back to the PASS/FAIL text.
-      const exitMatch = output.match(/exit\s*code\s*[:=]\s*(\d+)/i)
-      const textPassed = /\bPASS(ED)?\b/i.test(output) && !/\bFAIL(ED)?\b/i.test(output)
-      const exit_code = exitMatch ? Number(exitMatch[1]) : textPassed ? 0 : 1
+      // AUTHORITY ORDER: (1) the numeric exit trailer is definitive — derive passed from it, so the
+      // `passed === (exit_code === 0)` invariant (round-state.ts) holds even for output like
+      // "Tests passed. exit code: 1"; (2) a "terminated" trailer → failed; (3) ONLY when there is no
+      // trailer at all do we fall back to PASS/FAIL text. Fallback bias: absent any exit code, require a
+      // POSITIVE failure signal (FAIL/failed word) to mark failed — mere absence of "PASS" is NOT a
+      // failure (the old default-to-FAIL misread green runs whose output happened to contain "error").
+      let exit_code: number
+      if (lastExit) exit_code = Number(lastExit[1])
+      else if (terminated) exit_code = 1
+      else {
+        const textFailed = /\bFAIL(ED)?\b/i.test(output)
+        exit_code = textFailed ? 1 : 0
+      }
       const passed = exit_code === 0
       for (const candidate of declared) {
         latest.set(candidate, {

@@ -88,7 +88,26 @@ const stageForDecision = (decision: RoundDecision, current: ActivationStage): Ac
   }
 }
 
+// Identity of a candidate's evidence: same round + status + the same per-command exit outcomes. Keyed
+// on exit_code (not output text) for the same reason validationFingerprint is — output carries volatile
+// noise (durations/timestamps) that must not make identical evidence look distinct.
+const candidateEvidenceKey = (c: CandidateRef): string =>
+  `${c.round}|${c.status}|${[...c.validations].map((v) => `${v.command}=${v.exit_code}`).sort().join(",")}`
+
 export const addCandidate = (state: RoundState, candidate: CandidateRef): RoundState => {
+  // STALE-REHARVEST DEDUPE (single append site; covers BOTH the request-prep path and the micro-round
+  // driver path, which used to bypass the request.ts fingerprint guard). extractValidationResults
+  // re-scans the whole transcript every turn, so the same early validation result is re-recorded as a
+  // "new" candidate each round; addCandidate previously appended unconditionally, so after N rounds the
+  // list held N identical candidates and every candidate-walker (collectValidationFailureText, review)
+  // emitted the same block N times. If the incoming candidate is evidence-identical to the LAST one,
+  // skip the append — a genuinely new attempt (new round, changed exit outcome, or different status)
+  // has a different key and still appends. Best-candidate is recomputed from the retained set, so a
+  // dropped duplicate can never change it.
+  const last = state.candidates[state.candidates.length - 1]
+  if (last && candidateEvidenceKey(last) === candidateEvidenceKey(candidate)) {
+    return state
+  }
   const candidates = [...state.candidates, candidate]
   const best =
     candidate.status === "validated" &&
