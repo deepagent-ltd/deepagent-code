@@ -21,7 +21,11 @@ describe("hard gate enablement by mode", () => {
   })
 })
 
-describe("per-step binding via planGate (fresh plan, mutating tool)", () => {
+// WARN-ONLY (deadlock fix): the per-step binding layer NEVER blocks a tool anymore. Across 68 real
+// sessions the old hard-block produced 677 command denials (49/68 sessions), so plan discipline is now
+// a nudge at the tool call and is ENFORCED only at finalization (stopHookGate). These tests pin that
+// the binding layer warns (with a plan present) or allows, and never returns "block".
+describe("per-step binding via planGate (fresh plan, mutating tool) — warn-only", () => {
   const gate = planGate()
   const payload = (over: Record<string, unknown>) => ({
     planStale: false,
@@ -30,31 +34,40 @@ describe("per-step binding via planGate (fresh plan, mutating tool)", () => {
     ...over,
   })
 
-  test("high warns when no active step is bound (auto-replan path)", () => {
-    const d = gate({
-      name: "before_tool_use",
-      payload: payload({ hardGate: true, hasActiveStep: false, hardGateMissBlocks: false }),
-    })
-    expect(d.decision).toBe("warn")
+  test("warns when a plan exists but no active step is bound (any strict level)", () => {
+    for (const strict of [false, true]) {
+      const d = gate({
+        name: "before_tool_use",
+        payload: payload({ hardGate: true, planExists: true, hasActiveStep: false, hardGateMissBlocks: strict }),
+      })
+      expect(d.decision).toBe("warn")
+    }
   })
-  test("xhigh/max block when no active step is bound", () => {
+  test("NEVER blocks a mutating tool, even at strict levels with no active step", () => {
     const d = gate({
       name: "before_tool_use",
-      payload: payload({ hardGate: true, hasActiveStep: false, hardGateMissBlocks: true }),
+      payload: payload({ hardGate: true, planExists: true, hasActiveStep: false, hardGateMissBlocks: true }),
     })
-    expect(d.decision).toBe("block")
+    expect(d.decision).not.toBe("block")
+  })
+  test("a run with NO plan is not nagged about binding (planExists guard)", () => {
+    const d = gate({
+      name: "before_tool_use",
+      payload: payload({ hardGate: true, planExists: false, hasActiveStep: false }),
+    })
+    expect(d.decision).toBe("allow")
   })
   test("an active step allows the edit", () => {
     const d = gate({
       name: "before_tool_use",
-      payload: payload({ hardGate: true, hasActiveStep: true, hardGateMissBlocks: true }),
+      payload: payload({ hardGate: true, planExists: true, hasActiveStep: true }),
     })
     expect(d.decision).toBe("allow")
   })
   test("non-mutating tools are never bound-checked", () => {
     const d = gate({
       name: "before_tool_use",
-      payload: payload({ isMutating: false, hardGate: true, hasActiveStep: false, hardGateMissBlocks: true }),
+      payload: payload({ isMutating: false, hardGate: true, planExists: true, hasActiveStep: false }),
     })
     expect(d.decision).toBe("allow")
   })

@@ -59,55 +59,51 @@ export const stopHookGate = (): HookHandler => (e) => {
     : { decision: "block", blockReason: "required validations were not run; run them before finalizing" }
 }
 
-// U1 PlanController soft gate (wired into before_tool_use). While the plan latch is stale, MUTATING
-// tools (write/edit/patch/shell) are soft-blocked so the model must update the plan before changing
-// more files; READ/diagnosis tools always pass (otherwise a stale plan could never be
-// repaired). Lightweight modes (general/direct) only WARN — ordinary tasks are never slowed
-// (docs/38 §9). The caller supplies planStale, isMutating and lightweight in the payload.
-//
-// U9 hard gate (high+): even with a fresh plan, a mutating tool must be BOUND to an active step.
-// hardGateMissBlocks=true (xhigh/max/ultra) -> block on a missing active step; false (high) -> warn.
-// The payload carries hardGate, hasActiveStep, hardGateMissBlocks.
+// U1 PlanController soft gate (wired into before_tool_use). It NUDGES the model to keep its plan in
+// sync but MUST NEVER deny a tool its execution. The caller supplies planStale, staleReason,
+// isMutating, hardGate, hasActiveStep and planExists in the payload.
 //
 // DESIGN (aligned with codex core/src/exec_policy.rs render_decision_for_unmatched_command): command
 // safety classification and plan bookkeeping are ORTHOGONAL to whether a tool may run. In codex the
 // "is this a known-safe command" check only decides auto-approve-vs-prompt; a command that is NOT
 // known-safe is at worst prompted, and is Forbidden ONLY when it is genuinely dangerous AND the user
 // disabled prompts. Staleness of the plan ledger is not a safety property, so — like codex — it must
-// never REJECT execution. Our previous code coupled the two: a mutating tool on a stale plan was
-// hard-blocked in high+ mode, which deadlocked a model that did not repair the plan (observed: 280
-// consecutive blocked bash calls, and a read-only `ssh/docker exec` probe misclassified as mutating
-// then denied outright). This gate now downgrades EVERY plan-ledger condition to a WARN (the tool
-// runs, a reminder is attached), so plan state can nudge but can never deny the agent its tools.
+// never REJECT execution.
 //
-// The two remaining honest signals differ only in wording:
-//   - staleReason === "user_appended": a new user message MIGHT change intent — nudge to re-align.
-//   - graceRelease === true: repeated stale blocks with no forward progress (runtime-driven counter).
-// Both warn; neither blocks.
+// WHY THIS IS NOW WARN-ONLY (the recurring deadlock, fixed for real this time):
+// three prior fixes (1783c9d6, 7bc8bed8, db5e64e6) each neutered the STALE layer but left the U9
+// per-step-binding layer as a hard BLOCK. Empirically that binding block was the live deadlock —
+// across 68 real sessions it produced 677 hard blocks (530 on bash), 49/68 sessions hit it, and the
+// worst session had 120 consecutive commands rejected because NO plan was ever bound at session start.
+// Its "grace release" was non-sticky: the counter reset to 0 on every tool that got through, so the
+// pattern oscillated block-block-block-pass and denied ~75% of mutating calls indefinitely — including
+// ssh/docker-exec probes the lexical classifier can only see as "mutating". A workflow-discipline gate
+// must not have a blast radius like that. Every plan-ledger condition is now a WARN: the tool runs, a
+// reminder rides along, and plan state can nudge but can never deny the agent its tools. If plan
+// discipline needs to be ENFORCED, that belongs at finalization (stopHookGate), not at every tool call.
 export const planGate = (): HookHandler => (e) => {
   if (e.name !== "before_tool_use") return { decision: "continue" }
   if (e.payload["isMutating"] !== true) return { decision: "allow" }
-  // U1 soft layer: stale plan → WARN only (never block). Reality changed / a user message arrived is
-  // a reason to re-sync the plan, not a reason to deny work.
+  // U1 soft layer: stale plan → WARN only (never block). Reality changed is a reason to re-sync the
+  // plan, not a reason to deny work.
   if (e.payload["planStale"] === true) {
-    const reason = "the plan is stale (reality changed); review it and update the `plan` tool to resync — this action still proceeds"
+    const reason =
+      "the plan is stale (reality changed); review it and update the `plan` tool to resync — this action still proceeds"
     const userAppendedReason =
       "a new user message arrived; your plan may no longer match the request — review it and update the `plan` tool if the goal changed"
     if (e.payload["staleReason"] === "user_appended") return { decision: "warn", blockReason: userAppendedReason }
     return { decision: "warn", blockReason: reason }
   }
-  // U9 hard layer: per-step binding (high+ only; lightweight never reaches here with hardGate set). A
-  // mutating tool under a strict hard gate must be bound to an active step. This is a workflow-
-  // discipline gate, not a safety gate, so it MUST also have a runtime-driven release: if the gate has
-  // already blocked this many times with no forward progress (graceRelease), stop blocking and let the
-  // tool through with a reminder — otherwise a model that never marks a step active would be
-  // permanently denied its tools (the same deadlock class the stale layer just fixed).
-  if (e.payload["hardGate"] === true && e.payload["hasActiveStep"] !== true) {
-    const reason =
-      "no active plan step is bound to this edit; mark the step you are working on active via the plan tool"
-    if (e.payload["hardGateMissBlocks"] === true && e.payload["graceRelease"] !== true)
-      return { decision: "block", blockReason: reason }
-    return { decision: "warn", blockReason: reason }
+  // U9 per-step binding: nudge only, and ONLY when a plan actually exists. A run that never created a
+  // plan (planExists !== true) is not missing an "active step" — there is no plan to bind to — so it
+  // must pass silently rather than be nagged (this also mirrors stopHookGate's planExists guard, which
+  // the old hard-block path was missing). Under the hard gate WITH a plan present, a mutating tool that
+  // is not bound to an active step gets a reminder, never a block.
+  if (e.payload["hardGate"] === true && e.payload["planExists"] === true && e.payload["hasActiveStep"] !== true) {
+    return {
+      decision: "warn",
+      blockReason: "no active plan step is bound to this edit; mark the step you are working on active via the plan tool",
+    }
   }
   return { decision: "allow" }
 }
