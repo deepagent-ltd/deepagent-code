@@ -190,6 +190,30 @@ describe("tool.shell", () => {
     ),
   )
 
+  // GROUND-TRUTH EXIT TRAILER: the model-facing output text must end with an unambiguous exit-code
+  // marker so downstream classifiers (extractValidationResults) read the real status instead of guessing
+  // from arbitrary output. A success (exit 0) and a failure (non-zero) must be distinguishable in TEXT.
+  each("appends an exit-code trailer on success", () =>
+    runIn(
+      projectRoot,
+      Effect.gen(function* () {
+        const result = yield* run({ command: "echo hello", description: "Echo" })
+        expect(result.output.trimEnd().endsWith("exit code: 0")).toBe(true)
+      }),
+    ),
+  )
+
+  each("appends the real non-zero exit code in the trailer", () =>
+    runIn(
+      projectRoot,
+      Effect.gen(function* () {
+        const result = yield* run({ command: "sh -c 'exit 3'", description: "Fail with 3" })
+        expect(result.metadata.exit).toBe(3)
+        expect(result.output).toContain("exit code: 3")
+      }),
+    ),
+  )
+
   it.live("falls back from terminal-only configured shell", () =>
     Effect.gen(function* () {
       const tmp = yield* tmpdirScoped({ config: { shell: "fish" } })
