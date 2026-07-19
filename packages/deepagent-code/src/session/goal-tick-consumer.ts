@@ -1,9 +1,11 @@
 export * as GoalTickConsumer from "./goal-tick-consumer"
 
-import { Context, Effect, Layer, Stream, Schedule, Duration, Cause } from "effect"
+import { Context, Effect, Layer, Option, Stream, Schedule, Duration, Cause } from "effect"
 import { DeepAgentEventBus } from "@deepagent-code/core/deepagent/deepagent-event-bus"
 import { DeepAgentEvent } from "@deepagent-code/core/deepagent/deepagent-event"
 import { LMNEvents } from "@deepagent-code/core/deepagent/lmn-events"
+import { QuietHours } from "@deepagent-code/core/deepagent/quiet-hours"
+import { WorkspaceConfig } from "@deepagent-code/core/deepagent/workspace-config"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import * as Log from "@deepagent-code/core/util/log"
 
@@ -40,13 +42,17 @@ export const TICK_GROUP = "goal-tick-consumer"
 const DEFAULT_RETRY_PUMP_INTERVAL_MS = 30_000
 
 // The command payload carried by a goal.tick.requested event. `seq` is the dedup identity;
-// `expectedPlanVersion` is advisory (trace + sanity-check).
+// `expectedPlanVersion` is advisory (trace + sanity-check). `workspaceID` is the REAL workspace id
+// (a "wrk"-prefixed id) used by the quiet-hours gate to look up the workspace's configured window.
+// Optional for back-compat: old commands without it fall back to "never quiet" (the safe default).
 export type GoalTickRequest = {
   readonly sessionID: string
   readonly goalId: string
   readonly planDocId: string
   readonly seq: number
   readonly expectedPlanVersion: number
+  /** §E4/§N — real workspace id for the quiet-hours lookup. Absent ⇒ never quiet (fail-safe). */
+  readonly workspaceID?: string
 }
 
 // What the injected runTick port returns after executing ONE tick. `progress` mirrors the driver's
@@ -81,6 +87,8 @@ const parseRequest = (payload: unknown): GoalTickRequest | null => {
     planDocId: p.planDocId,
     seq: p.seq,
     expectedPlanVersion: p.expectedPlanVersion,
+    // §E4/§N — optional real workspace id; absent on old commands ⇒ falls back to "never quiet".
+    ...(typeof p.workspaceID === "string" ? { workspaceID: p.workspaceID } : {}),
   }
 }
 
@@ -92,6 +100,8 @@ export const tickCommand = (request: {
   planDocId: string
   seq: number
   expectedPlanVersion: number
+  /** §E4/§N — real workspace id; included in the payload so the consumer's quiet-hours gate can use it. */
+  workspaceID?: string
 }): DeepAgentEvent.PublishInput => ({
   type: LMNEvents.GOAL_TICK_REQUESTED,
   source: "system",
@@ -107,6 +117,8 @@ export const tickCommand = (request: {
     planDocId: request.planDocId,
     seq: request.seq,
     expectedPlanVersion: request.expectedPlanVersion,
+    // §E4/§N — carry the real workspace id in the payload for the quiet-hours gate downstream.
+    ...(request.workspaceID != null ? { workspaceID: request.workspaceID } : {}),
   },
 })
 
@@ -150,6 +162,49 @@ export const layerWith = (options: LayerOptions) =>
       const runLoop = options.runLoop ?? true
       const retryPumpIntervalMs = options.retryPumpIntervalMs ?? DEFAULT_RETRY_PUMP_INTERVAL_MS
 
+      // §E4/§N quiet-hours gate — WorkspaceConfig is OPTIONAL (same discipline as event-dispatcher and
+      // agent-push): absent ⇒ never quiet (the correct fail-safe), so the consumer stays testable with
+      // just Bus + Flags. When present, a CONFIGURED quiet-hours window defers a low/normal tick past the
+      // window by acking the current delivery and forking a fiber that sleeps until the window ends before
+      // re-publishing a resume command. Goal ticks are always normal priority, so they are always deferred.
+      const workspaceConfig = yield* Effect.serviceOption(WorkspaceConfig.Service)
+
+      // §E4/§N — resolve whether `at` falls inside the workspace's configured quiet window, and if so
+      // compute the window's END epoch (ms) for the sleep-and-re-seed deferral. Mirrors the same
+      // arithmetic used by event-dispatcher.ts fireOrDefer so the two paths behave identically.
+      // Returns { quiet:false } when: no WorkspaceConfig service, no configured window, or a lookup fails
+      // (fail-safe: never quiet ⇒ execute normally — identical to the scheduler path's fail-safe).
+      const resolveTickQuietHours = (
+        workspaceID: string,
+        at: number,
+      ): Effect.Effect<{ readonly quiet: boolean; readonly endAt?: number }> =>
+        Option.isNone(workspaceConfig)
+          ? Effect.succeed({ quiet: false })
+          : workspaceConfig.value.get(workspaceID).pipe(
+              Effect.map((resolved) => {
+                const qh = resolved.quietHours
+                if (qh == null) return { quiet: false as const }
+                if (!QuietHours.isWithinQuietHours(at, qh.startHour, qh.endHour, qh.tzOffsetMinutes))
+                  return { quiet: false as const }
+                // Walk forward hour-by-hour to the first instant outside the window (bounded: ≤ 24 steps
+                // since the window is < 24h). Align to the next whole local-hour boundary first.
+                const hourMs = 3_600_000
+                const localMs = at + qh.tzOffsetMinutes * 60_000
+                let boundary = Math.ceil(localMs / hourMs) * hourMs
+                for (let i = 0; i < 25; i++) {
+                  const hour = ((Math.floor(boundary / hourMs) % 24) + 24) % 24
+                  const inWindow =
+                    qh.startHour < qh.endHour
+                      ? hour >= qh.startHour && hour < qh.endHour
+                      : hour >= qh.startHour || hour < qh.endHour
+                  if (!inWindow) break
+                  boundary += hourMs
+                }
+                return { quiet: true as const, endAt: boundary - qh.tzOffsetMinutes * 60_000 }
+              }),
+              Effect.orElseSucceed(() => ({ quiet: false as const })),
+            )
+
       const ack = (event: DeepAgentEvent.Event) => bus.ack(TICK_GROUP, event.id)
 
       const handle: Interface["handle"] = (event) =>
@@ -166,6 +221,41 @@ export const layerWith = (options: LayerOptions) =>
             log.warn("goal.tick.requested with malformed payload; acking (dropped)", { eventID: event.id })
             yield* ack(event)
             return
+          }
+
+          // §E4/§N quiet-hours gate: goal ticks are NORMAL priority — they must NOT run autonomously
+          // during the workspace's configured quiet window. If quiet: ACK (no DLQ risk) + fork a fiber
+          // that sleeps until the window end then re-publishes a resume command so the chain self-heals
+          // after quiet hours. The resume command uses a fresh one-shot idempotency key so it bypasses
+          // the bus dedup and always re-seeds the chain. workspaceID comes from the request payload
+          // (stamped by goal-manager's tickCommand); absent on old commands ⇒ "never quiet" fail-safe.
+          if (request.workspaceID != null) {
+            const at = Date.now()
+            const qh = yield* resolveTickQuietHours(request.workspaceID, at)
+            if (qh.quiet) {
+              const delayMs = qh.endAt != null && qh.endAt > at ? qh.endAt - at : 3_600_000
+              log.info("goal tick deferred by quiet hours", {
+                goalId: request.goalId,
+                workspaceID: request.workspaceID,
+                deferMs: delayMs,
+              })
+              yield* ack(event) // discharge cleanly — no DLQ consumption
+              // Re-seed the chain after the quiet window. Best-effort: a re-seed failure is logged and
+              // swallowed — the goal stays dormant until the user resumes it or a monitor re-seeds it.
+              yield* Effect.sleep(Duration.millis(delayMs)).pipe(
+                Effect.andThen(bus.publish(resumeTickCommand(request))),
+                Effect.catchCause((cause) =>
+                  Effect.sync(() =>
+                    log.warn("quiet-hours re-seed failed; goal chain will need manual resume", {
+                      goalId: request.goalId,
+                      cause: Cause.pretty(cause),
+                    }),
+                  ),
+                ),
+                Effect.fork,
+              )
+              return
+            }
           }
 
           // Execute exactly ONE tick. A defect degrades to a nack so the bus retries the REAL tick.
@@ -196,6 +286,7 @@ export const layerWith = (options: LayerOptions) =>
                 planDocId: request.planDocId,
                 seq: nextSeq,
                 expectedPlanVersion: nextExpectedPlanVersion,
+                workspaceID: request.workspaceID,
               }),
             )
             log.info("goal tick executed; re-emitted next command", {

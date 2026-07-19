@@ -123,6 +123,9 @@ export interface LayerOptions {
   readonly retryPumpIntervalMs?: number
   // live dispatch-queue depth for §A4 回压 admission (Wave 3 supplies it; defaults to 0 = inert).
   readonly queueDepth?: () => number
+  // K40-4: real durable backlog depth per workspace — takes precedence over queueDepth when provided.
+  // Returns the count of pending delivery rows for the given workspace (the authoritative backpressure signal).
+  readonly pendingDeliveryCount?: (workspaceID: string) => Effect.Effect<number>
   readonly now?: () => number
   // start the background subscription + tick + retry-pump loops as scoped daemon fibers. Default true;
   // tests set false and call handle()/tick()/pumpRetries() directly for determinism.
@@ -149,10 +152,12 @@ export const layerWith = (options?: LayerOptions) =>
       const now = options?.now ?? Date.now
       const runLoops = options?.runLoops ?? true
       const retryPumpIntervalMs = options?.retryPumpIntervalMs ?? DEFAULT_RETRY_PUMP_INTERVAL_MS
-      // §A4 回压 — the live queue depth is a signal the SESSION RUNTIME owns (its dispatch backlog), not
-      // something this wiring can observe from the durable bus. Wave 3 supplies it via `queueDepth`;
-      // until then it defaults to 0, so backpressure is WIRED (route gets the value, a backpressure drop
-      // correctly nacks — see handle) but INERT (never trips) — matching the observe-only default.
+      // §A4 回压 — K40-4: prefer the durable `pendingDeliveryCount` (real backlog per workspace) over the
+      // in-flight `queueDepth` counter. If `pendingDeliveryCount` is wired, it is awaited inside `handle`
+      // before calling the router; if only `queueDepth` is provided (legacy / tests), that synchronous
+      // sampler is used as before. Both default to a constant-0 so backpressure stays INERT until the
+      // caller wires a real source — matching the observe-only default and not breaking existing tests.
+      const pendingDeliveryCount = options?.pendingDeliveryCount
       const queueDepth = options?.queueDepth ?? (() => 0)
 
       const nack = (event: DeepAgentEvent.Event, reason: string) =>
@@ -229,11 +234,17 @@ export const layerWith = (options?: LayerOptions) =>
             })
           }
 
+          // K40-4: use the durable pending-delivery count as the authoritative backpressure depth when
+          // wired; fall back to the legacy in-flight sampler so existing tests remain unaffected.
+          const resolvedQueueDepth = pendingDeliveryCount
+            ? yield* pendingDeliveryCount(event.workspaceID)
+            : queueDepth()
+
           const decision = EventRouter.route({
             event,
             agents,
             flagEnabled,
-            queueDepth: queueDepth(),
+            queueDepth: resolvedQueueDepth,
             maxQueueDepth,
             recentSameType,
           })

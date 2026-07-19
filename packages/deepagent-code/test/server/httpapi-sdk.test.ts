@@ -380,6 +380,7 @@ describe("HttpApi SDK", () => {
 
       expect(health.response?.status).toBe(200)
       expect(health.data).toMatchObject({ healthy: true })
+      expect(health.data?.runtimeId).toBeString()
       expect(yield* firstEvent((signal) => sdk.global.event({ signal }))).toMatchObject({
         payload: { type: "server.connected" },
       })

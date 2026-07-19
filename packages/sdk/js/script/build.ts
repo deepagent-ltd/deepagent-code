@@ -70,6 +70,24 @@ if (sseTypesPatched === sseTypesSource && !sseTypesSource.includes("=> Promise<S
 }
 if (sseTypesPatched !== sseTypesSource) await Bun.write(sseTypesPath, sseTypesPatched)
 
+// Error interceptors receive the original per-call options from hey-api, so a
+// client-level `throwOnError: true` is otherwise invisible to them. Pass the
+// resolved value to keep decoded server errors as real Error instances.
+for (const clientPath of ["./src/gen/client/client.gen.ts", "./src/v2/gen/client/client.gen.ts"]) {
+  const file = Bun.file(clientPath)
+  const source = await file.text()
+  const patched = source.replace(
+    "finalError = await fn(finalError, response, request, options as ResolvedRequestOptions)",
+    "finalError = await fn(finalError, response, request, { ...options, throwOnError } as ResolvedRequestOptions)",
+  )
+  if (patched === source && !source.includes("{ ...options, throwOnError } as ResolvedRequestOptions")) {
+    throw new Error(
+      `Error interceptor patch did not apply; @hey-api/openapi-ts output may have changed (${clientPath})`,
+    )
+  }
+  if (patched !== source) await Bun.write(clientPath, patched)
+}
+
 await $`bun prettier --write src/gen`
 await $`bun prettier --write src/v2`
 await $`rm -rf dist`
