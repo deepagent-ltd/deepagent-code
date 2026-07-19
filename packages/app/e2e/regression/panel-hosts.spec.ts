@@ -11,9 +11,36 @@ async function openSession(page: import("@playwright/test").Page) {
   let diagnosticsRequests = 0
   await mockDeepAgentCodeServer(page, {
     directory,
-    project: { id: projectID, worktree: directory, vcs: "git", name: "panel-regression", time: { created: 1700000000000, updated: 1700000000000 }, sandboxes: [] },
-    provider: { all: [{ id: "deepagent-code", name: "DeepAgent Code", models: { model: { id: "model", name: "Model", limit: { context: 200_000 } } } }], connected: ["deepagent-code"], default: { providerID: "deepagent-code", modelID: "model" } },
-    sessions: [{ id: sessionID, slug: "panel-regression", projectID, directory, title: "Panel regression", version: "dev", time: { created: 1700000000000, updated: 1700000000000 } }],
+    project: {
+      id: projectID,
+      worktree: directory,
+      vcs: "git",
+      name: "panel-regression",
+      time: { created: 1700000000000, updated: 1700000000000 },
+      sandboxes: [],
+    },
+    provider: {
+      all: [
+        {
+          id: "deepagent-code",
+          name: "DeepAgent Code",
+          models: { model: { id: "model", name: "Model", limit: { context: 200_000 } } },
+        },
+      ],
+      connected: ["deepagent-code"],
+      default: { providerID: "deepagent-code", modelID: "model" },
+    },
+    sessions: [
+      {
+        id: sessionID,
+        slug: "panel-regression",
+        projectID,
+        directory,
+        title: "Panel regression",
+        version: "dev",
+        time: { created: 1700000000000, updated: 1700000000000 },
+      },
+    ],
     pageMessages: () => ({ items: [] }),
   })
   await page.route("**/lsp/diagnostics**", async (route) => {
@@ -22,12 +49,29 @@ async function openSession(page: import("@playwright/test").Page) {
       status: 200,
       contentType: "application/json",
       body: JSON.stringify({
-        "C:/DeepAgent Code/PanelRegression/src/app.ts": [{ message: "Type mismatch", severity: 1, source: "ts", code: 2322, range: { start: { line: 4, character: 2 }, end: { line: 4, character: 8 } } }],
-        "C:/DeepAgent Code/PanelRegression/src/index.ts": [{ message: "Unused value", severity: 2, source: "eslint", range: { start: { line: 1, character: 0 }, end: { line: 1, character: 6 } } }],
+        "C:/DeepAgent Code/PanelRegression/src/app.ts": [
+          {
+            message: "Type mismatch",
+            severity: 1,
+            source: "ts",
+            code: 2322,
+            range: { start: { line: 4, character: 2 }, end: { line: 4, character: 8 } },
+          },
+        ],
+        "C:/DeepAgent Code/PanelRegression/src/index.ts": [
+          {
+            message: "Unused value",
+            severity: 2,
+            source: "eslint",
+            range: { start: { line: 1, character: 0 }, end: { line: 1, character: 6 } },
+          },
+        ],
       }),
     })
   })
-  await page.addInitScript(() => localStorage.setItem("settings.v3", JSON.stringify({ general: { newLayoutDesigns: true } })))
+  await page.addInitScript(() =>
+    localStorage.setItem("settings.v3", JSON.stringify({ general: { newLayoutDesigns: true } })),
+  )
   await page.goto(`/${base64Encode(directory)}/session/${sessionID}`)
   await expectAppVisible(page.getByRole("button", { name: "Toggle bottom panel" }))
   return { diagnosticsRequests: () => diagnosticsRequests }
@@ -46,18 +90,18 @@ test("Bottom Panel, movable views, Problems, and mobile reachability", async ({ 
   await bottomToggle.click()
   const bottom = page.locator("#bottom-panel")
   await expect(bottom).toBeVisible()
-  await expect(bottom.getByRole("tab", { name: "Terminal" })).toBeVisible()
-  await bottom.getByRole("tab", { name: "Terminal" }).click()
+  await expect(bottom.getByRole("tab", { name: "Terminal", exact: true })).toBeVisible()
+  await bottom.getByRole("tab", { name: "Terminal", exact: true }).click()
   await expect(bottom.getByLabel("New terminal")).toBeVisible()
   await expect(bottom.getByLabel("Split terminal")).toBeVisible()
   await expectTerminalPaneInHost(page, "bottom")
   await page.screenshot({ path: "e2e/test-results/panel-terminal-actions.png", fullPage: true })
 
-  await bottom.getByRole("tab", { name: "Problems" }).click()
+  await bottom.getByRole("tab", { name: "Problems", exact: true }).click()
   await expect.poll(runtime.diagnosticsRequests).toBeGreaterThan(0)
   await expect(bottom.getByText("Type mismatch")).toBeVisible()
   await expect(bottom.getByText("Unused value")).toBeVisible()
-  await expect(bottom.locator("[data-terminal-pane]")).toHaveCount(1)
+  await expect(page.locator("[data-terminal-pane]")).toHaveCount(0)
   await page.screenshot({ path: "e2e/test-results/panel-bottom-problems.png", fullPage: true })
 
   await bottom.getByRole("button", { name: "Move to Right Sidebar" }).click()
@@ -66,7 +110,7 @@ test("Bottom Panel, movable views, Problems, and mobile reachability", async ({ 
   await expect(side.getByText("Type mismatch")).toBeVisible()
   await side.getByRole("button", { name: "Move to bottom dock" }).click()
   await expect(bottom.getByText("Type mismatch")).toBeVisible()
-  await expect(bottom.locator("[data-terminal-pane]")).toHaveCount(1)
+  await expect(page.locator("[data-terminal-pane]")).toHaveCount(0)
 
   await bottomToggle.click()
   await expect(bottom).toBeHidden()
@@ -92,7 +136,7 @@ test("Bottom Panel, movable views, Problems, and mobile reachability", async ({ 
   await expect(page.getByText("app.ts").first()).toBeVisible()
 
   for (const view of ["Debug Console", "Terminal"]) {
-    await bottom.getByRole("tab", { name: view }).click()
+    await bottom.getByRole("tab", { name: view, exact: true }).click()
     await bottom.getByRole("button", { name: "Move to Right Sidebar" }).click()
     await expect(side.getByText(view).first()).toBeVisible()
     if (view === "Terminal") {
@@ -102,7 +146,7 @@ test("Bottom Panel, movable views, Problems, and mobile reachability", async ({ 
           side.getByLabel("Split terminal"),
           side.getByLabel("New terminal"),
           side.getByLabel("Move to bottom dock"),
-          side.getByRole("button", { name: "Close" }),
+          side.getByRole("button", { name: "Close", exact: true }),
         ].map(async (control) => {
           await expect(control).toBeVisible()
           return control.boundingBox()
@@ -115,14 +159,14 @@ test("Bottom Panel, movable views, Problems, and mobile reachability", async ({ 
       await side.screenshot({ path: "e2e/test-results/panel-side-terminal-toolbar.png" })
     }
     await side.getByRole("button", { name: "Move to bottom dock" }).click()
-    await expect(bottom.getByRole("tab", { name: view })).toBeVisible()
+    await expect(bottom.getByRole("tab", { name: view, exact: true })).toBeVisible()
     if (view === "Terminal") {
-      await bottom.getByRole("tab", { name: "Terminal" }).click()
+      await bottom.getByRole("tab", { name: "Terminal", exact: true }).click()
       await expectTerminalPaneInHost(page, "bottom")
     }
   }
 
-  await bottom.getByRole("tab", { name: "Problems" }).click()
+  await bottom.getByRole("tab", { name: "Problems", exact: true }).click()
   for (const view of ["Terminal", "Debug Console", "Problems"]) {
     await page.getByRole("button", { name: "Panel Views" }).click()
     await page.getByRole("button", { name: `Move to Right Sidebar: ${view}` }).click()
@@ -138,6 +182,56 @@ test("Bottom Panel, movable views, Problems, and mobile reachability", async ({ 
   await expect(page.locator("#review-panel")).toHaveCount(0)
   await expect(bottom.getByRole("button", { name: "Move to Right Sidebar" })).toHaveCount(0)
   await page.getByRole("button", { name: "Panel Views" }).click()
-  await expect(page.locator("[data-panel-views-menu]").getByRole("button", { name: /Move to Right Sidebar/ })).toHaveCount(0)
+  await expect(
+    page.locator("[data-panel-views-menu]").getByRole("button", { name: /Move to Right Sidebar/ }),
+  ).toHaveCount(0)
   await page.screenshot({ path: "e2e/test-results/panel-mobile.png", fullPage: true })
+})
+
+test("Terminal keeps one visible host and supports tabs plus atomic splits", async ({ page }) => {
+  await page.setViewportSize({ width: 2048, height: 1000 })
+  await openSession(page)
+  await page.getByRole("button", { name: "Toggle bottom panel" }).click()
+  const bottom = page.locator("#bottom-panel")
+  await bottom.getByRole("tab", { name: "Terminal", exact: true }).click()
+  await expectTerminalPaneInHost(page, "bottom")
+  await expect(page.locator("[data-terminal-pane]")).toHaveCount(1)
+
+  const pane = bottom.locator("[data-terminal-pane]")
+  await expect(pane.getByRole("tab")).toHaveCount(1)
+  await bottom.getByLabel("New terminal").click()
+  await expect(pane.getByRole("tab")).toHaveCount(2)
+
+  const split = bottom.getByLabel("Split terminal")
+  await expect(split).toBeEnabled()
+  await split.click()
+  const panes = bottom.locator("[data-terminal-pane]")
+  await expect(panes).toHaveCount(2)
+  await expect(page.locator("[data-terminal-pane]")).toHaveCount(2)
+  await expect(panes.nth(0).getByRole("tab")).toHaveCount(2)
+  await expect(panes.nth(1).getByRole("tab")).toHaveCount(1)
+  await expect(bottom.locator("[data-terminal-pane] [role=tab]")).toHaveCount(3)
+
+  await expect(split).toBeEnabled()
+  await split.click()
+  await expect(panes).toHaveCount(3)
+  await expect(panes.nth(0).getByRole("tab")).toHaveCount(2)
+  await expect(panes.nth(1).getByRole("tab")).toHaveCount(1)
+  await expect(panes.nth(2).getByRole("tab")).toHaveCount(1)
+  await expect(bottom.locator("[data-terminal-pane] [role=tab]")).toHaveCount(4)
+  for (const index of [0, 1, 2]) {
+    await expect(panes.nth(index)).toBeVisible()
+    await expect(panes.nth(index).getByRole("tab").last()).toBeVisible()
+    await expect.poll(async () => (await panes.nth(index).boundingBox())?.height ?? 0).toBeGreaterThan(100)
+  }
+
+  await bottom.getByRole("tab", { name: "Problems", exact: true }).click()
+  await expect(page.locator("[data-terminal-pane]")).toHaveCount(0)
+  await bottom.getByRole("tab", { name: "Terminal", exact: true }).click()
+  await expect(page.locator("[data-terminal-pane]")).toHaveCount(3)
+
+  await bottom.getByRole("button", { name: "Move to Right Sidebar" }).click()
+  await expect(page.locator('[data-terminal-host="bottom"]')).toHaveCount(0)
+  await expect(page.locator('[data-terminal-host="side"] [data-terminal-pane]')).toHaveCount(3)
+  await expect(page.locator("[data-terminal-pane]")).toHaveCount(3)
 })
