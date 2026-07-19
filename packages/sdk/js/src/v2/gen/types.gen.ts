@@ -3255,6 +3255,14 @@ export type WorkspaceWarpError = {
   }
 }
 
+export type TrustedSourcesResult = {
+  trustedSources: Array<"im" | "git" | "ci" | "pr" | "monitor" | "schedule" | "system">
+}
+
+export type TrustedSourcesInput = {
+  trustedSources: Array<"im" | "git" | "ci" | "pr" | "monitor" | "schedule" | "system">
+}
+
 export type UnauthorizedError = {
   _tag: "UnauthorizedError"
   message: string
@@ -5988,6 +5996,7 @@ export type GlobalHealthResponses = {
   200: {
     healthy: true
     version: string
+    runtimeId: string
   }
 }
 
@@ -6849,6 +6858,7 @@ export type DeepagentKnowledgePromoteData = {
       approved: boolean
       note?: string
     }
+    snapshotId?: string
   }
   path?: never
   query?: {
@@ -13744,6 +13754,70 @@ export type ExperimentalWorkspaceWarpResponses = {
 
 export type ExperimentalWorkspaceWarpResponse =
   ExperimentalWorkspaceWarpResponses[keyof ExperimentalWorkspaceWarpResponses]
+
+export type WorkspaceConfigTrustedSourcesGetData = {
+  body?: never
+  path: {
+    workspaceID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/workspace/{workspaceID}/config/trusted-sources"
+}
+
+export type WorkspaceConfigTrustedSourcesGetErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type WorkspaceConfigTrustedSourcesGetError =
+  WorkspaceConfigTrustedSourcesGetErrors[keyof WorkspaceConfigTrustedSourcesGetErrors]
+
+export type WorkspaceConfigTrustedSourcesGetResponses = {
+  /**
+   * Current trusted sources for the workspace (DEFAULT_TRUSTED_SOURCES when unset)
+   */
+  200: TrustedSourcesResult
+}
+
+export type WorkspaceConfigTrustedSourcesGetResponse =
+  WorkspaceConfigTrustedSourcesGetResponses[keyof WorkspaceConfigTrustedSourcesGetResponses]
+
+export type WorkspaceConfigTrustedSourcesPutData = {
+  body?: TrustedSourcesInput
+  path: {
+    workspaceID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/workspace/{workspaceID}/config/trusted-sources"
+}
+
+export type WorkspaceConfigTrustedSourcesPutErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type WorkspaceConfigTrustedSourcesPutError =
+  WorkspaceConfigTrustedSourcesPutErrors[keyof WorkspaceConfigTrustedSourcesPutErrors]
+
+export type WorkspaceConfigTrustedSourcesPutResponses = {
+  /**
+   * Updated trusted sources for the workspace
+   */
+  200: TrustedSourcesResult
+}
+
+export type WorkspaceConfigTrustedSourcesPutResponse =
+  WorkspaceConfigTrustedSourcesPutResponses[keyof WorkspaceConfigTrustedSourcesPutResponses]
 
 export type ImWebsocketConnectData = {
   body?: never

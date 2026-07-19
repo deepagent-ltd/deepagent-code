@@ -22,6 +22,8 @@ export interface MockServerConfig {
 }
 
 export async function mockDeepAgentCodeServer(page: Page, config: MockServerConfig) {
+  let ptySequence = 0
+  const ptys = new Map<string, { id: string; title: string }>()
   const staticRoutes: Record<string, unknown> = {
     "/provider": config.provider,
     "/path": {
@@ -45,7 +47,30 @@ export async function mockDeepAgentCodeServer(page: Page, config: MockServerConf
 
     const path = url.pathname
     if (path === "/global/event" || path === "/event") return sse(route, config.events?.())
-    if (path === "/global/health") return json(route, { healthy: true })
+    if (path === "/global/health") return json(route, { healthy: true, version: "test", runtimeId: "runtime-test" })
+    if (path === "/pty" && route.request().method() === "GET") return json(route, [...ptys.values()])
+    if (path === "/pty" && route.request().method() === "POST") {
+      ptySequence += 1
+      const body: unknown = route.request().postDataJSON()
+      const title =
+        body && typeof body === "object" && "title" in body && typeof body.title === "string"
+          ? body.title
+          : `Terminal ${ptySequence}`
+      const pty = { id: `pty_test_${ptySequence}`, title }
+      ptys.set(pty.id, pty)
+      return json(route, pty)
+    }
+    const ptyMatch = path.match(/^\/pty\/([^/]+)$/)
+    if (ptyMatch && route.request().method() === "GET") {
+      const pty = ptys.get(ptyMatch[1])
+      return pty ? json(route, pty) : json(route, { message: "PTY session not found" }, undefined, 404)
+    }
+    if (ptyMatch && route.request().method() === "PUT") return json(route, ptys.get(ptyMatch[1]) ?? {})
+    if (ptyMatch && route.request().method() === "DELETE") {
+      ptys.delete(ptyMatch[1])
+      return json(route, true)
+    }
+    if (/^\/pty\/[^/]+\/connect-token$/.test(path)) return json(route, { ticket: "test-ticket" })
     if (emptyObject.has(path)) return json(route, {})
     if (emptyList.has(path)) return json(route, [])
     if (path in staticRoutes) return json(route, staticRoutes[path])
@@ -70,9 +95,9 @@ export async function mockDeepAgentCodeServer(page: Page, config: MockServerConf
   })
 }
 
-function json(route: Route, body: unknown, headers?: Record<string, string>) {
+function json(route: Route, body: unknown, headers?: Record<string, string>, status = 200) {
   return route.fulfill({
-    status: 200,
+    status,
     contentType: "application/json",
     headers: {
       "access-control-allow-origin": "*",
