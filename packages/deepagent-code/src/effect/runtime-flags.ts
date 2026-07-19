@@ -182,8 +182,11 @@ export class Service extends ConfigService.Service<Service>()("@deepagent-code/R
   // Scheduler) alongside the legacy path (double-write). Enable with DEEPAGENT_CODE_V4_EVENT_DRIVEN_IM=true.
   v4EventDrivenIm: bool("DEEPAGENT_CODE_V4_EVENT_DRIVEN_IM"),
   // §A4: allow the agent to PUSH proactively (monitor/schedule/ci-driven outbound), through the §B2
-  // policy gate. HIGH-RISK (side-effecting outbound) — operator opt-in. Enable with DEEPAGENT_CODE_V4_AGENT_PUSH_ENABLED=true.
-  v4AgentPushEnabled: bool("DEEPAGENT_CODE_V4_AGENT_PUSH_ENABLED"),
+  // policy gate (rate-limit, quiet-hours, group-membership, workspace-push-permission). PROMOTED ON
+  // by default (V4.0.4 3b): the policy's hasWorkspacePushPermission fact defaults to false, so
+  // deliveries are blocked until a workspace explicitly enables push — making the runtime safe with
+  // the flag on. Set DEEPAGENT_CODE_V4_AGENT_PUSH_ENABLED=false to revert to inert posture.
+  v4AgentPushEnabled: stableOn("DEEPAGENT_CODE_V4_AGENT_PUSH_ENABLED"),
   // §C: the Multi-Agent Runtime (coordinated multi-agent execution over the bus + agent.task.*
   // coordination). This is the master switch that starts the event-runtime daemons — including the V4.1
   // §N event-driven goal-tick chain (GoalTickConsumer + cold-recovery port). PROMOTED ON by default (V4.1):
@@ -213,18 +216,16 @@ export class Service extends ConfigService.Service<Service>()("@deepagent-code/R
   v4FileUploadEnabled: bool("DEEPAGENT_CODE_V4_FILE_UPLOAD_ENABLED"),
   // §M: the Expert Panel AUTO-CONVENE consumer — auto-summons an Expert Panel for high-risk events
   // (destructive migrations, security alerts, architecture changes) per PanelConvenePolicy, routing a
-  // needs_human verdict to the §D2 Approval Queue. HIGH-COST (fans out reviewer subagents) + autonomous
-  // — operator opt-in. Enable with DEEPAGENT_CODE_V4_PANEL_AUTO_CONVENE=true.
-  v4PanelAutoConvene: bool("DEEPAGENT_CODE_V4_PANEL_AUTO_CONVENE"),
-  // §L: the EVENT-DRIVEN execution archiver TRIGGER. When on, a completed ROOT session (its end-of-turn
-  // idle signal) is republished as a `session.completed` event onto the DeepAgent Event Bus, so the §L
-  // EventDrivenArchiver has a trigger and archives the execution trajectory as a Wiki page OFF the
-  // session loop. Independent of IM (§L is a Repo/Wiki capability, not an IM one — the archiver's own
-  // header says so), so it carries its OWN flag rather than riding v4EventDrivenIm. Default OFF (P0.3
-  // production posture): with it off the bridge is inert — nothing subscribes, nothing publishes, and
-  // the V3.9 inline archive (prompt.ts, gated by experimentalWiki) remains the only archival path.
-  // Enable with DEEPAGENT_CODE_V4_EVENT_DRIVEN_ARCHIVE=true.
-  v4EventDrivenArchive: bool("DEEPAGENT_CODE_V4_EVENT_DRIVEN_ARCHIVE"),
+  // needs_human verdict to the §D2 Approval Queue. PROMOTED ON by default (V4.0.4 3b): idempotency
+  // guard (causationID) + deterministic idempotencyKey prevent double-convening on re-delivery.
+  // Set DEEPAGENT_CODE_V4_PANEL_AUTO_CONVENE=false to disable automatic panel fan-out.
+  v4PanelAutoConvene: stableOn("DEEPAGENT_CODE_V4_PANEL_AUTO_CONVENE"),
+  // §L: the EVENT-DRIVEN execution archiver TRIGGER. PROMOTED ON by default (V4.0.4 3b): the
+  // SessionCompletedPublisher fires at most once per 45-second debounce window per session, is
+  // root-session-only, and is idempotent (idempotencyKey = "session-completed:<id>:<firetime>").
+  // The EventDrivenArchiver consumer is already live (v4MultiAgentRuntime is stableOn). Set
+  // DEEPAGENT_CODE_V4_EVENT_DRIVEN_ARCHIVE=false to restore the V3.9 inline-archive-only path.
+  v4EventDrivenArchive: stableOn("DEEPAGENT_CODE_V4_EVENT_DRIVEN_ARCHIVE"),
   // V4.1 §S1.1: mid-turn STEERING — a user message that arrives while a turn is in flight is buffered
   // in a durable per-session steer queue and ABSORBED at the next model-request boundary of the live
   // turn loop (SessionPrompt.runLoop), appended as an ordinary tail user message (never aborting the

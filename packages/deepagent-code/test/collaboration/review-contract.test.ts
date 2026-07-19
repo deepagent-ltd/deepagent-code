@@ -64,13 +64,18 @@ describe("review verdict contract", () => {
 })
 
 describe("reviewer role profiles", () => {
-  test("are read-only and cannot mutate code, git state, tasks, or queues", () => {
-    for (const profile of Object.values(ReviewRoleProfiles)) {
-      expect(profile.permission.allow).toEqual(["read", "search"])
-      expect(profile.permission.deny).toEqual(
-        expect.arrayContaining(["write", "commit", "merge", "task_spawn", "queue_mutation"]),
-      )
-    }
+  test("keeps reviewers read-only and blocks code, git state, tasks, and queues", () => {
+    const profile = ReviewRoleProfiles.reviewer
+    expect(profile.permission.allow).toEqual(["read", "search"])
+    expect(profile.permission.deny).toEqual(
+      expect.arrayContaining(["write", "commit", "merge", "task_spawn", "queue_mutation"]),
+    )
+  })
+
+  test("allows senior reviewers to prepare ordinary commits without integration authority", () => {
+    const profile = ReviewRoleProfiles["senior-reviewer"]
+    expect(profile.permission.allow).toEqual(["read", "search", "write", "commit"])
+    expect(profile.permission.deny).toEqual(expect.arrayContaining(["merge", "task_spawn", "queue_mutation"]))
   })
 
   test("represents senior approval separately from reviewer or panel approval", () => {

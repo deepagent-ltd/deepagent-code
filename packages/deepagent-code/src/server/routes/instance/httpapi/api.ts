@@ -27,6 +27,7 @@ import { SessionApi } from "./groups/session"
 import { SyncApi } from "./groups/sync"
 import { TuiApi } from "./groups/tui"
 import { WorkspaceApi } from "./groups/workspace"
+import { WorkspaceConfigApi } from "./groups/workspace-config"
 import { IMApi } from "./groups/im"
 import { IMWebSocketApi } from "./groups/im-websocket"
 import { Api } from "@deepagent-code/server/api"
@@ -79,6 +80,7 @@ export const InstanceHttpApi = HttpApi.make("deepagent-code-instance")
   .addHttpApi(SyncApi)
   .addHttpApi(TuiApi)
   .addHttpApi(WorkspaceApi)
+  .addHttpApi(WorkspaceConfigApi)
   .middleware(SchemaErrorMiddleware)
 
 export const DeepAgentCodeHttpApi = HttpApi.make("deepagent-code")
