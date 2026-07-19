@@ -62,9 +62,9 @@ export type TerminalStore = {
 
 export type PaneBounds = { width: number; height: number }
 
-export const MAX_SPLIT_DEPTH = 3
-export const MAX_TERMINAL_PANES = 4
-export const MIN_TERMINAL_PANE_WIDTH = 240
+export const MAX_SPLIT_DEPTH = 8
+export const MAX_TERMINAL_PANES = 8
+export const MIN_TERMINAL_PANE_WIDTH = 160
 export const MIN_TERMINAL_PANE_HEIGHT = 160
 
 const MAX_TERMINAL_SESSIONS = 20
@@ -148,6 +148,15 @@ function splitLeaf(root: PaneNode, leafId: PaneId, dir: PaneSplit["dir"], newLea
     sizes: [0.5, 0.5],
     children: [leaf, newLeaf],
   })
+}
+
+function balanceSplits(root: PaneNode, dir: PaneSplit["dir"]): PaneNode {
+  if (root.kind === "leaf") return root
+  const children = [balanceSplits(root.children[0], dir), balanceSplits(root.children[1], dir)] as const
+  if (root.dir !== dir) return { ...root, children }
+  const first = getLeaves(children[0]).length
+  const second = getLeaves(children[1]).length
+  return { ...root, sizes: [first / (first + second), second / (first + second)], children }
 }
 
 function collapseLeaf(root: PaneNode, leafId: PaneId): PaneNode {
@@ -423,7 +432,7 @@ function createWorkspaceTerminalSession(
     pendingTitleNumbers.add(number)
     setCreateError(undefined)
     touchPending()
-    await runtime.ensure().catch(() => undefined)
+    if (!runtime.id()) void runtime.ensure().catch(() => undefined)
     const epoch = generation
     try {
       const result = await withServerAbortRetry(() => sdk.client.pty.create({ title: defaultTitle(number) }))
@@ -559,7 +568,15 @@ function createWorkspaceTerminalSession(
           batch(() => {
             setStore("all", store.all.length, pty)
             setRoot((root) =>
-              splitLeaf(root, targetId, direction, { kind: "leaf", id: newLeafId, activeId: pty.id, ptys: [pty.id] }),
+              balanceSplits(
+                splitLeaf(root, targetId, direction, {
+                  kind: "leaf",
+                  id: newLeafId,
+                  activeId: pty.id,
+                  ptys: [pty.id],
+                }),
+                direction,
+              ),
             )
             setFocusedPaneId(newLeafId)
           })
@@ -576,7 +593,7 @@ function createWorkspaceTerminalSession(
       if (!current) return false
       pendingRetries.add(id)
       setStore("all", store.all.indexOf(current), { status: "connecting", error: undefined })
-      await runtime.ensure().catch(() => undefined)
+      if (!runtime.id()) void runtime.ensure().catch(() => undefined)
       const epoch = generation
       try {
         const result = await withServerAbortRetry(() => sdk.client.pty.create({ title: current.title }))

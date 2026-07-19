@@ -196,7 +196,13 @@ describe("clonePaneTree (circular-structure regression)", () => {
   })
 })
 
-function terminalHarness(create: () => Promise<{ data?: { id: string; title: string } }>) {
+function terminalHarness(
+  create: () => Promise<{ data?: { id: string; title: string } }>,
+  runtime: { id: () => string | undefined; ensure: () => Promise<void> } = {
+    id: () => "runtime-1",
+    ensure: async () => undefined,
+  },
+) {
   const sdk = {
     directory: "/repo",
     url: "http://localhost:4096",
@@ -210,7 +216,7 @@ function terminalHarness(create: () => Promise<{ data?: { id: string; title: str
     event: { on: () => () => undefined },
   } as unknown as Parameters<typeof createTerminalSession>[0]
   return createRoot((dispose) => ({
-    session: createTerminalSession(sdk, { id: () => "runtime-1", ensure: async () => undefined }),
+    session: createTerminalSession(sdk, runtime),
     dispose,
   }))
 }
@@ -224,6 +230,31 @@ describe("runtime terminal controller", () => {
       expect(tab.id).not.toBe(tab.ptyId)
       expect(tab.ptyId).toBe("pty-server-1")
       expect((harness.session.root() as PL).ptys).toEqual([tab.id])
+    } finally {
+      harness.dispose()
+    }
+  })
+
+  test("starts PTY creation without waiting for the advisory runtime check", async () => {
+    let ensureCalls = 0
+    let createCalls = 0
+    const harness = terminalHarness(
+      async () => {
+        createCalls += 1
+        return { data: { id: "pty-server-1", title: "Terminal 1" } }
+      },
+      {
+        id: () => undefined,
+        ensure: () => {
+          ensureCalls += 1
+          return new Promise<void>(() => undefined)
+        },
+      },
+    )
+    try {
+      expect(await harness.session.new()).toBeTrue()
+      expect(ensureCalls).toBe(1)
+      expect(createCalls).toBe(1)
     } finally {
       harness.dispose()
     }
@@ -268,8 +299,11 @@ describe("runtime terminal controller", () => {
       harness.session.setPaneBounds(harness.session.focusedPaneId(), { width: 800, height: 400 })
       expect(await harness.session.split("horizontal")).toBeTrue()
 
+      harness.session.setPaneBounds(harness.session.focusedPaneId(), { width: 530, height: 400 })
+      expect(await harness.session.split("horizontal")).toBeTrue()
+
       const leaves = _getLeaves(harness.session.root())
-      expect(leaves).toHaveLength(3)
+      expect(leaves).toHaveLength(4)
       expect(leaves.every((leaf) => leaf.ptys.length === 1 && leaf.activeId === leaf.ptys[0])).toBeTrue()
       expect(new Set(leaves.flatMap((leaf) => leaf.ptys))).toEqual(new Set(harness.session.all().map((pty) => pty.id)))
     } finally {
