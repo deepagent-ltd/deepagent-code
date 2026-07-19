@@ -349,7 +349,7 @@
     },
     "packages/desktop": {
       "name": "@deepagent-code/desktop",
-      "version": "1.2.0",
+      "version": "1.4.2",
       "dependencies": {
         "@zip.js/zip.js": "2.7.62",
         "effect": "catalog:",
