@@ -2142,6 +2142,12 @@ export type Config = {
       max_concurrency?: number
     }
   }
+  v4PanelAutoConvene?: boolean
+  v4AgentPushEnabled?: boolean
+  v4EventDrivenIm?: boolean
+  v4MultiAgentRuntime?: boolean
+  v4EventDrivenArchive?: boolean
+  v4Steering?: boolean
 }
 
 export type ProjectListItem = {
