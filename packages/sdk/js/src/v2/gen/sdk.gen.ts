@@ -4860,7 +4860,7 @@ export class Groups extends HeyApiClient {
       directory?: string
       workspace?: string
       name: string
-      type: "project" | "system" | "direct"
+      type: "project" | "system"
       projectID?: string
       member?: {
         memberID: string
