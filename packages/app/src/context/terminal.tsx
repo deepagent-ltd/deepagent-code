@@ -1,6 +1,6 @@
 import { createStore, produce, reconcile } from "solid-js/store"
 import { createSimpleContext } from "@deepagent-code/ui/context"
-import { batch, createEffect, createMemo, createRoot, on, onCleanup } from "solid-js"
+import { batch, createEffect, createMemo, createRoot, createSignal, on, onCleanup } from "solid-js"
 import { useParams } from "@solidjs/router"
 import { useSDK } from "./sdk"
 import type { Platform } from "./platform"
@@ -57,7 +57,12 @@ export type TerminalStore = {
   focusedPaneId: PaneId
 }
 
-const MAX_SPLIT_DEPTH = 3
+export type PaneBounds = { width: number; height: number }
+
+export const MAX_SPLIT_DEPTH = 3
+export const MAX_TERMINAL_PANES = 4
+export const MIN_TERMINAL_PANE_WIDTH = 240
+export const MIN_TERMINAL_PANE_HEIGHT = 160
 
 // ─── Pure tree helpers ────────────────────────────────────────────────────────
 
@@ -589,6 +594,13 @@ function createWorkspaceTerminalSession(
     })
   }
 
+  const pendingCreates = new Set<string>()
+  const pendingSplitLeaves = new Set<PaneId>()
+  const [pendingSplitVersion, setPendingSplitVersion] = createSignal(0)
+  let creationEpoch = 0
+  const pendingTitleNumbers = new Set<number>
+  const [paneBounds, setPaneBounds] = createSignal<Record<PaneId, PaneBounds>>({})
+
   const pickNextTerminalNumber = () => {
     const existingTitleNumbers = new Set(
       store.all.flatMap((pty) => {
@@ -599,12 +611,57 @@ function createWorkspaceTerminalSession(
         return [parsed]
       }),
     )
+    for (const number of pendingTitleNumbers) existingTitleNumbers.add(number)
 
     return (
       Array.from({ length: existingTitleNumbers.size + 1 }, (_, index) => index + 1).find(
         (number) => !existingTitleNumbers.has(number),
       ) ?? 1
     )
+  }
+
+  const discardCreatedPty = async (id: string) => {
+    await sdk.client.pty.remove({ ptyID: id }).catch((error: unknown) => {
+      console.warn("Failed to discard stale terminal", error)
+    })
+  }
+
+  /**
+   * Reserve capacity before server creation. `canPlace` runs after the async
+   * request settles, so stale split completions cannot mutate a changed tree.
+   */
+  const createPty = async (
+    place: (id: string, title: string, titleNumber: number) => void,
+    canPlace: () => boolean = () => true,
+  ) => {
+    if (store.all.length + pendingCreates.size >= MAX_TERMINAL_SESSIONS || !canPlace()) return false
+    const requestID = uuid()
+    const epoch = creationEpoch
+    const nextNumber = pickNextTerminalNumber()
+    pendingCreates.add(requestID)
+    pendingTitleNumbers.add(nextNumber)
+    try {
+      const pty = await withServerAbortRetry(() => sdk.client.pty.create({ title: defaultTitle(nextNumber) }))
+      const id = pty.data?.id
+      if (!id) throw new Error("Terminal creation returned no PTY id")
+      if (!canPlace() || epoch !== creationEpoch) {
+        await discardCreatedPty(id)
+        return false
+      }
+      const title = pty.data?.title ?? defaultTitle(nextNumber)
+      batch(() => {
+        setStore("all", store.all.length, { id, title, titleNumber: nextNumber })
+        place(id, title, nextNumber)
+      })
+      return true
+    } catch (error) {
+      console.error("Failed to create terminal", error)
+      void notifyTerminalCreateFailed(error)
+      return false
+    } finally {
+      pendingCreates.delete(requestID)
+      pendingTitleNumbers.delete(nextNumber)
+    }
   }
 
   const removeExited = (id: string) => {
@@ -695,24 +752,22 @@ function createWorkspaceTerminalSession(
     })
   }
 
-  /** Create a PTY on the server and hand its id to `place`, which mutates the tree. */
-  const createPty = (place: (id: string, title: string, titleNumber: number) => void) => {
-    if (store.all.length >= MAX_TERMINAL_SESSIONS) return
-    const nextNumber = pickNextTerminalNumber()
-    withServerAbortRetry(() => sdk.client.pty.create({ title: defaultTitle(nextNumber) }))
-      .then((pty: { data?: { id?: string; title?: string } }) => {
-        const id = pty.data?.id
-        if (!id) return
-        const title = pty.data?.title ?? defaultTitle(nextNumber)
-        batch(() => {
-          setStore("all", store.all.length, { id, title, titleNumber: nextNumber })
-          place(id, title, nextNumber)
-        })
-      })
-      .catch((error: unknown) => {
-        console.error("Failed to create terminal", error)
-        void notifyTerminalCreateFailed(error)
-      })
+  const canSplitLeaf = (paneId: PaneId, direction: "horizontal" | "vertical", allowOwnPending = false) => {
+    pendingSplitVersion()
+    const leaf = findLeafById(store.root, paneId)
+    const level = leaf ? (leafLevel(store.root, paneId) ?? 1) : MAX_SPLIT_DEPTH
+    const bounds = paneBounds()[paneId]
+    const minimum = direction === "horizontal" ? MIN_TERMINAL_PANE_WIDTH : MIN_TERMINAL_PANE_HEIGHT
+    const available = direction === "horizontal" ? bounds?.width : bounds?.height
+    const projectedLeafCount = getLeaves(store.root).length + pendingSplitLeaves.size
+    return (
+      Boolean(leaf) &&
+      level < MAX_SPLIT_DEPTH &&
+      available !== undefined &&
+      available >= minimum * 2 &&
+      (allowOwnPending ? projectedLeafCount <= MAX_TERMINAL_PANES : projectedLeafCount < MAX_TERMINAL_PANES) &&
+      (allowOwnPending || !pendingSplitLeaves.has(paneId))
+    )
   }
 
   return {
@@ -724,13 +779,26 @@ function createWorkspaceTerminalSession(
     paneLevel(paneId: PaneId) {
       return leafLevel(store.root, paneId) ?? 1
     },
-    canSplit(paneId: PaneId) {
-      return (leafLevel(store.root, paneId) ?? 1) < MAX_SPLIT_DEPTH
+    paneBounds,
+    setPaneBounds(paneId: PaneId, bounds: PaneBounds | undefined) {
+      setPaneBounds((current) => {
+        if (!bounds) {
+          const { [paneId]: _, ...rest } = current
+          return rest
+        }
+        return { ...current, [paneId]: bounds }
+      })
+    },
+    canSplit(paneId: PaneId, direction: "horizontal" | "vertical" = "horizontal") {
+      return canSplitLeaf(paneId, direction)
     },
     leafPtys(paneId: PaneId) {
       return findLeafById(store.root, paneId)?.ptys ?? []
     },
     clear() {
+      creationEpoch++
+      pendingSplitLeaves.clear()
+      setPendingSplitVersion((version) => version + 1)
       batch(() => {
         const rootId = uuid()
         setRoot({ kind: "leaf", id: rootId, activeId: undefined, ptys: [] })
@@ -740,23 +808,34 @@ function createWorkspaceTerminalSession(
     },
     new() {
       const leafId = focusedLeaf().id
-      createPty((id) => {
-        setRoot((root) => {
-          const leaf = findLeafById(root, leafId)
-          if (!leaf) return root
-          return updateLeaf(root, leafId, { ptys: [...leaf.ptys, id], activeId: id })
-        })
-      })
+      void createPty(
+        (id) => {
+          setRoot((root) => {
+            const leaf = findLeafById(root, leafId)
+            if (!leaf) return root
+            return updateLeaf(root, leafId, { ptys: [...leaf.ptys, id], activeId: id })
+          })
+        },
+        () => Boolean(findLeafById(store.root, leafId)),
+      )
     },
     split(dir: "horizontal" | "vertical", paneId?: PaneId) {
       const leaf = (paneId ? findLeafById(store.root, paneId) : undefined) ?? focusedLeaf()
-      const level = leafLevel(store.root, leaf.id) ?? 1
-      if (level >= MAX_SPLIT_DEPTH) return
+      const leafId = leaf.id
+      if (!canSplitLeaf(leafId, dir)) return
+      pendingSplitLeaves.add(leafId)
+      setPendingSplitVersion((version) => version + 1)
       const newLeafId = uuid()
-      createPty((id) => {
-        const newLeaf: PaneLeaf = { kind: "leaf", id: newLeafId, activeId: id, ptys: [id] }
-        setRoot((root) => splitLeaf(root, leaf.id, dir, newLeaf))
-        setStore("focusedPaneId", newLeafId)
+      void createPty(
+        (id) => {
+          const newLeaf: PaneLeaf = { kind: "leaf", id: newLeafId, activeId: id, ptys: [id] }
+          setRoot((root) => splitLeaf(root, leafId, dir, newLeaf))
+          setStore("focusedPaneId", newLeafId)
+        },
+        () => canSplitLeaf(leafId, dir, true),
+      ).finally(() => {
+        pendingSplitLeaves.delete(leafId)
+        setPendingSplitVersion((version) => version + 1)
       })
     },
     update(pty: Partial<LocalPTY> & { id: string }) {
@@ -961,7 +1040,9 @@ export const { use: useTerminal, provider: TerminalProvider } = createSimpleCont
       root: () => workspace().root(),
       focusedPaneId: () => workspace().focusedPaneId(),
       paneLevel: (paneId: PaneId) => workspace().paneLevel(paneId),
-      canSplit: (paneId: PaneId) => workspace().canSplit(paneId),
+      paneBounds: () => workspace().paneBounds(),
+      setPaneBounds: (paneId: PaneId, bounds: PaneBounds | undefined) => workspace().setPaneBounds(paneId, bounds),
+      canSplit: (paneId: PaneId, direction: "horizontal" | "vertical" = "horizontal") => workspace().canSplit(paneId, direction),
       leafPtys: (paneId: PaneId) => workspace().leafPtys(paneId),
       active: () => workspace().active(),
       new: () => workspace().new(),

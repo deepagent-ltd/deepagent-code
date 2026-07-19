@@ -1,25 +1,27 @@
 import { AppIcon } from "@deepagent-code/ui/app-icon"
 import { Button } from "@deepagent-code/ui/button"
 import { DropdownMenu } from "@deepagent-code/ui/dropdown-menu"
+import { Popover } from "@deepagent-code/ui/popover"
 import { Icon } from "@deepagent-code/ui/icon"
 import { IconButton } from "@deepagent-code/ui/icon-button"
 import { Keybind } from "@deepagent-code/ui/keybind"
 import { Spinner } from "@deepagent-code/ui/spinner"
 import { showToast } from "@/utils/toast"
-import { TooltipKeybind } from "@deepagent-code/ui/tooltip"
+import { Tooltip, TooltipKeybind } from "@deepagent-code/ui/tooltip"
 import { getFilename } from "@deepagent-code/core/util/path"
 import { createEffect, createMemo, createSignal, For, onMount, Show, type ComponentProps } from "solid-js"
 import { createStore } from "solid-js/store"
 import { Portal } from "solid-js/web"
 import { useCommand } from "@/context/command"
 import { useLanguage } from "@/context/language"
-import { useLayout } from "@/context/layout"
+import { DOCK_PANEL_IDS, useLayout } from "@/context/layout"
 import { usePlatform } from "@/context/platform"
 import { useServer } from "@/context/server"
 import { useSync } from "@/context/sync"
 import { useTerminal } from "@/context/terminal"
 import { focusTerminalById } from "@/pages/session/helpers"
 import { useSessionLayout } from "@/pages/session/session-layout"
+import { PANEL_VIEW_META } from "@/pages/session/panel-view-registry"
 import { StatusPopover } from "@/components/status-popover"
 import { messageAgentColor } from "@/utils/agent"
 import { decode64 } from "@/utils/base64"
@@ -206,30 +208,33 @@ export function SessionHeader() {
     ]
   })
 
-  // Where the terminal currently lives (bottom dock vs right side panel). The header button toggles
-  // the terminal in-place: if it's docked to the side, toggle the side panel's terminal mode; else the
-  // bottom dock.
-  const terminalDockedSide = createMemo(() => layout.dock.location("terminal") === "side")
-  const terminalOpen = createMemo(() =>
-    terminalDockedSide() ? view().rightPanel.mode() === "terminal" : view().terminal.opened(),
-  )
+  const terminalOpen = createMemo(() => {
+    const panel = view().panel
+    return panel.location("terminal") === "bottom"
+      ? panel.bottom.opened() && panel.bottom.activeView() === "terminal"
+      : view().rightPanel.mode() === "terminal"
+  })
 
   const toggleTerminal = () => {
-    if (terminalDockedSide()) {
-      view().rightPanel.toggle("terminal")
-      if (view().rightPanel.mode() !== "terminal") return
-      const id = terminal.active()
-      if (id) focusTerminalById(id)
-      return
-    }
-
-    const next = !view().terminal.opened()
-    view().terminal.toggle()
-    if (!next) return
-
+    view().panel.toggle("terminal")
+    const panel = view().panel
+    if (panel.location("terminal") === "side" && view().rightPanel.mode() !== "terminal") return
     const id = terminal.active()
-    if (!id) return
-    focusTerminalById(id)
+    if (id) focusTerminalById(id)
+  }
+
+  const bottomPanelOpen = createMemo(() => view().panel.bottom.opened())
+  const bottomPanelAvailable = createMemo(() => view().panel.viewsAt("bottom").length > 0)
+  const toggleBottomPanel = () => view().panel.bottom.toggle()
+  const [panelViewsOpen, setPanelViewsOpen] = createSignal(false)
+  const panelViewIDs = createMemo(() => [...DOCK_PANEL_IDS])
+  const revealPanelView = (id: (typeof DOCK_PANEL_IDS)[number]) => {
+    view().panel.reveal(id)
+    setPanelViewsOpen(false)
+  }
+  const movePanelView = (id: (typeof DOCK_PANEL_IDS)[number], target: "bottom" | "side") => {
+    view().panel.move(id, target)
+    setPanelViewsOpen(false)
   }
 
   const rightPanelOpen = createMemo(() => view().rightPanel.opened())
@@ -475,12 +480,81 @@ export function SessionHeader() {
                       onClick={toggleTerminal}
                       aria-label={language.t("command.terminal.toggle")}
                       aria-expanded={terminalOpen()}
-                      aria-controls="terminal-panel"
+                      aria-controls={view().panel.location("terminal") === "bottom" ? "bottom-panel" : "review-panel"}
                     >
                       <Icon size="small" name={terminalOpen() ? "terminal-active" : "terminal"} />
                     </Button>
                   </TooltipKeybind>
                 </Show>
+                <TooltipKeybind
+                  title={bottomPanelAvailable() ? language.t("command.panel.toggle") : language.t("session.panel.noBottomViews")}
+                  keybind={command.keybind("panel.toggle")}
+                >
+                  <Button
+                    variant="ghost"
+                    class="group/bottom-panel-toggle titlebar-icon w-8 h-6 p-0 box-border shrink-0"
+                    onClick={toggleBottomPanel}
+                    aria-label={bottomPanelAvailable() ? language.t("command.panel.toggle") : language.t("session.panel.noBottomViews")}
+                    aria-expanded={bottomPanelOpen()}
+                    aria-controls="bottom-panel"
+                    disabled={!bottomPanelAvailable()}
+                  >
+                    <Icon size="small" name={bottomPanelOpen() ? "layout-bottom-full" : "layout-bottom"} />
+                  </Button>
+                </TooltipKeybind>
+
+                <Popover
+                  open={panelViewsOpen()}
+                  onOpenChange={setPanelViewsOpen}
+                  portal
+                  class="w-72 rounded-md border border-border-weaker-base bg-background-stronger p-1 shadow-lg"
+                  trigger={
+                    <span class="group/panel-views titlebar-icon w-8 h-6 p-0 box-border shrink-0 flex items-center justify-center" aria-label={language.t("session.panel.views")}>
+                      <Icon size="small" name="menu" />
+                    </span>
+                  }
+                >
+                  <div data-panel-views-menu>
+                    <div class="px-2 py-1.5 text-12-medium text-text-weak">{language.t("session.panel.views")}</div>
+                    <For each={panelViewIDs()}>
+                      {(id) => (
+                        <div class="mb-1 flex items-center gap-1 rounded-md px-1 py-1 hover:bg-surface-base-hover">
+                          <button
+                            type="button"
+                            class="min-w-0 flex flex-1 items-center gap-2 px-1 text-left text-13-regular text-text-strong"
+                            onClick={() => revealPanelView(id)}
+                          >
+                            <Icon size="small" name={PANEL_VIEW_META[id].icon} />
+                            <span class="flex-1 truncate">{language.t(PANEL_VIEW_META[id].titleKey)}</span>
+                            <span class="text-11-regular text-text-weak">
+                              {language.t(view().panel.location(id) === "bottom" ? "session.panel.location.bottom" : "session.panel.location.side")}
+                            </span>
+                          </button>
+                          <Show when={view().panel.location(id) === "side"}>
+                            <IconButton
+                              icon="layout-bottom"
+                              variant="ghost"
+                              iconSize="small"
+                              aria-label={`${language.t("session.panel.moveToBottom")}: ${language.t(PANEL_VIEW_META[id].titleKey)}`}
+                              title={`${language.t("session.panel.moveToBottom")}: ${language.t(PANEL_VIEW_META[id].titleKey)}`}
+                              onClick={() => movePanelView(id, "bottom")}
+                            />
+                          </Show>
+                          <Show when={view().panel.location(id) === "bottom" && view().panel.sideAvailable()}>
+                            <IconButton
+                              icon="layout-right"
+                              variant="ghost"
+                              iconSize="small"
+                              aria-label={`${language.t("session.panel.moveToSide")}: ${language.t(PANEL_VIEW_META[id].titleKey)}`}
+                              title={`${language.t("session.panel.moveToSide")}: ${language.t(PANEL_VIEW_META[id].titleKey)}`}
+                              onClick={() => movePanelView(id, "side")}
+                            />
+                          </Show>
+                        </div>
+                      )}
+                    </For>
+                  </div>
+                </Popover>
 
                 <div class="hidden md:flex items-center gap-1 shrink-0">
                   <TooltipKeybind
