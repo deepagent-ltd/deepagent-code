@@ -6,7 +6,7 @@ import { Icon } from "@deepagent-code/ui/icon"
 import { Tooltip } from "@deepagent-code/ui/tooltip"
 import { ResizeHandle } from "@deepagent-code/ui/resize-handle"
 import type { SnapshotFileDiff, VcsFileDiff } from "@deepagent-code/sdk/v2"
-import { RIGHT_PANEL_RAIL_PX, type RightPanelWidthBucket } from "@/context/layout"
+import { RIGHT_PANEL_RAIL_PX, type RightPanelWidthBucket, type DockPanelID } from "@/context/layout"
 
 import FileTree from "@/components/file-tree"
 import { SidePanelMcp } from "@/pages/session/side-panel-mcp"
@@ -30,7 +30,8 @@ import { SidePanelDebug } from "@/pages/session/side-panel-debug"
 import { SidePanelProfile } from "@/pages/session/side-panel-profile"
 import { SidePanelIM } from "@/pages/session/side-panel-im"
 import { SidePanelOversight } from "@/pages/session/side-panel-oversight"
-import { SidePanelTerminal, SidePanelDebugConsole } from "@/pages/session/side-panel-terminal"
+import { SidePanelDockHeader, SidePanelTerminal, SidePanelDebugConsole } from "@/pages/session/side-panel-terminal"
+import { ProblemsPanel } from "@/pages/session/problems-panel"
 
 type RenderDiff = (SnapshotFileDiff & { file: string }) | VcsFileDiff
 
@@ -52,12 +53,13 @@ type PanelMode =
   | "profile"
   | "terminal"
   | "debug-console"
+  | "problems"
 
 type PanelGroup = "code" | "agents" | "env" | "dev" | "dock"
 
-// The movable dock panels (terminal / debug-console) appear in the rail only when their location is
-// "side" (see layout.dock). Everything else is side-native and always eligible.
-const DOCK_PANEL_MODES: readonly PanelMode[] = ["terminal", "debug-console"]
+// Movable panel views appear in this rail only when their persisted location is
+// side. Other entries remain side-native.
+const DOCK_PANEL_MODES: readonly DockPanelID[] = ["terminal", "debug-console", "problems"]
 
 type PanelDef = {
   readonly mode: PanelMode
@@ -92,6 +94,7 @@ const PANELS: readonly PanelDef[] = [
   // Dock — the movable panels; only surface here when docked to the side (see gating below).
   { mode: "terminal", icon: "terminal-active", titleKey: "session.panel.terminal", group: "dock", bucket: "narrow", keybind: "terminal.toggle" },
   { mode: "debug-console", icon: "code-lines", titleKey: "session.panel.debugConsole", group: "dock", bucket: "narrow" },
+  { mode: "problems", icon: "warning", titleKey: "session.panel.problems", group: "dock", bucket: "narrow" },
 ]
 
 const GROUP_ORDER: readonly PanelGroup[] = ["code", "agents", "env", "dev", "dock"]
@@ -112,6 +115,7 @@ export function SessionSidePanel(props: {
   focusReviewDiff: (path: string) => void
   reviewSnap: boolean
   size: Sizing
+  onFileNavigate?: (navigate: (filePath: string, line: number) => void) => void
 }) {
   const layout = useLayout()
   const file = useFile()
@@ -262,6 +266,7 @@ export function SessionSidePanel(props: {
     setGotoLine(undefined)
     queueMicrotask(() => setGotoLine(line))
   }
+  createEffect(() => props.onFileNavigate?.(openFileAt))
 
   // V3.6 Phase 1B F5 — inline new-file/folder creation state
   const [newItemState, setNewItemState] = createSignal<{ type: "file" | "dir"; name: string } | null>(null)
@@ -302,6 +307,10 @@ export function SessionSidePanel(props: {
   const openPanel = (mode: PanelMode) => {
     view().reviewPanel.close()
     layout.fileTree.close()
+    if (DOCK_PANEL_MODES.includes(mode as DockPanelID)) {
+      view().panel.toggle(mode as DockPanelID)
+      return
+    }
     if (isActive(mode)) {
       view().rightPanel.close()
       return
@@ -325,7 +334,7 @@ export function SessionSidePanel(props: {
     PANELS.filter((p) => (p.capability === "oversight" ? oversightEnabled() : true))
       // Dock panels (terminal / debug-console) only appear in the rail when docked to the side; when
       // in the bottom dock they're reached there instead.
-      .filter((p) => (DOCK_PANEL_MODES.includes(p.mode) ? layout.dock.location(p.mode as "terminal" | "debug-console") === "side" : true))
+      .filter((p) => (DOCK_PANEL_MODES.includes(p.mode as DockPanelID) ? view().panel.location(p.mode as DockPanelID) === "side" : true))
       .map((p) => ({
         ...p,
         title: language.t(p.titleKey),
@@ -576,10 +585,18 @@ export function SessionSidePanel(props: {
                 <SidePanelOversight onClose={closePanel} />
               </Match>
               <Match when={isActive("terminal")}>
-                <SidePanelTerminal onClose={closePanel} />
+                <SidePanelTerminal onClose={() => view().panel.toggle("terminal")} />
               </Match>
               <Match when={isActive("debug-console")}>
-                <SidePanelDebugConsole onClose={closePanel} />
+                <SidePanelDebugConsole onClose={() => view().panel.toggle("debug-console")} />
+              </Match>
+              <Match when={isActive("problems")}>
+                <div class="h-full w-full min-w-0 flex flex-col overflow-hidden bg-background-stronger">
+                  <SidePanelDockHeader id="problems" title={language.t("session.panel.problems")} onClose={() => view().panel.toggle("problems")} />
+                  <div class="flex-1 min-h-0">
+                    <ProblemsPanel active={() => isActive("problems")} onOpenFile={openFileAt} />
+                  </div>
+                </div>
               </Match>
             </Switch>
             </div>
