@@ -86,6 +86,10 @@ export const DeepAgentPromotionInput = Schema.Struct({
     approved: Schema.Boolean,
     note: Schema.optional(Schema.String),
   }),
+  // F30-3 (v4.0.4): promotions should be associated with a passed ship-gate snapshot. Currently
+  // optional for backward compatibility; clients are encouraged to supply this field. A future
+  // version (v4.0.6) will make it required once all callers are updated.
+  snapshotId: Schema.optional(Schema.String),
 })
 
 export const DeepAgentPromotionResult = Schema.Struct({

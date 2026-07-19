@@ -102,6 +102,13 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
       const memoryDir = yield* workspaceMemoryDir()
       yield* workspaceDir()
       const now = new Date().toISOString()
+      // F30-3 (v4.0.4): promotions should be associated with a passed ship-gate snapshot.
+      // Soft enforcement: warn if absent so operators can update callers before v4.0.6 hardens this.
+      if (!ctx.payload.snapshotId) {
+        console.warn(
+          "[DeepAgent promote] snapshotId not supplied — promotion should be associated with a passed ship-gate snapshot (F30-3). This will become a hard requirement in v4.0.6.",
+        )
+      }
       const promoted = yield* Effect.try({
         try: () => {
           // P1-A: the promotion gate is enforced SERVER-SIDE. The client-supplied `verdict` is NOT
@@ -133,6 +140,9 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
             ctx.payload.approval,
             now,
           )
+          // H32-1 (v4.0.4): persist to user-global store. The store now accepts a shared
+          // DocumentStore handle (injected via knowledge-source.configure) for CAS/SSOT
+          // participation; existing callers without a shared handle continue using isolated instances.
           AgentGateway.DeepAgentPromotion.persistPromoted(
             record,
             AgentGateway.DeepAgentKnowledgeSource.userGlobalStoreFor(),
