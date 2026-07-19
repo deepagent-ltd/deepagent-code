@@ -260,8 +260,8 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
   }
 
   const openTerminal = () => {
-    if (terminal.all().length > 0) terminal.new()
-    view().terminal.open()
+    terminal.new()
+    view().panel.reveal("terminal")
   }
 
   const chooseModel = () => {
@@ -491,17 +491,55 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
 
         view().reviewPanel.close()
         layout.fileTree.close()
-        view().rightPanel.open("menu")
+        // T3.2: no more "menu" list — the always-on rail is the switcher; open a default content panel.
+        view().rightPanel.open("review")
       },
+    }),
+    viewCommand({
+      id: "panel.toggle",
+      title: language.t("command.panel.toggle"),
+      keybind: "mod+j",
+      onSelect: () => view().panel.bottom.toggle(),
     }),
     viewCommand({
       id: "terminal.toggle",
       title: language.t("command.terminal.toggle"),
       keybind: "ctrl+`",
       slash: "terminal",
-      onSelect: () => {
-        view().terminal.toggle()
-      },
+      onSelect: () => view().panel.toggle("terminal"),
+    }),
+    viewCommand({
+      id: "debugConsole.reveal",
+      title: language.t("command.debugConsole.reveal"),
+      onSelect: () => view().panel.reveal("debug-console"),
+    }),
+    viewCommand({
+      id: "problems.reveal",
+      title: language.t("command.problems.reveal"),
+      onSelect: () => view().panel.reveal("problems"),
+    }),
+    ...(["terminal", "debug-console", "problems"] as const).flatMap((id) => {
+      const label = language.t(`session.panel.${id === "debug-console" ? "debugConsole" : id}`)
+      const location = view().panel.location(id)
+      return [
+        viewCommand({
+          id: `panel.${id}.show`,
+          title: `${language.t("session.panel.showView")}: ${label}`,
+          onSelect: () => view().panel.reveal(id),
+        }),
+        viewCommand({
+          id: `panel.${id}.moveToSide`,
+          title: `${language.t("session.panel.moveToSide")}: ${label}`,
+          disabled: location !== "bottom" || !view().panel.sideAvailable(),
+          onSelect: () => view().panel.move(id, "side"),
+        }),
+        viewCommand({
+          id: `panel.${id}.moveToBottom`,
+          title: `${language.t("session.panel.moveToBottom")}: ${label}`,
+          disabled: location !== "side",
+          onSelect: () => view().panel.move(id, "bottom"),
+        }),
+      ]
     }),
     viewCommand({
       id: "review.toggle",
@@ -531,7 +569,12 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
     }),
   ]
 
-  const terminalOpen = () => view().terminal.opened()
+  const terminalOpen = () => {
+    const panel = view().panel
+    return panel.location("terminal") === "bottom"
+      ? panel.bottom.opened() && panel.bottom.activeView() === "terminal"
+      : view().rightPanel.mode() === "terminal"
+  }
   const focusedPane = () => terminal.focusedPaneId()
   const terminalCmds = () => [
     terminalCommand({
@@ -546,14 +589,14 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
       // terminal.new's ctrl+alt+t) to avoid colliding with fileTree.toggle (mod+\)
       // and tab.close (mod+w) — mod resolves to ctrl on non-Mac, so ctrl+\/ctrl+w
       // were being preempted by the earlier-registered view/file commands.
-      // Only a left/right (side-by-side) split is exposed; "vertical" here means a
-      // vertical divider ⇒ panes arranged left and right.
+      // Only a left/right (side-by-side) split is exposed. Keep the command and
+      // toolbar on the same direction so both entry points have identical layout.
       id: "terminal.split",
       title: language.t("command.terminal.split"),
       description: language.t("command.terminal.split.description"),
       keybind: "ctrl+alt+\\",
       disabled: !terminalOpen() || !terminal.canSplit(focusedPane()),
-      onSelect: () => terminal.split("vertical"),
+      onSelect: () => terminal.split("horizontal"),
     }),
     terminalCommand({
       id: "terminal.closePane",

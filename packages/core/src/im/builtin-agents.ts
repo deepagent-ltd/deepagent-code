@@ -54,7 +54,7 @@ export const BUILTIN_AGENT_DESCRIPTORS: readonly AgentDescriptor[] = [
     triggers: [{ event: "ci.failure" }, { event: "ci.repair.requested" }],
     capabilities: ["code_edit", "test_run"],
     autonomy: "level_2",
-    limits: { maxTurnDurationMs: 600_000 },
+    limits: { maxFilesChanged: 8, maxTurnDurationMs: 600_000 },
   },
   // 2. DiagnosisAgent — read-only root-cause locator for monitor alerts. level_1
   //    (post-hoc log only, no edits). Runs as the general-purpose agent.
@@ -94,7 +94,7 @@ export const BUILTIN_AGENT_DESCRIPTORS: readonly AgentDescriptor[] = [
     triggers: [{ event: "pr.comment" }],
     capabilities: ["code_edit"],
     autonomy: "level_2",
-    limits: {},
+    limits: { maxFilesChanged: 8 },
   },
   // 5. TestAgent — matched by CAPABILITY (test_run), not by trigger: the ci.failure
   //    DAG's test_run subtask can bind here (CodeFixAgent also covers test_run;

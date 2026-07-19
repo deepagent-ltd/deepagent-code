@@ -91,6 +91,7 @@ export type Event =
   | EventDebugOutput
   | EventDebugTerminated
   | EventDebugUpdated
+  | EventGoalUpdated
   | EventVcsBranchUpdated
   | EventWorkspaceReady
   | EventWorkspaceFailed
@@ -853,7 +854,7 @@ export type GlobalEvent = {
           sessionID: string
           messageID: string
           prompt: Prompt
-          delivery: "steer" | "queue"
+          delivery: "steer" | "queue" | "goal_steer"
         }
       }
     | {
@@ -864,7 +865,7 @@ export type GlobalEvent = {
           sessionID: string
           messageID: string
           prompt: Prompt
-          delivery: "steer" | "queue"
+          delivery: "steer" | "queue" | "goal_steer"
         }
       }
     | {
@@ -1647,6 +1648,24 @@ export type GlobalEvent = {
       }
     | {
         id: string
+        type: "goal.updated"
+        properties: {
+          sessionID: string
+          goalId: string
+          planDocId: string
+          phase: string
+          ledger: {
+            ticks: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+            tokens: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+            cost: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+            wallclockMs: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          }
+          stallCount: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          gaps: Array<string>
+        }
+      }
+    | {
+        id: string
         type: "vcs.branch.updated"
         properties: {
           branch?: string
@@ -1818,41 +1837,12 @@ export type AgentConfig = {
     maxConcurrency?: number
     maxTokensPerTurn?: number
     maxTurnDurationMs?: number
+    maxFilesChanged?: number
+    maxTokensPerHour?: number
     writablePaths?: Array<string>
     toolWhitelist?: Array<string>
   }
-  [key: string]:
-    | unknown
-    | string
-    | number
-    | {
-        [key: string]: boolean
-      }
-    | boolean
-    | "subagent"
-    | "primary"
-    | "all"
-    | {
-        [key: string]: unknown
-      }
-    | string
-    | "primary"
-    | "secondary"
-    | "accent"
-    | "success"
-    | "warning"
-    | "error"
-    | "info"
-    | number
-    | PermissionConfig
-    | {
-        maxConcurrency?: number
-        maxTokensPerTurn?: number
-        maxTurnDurationMs?: number
-        writablePaths?: Array<string>
-        toolWhitelist?: Array<string>
-      }
-    | undefined
+  [key: string]: unknown
 }
 
 export type ProviderConfig = {
@@ -1863,6 +1853,7 @@ export type ProviderConfig = {
   npm?: string
   whitelist?: Array<string>
   blacklist?: Array<string>
+  discovery?: boolean
   options?: {
     apiKey?: string
     baseURL?: string
@@ -1877,7 +1868,7 @@ export type ProviderConfig = {
      */
     headerTimeout?: number | false
     chunkTimeout?: number
-    [key: string]: unknown | string | boolean | number | false | number | false | number | undefined
+    [key: string]: unknown
   }
   models?: {
     [key: string]: {
@@ -1909,7 +1900,7 @@ export type ProviderConfig = {
       limit?: {
         context: number
         input?: number
-        output: number
+        output?: number
       }
       modalities?: {
         input?: Array<"text" | "audio" | "image" | "video" | "pdf">
@@ -1933,7 +1924,7 @@ export type ProviderConfig = {
       variants?: {
         [key: string]: {
           disabled?: boolean
-          [key: string]: unknown | boolean | undefined
+          [key: string]: unknown
         }
       }
     }
@@ -2043,9 +2034,6 @@ export type Config = {
   >
   share?: "manual" | "auto" | "disabled"
   autoshare?: boolean
-  /**
-   * Base URL of the server used for session sharing. When set, overrides the default share endpoint. Falls back to the enterprise URL and then the built-in default when unset.
-   */
   share_url?: string
   /**
    * Automatically update to the latest version. Set to true to auto-update, false to disable, or 'notify' to show update notifications
@@ -2154,6 +2142,12 @@ export type Config = {
       max_concurrency?: number
     }
   }
+  v4PanelAutoConvene?: boolean
+  v4AgentPushEnabled?: boolean
+  v4EventDrivenIm?: boolean
+  v4MultiAgentRuntime?: boolean
+  v4EventDrivenArchive?: boolean
+  v4Steering?: boolean
 }
 
 export type ProjectListItem = {
@@ -2868,6 +2862,8 @@ export type Agent = {
     maxConcurrency?: number
     maxTokensPerTurn?: number
     maxTurnDurationMs?: number
+    maxFilesChanged?: number
+    maxTokensPerHour?: number
     writablePaths?: Array<string>
     toolWhitelist?: Array<string>
   }
@@ -3234,6 +3230,14 @@ export type WorkspaceWarpError = {
   data: {
     message: string
   }
+}
+
+export type TrustedSourcesResult = {
+  trustedSources: Array<"im" | "git" | "ci" | "pr" | "monitor" | "schedule" | "system">
+}
+
+export type TrustedSourcesInput = {
+  trustedSources: Array<"im" | "git" | "ci" | "pr" | "monitor" | "schedule" | "system">
 }
 
 export type UnauthorizedError = {
@@ -3779,7 +3783,7 @@ export type SyncEventSessionNextPrompted = {
       sessionID: string
       messageID: string
       prompt: Prompt
-      delivery: "steer" | "queue"
+      delivery: "steer" | "queue" | "goal_steer"
     }
   }
 }
@@ -3797,7 +3801,7 @@ export type SyncEventSessionNextPromptAdmitted = {
       sessionID: string
       messageID: string
       prompt: Prompt
-      delivery: "steer" | "queue"
+      delivery: "steer" | "queue" | "goal_steer"
     }
   }
 }
@@ -4341,7 +4345,7 @@ export type SessionInputAdmitted = {
   id: string
   sessionID: string
   prompt: Prompt
-  delivery: "steer" | "queue"
+  delivery: "steer" | "queue" | "goal_steer"
   timeCreated: number
   promotedSeq?: number
 }
@@ -4931,7 +4935,7 @@ export type EventSessionNextPrompted = {
     sessionID: string
     messageID: string
     prompt: Prompt
-    delivery: "steer" | "queue"
+    delivery: "steer" | "queue" | "goal_steer"
   }
 }
 
@@ -4943,7 +4947,7 @@ export type EventSessionNextPromptAdmitted = {
     sessionID: string
     messageID: string
     prompt: Prompt
-    delivery: "steer" | "queue"
+    delivery: "steer" | "queue" | "goal_steer"
   }
 }
 
@@ -5741,6 +5745,25 @@ export type EventDebugUpdated = {
   }
 }
 
+export type EventGoalUpdated = {
+  id: string
+  type: "goal.updated"
+  properties: {
+    sessionID: string
+    goalId: string
+    planDocId: string
+    phase: string
+    ledger: {
+      ticks: number | "NaN" | "Infinity" | "-Infinity"
+      tokens: number | "NaN" | "Infinity" | "-Infinity"
+      cost: number | "NaN" | "Infinity" | "-Infinity"
+      wallclockMs: number | "NaN" | "Infinity" | "-Infinity"
+    }
+    stallCount: number | "NaN" | "Infinity" | "-Infinity"
+    gaps: Array<string>
+  }
+}
+
 export type EventVcsBranchUpdated = {
   id: string
   type: "vcs.branch.updated"
@@ -5950,6 +5973,7 @@ export type GlobalHealthResponses = {
   200: {
     healthy: true
     version: string
+    runtimeId: string
   }
 }
 
@@ -5983,6 +6007,14 @@ export type GlobalCapabilitiesResponses = {
       sessions: boolean
       pty: boolean
       workspaces: boolean
+      expertPanel: boolean
+      goalLoop: boolean
+      wiki: boolean
+      v4EventDrivenIm?: boolean
+      v4AgentPushEnabled?: boolean
+      v4MultiAgentRuntime?: boolean
+      v4ThreadEnabled?: boolean
+      v4FileUploadEnabled?: boolean
     }
   }
 }
@@ -6173,6 +6205,33 @@ export type GlobalProjectsResponses = {
 }
 
 export type GlobalProjectsResponse = GlobalProjectsResponses[keyof GlobalProjectsResponses]
+
+export type GlobalProjectDeleteData = {
+  body?: never
+  path: {
+    projectID: string
+  }
+  query?: never
+  url: "/global/projects/{projectID}"
+}
+
+export type GlobalProjectDeleteErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type GlobalProjectDeleteError = GlobalProjectDeleteErrors[keyof GlobalProjectDeleteErrors]
+
+export type GlobalProjectDeleteResponses = {
+  /**
+   * <No Content>
+   */
+  204: void
+}
+
+export type GlobalProjectDeleteResponse = GlobalProjectDeleteResponses[keyof GlobalProjectDeleteResponses]
 
 export type EventSubscribeData = {
   body?: never
@@ -6776,6 +6835,7 @@ export type DeepagentKnowledgePromoteData = {
       approved: boolean
       note?: string
     }
+    snapshotId?: string
   }
   path?: never
   query?: {
@@ -6893,6 +6953,7 @@ export type DeepagentKnowledgePendingResponses = {
       evidence_strength: "strong" | "medium" | "weak" | "none"
       evidence_refs: Array<string>
       approval_status: "pending" | "approved" | "rejected"
+      scope?: string
     }>
   }
 }
@@ -7297,6 +7358,1075 @@ export type DeepagentEnvFactsModifyResponses = {
 }
 
 export type DeepagentEnvFactsModifyResponse = DeepagentEnvFactsModifyResponses[keyof DeepagentEnvFactsModifyResponses]
+
+export type DeepagentPanelConsultData = {
+  body?: {
+    sessionID: string
+    question?: string
+    codeRefs?: Array<string>
+    lenses?: Array<"correctness" | "security" | "performance" | "architecture" | "repro">
+    maxRounds?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    policy?: "default" | "security"
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/deepagent/panel/consult"
+}
+
+export type DeepagentPanelConsultErrors = {
+  /**
+   * DeepAgentPromotionError | InvalidRequestError
+   */
+  400: DeepAgentPromotionError | InvalidRequestError
+}
+
+export type DeepagentPanelConsultError = DeepagentPanelConsultErrors[keyof DeepagentPanelConsultErrors]
+
+export type DeepagentPanelConsultResponses = {
+  /**
+   * Expert Panel verdict for the convened question
+   */
+  200: {
+    decision: "approve" | "revise" | "block" | "needs_human"
+    confidence: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    rounds: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    evidence: Array<string>
+    dissent: Array<{
+      lens: string
+      verdict: string
+      confidence: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      findings: Array<{
+        severity: string
+        category: string
+        file?: string
+        line?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        summary: string
+        failureScenario: string
+        confidence: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      }>
+    }>
+  }
+}
+
+export type DeepagentPanelConsultResponse = DeepagentPanelConsultResponses[keyof DeepagentPanelConsultResponses]
+
+export type DeepagentPanelArmData = {
+  body?: {
+    sessionID: string
+    armed: boolean
+    rounds?: "single" | "multi"
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/deepagent/panel/arm"
+}
+
+export type DeepagentPanelArmErrors = {
+  /**
+   * DeepAgentPromotionError | InvalidRequestError
+   */
+  400: DeepAgentPromotionError | InvalidRequestError
+}
+
+export type DeepagentPanelArmError = DeepagentPanelArmErrors[keyof DeepagentPanelArmErrors]
+
+export type DeepagentPanelArmResponses = {
+  /**
+   * The session's new panel armed state
+   */
+  200: {
+    sessionID: string
+    armed: boolean
+    rounds: "single" | "multi"
+  }
+}
+
+export type DeepagentPanelArmResponse = DeepagentPanelArmResponses[keyof DeepagentPanelArmResponses]
+
+export type DeepagentPanelStatusData = {
+  body?: never
+  path?: never
+  query: {
+    directory?: string
+    workspace?: string
+    sessionID: string
+  }
+  url: "/deepagent/panel/status"
+}
+
+export type DeepagentPanelStatusErrors = {
+  /**
+   * DeepAgentPromotionError | InvalidRequestError
+   */
+  400: DeepAgentPromotionError | InvalidRequestError
+}
+
+export type DeepagentPanelStatusError = DeepagentPanelStatusErrors[keyof DeepagentPanelStatusErrors]
+
+export type DeepagentPanelStatusResponses = {
+  /**
+   * Effective panel armed state (explicit toggle or global default)
+   */
+  200: {
+    sessionID: string
+    armed: boolean
+    explicit: boolean
+    rounds: "single" | "multi"
+  }
+}
+
+export type DeepagentPanelStatusResponse = DeepagentPanelStatusResponses[keyof DeepagentPanelStatusResponses]
+
+export type DeepagentGoalStartData = {
+  body?: {
+    sessionID: string
+    objective?: string
+    criteria?: Array<{
+      kind: "tests_pass" | "no_diagnostics" | "reviewer_clean" | "panel_approves" | "plan_complete"
+      commands?: Array<string>
+      maxSeverity?: string
+      severityAtMost?: string
+    }>
+    limits?: {
+      maxTicks?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      maxTokens?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      maxWallclockMs?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      maxCost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    }
+    stallThreshold?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/deepagent/goal/start"
+}
+
+export type DeepagentGoalStartErrors = {
+  /**
+   * DeepAgentPromotionError | InvalidRequestError
+   */
+  400: DeepAgentPromotionError | InvalidRequestError
+}
+
+export type DeepagentGoalStartError = DeepagentGoalStartErrors[keyof DeepagentGoalStartErrors]
+
+export type DeepagentGoalStartResponses = {
+  /**
+   * The started goal (goalId + initial phase)
+   */
+  200: {
+    goalId: string
+    planDocId: string
+    phase: string
+    running: boolean
+  }
+}
+
+export type DeepagentGoalStartResponse = DeepagentGoalStartResponses[keyof DeepagentGoalStartResponses]
+
+export type DeepagentGoalPauseData = {
+  body?: {
+    sessionID: string
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/deepagent/goal/pause"
+}
+
+export type DeepagentGoalPauseErrors = {
+  /**
+   * DeepAgentPromotionError | InvalidRequestError
+   */
+  400: DeepAgentPromotionError | InvalidRequestError
+}
+
+export type DeepagentGoalPauseError = DeepagentGoalPauseErrors[keyof DeepagentGoalPauseErrors]
+
+export type DeepagentGoalPauseResponses = {
+  /**
+   * Whether the goal was paused
+   */
+  200: {
+    ok: boolean
+  }
+}
+
+export type DeepagentGoalPauseResponse = DeepagentGoalPauseResponses[keyof DeepagentGoalPauseResponses]
+
+export type DeepagentGoalResumeData = {
+  body?: {
+    sessionID: string
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/deepagent/goal/resume"
+}
+
+export type DeepagentGoalResumeErrors = {
+  /**
+   * DeepAgentPromotionError | InvalidRequestError
+   */
+  400: DeepAgentPromotionError | InvalidRequestError
+}
+
+export type DeepagentGoalResumeError = DeepagentGoalResumeErrors[keyof DeepagentGoalResumeErrors]
+
+export type DeepagentGoalResumeResponses = {
+  /**
+   * Whether the goal was resumed
+   */
+  200: {
+    ok: boolean
+  }
+}
+
+export type DeepagentGoalResumeResponse = DeepagentGoalResumeResponses[keyof DeepagentGoalResumeResponses]
+
+export type DeepagentGoalStopData = {
+  body?: {
+    sessionID: string
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/deepagent/goal/stop"
+}
+
+export type DeepagentGoalStopErrors = {
+  /**
+   * DeepAgentPromotionError | InvalidRequestError
+   */
+  400: DeepAgentPromotionError | InvalidRequestError
+}
+
+export type DeepagentGoalStopError = DeepagentGoalStopErrors[keyof DeepagentGoalStopErrors]
+
+export type DeepagentGoalStopResponses = {
+  /**
+   * Whether the goal was stopped
+   */
+  200: {
+    ok: boolean
+  }
+}
+
+export type DeepagentGoalStopResponse = DeepagentGoalStopResponses[keyof DeepagentGoalStopResponses]
+
+export type DeepagentGoalEditPlanData = {
+  body?: {
+    sessionID: string
+    plan: {
+      goal: string
+      steps: Array<{
+        step_id?: string
+        title: string
+        status?: string
+        acceptance?: string
+        assigned_agent?: string
+        note?: string
+      }>
+      assumptions?: Array<string>
+      active_step_id?: string
+    }
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/deepagent/goal/edit-plan"
+}
+
+export type DeepagentGoalEditPlanErrors = {
+  /**
+   * DeepAgentPromotionError | InvalidRequestError
+   */
+  400: DeepAgentPromotionError | InvalidRequestError
+}
+
+export type DeepagentGoalEditPlanError = DeepagentGoalEditPlanErrors[keyof DeepagentGoalEditPlanErrors]
+
+export type DeepagentGoalEditPlanResponses = {
+  /**
+   * Whether the plan edit was enqueued for the goal
+   */
+  200: {
+    ok: boolean
+  }
+}
+
+export type DeepagentGoalEditPlanResponse = DeepagentGoalEditPlanResponses[keyof DeepagentGoalEditPlanResponses]
+
+export type DeepagentGoalStatusData = {
+  body?: never
+  path?: never
+  query: {
+    directory?: string
+    workspace?: string
+    sessionID: string
+  }
+  url: "/deepagent/goal/status"
+}
+
+export type DeepagentGoalStatusErrors = {
+  /**
+   * DeepAgentPromotionError | InvalidRequestError
+   */
+  400: DeepAgentPromotionError | InvalidRequestError
+}
+
+export type DeepagentGoalStatusError = DeepagentGoalStatusErrors[keyof DeepagentGoalStatusErrors]
+
+export type DeepagentGoalStatusResponses = {
+  /**
+   * The active goal for the session, or null
+   */
+  200: {
+    goal: {
+      goalId: string
+      planDocId: string
+      phase: string
+      running: boolean
+    }
+  }
+}
+
+export type DeepagentGoalStatusResponse = DeepagentGoalStatusResponses[keyof DeepagentGoalStatusResponses]
+
+export type DeepagentGoalStartableData = {
+  body?: never
+  path?: never
+  query: {
+    directory?: string
+    workspace?: string
+    sessionID: string
+  }
+  url: "/deepagent/goal/startable"
+}
+
+export type DeepagentGoalStartableErrors = {
+  /**
+   * DeepAgentPromotionError | InvalidRequestError
+   */
+  400: DeepAgentPromotionError | InvalidRequestError
+}
+
+export type DeepagentGoalStartableError = DeepagentGoalStartableErrors[keyof DeepagentGoalStartableErrors]
+
+export type DeepagentGoalStartableResponses = {
+  /**
+   * Whether a goal can be started + plan source
+   */
+  200: {
+    startable: boolean
+    source: "plan" | "file" | "none"
+  }
+}
+
+export type DeepagentGoalStartableResponse = DeepagentGoalStartableResponses[keyof DeepagentGoalStartableResponses]
+
+export type DeepagentWikiPagesData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+    type?: string
+  }
+  url: "/deepagent/wiki/pages"
+}
+
+export type DeepagentWikiPagesErrors = {
+  /**
+   * DeepAgentPromotionError | InvalidRequestError
+   */
+  400: DeepAgentPromotionError | InvalidRequestError
+}
+
+export type DeepagentWikiPagesError = DeepagentWikiPagesErrors[keyof DeepagentWikiPagesErrors]
+
+export type DeepagentWikiPagesResponses = {
+  /**
+   * Projectable Wiki page summaries (sealed excluded)
+   */
+  200: {
+    pages: Array<{
+      docId: string
+      type: string
+      title: string
+      scope: string
+      editable: boolean
+      version: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    }>
+  }
+}
+
+export type DeepagentWikiPagesResponse = DeepagentWikiPagesResponses[keyof DeepagentWikiPagesResponses]
+
+export type DeepagentWikiPageData = {
+  body?: never
+  path?: never
+  query: {
+    directory?: string
+    workspace?: string
+    docId: string
+    scope: string
+  }
+  url: "/deepagent/wiki/page"
+}
+
+export type DeepagentWikiPageErrors = {
+  /**
+   * DeepAgentPromotionError | InvalidRequestError
+   */
+  400: DeepAgentPromotionError | InvalidRequestError
+}
+
+export type DeepagentWikiPageError = DeepagentWikiPageErrors[keyof DeepagentWikiPageErrors]
+
+export type DeepagentWikiPageResponses = {
+  /**
+   * One rendered Wiki page (markdown + cross-links)
+   */
+  200: {
+    docId: string
+    type: string
+    title: string
+    markdown: string
+    editable: boolean
+    version: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    crossLinks: {
+      toCode: Array<{
+        docId: string
+        rel: string
+        path: string
+        line: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        symbolPath: string
+        stale: boolean
+      }>
+      toDocs: Array<{
+        docId: string
+        rel: string
+        type: string
+        title: string
+        stale: boolean
+      }>
+    }
+  }
+}
+
+export type DeepagentWikiPageResponse = DeepagentWikiPageResponses[keyof DeepagentWikiPageResponses]
+
+export type DeepagentWikiSearchData = {
+  body?: never
+  path?: never
+  query: {
+    directory?: string
+    workspace?: string
+    text: string
+    type?: string
+    scope?: string
+  }
+  url: "/deepagent/wiki/search"
+}
+
+export type DeepagentWikiSearchErrors = {
+  /**
+   * DeepAgentPromotionError | InvalidRequestError
+   */
+  400: DeepAgentPromotionError | InvalidRequestError
+}
+
+export type DeepagentWikiSearchError = DeepagentWikiSearchErrors[keyof DeepagentWikiSearchErrors]
+
+export type DeepagentWikiSearchResponses = {
+  /**
+   * Full-text search hits over the Wiki projection
+   */
+  200: {
+    hits: Array<{
+      docId: string
+      type: string
+      scope: string
+      title: string
+      score: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    }>
+  }
+}
+
+export type DeepagentWikiSearchResponse = DeepagentWikiSearchResponses[keyof DeepagentWikiSearchResponses]
+
+export type DeepagentWikiEditData = {
+  body?: {
+    docId: string
+    scope: string
+    body: string
+    editor: {
+      id: string
+      name?: string
+    }
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/deepagent/wiki/edit"
+}
+
+export type DeepagentWikiEditErrors = {
+  /**
+   * DeepAgentPromotionError | InvalidRequestError
+   */
+  400: DeepAgentPromotionError | InvalidRequestError
+}
+
+export type DeepagentWikiEditError = DeepagentWikiEditErrors[keyof DeepagentWikiEditErrors]
+
+export type DeepagentWikiEditResponses = {
+  /**
+   * The edited page (new version, human provenance)
+   */
+  200: {
+    docId: string
+    type: string
+    title: string
+    markdown: string
+    editable: boolean
+    version: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    crossLinks: {
+      toCode: Array<{
+        docId: string
+        rel: string
+        path: string
+        line: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        symbolPath: string
+        stale: boolean
+      }>
+      toDocs: Array<{
+        docId: string
+        rel: string
+        type: string
+        title: string
+        stale: boolean
+      }>
+    }
+  }
+}
+
+export type DeepagentWikiEditResponse = DeepagentWikiEditResponses[keyof DeepagentWikiEditResponses]
+
+export type DeepagentWikiExecutionArchiveData = {
+  body?: never
+  path?: never
+  query: {
+    directory?: string
+    workspace?: string
+    sessionID: string
+  }
+  url: "/deepagent/wiki/execution-archive"
+}
+
+export type DeepagentWikiExecutionArchiveErrors = {
+  /**
+   * DeepAgentPromotionError | InvalidRequestError
+   */
+  400: DeepAgentPromotionError | InvalidRequestError
+}
+
+export type DeepagentWikiExecutionArchiveError =
+  DeepagentWikiExecutionArchiveErrors[keyof DeepagentWikiExecutionArchiveErrors]
+
+export type DeepagentWikiExecutionArchiveResponses = {
+  /**
+   * A session's aggregated execution trajectory (plan + worklog + diagnosis + decision + eval)
+   */
+  200: {
+    sessionId: string
+    title: string
+    markdown: string
+    entries: Array<{
+      docId: string
+      type: string
+      title: string
+      body: string
+      version: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    }>
+  }
+}
+
+export type DeepagentWikiExecutionArchiveResponse =
+  DeepagentWikiExecutionArchiveResponses[keyof DeepagentWikiExecutionArchiveResponses]
+
+export type OversightMetricsData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+    from?: string
+    to?: string
+  }
+  url: "/oversight/metrics"
+}
+
+export type OversightMetricsErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type OversightMetricsError = OversightMetricsErrors[keyof OversightMetricsErrors]
+
+export type OversightMetricsResponses = {
+  /**
+   * §F1 metric snapshot for the workspace over the window
+   */
+  200: {
+    windowFrom: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    windowTo: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    dlqEventsTotal: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    agentPushRejectedTotal: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    agentPushRejectedByReason: {
+      [key: string]: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    }
+    agentTaskSuccessRate: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    agentTaskCompleted: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    agentTaskFailed: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    agentConflictRate: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    agentTaskBlockedTotal: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    agentPushTotal: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    eventPublishLatencyMsP50?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    eventPublishLatencyMsP95?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    eventToAgentStartMsP50?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    eventToAgentStartMsP95?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    humanTakeoverTotal?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    rollbackTotal?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  }
+}
+
+export type OversightMetricsResponse = OversightMetricsResponses[keyof OversightMetricsResponses]
+
+export type OversightTraceData = {
+  body?: never
+  path?: never
+  query: {
+    directory?: string
+    workspace?: string
+    correlationID: string
+  }
+  url: "/oversight/trace"
+}
+
+export type OversightTraceErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type OversightTraceError = OversightTraceErrors[keyof OversightTraceErrors]
+
+export type OversightTraceResponses = {
+  /**
+   * §F2 causal event chain for a correlationID
+   */
+  200: {
+    nodes: Array<{
+      kind?: "event" | "session"
+      eventID: string
+      type: string
+      source: string
+      causationID?: string
+      createdAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      sessionID?: string
+      title?: string
+      messageCount?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    }>
+  }
+}
+
+export type OversightTraceResponse = OversightTraceResponses[keyof OversightTraceResponses]
+
+export type OversightApprovalsData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/oversight/approvals"
+}
+
+export type OversightApprovalsErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type OversightApprovalsError = OversightApprovalsErrors[keyof OversightApprovalsErrors]
+
+export type OversightApprovalsResponses = {
+  /**
+   * §D2 pending Approval Queue items for the workspace
+   */
+  200: {
+    items: Array<{
+      id: string
+      workspaceID: string
+      eventID: string
+      eventType: string
+      correlationID?: string
+      summary: string
+      status: "pending" | "resolved"
+      decision?: "approved" | "rejected" | "acknowledged"
+      resolvedBy?: string
+      resolvedAt?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      createdAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    }>
+  }
+}
+
+export type OversightApprovalsResponse = OversightApprovalsResponses[keyof OversightApprovalsResponses]
+
+export type OversightApprovalsResolveData = {
+  body?: {
+    id: string
+    decision: "approved" | "rejected" | "acknowledged"
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/oversight/approvals/resolve"
+}
+
+export type OversightApprovalsResolveErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * Not found
+   */
+  404: NotFoundError
+}
+
+export type OversightApprovalsResolveError = OversightApprovalsResolveErrors[keyof OversightApprovalsResolveErrors]
+
+export type OversightApprovalsResolveResponses = {
+  /**
+   * The resolved Approval Queue item
+   */
+  200: {
+    id: string
+    workspaceID: string
+    eventID: string
+    eventType: string
+    correlationID?: string
+    summary: string
+    status: "pending" | "resolved"
+    decision?: "approved" | "rejected" | "acknowledged"
+    resolvedBy?: string
+    resolvedAt?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    createdAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  }
+}
+
+export type OversightApprovalsResolveResponse =
+  OversightApprovalsResolveResponses[keyof OversightApprovalsResolveResponses]
+
+export type OversightTakeoverData = {
+  body?: {
+    sessionID?: string
+    agentID?: string
+    reason?: string
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/oversight/takeover"
+}
+
+export type OversightTakeoverErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type OversightTakeoverError = OversightTakeoverErrors[keyof OversightTakeoverErrors]
+
+export type OversightTakeoverResponses = {
+  /**
+   * The recorded human-takeover audit row
+   */
+  200: {
+    id: string
+    workspaceID: string
+    sessionID?: string
+    agentID?: string
+    actorID?: string
+    reason?: string
+    createdAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  }
+}
+
+export type OversightTakeoverResponse = OversightTakeoverResponses[keyof OversightTakeoverResponses]
+
+export type OversightRollbackData = {
+  body?: {
+    sessionID: string
+    reason?: string
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/oversight/rollback"
+}
+
+export type OversightRollbackErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * Not found
+   */
+  404: NotFoundError
+}
+
+export type OversightRollbackError = OversightRollbackErrors[keyof OversightRollbackErrors]
+
+export type OversightRollbackResponses = {
+  /**
+   * The recorded rollback audit row
+   */
+  200: {
+    id: string
+    workspaceID: string
+    sessionID: string
+    actorID?: string
+    reason?: string
+    outcome: "reverted" | "noop"
+    createdAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  }
+}
+
+export type OversightRollbackResponse = OversightRollbackResponses[keyof OversightRollbackResponses]
+
+export type WebhookGitData = {
+  body: {
+    repo: string
+    ref?: string
+    branch?: string
+    commit: string
+    actor?: string
+    deliveryId?: string
+    destructive?: boolean
+    message?: string
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/api/v1/webhook/git"
+}
+
+export type WebhookGitErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+}
+
+export type WebhookGitError = WebhookGitErrors[keyof WebhookGitErrors]
+
+export type WebhookGitResponses = {
+  /**
+   * §A1 git.push published onto the bus (or shed by the §E2 rate gate)
+   */
+  200: {
+    accepted: boolean
+    dropped: boolean
+    eventID?: string
+    idempotencyKey?: string
+    type: string
+  }
+}
+
+export type WebhookGitResponse = WebhookGitResponses[keyof WebhookGitResponses]
+
+export type WebhookCiData = {
+  body: {
+    repo: string
+    ref?: string
+    branch?: string
+    commit?: string
+    actor?: string
+    deliveryId?: string
+    pipeline?: string
+    jobUrl?: string
+    consecutiveFailures?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    logExcerpt?: string
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/api/v1/webhook/ci"
+}
+
+export type WebhookCiErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+}
+
+export type WebhookCiError = WebhookCiErrors[keyof WebhookCiErrors]
+
+export type WebhookCiResponses = {
+  /**
+   * §A1 ci.failure published onto the bus (or shed by the §E2 rate gate)
+   */
+  200: {
+    accepted: boolean
+    dropped: boolean
+    eventID?: string
+    idempotencyKey?: string
+    type: string
+  }
+}
+
+export type WebhookCiResponse = WebhookCiResponses[keyof WebhookCiResponses]
+
+export type WebhookPrData = {
+  body: {
+    repo: string
+    prNumber?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    commit?: string
+    actor?: string
+    deliveryId?: string
+    comment: string
+    destructive?: boolean
+    migration?: boolean
+    architectureChange?: boolean
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/api/v1/webhook/pr"
+}
+
+export type WebhookPrErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+}
+
+export type WebhookPrError = WebhookPrErrors[keyof WebhookPrErrors]
+
+export type WebhookPrResponses = {
+  /**
+   * §A1 pr.comment published onto the bus (or shed by the §E2 rate gate)
+   */
+  200: {
+    accepted: boolean
+    dropped: boolean
+    eventID?: string
+    idempotencyKey?: string
+    type: string
+  }
+}
+
+export type WebhookPrResponse = WebhookPrResponses[keyof WebhookPrResponses]
+
+export type WebhookMonitorData = {
+  body: {
+    repo?: string
+    alertId?: string
+    deliveryId?: string
+    title: string
+    severity?: "info" | "warning" | "critical"
+    category?: string
+    detail?: string
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/api/v1/webhook/monitor"
+}
+
+export type WebhookMonitorErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+}
+
+export type WebhookMonitorError = WebhookMonitorErrors[keyof WebhookMonitorErrors]
+
+export type WebhookMonitorResponses = {
+  /**
+   * §A1 monitor.alert published onto the bus (or shed by the §E2 rate gate)
+   */
+  200: {
+    accepted: boolean
+    dropped: boolean
+    eventID?: string
+    idempotencyKey?: string
+    type: string
+  }
+}
+
+export type WebhookMonitorResponse = WebhookMonitorResponses[keyof WebhookMonitorResponses]
 
 export type ExperimentalConsoleGetData = {
   body?: never
@@ -8737,6 +9867,8 @@ export type ImAgentsListResponses = {
       maxConcurrency?: number
       maxTokensPerTurn?: number
       maxTurnDurationMs?: number
+      maxFilesChanged?: number
+      maxTokensPerHour?: number
       writablePaths?: Array<string>
       toolWhitelist?: Array<string>
     }
@@ -10297,13 +11429,30 @@ export type ProviderModelsDiscoverResponses = {
   200: {
     providerID: string
     baseURL: string
+    kind: "openai-compatible" | "anthropic"
     models: Array<{
       id: string
       name: string
+      spec?: {
+        context: number
+        output: number
+        reasoning: boolean
+        temperature: boolean
+        toolcall: boolean
+        matchedFrom: string
+      }
     }>
     selected: {
       id: string
       name: string
+      spec?: {
+        context: number
+        output: number
+        reasoning: boolean
+        temperature: boolean
+        toolcall: boolean
+        matchedFrom: string
+      }
     }
   }
 }
@@ -11164,6 +12313,45 @@ export type SessionPromptPrepareResponses = {
 }
 
 export type SessionPromptPrepareResponse = SessionPromptPrepareResponses[keyof SessionPromptPrepareResponses]
+
+export type SessionPromptPrepareStreamData = {
+  body?: {
+    mode: "wish" | "intelligence"
+    output_language?: "chinese" | "english"
+    parts: Array<TextPartInput | FilePartInput | AgentPartInput | SubtaskPartInput>
+  }
+  path: {
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/session/{sessionID}/prompt_prepare_stream"
+}
+
+export type SessionPromptPrepareStreamErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+}
+
+export type SessionPromptPrepareStreamError = SessionPromptPrepareStreamErrors[keyof SessionPromptPrepareStreamErrors]
+
+export type SessionPromptPrepareStreamResponses = {
+  /**
+   * Success
+   */
+  200: string
+}
+
+export type SessionPromptPrepareStreamResponse =
+  SessionPromptPrepareStreamResponses[keyof SessionPromptPrepareStreamResponses]
 
 export type SessionPromptSuggestionData = {
   body?: never
@@ -12297,6 +13485,70 @@ export type ExperimentalWorkspaceWarpResponses = {
 export type ExperimentalWorkspaceWarpResponse =
   ExperimentalWorkspaceWarpResponses[keyof ExperimentalWorkspaceWarpResponses]
 
+export type WorkspaceConfigTrustedSourcesGetData = {
+  body?: never
+  path: {
+    workspaceID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/workspace/{workspaceID}/config/trusted-sources"
+}
+
+export type WorkspaceConfigTrustedSourcesGetErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type WorkspaceConfigTrustedSourcesGetError =
+  WorkspaceConfigTrustedSourcesGetErrors[keyof WorkspaceConfigTrustedSourcesGetErrors]
+
+export type WorkspaceConfigTrustedSourcesGetResponses = {
+  /**
+   * Current trusted sources for the workspace (DEFAULT_TRUSTED_SOURCES when unset)
+   */
+  200: TrustedSourcesResult
+}
+
+export type WorkspaceConfigTrustedSourcesGetResponse =
+  WorkspaceConfigTrustedSourcesGetResponses[keyof WorkspaceConfigTrustedSourcesGetResponses]
+
+export type WorkspaceConfigTrustedSourcesPutData = {
+  body?: TrustedSourcesInput
+  path: {
+    workspaceID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/workspace/{workspaceID}/config/trusted-sources"
+}
+
+export type WorkspaceConfigTrustedSourcesPutErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type WorkspaceConfigTrustedSourcesPutError =
+  WorkspaceConfigTrustedSourcesPutErrors[keyof WorkspaceConfigTrustedSourcesPutErrors]
+
+export type WorkspaceConfigTrustedSourcesPutResponses = {
+  /**
+   * Updated trusted sources for the workspace
+   */
+  200: TrustedSourcesResult
+}
+
+export type WorkspaceConfigTrustedSourcesPutResponse =
+  WorkspaceConfigTrustedSourcesPutResponses[keyof WorkspaceConfigTrustedSourcesPutResponses]
+
 export type ImWebsocketConnectData = {
   body?: never
   path: {
@@ -12431,7 +13683,7 @@ export type V2SessionPromptData = {
   body: {
     id?: string
     prompt: Prompt
-    delivery?: "steer" | "queue"
+    delivery?: "steer" | "queue" | "goal_steer"
     resume?: boolean
   }
   path: {

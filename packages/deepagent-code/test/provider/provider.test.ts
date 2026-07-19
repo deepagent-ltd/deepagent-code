@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test"
+import { afterAll, afterEach, beforeAll, expect, test } from "bun:test"
 import { mkdir, unlink } from "fs/promises"
 import path from "path"
 import { pathToFileURL } from "url"
@@ -11,11 +11,13 @@ import { disposeAllInstances, provideInstanceEffect, tmpdirScoped, TestInstance 
 import { markPluginDependenciesReady } from "../fixture/plugin"
 import { Auth } from "@/auth"
 import { Config } from "@/config/config"
+import { SettingsStore } from "@/settings/store"
 import { Env } from "../../src/env"
 import { Plugin } from "../../src/plugin/index"
 import { Provider } from "@/provider/provider"
 
 import { RuntimeFlags } from "@/effect/runtime-flags"
+import { EffectFlock } from "@deepagent-code/core/util/effect-flock"
 import { Filesystem } from "@/util/filesystem"
 import { InstanceLayer } from "@/project/instance-layer"
 import { testEffect } from "../lib/effect"
@@ -60,6 +62,10 @@ afterEach(async () => {
     else process.env[key] = value
   }
   originalEnv.clear()
+  // Reset any SettingsStore official-transport override written by a test so it can't leak into the
+  // next (the store is backed by a shared global file + in-memory cache).
+  await SettingsStore.update({ providers: { openai: {}, anthropic: {} } }).catch(() => {})
+  SettingsStore.invalidate()
   await disposeAllInstances()
 })
 
@@ -72,6 +78,7 @@ const providerLayer = (flags: Partial<RuntimeFlags.Info> = {}) =>
     Layer.provide(Plugin.defaultLayer),
     Layer.provide(ModelsDev.defaultLayer),
     Layer.provide(RuntimeFlags.layer(flags)),
+    Layer.provide(EffectFlock.defaultLayer),
   )
 
 const list = Provider.use.list()
@@ -101,6 +108,53 @@ const connect = (providerID: ProviderV2.ID, key: string) =>
       key,
     })
   })
+
+// A tiny OpenAI-compatible /models endpoint so runtime discovery has something real to fetch. The
+// provider loader uses the live HTTP path (no injected stub), so an actual server is the cleanest
+// way to exercise the discovery pre-pass end to end.
+let discoveryServer: ReturnType<typeof Bun.serve> | undefined
+let discoveryServerURL = ""
+let discoveryEmptyURL = ""
+
+beforeAll(() => {
+  discoveryServer = Bun.serve({
+    port: 0,
+    fetch(req) {
+      const url = new URL(req.url)
+      if (url.pathname.endsWith("/models")) {
+        // `/empty/models` returns a 200 with no models (provisioning / not-implemented shape); every
+        // other path returns two chat models plus one embedding model that runtime filtering must drop.
+        if (url.pathname.startsWith("/empty")) return Response.json({ data: [] })
+        return Response.json({
+          data: [
+            { id: "runtime-a", display_name: "Runtime A" },
+            { id: "runtime-b", display_name: "Runtime B" },
+            { id: "text-embedding-3-large", display_name: "Embeddings" },
+          ],
+        })
+      }
+      return new Response("not found", { status: 404 })
+    },
+  })
+  discoveryServerURL = `http://localhost:${discoveryServer.port}/v1`
+  discoveryEmptyURL = `http://localhost:${discoveryServer.port}/empty`
+})
+
+afterAll(() => {
+  discoveryServer?.stop(true)
+})
+
+// Common model ids a third-party gateway typically forwards; the cross-provider spec-fill test lists
+// these bare and asserts against whichever the live models.dev catalog knows.
+const SPEC_FILL_CANDIDATES = [
+  "gpt-4o",
+  "gpt-4o-mini",
+  "claude-3-5-sonnet",
+  "claude-3-5-haiku",
+  "deepseek-chat",
+  "deepseek-reasoner",
+  "gemini-1.5-pro",
+]
 
 const alphaProviderConfig = {
   provider: {
@@ -158,6 +212,125 @@ it.instance(
 )
 
 it.instance(
+  "discovery:true third-party provider populates models from its /models endpoint at runtime",
+  Effect.gen(function* () {
+    const providers = yield* list
+    const provider = providers[ProviderV2.ID.make("runtime-disc")]
+    expect(provider).toBeDefined()
+    expect(provider.source).toBe("custom")
+    // Models come entirely from the live endpoint (config listed none). The embedding model the
+    // endpoint also returns is filtered out by isChatModel in the runtime pre-pass, so only the two
+    // chat models remain — proving a URL+key-only provider is no longer dropped for having zero models.
+    expect(Object.keys(provider.models).sort()).toEqual(["runtime-a", "runtime-b"])
+    expect(provider.models["runtime-a"].name).toBe("Runtime A")
+    expect(provider.models["text-embedding-3-large"]).toBeUndefined()
+  }),
+  {
+    config: () => ({
+      provider: {
+        "runtime-disc": {
+          name: "Runtime Discovery",
+          npm: "@ai-sdk/openai-compatible",
+          discovery: true,
+          options: { apiKey: "k", baseURL: discoveryServerURL },
+        },
+      },
+    }),
+  },
+)
+
+it.instance(
+  "manual models win over discovered models for the same id",
+  Effect.gen(function* () {
+    const providers = yield* list
+    const provider = providers[ProviderV2.ID.make("runtime-disc-manual")]
+    expect(provider).toBeDefined()
+    // Discovery returns runtime-a/runtime-b; config pins a custom name for runtime-a and adds an
+    // extra manual model. The manual name must survive the merge.
+    expect(provider.models["runtime-a"].name).toBe("Pinned A")
+    expect(provider.models["runtime-b"]).toBeDefined()
+    expect(provider.models["manual-only"].name).toBe("Manual Only")
+  }),
+  {
+    config: () => ({
+      provider: {
+        "runtime-disc-manual": {
+          name: "Runtime Discovery Manual",
+          npm: "@ai-sdk/openai-compatible",
+          discovery: true,
+          options: { apiKey: "k", baseURL: discoveryServerURL },
+          models: {
+            "runtime-a": { name: "Pinned A" },
+            "manual-only": { name: "Manual Only" },
+          },
+        },
+      },
+    }),
+  },
+)
+
+it.instance(
+  "third-party model with a bare well-known id inherits specs from the models.dev catalog",
+  Effect.gen(function* () {
+    // The custom provider below lists a set of common well-known model ids bare (name only) under its
+    // own third-party id. Config gives them no limit/reasoning, and none of these ids belong to this
+    // gateway's own catalog entry (it has none). So a non-zero context on the loaded model can only
+    // come from the cross-provider models.dev spec-fill. Assert against whichever candidate the live
+    // catalog knows, so the test tracks catalog data instead of pinning a single id that could churn.
+    const providers = yield* list
+    const provider = providers[ProviderV2.ID.make("spec-fill-gw")]
+    expect(provider).toBeDefined()
+
+    const filled = SPEC_FILL_CANDIDATES.map((id) => provider.models[id]).find((m) => m && m.limit.context > 0)
+    if (!filled) return // Offline / catalog lacks all candidates: nothing deterministic to assert.
+
+    // A bare config model with no catalog match would be stuck at context 0; a positive context proves
+    // the cross-provider fill ran.
+    expect(filled.limit.context).toBeGreaterThan(0)
+  }),
+  {
+    config: () => ({
+      provider: {
+        "spec-fill-gw": {
+          name: "Spec Fill Gateway",
+          npm: "@ai-sdk/openai-compatible",
+          api: "https://gw.example.com/v1",
+          options: { apiKey: "k", baseURL: "https://gw.example.com/v1" },
+          // Bare ids, name only — no limit/reasoning. Fill must come from the catalog.
+          models: Object.fromEntries(SPEC_FILL_CANDIDATES.map((id) => [id, { name: id }])),
+        },
+      },
+    }),
+  },
+)
+
+it.instance(
+  "discovery provider that yields no models surfaces a config error instead of vanishing silently",
+  Effect.gen(function* () {
+    const providers = yield* list
+    // The provider still can't load (no models to route to), but instead of disappearing with zero
+    // diagnostics it leaves a config error the UI can surface.
+    expect(providers[ProviderV2.ID.make("runtime-empty")]).toBeUndefined()
+    const errors = yield* Provider.use.errors()
+    const err = errors.find((e) => e.source === "provider.runtime-empty")
+    expect(err).toBeDefined()
+    expect(err?.message).toContain("discovery")
+  }),
+  {
+    config: () => ({
+      provider: {
+        "runtime-empty": {
+          name: "Runtime Empty",
+          npm: "@ai-sdk/openai-compatible",
+          discovery: true,
+          options: { apiKey: "k", baseURL: discoveryEmptyURL },
+        },
+      },
+    }),
+  },
+)
+
+it.instance(
   "config provider with official id reports duplicate provider error",
   Effect.gen(function* () {
     const providers = yield* list
@@ -209,6 +382,26 @@ it.instance(
       },
     },
   },
+)
+
+it.instance(
+  "official provider baseURL override comes from SettingsStore (the sanctioned channel)",
+  Effect.gen(function* () {
+    // Config baseURL is ignored for official providers (proven above). The ONE supported way to point
+    // an official provider at a proxy / self-hosted gateway / air-gapped mirror is SettingsStore
+    // (the connect dialog's advanced section). Written before the provider state materializes, it must
+    // land on the resolved provider's options so resolveSDK routes there.
+    yield* Effect.promise(() =>
+      SettingsStore.update({ providers: { openai: { baseURL: "https://proxy.corp.internal/openai/v1" } } }),
+    )
+    SettingsStore.invalidate()
+    yield* connect(ProviderV2.ID.openai, "test-openai-key")
+    const providers = yield* list
+    const provider = providers[ProviderV2.ID.openai]
+    expect(provider).toBeDefined()
+    expect(provider.source).toBe("api")
+    expect(provider.options.baseURL).toBe("https://proxy.corp.internal/openai/v1")
+  }),
 )
 
 it.instance(

@@ -1,9 +1,9 @@
 import { beforeAll, describe, expect, mock, test } from "bun:test"
+import { createRoot } from "solid-js"
 import { ServerScope } from "@/utils/server-scope"
 
 let getWorkspaceTerminalCacheKey: typeof import("./terminal").getWorkspaceTerminalCacheKey
 let getLegacyTerminalStorageKeys: (dir: string, legacySessionID?: string) => string[]
-let migrateTerminalState: (value: unknown) => unknown
 let _splitLeaf: typeof import("./terminal")._splitLeaf
 let _collapseLeaf: typeof import("./terminal")._collapseLeaf
 let _neighborLeafId: typeof import("./terminal")._neighborLeafId
@@ -11,6 +11,7 @@ let _removePtyFromTree: typeof import("./terminal")._removePtyFromTree
 let _treeDepth: typeof import("./terminal")._treeDepth
 let _getLeaves: typeof import("./terminal")._getLeaves
 let _clonePaneTree: typeof import("./terminal")._clonePaneTree
+let createTerminalSession: (typeof import("./terminal").TerminalTesting)["createWorkspaceTerminalSession"]
 
 beforeAll(async () => {
   mock.module("@solidjs/router", () => ({
@@ -32,7 +33,6 @@ beforeAll(async () => {
   const mod = await import("./terminal")
   getWorkspaceTerminalCacheKey = mod.getWorkspaceTerminalCacheKey
   getLegacyTerminalStorageKeys = mod.getLegacyTerminalStorageKeys
-  migrateTerminalState = mod.migrateTerminalState
   _splitLeaf = mod._splitLeaf
   _collapseLeaf = mod._collapseLeaf
   _neighborLeafId = mod._neighborLeafId
@@ -40,6 +40,7 @@ beforeAll(async () => {
   _treeDepth = mod._treeDepth
   _getLeaves = mod._getLeaves
   _clonePaneTree = mod._clonePaneTree
+  createTerminalSession = mod.TerminalTesting.createWorkspaceTerminalSession
 })
 
 describe("getWorkspaceTerminalCacheKey", () => {
@@ -64,122 +65,6 @@ describe("getLegacyTerminalStorageKeys", () => {
       "/repo/terminal/session-123.v1",
       "/repo/terminal.v1",
     ])
-  })
-})
-
-type Leaf = { kind: "leaf"; id: string; activeId?: string; ptys: string[] }
-type Split = { kind: "split"; id: string; dir: string; sizes: [number, number]; children: [Node, Node] }
-type Node = Leaf | Split
-type Store = { root: Node; all: Array<Record<string, unknown>>; focusedPaneId: string }
-
-const asStore = (value: unknown) => value as Store
-const leaves = (node: Node): Leaf[] =>
-  node.kind === "leaf" ? [node] : [...leaves(node.children[0]), ...leaves(node.children[1])]
-
-describe("migrateTerminalState", () => {
-  test("drops invalid terminals and upgrades the flat v2 shape to a single leaf", () => {
-    const store = asStore(
-      migrateTerminalState({
-        active: "missing",
-        all: [
-          null,
-          { id: "one", title: "Terminal 2" },
-          { id: "one", title: "duplicate", titleNumber: 9 },
-          { id: "two", title: "logs", titleNumber: 4, rows: 24, cols: 80 },
-          { title: "no-id" },
-        ],
-      }),
-    )
-
-    expect(store.all).toEqual([
-      { id: "one", title: "Terminal 2", titleNumber: 2 },
-      { id: "two", title: "logs", titleNumber: 4, rows: 24, cols: 80 },
-    ])
-    expect(store.root.kind).toBe("leaf")
-    const root = store.root as Leaf
-    expect(root.ptys).toEqual(["one", "two"])
-    // active "missing" is invalid → the leaf owns no such pty, so activeId is dropped.
-    expect(root.activeId).toBeUndefined()
-    expect(store.focusedPaneId).toBe(root.id)
-  })
-
-  test("keeps a valid active id when upgrading the flat shape", () => {
-    const store = asStore(
-      migrateTerminalState({
-        active: "two",
-        all: [
-          { id: "one", title: "Terminal 1" },
-          { id: "two", title: "shell", titleNumber: 7 },
-        ],
-      }),
-    )
-
-    expect(store.all).toEqual([
-      { id: "one", title: "Terminal 1", titleNumber: 1 },
-      { id: "two", title: "shell", titleNumber: 7 },
-    ])
-    const root = store.root as Leaf
-    expect(root.activeId).toBe("two")
-    expect(root.ptys).toEqual(["one", "two"])
-  })
-
-  test("validates and reconciles a v3 pane tree, dropping dead ptys and re-homing orphans", () => {
-    const store = asStore(
-      migrateTerminalState({
-        focusedPaneId: "leaf-b",
-        all: [
-          { id: "a", title: "a", titleNumber: 1 },
-          { id: "b", title: "b", titleNumber: 2 },
-          { id: "orphan", title: "orphan", titleNumber: 3 },
-        ],
-        root: {
-          kind: "split",
-          id: "split-1",
-          dir: "horizontal",
-          sizes: [0.7, 0.3],
-          children: [
-            { kind: "leaf", id: "leaf-a", activeId: "a", ptys: ["a", "dead"] },
-            { kind: "leaf", id: "leaf-b", activeId: "gone", ptys: ["b", "gone"] },
-          ],
-        },
-      }),
-    )
-
-    expect(store.root.kind).toBe("split")
-    const all = leaves(store.root)
-    const a = all.find((l) => l.id === "leaf-a")!
-    const b = all.find((l) => l.id === "leaf-b")!
-    // dead pty removed from leaf-a; orphan re-homed onto the first leaf.
-    expect(a.ptys).toEqual(["a", "orphan"])
-    expect(a.activeId).toBe("a")
-    // "gone" was invalid → dropped; activeId falls back to first surviving pty.
-    expect(b.ptys).toEqual(["b"])
-    expect(b.activeId).toBe("b")
-    expect(store.focusedPaneId).toBe("leaf-b")
-  })
-
-  test("collapses a v3 split whose child leaves both lose all ptys back to a single leaf", () => {
-    const store = asStore(
-      migrateTerminalState({
-        all: [{ id: "keep", title: "keep", titleNumber: 1 }],
-        root: {
-          kind: "split",
-          id: "split-1",
-          dir: "vertical",
-          sizes: [0.5, 0.5],
-          children: [
-            { kind: "leaf", id: "leaf-a", activeId: "dead-1", ptys: ["dead-1"] },
-            { kind: "leaf", id: "leaf-b", activeId: "dead-2", ptys: ["dead-2"] },
-          ],
-        },
-      }),
-    )
-
-    // Both children emptied → split collapses; the surviving leaf adopts the orphan "keep".
-    expect(store.root.kind).toBe("leaf")
-    const root = store.root as Leaf
-    expect(root.ptys).toEqual(["keep"])
-    expect(store.focusedPaneId).toBe(root.id)
   })
 })
 
@@ -308,5 +193,163 @@ describe("clonePaneTree (circular-structure regression)", () => {
     // Detached from the store: the clone shares no identity with the proxy.
     expect(cloned).not.toBe(split)
     expect((cloned as PS).children[0]).not.toBe(unwrap(proxyLeaf))
+  })
+})
+
+function terminalHarness(
+  create: () => Promise<{ data?: { id: string; title: string } }>,
+  runtime: { id: () => string | undefined; ensure: () => Promise<void> } = {
+    id: () => "runtime-1",
+    ensure: async () => undefined,
+  },
+) {
+  const sdk = {
+    directory: "/repo",
+    url: "http://localhost:4096",
+    client: {
+      pty: {
+        create,
+        remove: async () => ({ response: new Response(null, { status: 200 }) }),
+        update: async () => ({ response: new Response(null, { status: 200 }) }),
+      },
+    },
+    event: { on: () => () => undefined },
+  } as unknown as Parameters<typeof createTerminalSession>[0]
+  return createRoot((dispose) => ({
+    session: createTerminalSession(sdk, runtime),
+    dispose,
+  }))
+}
+
+describe("runtime terminal controller", () => {
+  test("keeps frontend tab identity separate from the server PTY handle", async () => {
+    const harness = terminalHarness(async () => ({ data: { id: "pty-server-1", title: "Terminal 1" } }))
+    try {
+      expect(await harness.session.new()).toBeTrue()
+      const tab = harness.session.all()[0]!
+      expect(tab.id).not.toBe(tab.ptyId)
+      expect(tab.ptyId).toBe("pty-server-1")
+      expect((harness.session.root() as PL).ptys).toEqual([tab.id])
+    } finally {
+      harness.dispose()
+    }
+  })
+
+  test("starts PTY creation without waiting for the advisory runtime check", async () => {
+    let ensureCalls = 0
+    let createCalls = 0
+    const harness = terminalHarness(
+      async () => {
+        createCalls += 1
+        return { data: { id: "pty-server-1", title: "Terminal 1" } }
+      },
+      {
+        id: () => undefined,
+        ensure: () => {
+          ensureCalls += 1
+          return new Promise<void>(() => undefined)
+        },
+      },
+    )
+    try {
+      expect(await harness.session.new()).toBeTrue()
+      expect(ensureCalls).toBe(1)
+      expect(createCalls).toBe(1)
+    } finally {
+      harness.dispose()
+    }
+  })
+
+  test("does not commit a split when server creation fails", async () => {
+    let fail = false
+    let sequence = 0
+    const harness = terminalHarness(async () => {
+      if (fail) throw new Error("spawn failed")
+      sequence += 1
+      return { data: { id: `pty-${sequence}`, title: `Terminal ${sequence}` } }
+    })
+    try {
+      await harness.session.new()
+      const paneId = harness.session.focusedPaneId()
+      harness.session.setPaneBounds(paneId, { width: 600, height: 300 })
+      const before = JSON.stringify(harness.session.root())
+      fail = true
+
+      expect(await harness.session.split("horizontal")).toBeFalse()
+      expect(JSON.stringify(harness.session.root())).toBe(before)
+      expect(harness.session.all()).toHaveLength(1)
+      expect(harness.session.createError()?.message).toBe("spawn failed")
+    } finally {
+      harness.dispose()
+    }
+  })
+
+  test("keeps every pane populated across consecutive nested splits", async () => {
+    let sequence = 0
+    const harness = terminalHarness(async () => {
+      sequence += 1
+      return { data: { id: `pty-${sequence}`, title: `Terminal ${sequence}` } }
+    })
+    try {
+      expect(harness.session.canSplit(harness.session.focusedPaneId())).toBeFalse()
+      await harness.session.new()
+      harness.session.setPaneBounds(harness.session.focusedPaneId(), { width: 1_600, height: 400 })
+      expect(await harness.session.split("horizontal")).toBeTrue()
+
+      harness.session.setPaneBounds(harness.session.focusedPaneId(), { width: 800, height: 400 })
+      expect(await harness.session.split("horizontal")).toBeTrue()
+
+      harness.session.setPaneBounds(harness.session.focusedPaneId(), { width: 530, height: 400 })
+      expect(await harness.session.split("horizontal")).toBeTrue()
+
+      const leaves = _getLeaves(harness.session.root())
+      expect(leaves).toHaveLength(4)
+      expect(leaves.every((leaf) => leaf.ptys.length === 1 && leaf.activeId === leaf.ptys[0])).toBeTrue()
+      expect(new Set(leaves.flatMap((leaf) => leaf.ptys))).toEqual(new Set(harness.session.all().map((pty) => pty.id)))
+    } finally {
+      harness.dispose()
+    }
+  })
+
+  test("drops a stale create completion after the server runtime changes", async () => {
+    let markStarted: (() => void) | undefined
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve
+    })
+    let resolveCreate: ((value: { data: { id: string; title: string } }) => void) | undefined
+    const harness = terminalHarness(
+      () =>
+        new Promise((resolve) => {
+          markStarted?.()
+          resolveCreate = resolve
+        }),
+    )
+    try {
+      const create = harness.session.new()
+      await started
+      harness.session.resetRuntime()
+      resolveCreate?.({ data: { id: "pty-stale", title: "Terminal 1" } })
+
+      expect(await create).toBeFalse()
+      expect(harness.session.all()).toEqual([])
+      expect(harness.session.root().kind).toBe("leaf")
+      expect(harness.session.closeRequest()).toBe(0)
+    } finally {
+      harness.dispose()
+    }
+  })
+
+  test("requests panel close only when the user closes the final tab", async () => {
+    const harness = terminalHarness(async () => ({ data: { id: "pty-server-1", title: "Terminal 1" } }))
+    try {
+      await harness.session.new()
+      const id = harness.session.all()[0]!.id
+      expect(harness.session.closeRequest()).toBe(0)
+
+      await harness.session.close(id)
+      expect(harness.session.closeRequest()).toBe(1)
+    } finally {
+      harness.dispose()
+    }
   })
 })

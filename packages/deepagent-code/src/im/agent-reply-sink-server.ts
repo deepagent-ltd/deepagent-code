@@ -40,13 +40,22 @@ class ServerAgentReplySink implements AgentReplySink {
       success: boolean
       timeout: boolean
       content?: string
+      // V4.1 §S1.2: absorbed as a mid-turn steer — accepted, no reply of our own (the running turn
+      // replies through its own path). Report "steered" so the gateway does not post an empty message.
+      steered?: boolean
       error?: { code: string; message: string; retryable: boolean }
     }
   }): Effect.Effect<void, never, never> {
     const callbackUrl = this.callbackUrl
     const internalToken = this.internalToken
     return Effect.gen(function* () {
-      const status = input.result.success ? "success" : input.result.timeout ? "timeout" : "failed"
+      const status = input.result.steered
+        ? "steered"
+        : input.result.success
+          ? "success"
+          : input.result.timeout
+            ? "timeout"
+            : "failed"
       const body = {
         // Kernel-native correlation keys; the gateway maps these back to its own
         // conversationId / triggerMessageId recorded at delivery time.
@@ -54,7 +63,7 @@ class ServerAgentReplySink implements AgentReplySink {
         triggerMessageId: input.messageID,
         agentName: input.agentID,
         status,
-        content: input.result.success ? input.result.content : undefined,
+        content: input.result.success && !input.result.steered ? input.result.content : undefined,
         error: input.result.error,
       }
 

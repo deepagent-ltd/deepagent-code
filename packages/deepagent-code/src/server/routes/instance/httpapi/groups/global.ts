@@ -12,6 +12,7 @@ import { described } from "./metadata"
 const GlobalHealth = Schema.Struct({
   healthy: Schema.Literal(true),
   version: Schema.String,
+  runtimeId: Schema.String,
 })
 
 // Capabilities / version handshake for the Server Edition. A desktop client
@@ -31,6 +32,15 @@ const GlobalCapabilities = Schema.Struct({
     // V3.9 §C/§D — independently-gated experimental subsystems the client gates UI on.
     expertPanel: Schema.Boolean,
     goalLoop: Schema.Boolean,
+    wiki: Schema.Boolean,
+    // V4.0 §H3 — the event-driven Agent-OS feature flags (all default OFF). Advertised so the client
+    // can gate V4 UI (Oversight Dashboard / Approval Queue / proactive-push surface / thread + file
+    // upload) exactly where the routes fail-close. Optional so older clients tolerate their absence.
+    v4EventDrivenIm: Schema.optional(Schema.Boolean),
+    v4AgentPushEnabled: Schema.optional(Schema.Boolean),
+    v4MultiAgentRuntime: Schema.optional(Schema.Boolean),
+    v4ThreadEnabled: Schema.optional(Schema.Boolean),
+    v4FileUploadEnabled: Schema.optional(Schema.Boolean),
   }),
 })
 

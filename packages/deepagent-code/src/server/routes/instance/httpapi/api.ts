@@ -7,6 +7,8 @@ import { ConfigApi } from "./groups/config"
 import { ControlApi } from "./groups/control"
 import { ControlPlaneApi } from "./groups/control-plane"
 import { DeepAgentApi } from "./groups/deepagent"
+import { OversightApi } from "./groups/oversight"
+import { WebhookApi } from "./groups/webhook"
 import { EventApi } from "./groups/event"
 import { ExperimentalApi } from "./groups/experimental"
 import { DebugApi } from "./groups/debug"
@@ -25,6 +27,7 @@ import { SessionApi } from "./groups/session"
 import { SyncApi } from "./groups/sync"
 import { TuiApi } from "./groups/tui"
 import { WorkspaceApi } from "./groups/workspace"
+import { WorkspaceConfigApi } from "./groups/workspace-config"
 import { IMApi } from "./groups/im"
 import { IMWebSocketApi } from "./groups/im-websocket"
 import { Api } from "@deepagent-code/server/api"
@@ -59,6 +62,8 @@ export const InstanceHttpApi = HttpApi.make("deepagent-code-instance")
   .addHttpApi(DebugApi)
   .addHttpApi(ProfileApi)
   .addHttpApi(DeepAgentApi)
+  .addHttpApi(OversightApi)
+  .addHttpApi(WebhookApi)
   .addHttpApi(ExperimentalApi)
   .addHttpApi(FileApi)
   .addHttpApi(IMApi)
@@ -75,6 +80,7 @@ export const InstanceHttpApi = HttpApi.make("deepagent-code-instance")
   .addHttpApi(SyncApi)
   .addHttpApi(TuiApi)
   .addHttpApi(WorkspaceApi)
+  .addHttpApi(WorkspaceConfigApi)
   .middleware(SchemaErrorMiddleware)
 
 export const DeepAgentCodeHttpApi = HttpApi.make("deepagent-code")

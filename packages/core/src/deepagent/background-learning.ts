@@ -8,6 +8,7 @@ import type { ProjectPaths } from "./workspace"
 import { DurableKnowledgeStore, openProjectStore, type KnowledgeDocInput } from "./durable-knowledge-store"
 import type { DocType, EvidenceStrength } from "./document-store"
 import { evidenceFromConfidence } from "./knowledge-retriever"
+import { fingerprint as candidateFingerprint, type RejectedBuffer } from "./promotion"
 import * as Governance from "./memory-governance"
 
 export const MEMORY_INBOX_SCHEMA_VERSION = "deepagent-code.memory_inbox_item.v1"
@@ -26,6 +27,18 @@ export type LearningWorkerInput = {
   readonly finalStatus: "completed" | "failed"
   readonly trigger: LearningTrigger
   readonly policy?: LearningPolicy
+  // H32-2: Optional reviewer injected by the caller (e.g. runBackgroundLearning in agent-gateway.ts).
+  // The reviewer receives only the extracted candidates — no session history, no run context, no tool
+  // state — ensuring it evaluates each candidate in isolation (no hidden evaluator context leaking in).
+  // It returns a filtered/annotated subset; the governance loop then runs on the reviewer's output.
+  //
+  // The LearningWorker itself is already structurally isolated (receives only a plain data struct),
+  // so no "isolation flag" is needed — isolation is enforced by the injection contract: the caller
+  // MUST NOT close over live session state inside the reviewer closure.
+  //
+  // TODO H32-2: wire a real model-based reviewer in runBackgroundLearning (agent-gateway.ts) using
+  // a fresh session (no history) and a small model. See scout notes for injection-point details.
+  readonly reviewer?: (candidates: readonly LearningCandidate[]) => Promise<readonly LearningCandidate[]>
 }
 
 export type MemoryInboxItem = {
@@ -75,13 +88,18 @@ export class LearningWorker {
     private readonly paths: ProjectPaths,
     private readonly projectID = readProjectID(paths),
     store?: DurableKnowledgeStore,
+    // The durable RejectedBuffer (the human-`reject` fingerprint cache). Gate 3 (R3 anti-pollution)
+    // consults it so a pattern a human explicitly rejected is NOT silently re-learned + auto-admitted on
+    // a later run. Injected by the caller that owns the memory-dir path (the reject handler writes the
+    // SAME buffer). Omitted ⇒ gate 3 is inert (back-compat for tests / callers without a buffer).
+    private readonly rejectedBuffer?: RejectedBuffer,
   ) {
     // ProjectPaths.root is <baseDir>/project/<pid>; the durable knowledge store roots at
     // <baseDir>/project/<pid>/knowledge — i.e. a "knowledge" subdir of the project root.
     this.store = store ?? new DurableKnowledgeStore(path.join(paths.root, "knowledge"))
   }
 
-  run(input: LearningWorkerInput): LearningWorkerResult {
+  async run(input: LearningWorkerInput): Promise<LearningWorkerResult> {
     const started = Date.now()
     const extraction = Learning.extract({
       runId: input.runID,
@@ -90,12 +108,24 @@ export class LearningWorker {
       totalRounds: input.totalRounds,
       finalStatus: input.finalStatus,
     })
+    // H32-2: if a reviewer is injected, pass ONLY the extracted candidates — no session state, no
+    // history, no run context. The reviewer may filter or annotate; we proceed on its output.
+    // If the reviewer throws, fall back to the full extraction to keep the learning pass non-fatal.
+    let candidates: readonly LearningCandidate[] = extraction.candidates
+    if (input.reviewer && candidates.length > 0) {
+      try {
+        candidates = await input.reviewer(candidates)
+      } catch {
+        // Non-fatal: reviewer failure must not block the learning pass.
+        candidates = extraction.candidates
+      }
+    }
     const policy = input.policy ?? "auto_merge_safe_project"
     const autoMerged: string[] = []
     const inbox: string[] = []
     const skipped: string[] = []
 
-    for (const candidate of extraction.candidates) {
+    for (const candidate of candidates) {
       // U6 governance pipeline (S1 §P1): default fully automatic; route to a human ONLY for the four
       // cases a machine can't safely decide (sensitive / high-trust contradiction / pack promotion /
       // global promotion). Gates 3/4 (exact dedup + near-dup merge) live in the store's
@@ -105,9 +135,13 @@ export class LearningWorker {
       const contradictsHighTrust = this.detectHighTrustContradiction(candidate, classification)
       const govRoute = Governance.route({
         classification,
-        // RejectedBuffer is consulted upstream (promote path); learning candidates carry status
-        // "rejected" when extraction already rejected them.
-        inRejectedBuffer: candidate.status === "rejected",
+        // Gate 3 (R3): consult the durable RejectedBuffer by fingerprint so a pattern a human explicitly
+        // rejected is dropped, not silently re-learned + auto-admitted. Extraction always emits fresh
+        // candidates as status "staged" (never "rejected"), so the old `status === "rejected"` check was
+        // ALWAYS false — the gate was vacuous and the buffer was never consulted on this path. When no
+        // buffer is injected the gate stays inert (back-compat), matching the prior effective behavior.
+        inRejectedBuffer:
+          (this.rejectedBuffer?.has(candidateFingerprint(candidate)) ?? false) || candidate.status === "rejected",
         contradictsHighTrust,
         // Learning candidates never self-promote into a pack or to global scope; those are explicit
         // human actions (gate 6/7) handled in the review/promote path, so false here.
@@ -363,13 +397,16 @@ export class LearningQueue {
     }
   }
 
-  private drain(): void {
+  private async drain(): Promise<void> {
     try {
       while (this.jobs.length > 0) {
         const job = this.jobs.shift()!
         try {
           const { worker, input } = job.build()
-          this.completed.push(worker.run(input))
+          // run() is async to support an injected reviewer (H32-2). Awaiting here keeps the queue
+          // sequential — one job at a time — which matches the original sync behaviour and prevents
+          // concurrent writes to the durable store.
+          this.completed.push(await worker.run(input))
         } catch {
           // A failed learning pass is non-fatal and must not stop the queue or the turn.
         }
@@ -386,8 +423,9 @@ export class LearningQueue {
   get results(): readonly LearningWorkerResult[] {
     return this.completed
   }
-  // Drain synchronously (tests): run all queued jobs now instead of on the scheduler.
-  drainNow(): void {
-    this.drain()
+  // Drain all queued jobs and await completion. Tests use this to drain deterministically;
+  // the return type changed from void to Promise<void> with the H32-2 async reviewer seam.
+  async drainNow(): Promise<void> {
+    await this.drain()
   }
 }

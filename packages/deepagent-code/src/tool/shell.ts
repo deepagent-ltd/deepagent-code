@@ -595,6 +595,15 @@ export const ShellTool = Tool.define(
       if (meta.length > 0) {
         output += "\n\n<shell_metadata>\n" + meta.join("\n") + "\n</shell_metadata>"
       }
+      // GROUND-TRUTH EXIT TRAILER. Previously the exit code lived ONLY in metadata.exit, which is not
+      // serialized into the transcript the model + downstream classifiers read — so a successful (exit 0)
+      // command had NO success marker in its text, and extractValidationResults had to GUESS pass/fail
+      // from arbitrary output (defaulting to FAIL when no "PASS" token was present). That misread a huge
+      // fraction of green runs as failures. Emit the canonical `exit code: N` as the LAST line so: (1) the
+      // model can see it, (2) the classifier's existing /exit\s*code[:=]\s*(\d+)/ regex matches it
+      // authoritatively, and (3) tail() truncation (which keeps the END) never drops it. `null` (abort/
+      // timeout) is rendered as such so it is never mistaken for exit 0.
+      output += `\n\nexit code: ${code === null ? "null (terminated)" : code}`
       return {
         title: input.description,
         metadata: {

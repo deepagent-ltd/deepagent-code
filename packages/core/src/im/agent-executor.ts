@@ -53,14 +53,18 @@ export const AgentExecutionResult = Schema.Struct({
     }),
   ),
   timeout: Schema.Boolean,
+  // V4.1 §S1.2: true when the message was absorbed as a mid-turn STEER into an already-running turn
+  // rather than executed as a fresh turn — the reply streams through that running turn's own path, so
+  // this result carries no synthesized `content`. Optional/additive: absent ⇒ a normal turn (unchanged).
+  steered: Schema.optional(Schema.Boolean),
 })
 
 export type AgentExecutionResult = Schema.Schema.Type<typeof AgentExecutionResult>
 
 /**
  * Agent context builder interface.
- * Builds context by querying code/knowledge/memory/documents separately.
- * Does NOT use queryUnifiedGraph.
+ * Builds context across code/knowledge/memory/documents. The live implementation routes through
+ * UnifiedContextGraph (four-graph unification, V3.8.1 §B) with defect-safe degradation to empty.
  */
 export interface AgentContextBuilder {
   build(input: {
