@@ -10,6 +10,7 @@ import {
   createMemo,
   createEffect,
   createComputed,
+  createSignal,
   on,
   onMount,
   untrack,
@@ -229,6 +230,8 @@ export default function Page() {
       jump: false,
     },
   })
+
+  const [fileNavigator, setFileNavigator] = createSignal<(filePath: string, line: number) => void>()
 
   const composer = createSessionComposerState()
 
@@ -850,7 +853,13 @@ export default function Page() {
     }
 
     // Prefer the open terminal over the composer when it can take focus
-    if (view().terminal.opened()) {
+    const terminalVisible = (() => {
+      const panel = view().panel
+      return panel.location("terminal") === "bottom"
+        ? panel.bottom.opened() && panel.bottom.activeView() === "terminal"
+        : view().rightPanel.mode() === "terminal"
+    })()
+    if (terminalVisible) {
       const id = terminal.active()
       if (id && shouldFocusTerminalOnKeyDown(event) && focusTerminalById(id)) return
     }
@@ -1893,6 +1902,7 @@ export default function Page() {
         </div>
 
         <SessionSidePanel
+          onFileNavigate={(navigate) => setFileNavigator(() => navigate)}
           canReview={canReview}
           diffs={reviewDiffs}
           diffsReady={reviewReady}
@@ -1907,7 +1917,7 @@ export default function Page() {
         />
       </div>
 
-      <TerminalPanel />
+      <TerminalPanel onOpenFile={(path, line) => fileNavigator()?.(path, line)} />
     </div>
   )
 }
