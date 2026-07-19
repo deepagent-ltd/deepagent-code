@@ -1,6 +1,6 @@
 # DeepAgent Code — Architecture & Design
 
-> **Public design overview.** Internal implementation details and roadmap docs live in the private `docs/` tree (not version-controlled). This directory contains the publicly visible architectural narrative.
+> **Public design overview for DeepAgent Core V4.0.4 / Desktop 1.4.2.** Internal implementation details and roadmap documents live in the private `docs/` tree and are intentionally not version-controlled.
 
 ---
 
@@ -8,13 +8,13 @@
 
 DeepAgent Code is an AI coding agent that adds a **control plane** on top of the [opencode](https://github.com/sst/opencode) runtime. It keeps the proven opencode foundations (runtime, tool, MCP, session, provider stack) and layers in:
 
-- **Durable document memory** — knowledge base with retrieval gates, dedup, and merge
-- **Context assembly** — selective, evidence-backed context building (not raw file dumps)
-- **Plan system** — structured task planning with staleness detection and rollback
-- **Failure triage** — three-tier classifier (auto-fixable / needs-narrowing / not-auto-fixable)
-- **Domain adapters** — pluggable domain packs for specialized workflows
+- **Durable document and project memory** — atomic, recoverable storage with retrieval gates, provenance, governance, and conflict detection
+- **Connected context** — selective, evidence-backed assembly across code, knowledge, project memory, and execution documents
+- **Plans and long-running goals** — structured plans, stale-state detection, validation evidence, bounded retries, and human control
+- **Event-driven coordination** — durable delivery, priority routing, offline catch-up, idempotent goal ticks, and observable queue state
+- **Isolated agent collaboration** — bounded subagents, worktree isolation for write-capable workers, and conflict-aware change return
 - **AI IDE microservice** — LSP-backed semantic code navigation via `code_intel`
-- **MCP catalog** — curated, one-click-enable MCP servers with safety tiers
+- **Secure MCP catalog** — curated integrations, derived safety tiers, environment references, and native OS secret storage
 
 ---
 
@@ -22,11 +22,11 @@ DeepAgent Code is an AI coding agent that adds a **control plane** on top of the
 
 ### 1. Enhance, don't replace
 
-DeepAgent is built **on top of** the opencode agent/runtime/session/tool/MCP stack. It does not rewrite the execution engine, tool system, or provider layer. The default agent behavior is not degraded. The lower-strength `general` mode stays close to the inherited runtime contract.
+DeepAgent is built **on top of** the opencode agent/runtime/session/tool/MCP stack. V4.0.4 strengthens the control plane without replacing the current turn engine, tool system, or provider layer.
 
-### 2. Control-plane only
+### 2. One durable authority per concern
 
-DeepAgent is responsible for **strategy / context / budget / audit / verification / document graph**. It does not directly spawn LSP processes or execute MCP tools — those go through the existing `LSP.Service` and `MCP.Service` respectively.
+Documents, plans, event delivery state, knowledge promotion, and goal progress each have one authoritative durable store. In-memory state may accelerate delivery, but it cannot become a second source of truth.
 
 ### 3. Full tool output does not enter context
 
@@ -36,6 +36,10 @@ Per the deterministic task control contract: raw LSP results, diagnostic dumps, 
 
 MCP catalog entries default to **not connected** (zero startup overhead). Dangerous write operations (force-push, DROP, file delete) require explicit approval. Read-only DB connections enforce restricted-mode at the server level.
 
+### 5. Keep execution boundaries explicit
+
+Write-capable subagents run in isolated worktrees by default. Event consumers claim durable work with idempotency and retry boundaries. Users retain explicit paths to approve, steer, pause, resume, take over, or roll back long-running work.
+
 ---
 
 ## Component Map
@@ -44,24 +48,23 @@ MCP catalog entries default to **not connected** (zero startup overhead). Danger
 ┌─────────────────────────────────────────────────────────────┐
 │  DeepAgent Control Plane                                    │
 │                                                             │
-│  ┌──────────────┐  ┌─────────────┐  ┌───────────────────┐  │
-│  │  Plan System │  │  Doc Memory │  │  Failure Triage   │  │
-│  │  (task/plan) │  │  (knowledge │  │  (3-tier classify)│  │
-│  └──────┬───────┘  │   store)    │  └─────────┬─────────┘  │
-│         │          └──────┬──────┘            │             │
-│  ┌──────▼──────────────────▼──────────────────▼───────────┐  │
-│  │            Agent Gateway (core)                        │  │
-│  │  audit · budget · permission · capability index        │  │
-│  └──────┬─────────────────────────────────────────────────┘  │
-└─────────│───────────────────────────────────────────────────┘
-          │
-┌─────────▼──────────────────────────────────────────────────┐
-│  opencode Foundation (unchanged)                           │
-│                                                            │
-│  Session ─── Tool Registry ─── MCP Service                │
-│     │              │                  │                    │
-│  Provider       LSP Service      38 lang servers           │
-│  (Claude/…)   code_intel tool    + MCP catalog             │
+│  DocumentStore ─ Plan/Goal ─ Knowledge Governance          │
+│       │              │                │                     │
+│  Context Graph ─ Event Bus ─ Oversight and Audit           │
+│       │              │                │                     │
+│  ┌────▼──────────────▼────────────────▼──────────────────┐  │
+│  │ Agent Gateway: budget · permission · evidence · policy│  │
+│  └────┬───────────────────────────────────────────────────┘  │
+└───────│─────────────────────────────────────────────────────┘
+        │
+┌───────▼────────────────────────────────────────────────────┐
+│  opencode Foundation                                       │
+│  Session · Provider · Tool Registry · LSP · MCP            │
+└────────────────────────────────────────────────────────────┘
+        │
+┌───────▼────────────────────────────────────────────────────┐
+│  Execution Boundaries                                      │
+│  isolated subagents · worktrees · event consumers · tools  │
 └────────────────────────────────────────────────────────────┘
 ```
 
@@ -93,9 +96,7 @@ Each catalog entry carries a **risk tier** derived at load time from the catalog
 | `write_guarded` | filesystem, github, git | Write ops require explicit approval |
 | `external_fetch` | fetch, browser (Playwright) | External requests require explicit approval |
 
-**Credentials** are declared by key name in the catalog template (`CredentialSpec`). Values are filled at enable-time.
-
-> **Known limitation (V3.4):** credential values are stored in plaintext in the local config file. Do not commit config files containing credentials to version control. A secure-storage mechanism (OS keyring, aligned with the codex approach) is planned for V3.5.
+**Credentials** are declared by key name in the catalog template (`CredentialSpec`). Configuration stores environment references or `secret://` handles instead of plaintext values. Handles resolve at connection time through macOS Keychain, Linux Secret Service (`libsecret`), or Windows DPAPI-backed credential storage.
 
 ---
 
@@ -103,18 +104,20 @@ Each catalog entry carries a **risk tier** derived at load time from the catalog
 
 | Mechanism | Status |
 |-----------|--------|
-| MCP risk tier — catalog-derived, not config-injectable | ✅ V3.4 |
-| MCP catalog defaults to not connected | ✅ V3.4 |
-| Dangerous writes: approval gate (`ctx.ask`) | ✅ V3.4 |
-| Read-only DB: restricted-mode enforced at server | ✅ V3.4 |
-| Credential secure storage (OS keyring) | ⏳ V3.5 M-CRED |
+| MCP risk tier — catalog-derived, not config-injectable | Available |
+| MCP catalog defaults to not connected | Available |
+| Dangerous writes: approval gate (`ctx.ask`) | Available |
+| Read-only DB: restricted mode enforced at server | Available |
+| Credential indirection (`${VAR}` / `secret://`) | Available |
+| Native secret storage (macOS / Linux / Windows) | Available in V4.0.4 |
+| Subagent write isolation and conflict-aware return | Available in V4.0.4 |
 
 ---
 
 ## License
 
 DeepAgent Code is licensed under **AGPL-3.0-or-later**.
-Source code: [github.com/lessweb/deepagent-code](https://github.com/lessweb/deepagent-code)
+Source code: [github.com/deepagent-ltd/deepagent-code](https://github.com/deepagent-ltd/deepagent-code)
 
 DeepAgent Code is derived from [opencode](https://github.com/sst/opencode) (MIT).
 See `NOTICE` in the repository root for the full upstream attribution.
