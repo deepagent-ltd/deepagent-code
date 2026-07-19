@@ -252,8 +252,8 @@ export const layerWith = (options: LayerOptions) =>
                     }),
                   ),
                 ),
-                Effect.fork,
-              )
+                Effect.forkScoped,
+              ) as Effect.Effect<unknown>
               return
             }
           }
