@@ -12,6 +12,7 @@ import { described } from "./metadata"
 const GlobalHealth = Schema.Struct({
   healthy: Schema.Literal(true),
   version: Schema.String,
+  runtimeId: Schema.String,
 })
 
 // Capabilities / version handshake for the Server Edition. A desktop client

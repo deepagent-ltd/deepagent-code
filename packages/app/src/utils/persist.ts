@@ -1,6 +1,6 @@
 import { Platform, usePlatform } from "@/context/platform"
 import { makePersisted, type AsyncStorage, type SyncStorage } from "@solid-primitives/storage"
-import { checksum } from "@deepagent-code/core/util/encode"
+import { base64Encode, checksum } from "@deepagent-code/core/util/encode"
 import { createResource, type Accessor } from "solid-js"
 import type { SetStoreFunction, Store } from "solid-js/store"
 import { pathKey } from "@/utils/path-key"
@@ -351,6 +351,12 @@ function legacyAppWorkspaceStorage(dir: string) {
   return `${LEGACY_APP_STORAGE}.workspace.${head}.${sum}.dat`
 }
 
+function legacyEncodedWorkspaceStorage(dir: string) {
+  const head = base64Encode(dir).slice(0, 12) || "workspace"
+  const sum = checksum(dir) ?? "0"
+  return `${APP_STORAGE}.workspace.${head}.${sum}.dat`
+}
+
 function legacyWorkspaceStorage(dir: string) {
   const storage = workspaceStorage(pathKey(dir))
   const result = new Set<string>()
@@ -358,6 +364,8 @@ function legacyWorkspaceStorage(dir: string) {
   if (raw !== storage) result.add(raw)
   result.add(legacyAppWorkspaceStorage(pathKey(dir)))
   result.add(legacyAppWorkspaceStorage(dir))
+  result.add(legacyEncodedWorkspaceStorage(pathKey(dir)))
+  result.add(legacyEncodedWorkspaceStorage(dir))
 
   const key = pathKey(dir)
   const drive = key.length >= 3 && key[1] === ":" && key[2] === "/"
@@ -365,6 +373,7 @@ function legacyWorkspaceStorage(dir: string) {
     const backslash = workspaceStorage(key.replaceAll("/", "\\"))
     if (backslash !== storage) result.add(backslash)
     result.add(legacyAppWorkspaceStorage(key.replaceAll("/", "\\")))
+    result.add(legacyEncodedWorkspaceStorage(key.replaceAll("/", "\\")))
   }
 
   result.delete(storage)
@@ -472,6 +481,7 @@ export const PersistTesting = {
   normalize,
   workspaceStorage,
   legacyAppWorkspaceStorage,
+  legacyEncodedWorkspaceStorage,
 }
 
 export const Persist = {
