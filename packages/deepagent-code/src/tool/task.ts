@@ -8,14 +8,15 @@ import { SessionID, MessageID } from "../session/schema"
 import { Identifier } from "@/id/id"
 import { MessageV2 } from "../session/message-v2"
 import { Agent } from "../agent/agent"
-import { deriveSubagentSessionPermission, filterPrimaryToolsForSubagent } from "../agent/subagent-permissions"
+import { deriveSubagentSessionPermission, filterPrimaryToolsForSubagent, subagentIsWriteType } from "../agent/subagent-permissions"
 import type { SessionPrompt } from "../session/prompt"
 import { Config } from "@/config/config"
-import { Effect, Exit, Option, Schema, Scope } from "effect"
+import { Cause, Effect, Exit, Option, Schema, Scope } from "effect"
 import { EffectBridge } from "@/effect/bridge"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Database } from "@deepagent-code/core/database/database"
 import { Worktree } from "@/worktree"
+import { Git } from "@/git"
 import { Orchestration } from "../agent/schema/orchestration"
 import { Orchestration as CoreOrchestration } from "@deepagent-code/core/deepagent/orchestration"
 import { AgentGateway } from "@deepagent-code/core/agent-gateway"
@@ -170,10 +171,12 @@ type AttemptMetadata = Record<string, unknown> & {
 
 interface AttemptBundle {
   readonly worktreeInfo: Worktree.Info | undefined
+  readonly worktree: Worktree.Interface | undefined
   readonly nextSession: Session.Info
   readonly metadata: AttemptMetadata
   readonly markFinished: (state: "completed" | "error" | "cancelled") => Effect.Effect<void, unknown>
   readonly inject: (state: "completed" | "error", text: string, takeovers: number) => Effect.Effect<unknown, unknown>
+  readonly mergeWorktree: () => Effect.Effect<void, unknown>
   readonly teardownWorktree: (force: boolean) => Effect.Effect<unknown, unknown>
 }
 
@@ -271,7 +274,7 @@ export const TaskTool = Tool.define(
         // child session; the resumed session (task_id) is only reused by the FIRST attempt.
         const spawnAttempt = Effect.fn("TaskTool.spawnAttempt")(function* (first: boolean) {
           const resumed = first ? session : undefined
-          const isolate = params.isolation === "worktree" && !resumed
+          const isolate = !resumed && (params.isolation === "worktree" || subagentIsWriteType(next))
           const worktreeOpt = isolate
             ? yield* Effect.serviceOption(Worktree.Service)
             : Option.none<Worktree.Interface>()
@@ -301,11 +304,11 @@ export const TaskTool = Tool.define(
                 })),
               ],
             }))
-          return { worktreeInfo, nextSession }
+          return { worktree: Option.getOrUndefined(worktreeOpt), worktreeInfo, nextSession }
         })
 
         const startAttempt = Effect.fn("TaskTool.startAttempt")(function* (
-          a: { worktreeInfo: Worktree.Info | undefined; nextSession: Session.Info },
+          a: { worktree: Worktree.Interface | undefined; worktreeInfo: Worktree.Info | undefined; nextSession: Session.Info },
           takeovers: number,
           allowExtend: boolean,
         ) {
@@ -453,12 +456,66 @@ export const TaskTool = Tool.define(
             ).pipe(Effect.ignore)
           })
 
+          // 2c (Block 2): automatic write-isolation merge-back. When the worktree was created
+          // automatically (not via explicit isolation:"worktree"), integrate the worker's committed
+          // changes back into the PARENT checkout via Git.mergeInto rather than Worktree.mergeBack.
+          // Worktree.mergeBack targets the repo default branch with --no-commit, which is wrong here:
+          // the parent may be on any branch and the merge must be a committed --no-ff. We also check
+          // the parent HEAD hasn't advanced since spawn (baseline guard) so we don't silently merge
+          // onto a moved target. On any failure we abort the merge state and preserve the worker
+          // worktree for recovery; teardownWorktree(false) is then called by the caller to keep it.
+          //
+          // We resolve Git.Service here (at bundle-build time inside startAttempt) so that
+          // mergeWorktree itself can be typed as () => Effect<void, unknown> (no service requirements):
+          // the service is captured in the closure, not re-required at call time.
+          const automaticWriteIsolation = params.isolation !== "worktree" && !!a.worktreeInfo
+          const parentDir = parent.directory
+          const gitOpt = yield* Effect.serviceOption(Git.Service)
+          const parentBaselineHead =
+            parentDir && Option.isSome(gitOpt)
+              ? yield* gitOpt.value.resolveRef(parentDir).pipe(Effect.orElseSucceed(() => undefined))
+              : undefined
+          const mergeWorktree = Effect.fn("TaskTool.mergeWorktree")(function* () {
+            if (!a.worktreeInfo || !automaticWriteIsolation || !parentDir || Option.isNone(gitOpt)) return
+            const git = gitOpt.value
+            const workerBranch = a.worktreeInfo.branch
+            if (!workerBranch) return // detached HEAD on worker — nothing to merge
+            const currentParentHead = yield* git.resolveRef(parentDir).pipe(Effect.orElseSucceed(() => undefined))
+            if (currentParentHead !== parentBaselineHead) {
+              // Parent advanced — preserve worker for human resolution; caller treats this as merge failure.
+              return yield* Effect.fail(
+                new Error(
+                  `Automatic worktree merge skipped: parent HEAD advanced since task spawn ` +
+                    `(baseline ${parentBaselineHead ?? "none"}, current ${currentParentHead ?? "none"}). ` +
+                    `Worker branch ${workerBranch} preserved for manual review.`,
+                ),
+              )
+            }
+            const result = yield* git.mergeInto(parentDir, workerBranch)
+            if (result.type === "merged") return
+            // On conflict or failure: abort merge state so parent checkout is usable, then re-throw
+            // so the caller knows to preserve the worker worktree.
+            yield* git.abortMerge(parentDir).pipe(Effect.ignore)
+            const diag =
+              result.type === "conflict"
+                ? `conflicts in ${result.paths.join(", ")}`
+                : result.diagnostic ?? result.type
+            return yield* Effect.fail(
+              new Error(
+                `Automatic worktree merge failed (${diag}). ` +
+                  `Worker branch ${workerBranch} preserved at ${a.worktreeInfo.directory}.`,
+              ),
+            )
+          })
+
           const bundle: AttemptBundle = {
             worktreeInfo: a.worktreeInfo,
+            worktree: a.worktree,
             nextSession: a.nextSession,
             metadata,
             markFinished,
             inject,
+            mergeWorktree,
             teardownWorktree,
           }
 
@@ -532,8 +589,21 @@ export const TaskTool = Tool.define(
             )
             if (outcome.kind === "promoted") return backgroundResult(b)
             if (outcome.kind === "completed") {
+              const merged = yield* b.mergeWorktree().pipe(
+                Effect.as(true),
+                Effect.catchCause((cause) =>
+                  Effect.gen(function* () {
+                    const diagnostic = Cause.squash(cause)
+                    yield* b.markFinished("error")
+                    yield* b.inject("error", `Worktree merge-back failed: ${String(diagnostic)}`, takeovers)
+                    yield* b.teardownWorktree(false)
+                    return false
+                  }),
+                ),
+              )
+              if (!merged) return yield* Effect.fail(new Error("Worktree merge-back failed"))
               yield* b.markFinished("completed")
-              yield* b.teardownWorktree(false)
+              yield* b.teardownWorktree(true)
               return {
                 title: params.description,
                 metadata: b.metadata,
@@ -580,8 +650,21 @@ export const TaskTool = Tool.define(
             const waited = yield* background.wait({ id: b.nextSession.id, timeout: timeoutMs })
             const status = waited.info?.status
             if (!waited.timedOut && status === "completed") {
+              const merged = yield* b.mergeWorktree().pipe(
+                Effect.as(true),
+                Effect.catchCause((cause) =>
+                  Effect.gen(function* () {
+                    const diagnostic = Cause.squash(cause)
+                    yield* b.markFinished("error")
+                    yield* b.inject("error", `Worktree merge-back failed: ${String(diagnostic)}`, takeovers)
+                    yield* b.teardownWorktree(false)
+                    return false
+                  }),
+                ),
+              )
+              if (!merged) return
               yield* b.markFinished("completed")
-              yield* b.teardownWorktree(false)
+              yield* b.teardownWorktree(true)
               yield* b.inject("completed", waited.info?.output ?? "", takeovers)
               return
             }
@@ -647,7 +730,7 @@ export const TaskTool = Tool.define(
       // (unique even within the same millisecond) guarantees no two invocations request the same name.
       // Only the non-git degradation (NotGitError) is tolerated as a shared-directory fallback; any
       // other create failure now FAILS the task loudly instead of silently un-isolating it.
-      const isolate = params.isolation === "worktree" && !session
+      const isolate = !session && (params.isolation === "worktree" || subagentIsWriteType(next))
       const worktreeOpt = isolate ? yield* Effect.serviceOption(Worktree.Service) : Option.none<Worktree.Interface>()
       const worktreeInfo =
         isolate && Option.isSome(worktreeOpt)
