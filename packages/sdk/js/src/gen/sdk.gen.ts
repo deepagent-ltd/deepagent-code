@@ -58,6 +58,20 @@ import type {
   DeepagentEnvFactsListResponses,
   DeepagentEnvFactsModifyErrors,
   DeepagentEnvFactsModifyResponses,
+  DeepagentGoalEditPlanErrors,
+  DeepagentGoalEditPlanResponses,
+  DeepagentGoalPauseErrors,
+  DeepagentGoalPauseResponses,
+  DeepagentGoalResumeErrors,
+  DeepagentGoalResumeResponses,
+  DeepagentGoalStartableErrors,
+  DeepagentGoalStartableResponses,
+  DeepagentGoalStartErrors,
+  DeepagentGoalStartResponses,
+  DeepagentGoalStatusErrors,
+  DeepagentGoalStatusResponses,
+  DeepagentGoalStopErrors,
+  DeepagentGoalStopResponses,
   DeepagentKnowledgeApproveErrors,
   DeepagentKnowledgeApproveResponses,
   DeepagentKnowledgePendingErrors,
@@ -78,8 +92,25 @@ import type {
   DeepagentPacksPinResponses,
   DeepagentPacksUnpinErrors,
   DeepagentPacksUnpinResponses,
+  DeepagentPanelArmErrors,
+  DeepagentPanelArmResponses,
+  DeepagentPanelConsultErrors,
+  DeepagentPanelConsultResponses,
+  DeepagentPanelStatusErrors,
+  DeepagentPanelStatusResponses,
   DeepagentReviewsErrors,
   DeepagentReviewsResponses,
+  DeepagentWikiEditErrors,
+  DeepagentWikiEditResponses,
+  DeepagentWikiExecutionArchiveErrors,
+  DeepagentWikiExecutionArchiveResponses,
+  DeepagentWikiPageErrors,
+  DeepagentWikiPageResponses,
+  DeepagentWikiPagesErrors,
+  DeepagentWikiPagesResponses,
+  DeepagentWikiSearchErrors,
+  DeepagentWikiSearchResponses,
+  EventSubscribeResponse,
   EventSubscribeResponses,
   EventTuiCommandExecute,
   EventTuiPromptAppend,
@@ -166,11 +197,14 @@ import type {
   GlobalDisposeErrors,
   GlobalDisposeResponses,
   GlobalEventErrors,
+  GlobalEventResponse,
   GlobalEventResponses,
   GlobalHealthErrors,
   GlobalHealthResponses,
   GlobalImportErrors,
   GlobalImportResponses,
+  GlobalProjectDeleteErrors,
+  GlobalProjectDeleteResponses,
   GlobalProjectsErrors,
   GlobalProjectsResponses,
   GlobalUpgradeErrors,
@@ -236,6 +270,18 @@ import type {
   McpStatusResponses,
   MoveSessionDestination,
   OutputFormat,
+  OversightApprovalsErrors,
+  OversightApprovalsResolveErrors,
+  OversightApprovalsResolveResponses,
+  OversightApprovalsResponses,
+  OversightMetricsErrors,
+  OversightMetricsResponses,
+  OversightRollbackErrors,
+  OversightRollbackResponses,
+  OversightTakeoverErrors,
+  OversightTakeoverResponses,
+  OversightTraceErrors,
+  OversightTraceResponses,
   Part as Part2,
   PartDeleteErrors,
   PartDeleteResponses,
@@ -338,6 +384,8 @@ import type {
   SessionPromptErrors,
   SessionPromptPrepareErrors,
   SessionPromptPrepareResponses,
+  SessionPromptPrepareStreamErrors,
+  SessionPromptPrepareStreamResponses,
   SessionPromptResponses,
   SessionPromptSuggestionErrors,
   SessionPromptSuggestionResponses,
@@ -373,6 +421,7 @@ import type {
   ToolIdsResponses,
   ToolListErrors,
   ToolListResponses,
+  TrustedSourcesInput,
   TuiAppendPromptErrors,
   TuiAppendPromptResponses,
   TuiClearPromptErrors,
@@ -404,6 +453,7 @@ import type {
   V2CommandListErrors,
   V2CommandListResponses,
   V2EventSubscribeErrors,
+  V2EventSubscribeResponse,
   V2EventSubscribeResponses,
   V2FsListErrors,
   V2FsListResponses,
@@ -457,6 +507,18 @@ import type {
   VcsGetResponses,
   VcsStatusErrors,
   VcsStatusResponses,
+  WebhookCiErrors,
+  WebhookCiResponses,
+  WebhookGitErrors,
+  WebhookGitResponses,
+  WebhookMonitorErrors,
+  WebhookMonitorResponses,
+  WebhookPrErrors,
+  WebhookPrResponses,
+  WorkspaceConfigTrustedSourcesGetErrors,
+  WorkspaceConfigTrustedSourcesGetResponses,
+  WorkspaceConfigTrustedSourcesPutErrors,
+  WorkspaceConfigTrustedSourcesPutResponses,
   WorktreeChangesErrors,
   WorktreeChangesResponses,
   WorktreeCreateErrors,
@@ -481,10 +543,11 @@ import type {
   WorktreeSummaryResponses,
 } from "./types.gen.js"
 
-export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean> = Options2<
-  TData,
-  ThrowOnError
-> & {
+export type Options<
+  TData extends TDataShape = TDataShape,
+  ThrowOnError extends boolean = boolean,
+  TResponse = unknown,
+> = Options2<TData, ThrowOnError, TResponse> & {
   /**
    * You can provide a client instance returned by `createClient()` instead of
    * individual options. This might be also useful if you want to implement a
@@ -587,12 +650,12 @@ export class App extends HeyApiClient {
    * Write a log entry to the server logs with specified level and metadata.
    */
   public log<ThrowOnError extends boolean = false>(
-    parameters?: {
+    parameters: {
       directory?: string
       workspace?: string
-      service?: string
-      level?: "debug" | "info" | "error" | "warn"
-      message?: string
+      service: string
+      level: "debug" | "info" | "error" | "warn"
+      message: string
       extra?: {
         [key: string]: unknown
       }
@@ -694,9 +757,9 @@ export class ControlPlane extends HeyApiClient {
    * Move a session to another project directory, optionally transferring local changes.
    */
   public moveSession<ThrowOnError extends boolean = false>(
-    parameters?: {
-      sessionID?: string
-      destination?: MoveSessionDestination
+    parameters: {
+      sessionID: string
+      destination: MoveSessionDestination
       moveChanges?: boolean
     },
     options?: Options<never, ThrowOnError>,
@@ -805,11 +868,11 @@ export class Console extends HeyApiClient {
    * Persist a new active Console account/org selection for the current local DeepAgent Code state.
    */
   public switchOrg<ThrowOnError extends boolean = false>(
-    parameters?: {
+    parameters: {
       directory?: string
       workspace?: string
-      accountID?: string
-      orgID?: string
+      accountID: string
+      orgID: string
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -969,8 +1032,8 @@ export class ProjectCopy extends HeyApiClient {
     parameters: {
       projectID: string
       workspace?: string
-      directory?: string
-      force?: boolean
+      directory: string
+      force: boolean
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -1012,8 +1075,8 @@ export class ProjectCopy extends HeyApiClient {
     parameters: {
       projectID: string
       workspace?: string
-      strategy?: "git_worktree"
-      directory?: string
+      strategy: "git_worktree"
+      directory: string
       name?: string
       context?: string
     },
@@ -1164,11 +1227,11 @@ export class Workspace extends HeyApiClient {
    * Create a workspace for the current project.
    */
   public create<ThrowOnError extends boolean = false>(
-    parameters?: {
+    parameters: {
       directory?: string
       workspace?: string
       id?: string
-      type?: string
+      type: string
       branch?: string | null
       extra?: unknown | null
     },
@@ -1315,11 +1378,11 @@ export class Workspace extends HeyApiClient {
    * Move a session's sync history into the target workspace, or detach it to the local project.
    */
   public warp<ThrowOnError extends boolean = false>(
-    parameters?: {
+    parameters: {
       directory?: string
       workspace?: string
-      id?: string | null
-      sessionID?: string
+      id: string | null
+      sessionID: string
       copyChanges?: boolean
     },
     options?: Options<never, ThrowOnError>,
@@ -1460,7 +1523,7 @@ export class Global extends HeyApiClient {
    *
    * Subscribe to global events from the DeepAgent Code system using server-sent events.
    */
-  public event<ThrowOnError extends boolean = false>(options?: Options<never, ThrowOnError>) {
+  public event<ThrowOnError extends boolean = false>(options?: Options<never, ThrowOnError, GlobalEventResponse>) {
     return (options?.client ?? this.client).sse.get<GlobalEventResponses, GlobalEventErrors, ThrowOnError>({
       url: "/global/event",
       ...options,
@@ -1527,13 +1590,36 @@ export class Global extends HeyApiClient {
     })
   }
 
+  /**
+   * Delete a project
+   *
+   * Permanently delete a project row and, by database cascade, all of its sessions, messages, and parts. Any running instances rooted at the project's known directories are disposed first. Idempotent: deleting an unknown project succeeds. Does NOT touch files on disk — only the DeepAgent Code database record.
+   */
+  public projectDelete<ThrowOnError extends boolean = false>(
+    parameters: {
+      projectID: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "path", key: "projectID" }] }])
+    return (options?.client ?? this.client).delete<
+      GlobalProjectDeleteResponses,
+      GlobalProjectDeleteErrors,
+      ThrowOnError
+    >({
+      url: "/global/projects/{projectID}",
+      ...options,
+      ...params,
+    })
+  }
+
   private _config?: Config
   get config(): Config {
     return (this._config ??= new Config({ client: this.client }))
   }
 }
 
-export class Event extends HeyApiClient {
+export class Event_ extends HeyApiClient {
   /**
    * Subscribe to events
    *
@@ -1544,7 +1630,7 @@ export class Event extends HeyApiClient {
       directory?: string
       workspace?: string
     },
-    options?: Options<never, ThrowOnError>,
+    options?: Options<never, ThrowOnError, EventSubscribeResponse>,
   ) {
     const params = buildClientParams(
       [parameters],
@@ -2101,10 +2187,10 @@ export class Knowledge extends HeyApiClient {
    * Apply the V3 promotion gate and persist a human-approved candidate as durable retrievable knowledge.
    */
   public promote<ThrowOnError extends boolean = false>(
-    parameters?: {
+    parameters: {
       directory?: string
       workspace?: string
-      candidate?: {
+      candidate: {
         candidate_id: string
         type: "memory" | "strategy" | "methodology"
         status: "staged"
@@ -2114,17 +2200,18 @@ export class Knowledge extends HeyApiClient {
         evidence_refs: Array<string>
         confidence: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
       }
-      origin?: "run_local" | "external_trace" | "sealed"
+      origin: "run_local" | "external_trace" | "sealed"
       verdict?: {
         pass: boolean
         reason?: string
         evidence: Array<string>
       }
-      approval?: {
+      approval: {
         approver: string
         approved: boolean
         note?: string
       }
+      snapshotId?: string
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -2139,6 +2226,7 @@ export class Knowledge extends HeyApiClient {
             { in: "body", key: "origin" },
             { in: "body", key: "verdict" },
             { in: "body", key: "approval" },
+            { in: "body", key: "snapshotId" },
           ],
         },
       ],
@@ -2165,10 +2253,10 @@ export class Knowledge extends HeyApiClient {
    * Record a reviewed candidate fingerprint in the V3 rejection buffer so it is not relearned.
    */
   public reject<ThrowOnError extends boolean = false>(
-    parameters?: {
+    parameters: {
       directory?: string
       workspace?: string
-      candidate?: {
+      candidate: {
         candidate_id: string
         type: "memory" | "strategy" | "methodology"
         status: "staged"
@@ -2178,7 +2266,7 @@ export class Knowledge extends HeyApiClient {
         evidence_refs: Array<string>
         confidence: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
       }
-      reason?: string
+      reason: string
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -2251,10 +2339,10 @@ export class Knowledge extends HeyApiClient {
    * Flag durable knowledge entries as approved (retrievable). Reversible; does not move files.
    */
   public approve<ThrowOnError extends boolean = false>(
-    parameters?: {
+    parameters: {
       directory?: string
       workspace?: string
-      ids?: Array<string>
+      ids: Array<string>
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -2292,10 +2380,10 @@ export class Knowledge extends HeyApiClient {
    * Flag durable knowledge entries as rejected (not retrievable). Reversible; does not move files.
    */
   public rejectIds<ThrowOnError extends boolean = false>(
-    parameters?: {
+    parameters: {
       directory?: string
       workspace?: string
-      ids?: Array<string>
+      ids: Array<string>
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -2333,16 +2421,16 @@ export class Knowledge extends HeyApiClient {
    * CI/eval posts measured per-group/per-task metrics; if MAX regresses vs HIGH the candidate refs are demoted (rejected) so misleading knowledge cannot ship (docs/30 §7).
    */
   public shipGate<ThrowOnError extends boolean = false>(
-    parameters?: {
+    parameters: {
       directory?: string
       workspace?: string
-      tasks?: Array<string>
-      metrics?: Array<{
+      tasks: Array<string>
+      metrics: Array<{
         group: "general" | "high" | "max"
         task: string
         metric: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
       }>
-      candidateRefs?: Array<string>
+      candidateRefs: Array<string>
       tolerance?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
       repeats?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
     },
@@ -2422,11 +2510,11 @@ export class EnvFacts extends HeyApiClient {
    * V3.8.1 §G.5: adopt (silently use in this project, never ask again) or reject (never ask again here; other projects unaffected).
    */
   public decide<ThrowOnError extends boolean = false>(
-    parameters?: {
+    parameters: {
       directory?: string
       workspace?: string
-      factId?: string
-      decision?: "adopt" | "reject"
+      factId: string
+      decision: "adopt" | "reject"
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -2465,12 +2553,12 @@ export class EnvFacts extends HeyApiClient {
    * V3.8.1 §G.5: edit a fact then adopt it. mode=global corrects the shared fact for all projects; mode=project writes a project-local override, leaving the global fact untouched.
    */
   public modify<ThrowOnError extends boolean = false>(
-    parameters?: {
+    parameters: {
       directory?: string
       workspace?: string
-      factId?: string
-      description?: string
-      body?: {
+      factId: string
+      description: string
+      body: {
         host?: string
         port?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
         container?: string
@@ -2480,7 +2568,7 @@ export class EnvFacts extends HeyApiClient {
         notes?: string
       }
       domain?: string
-      mode?: "global" | "project"
+      mode: "global" | "project"
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -2513,6 +2601,364 @@ export class EnvFacts extends HeyApiClient {
         ...options?.headers,
         ...params.headers,
       },
+    })
+  }
+}
+
+export class Panel extends HeyApiClient {
+  /**
+   * Convene the Expert Panel (会诊)
+   *
+   * V3.9 §C: freeze the question, fan out the lens panelists (equal-footing debate), and return the deterministic arbiter verdict. Gated by the expert-panel flag.
+   */
+  public consult<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      workspace?: string
+      sessionID: string
+      question?: string
+      codeRefs?: Array<string>
+      lenses?: Array<"correctness" | "security" | "performance" | "architecture" | "repro">
+      maxRounds?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      policy?: "default" | "security"
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "sessionID" },
+            { in: "body", key: "question" },
+            { in: "body", key: "codeRefs" },
+            { in: "body", key: "lenses" },
+            { in: "body", key: "maxRounds" },
+            { in: "body", key: "policy" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      DeepagentPanelConsultResponses,
+      DeepagentPanelConsultErrors,
+      ThrowOnError
+    >({
+      url: "/deepagent/panel/consult",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Arm or disarm the Expert Panel for a session
+   *
+   * V3.9 §C: per-conversation toggle for the panel button; seeded from the global default.
+   */
+  public arm<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      workspace?: string
+      sessionID: string
+      armed: boolean
+      rounds?: "single" | "multi"
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "sessionID" },
+            { in: "body", key: "armed" },
+            { in: "body", key: "rounds" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<DeepagentPanelArmResponses, DeepagentPanelArmErrors, ThrowOnError>({
+      url: "/deepagent/panel/arm",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Resolve the effective Expert Panel armed state
+   *
+   * V3.9 §C: returns the explicit per-session toggle if set, else the global expertPanelDefault — so the UI seeds the button from the server's default without guessing.
+   */
+  public status<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      workspace?: string
+      sessionID: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "query", key: "sessionID" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<
+      DeepagentPanelStatusResponses,
+      DeepagentPanelStatusErrors,
+      ThrowOnError
+    >({
+      url: "/deepagent/panel/status",
+      ...options,
+      ...params,
+    })
+  }
+}
+
+export class Goal extends HeyApiClient {
+  /**
+   * Start a Goal Loop from the session's plan
+   *
+   * V3.9 §D: materialize the session plan into the graded doc and drive the autonomous loop as a resident background task. Gated by the goal-loop flag.
+   */
+  public start<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      workspace?: string
+      sessionID: string
+      objective?: string
+      criteria?: Array<{
+        kind: "tests_pass" | "no_diagnostics" | "reviewer_clean" | "panel_approves" | "plan_complete"
+        commands?: Array<string>
+        maxSeverity?: string
+        severityAtMost?: string
+      }>
+      limits?: {
+        maxTicks?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        maxTokens?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        maxWallclockMs?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        maxCost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      }
+      stallThreshold?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "sessionID" },
+            { in: "body", key: "objective" },
+            { in: "body", key: "criteria" },
+            { in: "body", key: "limits" },
+            { in: "body", key: "stallThreshold" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<DeepagentGoalStartResponses, DeepagentGoalStartErrors, ThrowOnError>({
+      url: "/deepagent/goal/start",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Hot-edit the plan of a running/paused Goal Loop
+   *
+   * V4.1 §S2: enqueue a user plan revision on the goal control channel. The driver applies it between ticks (durable-doc upsert + stall re-baseline). ok:false when no goal is running or it reached a terminal phase.
+   */
+  public editPlan<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      workspace?: string
+      sessionID: string
+      plan: {
+        goal: string
+        steps: Array<{
+          step_id?: string
+          title: string
+          status?: string
+          acceptance?: string
+          assigned_agent?: string
+          note?: string
+        }>
+        assumptions?: Array<string>
+        active_step_id?: string
+      }
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "sessionID" },
+            { in: "body", key: "plan" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      DeepagentGoalEditPlanResponses,
+      DeepagentGoalEditPlanErrors,
+      ThrowOnError
+    >({
+      url: "/deepagent/goal/edit-plan",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+}
+
+export class Wiki extends HeyApiClient {
+  /**
+   * List Repo & Wiki pages
+   *
+   * V3.9 §B: the human-facing projection of the four graphs. Gated by the wiki flag.
+   */
+  public pages<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      type?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "query", key: "type" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<DeepagentWikiPagesResponses, DeepagentWikiPagesErrors, ThrowOnError>({
+      url: "/deepagent/wiki/pages",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Governed edit of a Knowledge/Memory Wiki page
+   *
+   * V3.9 §B.3: append-only new version through the real promotion evidence-gate + human provenance. Non-editable type ⇒ read-only error.
+   */
+  public edit<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      workspace?: string
+      docId: string
+      scope: string
+      body: string
+      editor: {
+        id: string
+        name?: string
+      }
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "docId" },
+            { in: "body", key: "scope" },
+            { in: "body", key: "body" },
+            { in: "body", key: "editor" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<DeepagentWikiEditResponses, DeepagentWikiEditErrors, ThrowOnError>({
+      url: "/deepagent/wiki/edit",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Read a session's execution archive
+   *
+   * V3.9 §B.6 read side: aggregate a completed session's run-scoped Document Graph trajectory into a single archive (markdown + entries). Gated by the wiki flag.
+   */
+  public executionArchive<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      workspace?: string
+      sessionID: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "query", key: "sessionID" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<
+      DeepagentWikiExecutionArchiveResponses,
+      DeepagentWikiExecutionArchiveErrors,
+      ThrowOnError
+    >({
+      url: "/deepagent/wiki/execution-archive",
+      ...options,
+      ...params,
     })
   }
 }
@@ -2603,10 +3049,10 @@ export class Deepagent extends HeyApiClient {
   }
 
   public packsPin<ThrowOnError extends boolean = false>(
-    parameters?: {
+    parameters: {
       directory?: string
       workspace?: string
-      packId?: string
+      packId: string
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -2635,10 +3081,10 @@ export class Deepagent extends HeyApiClient {
   }
 
   public packsUnpin<ThrowOnError extends boolean = false>(
-    parameters?: {
+    parameters: {
       directory?: string
       workspace?: string
-      packId?: string
+      packId: string
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -2668,6 +3114,222 @@ export class Deepagent extends HeyApiClient {
     )
   }
 
+  public goalPause<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      workspace?: string
+      sessionID: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "sessionID" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<DeepagentGoalPauseResponses, DeepagentGoalPauseErrors, ThrowOnError>({
+      url: "/deepagent/goal/pause",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  public goalResume<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      workspace?: string
+      sessionID: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "sessionID" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<DeepagentGoalResumeResponses, DeepagentGoalResumeErrors, ThrowOnError>(
+      {
+        url: "/deepagent/goal/resume",
+        ...options,
+        ...params,
+        headers: {
+          "Content-Type": "application/json",
+          ...options?.headers,
+          ...params.headers,
+        },
+      },
+    )
+  }
+
+  public goalStop<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      workspace?: string
+      sessionID: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "sessionID" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<DeepagentGoalStopResponses, DeepagentGoalStopErrors, ThrowOnError>({
+      url: "/deepagent/goal/stop",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  public goalStatus<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      workspace?: string
+      sessionID: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "query", key: "sessionID" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<DeepagentGoalStatusResponses, DeepagentGoalStatusErrors, ThrowOnError>({
+      url: "/deepagent/goal/status",
+      ...options,
+      ...params,
+    })
+  }
+
+  public goalStartable<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      workspace?: string
+      sessionID: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "query", key: "sessionID" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<
+      DeepagentGoalStartableResponses,
+      DeepagentGoalStartableErrors,
+      ThrowOnError
+    >({
+      url: "/deepagent/goal/startable",
+      ...options,
+      ...params,
+    })
+  }
+
+  public wikiPage<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      workspace?: string
+      docId: string
+      scope: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "query", key: "docId" },
+            { in: "query", key: "scope" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<DeepagentWikiPageResponses, DeepagentWikiPageErrors, ThrowOnError>({
+      url: "/deepagent/wiki/page",
+      ...options,
+      ...params,
+    })
+  }
+
+  public wikiSearch<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      workspace?: string
+      text: string
+      type?: string
+      scope?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "query", key: "text" },
+            { in: "query", key: "type" },
+            { in: "query", key: "scope" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<DeepagentWikiSearchResponses, DeepagentWikiSearchErrors, ThrowOnError>({
+      url: "/deepagent/wiki/search",
+      ...options,
+      ...params,
+    })
+  }
+
   private _knowledge?: Knowledge
   get knowledge(): Knowledge {
     return (this._knowledge ??= new Knowledge({ client: this.client }))
@@ -2676,6 +3338,459 @@ export class Deepagent extends HeyApiClient {
   private _envFacts?: EnvFacts
   get envFacts(): EnvFacts {
     return (this._envFacts ??= new EnvFacts({ client: this.client }))
+  }
+
+  private _panel?: Panel
+  get panel(): Panel {
+    return (this._panel ??= new Panel({ client: this.client }))
+  }
+
+  private _goal?: Goal
+  get goal(): Goal {
+    return (this._goal ??= new Goal({ client: this.client }))
+  }
+
+  private _wiki?: Wiki
+  get wiki(): Wiki {
+    return (this._wiki ??= new Wiki({ client: this.client }))
+  }
+}
+
+export class Approvals extends HeyApiClient {
+  /**
+   * Resolve an Approval Queue item
+   *
+   * V4.0 §D2: a human approves / rejects / acknowledges a pending item (first resolution wins).
+   */
+  public resolve<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      workspace?: string
+      id: string
+      decision: "approved" | "rejected" | "acknowledged"
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "id" },
+            { in: "body", key: "decision" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      OversightApprovalsResolveResponses,
+      OversightApprovalsResolveErrors,
+      ThrowOnError
+    >({
+      url: "/oversight/approvals/resolve",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+}
+
+export class Oversight extends HeyApiClient {
+  /**
+   * Agent Dashboard metrics
+   *
+   * V4.0 §F1: DLQ total, push-rejected-by-reason, task success rate, conflict rate.
+   */
+  public metrics<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      from?: string
+      to?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "query", key: "from" },
+            { in: "query", key: "to" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<OversightMetricsResponses, OversightMetricsErrors, ThrowOnError>({
+      url: "/oversight/metrics",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Event trace
+   *
+   * V4.0 §F2: the causal event chain (event → route → agent → coordination) for a correlationID.
+   */
+  public trace<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      workspace?: string
+      correlationID: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "query", key: "correlationID" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<OversightTraceResponses, OversightTraceErrors, ThrowOnError>({
+      url: "/oversight/trace",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Approval Queue (pending)
+   *
+   * V4.0 §D2: pending human-decision items (goal escalations, rollbacks, panel verdicts).
+   */
+  public approvals<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<OversightApprovalsResponses, OversightApprovalsErrors, ThrowOnError>({
+      url: "/oversight/approvals",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Record a human takeover
+   *
+   * V4.0 §D2: record that a human stepped in over an agent (pause/revert/claim). Feeds §F human_takeover_total.
+   */
+  public takeover<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      sessionID?: string
+      agentID?: string
+      reason?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "sessionID" },
+            { in: "body", key: "agentID" },
+            { in: "body", key: "reason" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<OversightTakeoverResponses, OversightTakeoverErrors, ThrowOnError>({
+      url: "/oversight/takeover",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Roll back an agent-produced change
+   *
+   * V4.0 §D2: a human reverts a session's agent-produced changes via SessionRevert. Feeds §F rollback_total.
+   */
+  public rollback<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      workspace?: string
+      sessionID: string
+      reason?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "sessionID" },
+            { in: "body", key: "reason" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<OversightRollbackResponses, OversightRollbackErrors, ThrowOnError>({
+      url: "/oversight/rollback",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  private _approvals?: Approvals
+  get approvals2(): Approvals {
+    return (this._approvals ??= new Approvals({ client: this.client }))
+  }
+}
+
+export class Webhook extends HeyApiClient {
+  /**
+   * Git push webhook
+   *
+   * V4.0 §A1: authenticate + publish a `git.push` DeepAgentEvent (CodeReviewAgent trigger). Opt-in trustedSources gates dispatch.
+   */
+  public git<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      workspace?: string
+      repo: string
+      ref?: string
+      branch?: string
+      commit: string
+      actor?: string
+      deliveryId?: string
+      destructive?: boolean
+      message?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "repo" },
+            { in: "body", key: "ref" },
+            { in: "body", key: "branch" },
+            { in: "body", key: "commit" },
+            { in: "body", key: "actor" },
+            { in: "body", key: "deliveryId" },
+            { in: "body", key: "destructive" },
+            { in: "body", key: "message" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<WebhookGitResponses, WebhookGitErrors, ThrowOnError>({
+      url: "/api/v1/webhook/git",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * CI failure webhook
+   *
+   * V4.0 §A1: authenticate + publish a `ci.failure` DeepAgentEvent (CodeFixAgent trigger). Opt-in trustedSources gates dispatch.
+   */
+  public ci<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      workspace?: string
+      repo: string
+      ref?: string
+      branch?: string
+      commit?: string
+      actor?: string
+      deliveryId?: string
+      pipeline?: string
+      jobUrl?: string
+      consecutiveFailures?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      logExcerpt?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "repo" },
+            { in: "body", key: "ref" },
+            { in: "body", key: "branch" },
+            { in: "body", key: "commit" },
+            { in: "body", key: "actor" },
+            { in: "body", key: "deliveryId" },
+            { in: "body", key: "pipeline" },
+            { in: "body", key: "jobUrl" },
+            { in: "body", key: "consecutiveFailures" },
+            { in: "body", key: "logExcerpt" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<WebhookCiResponses, WebhookCiErrors, ThrowOnError>({
+      url: "/api/v1/webhook/ci",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * PR comment webhook
+   *
+   * V4.0 §A1: authenticate + publish a `pr.comment` DeepAgentEvent (Review/Performance agent trigger). Opt-in trustedSources gates dispatch.
+   */
+  public pr<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      workspace?: string
+      repo: string
+      prNumber?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      commit?: string
+      actor?: string
+      deliveryId?: string
+      comment: string
+      destructive?: boolean
+      migration?: boolean
+      architectureChange?: boolean
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "repo" },
+            { in: "body", key: "prNumber" },
+            { in: "body", key: "commit" },
+            { in: "body", key: "actor" },
+            { in: "body", key: "deliveryId" },
+            { in: "body", key: "comment" },
+            { in: "body", key: "destructive" },
+            { in: "body", key: "migration" },
+            { in: "body", key: "architectureChange" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<WebhookPrResponses, WebhookPrErrors, ThrowOnError>({
+      url: "/api/v1/webhook/pr",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Monitoring alert webhook
+   *
+   * V4.0 §A1: authenticate + publish a `monitor.alert` DeepAgentEvent (DiagnosisAgent trigger). Opt-in trustedSources gates dispatch.
+   */
+  public monitor<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      workspace?: string
+      repo?: string
+      alertId?: string
+      deliveryId?: string
+      title: string
+      severity?: "info" | "warning" | "critical"
+      category?: string
+      detail?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "repo" },
+            { in: "body", key: "alertId" },
+            { in: "body", key: "deliveryId" },
+            { in: "body", key: "title" },
+            { in: "body", key: "severity" },
+            { in: "body", key: "category" },
+            { in: "body", key: "detail" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<WebhookMonitorResponses, WebhookMonitorErrors, ThrowOnError>({
+      url: "/api/v1/webhook/monitor",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
   }
 }
 
@@ -3285,7 +4400,7 @@ export class Lock extends HeyApiClient {
   }
 }
 
-export class File extends HeyApiClient {
+export class File_ extends HeyApiClient {
   /**
    * List files
    *
@@ -3727,11 +4842,11 @@ export class Groups extends HeyApiClient {
    * Create a new IM group.
    */
   public create<ThrowOnError extends boolean = false>(
-    parameters?: {
+    parameters: {
       directory?: string
       workspace?: string
-      name?: string
-      type?: "project" | "system"
+      name: string
+      type: "project" | "system"
       projectID?: string
     },
     options?: Options<never, ThrowOnError>,
@@ -3810,9 +4925,9 @@ export class Messages extends HeyApiClient {
       groupId: string
       directory?: string
       workspace?: string
-      senderType?: "user" | "agent" | "system"
-      type?: "text" | "code" | "file" | "agent_status" | "system"
-      content?: string
+      senderType: "user" | "agent" | "system"
+      type: "text" | "code" | "file" | "agent_status" | "system"
+      content: string
       mentions?: Array<string>
       metadata?:
         | {
@@ -4241,10 +5356,10 @@ export class Vcs extends HeyApiClient {
    * Apply a raw patch to the current working tree.
    */
   public apply<ThrowOnError extends boolean = false>(
-    parameters?: {
+    parameters: {
       directory?: string
       workspace?: string
-      patch?: string
+      patch: string
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -4417,7 +5532,7 @@ export class Auth2 extends HeyApiClient {
       name: string
       directory?: string
       workspace?: string
-      code?: string
+      code: string
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -4518,11 +5633,11 @@ export class Mcp extends HeyApiClient {
    * Dynamically add a new Model Context Protocol (MCP) server to the system.
    */
   public add<ThrowOnError extends boolean = false>(
-    parameters?: {
+    parameters: {
       directory?: string
       workspace?: string
-      name?: string
-      config?: McpLocalConfig | McpRemoteConfig
+      name: string
+      config: McpLocalConfig | McpRemoteConfig
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -4587,14 +5702,14 @@ export class Mcp extends HeyApiClient {
    * Instantiate a preset catalog entry (with filled params + secure-storage credential references) into a cfg.mcp entry and connect it.
    */
   public catalogEnable<ThrowOnError extends boolean = false>(
-    parameters?: {
+    parameters: {
       directory?: string
       workspace?: string
-      id?: string
-      params?: {
+      id: string
+      params: {
         [key: string]: string | Array<string>
       }
-      credentialRefs?: {
+      credentialRefs: {
         [key: string]: string
       }
     },
@@ -5194,7 +6309,7 @@ export class Question extends HeyApiClient {
       requestID: string
       directory?: string
       workspace?: string
-      answers?: Array<QuestionAnswer>
+      answers: Array<QuestionAnswer>
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -5297,7 +6412,7 @@ export class Permission extends HeyApiClient {
       requestID: string
       directory?: string
       workspace?: string
-      reply?: "once" | "always" | "reject"
+      reply: "once" | "always" | "reject"
       message?: string
     },
     options?: Options<never, ThrowOnError>,
@@ -5341,7 +6456,7 @@ export class Permission extends HeyApiClient {
       permissionID: string
       directory?: string
       workspace?: string
-      response?: "once" | "always" | "reject"
+      response: "once" | "always" | "reject"
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -5379,11 +6494,11 @@ export class Models extends HeyApiClient {
    * Probe a provider /models endpoint and return discovered chat models.
    */
   public discover<ThrowOnError extends boolean = false>(
-    parameters?: {
+    parameters: {
       directory?: string
       workspace?: string
-      providerID?: string
-      baseURL?: string
+      providerID: string
+      baseURL: string
       apiKey?: string
       authProviderID?: string
       modelID?: string
@@ -5440,7 +6555,7 @@ export class Oauth extends HeyApiClient {
       providerID: string
       directory?: string
       workspace?: string
-      method?: number
+      method: number
       inputs?: {
         [key: string]: string
       }
@@ -5487,7 +6602,7 @@ export class Oauth extends HeyApiClient {
       providerID: string
       directory?: string
       workspace?: string
-      method?: number
+      method: number
       code?: string
     },
     options?: Options<never, ThrowOnError>,
@@ -6028,7 +7143,7 @@ export class Session2 extends HeyApiClient {
         [key: string]: unknown
       }
       variant?: string
-      parts?: Array<TextPartInput | FilePartInput | AgentPartInput | SubtaskPartInput>
+      parts: Array<TextPartInput | FilePartInput | AgentPartInput | SubtaskPartInput>
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -6231,9 +7346,9 @@ export class Session2 extends HeyApiClient {
       sessionID: string
       directory?: string
       workspace?: string
-      modelID?: string
-      providerID?: string
-      messageID?: string
+      modelID: string
+      providerID: string
+      messageID: string
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -6338,8 +7453,8 @@ export class Session2 extends HeyApiClient {
       sessionID: string
       directory?: string
       workspace?: string
-      providerID?: string
-      modelID?: string
+      providerID: string
+      modelID: string
       auto?: boolean
     },
     options?: Options<never, ThrowOnError>,
@@ -6381,9 +7496,9 @@ export class Session2 extends HeyApiClient {
       sessionID: string
       directory?: string
       workspace?: string
-      mode?: "wish" | "intelligence"
+      mode: "wish" | "intelligence"
       output_language?: "chinese" | "english"
-      parts?: Array<TextPartInput | FilePartInput | AgentPartInput | SubtaskPartInput>
+      parts: Array<TextPartInput | FilePartInput | AgentPartInput | SubtaskPartInput>
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -6408,6 +7523,53 @@ export class Session2 extends HeyApiClient {
       ThrowOnError
     >({
       url: "/session/{sessionID}/prompt_prepare",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Stream prompt draft preparation
+   *
+   * Create a DeepAgent intelligence prompt draft and stream progressive preview updates as server-sent events.
+   */
+  public promptPrepareStream<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      directory?: string
+      workspace?: string
+      mode: "wish" | "intelligence"
+      output_language?: "chinese" | "english"
+      parts: Array<TextPartInput | FilePartInput | AgentPartInput | SubtaskPartInput>
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "mode" },
+            { in: "body", key: "output_language" },
+            { in: "body", key: "parts" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      SessionPromptPrepareStreamResponses,
+      SessionPromptPrepareStreamErrors,
+      ThrowOnError
+    >({
+      url: "/session/{sessionID}/prompt_prepare_stream",
       ...options,
       ...params,
       headers: {
@@ -6480,7 +7642,7 @@ export class Session2 extends HeyApiClient {
         [key: string]: unknown
       }
       variant?: string
-      parts?: Array<TextPartInput | FilePartInput | AgentPartInput | SubtaskPartInput>
+      parts: Array<TextPartInput | FilePartInput | AgentPartInput | SubtaskPartInput>
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -6531,8 +7693,8 @@ export class Session2 extends HeyApiClient {
       messageID?: string
       agent?: string
       model?: string
-      arguments?: string
-      command?: string
+      arguments: string
+      command: string
       variant?: string
       parts?: Array<{
         id?: string
@@ -6587,12 +7749,12 @@ export class Session2 extends HeyApiClient {
       directory?: string
       workspace?: string
       messageID?: string
-      agent?: string
+      agent: string
       model?: {
         providerID: string
         modelID: string
       }
-      command?: string
+      command: string
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -6634,7 +7796,7 @@ export class Session2 extends HeyApiClient {
       sessionID: string
       directory?: string
       workspace?: string
-      messageID?: string
+      messageID: string
       partID?: string
     },
     options?: Options<never, ThrowOnError>,
@@ -6853,11 +8015,11 @@ export class Sync extends HeyApiClient {
    * Validate and replay a complete sync event history.
    */
   public replay<ThrowOnError extends boolean = false>(
-    parameters?: {
+    parameters: {
       query_directory?: string
       workspace?: string
-      body_directory?: string
-      events?: Array<{
+      body_directory: string
+      events: Array<{
         id: string
         aggregateID: string
         seq: number
@@ -6908,10 +8070,10 @@ export class Sync extends HeyApiClient {
    * Update a session to belong to the current workspace through the sync event system.
    */
   public steal<ThrowOnError extends boolean = false>(
-    parameters?: {
+    parameters: {
       directory?: string
       workspace?: string
-      sessionID?: string
+      sessionID: string
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -7021,10 +8183,10 @@ export class Tui extends HeyApiClient {
    * Append prompt to the TUI.
    */
   public appendPrompt<ThrowOnError extends boolean = false>(
-    parameters?: {
+    parameters: {
       directory?: string
       workspace?: string
-      text?: string
+      text: string
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -7238,10 +8400,10 @@ export class Tui extends HeyApiClient {
    * Execute a TUI command.
    */
   public executeCommand<ThrowOnError extends boolean = false>(
-    parameters?: {
+    parameters: {
       directory?: string
       workspace?: string
-      command?: string
+      command: string
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -7275,12 +8437,12 @@ export class Tui extends HeyApiClient {
    * Show a toast notification in the TUI.
    */
   public showToast<ThrowOnError extends boolean = false>(
-    parameters?: {
+    parameters: {
       directory?: string
       workspace?: string
       title?: string
-      message?: string
-      variant?: "info" | "success" | "warning" | "error"
+      message: string
+      variant: "info" | "success" | "warning" | "error"
       duration?: number
     },
     options?: Options<never, ThrowOnError>,
@@ -7355,10 +8517,10 @@ export class Tui extends HeyApiClient {
    * Navigate the TUI to display the specified session.
    */
   public selectSession<ThrowOnError extends boolean = false>(
-    parameters?: {
+    parameters: {
       directory?: string
       workspace?: string
-      sessionID?: string
+      sessionID: string
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -7389,6 +8551,94 @@ export class Tui extends HeyApiClient {
   private _control?: Control
   get control(): Control {
     return (this._control ??= new Control({ client: this.client }))
+  }
+}
+
+export class TrustedSources extends HeyApiClient {
+  /**
+   * Get trusted event sources
+   *
+   * V4.0 §E1: return the resolved trusted event sources list for a workspace. Returns DEFAULT_TRUSTED_SOURCES (["im","system","schedule"]) when no config row exists.
+   */
+  public get<ThrowOnError extends boolean = false>(
+    parameters: {
+      workspaceID: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "workspaceID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<
+      WorkspaceConfigTrustedSourcesGetResponses,
+      WorkspaceConfigTrustedSourcesGetErrors,
+      ThrowOnError
+    >({
+      url: "/workspace/{workspaceID}/config/trusted-sources",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Replace trusted event sources
+   *
+   * V4.0 §E1: replace the trusted event sources list for a workspace. Each entry must be a valid DeepAgentEvent.EventSource ("im"|"git"|"ci"|"pr"|"monitor"|"schedule"|"system"). Invalid sources are rejected with 400 at the schema boundary.
+   */
+  public put<ThrowOnError extends boolean = false>(
+    parameters: {
+      workspaceID: string
+      directory?: string
+      workspace?: string
+      trustedSourcesInput?: TrustedSourcesInput
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "workspaceID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { key: "trustedSourcesInput", map: "body" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).put<
+      WorkspaceConfigTrustedSourcesPutResponses,
+      WorkspaceConfigTrustedSourcesPutErrors,
+      ThrowOnError
+    >({
+      url: "/workspace/{workspaceID}/config/trusted-sources",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+}
+
+export class WorkspaceConfig extends HeyApiClient {
+  private _trustedSources?: TrustedSources
+  get trustedSources(): TrustedSources {
+    return (this._trustedSources ??= new TrustedSources({ client: this.client }))
   }
 }
 
@@ -7463,7 +8713,7 @@ export class Permission2 extends HeyApiClient {
     parameters: {
       sessionID: string
       requestID: string
-      reply?: PermissionV2Reply
+      reply: PermissionV2Reply
       message?: string
     },
     options?: Options<never, ThrowOnError>,
@@ -7627,8 +8877,8 @@ export class Session3 extends HeyApiClient {
     parameters: {
       sessionID: string
       id?: string
-      prompt?: Prompt
-      delivery?: "steer" | "queue"
+      prompt: Prompt
+      delivery?: "steer" | "queue" | "goal_steer"
       resume?: boolean
     },
     options?: Options<never, ThrowOnError>,
@@ -7842,7 +9092,7 @@ export class Provider2 extends HeyApiClient {
   }
 }
 
-export class Request extends HeyApiClient {
+export class Request_ extends HeyApiClient {
   /**
    * List pending permission requests
    *
@@ -7919,9 +9169,9 @@ export class Saved extends HeyApiClient {
 }
 
 export class Permission3 extends HeyApiClient {
-  private _request?: Request
-  get request(): Request {
-    return (this._request ??= new Request({ client: this.client }))
+  private _request?: Request_
+  get request(): Request_ {
+    return (this._request ??= new Request_({ client: this.client }))
   }
 
   private _saved?: Saved
@@ -8063,7 +9313,7 @@ export class Event2 extends HeyApiClient {
         workspace?: string
       }
     },
-    options?: Options<never, ThrowOnError>,
+    options?: Options<never, ThrowOnError, V2EventSubscribeResponse>,
   ) {
     const params = buildClientParams([parameters], [{ args: [{ in: "query", key: "location" }] }])
     return (options?.client ?? this.client).sse.get<V2EventSubscribeResponses, V2EventSubscribeErrors, ThrowOnError>({
@@ -8194,9 +9444,9 @@ export class DeepAgentCodeClient extends HeyApiClient {
     return (this._global ??= new Global({ client: this.client }))
   }
 
-  private _event?: Event
-  get event(): Event {
-    return (this._event ??= new Event({ client: this.client }))
+  private _event?: Event_
+  get event(): Event_ {
+    return (this._event ??= new Event_({ client: this.client }))
   }
 
   private _config?: Config2
@@ -8219,6 +9469,16 @@ export class DeepAgentCodeClient extends HeyApiClient {
     return (this._deepagent ??= new Deepagent({ client: this.client }))
   }
 
+  private _oversight?: Oversight
+  get oversight(): Oversight {
+    return (this._oversight ??= new Oversight({ client: this.client }))
+  }
+
+  private _webhook?: Webhook
+  get webhook(): Webhook {
+    return (this._webhook ??= new Webhook({ client: this.client }))
+  }
+
   private _tool?: Tool
   get tool(): Tool {
     return (this._tool ??= new Tool({ client: this.client }))
@@ -8234,9 +9494,9 @@ export class DeepAgentCodeClient extends HeyApiClient {
     return (this._find ??= new Find({ client: this.client }))
   }
 
-  private _file?: File
-  get file(): File {
-    return (this._file ??= new File({ client: this.client }))
+  private _file?: File_
+  get file(): File_ {
+    return (this._file ??= new File_({ client: this.client }))
   }
 
   private _lsp?: Lsp
@@ -8327,6 +9587,11 @@ export class DeepAgentCodeClient extends HeyApiClient {
   private _tui?: Tui
   get tui(): Tui {
     return (this._tui ??= new Tui({ client: this.client }))
+  }
+
+  private _workspaceConfig?: WorkspaceConfig
+  get workspaceConfig(): WorkspaceConfig {
+    return (this._workspaceConfig ??= new WorkspaceConfig({ client: this.client }))
   }
 
   private _v2?: V2

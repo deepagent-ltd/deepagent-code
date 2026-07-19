@@ -1293,7 +1293,10 @@ export function schema(model: Provider.Model, schema: JSONSchema7): JSONSchema7 
   }
   */
 
-  if (model.providerID === "moonshotai" || model.api.id.toLowerCase().includes("kimi")) {
+  if (
+    ["moonshotai", "moonshotai-cn", "kimi-for-coding"].includes(model.providerID) ||
+    model.api.id.toLowerCase().includes("kimi")
+  ) {
     const sanitizeMoonshot = (obj: unknown): unknown => {
       if (obj === null || typeof obj !== "object") return obj
       if (Array.isArray(obj)) return obj.map(sanitizeMoonshot)

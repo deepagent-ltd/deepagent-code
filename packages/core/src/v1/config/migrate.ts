@@ -241,7 +241,7 @@ function migrateModel(info: typeof ConfigProviderV1.Model.Type, packageName?: st
     limit: info.limit && {
       context: int(info.limit.context),
       input: info.limit.input === undefined ? undefined : int(info.limit.input),
-      output: int(info.limit.output),
+      output: info.limit.output === undefined ? undefined : int(info.limit.output),
     },
   }
 }

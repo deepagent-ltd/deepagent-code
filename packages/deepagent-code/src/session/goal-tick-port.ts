@@ -215,6 +215,7 @@ export const makeGoalTickPort =
         eventBus: deps.eventBus,
         approvalQueue: deps.approvalQueue,
         v4MultiAgentRuntime: deps.flags.v4MultiAgentRuntime,
+        v4GoalTickEventDriven: deps.flags.v4GoalTickEventDriven,
         goalStoreRoot: deps.goalStoreRoot,
       })
 

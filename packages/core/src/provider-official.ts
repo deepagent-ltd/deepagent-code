@@ -23,6 +23,12 @@
  *   - `zai-coding-plan`       api.z.ai         /api/coding/paas/v4 (subscription, intl)
  * Each takes its own API key from the auth key store (users connect only the ones
  * they hold); coding-plan thinking/billing keys off the catalog `api.url`, not config.
+ *
+ * The Kimi/Moonshot family is two faces (brand × billing plane) — note they use
+ * DIFFERENT protocols, both resolved from the models.dev catalog:
+ *   - `kimi-for-coding`  api.kimi.com     /coding/v1  (subscription, `@ai-sdk/anthropic`
+ *                        — SDK appends `/messages`; the `/v1` suffix is mandatory)
+ *   - `moonshotai-cn`    api.moonshot.cn  /v1         (pay-as-you-go, `@ai-sdk/openai-compatible`)
  */
 export const OFFICIAL_PROVIDER_IDS = [
   "openai",
@@ -32,6 +38,8 @@ export const OFFICIAL_PROVIDER_IDS = [
   "zhipuai-coding-plan",
   "zai",
   "zai-coding-plan",
+  "kimi-for-coding",
+  "moonshotai-cn",
   "xai",
   "google",
 ] as const

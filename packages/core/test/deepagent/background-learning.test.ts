@@ -6,6 +6,8 @@ import { DeepAgentCodeHome } from "../../src/deepagent/workspace"
 import { DurableKnowledgeStore } from "../../src/deepagent/durable-knowledge-store"
 import { LearningWorker, SkillCurator } from "../../src/deepagent/background-learning"
 import { createInitialRoundState } from "../../src/deepagent/round-state"
+import { RejectedBuffer, fingerprint } from "../../src/deepagent/promotion"
+import * as Learning from "../../src/deepagent/learning"
 
 let root: string
 let home: DeepAgentCodeHome
@@ -25,9 +27,9 @@ const workerFor = (projectID = "projA") => {
 }
 
 describe("V3.1 LearningWorker and SkillCurator", () => {
-  test("auto-merges safe project memory without blocking the task thread", () => {
+  test("auto-merges safe project memory without blocking the task thread", async () => {
     const { projectID, store, worker } = workerFor()
-    const result = worker.run({
+    const result = await worker.run({
       projectID: "projA",
       sessionID: "sess1",
       runID: "run1",
@@ -53,9 +55,54 @@ describe("V3.1 LearningWorker and SkillCurator", () => {
     expect(doc.extensions?.knowledge_scope).toBe("project-shared")
   })
 
-  test("manual review policy sends staged candidates to Memory Inbox", () => {
+  test("gate 3 (R3): a candidate whose fingerprint is in the RejectedBuffer is dropped, not re-learned", async () => {
+    // Regression for the vacuous-gate seam bug: gate 3 fed `status === "rejected"`, but extraction always
+    // emits "staged", so the durable RejectedBuffer (what the human `reject` action writes) was never
+    // consulted — a rejected pattern would be re-extracted and AUTO-ADMITTED on the next run. The worker
+    // now consults an injected RejectedBuffer by fingerprint.
+    const runInput = {
+      projectID: "projA",
+      sessionID: "sess1",
+      runID: "run1",
+      mode: "high" as const,
+      roundState: createInitialRoundState("high"),
+      totalRounds: 1,
+      finalStatus: "completed" as const,
+      trigger: "idle" as const,
+    }
+    // Pre-reject the exact candidate this run extracts (same fingerprint the human `reject` route stores).
+    // extract() takes `runId` (the worker maps input.runID → runId internally).
+    const extracted = Learning.extract({
+      runId: runInput.runID,
+      mode: runInput.mode,
+      roundState: runInput.roundState,
+      totalRounds: runInput.totalRounds,
+      finalStatus: runInput.finalStatus,
+    })
+    expect(extracted.candidates.length).toBe(1)
+    const paths = home.ensureProject("projA")
+    const store = new DurableKnowledgeStore(path.join(paths.root, "knowledge"))
+    const rejected = new RejectedBuffer(path.join(paths.root, "memory"))
+    rejected.add(fingerprint(extracted.candidates[0]!), "human rejected this pattern")
+    const worker = new LearningWorker(paths, "projA", store, rejected)
+
+    const result = await worker.run(runInput)
+    // The candidate is dropped by gate 3 — NOT auto-merged, NOT staged into the durable store.
+    expect(result.auto_merged_ids).toEqual([])
+    expect(result.inbox_ids).toEqual([])
+    expect(store.listByStatus("active").length).toBe(0)
+    expect(store.listByStatus("candidate").length).toBe(0)
+
+    // Control: WITHOUT the buffer the same candidate auto-merges (proving the buffer is what dropped it).
+    const store2 = new DurableKnowledgeStore(path.join(home.ensureProject("projB").root, "knowledge"))
+    const worker2 = new LearningWorker(home.ensureProject("projB"), "projB", store2)
+    const result2 = await worker2.run({ ...runInput, projectID: "projB" })
+    expect(result2.auto_merged_ids.length).toBe(1)
+  })
+
+  test("manual review policy sends staged candidates to Memory Inbox", async () => {
     const { store, worker } = workerFor()
-    const result = worker.run({
+    const result = await worker.run({
       projectID: "projA",
       sessionID: "sess1",
       runID: "run2",
@@ -84,7 +131,7 @@ describe("V3.1 LearningWorker and SkillCurator", () => {
     expect(store.documentStore.get(candidates[0]!.id)!.extensions?.knowledge_scope).toBe("project-shared")
   })
 
-  test("strategy and anti-pattern candidates require review instead of auto-merge", () => {
+  test("strategy and anti-pattern candidates require review instead of auto-merge", async () => {
     const { worker } = workerFor()
     const roundState = createInitialRoundState("max")
     roundState.diagnoses.push({
@@ -93,7 +140,7 @@ describe("V3.1 LearningWorker and SkillCurator", () => {
       evidence_refs: ["run:run3"],
       next_action: "revise",
     })
-    const strategy = worker.run({
+    const strategy = await worker.run({
       projectID: "projA",
       sessionID: "sess1",
       runID: "run3",
@@ -111,7 +158,7 @@ describe("V3.1 LearningWorker and SkillCurator", () => {
       { round: 1, root_cause: "missing validation", evidence_refs: ["run:run4:r1"], next_action: "revise" },
       { round: 2, root_cause: "missing validation", evidence_refs: ["run:run4:r2"], next_action: "block" },
     )
-    const failed = worker.run({
+    const failed = await worker.run({
       projectID: "projA",
       sessionID: "sess1",
       runID: "run4",

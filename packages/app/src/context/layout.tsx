@@ -19,8 +19,17 @@ import {
   createSessionKeyReader,
   ensureSessionKey,
   isPanelOpen,
+  movePanel,
+  panelHost,
   pruneSessionKeys,
+  revealPanel,
+  toggleBottomPanel,
+  togglePanel,
   toggledPanelMode,
+  type PanelLocation,
+  type PanelSessionState,
+  type PanelTransitionInput,
+  type PanelView,
 } from "./layout-helpers"
 
 export { createSessionKeyReader, ensureSessionKey, pruneSessionKeys }
@@ -34,12 +43,33 @@ const DEFAULT_FILE_TREE_WIDTH = 200
 // visually consistent across screen sizes / zoom levels. px is derived live from the current
 // window width and clamped to [MIN_RIGHT_PANEL_PX, window * MAX_RIGHT_PANEL_RATIO].
 const DEFAULT_RIGHT_PANEL_RATIO = 0.26
+// T3.3 — the right panel remembers TWO widths, one per "bucket": WIDE panels (diff/files) want
+// horizontal room; NARROW panels (subagent/im/oversight lists, browser, terminal-ish) read fine in a
+// slimmer column. Each bucket keeps its own ratio so switching between a diff and a list does not drag
+// one to the other's width. A slightly slimmer default for the narrow bucket.
+const DEFAULT_RIGHT_PANEL_NARROW_RATIO = 0.2
 const MIN_RIGHT_PANEL_PX = 300
 const MAX_RIGHT_PANEL_RATIO = 0.6
+// T3.2 — the always-on vertical icon rail is a fixed, non-resizable strip beside the content area.
+export const RIGHT_PANEL_RAIL_PX = 44
+export type RightPanelWidthBucket = "wide" | "narrow"
 const FALLBACK_WINDOW_WIDTH = 1280
 const DEFAULT_SESSION_WIDTH = 600
 const DEFAULT_TERMINAL_HEIGHT = 280
 export type AvatarColorKey = (typeof AVATAR_COLOR_KEYS)[number]
+
+// ── Movable panel views ───────────────────────────────────────────────────────
+// The three views that can live in the independent Bottom Panel or the session
+// right panel. Other right-panel modes (DAP, PAP, review, files, ...) remain
+// side-native and are deliberately excluded from this union.
+export type DockPanelID = PanelView
+export type DockLocation = PanelLocation
+export const DOCK_PANEL_IDS: readonly DockPanelID[] = ["terminal", "debug-console", "problems"]
+const DOCK_DEFAULT_LOCATION: Record<DockPanelID, DockLocation> = {
+  terminal: "bottom",
+  "debug-console": "bottom",
+  problems: "bottom",
+}
 
 export function getAvatarColors(key?: string) {
   if (key && AVATAR_COLOR_KEYS.includes(key as AvatarColorKey)) {
@@ -74,18 +104,27 @@ type SessionView = {
   reviewOpen?: string[]
   // U3/U4/U7: added "worktree" (isolated worktree diff/merge), "subagents" (child-session list),
   // "browser" (isolated WebContentsView).
+  // T3.2: the "menu" mode is gone — an always-on icon rail replaced the full-panel menu list.
   rightPanelMode?:
-    | "menu"
     | "review"
     | "files"
-    | "status"
     | "worktree"
     | "subagents"
     | "browser"
+    | "mcp"
     | "plugins"
     | "profile"
     | "debug"
     | "im"
+    | "oversight"
+    // Movable panel views can also live in the side panel.
+    | "terminal"
+    | "debug-console"
+    | "problems"
+  bottomPanel?: {
+    opened: boolean
+    activeView?: DockPanelID
+  }
   pendingMessage?: string
   pendingMessageAt?: number
   todoCollapsed?: boolean
@@ -161,6 +200,8 @@ const currentRoute = (pathname: string): LayoutRoute => {
   if (id) return { type: "session", dir, dirBase64, sessionId: id }
   return { type: "dir-new-sesssion", dir, dirBase64 }
 }
+
+type SessionRightPanelMode = NonNullable<SessionView["rightPanelMode"]>
 
 export const { use: useLayout, provider: LayoutProvider } = createSimpleContext({
   name: "Layout",
@@ -294,6 +335,13 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
           height: DEFAULT_TERMINAL_HEIGHT,
           opened: false,
         },
+        // Dock-panel location (global, matching terminal.opened's global scope). Each movable panel
+        // (terminal / debug-console) remembers whether it lives in the bottom dock or the right side
+        // panel. Absent entries fall back to DOCK_DEFAULT_LOCATION at read time, so an older store with
+        // no `dock` field keeps working with no migration.
+        dock: {
+          location: {} as Record<DockPanelID, DockLocation>,
+        },
         review: {
           diffStyle: "split" as ReviewDiffStyle,
           panelOpened: true,
@@ -304,7 +352,11 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
           tab: "changes" as "changes" | "all",
         },
         rightPanel: {
+          // `ratio` = the WIDE bucket (legacy field name, kept so the existing migration keeps working);
+          // `narrowRatio` = the NARROW bucket (T3.3). An older store without narrowRatio falls back to
+          // the default at read time.
           ratio: DEFAULT_RIGHT_PANEL_RATIO,
+          narrowRatio: DEFAULT_RIGHT_PANEL_NARROW_RATIO,
         },
         session: {
           width: DEFAULT_SESSION_WIDTH,
@@ -320,7 +372,8 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
       }),
     )
 
-    // Reactive window width, used to derive the right panel px width from its stored ratio.
+    // Reactive viewport width is used by both resizable panel geometry and the
+    // side-host reachability guard for movable views.
     const [windowWidth, setWindowWidth] = createSignal(typeof window === "undefined" ? 1280 : window.innerWidth)
     if (typeof window !== "undefined") {
       const onResize = () => setWindowWidth(window.innerWidth)
@@ -677,6 +730,32 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
           setStore("terminal", "height", height)
         },
       },
+      dock: {
+        // Deprecated compatibility metadata. New UI must use view(session).panel;
+        // only locations and the shared Bottom Panel dimension remain global.
+        location(id: DockPanelID): DockLocation {
+          return store.dock?.location?.[id] ?? DOCK_DEFAULT_LOCATION[id]
+        },
+        setLocation(id: DockPanelID, location: DockLocation) {
+          if (!store.dock) {
+            setStore("dock", { location: { [id]: location } as Record<DockPanelID, DockLocation> })
+            return
+          }
+          setStore("dock", "location", id, location)
+        },
+        move(id: DockPanelID) {
+          const current = store.dock?.location?.[id] ?? DOCK_DEFAULT_LOCATION[id]
+          const next: DockLocation = current === "bottom" ? "side" : "bottom"
+          if (!store.dock) {
+            setStore("dock", { location: { [id]: next } as Record<DockPanelID, DockLocation> })
+            return
+          }
+          setStore("dock", "location", id, next)
+        },
+        bottomCount: createMemo(
+          () => DOCK_PANEL_IDS.filter((id) => (store.dock?.location?.[id] ?? DOCK_DEFAULT_LOCATION[id]) === "bottom").length,
+        ),
+      },
       review: {
         diffStyle: createMemo(() => store.review?.diffStyle ?? "split"),
         setDiffStyle(diffStyle: ReviewDiffStyle) {
@@ -730,21 +809,31 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
       rightPanel: {
         // Stored value is a ratio of the window width; px is derived live from the current window
         // width and clamped so the panel stays proportional across screens and can stretch with the
-        // window (no fixed 720px ceiling).
+        // window (no fixed 720px ceiling). T3.3: the ratio is per-BUCKET (wide/narrow) so each panel
+        // family remembers its own width.
         maxWidth: createMemo(() => Math.round(windowWidth() * MAX_RIGHT_PANEL_RATIO)),
         minWidth: MIN_RIGHT_PANEL_PX,
-        width: createMemo(() => {
-          const ratio = store.rightPanel?.ratio ?? DEFAULT_RIGHT_PANEL_RATIO
+        // Fixed, non-resizable icon-rail strip beside the content area (T3.2).
+        railWidth: RIGHT_PANEL_RAIL_PX,
+        // Called inside a tracking scope (JSX / createMemo), so reading store.rightPanel + windowWidth()
+        // here is reactive without wrapping in its own memo. Defaults to the wide bucket for callers
+        // that don't care (e.g. the shared session-width calc).
+        width: (bucket: RightPanelWidthBucket = "wide") => {
+          const ratio =
+            bucket === "narrow"
+              ? store.rightPanel?.narrowRatio ?? DEFAULT_RIGHT_PANEL_NARROW_RATIO
+              : store.rightPanel?.ratio ?? DEFAULT_RIGHT_PANEL_RATIO
           const max = Math.max(MIN_RIGHT_PANEL_PX, Math.round(windowWidth() * MAX_RIGHT_PANEL_RATIO))
           return Math.min(max, Math.max(MIN_RIGHT_PANEL_PX, Math.round(windowWidth() * ratio)))
-        }),
-        resize(width: number) {
+        },
+        resize(width: number, bucket: RightPanelWidthBucket = "wide") {
           const ratio = windowWidth() > 0 ? width / windowWidth() : DEFAULT_RIGHT_PANEL_RATIO
+          const field = bucket === "narrow" ? "narrowRatio" : "ratio"
           if (!store.rightPanel) {
-            setStore("rightPanel", { ratio })
+            setStore("rightPanel", field === "narrowRatio" ? { narrowRatio: ratio } : { ratio })
             return
           }
-          setStore("rightPanel", "ratio", ratio)
+          setStore("rightPanel", field, ratio)
         },
       },
       session: {
@@ -815,9 +904,48 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
       view(sessionKey: string | Accessor<string>) {
         const key = createSessionKeyReader(sessionKey, ensureKey)
         const s = createMemo(() => store.sessionView[key()] ?? { scroll: {} })
-        const terminalOpened = createMemo(() => store.terminal?.opened ?? false)
         const reviewPanelOpened = createMemo(() => store.review?.panelOpened ?? true)
         const rightPanelMode = createMemo(() => store.sessionView[key()]?.rightPanelMode)
+        const bottomPanel = createMemo(() => {
+          const current = store.sessionView[key()]
+          // One-way compatibility migration from the pre-panel global terminal flag.
+          if (current?.bottomPanel) return current.bottomPanel
+          if (store.terminal?.opened) return { opened: true, activeView: "terminal" as DockPanelID }
+          return { opened: false } as PanelSessionState<SessionRightPanelMode>["bottomPanel"]
+        })
+        const panelLocations = createMemo(
+          () =>
+            Object.fromEntries(
+              DOCK_PANEL_IDS.map((id) => [id, store.dock?.location?.[id] ?? DOCK_DEFAULT_LOCATION[id]]),
+            ) as Record<DockPanelID, DockLocation>,
+        )
+        const sideAvailable = createMemo(() => windowWidth() >= 768)
+
+        function commitPanel(next: PanelSessionState<SessionRightPanelMode>) {
+          const session = key()
+          const current = store.sessionView[session]
+          const bottom = next.bottomPanel
+          if (!current) {
+            setStore("sessionView", session, { scroll: {}, bottomPanel: bottom, rightPanelMode: next.rightPanelMode })
+            return
+          }
+          setStore(
+            "sessionView",
+            session,
+            produce((draft) => {
+              draft.bottomPanel = bottom
+              draft.rightPanelMode = next.rightPanelMode
+            }),
+          )
+        }
+
+        function panelInput(): PanelTransitionInput<SessionRightPanelMode> {
+          return {
+            locations: panelLocations(),
+            sideAvailable: sideAvailable(),
+            state: { bottomPanel: bottomPanel(), rightPanelMode: rightPanelMode() },
+          }
+        }
 
         function setRightPanelMode(next: SessionView["rightPanelMode"]) {
           const session = key()
@@ -875,15 +1003,50 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
             },
           },
           terminal: {
-            opened: terminalOpened,
+            // Legacy adapter for existing non-panel callers. New UI must use panel.
+            opened: createMemo(() => bottomPanel().opened && bottomPanel().activeView === "terminal"),
             open() {
-              setTerminalOpened(true)
+              commitPanel(revealPanel(panelInput(), "terminal"))
             },
             close() {
-              setTerminalOpened(false)
+              commitPanel(togglePanel(panelInput(), "terminal"))
             },
             toggle() {
-              setTerminalOpened(!terminalOpened())
+              commitPanel(togglePanel(panelInput(), "terminal"))
+            },
+          },
+          panel: {
+            locations: panelLocations,
+            sideAvailable,
+            bottom: {
+              opened: createMemo(() => bottomPanel().opened),
+              activeView: createMemo(() => bottomPanel().activeView),
+              toggle() {
+                commitPanel(toggleBottomPanel(panelInput()))
+              },
+            },
+            location(view: DockPanelID) {
+              return panelHost(panelLocations()[view], sideAvailable())
+            },
+            viewsAt(location: DockLocation) {
+              return DOCK_PANEL_IDS.filter((view) => panelHost(panelLocations()[view], sideAvailable()) === location)
+            },
+            reveal(view: DockPanelID) {
+              commitPanel(revealPanel(panelInput(), view))
+            },
+            toggle(view: DockPanelID) {
+              commitPanel(togglePanel(panelInput(), view))
+            },
+            move(view: DockPanelID, target: DockLocation) {
+              const input = panelInput()
+              const moved = movePanel(input, view, target)
+              if (moved.locations[view] === input.locations[view] && moved.state === input.state) return
+              if (!store.dock) {
+                setStore("dock", { location: moved.locations })
+              } else {
+                setStore("dock", "location", view, moved.locations[view])
+              }
+              commitPanel(moved.state)
             },
           },
           reviewPanel: {

@@ -55,6 +55,11 @@ export type SessionRunState = {
   // update. The SEMANTIC primary trigger for the progress nudge ("a step probably just finished").
   // Reset with the counter on a real status change.
   validationPassedSinceReport: boolean
+  // Round-context: fingerprints (command + " " + exit_code) of validation failures the model has
+  // acknowledged as false positives or already-handled. Matching failures are suppressed (not
+  // re-injected next round). Empty set = no change in behaviour. Cleared when a genuinely new
+  // result for the same command arrives, so real regressions are never silently swallowed.
+  suppressedFingerprints: string[]
   // V3.9 §C: whether this conversation has EXPLICITLY toggled the Expert Panel "armed" state from the
   // chat dialog. `null` = never toggled → the effective armed state falls back to the global
   // `expertPanelDefault` setting (resolved server-side, so the UI reflects the server default without a
@@ -127,6 +132,7 @@ export const getOrCreate = (sessionId: string, mode: AgentMode): SessionRunState
     planLatch: initialPlanLatch(),
     mutationsSinceReport: 0,
     validationPassedSinceReport: false,
+    suppressedFingerprints: [],
     panelArmed: null,
     panelRounds: null,
     activeGoal: null,
@@ -297,6 +303,32 @@ export const mutationsSinceReport = (sessionId: string): number => sessions.get(
 export const validationPassedSinceReport = (sessionId: string): boolean =>
   sessions.get(sessionId)?.validationPassedSinceReport ?? false
 
+// Round-context suppression helpers (v4.0.4)
+export const suppressFingerprint = (sessionId: string, fingerprint: string): void => {
+  const state = sessions.get(sessionId)
+  if (!state || state.suppressedFingerprints.includes(fingerprint)) return
+  state.suppressedFingerprints = [...state.suppressedFingerprints, fingerprint]
+  saveToDisk()
+}
+export const unsuppressFingerprint = (sessionId: string, fingerprint: string): void => {
+  const state = sessions.get(sessionId)
+  if (!state) return
+  const next = state.suppressedFingerprints.filter((f) => f !== fingerprint)
+  if (next.length === state.suppressedFingerprints.length) return
+  state.suppressedFingerprints = next
+  saveToDisk()
+}
+export const isFingerprintSuppressed = (sessionId: string, fingerprint: string): boolean =>
+  sessions.get(sessionId)?.suppressedFingerprints.includes(fingerprint) ?? false
+export const clearSuppressedFingerprints = (sessionId: string): void => {
+  const state = sessions.get(sessionId)
+  if (!state || state.suppressedFingerprints.length === 0) return
+  state.suppressedFingerprints = []
+  saveToDisk()
+}
+export const getSuppressedFingerprints = (sessionId: string): readonly string[] =>
+  sessions.get(sessionId)?.suppressedFingerprints ?? []
+
 // U10 / P2-E: a compact summary of the latest validation run, used as step evidence when a step
 // moves to `done`. Null when nothing has been validated yet.
 export const lastValidationSummary = (sessionId: string): string | null => {
@@ -425,6 +457,8 @@ function normalizeState(state: SessionRunState): SessionRunState {
     // Backfill: sessions persisted before U10 have no counter on disk.
     mutationsSinceReport: state.mutationsSinceReport ?? 0,
     validationPassedSinceReport: state.validationPassedSinceReport ?? false,
+    // Backfill: sessions persisted before round-context suppression feature have no set on disk.
+    suppressedFingerprints: state.suppressedFingerprints ?? [],
     // Backfill: sessions persisted before V3.9 §C/§D have neither slot on disk. panelArmed backfills to
     // null (= not explicitly toggled → follows the global default), NOT false.
     panelArmed: state.panelArmed ?? null,

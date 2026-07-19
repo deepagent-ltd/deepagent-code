@@ -5,7 +5,7 @@ import { OFFICIAL_PROVIDER_ID_SET } from "@deepagent-code/core/provider-official
 
 /**
  * First-party settings store — the single home for settings that must NOT live in the
- * user-editable config file (`deepagent-code.jsonc`, which is reserved for third-party
+ * user-editable config file (`config.jsonc`, which is reserved for third-party
  * providers). Two families live here:
  *
  *   1. `deepagent`  — first-party runtime settings (prompt/intelligence/agent-mode/self-learning +
@@ -43,8 +43,14 @@ export namespace SettingsStore {
   }
 
   /** Transport tuning for a single official provider. Mirrors the transport keys the provider
-   * loader strips from `options` and applies as fetch-level abort controllers. */
+   * loader strips from `options` and applies as fetch-level abort controllers, PLUS an optional
+   * `baseURL` endpoint override. Official providers deliberately ignore `config.provider.<id>`, so a
+   * corporate proxy / self-hosted gateway / air-gapped mirror in front of an official provider can
+   * ONLY be pointed to here (the connect dialog's advanced section) — never via the config file.
+   * When `baseURL` is set, the OpenAI codex WebSocket transport is skipped (a proxy speaks HTTP, not
+   * the ChatGPT-backend WS protocol); see plugin/openai/codex.ts. */
   export interface TransportSettings {
+    baseURL?: string
     headerTimeout?: number | false
     chunkTimeout?: number
     timeout?: number | false
@@ -112,9 +118,25 @@ export namespace SettingsStore {
     return Object.keys(out).length > 0 ? out : undefined
   }
 
+  // Accept only a well-formed absolute http(s) endpoint. A malformed or non-http value is dropped
+  // (not persisted) so a hand-edited settings file can never route an official provider somewhere
+  // unexpected — the provider then falls back to its fixed catalog endpoint.
+  const httpUrl = (v: unknown): string | undefined => {
+    const s = str(v)
+    if (!s) return undefined
+    try {
+      const u = new URL(s)
+      return u.protocol === "http:" || u.protocol === "https:" ? s : undefined
+    } catch {
+      return undefined
+    }
+  }
+
   function normalizeTransport(input: unknown): TransportSettings | undefined {
     if (!isRecord(input)) return undefined
     const out: TransportSettings = {}
+    const bu = httpUrl(input.baseURL)
+    if (bu !== undefined) out.baseURL = bu
     const ht = timeout(input.headerTimeout)
     if (ht !== undefined) out.headerTimeout = ht
     const ct = posInt(input.chunkTimeout)

@@ -6,7 +6,7 @@ import {
   statusToApproval,
   type ScoredDoc,
 } from "./durable-knowledge-store"
-import type { DocType } from "./document-store"
+import type { DocType, DocumentStore } from "./document-store"
 import { DeepAgentCodeHome } from "./workspace"
 import { EnvironmentFactAdoption } from "./environment-fact-adoption"
 
@@ -22,16 +22,34 @@ import { EnvironmentFactAdoption } from "./environment-fact-adoption"
 let baseDir: string | null = null
 let userGlobalCache: DurableKnowledgeStore | null = null
 const projectCache = new Map<string, DurableKnowledgeStore>()
+// H32-1: optional shared DocumentStore injected by the gateway so knowledge operations participate
+// in the same CAS/SSOT instance as plan/session docs. When null, each store creates its own
+// DocumentStore (existing behaviour, backward-compatible).
+let sharedDocumentStore: DocumentStore | null = null
 
 // Configure the durable knowledge base dir (the gateway calls this alongside SessionState/MemoryStore
 // configure, from the injected baseDir — never a self-resolved home).
-export const configure = (dir: string): void => {
+// H32-1: optional sharedStore accepted; passed through to openUserGlobalStore/openProjectStore.
+export const configure = (dir: string, sharedStore?: DocumentStore): void => {
   baseDir = dir
+  sharedDocumentStore = sharedStore ?? null
   userGlobalCache = null
   projectCache.clear()
 }
 
 export const isConfigured = (): boolean => baseDir !== null
+
+// Reset to the unconfigured state (baseDir=null + caches cleared). `configure` is a process-global
+// setter with no other way back to null; tests that assert the UNCONFIGURED path (isConfigured()===false
+// → callers fall back to empty results) need this to guarantee their precondition regardless of a prior
+// test in the same process having called configure(). Not used by production wiring (the gateway only
+// ever configures forward).
+export const reset = (): void => {
+  baseDir = null
+  sharedDocumentStore = null
+  userGlobalCache = null
+  projectCache.clear()
+}
 
 // Clear cached stores so a subsequent query re-reads from disk (after approve/reject/seed).
 export const invalidateCache = (): void => {
@@ -45,7 +63,7 @@ const ensureBase = (): string => {
 }
 
 const userGlobalStore = (): DurableKnowledgeStore => {
-  if (!userGlobalCache) userGlobalCache = openUserGlobalStore(ensureBase())
+  if (!userGlobalCache) userGlobalCache = openUserGlobalStore(ensureBase(), sharedDocumentStore ?? undefined)
   return userGlobalCache
 }
 
@@ -53,7 +71,7 @@ const projectStore = (workspacePath: string): DurableKnowledgeStore => {
   const pid = projectIdForWorkspace(workspacePath)
   let store = projectCache.get(pid)
   if (!store) {
-    store = openProjectStore(ensureBase(), workspacePath)
+    store = openProjectStore(ensureBase(), workspacePath, sharedDocumentStore ?? undefined)
     projectCache.set(pid, store)
   }
   return store
@@ -173,6 +191,10 @@ export type ReviewItem = {
   readonly evidence_strength: import("./document-store").EvidenceStrength
   readonly evidence_refs: readonly string[]
   readonly approval_status: "pending" | "approved" | "rejected"
+  // The doc's storage scope, so the Review UI can group by project vs global:
+  //   "durable" (or legacy untagged)  → user-global bucket
+  //   "durable:project:<project_id>"  → that project's bucket
+  readonly scope: string
 }
 
 // A built-in seeded pack doc carries a pack id (extensions.pack_id or a "pack:" tag). These are the
@@ -209,6 +231,7 @@ export const listByStatusForWorkspace = (
         evidence_strength: doc.confidence?.evidence_strength ?? "none",
         evidence_refs: doc.provenance.evidence_refs ?? [],
         approval_status: statusToApproval(doc.status),
+        scope: doc.scope,
       })
     }
   }
