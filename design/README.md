@@ -1,6 +1,6 @@
 # DeepAgent Code Architecture & Design
 
-> Public architecture baseline for DeepAgent Core V4.1.
+> **Public design overview for DeepAgent Core V4.0.4 / Desktop 1.4.2.** Internal implementation details and roadmap documents live in the private `docs/` tree and are intentionally not version-controlled.
 
 DeepAgent Code is a document-centered, event-driven AI coding system. It combines a coding-agent runtime with a durable control plane that owns context, planning, learning, collaboration, safety, and human oversight.
 
@@ -8,7 +8,13 @@ The architecture is designed around one requirement: a long-running agent must r
 
 ## Design Principles
 
-### One durable truth per concept
+- **Durable document and project memory** — atomic, recoverable storage with retrieval gates, provenance, governance, and conflict detection
+- **Connected context** — selective, evidence-backed assembly across code, knowledge, project memory, and execution documents
+- **Plans and long-running goals** — structured plans, stale-state detection, validation evidence, bounded retries, and human control
+- **Event-driven coordination** — durable delivery, priority routing, offline catch-up, idempotent goal ticks, and observable queue state
+- **Isolated agent collaboration** — bounded subagents, worktree isolation for write-capable workers, and conflict-aware change return
+- **AI IDE microservice** — LSP-backed semantic code navigation via `code_intel`
+- **Secure MCP catalog** — curated integrations, derived safety tiers, environment references, and native OS secret storage
 
 Sessions, inputs, plans, documents, goals, events, approvals, and learning decisions each have one authoritative durable representation. In-memory state is a cache or an ownership hint, never a competing source of truth.
 
@@ -16,11 +22,11 @@ Sessions, inputs, plans, documents, goals, events, approvals, and learning decis
 
 A user instruction is durably admitted before execution is scheduled. A successful API response therefore means the instruction is recorded, not merely present in a process-local queue.
 
-### One provider-turn contract
+DeepAgent is built **on top of** the opencode agent/runtime/session/tool/MCP stack. V4.0.4 strengthens the control plane without replacing the current turn engine, tool system, or provider layer.
 
-Native and AI SDK providers pass through the same model-turn boundary. Budget, permissions, tool policy, prompt assembly, artifacts, audit, learning, and close semantics cannot be bypassed by selecting another provider implementation.
+### 2. One durable authority per concern
 
-### Context is selected, not accumulated
+Documents, plans, event delivery state, knowledge promotion, and goal progress each have one authoritative durable store. In-memory state may accelerate delivery, but it cannot become a second source of truth.
 
 The model receives a bounded working set assembled from explicit Context Sources. Full tool output and durable history remain referenceable artifacts; only admitted summaries, evidence, and snippets enter the active context.
 
@@ -30,37 +36,36 @@ External events, credentials, tools, paths, autonomy, worker placement, and outb
 
 ### Humans can always intervene
 
-Steering, plan editing, approval, pause, resume, takeover, rollback, and review are part of the runtime contract. They are not dashboard-only controls layered over an autonomous black box.
+### 5. Keep execution boundaries explicit
+
+Write-capable subagents run in isolated worktrees by default. Event consumers claim durable work with idempotency and retry boundaries. Users retain explicit paths to approve, steer, pause, resume, take over, or roll back long-running work.
+
+---
 
 ## System Map
 
-```text
-┌─────────────────────────────────────────────────────────────────────┐
-│ Experience                                                          │
-│ Desktop · Web · TUI · IM · Repo & Wiki · Expert Panel · Oversight  │
-└──────────────────────────────┬──────────────────────────────────────┘
-                               │
-┌──────────────────────────────▼──────────────────────────────────────┐
-│ Durable Session Runtime                                             │
-│ Session V2 · System Context · Context Epoch · Steering · Queue      │
-│ Prompt cache policy · Provider-turn lifecycle · Tool materialization│
-└──────────────────────────────┬──────────────────────────────────────┘
-                               │
-┌──────────────────────────────▼──────────────────────────────────────┐
-│ DeepAgent Control Plane                                             │
-│ PlanController · GoalController · Context Graph · Learning          │
-│ Event Router · Scheduler · Worker Pool · Handoff · Security gates   │
-└──────────────────────────────┬──────────────────────────────────────┘
-                               │
-┌──────────────────────────────▼──────────────────────────────────────┐
-│ Durable State                                                       │
-│ DocumentStore · Session/Event database · Event Bus · Audit/Artifacts│
-└──────────────────────────────┬──────────────────────────────────────┘
-                               │
-┌──────────────────────────────▼──────────────────────────────────────┐
-│ Execution Services                                                  │
-│ Provider · Tool · LSP · MCP · Git/Worktree · Debug · Profile       │
-└─────────────────────────────────────────────────────────────────────┘
+```
+┌─────────────────────────────────────────────────────────────┐
+│  DeepAgent Control Plane                                    │
+│                                                             │
+│  DocumentStore ─ Plan/Goal ─ Knowledge Governance          │
+│       │              │                │                     │
+│  Context Graph ─ Event Bus ─ Oversight and Audit           │
+│       │              │                │                     │
+│  ┌────▼──────────────▼────────────────▼──────────────────┐  │
+│  │ Agent Gateway: budget · permission · evidence · policy│  │
+│  └────┬───────────────────────────────────────────────────┘  │
+└───────│─────────────────────────────────────────────────────┘
+        │
+┌───────▼────────────────────────────────────────────────────┐
+│  opencode Foundation                                       │
+│  Session · Provider · Tool Registry · LSP · MCP            │
+└────────────────────────────────────────────────────────────┘
+        │
+┌───────▼────────────────────────────────────────────────────┐
+│  Execution Boundaries                                      │
+│  isolated subagents · worktrees · event consumers · tools  │
+└────────────────────────────────────────────────────────────┘
 ```
 
 ## Session V2
@@ -93,9 +98,7 @@ Steering never aborts an in-flight tool or stream. The input is persisted first,
 
 Same-Session resumes join one coordinator; advisory wakes coalesce; different Sessions can run concurrently. Every provider turn performs one explicit `llm.stream(request)` call and reloads projected history before durable continuation.
 
-### Prompt cache invariant
-
-The system prompt is split into a byte-stable prefix and one append-only volatile tail:
+**Credentials** are declared by key name in the catalog template (`CredentialSpec`). Configuration stores environment references or `secret://` handles instead of plaintext values. Handles resolve at connection time through macOS Keychain, Linux Secret Service (`libsecret`), or Windows DPAPI-backed credential storage.
 
 - Agent instructions, stable policy, and System Context baseline stay in the prefix.
 - Round state, budgets, plan snapshots, prior results, fan-out decisions, and steering stay in the tail.
@@ -104,7 +107,15 @@ The system prompt is split into a byte-stable prefix and one append-only volatil
 
 ## Document System
 
-DocumentStore is the durable body for DeepAgent state. Documents carry:
+| Mechanism | Status |
+|-----------|--------|
+| MCP risk tier — catalog-derived, not config-injectable | Available |
+| MCP catalog defaults to not connected | Available |
+| Dangerous writes: approval gate (`ctx.ask`) | Available |
+| Read-only DB: restricted mode enforced at server | Available |
+| Credential indirection (`${VAR}` / `secret://`) | Available |
+| Native secret storage (macOS / Linux / Windows) | Available in V4.0.4 |
+| Subagent write isolation and conflict-aware return | Available in V4.0.4 |
 
 - a stable ID and monotonic version;
 - type, scope, status, domain, tags, and description;
@@ -114,7 +125,8 @@ DocumentStore is the durable body for DeepAgent state. Documents carry:
 
 Writes use atomic replacement and conflict detection. Concurrent handles observe one authority, process-level writers coordinate through lock/CAS semantics, and migrations are incremental, restartable, and integrity-checked.
 
-### Scope
+DeepAgent Code is licensed under **AGPL-3.0-or-later**.
+Source code: [github.com/deepagent-ltd/deepagent-code](https://github.com/deepagent-ltd/deepagent-code)
 
 | Scope | Purpose |
 |---|---|
