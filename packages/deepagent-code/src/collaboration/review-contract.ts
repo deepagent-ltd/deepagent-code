@@ -72,6 +72,13 @@ const reviewOnlyPermission = {
   deny: ["write", "commit", "merge", "task_spawn", "queue_mutation"],
 } as const satisfies ReviewPermissionPolicy
 
+// Senior review can prepare a normal follow-up commit, but cannot integrate it,
+// mutate queue state, or perform structural Git actions without parent approval.
+const seniorReviewPermission = {
+  allow: ["read", "search", "write", "commit"],
+  deny: ["merge", "task_spawn", "queue_mutation"],
+} as const satisfies ReviewPermissionPolicy
+
 /**
  * Profiles are deliberately separate from Agent.Info registration. A coordinator
  * chooses the runtime agent and must apply this policy before executing it.
@@ -85,7 +92,7 @@ export const ReviewRoleProfiles = {
   },
   "senior-reviewer": {
     role: "senior-reviewer",
-    permission: reviewOnlyPermission,
+    permission: seniorReviewPermission,
     output: "ReviewVerdictContract",
     requiresIndependentSeniorApproval: false,
   },

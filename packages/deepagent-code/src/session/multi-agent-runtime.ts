@@ -393,7 +393,10 @@ export const layerWith = (options: LayerOptions) =>
             // ALREADY at/over its declared maxTokensPerHour, DEFER this subtask (retryable — the window
             // rolls over, unlike max_files_changed which is terminal). Checked before acquiring a slot so
             // there is nothing to release on defer. Only bites when a budget is declared AND the runner
-            // reports real usage (the event turn runner reports 0 today → this never trips there yet).
+            // reports real token usage. P4.1: the production event turn runner now threads the real
+            // per-turn total (input+output+reasoning) from the prompt result, so this gate is live in
+            // production. A stub runner that reports 0 is a harmless no-op debit (budget enforcement
+            // is correct; the gate just never triggers for stubs).
             const maxTokensPerHour = agent.limits?.maxTokensPerHour
             if (maxTokensPerHour != null && maxTokensPerHour >= 0 && tokensUsedThisHour(agent.id, now()) >= maxTokensPerHour) {
               outcomes.push({ taskID: subtask.id, capability: subtask.capability, status: "deferred", agentID: agent.id, reason: "token_budget_exceeded" })
