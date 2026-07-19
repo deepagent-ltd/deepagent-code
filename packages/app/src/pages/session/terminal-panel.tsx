@@ -34,7 +34,9 @@ export function TerminalPanel(props: Props) {
   const active = createMemo(() => panel().bottom.activeView())
   const bottomTabs = createMemo<DockPanelID[]>(() => panel().viewsAt("bottom"))
   const visible = createMemo(() => opened())
-  const [store, setStore] = createStore({ view: typeof window === "undefined" ? 1000 : (window.visualViewport?.height ?? window.innerHeight) })
+  const [store, setStore] = createStore({
+    view: typeof window === "undefined" ? 1000 : (window.visualViewport?.height ?? window.innerHeight),
+  })
   let root: HTMLDivElement | undefined
 
   const max = () => store.view * 0.6
@@ -47,9 +49,14 @@ export function TerminalPanel(props: Props) {
       : view().rightPanel.mode() === "terminal"
   })
 
-  // This is the only terminal lifecycle owner. The host components only render
-  // the pane tree; they never create, close, or move PTYs themselves.
-  useTerminalLifecycle({ active: terminalVisible, close: () => panel().toggle("terminal"), rootEl: () => root })
+  // This is the only lifecycle owner. Exactly one visible host mounts the pane
+  // tree; moving the panel reconnects renderers to the same runtime PTYs.
+  useTerminalLifecycle({
+    active: terminalVisible,
+    close: () => panel().toggle("terminal"),
+    rootEl: () =>
+      document.querySelector<HTMLElement>('[data-terminal-host="bottom"], [data-terminal-host="side"]') ?? root,
+  })
 
   onMount(() => {
     if (typeof window === "undefined") return
@@ -84,11 +91,16 @@ export function TerminalPanel(props: Props) {
       inert={!visible()}
       class="relative w-full shrink-0 overflow-hidden bg-background-stronger"
       classList={{
-        "transition-[height] duration-200 ease-[cubic-bezier(0.22,1,0.36,1)] will-change-[height] motion-reduce:transition-none": !size.active(),
+        "transition-[height] duration-200 ease-[cubic-bezier(0.22,1,0.36,1)] will-change-[height] motion-reduce:transition-none":
+          !size.active(),
       }}
       style={{ height: visible() ? `${pane()}px` : "0px" }}
     >
-      <div class="absolute inset-x-0 top-0 flex flex-col" classList={{ "pointer-events-none": !visible() }} style={{ height: `${pane()}px` }}>
+      <div
+        class="absolute inset-x-0 top-0 flex flex-col"
+        classList={{ "pointer-events-none": !visible() }}
+        style={{ height: `${pane()}px` }}
+      >
         <div class="hidden md:block" onPointerDown={() => size.start()}>
           <ResizeHandle
             direction="vertical"
@@ -105,81 +117,113 @@ export function TerminalPanel(props: Props) {
           />
         </div>
         <div class="flex flex-col h-full">
-            <div class="flex h-9 shrink-0 items-center overflow-hidden border-b border-border-weaker-base bg-background-stronger">
-              <div class="flex min-w-0 flex-1 h-full overflow-x-auto" role="tablist" aria-label={language.t("session.panel.bottom")}>
-                <For each={bottomTabs()}>
-                  {(id) => (
-                    <button
-                      type="button"
-                      role="tab"
-                      aria-selected={active() === id}
-                      class="px-3 h-full shrink-0 flex items-center gap-1.5 text-13-regular border-b-2 -mb-px outline-none"
-                      classList={{
-                        "border-border-base text-text-stronger": active() === id,
-                        "border-transparent text-text-weak hover:text-text": active() !== id,
-                      }}
-                      onClick={() => panel().reveal(id)}
-                    >
-                      <Icon name={PANEL_META[id].icon} size="small" />
-                      {language.t(PANEL_META[id].titleKey)}
-                    </button>
-                  )}
-                </For>
-              </div>
-              <div class="flex h-full shrink-0 items-center gap-0.5 whitespace-nowrap px-1">
-                <Show when={active() === "terminal"}><TerminalActions /></Show>
-                <Show when={active() === "terminal"}><div class="h-4 w-px shrink-0 bg-border-weaker-base" aria-hidden="true" /></Show>
-                <Show when={active() && panel().sideAvailable()}>
-                  <Tooltip value={language.t("session.panel.moveToSide")}>
-                    <IconButton icon="layout-right" variant="ghost" iconSize="normal" aria-label={language.t("session.panel.moveToSide")} onClick={() => {
+          <div class="flex h-9 shrink-0 items-center overflow-hidden border-b border-border-weaker-base bg-background-stronger">
+            <div
+              class="flex min-w-0 flex-1 h-full overflow-x-auto"
+              role="tablist"
+              aria-label={language.t("session.panel.bottom")}
+            >
+              <For each={bottomTabs()}>
+                {(id) => (
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={active() === id}
+                    class="px-3 h-full shrink-0 flex items-center gap-1.5 text-13-regular border-b-2 -mb-px outline-none"
+                    classList={{
+                      "border-border-base text-text-stronger": active() === id,
+                      "border-transparent text-text-weak hover:text-text": active() !== id,
+                    }}
+                    onClick={() => panel().reveal(id)}
+                  >
+                    <Icon name={PANEL_META[id].icon} size="small" />
+                    {language.t(PANEL_META[id].titleKey)}
+                  </button>
+                )}
+              </For>
+            </div>
+            <div class="flex h-full shrink-0 items-center gap-0.5 whitespace-nowrap px-1">
+              <Show when={active() === "terminal"}>
+                <TerminalActions />
+              </Show>
+              <Show when={active() === "terminal"}>
+                <div class="h-4 w-px shrink-0 bg-border-weaker-base" aria-hidden="true" />
+              </Show>
+              <Show when={active() && panel().sideAvailable()}>
+                <Tooltip value={language.t("session.panel.moveToSide")}>
+                  <IconButton
+                    icon="layout-right"
+                    variant="ghost"
+                    iconSize="normal"
+                    aria-label={language.t("session.panel.moveToSide")}
+                    onClick={() => {
                       const current = active()
                       if (current) panel().move(current, "side")
-                    }} />
-                  </Tooltip>
-                </Show>
-                <Tooltip value={language.t("common.close")}>
-                  <IconButton icon="close" variant="ghost" iconSize="normal" aria-label={language.t("common.close")} onClick={close} />
+                    }}
+                  />
                 </Tooltip>
-              </div>
-            </div>
-            <div class="relative min-h-0 flex-1">
-              <Show when={opened() && panel().location("terminal") === "bottom" && active() !== "terminal"}>
-                <div class="absolute inset-0 invisible pointer-events-none" aria-hidden="true">
-                  <Show when={terminal.ready()}>
-                    <TerminalPanes />
-                  </Show>
-                </div>
               </Show>
-              <Show
-                when={active()}
-                fallback={
-                  <div class="size-full flex flex-col items-center justify-center gap-2 text-13-regular text-text-weak">
-                    <div>{language.t("session.panel.emptyBottom")}</div>
-                    <For each={(["terminal", "debug-console", "problems"] as DockPanelID[]).filter((id) => panel().location(id) === "side")}>
-                      {(id) => <button class="text-13-medium text-text-info hover:underline" onClick={() => panel().move(id, "bottom")}>{language.t(PANEL_META[id].titleKey)}</button>}
-                    </For>
-                  </div>
-                }
-              >
-                {(id) => (
-                  <Switch>
-                    <Match when={id() === "terminal"}>
-                      <Show
-                        when={terminal.ready()}
-                        fallback={<div class="size-full flex items-center justify-center text-13-regular text-text-weak">{language.t("terminal.loading")}</div>}
-                      >
-                        <div class="size-full relative" data-terminal-host="bottom">
-                          <TerminalPanes />
-                        </div>
-                      </Show>
-                    </Match>
-                    <Match when={id() === "debug-console"}><DebugConsole /></Match>
-                    <Match when={id() === "problems"}><ProblemsPanel active={() => visible() && active() === "problems"} onOpenFile={props.onOpenFile} /></Match>
-                  </Switch>
-                )}
-              </Show>
+              <Tooltip value={language.t("common.close")}>
+                <IconButton
+                  icon="close"
+                  variant="ghost"
+                  iconSize="normal"
+                  aria-label={language.t("common.close")}
+                  onClick={close}
+                />
+              </Tooltip>
             </div>
           </div>
+          <div class="relative min-h-0 flex-1">
+            <Show
+              when={active()}
+              fallback={
+                <div class="size-full flex flex-col items-center justify-center gap-2 text-13-regular text-text-weak">
+                  <div>{language.t("session.panel.emptyBottom")}</div>
+                  <For
+                    each={(["terminal", "debug-console", "problems"] as DockPanelID[]).filter(
+                      (id) => panel().location(id) === "side",
+                    )}
+                  >
+                    {(id) => (
+                      <button
+                        class="text-13-medium text-text-info hover:underline"
+                        onClick={() => panel().move(id, "bottom")}
+                      >
+                        {language.t(PANEL_META[id].titleKey)}
+                      </button>
+                    )}
+                  </For>
+                </div>
+              }
+            >
+              {(id) => (
+                <Switch>
+                  <Match when={id() === "terminal"}>
+                    <Show
+                      when={terminal.ready()}
+                      fallback={
+                        <div class="size-full flex items-center justify-center text-13-regular text-text-weak">
+                          {language.t("terminal.loading")}
+                        </div>
+                      }
+                    >
+                      <div class="size-full relative" data-terminal-host="bottom">
+                        <TerminalPanes />
+                      </div>
+                    </Show>
+                  </Match>
+                  <Match when={id() === "debug-console"}>
+                    <DebugConsole />
+                  </Match>
+                  <Match when={id() === "problems"}>
+                    <ProblemsPanel active={() => visible() && active() === "problems"} onOpenFile={props.onOpenFile} />
+                  </Match>
+                </Switch>
+              )}
+            </Show>
+          </div>
+        </div>
       </div>
     </div>
   )

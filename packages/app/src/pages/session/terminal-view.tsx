@@ -1,8 +1,8 @@
 import { For, Show, createEffect, createMemo, createSignal, on, onCleanup, onMount } from "solid-js"
-import { createStore } from "solid-js/store"
 import { Tabs } from "@deepagent-code/ui/tabs"
 import { ResizeHandle } from "@deepagent-code/ui/resize-handle"
 import { IconButton } from "@deepagent-code/ui/icon-button"
+import { Button } from "@deepagent-code/ui/button"
 import { TooltipKeybind, Tooltip } from "@deepagent-code/ui/tooltip"
 import { DragDropProvider, DragDropSensors, SortableProvider, closestCenter } from "@thisbeyond/solid-dnd"
 import type { DragEvent } from "@thisbeyond/solid-dnd"
@@ -13,8 +13,14 @@ import { Terminal } from "@/components/terminal"
 import { useCommand } from "@/context/command"
 import { useDebug } from "@/context/debug"
 import { useLanguage } from "@/context/language"
-import { useTerminal, type PaneLeaf, type PaneNode, MIN_TERMINAL_PANE_HEIGHT, MIN_TERMINAL_PANE_WIDTH } from "@/context/terminal"
-import { useSessionLayout } from "@/pages/session/session-layout"
+import {
+  useTerminal,
+  type LocalPTY,
+  type PaneLeaf,
+  type PaneNode,
+  MIN_TERMINAL_PANE_HEIGHT,
+  MIN_TERMINAL_PANE_WIDTH,
+} from "@/context/terminal"
 import { focusTerminalById } from "@/pages/session/helpers"
 
 // ─── Debug console (shared: bottom dock + side panel) ───────────────────────────
@@ -114,7 +120,11 @@ function SplitPane(props: { node: Extract<PaneNode, { kind: "split" }> }) {
   const maxPx = () => Math.max(minPx(), total() - minimum())
 
   return (
-    <div ref={ref} class="flex min-h-0 min-w-0 flex-1" classList={{ "flex-col": stacked(), "flex-row": !stacked() }}>
+    <div
+      ref={ref}
+      class="absolute inset-0 flex min-h-0 min-w-0 overflow-hidden"
+      classList={{ "flex-col": stacked(), "flex-row": !stacked() }}
+    >
       <div
         class="relative min-h-0 min-w-0"
         style={{ "flex-basis": `${props.node.sizes[0] * 100}%`, "flex-grow": 0, "flex-shrink": 0 }}
@@ -154,18 +164,6 @@ function SplitPane(props: { node: Extract<PaneNode, { kind: "split" }> }) {
 
 function LeafPane(props: { node: PaneLeaf }) {
   const terminal = useTerminal()
-  const language = useLanguage()
-  const { view } = useSessionLayout()
-  const [store, setStore] = createStore({
-    recovered: {} as Record<string, boolean>,
-  })
-
-  const opened = createMemo(() => {
-    const panel = view().panel
-    return panel.location("terminal") === "bottom"
-      ? panel.bottom.opened() && panel.bottom.activeView() === "terminal"
-      : view().rightPanel.mode() === "terminal"
-  })
   const focused = createMemo(() => terminal.focusedPaneId() === props.node.id)
   let ref: HTMLDivElement | undefined
   let observer: ResizeObserver | undefined
@@ -194,18 +192,6 @@ function LeafPane(props: { node: PaneLeaf }) {
     })
   })
   const activeId = createMemo(() => props.node.activeId)
-
-  const recoverTerminal = (key: string, id: string, clone: (id: string) => Promise<void>) => {
-    if (store.recovered[key]) return
-    setStore("recovered", key, true)
-    void clone(id)
-  }
-  const terminalRecoveryKey = (pty: { id: string; title: string; titleNumber: number }) =>
-    String(pty.titleNumber || pty.title || pty.id)
-  const markTerminalConnected = (key: string, id: string, trim: (id: string) => void) => {
-    setStore("recovered", key, false)
-    trim(id)
-  }
 
   const handleDragOver = (event: DragEvent) => {
     const { draggable, droppable } = event
@@ -257,29 +243,22 @@ function LeafPane(props: { node: PaneLeaf }) {
           <Show
             when={activeId()}
             keyed
-            fallback={<div class="absolute inset-0 flex items-center justify-center text-13-regular text-text-weak">{language.t("terminal.loading")}</div>}
+            fallback={
+              <TerminalEmptyState
+                creating={terminal.creating()}
+                error={terminal.createError()}
+                onRetry={() => void terminal.new()}
+              />
+            }
           >
-            {(id) => {
-              const ops = terminal.bind()
-              return (
-                <Show
-                  when={ptys().find((pty) => pty.id === id)}
-                  fallback={<div class="absolute inset-0 flex items-center justify-center text-13-regular text-text-weak">{language.t("terminal.loading")}</div>}
-                >
-                  {(pty) => (
-                    <div id={`terminal-wrapper-${id}`} class="absolute inset-0">
-                      <Terminal
-                        pty={pty()}
-                        autoFocus={opened() && focused()}
-                        onConnect={() => markTerminalConnected(terminalRecoveryKey(pty()), id, ops.trim)}
-                        onCleanup={ops.update}
-                        onConnectError={() => recoverTerminal(terminalRecoveryKey(pty()), id, ops.clone)}
-                      />
-                    </div>
-                  )}
-                </Show>
-              )
-            }}
+            {(id) => (
+              <Show
+                when={ptys().find((pty) => pty.id === id)}
+                fallback={<TerminalEmptyState creating={terminal.creating()} onRetry={() => void terminal.new()} />}
+              >
+                {(pty) => <TerminalSessionView pty={pty()} focused={focused()} />}
+              </Show>
+            )}
           </Show>
         </div>
       </DragDropProvider>
@@ -287,14 +266,83 @@ function LeafPane(props: { node: PaneLeaf }) {
   )
 }
 
-function PaneRenderer(props: { node: PaneNode }): ReturnType<typeof LeafPane> {
+function TerminalEmptyState(props: { creating: boolean; error?: { message: string }; onRetry: () => void }) {
+  const language = useLanguage()
   return (
-    <Show
-      when={props.node.kind === "split" ? (props.node as Extract<PaneNode, { kind: "split" }>) : undefined}
-      keyed
-      fallback={<LeafPane node={props.node as PaneLeaf} />}
-    >
-      {(split) => <SplitPane node={split} />}
+    <div class="absolute inset-0 flex flex-col items-center justify-center gap-3 px-6 text-center">
+      <div class="max-w-md text-13-regular text-text-weak">
+        {props.error?.message ?? language.t(props.creating ? "terminal.status.starting" : "terminal.loading")}
+      </div>
+      <Show when={props.error}>
+        <Button size="small" variant="secondary" icon="reset" onClick={props.onRetry}>
+          {language.t("terminal.retry")}
+        </Button>
+      </Show>
+    </div>
+  )
+}
+
+function TerminalSessionView(props: { pty: LocalPTY; focused: boolean }) {
+  const terminal = useTerminal()
+  const language = useLanguage()
+  const unavailable = () => props.pty.status === "error" || props.pty.status === "exited"
+  const status = () =>
+    props.pty.status === "reconnecting"
+      ? language.t("terminal.status.reconnecting")
+      : language.t("terminal.status.connecting")
+
+  return (
+    <div id={`terminal-wrapper-${props.pty.id}`} class="absolute inset-0">
+      <Show
+        when={!unavailable()}
+        fallback={
+          <div class="absolute inset-0 flex flex-col items-center justify-center gap-3 px-6 text-center">
+            <div class="max-w-md text-13-regular text-text-weak">
+              {props.pty.error?.message ?? language.t("terminal.status.exited")}
+            </div>
+            <div class="flex items-center gap-2">
+              <Button size="small" variant="secondary" icon="reset" onClick={() => void terminal.retry(props.pty.id)}>
+                {language.t("terminal.retry")}
+              </Button>
+              <Button size="small" variant="ghost" icon="close" onClick={() => void terminal.close(props.pty.id)}>
+                {language.t("terminal.close")}
+              </Button>
+            </div>
+          </div>
+        }
+      >
+        <Show when={props.pty.ptyId} keyed>
+          {(ptyId) => (
+            <Terminal
+              pty={props.pty}
+              autoFocus={props.focused}
+              runtimeId={terminal.runtimeId()}
+              onStatusChange={(next, error) => terminal.setStatus(props.pty.id, ptyId, next, error)}
+            />
+          )}
+        </Show>
+        <Show when={props.pty.status !== "ready"}>
+          <div class="pointer-events-none absolute inset-0 flex items-center justify-center bg-background-stronger text-13-regular text-text-weak">
+            {status()}
+          </div>
+        </Show>
+      </Show>
+    </div>
+  )
+}
+
+function PaneRenderer(props: { node: PaneNode }) {
+  const split = () => {
+    const node = props.node
+    return node.kind === "split" ? node : undefined
+  }
+  const leaf = () => {
+    const node = props.node
+    return node.kind === "leaf" ? node : undefined
+  }
+  return (
+    <Show when={split()} fallback={<Show when={leaf()}>{(node) => <LeafPane node={node()} />}</Show>}>
+      {(node) => <SplitPane node={node()} />}
     </Show>
   )
 }
@@ -337,9 +385,7 @@ export function TerminalActions() {
   )
 }
 
-/** The terminal pane tree (splits + leaves + tabs). Position-agnostic: mounted by both the
- *  bottom dock and the side panel. PTY state is workspace-scoped, so both mounts share one store —
- *  but at any time a panel lives in only one location, so there is never a double mount. */
+/** The pane tree is mounted only in the currently visible terminal host. */
 export function TerminalPanes() {
   const terminal = useTerminal()
   return (
@@ -369,16 +415,20 @@ export function useTerminalLifecycle(opts: {
       setAutoCreated(false)
       return
     }
-    if (!terminal.ready() || terminal.all().length !== 0 || autoCreated()) return
-    terminal.new()
+    if (terminal.all().length !== 0) {
+      setAutoCreated(false)
+      return
+    }
+    if (!terminal.ready() || terminal.creating() || terminal.createError() || autoCreated()) return
+    void terminal.new()
     setAutoCreated(true)
   })
 
   createEffect(
     on(
-      () => terminal.all().length,
-      (count, prevCount) => {
-        if (prevCount === undefined || prevCount <= 0 || count !== 0) return
+      () => terminal.closeRequest(),
+      (request, previous) => {
+        if (previous === undefined || request === previous) return
         if (!opts.active()) return
         opts.close()
       },

@@ -500,6 +500,20 @@ const buildDeepAgentPromptContext = Effect.fn("LLMRequestPrep.buildDeepAgentProm
   }
 
   if (previousValidationResults.length > 0) {
+    // Round-context suppression (v4.0.4): filter out failing results that the model has acknowledged.
+    // Single-item fingerprint: "command exit_code" — same scheme as validationFingerprint() but per-item.
+    const suppressedFps = AgentGateway.DeepAgentSessionState.getSuppressedFingerprints(input.sessionID)
+    let activeResults = previousValidationResults
+    if (suppressedFps.length > 0) {
+      // Evict stale suppressions for commands that re-ran with a new exit_code.
+      for (const r of previousValidationResults) {
+        const fp = `${r.command} ${r.exit_code}`
+        const stale = suppressedFps.find((s) => s !== fp && s.startsWith(r.command + " "))
+        if (stale) AgentGateway.DeepAgentSessionState.unsuppressFingerprint(input.sessionID, stale)
+      }
+      const current = AgentGateway.DeepAgentSessionState.getSuppressedFingerprints(input.sessionID)
+      activeResults = previousValidationResults.filter((r) => r.passed || !current.includes(`${r.command} ${r.exit_code}`))
+    }
     // STALE-REHARVEST GUARD: extractValidationResults re-scans the WHOLE transcript every turn, so a
     // test result from an earlier round (with its frozen `[Nms]` duration) is re-extracted verbatim on
     // every subsequent turn as long as it stays in history. Without this guard, each turn re-ran
@@ -511,11 +525,11 @@ const buildDeepAgentPromptContext = Effect.fn("LLMRequestPrep.buildDeepAgentProm
     // new validation run changes the fingerprint; a stale re-harvest does not.
     const existing = AgentGateway.DeepAgentSessionState.get(input.sessionID)
     const isNewEvidence =
-      !existing || validationFingerprint(existing.lastValidationResults) !== validationFingerprint(previousValidationResults)
+      !existing || validationFingerprint(existing.lastValidationResults) !== validationFingerprint(activeResults)
     if (isNewEvidence) {
-      const output = previousValidationResults.map((r) => `${r.command}: ${r.passed ? "PASS" : "FAIL"}`).join("\n")
-      AgentGateway.DeepAgentSessionState.recordValidation(input.sessionID, previousValidationResults, output)
-      AgentGateway.DeepAgentOrchestrator.processValidationResults(input.sessionID, previousValidationResults)
+      const output = activeResults.map((r) => `${r.command}: ${r.passed ? "PASS" : "FAIL"}`).join("\n")
+      AgentGateway.DeepAgentSessionState.recordValidation(input.sessionID, activeResults, output)
+      AgentGateway.DeepAgentOrchestrator.processValidationResults(input.sessionID, activeResults)
     }
   } else if (deepAgentRoundControl(input.user.metadata) === "continue") {
     const state = AgentGateway.DeepAgentSessionState.get(input.sessionID)
