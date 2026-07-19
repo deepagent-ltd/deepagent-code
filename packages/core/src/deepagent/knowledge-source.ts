@@ -6,7 +6,7 @@ import {
   statusToApproval,
   type ScoredDoc,
 } from "./durable-knowledge-store"
-import type { DocType } from "./document-store"
+import type { DocType, DocumentStore } from "./document-store"
 import { DeepAgentCodeHome } from "./workspace"
 import { EnvironmentFactAdoption } from "./environment-fact-adoption"
 
@@ -22,11 +22,17 @@ import { EnvironmentFactAdoption } from "./environment-fact-adoption"
 let baseDir: string | null = null
 let userGlobalCache: DurableKnowledgeStore | null = null
 const projectCache = new Map<string, DurableKnowledgeStore>()
+// H32-1: optional shared DocumentStore injected by the gateway so knowledge operations participate
+// in the same CAS/SSOT instance as plan/session docs. When null, each store creates its own
+// DocumentStore (existing behaviour, backward-compatible).
+let sharedDocumentStore: DocumentStore | null = null
 
 // Configure the durable knowledge base dir (the gateway calls this alongside SessionState/MemoryStore
 // configure, from the injected baseDir — never a self-resolved home).
-export const configure = (dir: string): void => {
+// H32-1: optional sharedStore accepted; passed through to openUserGlobalStore/openProjectStore.
+export const configure = (dir: string, sharedStore?: DocumentStore): void => {
   baseDir = dir
+  sharedDocumentStore = sharedStore ?? null
   userGlobalCache = null
   projectCache.clear()
 }
@@ -40,6 +46,7 @@ export const isConfigured = (): boolean => baseDir !== null
 // ever configures forward).
 export const reset = (): void => {
   baseDir = null
+  sharedDocumentStore = null
   userGlobalCache = null
   projectCache.clear()
 }
@@ -56,7 +63,7 @@ const ensureBase = (): string => {
 }
 
 const userGlobalStore = (): DurableKnowledgeStore => {
-  if (!userGlobalCache) userGlobalCache = openUserGlobalStore(ensureBase())
+  if (!userGlobalCache) userGlobalCache = openUserGlobalStore(ensureBase(), sharedDocumentStore ?? undefined)
   return userGlobalCache
 }
 
@@ -64,7 +71,7 @@ const projectStore = (workspacePath: string): DurableKnowledgeStore => {
   const pid = projectIdForWorkspace(workspacePath)
   let store = projectCache.get(pid)
   if (!store) {
-    store = openProjectStore(ensureBase(), workspacePath)
+    store = openProjectStore(ensureBase(), workspacePath, sharedDocumentStore ?? undefined)
     projectCache.set(pid, store)
   }
   return store
