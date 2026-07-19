@@ -88,7 +88,7 @@ This will walk you through installing the GitHub app, creating the workflow, and
               persist-credentials: false
 
           - name: Run deepagent-code
-           uses: lessweb/deepagent-code/github@latest
+           uses: deepagent-ltd/deepagent-code/github@latest
            env:
              ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
              GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -101,7 +101,7 @@ This will walk you through installing the GitHub app, creating the workflow, and
 
 ## Support
 
-This is an early release. If you encounter issues or have feedback, please create an issue at https://github.com/lessweb/deepagent-code/issues.
+This is an early release. If you encounter issues or have feedback, please create an issue at https://github.com/deepagent-ltd/deepagent-code/issues.
 
 ## Development
 

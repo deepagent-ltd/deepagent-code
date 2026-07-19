@@ -14,14 +14,11 @@ DeepAgent Code keeps the opencode runtime foundation and adds the DeepAgent cont
 
 ## Install
 
-```bash
-npm i -g deepagent-code@latest
-```
-
-Or install through the script:
+> **Note:** The `deepagent-code` npm package is not yet publicly published.
+> Install via the desktop app or the install script:
 
 ```bash
-curl -fsSL https://deepagent-code.ai/install | bash
+curl -fsSL https://deepagent.ltd/install | bash
 ```
 
 ## Usage
@@ -30,4 +27,4 @@ curl -fsSL https://deepagent-code.ai/install | bash
 deepagent-code
 ```
 
-For full documentation, desktop downloads, and configuration guides, see the repository README and https://deepagent-code.ai/docs.
+For full documentation, desktop downloads, and configuration guides, see the repository README and https://deepagent.ltd/docs.
