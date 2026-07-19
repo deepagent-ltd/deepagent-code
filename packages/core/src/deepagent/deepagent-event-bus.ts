@@ -1,10 +1,10 @@
 export * as DeepAgentEventBus from "./deepagent-event-bus"
 
 import { Context, Effect, Layer, PubSub, Stream } from "effect"
-import { and, asc, desc, eq, lte, lt, gt, notExists, or, sql } from "drizzle-orm"
+import { and, asc, desc, eq, isNull, lte, lt, gt, notExists, or, sql } from "drizzle-orm"
 import { alias } from "drizzle-orm/sqlite-core"
 import { Database } from "../database/database"
-import { DeepAgentEventDeliveryTable, DeepAgentEventDropTable, DeepAgentEventTable } from "./deepagent-event-sql"
+import { DeepAgentEventDeliveryTable, DeepAgentEventDropTable, DeepAgentEventTable, DeepAgentConsumerGroupTable } from "./deepagent-event-sql"
 import { ApprovalQueueTable } from "./approval-queue-sql"
 import { DeepAgentEvent } from "./deepagent-event"
 import { RateLimiter } from "./rate-limiter"
@@ -163,6 +163,19 @@ export interface Interface {
    * the injected clock (deterministic in tests). A no-op that never throws — safe to call any time.
    */
   readonly sweepPublishLimiter: (now?: number) => Effect.Effect<{ readonly prunedBuckets: number }>
+  /**
+   * K40-2 (v4.0.4): Durably register a consumer group so it receives delivery rows even when offline.
+   * Previously groups only existed in-memory (registered for the lifetime of a live subscribe stream).
+   * With durable registration, `publish` writes delivery rows for ALL registered groups — not just the
+   * in-memory live ones — so an offline consumer catches up via `dueRetries` + `replay` on reconnect.
+   * Idempotent: re-registering the same group updates `last_seen_at`.
+   */
+  readonly registerConsumerGroup: (groupId: string, typeFilter?: string) => Effect.Effect<void>
+  /**
+   * K40-2: Durably unregister a consumer group. After this call `publish` will no longer create delivery
+   * rows for this group. Live in-memory streams for this group are NOT terminated — they finish naturally.
+   */
+  readonly unregisterConsumerGroup: (groupId: string) => Effect.Effect<void>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@deepagent-code/DeepAgentEventBus") {}
@@ -210,12 +223,22 @@ export const layerWith = (options?: LayerOptions) =>
       const backoffBaseMs = options?.backoffBaseMs ?? DEFAULT_BACKOFF_BASE_MS
       const now = options?.now ?? Date.now
       const live = yield* PubSub.unbounded<DeepAgentEvent.Event>()
+      // K40-3 (v4.0.4): separate high-priority PubSub so critical/high events are available on a
+      // dedicated channel that subscribers can drain FIRST — implementing true priority preemption.
+      // critical/high events go to BOTH `live` AND `highPriorityLive`; normal/low go to `live` only.
+      // `subscribe` for grouped consumers merges both channels (highPriorityLive first), so when
+      // multiple events are queued, critical/high are processed before normal/low.
+      const highPriorityLive = yield* PubSub.unbounded<DeepAgentEvent.Event>()
       // §A4/§E2 — ONE in-memory fixed-window limiter for the whole bus, keyed per workspaceID. Only
       // `tryPublish` consults it; `publish` is unchanged. `now` (the injected clock) drives window
       // resets so tests cross a boundary deterministically.
       const publishLimiter = new RateLimiter.Service()
 
-      yield* Effect.addFinalizer(() => PubSub.shutdown(live))
+      yield* Effect.addFinalizer(() =>
+        Effect.all([PubSub.shutdown(live), PubSub.shutdown(highPriorityLive)], { concurrency: "unbounded" }).pipe(
+          Effect.asVoid,
+        ),
+      )
 
       // §A3 at-least-once — the set of consumer groups with a live `subscribe({group})` stream, and
       // the type filter each declared. `publish` writes a durable `pending` delivery row for every
@@ -238,15 +261,37 @@ export const layerWith = (options?: LayerOptions) =>
           else entry.types.set(type, next)
           if (entry.types.size === 0) groups.delete(group)
         })
-      // groups owed a delivery for `event`: any live group with a wildcard (null) filter or a filter
-      // matching the event's type.
-      const groupsFor = (eventType: string): ReadonlyArray<string> => {
+      // K40-2: in-memory live groups (unchanged: groups registered for the current stream lifetime)
+      const liveGroupsFor = (eventType: string): ReadonlyArray<string> => {
         const out: string[] = []
         for (const [group, entry] of groups) {
           if (entry.types.has(null) || entry.types.has(eventType)) out.push(group)
         }
         return out
       }
+      // K40-2: durable groups from DB (groups registered via registerConsumerGroup, survive restarts).
+      // Returns the union of live + durable groups, deduped. An offline group that registered durably
+      // will receive delivery rows even though it has no live stream right now.
+      const groupsFor = (eventType: string): Effect.Effect<ReadonlyArray<string>> =>
+        db
+          .select({ group_id: DeepAgentConsumerGroupTable.group_id })
+          .from(DeepAgentConsumerGroupTable)
+          .where(
+            or(isNull(DeepAgentConsumerGroupTable.type_filter), eq(DeepAgentConsumerGroupTable.type_filter, eventType)),
+          )
+          .all()
+          .pipe(
+            Effect.orDie,
+            Effect.map((rows) => {
+              const dbGroups = rows.map((r) => r.group_id)
+              const live = liveGroupsFor(eventType)
+              // Union: db-registered + live-only (not yet durable-registered), deduplicated.
+              const seen = new Set<string>(dbGroups)
+              const merged = [...dbGroups]
+              for (const g of live) if (!seen.has(g)) merged.push(g)
+              return merged
+            }),
+          )
 
       const publish: Interface["publish"] = (input) =>
         Effect.gen(function* () {
@@ -281,7 +326,8 @@ export const layerWith = (options?: LayerOptions) =>
           // `.returning()` tells us whether the insert actually landed (a racing duplicate that slips
           // past the read-check above hits UNIQUE(idempotency_key) → 0 rows → not the winner). Dispatch
           // happens AFTER commit, so a subscriber never observes an uncommitted event.
-          const owed = groupsFor(event.type)
+          // K40-2: groupsFor is now async (queries DB for durable groups + in-memory live groups).
+          const owed = yield* groupsFor(event.type)
           // §F1 event_publish_latency_ms — wall-clock delta (injected clock) around the persist
           // transaction. One now() before, one after; the delta is written on the row so Observability
           // can build the publish-latency histogram. Cheap + additive.
@@ -363,7 +409,14 @@ export const layerWith = (options?: LayerOptions) =>
             .where(eq(DeepAgentEventTable.id, event.id))
             .run()
             .pipe(Effect.orDie)
+          // K40-3: critical/high events go to BOTH channels so grouped subscribers drain the
+          // high-priority channel first (preempting queued normal/low events). normal/low go to
+          // `live` only. All events go to `live` so anonymous (non-grouped) subscribers still
+          // receive the complete stream regardless of priority.
           yield* PubSub.publish(live, event)
+          if (event.priority === "critical" || event.priority === "high") {
+            yield* PubSub.publish(highPriorityLive, event)
+          }
           return event
         })
 
@@ -391,15 +444,40 @@ export const layerWith = (options?: LayerOptions) =>
         const filtered = Stream.fromPubSub(live).pipe(
           Stream.filter((event) => (input.type ? event.type === input.type : true)),
         )
-        // A grouped subscriber declares a durable consumer group: register it for the stream's scope so
-        // `publish` writes `pending` delivery rows it must ack (§A3 at-least-once). Anonymous
-        // subscribers (no group) are pure live observers — no delivery tracking.
+        // Anonymous subscribers (no group) are pure live observers — no delivery tracking, no priority
+        // preemption needed (they see everything anyway).
         if (input.group == null) return filtered
         const group = input.group
         const type = input.type ?? null
-        return filtered.pipe(
-          Stream.onStart(registerGroup(group, type)),
-          Stream.ensuring(unregisterGroup(group, type)),
+
+        // K40-3: grouped subscribers get a merged stream — high-priority channel first so critical/high
+        // events preempt queued normal/low events. Anonymous subscribers keep the simple `filtered` path.
+        const priorityFiltered = Stream.fromPubSub(highPriorityLive).pipe(
+          Stream.filter((event) => (input.type ? event.type === input.type : true)),
+        )
+        // Merge: highPriorityLive items are pulled first; live provides the rest. Both are filtered.
+        const mergedFiltered = Stream.merge(priorityFiltered, filtered, { haltStrategy: "both" })
+
+        // K40-2: update last_seen_at in DB when a group stream starts/ends so a future sweep can
+        // prune durably-registered groups that have been offline indefinitely.
+        const touchLastSeen = db
+          .update(DeepAgentConsumerGroupTable)
+          .set({ last_seen_at: now() })
+          .where(eq(DeepAgentConsumerGroupTable.group_id, group))
+          .run()
+          .pipe(Effect.orDie, Effect.asVoid)
+
+        return mergedFiltered.pipe(
+          Stream.onStart(
+            Effect.all([registerGroup(group, type), touchLastSeen], { concurrency: "unbounded" }).pipe(
+              Effect.asVoid,
+            ),
+          ),
+          Stream.ensuring(
+            Effect.all([unregisterGroup(group, type), touchLastSeen], { concurrency: "unbounded" }).pipe(
+              Effect.asVoid,
+            ),
+          ),
         )
       }
 
@@ -755,6 +833,28 @@ export const layerWith = (options?: LayerOptions) =>
       const sweepPublishLimiter: Interface["sweepPublishLimiter"] = (nowArg) =>
         Effect.sync(() => ({ prunedBuckets: publishLimiter.sweep(nowArg ?? now()) }))
 
+      // K40-2: durable consumer group registration — persists group identity so publish writes delivery
+      // rows for offline groups too. Both methods are idempotent; registerConsumerGroup upserts.
+      const registerConsumerGroup: Interface["registerConsumerGroup"] = (groupId, typeFilter) => {
+        const at = now()
+        return db
+          .insert(DeepAgentConsumerGroupTable)
+          .values([{ group_id: groupId, type_filter: typeFilter ?? null, registered_at: at, last_seen_at: at }])
+          .onConflictDoUpdate({
+            target: DeepAgentConsumerGroupTable.group_id,
+            set: { type_filter: typeFilter ?? null, last_seen_at: at },
+          })
+          .run()
+          .pipe(Effect.orDie, Effect.asVoid)
+      }
+
+      const unregisterConsumerGroup: Interface["unregisterConsumerGroup"] = (groupId) =>
+        db
+          .delete(DeepAgentConsumerGroupTable)
+          .where(eq(DeepAgentConsumerGroupTable.group_id, groupId))
+          .run()
+          .pipe(Effect.orDie, Effect.asVoid)
+
       return Service.of({
         publish,
         tryPublish,
@@ -769,6 +869,8 @@ export const layerWith = (options?: LayerOptions) =>
         getByID,
         sweep,
         sweepPublishLimiter,
+        registerConsumerGroup,
+        unregisterConsumerGroup,
       })
     }),
   )
