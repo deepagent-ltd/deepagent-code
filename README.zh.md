@@ -14,7 +14,7 @@
   <a href="https://github.com/deepagent-ltd/deepagent-code-enterprise">Enterprise 版本</a>
 </p>
 
-<p align="center"><sub>桌面版 1.4.1 · DeepAgent Core V4.1</sub></p>
+<p align="center"><sub>桌面版 1.4.2 · DeepAgent Core V4.0.4</sub></p>
 
 ---
 
@@ -91,22 +91,25 @@ DeepAgent 可以把独立工作拆分给数量有界、相互隔离的 Worker。
 
 项目 IM 把团队成员和智能体放进同一条讨论。@ 某个智能体即可启动有明确作用域的运行，使用项目上下文、流式展示进度、关联执行工件，并把答案留在发起任务的对话里。
 
-## DeepAgent Core V4.1
+## DeepAgent Core V4.0.4
 
-V4.1 把完整的 DeepAgent 控制平面汇聚在一起：
+V4.0.4 在保持当前 turn 引擎稳定的前提下，关闭生产合同缺口：
 
-- **持久 Session V2：** prompt 先持久准入、再调度执行；精确重试不会复制用户意图；同一 Session 的唤醒会安全合并。
-- **统一供应商轮次合同：** native 与 AI SDK provider 共享预算、权限、工件、审计、学习和关闭生命周期。
 - **单一持久真相：** DocumentStore 通过原子、可恢复写入统一管理文档、计划、学习候选、治理状态和版本冲突。
-- **事件驱动 Agent OS：** 持久事件、优先级路由、回压、Worker claim、租约、handoff、重试、死信恢复与分布式 placement 协调自主工作。
-- **消费者驱动 Goal：** `goal.tick.requested` 每次认领并执行一个幂等 tick，记录事实，并只在持久目标仍满足条件时调度下一 tick。
-- **人类监督：** 审批队列、全链路 trace、接管、回滚、Wiki 档案、通知，以及组织和 workspace 隔离始终位于执行路径上。
-- **安全集成：** MCP 凭据使用环境变量引用或原生操作系统 secret storage；目录风险、运行时权限、可信来源和工具 capability 逐层失败关闭。
+- **隔离子智能体：** 具备写权限的子智能体默认使用独立 worktree，并通过有界、可感知冲突的路径把改动回传到父工作区。
+- **可靠事件投递：** Event Bus 提供可替换 transport、持久 consumer offset、离线补投、真实优先级排序和可观测队列深度。
+- **受治理的学习与目标：** 知识晋升关联审阅证据与 ship-gate snapshot；事件驱动 goal tick 保持幂等并遵守 quiet hours。
+- **安全集成：** MCP 凭据使用环境变量引用或 macOS、Linux、Windows 原生 secret storage；capability 与来源检查逐层失败关闭。
+- **发布真实性：** 安装方式、CLI 示例、发布元数据、公开域名和支持版本文档与实际交付产品一致。
 
 ## 安装
 
+> **说明：** `deepagent-code` npm 包尚未公开发布。
+> 请通过桌面应用或下面的安装脚本安装。
+
 ```bash
-npm install -g deepagent-code
+# 安装脚本（macOS / Linux）
+curl -fsSL https://deepagent.ltd/install | bash
 ```
 
 然后运行：
@@ -178,7 +181,7 @@ deepagent auth list
 启动智能体并交给它一个任务：
 
 ```bash
-deepagent-code "为 /api/users 端点添加限流"
+deepagent-code run "为 /api/users 端点添加限流"
 ```
 
 智能体将会：

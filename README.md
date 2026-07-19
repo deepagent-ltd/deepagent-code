@@ -14,7 +14,7 @@
   <a href="https://github.com/deepagent-ltd/deepagent-code-enterprise">Enterprise</a>
 </p>
 
-<p align="center"><sub>Desktop 1.4.2 · DeepAgent Core V4.0</sub></p>
+<p align="center"><sub>Desktop 1.4.2 · DeepAgent Core V4.0.4</sub></p>
 
 ---
 
@@ -91,17 +91,16 @@ For high-risk decisions, convene an **Expert Panel**. Correctness, security, per
 
 Project IM brings people and agents into the same thread. Mention an agent to start a scoped run with project context, stream its progress, inspect its artifacts, and keep the answer attached to the conversation that requested it.
 
-## DeepAgent Core V4.1
+## DeepAgent Core V4.0.4
 
-V4.1 brings the complete DeepAgent control plane together:
+V4.0.4 closes production contract gaps while keeping the current turn engine stable:
 
-- **Durable Session V2:** prompt admission is persisted before execution; exact retries do not duplicate user intent; same-session wakes coalesce safely.
-- **One provider-turn contract:** native and AI SDK providers share the same budget, permission, artifact, audit, learning, and close lifecycle.
-- **Single durable truth:** DocumentStore owns documents, plans, learning candidates, governance state, and version conflicts through atomic, recoverable writes.
-- **Event-driven Agent OS:** durable events, priority routing, backpressure, worker claims, leases, handoffs, retries, dead-letter recovery, and distributed placement coordinate autonomous work.
-- **Consumer-driven goals:** `goal.tick.requested` claims and executes one idempotent tick, records facts, and schedules the next tick only when the durable goal remains eligible.
-- **Human oversight:** approval queues, trace correlation, takeover, rollback, Wiki archives, notifications, and organization/workspace isolation remain part of the execution path.
-- **Secure integrations:** MCP credentials use environment references or native OS secret storage; catalog risk, runtime permissions, trusted sources, and tool capability checks fail closed.
+- **Single durable truth:** DocumentStore uses atomic, recoverable writes for documents, plans, learning candidates, governance state, and version conflicts.
+- **Isolated subagents:** write-capable subagents use dedicated worktrees by default and return their changes to the parent workspace through a bounded, conflict-aware path.
+- **Reliable event delivery:** the Event Bus has a transport seam, durable consumer offsets, offline catch-up, real priority ordering, and observable queue depth.
+- **Governed learning and goals:** knowledge promotion is tied to review evidence and ship-gate snapshots; event-driven goal ticks remain idempotent and respect quiet hours.
+- **Secure integrations:** MCP credentials use environment references or native OS secret storage on macOS, Linux, and Windows; capability and source checks fail closed.
+- **Publishing truth:** installation, CLI examples, release metadata, public domains, and supported-version documentation match the product that is actually shipped.
 
 ## Installation
 
