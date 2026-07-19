@@ -199,34 +199,146 @@ export namespace SecretStore {
   })
 
   /**
-   * Linux libsecret (Secret Service) backend — NOT YET IMPLEMENTED natively.
-   * TODO(S1-v3.5): wire `secret-tool store/lookup` (libsecret) when a Secret Service
-   * daemon is present. Until then it reports unavailable so selection degrades to the
-   * REAL 0600 file fallback — we do NOT fake a keyring.
+   * Linux libsecret (Secret Service) backend — via the `secret-tool` CLI (part of libsecret-tools).
+   * Requires a running Secret Service daemon (GNOME Keyring, KWallet with the KSecretService module,
+   * or a headless daemon like `gnome-keyring-daemon --daemonize --components=secrets`).
+   *
+   * G35-1 (v4.0.4): real implementation replacing the always-unavailable stub. The secret is passed
+   * via stdin (not a CLI argument) so it does not appear in the process table — unlike the macOS
+   * backend which has a documented process-table exposure from `security -w`.
+   *
+   * Validated on Ubuntu 22.04+ with gnome-keyring. Remote/headless verification: SSH into the
+   * target machine (port 5070) and confirm `secret-tool --version` + daemon presence.
    */
   export const libsecretBackend = (): Backend => ({
     id: "libsecret",
-    available: async () => false, // TODO: detect + use `secret-tool` (libsecret) on Linux.
-    put: async () => {
-      throw new Error("libsecret backend not implemented")
+    available: async () => {
+      if (process.platform !== "linux") return false
+      // Check secret-tool is on PATH.
+      const which = await Process.run(["which", "secret-tool"], { nothrow: true }).catch(() => undefined)
+      if (!which || which.code !== 0) return false
+      // Probe the Secret Service daemon with a zero-cost attributes query (no I/O expected, only
+      // checking the daemon responds). We cannot call `secret-tool --version` reliably across
+      // distributions; instead try a `lookup` for an account that should not exist and treat
+      // daemon-unavailable (exit 2) as false vs. daemon-present/not-found (exit 1) as true.
+      const probe = await Process.run(
+        ["secret-tool", "lookup", "service", KEYCHAIN_SERVICE, "account", "__availability_probe__"],
+        { nothrow: true },
+      ).catch(() => undefined)
+      // exit 1 = no matching item (daemon is up, secret not found) → available
+      // exit 2+ = daemon not running or other error → not available
+      return !!probe && (probe.code === 0 || probe.code === 1)
     },
-    get: async () => undefined,
-    remove: async () => {},
+    put: async (account, secret) => {
+      // secret-tool reads the secret from stdin so it never appears in the process table.
+      const label = `${KEYCHAIN_SERVICE}:${account}`
+      const proc = Bun.spawn(
+        ["secret-tool", "store", "--label", label, "service", KEYCHAIN_SERVICE, "account", account],
+        { stdin: "pipe", stdout: "pipe", stderr: "pipe" },
+      )
+      proc.stdin.write(secret)
+      proc.stdin.end()
+      const code = await proc.exited
+      if (code !== 0) {
+        const err = await new Response(proc.stderr).text()
+        throw new Error(`secret-tool store failed (code ${code}): ${err.trim()}`)
+      }
+    },
+    get: async (account) => {
+      const res = await Process.run(
+        ["secret-tool", "lookup", "service", KEYCHAIN_SERVICE, "account", account],
+        { nothrow: true },
+      )
+      if (res.code !== 0) return undefined
+      return res.stdout.toString()
+    },
+    remove: async (account) => {
+      await Process.run(
+        ["secret-tool", "clear", "service", KEYCHAIN_SERVICE, "account", account],
+        { nothrow: true },
+      ).catch(() => {})
+    },
   })
 
   /**
-   * Windows DPAPI backend — NOT YET IMPLEMENTED natively.
-   * TODO(S1-v3.5): wrap DPAPI (CryptProtectData) or Credential Manager. Until then it
-   * reports unavailable so selection degrades to the REAL 0600 file fallback.
+   * Windows Credential Manager backend — via PowerShell's Windows.Security.Credentials.PasswordVault
+   * (WinRT, available on Windows 8.1+ / Windows Server 2012 R2+).
+   *
+   * G35-1 (v4.0.4): real implementation replacing the always-unavailable stub. Uses the PasswordVault
+   * API, which is backed by DPAPI under the hood — credentials are encrypted with the user's key and
+   * stored in the OS credential store (visible in Windows Credential Manager → Windows Credentials).
+   *
+   * Note: not yet verified on Windows (no test machine in current environment). The implementation
+   * follows Microsoft's documented PasswordVault PowerShell pattern. Verified path deferred to
+   * v4.0.6 once a Windows CI/test machine is available.
    */
   export const dpapiBackend = (): Backend => ({
     id: "dpapi",
-    available: async () => false, // TODO: implement DPAPI / Windows Credential Manager.
-    put: async () => {
-      throw new Error("DPAPI backend not implemented")
+    available: async () => {
+      if (process.platform !== "win32") return false
+      // Probe PowerShell + PasswordVault availability with a minimal no-op script.
+      const res = await Process.run(
+        [
+          "powershell.exe",
+          "-NoProfile",
+          "-NonInteractive",
+          "-Command",
+          "[Windows.Security.Credentials.PasswordVault,Windows.Security.Credentials,ContentType=WindowsRuntime] | Out-Null; Write-Output ok",
+        ],
+        { nothrow: true },
+      ).catch(() => undefined)
+      return !!res && res.code === 0 && res.stdout.toString().includes("ok")
     },
-    get: async () => undefined,
-    remove: async () => {},
+    put: async (account, secret) => {
+      const label = `${KEYCHAIN_SERVICE}:${account}`
+      const script = `
+        [Windows.Security.Credentials.PasswordVault,Windows.Security.Credentials,ContentType=WindowsRuntime] | Out-Null
+        $vault = New-Object Windows.Security.Credentials.PasswordVault
+        # Remove existing entry before adding to avoid duplicates.
+        try { $vault.Remove($vault.Retrieve('${label}', '${account}')) } catch {}
+        $cred = New-Object Windows.Security.Credentials.PasswordCredential('${label}', '${account}', '${secret.replace(/'/g, "''")}')
+        $vault.Add($cred)
+        Write-Output ok
+      `.trim()
+      const res = await Process.run(
+        ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
+        { nothrow: true },
+      )
+      if (res.code !== 0 || !res.stdout.toString().includes("ok")) {
+        throw new Error(`Windows Credential Manager put failed (code ${res.code})`)
+      }
+    },
+    get: async (account) => {
+      const label = `${KEYCHAIN_SERVICE}:${account}`
+      const script = `
+        [Windows.Security.Credentials.PasswordVault,Windows.Security.Credentials,ContentType=WindowsRuntime] | Out-Null
+        $vault = New-Object Windows.Security.Credentials.PasswordVault
+        try {
+          $cred = $vault.Retrieve('${label}', '${account}')
+          $cred.RetrievePassword()
+          Write-Output $cred.Password
+        } catch { exit 1 }
+      `.trim()
+      const res = await Process.run(
+        ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
+        { nothrow: true },
+      ).catch(() => undefined)
+      if (!res || res.code !== 0) return undefined
+      const value = res.stdout.toString().replace(/\r?\n$/, "")
+      return value || undefined
+    },
+    remove: async (account) => {
+      const label = `${KEYCHAIN_SERVICE}:${account}`
+      const script = `
+        [Windows.Security.Credentials.PasswordVault,Windows.Security.Credentials,ContentType=WindowsRuntime] | Out-Null
+        $vault = New-Object Windows.Security.Credentials.PasswordVault
+        try { $vault.Remove($vault.Retrieve('${label}', '${account}')) } catch {}
+      `.trim()
+      await Process.run(
+        ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
+        { nothrow: true },
+      ).catch(() => {})
+    },
   })
 
   /**
