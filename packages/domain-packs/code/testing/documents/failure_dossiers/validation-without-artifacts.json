@@ -2,7 +2,7 @@
   "ref_id": "failure:testing:failure",
   "type": "failure_dossier",
   "description": "Validation Without Artifacts",
-  "body": "Claiming validation without command or artifact refs cannot be audited.\n\nDerived from reviewed skill survey outputs, including canonical rules, coverage reports, and trusted skill notes. Paraphrased into domain-pack seed form.\n\nDiagnostic use only: keep this out of index.json and use it only as a blocked/do-not-use signal.",
+  "body": "Claiming validation without command or artifact refs cannot be audited.\n\nDerived from local skill survey outputs under /Users/xiuranli/code/agent/skill, especially reviewed canonical rules, coverage reports, and trusted local skill notes. Paraphrased into domain-pack seed form.\n\nDiagnostic use only: keep this out of index.json and use it only as a blocked/do-not-use signal.",
   "domain": "testing",
   "scope_hint": "code.testing:failure_dossiers",
   "evidence_strength": "medium",

@@ -12,6 +12,8 @@ import {
   type StepExecutor,
 } from "@deepagent-code/core/deepagent/goal-loop"
 import { WikiGraph, WikiService } from "../../src/wiki/wiki-service"
+import { ExecutionArchiver } from "../../src/wiki/execution-archiver"
+import { DurableKnowledgeStore } from "@deepagent-code/core/deepagent/durable-knowledge-store"
 import { runPanel, type PanelistRunner } from "../../src/panel/orchestrator"
 import { DEFAULT_QUORUM_POLICY, type PanelOpinion } from "../../src/agent/schema/panel"
 
@@ -19,8 +21,8 @@ import { DEFAULT_QUORUM_POLICY, type PanelOpinion } from "../../src/agent/schema
  * V3.9 §G integration — the B/C/D collaborative CLOSED LOOP (§D.7), proven deterministically.
  *
  * This is the key deliverable: it wires the REAL controller (core `makeGoalLoop`), the REAL Panel
- * (orchestrator `runPanel` + deterministic `arbitrate`), and the REAL archiver
- * (`WikiService.renderExecutionArchive`) over ONE real DocumentStore. Only the leaf I/O is stubbed:
+ * (orchestrator `runPanel` + deterministic `arbitrate`), and the REAL archiver (`ExecutionArchiver` /
+ * `WikiService.renderExecutionArchive`) over ONE real DocumentStore. Only the leaf I/O is stubbed:
  *   - the panelist LLM (a `PanelistRunner` returning fixed PanelOpinions → real arbiter → PanelVerdict)
  *   - step execution (a StubStepExecutor that advances the plan doc, i.e. writes plan versions)
  *
@@ -28,8 +30,8 @@ import { DEFAULT_QUORUM_POLICY, type PanelOpinion } from "../../src/agent/schema
  *   §D.7 × C : `panel_approves` calls the REAL runPanel — the Goal Loop convenes the Panel at a
  *              decision point, and only when the panel approves does the goal reach `done`.
  *   §D.7 × B : every tick writes worklog/diagnosis into the run:<sessionId> Document Graph (the
- *              trajectory); WikiService.renderExecutionArchive then aggregates plan+worklog+trajectory
- *              into a Wiki archive page (the read path now exposed via GET /wiki/execution-archive).
+ *              trajectory); the REAL ExecutionArchiver then aggregates plan+worklog+trajectory into a
+ *              Wiki archive page.
  */
 
 let roots: string[] = []
@@ -41,6 +43,12 @@ const freshStore = () => {
   roots.push(root)
   return new DocumentStore(root)
 }
+const freshDurable = () => {
+  const root = mkdtempSync(path.join(tmpdir(), "deepagent-bcd-dks-"))
+  roots.push(root)
+  return new DurableKnowledgeStore(root)
+}
+
 const SESSION = "s-bcd-1"
 const step = (id: string, status: PlanStep["status"], title = id): PlanStep => ({
   step_id: id,
@@ -159,8 +167,7 @@ describe("V3.9 §G — B/C/D closed loop (real controller + real panel + real ar
     const worklogs = store.list({ type: "worklog", scope: planScope(SESSION) })
     expect(worklogs.length).toBe(2)
 
-    // The REAL archiver aggregates plan + worklog trajectory into a Wiki archive page. This is the
-    // §B.6 read path now exposed via GET /deepagent/wiki/execution-archive (WikiService.render).
+    // The REAL archiver aggregates plan + worklog trajectory into a Wiki archive page.
     const graph = new WikiGraph([store])
     const wiki = new WikiService(graph)
     const archive = await Effect.runPromise(wiki.renderExecutionArchive({ sessionId: SESSION }))
@@ -168,6 +175,11 @@ describe("V3.9 §G — B/C/D closed loop (real controller + real panel + real ar
     expect(types).toContain("plan")
     expect(types.filter((t) => t === "worklog").length).toBe(2)
     expect(archive.markdown).toContain(`Execution Archive — session ${SESSION}`)
+
+    // And the same archive is reachable via the ExecutionArchiver (the §B.6 completion-hook entry).
+    const archiver = new ExecutionArchiver({ graph, promotionStore: freshDurable(), wiki })
+    const viaArchiver = await Effect.runPromise(archiver.archiveSession(SESSION))
+    expect(viaArchiver.entries.length).toBe(archive.entries.length)
   })
 
   test("§D.7 × C: a real panel BLOCK keeps the goal from completing (fail-closed) → not done", async () => {

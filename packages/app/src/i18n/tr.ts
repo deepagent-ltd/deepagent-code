@@ -630,12 +630,6 @@ export const dict = {
   "settings.general.section.updates": "Güncellemeler",
   "settings.general.section.sounds": "Ses efektleri",
   "settings.general.section.feed": "Akış",
-  "settings.general.section.sharing": "Paylaşım",
-  "settings.general.row.shareUrl.title": "Paylaşım sunucusu URL'si",
-  "settings.general.row.shareUrl.description": "Oturumları paylaşırken kullanılan sunucunun temel URL'si. Varsayılanı kullanmak için boş bırakın.",
-  "settings.general.row.shareUrl.placeholder": "https://opncd.ai",
-  "settings.general.row.expertPanelDefault.title": "Uzman panelini varsayılan olarak etkinleştir",
-  "settings.general.row.expertPanelDefault.description": "Yeni sohbetleri uzman paneli etkin olarak başlatın; böylece düğmesi istendiğinde mevcut bağlamı inceler.",
   "settings.general.section.display": "Ekran",
 
   "settings.general.row.language.title": "Dil",

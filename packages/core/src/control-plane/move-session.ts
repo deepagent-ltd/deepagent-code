@@ -96,21 +96,12 @@ export const layer = Layer.effect(
           .pipe(Effect.mapError((error) => new ApplyChangesError({ message: error.message })))
       }
 
-      const sessions = isFilesystemRoot(current.location.directory)
-        ? conversationTree(current, yield* session.list({ directory: current.location.directory }))
-        : [current]
-      const timestamp = yield* DateTime.now
-      yield* Effect.forEach(
-        sessions,
-        (item) =>
-          events.publish(SessionEvent.Moved, {
-            sessionID: item.id,
-            location: Location.Ref.make({ directory }),
-            subdirectory: RelativePath.make(path.relative(destination.directory, directory).replaceAll("\\", "/")),
-            timestamp,
-          }),
-        { discard: true },
-      )
+      yield* events.publish(SessionEvent.Moved, {
+        sessionID: input.sessionID,
+        location: Location.Ref.make({ directory }),
+        subdirectory: RelativePath.make(path.relative(destination.directory, directory).replaceAll("\\", "/")),
+        timestamp: yield* DateTime.now,
+      })
 
       if (patch) {
         yield* git.softResetChanges(current.location.directory).pipe(
@@ -129,27 +120,6 @@ export const layer = Layer.effect(
     return Service.of({ moveSession })
   }),
 )
-
-function isFilesystemRoot(directory: string) {
-  const resolved = path.resolve(directory)
-  return path.dirname(resolved) === resolved
-}
-
-function conversationTree(current: SessionSchema.Info, sessions: SessionSchema.Info[]) {
-  const byID = new Map(sessions.map((session) => [session.id, session]))
-  const root = sessions.reduce(
-    (session) => (session.parentID ? (byID.get(session.parentID) ?? session) : session),
-    current,
-  )
-  const result: SessionSchema.Info[] = []
-  const append = (session: SessionSchema.Info) => {
-    if (result.some((item) => item.id === session.id)) return
-    result.push(session)
-    sessions.filter((item) => item.parentID === session.id).forEach(append)
-  }
-  append(root)
-  return result
-}
 
 export const defaultLayer = layer.pipe(
   Layer.provide(Git.defaultLayer),

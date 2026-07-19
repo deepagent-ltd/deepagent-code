@@ -10,9 +10,6 @@ export type KnowledgeItem = {
   evidence_strength: "strong" | "medium" | "weak" | "none"
   evidence_refs: string[]
   approval_status: "pending" | "approved" | "rejected"
-  // Storage scope, for grouping by project vs global: "durable" (global) or
-  // "durable:project:<project_id>". Absent from older servers → treated as global.
-  scope?: string
 }
 
 type RawSdkClient = {

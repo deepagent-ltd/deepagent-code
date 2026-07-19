@@ -13,7 +13,7 @@ tmp
 dist
 ts-dist
 .turbo
-# Web/edge build artifacts (nitro .output, cloudflare .wrangler) — e.g. packages/console, packages/stats
+# Web/edge build artifacts (nitro .output, cloudflare .wrangler) - e.g. packages/console, packages/stats
 .output
 .wrangler
 packages/console/app/public/sitemap.xml

@@ -68,15 +68,6 @@ const testHome = path.join(dir, "home")
 await fs.mkdir(testHome, { recursive: true })
 process.env["DEEPAGENT_CODE_TEST_HOME"] = testHome
 
-// Seed the ripgrep binary into the isolated test cache. The grep/glob/shell/skill tools (and the
-// tool-registry construction that eagerly resolves `rg`) look it up under
-// `<home>/.deepagent/code/cache/bin` and, when absent, download it from GitHub releases — a ~50s
-// transfer that blows past every per-test timeout and makes search-backed tests appear to hang.
-// Seeding it up front makes those tests deterministic and offline. Tests that repoint
-// DEEPAGENT_CODE_TEST_HOME to a fresh dir re-seed via the same helper.
-const { seedRipgrep } = await import("./lib/seed-ripgrep")
-await seedRipgrep(testHome)
-
 // Set test managed config directory to isolate tests from system managed settings
 const testManagedConfigDir = path.join(dir, "managed")
 process.env["DEEPAGENT_CODE_TEST_MANAGED_CONFIG_DIR"] = testManagedConfigDir

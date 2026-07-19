@@ -37,27 +37,6 @@ describe("parseSummaryToEntries (Stage 1)", () => {
     expect(byKind("artifact")).toEqual(["src/foo.ts"])
   })
 
-  // V4.0.1 P1 §3.4 — the narrowed four-bucket template's headings parse into the right ledger kinds; the
-  // "Data References" bucket → artifact (reference only, never content).
-  test("maps the narrowed four-bucket headings (Progress & Key Decisions / Data References)", () => {
-    const summary = [
-      "## Progress & Key Decisions",
-      "- chose DocumentStore for persistence",
-      "## Constraints & Preferences",
-      "- keep it backward compatible",
-      "## Next Steps",
-      "- wire the re-injection",
-      "## Data References",
-      "- src/foo.ts: the entry point",
-    ].join("\n")
-    const entries = parseSummaryToEntries(summary)
-    const byKind = (k: string) => entries.filter((e) => e.kind === k).map((e) => e.text)
-    expect(byKind("decision")).toEqual(["chose DocumentStore for persistence"])
-    expect(byKind("constraint")).toEqual(["keep it backward compatible"])
-    expect(byKind("next")).toEqual(["wire the re-injection"])
-    expect(byKind("artifact")).toEqual(["src/foo.ts: the entry point"])
-  })
-
   test("skips placeholders and bullets outside a known heading", () => {
     const summary = [
       "# Goal",

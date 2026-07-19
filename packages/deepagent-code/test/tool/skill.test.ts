@@ -11,7 +11,6 @@ import { ToolRegistry } from "@/tool/registry"
 import { disposeAllInstances, TestInstance } from "../fixture/fixture"
 import { SessionID, MessageID } from "../../src/session/schema"
 import { testEffect } from "../lib/effect"
-import { seedRipgrep } from "../lib/seed-ripgrep"
 
 const baseCtx: Omit<Tool.Context, "ask"> = {
   sessionID: SessionID.make("ses_test"),
@@ -59,9 +58,6 @@ Use this skill.
           process.env.DEEPAGENT_CODE_TEST_HOME = home
         }),
       )
-      // Re-seed rg into the repointed test home so tool-registry construction (which resolves rg)
-      // does not fall through to the ~50s GitHub download and time out.
-      yield* Effect.promise(() => seedRipgrep(dir))
 
       const registry = yield* ToolRegistry.Service
       const agent = { name: "build", mode: "primary" as const, permission: [], options: {} }
@@ -108,9 +104,6 @@ Use this skill.
           process.env.DEEPAGENT_CODE_TEST_HOME = home
         }),
       )
-      // Re-seed rg into the repointed test home so tool-registry construction (which resolves rg)
-      // does not fall through to the ~50s GitHub download and time out.
-      yield* Effect.promise(() => seedRipgrep(dir))
 
       const registry = yield* ToolRegistry.Service
       const agent = { name: "build", mode: "primary" as const, permission: [], options: {} }

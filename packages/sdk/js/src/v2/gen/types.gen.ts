@@ -2142,6 +2142,12 @@ export type Config = {
       max_concurrency?: number
     }
   }
+  v4PanelAutoConvene?: boolean
+  v4AgentPushEnabled?: boolean
+  v4EventDrivenIm?: boolean
+  v4MultiAgentRuntime?: boolean
+  v4EventDrivenArchive?: boolean
+  v4Steering?: boolean
 }
 
 export type ProjectListItem = {
@@ -2740,35 +2746,6 @@ export type ImRateLimitExceededError = {
 
 export type ImMessageNotFoundError = {
   name: "MESSAGE_NOT_FOUND"
-  data: {
-    message: string
-  }
-}
-
-export type ImThreadDisabledError = {
-  name: "THREAD_DISABLED"
-  data: {
-    message: string
-  }
-}
-
-export type ImFileUploadDisabledError = {
-  name: "FILE_UPLOAD_DISABLED"
-  data: {
-    message: string
-  }
-}
-
-export type ImFileTooLargeError = {
-  name: "FILE_TOO_LARGE"
-  data: {
-    message: string
-    maxBytes: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-  }
-}
-
-export type ImUnsupportedMediaTypeError = {
-  name: "UNSUPPORTED_MEDIA_TYPE"
   data: {
     message: string
   }
@@ -9571,12 +9548,8 @@ export type ImGroupsListResponse = ImGroupsListResponses[keyof ImGroupsListRespo
 export type ImGroupsCreateData = {
   body: {
     name: string
-    type: "project" | "system" | "direct"
+    type: "project" | "system"
     projectID?: string
-    member?: {
-      memberID: string
-      memberType: "user" | "agent"
-    }
   }
   path?: never
   query?: {
@@ -9961,249 +9934,6 @@ export type ImMessagesGetResponses = {
 }
 
 export type ImMessagesGetResponse = ImMessagesGetResponses[keyof ImMessagesGetResponses]
-
-export type ImMessagesThreadData = {
-  body?: never
-  path: {
-    groupId: string
-    messageId: string
-  }
-  query?: {
-    directory?: string
-    workspace?: string
-    cursor?: string
-    limit?: string
-  }
-  url: "/api/v1/im/groups/{groupId}/messages/{messageId}/thread"
-}
-
-export type ImMessagesThreadErrors = {
-  /**
-   * InvalidRequestError
-   */
-  400: InvalidRequestError
-  /**
-   * Unauthorized
-   */
-  401: unknown
-  /**
-   * IMPermissionDeniedError
-   */
-  403: ImPermissionDeniedError
-  /**
-   * IMThreadDisabledError | IMGroupNotFoundError
-   */
-  404: ImThreadDisabledError | ImGroupNotFoundError
-  /**
-   * IMInternalServerError
-   */
-  500: ImInternalServerError
-}
-
-export type ImMessagesThreadError = ImMessagesThreadErrors[keyof ImMessagesThreadErrors]
-
-export type ImMessagesThreadResponses = {
-  /**
-   * Thread messages
-   */
-  200: {
-    messages: Array<{
-      id: string
-      groupID: string
-      senderID: string
-      senderType: string
-      type: string
-      content: string
-      mentions: Array<string>
-      metadata: unknown
-      replyToID: string
-      createdAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-      updatedAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-    }>
-    nextCursor: string
-    hasMore: boolean
-  }
-}
-
-export type ImMessagesThreadResponse = ImMessagesThreadResponses[keyof ImMessagesThreadResponses]
-
-export type ImMessagesSearchData = {
-  body?: never
-  path?: never
-  query: {
-    directory?: string
-    workspace?: string
-    q: string
-    groupId?: string
-    senderType?: "user" | "agent" | "system"
-    type?: "text" | "code" | "file" | "agent_status" | "system"
-    metadataType?: string
-    cursor?: string
-    limit?: string
-  }
-  url: "/api/v1/im/search"
-}
-
-export type ImMessagesSearchErrors = {
-  /**
-   * IMValidationFailedError | InvalidRequestError
-   */
-  400: ImValidationFailedError | InvalidRequestError
-  /**
-   * Unauthorized
-   */
-  401: unknown
-  /**
-   * IMInternalServerError
-   */
-  500: ImInternalServerError
-}
-
-export type ImMessagesSearchError = ImMessagesSearchErrors[keyof ImMessagesSearchErrors]
-
-export type ImMessagesSearchResponses = {
-  /**
-   * Search results
-   */
-  200: {
-    messages: Array<{
-      id: string
-      groupID: string
-      senderID: string
-      senderType: string
-      type: string
-      content: string
-      mentions: Array<string>
-      metadata: unknown
-      replyToID: string
-      createdAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-      updatedAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-    }>
-    nextCursor: string
-    hasMore: boolean
-  }
-}
-
-export type ImMessagesSearchResponse = ImMessagesSearchResponses[keyof ImMessagesSearchResponses]
-
-export type ImAttachmentsListData = {
-  body?: never
-  path?: never
-  query?: {
-    directory?: string
-    workspace?: string
-    groupId?: string
-    messageId?: string
-    limit?: string
-  }
-  url: "/api/v1/im/attachments"
-}
-
-export type ImAttachmentsListErrors = {
-  /**
-   * InvalidRequestError
-   */
-  400: InvalidRequestError
-  /**
-   * Unauthorized
-   */
-  401: unknown
-  /**
-   * IMFileUploadDisabledError | IMGroupNotFoundError
-   */
-  404: ImFileUploadDisabledError | ImGroupNotFoundError
-  /**
-   * IMInternalServerError
-   */
-  500: ImInternalServerError
-}
-
-export type ImAttachmentsListError = ImAttachmentsListErrors[keyof ImAttachmentsListErrors]
-
-export type ImAttachmentsListResponses = {
-  /**
-   * Attachments
-   */
-  200: Array<{
-    id: string
-    workspaceID: string
-    projectID: string
-    groupID: string
-    messageID: string
-    uploadedBy: string
-    filename: string
-    mime: string
-    sizeBytes: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-    checksum: string
-    createdAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-  }>
-}
-
-export type ImAttachmentsListResponse = ImAttachmentsListResponses[keyof ImAttachmentsListResponses]
-
-export type ImAttachmentsUploadData = {
-  body: {
-    file: Blob | File
-    groupId?: string | null
-    messageId?: string | null
-  }
-  path?: never
-  query?: {
-    directory?: string
-    workspace?: string
-  }
-  url: "/api/v1/im/attachments"
-}
-
-export type ImAttachmentsUploadErrors = {
-  /**
-   * IMValidationFailedError | BadRequest | InvalidRequestError
-   */
-  400: ImValidationFailedError | EffectHttpApiErrorBadRequest | InvalidRequestError
-  /**
-   * Unauthorized
-   */
-  401: unknown
-  /**
-   * IMFileUploadDisabledError | IMGroupNotFoundError
-   */
-  404: ImFileUploadDisabledError | ImGroupNotFoundError
-  /**
-   * IMFileTooLargeError
-   */
-  413: ImFileTooLargeError
-  /**
-   * IMUnsupportedMediaTypeError
-   */
-  415: ImUnsupportedMediaTypeError
-  /**
-   * IMInternalServerError
-   */
-  500: ImInternalServerError
-}
-
-export type ImAttachmentsUploadError = ImAttachmentsUploadErrors[keyof ImAttachmentsUploadErrors]
-
-export type ImAttachmentsUploadResponses = {
-  /**
-   * Uploaded attachment
-   */
-  200: {
-    id: string
-    workspaceID: string
-    projectID: string
-    groupID: string
-    messageID: string
-    uploadedBy: string
-    filename: string
-    mime: string
-    sizeBytes: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-    checksum: string
-    createdAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-  }
-}
-
-export type ImAttachmentsUploadResponse = ImAttachmentsUploadResponses[keyof ImAttachmentsUploadResponses]
 
 export type InstanceDisposeData = {
   body?: never

@@ -730,19 +730,6 @@
   color: var(--v2-text-text-faint);
 }
 
-/* Import: the run action is a full-width bar button under the options list, not a small
-   right-aligned row control. Cancel (only while running) sits beside it, sized to content. */
-.settings-v2-import-actions {
-  display: flex;
-  gap: 8px;
-  margin-top: 4px;
-}
-
-.settings-v2-import-run {
-  flex: 1;
-  justify-content: center;
-}
-
 .settings-v2-import-log {
   margin: 0;
   padding: 10px 12px;

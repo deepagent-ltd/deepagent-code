@@ -401,18 +401,11 @@ export async function CodexAuthPlugin(input: PluginInput, options: CodexAuthPlug
     },
     auth: {
       provider: "openai",
-      async loader(getAuth, provider) {
+      async loader(getAuth) {
         const auth = await getAuth()
-        // A custom baseURL means the user is routing OpenAI through a proxy / self-hosted gateway /
-        // air-gapped mirror (set via SettingsStore, the official-provider override channel). Those
-        // endpoints speak plain HTTP, not the ChatGPT-backend WebSocket protocol, so the WS transport
-        // must be skipped even when it is otherwise enabled — otherwise every request would try to
-        // open a ws:// connection the proxy cannot answer.
-        const hasCustomBaseURL = typeof provider?.options?.baseURL === "string" && provider.options.baseURL !== ""
-        const websocketFetch =
-          options.experimentalWebSockets && !hasCustomBaseURL
-            ? OpenAIWebSocketPool.createWebSocketFetch({ httpFetch: fetch })
-            : undefined
+        const websocketFetch = options.experimentalWebSockets
+          ? OpenAIWebSocketPool.createWebSocketFetch({ httpFetch: fetch })
+          : undefined
         if (websocketFetch) {
           websocketFetches.push(websocketFetch)
           websocketFetchInstalled = true
