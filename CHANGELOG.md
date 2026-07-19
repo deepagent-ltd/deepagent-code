@@ -5,7 +5,7 @@
 - Fix Plan Gate deadlock: stale-plan latch now warns (never hard-blocks) on tool execution, aligned with codex exec-policy philosophy. A mutating tool on a stale plan receives a reminder but always runs.
 - Fix goal-loop scorer false positives: `extractValidationResults` now scopes extraction to declared validation commands only (toolCallId→command mapping), with latest-wins per command. Diagnostic bash calls no longer poison the score.
 - Fix cancel/loop test flake: `maxRetries:0` in the test provider config prevents AI SDK exponential-backoff retries against the intentionally-dead test URL; per-test budgets raised from 3 s to 15 s.
-- Bump desktop app to 1.4.2.
+- Release Desktop 1.4.2 with DeepAgent Core V4.0.4.
 - Publishing truth: fix quick-start command (`deepagent-code run`), comment out unpublished npm install, unify domain to `deepagent.ltd`, replace `lessweb`/`anomalyco` org handles, update SECURITY.md supported-version line and M-CRED status, update CHANGELOG.
 
 ## V4.0.3 - Upstream kernel alignment (AppNode foundation)
