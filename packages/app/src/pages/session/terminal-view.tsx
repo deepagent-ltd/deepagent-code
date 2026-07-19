@@ -1,4 +1,4 @@
-import { For, Show, createEffect, createMemo, createSignal, on, onCleanup } from "solid-js"
+import { For, Show, createEffect, createMemo, createSignal, on, onCleanup, onMount } from "solid-js"
 import { createStore } from "solid-js/store"
 import { Tabs } from "@deepagent-code/ui/tabs"
 import { ResizeHandle } from "@deepagent-code/ui/resize-handle"
@@ -13,7 +13,7 @@ import { Terminal } from "@/components/terminal"
 import { useCommand } from "@/context/command"
 import { useDebug } from "@/context/debug"
 import { useLanguage } from "@/context/language"
-import { useTerminal, type PaneLeaf, type PaneNode } from "@/context/terminal"
+import { useTerminal, type PaneLeaf, type PaneNode, MIN_TERMINAL_PANE_HEIGHT, MIN_TERMINAL_PANE_WIDTH } from "@/context/terminal"
 import { useSessionLayout } from "@/pages/session/session-layout"
 import { focusTerminalById } from "@/pages/session/helpers"
 
@@ -103,11 +103,15 @@ function SplitPane(props: { node: Extract<PaneNode, { kind: "split" }> }) {
   const terminal = useTerminal()
   const { ref, size } = createElementSize()
 
-  // dir "horizontal" ⇒ a horizontal divider ⇒ children stacked top/bottom.
-  // dir "vertical"   ⇒ a vertical divider   ⇒ children side by side.
-  const stacked = () => props.node.dir === "horizontal"
+  // dir "horizontal" ⇒ children side by side (left/right navigation).
+  // dir "vertical"   ⇒ children stacked top/bottom (up/down navigation).
+  const stacked = () => props.node.dir === "vertical"
   const total = () => (stacked() ? size().height : size().width)
+  const minimum = () => (stacked() ? MIN_TERMINAL_PANE_HEIGHT : MIN_TERMINAL_PANE_WIDTH)
+  const canResize = () => total() >= minimum() * 2
   const firstPx = () => Math.round(total() * props.node.sizes[0])
+  const minPx = () => minimum()
+  const maxPx = () => Math.max(minPx(), total() - minimum())
 
   return (
     <div ref={ref} class="flex min-h-0 min-w-0 flex-1" classList={{ "flex-col": stacked(), "flex-row": !stacked() }}>
@@ -117,24 +121,28 @@ function SplitPane(props: { node: Extract<PaneNode, { kind: "split" }> }) {
       >
         <PaneRenderer node={props.node.children[0]} />
       </div>
-      <ResizeHandle
-        direction={stacked() ? "vertical" : "horizontal"}
-        edge="end"
-        size={firstPx()}
-        min={Math.max(60, total() * 0.1)}
-        max={Math.max(60, total() * 0.9)}
-        onResize={(px) => {
-          const t = total()
-          if (t <= 0) return
-          const ratio = Math.min(0.9, Math.max(0.1, px / t))
-          terminal.resizePane(props.node.id, [ratio, 1 - ratio])
-        }}
-        class="shrink-0"
-        classList={{
-          "cursor-col-resize w-px hover:w-0.5 bg-border-weak-base hover:bg-border-base": !stacked(),
-          "cursor-row-resize h-px hover:h-0.5 bg-border-weak-base hover:bg-border-base": stacked(),
-        }}
-      />
+      <Show when={canResize()}>
+        <div class="relative shrink-0" classList={{ "h-1": stacked(), "w-1": !stacked() }}>
+          <ResizeHandle
+            direction={stacked() ? "vertical" : "horizontal"}
+            edge="end"
+            size={firstPx()}
+            min={minPx()}
+            max={maxPx()}
+            onResize={(px) => {
+              const t = total()
+              if (t <= 0) return
+              const ratio = Math.min(1 - minimum() / t, Math.max(minimum() / t, px / t))
+              terminal.resizePane(props.node.id, [ratio, 1 - ratio])
+            }}
+            class="absolute inset-0"
+            classList={{
+              "cursor-col-resize bg-border-weak-base hover:bg-border-base": !stacked(),
+              "cursor-row-resize bg-border-weak-base hover:bg-border-base": stacked(),
+            }}
+          />
+        </div>
+      </Show>
       <div class="relative min-h-0 min-w-0 flex-1">
         <PaneRenderer node={props.node.children[1]} />
       </div>
@@ -146,13 +154,37 @@ function SplitPane(props: { node: Extract<PaneNode, { kind: "split" }> }) {
 
 function LeafPane(props: { node: PaneLeaf }) {
   const terminal = useTerminal()
+  const language = useLanguage()
   const { view } = useSessionLayout()
   const [store, setStore] = createStore({
     recovered: {} as Record<string, boolean>,
   })
 
-  const opened = createMemo(() => view().terminal.opened())
+  const opened = createMemo(() => {
+    const panel = view().panel
+    return panel.location("terminal") === "bottom"
+      ? panel.bottom.opened() && panel.bottom.activeView() === "terminal"
+      : view().rightPanel.mode() === "terminal"
+  })
   const focused = createMemo(() => terminal.focusedPaneId() === props.node.id)
+  let ref: HTMLDivElement | undefined
+  let observer: ResizeObserver | undefined
+
+  const reportBounds = () => {
+    if (!ref) return
+    terminal.setPaneBounds(props.node.id, { width: ref.clientWidth, height: ref.clientHeight })
+  }
+
+  onMount(() => {
+    observer = new ResizeObserver(reportBounds)
+    if (ref) observer.observe(ref)
+    reportBounds()
+  })
+  onCleanup(() => {
+    observer?.disconnect()
+    terminal.setPaneBounds(props.node.id, undefined)
+  })
+
   const ptys = createMemo(() => {
     const owned = new Set(props.node.ptys)
     const byId = new Map(terminal.all().map((p) => [p.id, p] as const))
@@ -190,6 +222,7 @@ function LeafPane(props: { node: PaneLeaf }) {
 
   return (
     <div
+      ref={ref}
       data-terminal-pane={props.node.id}
       data-focused={focused() ? "true" : undefined}
       class="absolute inset-0 flex flex-col overflow-hidden border bg-background-stronger"
@@ -198,6 +231,7 @@ function LeafPane(props: { node: PaneLeaf }) {
         "border-border-weak-base": !focused(),
       }}
       onPointerDown={() => terminal.setFocusedPane(props.node.id)}
+      onFocusIn={() => terminal.setFocusedPane(props.node.id)}
     >
       <DragDropProvider onDragOver={handleDragOver} collisionDetector={closestCenter}>
         <DragDropSensors />
@@ -223,12 +257,15 @@ function LeafPane(props: { node: PaneLeaf }) {
           <Show
             when={activeId()}
             keyed
-            fallback={<div class="absolute inset-0 flex items-center justify-center text-text-weak" />}
+            fallback={<div class="absolute inset-0 flex items-center justify-center text-13-regular text-text-weak">{language.t("terminal.loading")}</div>}
           >
             {(id) => {
               const ops = terminal.bind()
               return (
-                <Show when={ptys().find((pty) => pty.id === id)}>
+                <Show
+                  when={ptys().find((pty) => pty.id === id)}
+                  fallback={<div class="absolute inset-0 flex items-center justify-center text-13-regular text-text-weak">{language.t("terminal.loading")}</div>}
+                >
                   {(pty) => (
                     <div id={`terminal-wrapper-${id}`} class="absolute inset-0">
                       <Terminal
@@ -277,8 +314,8 @@ export function TerminalActions() {
           icon="split-columns"
           variant="ghost"
           iconSize="normal"
-          disabled={!terminal.canSplit(terminal.focusedPaneId())}
-          onClick={() => terminal.split("vertical")}
+          disabled={!terminal.canSplit(terminal.focusedPaneId(), "horizontal")}
+          onClick={() => terminal.split("horizontal")}
           aria-label={language.t("terminal.split")}
         />
       </Tooltip>
@@ -387,4 +424,3 @@ export function useTerminalLifecycle(opts: {
     el.blur()
   })
 }
-

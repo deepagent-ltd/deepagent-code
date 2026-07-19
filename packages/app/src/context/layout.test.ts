@@ -2,10 +2,17 @@ import { describe, expect, test } from "bun:test"
 import { createRoot, createSignal } from "solid-js"
 import {
   createSessionKeyReader,
+  movePanel,
+  panelIsVisible,
   ensureSessionKey,
   isPanelOpen,
   pruneSessionKeys,
+  revealPanel,
+  toggleBottomPanel,
+  togglePanel,
   toggledPanelMode,
+  type PanelSessionState,
+  type PanelTransitionInput,
 } from "./layout-helpers"
 
 describe("right-side-panel mode reducer", () => {
@@ -32,6 +39,88 @@ describe("right-side-panel mode reducer", () => {
     expect(isPanelOpen(undefined)).toBe(false)
     expect(isPanelOpen("im")).toBe(true)
     expect(isPanelOpen("review")).toBe(true)
+  })
+})
+
+describe("movable panel state machine", () => {
+  const locations = {
+    terminal: "bottom",
+    "debug-console": "bottom",
+    problems: "bottom",
+  } as const
+  const state: PanelSessionState = { bottomPanel: { opened: false } }
+  const input = (overrides: Partial<PanelTransitionInput> = {}): PanelTransitionInput => ({
+    locations,
+    sideAvailable: true,
+    state,
+    ...overrides,
+  })
+
+  test("reveal opens the correct host for bottom and side views", () => {
+    expect(revealPanel(input(), "terminal")).toEqual({ bottomPanel: { opened: true, activeView: "terminal" } })
+    expect(revealPanel(input({ locations: { ...locations, terminal: "side" } }), "terminal")).toEqual({
+      bottomPanel: { opened: false },
+      rightPanelMode: "terminal",
+    })
+  })
+
+  test("toggle only closes the host currently displaying the requested view", () => {
+    const terminalOpen = revealPanel(input(), "terminal")
+    expect(togglePanel(input({ state: terminalOpen }), "terminal")).toEqual({
+      bottomPanel: { opened: false, activeView: "terminal" },
+    })
+    expect(togglePanel(input({ state: terminalOpen }), "debug-console")).toEqual({
+      bottomPanel: { opened: true, activeView: "debug-console" },
+    })
+  })
+
+  test("independent bottom toggle remains closed when no view remains", () => {
+    const allSide = { terminal: "side", "debug-console": "side", problems: "side" } as const
+    expect(toggleBottomPanel(input({ locations: allSide }))).toEqual({ bottomPanel: { opened: false } })
+  })
+
+  test("bottom toggle replaces a stale active view with a valid fallback", () => {
+    const locationsWithTerminalSide = { terminal: "side", "debug-console": "bottom", problems: "bottom" } as const
+    expect(
+      toggleBottomPanel(input({ locations: locationsWithTerminalSide, state: { bottomPanel: { opened: false, activeView: "terminal" } } })),
+    ).toEqual({ bottomPanel: { opened: true, activeView: "debug-console" } })
+  })
+
+  test("moving a visible bottom view reveals it on the side and falls back", () => {
+    const opened = revealPanel(input(), "terminal")
+    const moved = movePanel(input({ state: opened }), "terminal", "side")
+    expect(moved.locations.terminal).toBe("side")
+    expect(moved.state).toEqual({ bottomPanel: { opened: true, activeView: "debug-console" }, rightPanelMode: "terminal" })
+  })
+
+  test("moving the final bottom view closes the bottom panel", () => {
+    const onlyTerminalBottom = { terminal: "bottom", "debug-console": "side", problems: "side" } as const
+    const opened = revealPanel(input({ locations: onlyTerminalBottom }), "terminal")
+    const moved = movePanel(input({ locations: onlyTerminalBottom, state: opened }), "terminal", "side")
+    expect(moved.state).toEqual({ bottomPanel: { opened: false }, rightPanelMode: "terminal" })
+  })
+
+  test("moving a visible side view to bottom clears stale side mode", () => {
+    const terminalSide = { ...locations, terminal: "side" } as const
+    const opened = revealPanel(input({ locations: terminalSide }), "terminal")
+    const moved = movePanel(input({ locations: terminalSide, state: opened }), "terminal", "bottom")
+    expect(moved.state).toEqual({ bottomPanel: { opened: true, activeView: "terminal" }, rightPanelMode: undefined })
+  })
+
+  test("session snapshots remain isolated", () => {
+    const sessionA = revealPanel(input(), "terminal")
+    const sessionB = revealPanel(input(), "problems")
+    expect(panelIsVisible(sessionA, "terminal", "bottom", true)).toBe(true)
+    expect(panelIsVisible(sessionB, "terminal", "bottom", true)).toBe(false)
+    expect(sessionB.bottomPanel.activeView).toBe("problems")
+  })
+
+  test("mobile refuses a side move and reveals an old side preference in bottom", () => {
+    const mobile = input({ sideAvailable: false })
+    expect(movePanel(mobile, "terminal", "side")).toEqual({ locations, state })
+    expect(revealPanel(input({ sideAvailable: false, locations: { ...locations, terminal: "side" } }), "terminal")).toEqual({
+      bottomPanel: { opened: true, activeView: "terminal" },
+    })
   })
 })
 
