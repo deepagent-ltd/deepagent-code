@@ -68,6 +68,26 @@ export const DeepAgentEventDeliveryTable = sqliteTable(
   ],
 )
 
+// §K40-2 consumer group registry — durable consumer identity so offline/never-live groups receive
+// delivery rows and can resume from their last offset on reconnect. A consumer group REGISTERS before
+// (or independently of) its live stream; `publish` creates delivery rows for ALL registered groups
+// whose type filter matches, not just the in-memory live ones. `last_seen_at` tracks liveness so a
+// maintenance sweep can prune groups that have been offline for too long (not yet wired; placeholder).
+export const DeepAgentConsumerGroupTable = sqliteTable(
+  "deepagent_consumer_group",
+  {
+    group_id: text().primaryKey(),
+    // null = wildcard (all event types); non-null = subscribe to one type only.
+    type_filter: text(),
+    registered_at: integer().notNull(),
+    // Updated on every live subscribe/unsubscribe so a sweep can distinguish stale registrations.
+    last_seen_at: integer().notNull(),
+  },
+  (table) => [
+    // fast lookup: which groups are registered for a given event type?
+    index("deepagent_consumer_group_type_idx").on(table.type_filter),
+  ],
+)
 // §A4 event_dropped — the durable DROP LOG. One append-only row per event the router shed (a §A4
 // backpressure drop), so Observability can aggregate `event_dropped_total` by reason exactly the way
 // `dlq_events_total` aggregates dead deliveries. Kept SEPARATE from the delivery table (a drop is not a
