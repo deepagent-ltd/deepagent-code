@@ -119,6 +119,7 @@ import { tuiHandlers } from "./handlers/tui"
 import { handlers } from "@deepagent-code/server/handlers"
 import { schemaErrorLayer as v2SchemaErrorLayer } from "@deepagent-code/server/middleware/schema-error"
 import { workspaceHandlers } from "./handlers/workspace"
+import { workspaceConfigHandlers } from "./handlers/workspace-config"
 import { instanceContextLayer } from "./middleware/instance-context"
 import { workspaceRoutingLayer } from "./middleware/workspace-routing"
 import { disposeMiddleware } from "./lifecycle"
@@ -250,6 +251,7 @@ const instanceApiRoutes = HttpApiBuilder.layer(InstanceHttpApi).pipe(
     syncHandlers,
     tuiHandlers,
     workspaceHandlers,
+    workspaceConfigHandlers,
   ]),
 )
 
@@ -260,6 +262,10 @@ const instanceRoutes = instanceApiRoutes.pipe(
   // §B1 — the IM handler double-writes im.message.created onto the bus (flag-gated). Provide the bus
   // service to the instance route graph.
   Layer.provide(DeepAgentEventBus.defaultLayer),
+  // §E1 — the workspace trusted-sources config handler reads/writes WorkspaceConfig (GET+PUT
+  // /workspace/:workspaceID/config/trusted-sources). Provide the default layer (Database-backed) here so
+  // it shares the same Database singleton as the rest of the instance graph.
+  Layer.provide(WorkspaceConfig.defaultLayer),
 )
 const serverRoutes = HttpApiBuilder.layer(Api).pipe(
   Layer.provide(handlers),

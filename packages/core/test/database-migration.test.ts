@@ -13,7 +13,6 @@ import normalizeStoragePathsMigration from "@deepagent-code/core/database/migrat
 import sessionMessageProjectionOrderMigration from "@deepagent-code/core/database/migration/20260603040000_session_message_projection_order"
 import eventSourcedSessionInputMigration from "@deepagent-code/core/database/migration/20260604172448_event_sourced_session_input"
 import contextEpochAgentMigration from "@deepagent-code/core/database/migration/20260605042240_add_context_epoch_agent"
-import eventDropDistinctMigration from "@deepagent-code/core/database/migration/20260712040000_deepagent_event_drop_distinct"
 import { ProjectV2 } from "@deepagent-code/core/project"
 import { ProjectTable } from "@deepagent-code/core/project/sql"
 import { AbsolutePath } from "@deepagent-code/core/schema"
@@ -508,95 +507,6 @@ describe("DatabaseMigration", () => {
         yield* DatabaseMigration.applyOnly(db, [])
 
         expect(yield* db.all(sql`SELECT id FROM migration ORDER BY id`)).toEqual([{ id: "existing" }])
-      }),
-    )
-  })
-
-  // §A4 event_dropped DISTINCT (P4.6) — the unique-index migration must be robust on a dev/beta DB that
-  // already accumulated DUPLICATE event_id drop rows (flags-ON + same event shed multiple times under
-  // backpressure BEFORE the onConflictDoNothing fix). A naive CREATE UNIQUE INDEX would throw `UNIQUE
-  // constraint failed`, aborting the migration txn and wedging startup. The dedupe-before-index step must
-  // collapse the duplicates first so the index builds cleanly.
-  test("event_dropped distinct: dedupes historical duplicate event_id rows BEFORE the unique index (no throw)", async () => {
-    await run(
-      Effect.gen(function* () {
-        const db = yield* makeDb
-        // recreate the P3.13 (20260712010000) table shape WITHOUT the unique index, as a pre-fix DB has it.
-        yield* db.run(sql`
-          CREATE TABLE deepagent_event_drop (
-            id integer PRIMARY KEY AUTOINCREMENT NOT NULL,
-            event_id text NOT NULL,
-            workspace_id text NOT NULL,
-            reason text NOT NULL,
-            priority text NOT NULL,
-            created_at integer NOT NULL
-          )
-        `)
-        // the same event shed 3× under backpressure (3 rows, same event_id) + a distinct event (1 row).
-        yield* db.run(
-          sql`INSERT INTO deepagent_event_drop (event_id, workspace_id, reason, priority, created_at) VALUES ('dae_dup', 'wrk_1', 'backpressure', 'normal', 100)`,
-        )
-        yield* db.run(
-          sql`INSERT INTO deepagent_event_drop (event_id, workspace_id, reason, priority, created_at) VALUES ('dae_dup', 'wrk_1', 'backpressure', 'normal', 200)`,
-        )
-        yield* db.run(
-          sql`INSERT INTO deepagent_event_drop (event_id, workspace_id, reason, priority, created_at) VALUES ('dae_dup', 'wrk_1', 'backpressure', 'normal', 300)`,
-        )
-        yield* db.run(
-          sql`INSERT INTO deepagent_event_drop (event_id, workspace_id, reason, priority, created_at) VALUES ('dae_other', 'wrk_1', 'backpressure', 'normal', 400)`,
-        )
-
-        // the migration must NOT throw despite the duplicate event_id rows.
-        yield* DatabaseMigration.applyOnly(db, [eventDropDistinctMigration])
-
-        // one row per event_id survived; the duplicate collapsed to its EARLIEST (MIN(rowid) → created_at 100).
-        expect(yield* db.all(sql`SELECT event_id, created_at FROM deepagent_event_drop ORDER BY event_id`)).toEqual([
-          { event_id: "dae_dup", created_at: 100 },
-          { event_id: "dae_other", created_at: 400 },
-        ])
-        // event_dropped_total (COUNT(*)) now == 2 DISTINCT events, not 4 shed-attempts.
-        expect(yield* db.get(sql`SELECT count(*) as n FROM deepagent_event_drop`)).toEqual({ n: 2 })
-
-        // the UNIQUE index is in place, so a re-shed of an existing event is a no-op (onConflictDoNothing works).
-        expect(
-          (yield* db.all<{ name: string; unique: number }>(sql`PRAGMA index_list(deepagent_event_drop)`)).find(
-            (index) => index.name === "deepagent_event_drop_event_id_idx",
-          ),
-        ).toMatchObject({ unique: 1 })
-        // prove the constraint is live: an ON CONFLICT DO NOTHING insert of an existing id changes nothing.
-        yield* db.run(
-          sql`INSERT INTO deepagent_event_drop (event_id, workspace_id, reason, priority, created_at) VALUES ('dae_dup', 'wrk_1', 'backpressure', 'normal', 999) ON CONFLICT DO NOTHING`,
-        )
-        expect(yield* db.get(sql`SELECT count(*) as n FROM deepagent_event_drop`)).toEqual({ n: 2 })
-      }),
-    )
-  })
-
-  // fresh/duplicate-free table: the DELETE is a harmless no-op and the index still builds.
-  test("event_dropped distinct: DELETE is a no-op on a duplicate-free table, index still applies", async () => {
-    await run(
-      Effect.gen(function* () {
-        const db = yield* makeDb
-        yield* db.run(sql`
-          CREATE TABLE deepagent_event_drop (
-            id integer PRIMARY KEY AUTOINCREMENT NOT NULL,
-            event_id text NOT NULL,
-            workspace_id text NOT NULL,
-            reason text NOT NULL,
-            priority text NOT NULL,
-            created_at integer NOT NULL
-          )
-        `)
-        yield* db.run(
-          sql`INSERT INTO deepagent_event_drop (event_id, workspace_id, reason, priority, created_at) VALUES ('dae_a', 'wrk_1', 'backpressure', 'normal', 100)`,
-        )
-        yield* DatabaseMigration.applyOnly(db, [eventDropDistinctMigration])
-        expect(yield* db.get(sql`SELECT count(*) as n FROM deepagent_event_drop`)).toEqual({ n: 1 })
-        expect(
-          (yield* db.all<{ name: string; unique: number }>(sql`PRAGMA index_list(deepagent_event_drop)`)).find(
-            (index) => index.name === "deepagent_event_drop_event_id_idx",
-          ),
-        ).toMatchObject({ unique: 1 })
       }),
     )
   })

@@ -23,6 +23,7 @@ import { resolveDataPath } from "@deepagent-code/core/global-path"
 import { eq } from "drizzle-orm"
 
 const log = Log.create({ service: "server" })
+const runtimeId = crypto.randomUUID()
 
 function eventData(data: unknown): Sse.Event {
   return {
@@ -83,7 +84,7 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
     const flags = yield* RuntimeFlags.Service
 
     const health = Effect.fn("GlobalHttpApi.health")(function* () {
-      return { healthy: true as const, version: InstallationVersion }
+      return { healthy: true as const, version: InstallationVersion, runtimeId }
     })
 
     const capabilities = Effect.fn("GlobalHttpApi.capabilities")(function* () {

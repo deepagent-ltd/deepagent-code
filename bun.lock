@@ -29,7 +29,7 @@
     },
     "packages/app": {
       "name": "@deepagent-code/app",
-      "version": "1.4.0",
+      "version": "1.0.0-beta",
       "dependencies": {
         "@codemirror/autocomplete": "6",
         "@codemirror/commands": "6",
@@ -109,15 +109,20 @@
         "lildax": "./bin/lildax.cjs",
       },
       "dependencies": {
+        "@agentclientprotocol/sdk": "^0.21.0",
         "@deepagent-code/core": "workspace:*",
         "@deepagent-code/sdk": "workspace:*",
         "@deepagent-code/server": "workspace:*",
         "@deepagent-code/tui": "workspace:*",
         "@effect/platform-node": "catalog:",
         "@opentui/core": "catalog:",
+        "@opentui/keymap": "catalog:",
         "@opentui/solid": "catalog:",
         "@parcel/watcher": "2.5.1",
+        "deepagent-code": "workspace:*",
+        "drizzle-orm": "catalog:",
         "effect": "catalog:",
+        "jsonc-parser": "^3.3.1",
         "solid-js": "catalog:",
       },
       "devDependencies": {
@@ -344,7 +349,7 @@
     },
     "packages/desktop": {
       "name": "@deepagent-code/desktop",
-      "version": "1.4.0",
+      "version": "1.2.0",
       "dependencies": {
         "@zip.js/zip.js": "2.7.62",
         "effect": "catalog:",

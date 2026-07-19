@@ -1,6 +1,7 @@
 /** Intentional supported native API. Other core subpaths remain internal implementation surfaces. */
 export { Agent } from "./agent"
 export { Model } from "./model"
+export { DeepAgentCode } from "./deepagent-code"
 export { Session } from "./session"
 export { Tool } from "./tool"
 export { Location } from "./location"

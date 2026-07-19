@@ -464,13 +464,15 @@ const dispatcherLayer = Layer.unwrap(
   Effect.gen(function* () {
     const rt = yield* MultiAgentRuntime.Service
     const flags = yield* RuntimeFlags.Service
-    const concurrency = yield* WorkspaceConcurrency.Service
+    const bus = yield* DeepAgentEventBus.Service
     return EventDispatcher.layerWith({
       dispatchPort: { dispatch: rt.dispatch },
       runLoops: anyV4DaemonEnabled(flags),
-      // §A4 backpressure reads the live agent-execution depth (total across workspaces) so the router
-      // sheds low/normal events when the runtime is saturated; high/critical always pass.
-      queueDepth: () => concurrency.totalDepth(),
+      // K40-4: backpressure is now driven by the real durable backlog depth (pending delivery rows
+      // per workspace) rather than the in-flight concurrency counter. This reflects the actual
+      // workload owed to consumers, not just what is currently executing.
+      maxQueueDepth: 500,
+      pendingDeliveryCount: (workspaceID) => bus.pendingDeliveryCount(workspaceID),
     })
   }),
 )

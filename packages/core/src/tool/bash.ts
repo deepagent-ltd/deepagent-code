@@ -2,7 +2,7 @@ export * as BashTool from "./bash"
 
 import path from "path"
 import { ToolFailure, toolText } from "@deepagent-code/llm"
-import { Duration, Effect, Layer, Schema } from "effect"
+import { Duration, Effect, Layer, Option, Schema } from "effect"
 import { ChildProcess } from "effect/unstable/process"
 import { Config } from "../config"
 import { FSUtil } from "../fs-util"
@@ -16,6 +16,9 @@ import { ServerCapabilities } from "../server-capabilities"
 import { PositiveInt } from "../schema"
 import { Tool } from "./tool"
 import { Tools } from "./tools"
+import { ApprovalQueue } from "../deepagent/approval-queue"
+import { DeepAgentEvent } from "../deepagent/deepagent-event"
+import { LMNEvents } from "../deepagent/lmn-events"
 
 export const name = "bash"
 export const DEFAULT_TIMEOUT_MS = 2 * 60 * 1_000
@@ -175,10 +178,41 @@ export const layer = Layer.effectDiscard(
                 if (
                   isGitPush(input.command) &&
                   (yield* policy.evaluate(ServerCapabilities.Actions.gitPush, input.command, "allow")) === "deny"
-                )
+                ) {
+                  // §D: instead of hard-denying git push, escalate to the Approval Queue so a human
+                  // can approve or reject before the push executes. Falls back to ToolFailure when
+                  // ApprovalQueue is not available in the current context (e.g. minimal test layers).
+                  const maybeQueue = yield* Effect.serviceOption(ApprovalQueue.Service)
+                  if (Option.isSome(maybeQueue)) {
+                    const event: DeepAgentEvent.Event = {
+                      id: DeepAgentEvent.ID.create(),
+                      type: LMNEvents.AGENT_TASK_NEEDS_HUMAN,
+                      source: "system",
+                      workspaceID: context.sessionID,
+                      idempotencyKey: `git-push:${context.toolCallID}`,
+                      priority: "high",
+                      createdAt: Date.now(),
+                      payload: {
+                        taskID: context.toolCallID,
+                        agentID: context.agent,
+                        capability: "git.push",
+                        intent: input.command,
+                        reason: "git push requires human approval before execution",
+                      },
+                    }
+                    const item = yield* maybeQueue.value.offer(event)
+                    if (item !== null)
+                      return {
+                        command: input.command,
+                        cwd: target.canonical,
+                        output: `git push queued for human approval (approval id: ${item.id}). The push will execute once approved.`,
+                        truncated: false,
+                      }
+                  }
                   return yield* Effect.fail(
                     new ToolFailure({ message: "`git push` is disabled by the server administrator." }),
                   )
+                }
               }
 
               if ((yield* fs.stat(target.canonical)).type !== "Directory")

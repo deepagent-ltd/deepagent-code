@@ -270,14 +270,7 @@ export const decideFanout = (input: {
  * OFF and the section only tells the agent to fan out on explicit user request; at higher tiers it
  * gives the full fan-out judgment. Returns `null` when there is nothing worth injecting.
  */
-// PROMPT-CACHE NOTE: this returns the STABLE, generic orchestration guidance only — it is a pure
-// function of `mode`, so it stays byte-identical across a session and can live in the cached system
-// prefix. The per-turn fan-out VERDICT (concrete researcher/reviewer counts derived from this turn's
-// task complexity) is deliberately NOT rendered here anymore; it changes turn-to-turn and would bust
-// the prefix. The DeepAgent path renders that verdict via prompt-policy.ts `buildVolatileRoundContext`
-// and appends it after the cache breakpoint. The non-DeepAgent path (session/system.ts) may still
-// pass no decision and get just this stable guidance.
-export const buildOrchestrationSection = (mode: AgentMode): string | null => {
+export const buildOrchestrationSection = (mode: AgentMode, decision?: FanoutDecision): string | null => {
   const tier = tierForMode(mode)
   const votes = reviewerVotesForMode(mode)
   const header = "# 多-Agent 编排 (multi-agent orchestration)"
@@ -290,6 +283,28 @@ export const buildOrchestrationSection = (mode: AgentMode): string | null => {
       "默认不自动编排。只有当用户明确要求「深入 / 多角度 / review / 彻底」时，才用 `task` 工具扇出 researcher/reviewer 子 agent；否则本体直接完成。",
       "简单任务（单文件、机制清楚、纯机械改动）永远本体做。",
     ].join("\n")
+  }
+
+  // §5b: when a runtime fan-out DECISION is supplied (computed by `decideFanout` from this turn's
+  // ComplexitySignals), the guidance stops being generic and states the concrete, task-specific
+  // recommendation. This is ADVISORY — the model still issues the `task` calls itself — but the
+  // numbers are now the scheduler's actual verdict for THIS task, not a static suggestion. The
+  // HARD ceiling remains the §5a semaphore, which clamps real concurrency in code regardless.
+  const decisionLines: string[] = []
+  if (decision) {
+    if (!decision.orchestrate) {
+      decisionLines.push(
+        "",
+        `本轮调度判定（基于当前任务复杂度）：不建议扇出（level=${decision.level}，tier=${decision.tier}，complexity=${decision.complexity}）。本体直接完成，除非用户明确要求深入/多角度。`,
+      )
+    } else {
+      decisionLines.push(
+        "",
+        `本轮调度判定（基于当前任务复杂度，level=${decision.level}）：建议扇出约 ${decision.researchers} 个 researcher` +
+          (decision.reviewers > 0 ? ` + ${decision.reviewers} 个 reviewer` : "") +
+          `；单轮并行上限 ${decision.maxConcurrency}（代码层已按此硬限流，超发会自动排队）。`,
+      )
+    }
   }
 
   const lines = [
@@ -306,7 +321,8 @@ export const buildOrchestrationSection = (mode: AgentMode): string | null => {
     "抑制信号（命中则本体做，禁止过度编排）：单文件；机制已明确；纯机械改动（改名/typo/格式）；用户要求快速/直接。",
     "",
     "关键判定（reviewer 的 verdict、研究结果的合并）走结构化结果：调 `task` 时传 `output_schema`（reviewer→ReviewResult，researcher→ResearchResult），不要依赖散文解析。",
-    `扇出规模自控（宽松上限，非硬性）：单次编排子 agent 总数控制在 ${DEFAULT_MAX_FANOUT} 个以内，单轮并行不超过 ${DEFAULT_MAX_CONCURRENCY} 个；确有必要可分多轮，但不要一次性发起远超此规模的 task。本轮的具体扇出建议数见对话末尾 <deepagent-round-context>。`,
+    `扇出规模自控（宽松上限，非硬性）：单次编排子 agent 总数控制在 ${DEFAULT_MAX_FANOUT} 个以内，单轮并行不超过 ${decision?.maxConcurrency ?? DEFAULT_MAX_CONCURRENCY} 个；确有必要可分多轮，但不要一次性发起远超此规模的 task。`,
+    ...decisionLines,
   ]
   if (mode === "ultra") {
     lines.push("当前为 ultra：默认倾向编排并可多轮迭代。")

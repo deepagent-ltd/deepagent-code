@@ -47,6 +47,16 @@ export class Service extends ConfigService.Service<Service>()("@deepagent-code/R
   // by default. NOTE: this is local, non-durable (process restart loses live jobs); cross-restart
   // recovery + remote/cloud agents are deferred to V3.4 (S1 §10). Disable with =false.
   experimentalBackgroundSubagents: stableOn("DEEPAGENT_CODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS"),
+  // v4.0.4 块1 (I33-3 可靠性): 子 Agent 存活超时(毫秒)。超过则判定挂死/崩溃并触发 takeover(同 fork
+  // 基点重生,受 subagentTakeoverLimit 上限约束)。默认 undefined = 不启用超时(逐字节等价现状:子 Agent
+  // 可无限期运行,长任务不被误杀) —— 保守默认,回滚安全。设为正整数毫秒才启用。
+  subagentTimeoutMs: positiveInteger("DEEPAGENT_CODE_SUBAGENT_TIMEOUT_MS"),
+  // v4.0.4 块1: 单个子 Agent 任务被 takeover(超时/崩溃后重生)的最大次数。达上限仍失败则上报主 Agent。
+  // 默认 undefined ⇒ 代码内回退到 2。防无限接管。
+  subagentTakeoverLimit: positiveInteger("DEEPAGENT_CODE_SUBAGENT_TAKEOVER_LIMIT"),
+  // v4.0.4 块1 (I33-4): 子 Agent 结果注入父会话的有界长度(字符数)。超过则父只收截断摘要 + 指向子
+  // session 的引用(全量 text 不丢,仍在子 session 可查)。默认 undefined = 全量注入(逐字节等价现状)。
+  subagentOutputMaxChars: positiveInteger("DEEPAGENT_CODE_SUBAGENT_OUTPUT_MAX_CHARS"),
   experimentalLspTy: bool("DEEPAGENT_CODE_EXPERIMENTAL_LSP_TY"),
   experimentalLspTool: enabledByExperimental("DEEPAGENT_CODE_EXPERIMENTAL_LSP_TOOL"),
   // V3.8 App-A C2.5 (Stage 5): query_log tool — lets the agent retrieve slices of the append-only
@@ -172,8 +182,11 @@ export class Service extends ConfigService.Service<Service>()("@deepagent-code/R
   // Scheduler) alongside the legacy path (double-write). Enable with DEEPAGENT_CODE_V4_EVENT_DRIVEN_IM=true.
   v4EventDrivenIm: bool("DEEPAGENT_CODE_V4_EVENT_DRIVEN_IM"),
   // §A4: allow the agent to PUSH proactively (monitor/schedule/ci-driven outbound), through the §B2
-  // policy gate. HIGH-RISK (side-effecting outbound) — operator opt-in. Enable with DEEPAGENT_CODE_V4_AGENT_PUSH_ENABLED=true.
-  v4AgentPushEnabled: bool("DEEPAGENT_CODE_V4_AGENT_PUSH_ENABLED"),
+  // policy gate (rate-limit, quiet-hours, group-membership, workspace-push-permission). PROMOTED ON
+  // by default (V4.0.4 3b): the policy's hasWorkspacePushPermission fact defaults to false, so
+  // deliveries are blocked until a workspace explicitly enables push — making the runtime safe with
+  // the flag on. Set DEEPAGENT_CODE_V4_AGENT_PUSH_ENABLED=false to revert to inert posture.
+  v4AgentPushEnabled: stableOn("DEEPAGENT_CODE_V4_AGENT_PUSH_ENABLED"),
   // §C: the Multi-Agent Runtime (coordinated multi-agent execution over the bus + agent.task.*
   // coordination). This is the master switch that starts the event-runtime daemons — including the V4.1
   // §N event-driven goal-tick chain (GoalTickConsumer + cold-recovery port). PROMOTED ON by default (V4.1):
@@ -186,6 +199,11 @@ export class Service extends ConfigService.Service<Service>()("@deepagent-code/R
   // DEEPAGENT_CODE_V4_MULTI_AGENT_RUNTIME=false to restore the pre-V4 (V3.8-equivalent) inert posture: no
   // daemons subscribe, ticks run via the in-process BackgroundJob driver, nothing is autonomous.
   v4MultiAgentRuntime: stableOn("DEEPAGENT_CODE_V4_MULTI_AGENT_RUNTIME"),
+  // Finer-grained flag: enables ONLY the goal-tick event chain without the full v4MultiAgentRuntime
+  // daemon stack. When this flag is on (or v4MultiAgentRuntime is on), goal ticks are driven by the
+  // GoalTickConsumer via GOAL_TICK_REQUESTED events rather than the in-process BackgroundJob for-loop.
+  // Default OFF so existing sessions are unaffected until explicitly opted in.
+  v4GoalTickEventDriven: bool("DEEPAGENT_CODE_V4_GOAL_TICK_EVENT_DRIVEN"),
   // NOTE: there is deliberately NO separate "autonomy level 2" flag. The §D autonomy gate
   // (AutonomyPolicy.decide in multi-agent-runtime.ts) is driven purely by each agent's DECLARED autonomy
   // ceiling in its descriptor — a flag could only ever have MASKED that, and a former
@@ -203,18 +221,16 @@ export class Service extends ConfigService.Service<Service>()("@deepagent-code/R
   v4FileUploadEnabled: bool("DEEPAGENT_CODE_V4_FILE_UPLOAD_ENABLED"),
   // §M: the Expert Panel AUTO-CONVENE consumer — auto-summons an Expert Panel for high-risk events
   // (destructive migrations, security alerts, architecture changes) per PanelConvenePolicy, routing a
-  // needs_human verdict to the §D2 Approval Queue. HIGH-COST (fans out reviewer subagents) + autonomous
-  // — operator opt-in. Enable with DEEPAGENT_CODE_V4_PANEL_AUTO_CONVENE=true.
-  v4PanelAutoConvene: bool("DEEPAGENT_CODE_V4_PANEL_AUTO_CONVENE"),
-  // §L: the EVENT-DRIVEN execution archiver TRIGGER. When on, a completed ROOT session (its end-of-turn
-  // idle signal) is republished as a `session.completed` event onto the DeepAgent Event Bus, so the §L
-  // EventDrivenArchiver has a trigger and archives the execution trajectory as a Wiki page OFF the
-  // session loop. Independent of IM (§L is a Repo/Wiki capability, not an IM one — the archiver's own
-  // header says so), so it carries its OWN flag rather than riding v4EventDrivenIm. Default OFF (P0.3
-  // production posture): with it off the bridge is inert — nothing subscribes, nothing publishes, and
-  // the V3.9 inline archive (prompt.ts, gated by experimentalWiki) remains the only archival path.
-  // Enable with DEEPAGENT_CODE_V4_EVENT_DRIVEN_ARCHIVE=true.
-  v4EventDrivenArchive: bool("DEEPAGENT_CODE_V4_EVENT_DRIVEN_ARCHIVE"),
+  // needs_human verdict to the §D2 Approval Queue. PROMOTED ON by default (V4.0.4 3b): idempotency
+  // guard (causationID) + deterministic idempotencyKey prevent double-convening on re-delivery.
+  // Set DEEPAGENT_CODE_V4_PANEL_AUTO_CONVENE=false to disable automatic panel fan-out.
+  v4PanelAutoConvene: stableOn("DEEPAGENT_CODE_V4_PANEL_AUTO_CONVENE"),
+  // §L: the EVENT-DRIVEN execution archiver TRIGGER. PROMOTED ON by default (V4.0.4 3b): the
+  // SessionCompletedPublisher fires at most once per 45-second debounce window per session, is
+  // root-session-only, and is idempotent (idempotencyKey = "session-completed:<id>:<firetime>").
+  // The EventDrivenArchiver consumer is already live (v4MultiAgentRuntime is stableOn). Set
+  // DEEPAGENT_CODE_V4_EVENT_DRIVEN_ARCHIVE=false to restore the V3.9 inline-archive-only path.
+  v4EventDrivenArchive: stableOn("DEEPAGENT_CODE_V4_EVENT_DRIVEN_ARCHIVE"),
   // V4.1 §S1.1: mid-turn STEERING — a user message that arrives while a turn is in flight is buffered
   // in a durable per-session steer queue and ABSORBED at the next model-request boundary of the live
   // turn loop (SessionPrompt.runLoop), appended as an ordinary tail user message (never aborting the

@@ -150,30 +150,29 @@ export const DialogReview: Component<{ client: ReviewClient }> = (props) => {
   const pending = createMemo(() => (items() ?? []).filter((i) => i.approval_status === "pending" && matchesQuery(i)))
   const approved = createMemo(() => (items() ?? []).filter((i) => i.approval_status === "approved" && matchesQuery(i)))
 
-  // Group by SCOPE, not by type: the governance view shows the user's learned facts split into
-  // "this project" vs "global". A doc scoped `durable:project:<id>` is project-local; anything else
-  // (`durable`, or legacy untagged) is global. (Skills + domain-pack seed docs are already excluded
-  // server-side, so every item here is a human-readable, user-learned fact.)
-  const scopeOf = (item: KnowledgeItem): "project" | "global" =>
-    item.scope?.startsWith("durable:project:") ? "project" : "global"
-  const scopeLabel = (scope: string) =>
-    scope === "project" ? language.t("review.scope.project") : language.t("review.scope.global")
+  // Stable display order for the type boxes. Any unknown type falls back into "other".
+  const TYPE_ORDER = ["memory", "failure_dossier", "knowledge", "strategy", "methodology", "skill"] as const
+  const typeLabel = (type: string) =>
+    (TYPE_ORDER as readonly string[]).includes(type)
+      ? language.t(`review.type.${type}`)
+      : language.t("review.type.other")
 
-  // Project bucket first (most specific to what the user is working on), then global.
-  const SCOPE_ORDER = ["project", "global"] as const
+  // Group pending items by type, preserving TYPE_ORDER; trailing "other" bucket for unknown types.
   const pendingGroups = createMemo(() => {
-    const byScope = new Map<string, KnowledgeItem[]>()
+    const byType = new Map<string, KnowledgeItem[]>()
     for (const item of pending()) {
-      const key = scopeOf(item)
-      const list = byScope.get(key)
+      const key = (TYPE_ORDER as readonly string[]).includes(item.type) ? item.type : "other"
+      const list = byType.get(key)
       if (list) list.push(item)
-      else byScope.set(key, [item])
+      else byType.set(key, [item])
     }
-    const ordered: Array<{ scope: string; items: KnowledgeItem[] }> = []
-    for (const scope of SCOPE_ORDER) {
-      const list = byScope.get(scope)
-      if (list?.length) ordered.push({ scope, items: list })
+    const ordered: Array<{ type: string; items: KnowledgeItem[] }> = []
+    for (const type of TYPE_ORDER) {
+      const list = byType.get(type)
+      if (list?.length) ordered.push({ type, items: list })
     }
+    const other = byType.get("other")
+    if (other?.length) ordered.push({ type: "other", items: other })
     return ordered
   })
 
@@ -527,7 +526,7 @@ export const DialogReview: Component<{ client: ReviewClient }> = (props) => {
                 }
               >
                 <For each={pendingGroups()}>
-                  {(group) => GroupBox({ boxKey: group.scope, label: scopeLabel(group.scope), items: group.items })}
+                  {(group) => GroupBox({ boxKey: group.type, label: typeLabel(group.type), items: group.items })}
                 </For>
                 <Show when={approved().length > 0}>
                   {GroupBox({ boxKey: "approved", label: language.t("review.status.approved"), items: approved() })}

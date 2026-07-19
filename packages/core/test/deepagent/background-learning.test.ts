@@ -27,9 +27,9 @@ const workerFor = (projectID = "projA") => {
 }
 
 describe("V3.1 LearningWorker and SkillCurator", () => {
-  test("auto-merges safe project memory without blocking the task thread", () => {
+  test("auto-merges safe project memory without blocking the task thread", async () => {
     const { projectID, store, worker } = workerFor()
-    const result = worker.run({
+    const result = await worker.run({
       projectID: "projA",
       sessionID: "sess1",
       runID: "run1",
@@ -55,7 +55,7 @@ describe("V3.1 LearningWorker and SkillCurator", () => {
     expect(doc.extensions?.knowledge_scope).toBe("project-shared")
   })
 
-  test("gate 3 (R3): a candidate whose fingerprint is in the RejectedBuffer is dropped, not re-learned", () => {
+  test("gate 3 (R3): a candidate whose fingerprint is in the RejectedBuffer is dropped, not re-learned", async () => {
     // Regression for the vacuous-gate seam bug: gate 3 fed `status === "rejected"`, but extraction always
     // emits "staged", so the durable RejectedBuffer (what the human `reject` action writes) was never
     // consulted — a rejected pattern would be re-extracted and AUTO-ADMITTED on the next run. The worker
@@ -86,7 +86,7 @@ describe("V3.1 LearningWorker and SkillCurator", () => {
     rejected.add(fingerprint(extracted.candidates[0]!), "human rejected this pattern")
     const worker = new LearningWorker(paths, "projA", store, rejected)
 
-    const result = worker.run(runInput)
+    const result = await worker.run(runInput)
     // The candidate is dropped by gate 3 — NOT auto-merged, NOT staged into the durable store.
     expect(result.auto_merged_ids).toEqual([])
     expect(result.inbox_ids).toEqual([])
@@ -96,13 +96,13 @@ describe("V3.1 LearningWorker and SkillCurator", () => {
     // Control: WITHOUT the buffer the same candidate auto-merges (proving the buffer is what dropped it).
     const store2 = new DurableKnowledgeStore(path.join(home.ensureProject("projB").root, "knowledge"))
     const worker2 = new LearningWorker(home.ensureProject("projB"), "projB", store2)
-    const result2 = worker2.run({ ...runInput, projectID: "projB" })
+    const result2 = await worker2.run({ ...runInput, projectID: "projB" })
     expect(result2.auto_merged_ids.length).toBe(1)
   })
 
-  test("manual review policy sends staged candidates to Memory Inbox", () => {
+  test("manual review policy sends staged candidates to Memory Inbox", async () => {
     const { store, worker } = workerFor()
-    const result = worker.run({
+    const result = await worker.run({
       projectID: "projA",
       sessionID: "sess1",
       runID: "run2",
@@ -131,7 +131,7 @@ describe("V3.1 LearningWorker and SkillCurator", () => {
     expect(store.documentStore.get(candidates[0]!.id)!.extensions?.knowledge_scope).toBe("project-shared")
   })
 
-  test("strategy and anti-pattern candidates require review instead of auto-merge", () => {
+  test("strategy and anti-pattern candidates require review instead of auto-merge", async () => {
     const { worker } = workerFor()
     const roundState = createInitialRoundState("max")
     roundState.diagnoses.push({
@@ -140,7 +140,7 @@ describe("V3.1 LearningWorker and SkillCurator", () => {
       evidence_refs: ["run:run3"],
       next_action: "revise",
     })
-    const strategy = worker.run({
+    const strategy = await worker.run({
       projectID: "projA",
       sessionID: "sess1",
       runID: "run3",
@@ -158,7 +158,7 @@ describe("V3.1 LearningWorker and SkillCurator", () => {
       { round: 1, root_cause: "missing validation", evidence_refs: ["run:run4:r1"], next_action: "revise" },
       { round: 2, root_cause: "missing validation", evidence_refs: ["run:run4:r2"], next_action: "block" },
     )
-    const failed = worker.run({
+    const failed = await worker.run({
       projectID: "projA",
       sessionID: "sess1",
       runID: "run4",

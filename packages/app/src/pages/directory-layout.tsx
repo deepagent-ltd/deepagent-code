@@ -4,16 +4,10 @@ import { base64Encode } from "@deepagent-code/core/util/encode"
 import { useLocation, useNavigate, useParams } from "@solidjs/router"
 import { createEffect, createMemo, createResource, type ParentProps, Show } from "solid-js"
 import { useLanguage } from "@/context/language"
-import { useLayout } from "@/context/layout"
 import { LocalProvider } from "@/context/local"
 import { SDKProvider } from "@/context/sdk"
-import { useServer } from "@/context/server"
-import { useServerSDK } from "@/context/server-sdk"
-import { useServerSync } from "@/context/server-sync"
 import { useSync } from "@/context/sync"
 import { decode64 } from "@/utils/base64"
-import { isFilesystemRootDir, recoverFilesystemRootRoute } from "@/utils/filesystem-root"
-import { formatServerError } from "@/utils/server-errors"
 import { Schema } from "effect"
 
 function DirectoryDataProvider(props: ParentProps<{ directory: string }>) {
@@ -59,13 +53,8 @@ export function decodeDirectory(dir: string): ProjectDirString | undefined {
 export default function Layout(props: ParentProps) {
   const params = useParams()
   const language = useLanguage()
-  const layout = useLayout()
   const navigate = useNavigate()
-  const server = useServer()
-  const serverSDK = useServerSDK()
-  const serverSync = useServerSync()
   let invalid = ""
-  let recovering = ""
 
   const resolved = createMemo(() => {
     if (!params.dir) return ""
@@ -89,51 +78,8 @@ export default function Layout(props: ParentProps) {
     navigate("/", { replace: true })
   })
 
-  createEffect(() => {
-    const directory = resolved()
-    if (!directory || !isFilesystemRootDir(directory)) return
-    const dataDir = serverSync.data.path.data
-    if (!dataDir) return
-    const key = `${params.dir}/${params.id ?? ""}`
-    if (recovering === key) return
-    recovering = key
-
-    void recoverFilesystemRootRoute({
-      dataDir,
-      sessionID: params.id,
-      getSession: (sessionID) =>
-        serverSDK.client.session
-          .get({ sessionID })
-          .then((response) => response.data)
-          .catch(() => undefined),
-      mkdir: async (destination) => {
-        await serverSDK.createClient({ directory: destination, throwOnError: true }).file.mkdir({ path: "." })
-      },
-      moveSession: async (sessionID, destination) => {
-        await serverSDK.client.experimental.controlPlane.moveSession({
-          sessionID,
-          destination: { directory: destination },
-        })
-      },
-    })
-      .then((result) => {
-        layout.projects.open(result.directory)
-        server.projects.touch(result.directory)
-        const session = result.sessionID ? `/session/${result.sessionID}` : "/session"
-        navigate(`/${base64Encode(result.directory)}${session}`, { replace: true })
-      })
-      .catch((error) => {
-        showToast({
-          variant: "error",
-          title: language.t("toast.project.rootRecoveryFailed.title"),
-          description: formatServerError(error, language.t),
-        })
-        navigate("/", { replace: true })
-      })
-  })
-
   return (
-    <Show when={resolved() && !isFilesystemRootDir(resolved()) ? resolved() : undefined} keyed>
+    <Show when={resolved()} keyed>
       {(resolved) => (
         <SDKProvider directory={resolved}>
           <DirectoryDataProvider directory={resolved}>{props.children}</DirectoryDataProvider>

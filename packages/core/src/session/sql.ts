@@ -172,15 +172,6 @@ export const SessionInputTable = sqliteTable(
   ],
 )
 
-// V4.1 §S1.1: durable mid-turn STEER queue. A user message that arrives while a session is busy is
-// admitted here (delivery="steer") and drained at the next model-request boundary of the LIVE turn
-// loop (SessionPrompt.runLoop), where it is persisted as an ordinary tail user message. This is a
-// PLAIN durable buffer (direct row writes, NOT event-sourced) — deliberately distinct from
-// SessionInputTable, which is projected only by the dormant experimentalEventSystem V2 runner and
-// feeds a different (V2) history store. Consume-once is enforced by `consumed_seq`: `drainSteer`
-// atomically stamps every pending row it returns in one transaction, so a second drain (or a
-// concurrent one) sees no pending rows. `seq` is a per-session monotonic admission order (autoincrement
-// PK) so a drain returns steers in the exact order the user sent them.
 export const SessionSteerTable = sqliteTable(
   "session_steer",
   {
