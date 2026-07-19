@@ -8,7 +8,7 @@ Do not include live secrets in reports. Use redacted examples or synthetic crede
 
 ## Supported versions
 
-Before the first public stable tag, the supported line is the current `main` branch and the latest published pre-release. Security fixes may be released as patch versions.
+The active development line is the `dev` branch. The supported release is the latest published version on the `core-v4.0-beta` branch and the desktop app release derived from it. Security fixes are applied to the active line and backported to the latest release where feasible.
 
 ## Source availability
 
@@ -20,13 +20,13 @@ Preset MCP servers are opt-in. The preset catalog records intended risk tiers, b
 
 Read-only database presets are intended to use restricted server modes and SQL guardrails. Guardrails are defense in depth, not a substitute for least-privilege database users.
 
-## Known limitation: preset MCP credentials in V3.4.1
+## MCP credential security (V4.0+)
 
-When enabling preset MCP servers that require credentials, credential values may currently be persisted in local configuration. Until V3.5 M-CRED lands:
+As of V4.0, MCP server credentials are stored in OS-backed secret storage where available (macOS Keychain; Linux and Windows fall back to a 0600 file). Credential values are not persisted in plain-text configuration. Only variable names or references travel through config files; values are resolved at runtime.
+
+If you are running a version older than V4.0:
 
 - Do not commit DeepAgent Code configuration files containing secrets.
 - Prefer environment-variable indirection where a server supports it.
 - Use least-privilege tokens and database users.
 - Rotate credentials if they were accidentally committed or shared.
-
-The planned V3.5 M-CRED work stores secrets in OS-backed secret storage where available (macOS Keychain, Windows Credential Manager, Linux Secret Service), passes only variable names or references through configuration, and resolves values at runtime.
