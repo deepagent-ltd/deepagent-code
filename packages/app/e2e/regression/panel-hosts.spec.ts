@@ -201,6 +201,11 @@ test("Terminal keeps one visible host and supports tabs plus atomic splits", asy
   await expect(pane.getByRole("tab")).toHaveCount(1)
   await bottom.getByLabel("New terminal").click()
   await expect(pane.getByRole("tab")).toHaveCount(2)
+  await expect(bottom.locator('[data-terminal-pty-id="pty_test_2"]')).toBeVisible()
+  await pane.getByRole("tab", { name: "Terminal 1" }).click()
+  await expect(bottom.locator('[data-terminal-pty-id="pty_test_1"]')).toBeVisible()
+  await pane.getByRole("tab", { name: "Terminal 2" }).click()
+  await expect(bottom.locator('[data-terminal-pty-id="pty_test_2"]')).toBeVisible()
 
   const split = bottom.getByLabel("Split terminal")
   await expect(split).toBeEnabled()
@@ -219,19 +224,26 @@ test("Terminal keeps one visible host and supports tabs plus atomic splits", asy
   await expect(panes.nth(1).getByRole("tab")).toHaveCount(1)
   await expect(panes.nth(2).getByRole("tab")).toHaveCount(1)
   await expect(bottom.locator("[data-terminal-pane] [role=tab]")).toHaveCount(4)
-  for (const index of [0, 1, 2]) {
+
+  await expect(split).toBeEnabled()
+  await split.click()
+  await expect(panes).toHaveCount(4)
+  await expect(bottom.locator("[data-terminal-pane] [role=tab]")).toHaveCount(5)
+  for (const index of [0, 1, 2, 3]) {
     await expect(panes.nth(index)).toBeVisible()
     await expect(panes.nth(index).getByRole("tab").last()).toBeVisible()
     await expect.poll(async () => (await panes.nth(index).boundingBox())?.height ?? 0).toBeGreaterThan(100)
   }
+  const widths = await panes.evaluateAll((items) => items.map((item) => item.getBoundingClientRect().width))
+  expect(Math.max(...widths) - Math.min(...widths)).toBeLessThan(8)
 
   await bottom.getByRole("tab", { name: "Problems", exact: true }).click()
   await expect(page.locator("[data-terminal-pane]")).toHaveCount(0)
   await bottom.getByRole("tab", { name: "Terminal", exact: true }).click()
-  await expect(page.locator("[data-terminal-pane]")).toHaveCount(3)
+  await expect(page.locator("[data-terminal-pane]")).toHaveCount(4)
 
   await bottom.getByRole("button", { name: "Move to Right Sidebar" }).click()
   await expect(page.locator('[data-terminal-host="bottom"]')).toHaveCount(0)
-  await expect(page.locator('[data-terminal-host="side"] [data-terminal-pane]')).toHaveCount(3)
-  await expect(page.locator("[data-terminal-pane]")).toHaveCount(3)
+  await expect(page.locator('[data-terminal-host="side"] [data-terminal-pane]')).toHaveCount(4)
+  await expect(page.locator("[data-terminal-pane]")).toHaveCount(4)
 })
