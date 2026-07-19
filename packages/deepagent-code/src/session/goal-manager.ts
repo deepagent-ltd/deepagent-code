@@ -305,6 +305,7 @@ export const layer = Layer.effect(
       eventBus,
       approvalQueue,
       v4MultiAgentRuntime: flags.v4MultiAgentRuntime,
+      v4GoalTickEventDriven: flags.v4GoalTickEventDriven,
       goalStoreRoot,
       cacheStatus: (sessionID, cached) =>
         mutateControl(sessionID, (ctrl) => {
@@ -508,10 +509,8 @@ export const layer = Layer.effect(
 
         // V4.1 §N DUAL-PATH drive. The two paths MUST be mutually exclusive — running both for one goal
         // would double-execute every tick over the same run_context doc.
-        //   • flag ON  (v4MultiAgentRuntime): publish the FIRST goal.tick.requested command onto the Event
-        //     Bus (seq=0). The GoalTickConsumer executes each tick on a (possibly cold) fiber and re-emits
-        //     the next command — the self-driving, persistence/retry/dedup-backed chain (contract §N). NO
-        //     BackgroundJob is started, so there is exactly one driver.
+        //   • flag ON  (v4MultiAgentRuntime OR v4GoalTickEventDriven): publish the FIRST goal.tick.requested
+        //     command onto the Event Bus (seq=0). Either flag activates this path.
         //   • flag OFF (default): the existing in-process BackgroundJob `runToCompletion` drives the ticks
         //     (byte-identical to V3.9). The event-driven consumer's handle() acks-and-drives-nothing when
         //     the flag is off, so a stray command can never double-drive.
@@ -519,7 +518,7 @@ export const layer = Layer.effect(
         // job to cancel; stop() sets the durable phase the cold tick reads, and cancel("") is a safe no-op)
         // so pause / resume / stop / status / editPlan keep working the same way.
         let jobId = ""
-        if (flags.v4MultiAgentRuntime) {
+        if (flags.v4MultiAgentRuntime || flags.v4GoalTickEventDriven) {
           // seq=0 is the seed; expectedPlanVersion is advisory trace. The bus dedups on goal:tick:<id>:0
           // so a retried start() cannot seed two chains.
           const expectedPlanVersion = store.get(planDocId)?.version ?? 0
@@ -531,6 +530,8 @@ export const layer = Layer.effect(
                 planDocId: handle.planDocId,
                 seq: 0,
                 expectedPlanVersion,
+                // §E4/§N — carry the real workspace id so the consumer's quiet-hours gate can use it.
+                ...(session.workspaceID != null ? { workspaceID: String(session.workspaceID) } : {}),
               }),
             )
             .pipe(Effect.ignore)
@@ -597,7 +598,7 @@ export const layer = Layer.effect(
         // The paused command consumed the current normal cursor key without advancing state. Resume keeps
         // that cursor as the tick's true pre-state but publishes it through a fresh resume-only key; the
         // resumed tick's successor returns to the normal durable-cursor namespace.
-        if (flags.v4MultiAgentRuntime) {
+        if (flags.v4MultiAgentRuntime || flags.v4GoalTickEventDriven) {
           const tick = readGoalTickCursor(store, sessionID, c.goalId)
           const expectedPlanVersion = tick?.planVersion ?? store.get(c.planDocId)?.version ?? 0
           yield* eventBus

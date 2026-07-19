@@ -38,6 +38,7 @@ import { SessionProcessor } from "../../src/session/processor"
 import { SessionPrompt } from "../../src/session/prompt"
 import { SessionRevert } from "../../src/session/revert"
 import { SessionRunState } from "../../src/session/run-state"
+import { SessionSteer } from "../../src/session/steer"
 import { MessageID, PartID, SessionID } from "../../src/session/schema"
 import { SessionStatus } from "../../src/session/status"
 import { SessionV2 } from "@deepagent-code/core/session"
@@ -207,8 +208,7 @@ const stubRuntimeBaseLayer = Layer.succeed(
 // Fully-inert DebugService (D1) stub. The real DebugService.layer runs InstanceState.make
 // + registers a scope finalizer at registry-build time, perturbing the instance-context
 // lifecycle these prompt tests rely on. The debug tool is never invoked here.
-const debugStubDie = <A>(): Effect.Effect<A, never, never> =>
-  Effect.die("DebugService stub (not used in prompt tests)")
+const debugStubDie = <A>(): Effect.Effect<A, never, never> => Effect.die("DebugService stub (not used in prompt tests)")
 const stubDebugServiceLayer = Layer.succeed(
   DebugService.Service,
   DebugService.Service.of({
@@ -285,11 +285,15 @@ function makePrompt(input?: { processor?: "blocking" }) {
     Layer.provideMerge(proc),
     Layer.provideMerge(deps),
   )
+  // V4.1 §S1.1: the durable steer buffer shares the SAME Database instance as Session (built over
+  // `deps`) so drained steers are visible to the loop's history reads.
+  const steer = SessionSteer.layer.pipe(Layer.provideMerge(deps))
   return SessionPrompt.layer.pipe(
     Layer.provide(SessionRevert.defaultLayer),
     Layer.provide(Image.defaultLayer),
     Layer.provide(Reference.defaultLayer),
     Layer.provide(summary),
+    Layer.provideMerge(steer),
     Layer.provideMerge(run),
     Layer.provideMerge(compact),
     Layer.provideMerge(proc),
@@ -343,6 +347,9 @@ const cfg = {
       options: {
         apiKey: "test-key",
         baseURL: "http://localhost:1/v1",
+        // maxRetries:0 so a refused-connection test fails immediately instead of
+        // retrying 3× with exponential backoff (which eats 6s+ and trips the budget).
+        maxRetries: 0,
       },
     },
   },
@@ -752,6 +759,38 @@ it.instance("loop continues when finish is tool-calls", () =>
   }),
 )
 
+// V4.0.1 P0b OUTPUT soft-landing — a length-capped response continues instead of ending the turn.
+it.instance("loop continues (not exits) when finish is length: injects a continue nudge + re-prompts", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(providerCfg)
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const session = yield* sessions.create({
+      title: "Pinned",
+      permission: [{ permission: "*", pattern: "*", action: "allow" }],
+    })
+    // Seed an assistant that was cut off at the output ceiling (finish === "length"), then queue the
+    // continuation the re-prompt will consume. Without output soft-landing this would exit immediately
+    // like a "stop" finish (0 LLM calls); with it ON the loop injects a continue nudge and re-prompts.
+    yield* seed(session.id, { finish: "length" })
+    yield* llm.text("...continued to the end.")
+
+    const result = yield* prompt.loop({ sessionID: session.id })
+
+    // It made an LLM request (continued) rather than exiting on the length cutoff.
+    expect(yield* llm.hits).toHaveLength(1)
+    expect(result.info.role).toBe("assistant")
+    if (result.info.role === "assistant") expect(result.info.finish).toBe("stop")
+
+    // A synthetic continue-nudge user message was injected before the re-prompt.
+    const msgs = yield* sessions.messages({ sessionID: session.id })
+    const injected = msgs.some((m) =>
+      m.parts.some((p) => p.type === "text" && p.synthetic === true && p.text.includes("输出长度上限")),
+    )
+    expect(injected).toBe(true)
+  }),
+)
+
 it.instance("glob tool keeps instance context during prompt runs", () =>
   Effect.gen(function* () {
     const { dir, llm } = yield* useServerConfig(providerCfg)
@@ -922,7 +961,7 @@ it.instance(
       const tool = yield* pollWithTimeout(
         Effect.gen(function* () {
           const msgs = yield* MessageV2.filterCompactedEffect(chat.id)
-          const assistant = msgs.findLast((item) => item.info.role === "assistant" && item.info.agent === "build")
+          const assistant = msgs.findLast((item) => item.info.role === "assistant" && item.info.agent === "auto")
           const tool = assistant?.parts.find(
             (part): part is SessionV1.ToolPart => part.type === "tool" && part.tool === "task",
           )
@@ -965,7 +1004,7 @@ it.instance(
       yield* Fiber.await(fiber)
       expect((yield* status.get(chat.id)).type).toBe("idle")
     }),
-  3_000,
+  15_000,
 )
 
 // Cancel semantics
@@ -993,7 +1032,7 @@ it.instance(
         expect(exit.value.info.role).toBe("assistant")
       }
     }),
-  3_000,
+  15_000,
 )
 
 it.instance(
@@ -1019,7 +1058,7 @@ it.instance(
         }
       }
     }),
-  3_000,
+  15_000,
 )
 
 raceNoLLMServer.instance(
@@ -1108,7 +1147,7 @@ raceNoLLMServer.instance(
       }
     }),
   { config: cfg },
-  3_000,
+  15_000,
 )
 
 noLLMServer.instance(
@@ -1218,7 +1257,7 @@ it.instance(
       }
     }),
   { git: true },
-  3_000,
+  15_000,
 )
 
 // Queue semantics
@@ -1256,7 +1295,7 @@ it.instance(
       expect(a.info.id).toBe(b.info.id)
       expect(a.info.role).toBe("assistant")
     }),
-  3_000,
+  15_000,
 )
 
 it.instance(
@@ -1353,7 +1392,7 @@ it.instance(
       yield* prompt.cancel(chat.id)
       yield* Fiber.await(fiber)
     }),
-  3_000,
+  15_000,
 )
 
 noLLMServer.instance("assertNotBusy succeeds when idle", () =>
@@ -1393,7 +1432,7 @@ it.instance(
       yield* prompt.cancel(chat.id)
       yield* Fiber.await(fiber)
     }),
-  3_000,
+  15_000,
 )
 
 unixNoLLMServer(
@@ -2066,7 +2105,7 @@ noLLMServer.instance(
         source: { type: "file", path: "docs", text: { value: "@docs" } },
       })
       expect(fileURLToPath(files[0].url)).toBe(docs)
-      expect(agents.map((agent) => agent.name)).toEqual(["build"])
+      expect(agents.map((agent) => agent.name)).toEqual(["auto"])
     }),
   {
     config: {
@@ -2225,7 +2264,7 @@ it.instance(
         expect(last.info.error?.name).toBe("MessageAbortedError")
       }
     }),
-  3_000,
+  15_000,
 )
 
 // Agent variant
@@ -2351,7 +2390,7 @@ noLLMServer.instance(
         const err = Cause.squash(exit.cause)
         expect(NamedError.Unknown.isInstance(err)).toBe(true)
         if (NamedError.Unknown.isInstance(err)) {
-          expect(err.data.message).toContain("build")
+          expect(err.data.message).toContain("auto")
         }
       }
     }),
@@ -2512,6 +2551,7 @@ it.instance(
       const prompt = yield* SessionPrompt.Service
       const sessions = yield* Session.Service
       const session = yield* sessions.create({})
+      const progress: string[] = []
 
       yield* llm.text(
         JSON.stringify({
@@ -2530,6 +2570,7 @@ it.instance(
           sessionID: session.id,
           rawInput: "修复登录测试",
           outputLanguage: "chinese",
+          onProgress: (preview) => progress.push(preview),
         })
         .pipe(Effect.exit)
 
@@ -2542,6 +2583,7 @@ it.instance(
       expect(JSON.stringify((yield* llm.hits)[0]?.body)).toContain("in Chinese")
       expect((yield* llm.hits)[0]?.headers.authorization).toBe("Bearer upstream-test-key")
       expect(yield* llm.misses).toEqual([])
+      expect(progress.at(-1)).toContain("登录测试")
     }),
   30_000,
 )

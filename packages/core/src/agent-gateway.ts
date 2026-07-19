@@ -258,6 +258,25 @@ let current: CurrentConfig = {
 
 export const selfLearningPolicy = (): SelfLearningPolicy => current.selfLearning
 
+// G31-3: minimal in-memory audit counters for general-mode (passthrough) turns.
+// No disk writes — available only for diagnostics / budget tracking in-process.
+type GeneralAuditEntry = { turnCount: number; totalInputTokens: number; totalOutputTokens: number }
+const generalAuditState = new Map<string, GeneralAuditEntry>()
+
+const recordGeneralAudit = (sessionID: string, inputTokens: number, outputTokens: number): void => {
+  const existing = generalAuditState.get(sessionID)
+  if (existing) {
+    existing.turnCount += 1
+    existing.totalInputTokens += inputTokens
+    existing.totalOutputTokens += outputTokens
+  } else {
+    generalAuditState.set(sessionID, { turnCount: 1, totalInputTokens: inputTokens, totalOutputTokens: outputTokens })
+  }
+}
+
+/** Returns the accumulated general-mode audit counters for a session, or undefined if none recorded. */
+export const getGeneralAudit = (sessionID: string): GeneralAuditEntry | undefined => generalAuditState.get(sessionID)
+
 export const configure = (config: Config = {}) => {
   const nextRunsDir = "runsDir" in config ? config.runsDir : current.runsDir
   // P0-0: memory/state always root at the single storage home. Production injects `baseDir`
@@ -382,7 +401,12 @@ export const isActiveDeepAgentRuntime = () => current.enabled && !current.killSw
 const isManagedDeepAgentRuntimeWith = (config: CurrentConfig) =>
   config.enabled && !config.killSwitch && config.agentMode !== "general"
 
-import { buildSystemPrompt, type KnowledgeRefProjection, type PromptContext } from "./deepagent/prompt-policy"
+import {
+  buildSystemPrompt,
+  buildVolatileRoundContext,
+  type KnowledgeRefProjection,
+  type PromptContext,
+} from "./deepagent/prompt-policy"
 import * as DeepAgentOrchestrator from "./deepagent/orchestrator"
 import * as DeepAgentSessionState from "./deepagent/session-state"
 import * as DeepAgentPlanController from "./deepagent/plan-controller"
@@ -452,6 +476,14 @@ import type { RoundState as DeepAgentRoundState } from "./deepagent/round-state"
 export const systemPrompt = (_providerID: string, context?: PromptContext) =>
   isActiveDeepAgentRuntime() ? [context ? buildSystemPrompt(context) : bootMessage(current.agentMode)] : []
 
+// Prompt-cache split (see docs/deepagent-cache-hit-fix-plan.md): the per-turn volatile state that must
+// NOT ride the cached system prefix. The caller appends this to the tail of the message array (after
+// the cache breakpoint) so the model still sees round/stage/previous-results/budget without churning
+// the prefix. Returns "" when there is nothing round-specific (⇒ caller skips injection). Only emitted
+// when the DeepAgent runtime is active, matching systemPrompt().
+export const volatileRoundContext = (context: PromptContext): string =>
+  isActiveDeepAgentRuntime() ? buildVolatileRoundContext(context) : ""
+
 export const preflight = (input: RunInput): Effect.Effect<void, LLMError> => preflightWith(input, current)
 
 const preflightWith = (input: RunInput, config: CurrentConfig): Effect.Effect<void, LLMError> =>
@@ -484,8 +516,24 @@ export const manageStream = <E>(
   }
   // general mode (and a disabled runtime) is pure passthrough with zero artifacts, which
   // protects the inherited generic-agent (deepagent-code) baseline.
+  // G31-3: even in passthrough mode, tap finish events to record a minimal audit entry
+  // (turn count + token delta) so diagnostics/budget tracking have visibility into these turns.
   const agentMode = effectiveAgentMode(input.metadata) ?? current.agentMode
-  if (!isManagedDeepAgentRuntimeWith({ ...current, agentMode })) return stream
+  if (!isManagedDeepAgentRuntimeWith({ ...current, agentMode })) {
+    if (!input.sessionID) return stream
+    const sessionID = input.sessionID
+    return Stream.tap(stream, (event) =>
+      Effect.sync(() => {
+        if (LLMEvent.is.finish(event) && "usage" in event && event.usage != null) {
+          recordGeneralAudit(
+            sessionID,
+            Math.trunc(event.usage.inputTokens ?? 0),
+            Math.trunc(event.usage.outputTokens ?? 0),
+          )
+        }
+      }),
+    )
+  }
   if (input.sessionID) {
     const budgetStatus = DeepAgentSessionState.budgetStatus(input.sessionID)
     if (budgetStatus?.status === "exhausted" || budgetStatus?.status === "exceeded") {
@@ -690,9 +738,10 @@ const learningQueue = new DeepAgentBackgroundLearning.LearningQueue()
 
 export const enqueueLearning = (job: DeepAgentBackgroundLearning.LearningJob): void => learningQueue.enqueue(job)
 
-// Test/shutdown hook: drain any queued learning jobs now (synchronously) and await completion.
+// Test/shutdown hook: drain any queued learning jobs now and await completion.
+// drainNow() is async since H32-2 made LearningWorker.run() async (reviewer seam).
 export const flushLearning = async (): Promise<void> => {
-  learningQueue.drainNow()
+  await learningQueue.drainNow()
 }
 
 const runBackgroundLearning = (run: RunRecord, finalStatus: "completed" | "failed"): void => {
@@ -719,8 +768,14 @@ const runBackgroundLearning = (run: RunRecord, finalStatus: "completed" | "faile
       // docs/34 §8: the worker stages into THIS workspace's durable project store (opened from the
       // same baseDir + path the retriever reads), so learned knowledge is immediately consistent.
       const durable = DeepAgentKnowledgeSource.projectStoreFor(workspacePath)
+      // Gate 3 (R3 anti-pollution): the worker must consult the SAME durable RejectedBuffer the human
+      // `reject` handler writes, so a rejected pattern is not re-learned + auto-admitted on a later run.
+      // The handler roots it at dirname(runsDir)/memory; construct the reader at the identical path.
+      const rejectedBuffer = current.runsDir
+        ? new DeepAgentPromotion.RejectedBuffer(path.join(path.dirname(current.runsDir), "memory"))
+        : undefined
       return {
-        worker: new DeepAgentBackgroundLearning.LearningWorker(project, projectID, durable),
+        worker: new DeepAgentBackgroundLearning.LearningWorker(project, projectID, durable, rejectedBuffer),
         input: {
           projectID,
           sessionID: sessionId,
@@ -731,6 +786,20 @@ const runBackgroundLearning = (run: RunRecord, finalStatus: "completed" | "faile
           finalStatus,
           trigger: "session_finalization",
           policy,
+          // TODO H32-2: inject a model-based reviewer here to validate candidates before the
+          // governance loop. The reviewer MUST use a fresh session with NO history so it evaluates
+          // each candidate in isolation. Example shape:
+          //
+          //   reviewer: async (candidates) => {
+          //     // Open a fresh, ephemeral session using a small model (e.g. "small" preset).
+          //     // Pass ONLY `candidates` — no round state, no session messages, no tool outputs.
+          //     // Return a filtered/annotated subset. The LearningWorker falls back to the full
+          //     // extraction if this throws, so failures here are always non-fatal.
+          //     return reviewCandidatesWithFreshSession(candidates, current.baseDir)
+          //   },
+          //
+          // The LearningWorker itself is already structurally isolated (receives only plain data),
+          // so no isolation flag is needed — isolation is enforced by this injection contract.
         },
       }
     },

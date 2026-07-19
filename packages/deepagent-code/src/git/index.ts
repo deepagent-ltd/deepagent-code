@@ -56,6 +56,62 @@ export interface PatchOptions {
   readonly maxOutputBytes?: number
 }
 
+export interface Repository {
+  readonly root: string
+  readonly prefix: string
+}
+
+export interface PorcelainStatus {
+  readonly entries: Item[]
+  readonly paths: string[]
+  readonly clean: boolean
+}
+
+export interface CommitIdentity {
+  readonly name: string
+  readonly email: string
+}
+
+export interface ScopedCommitInput {
+  readonly paths: string[]
+  readonly message: string
+  readonly author: CommitIdentity
+  readonly committer?: CommitIdentity
+}
+
+export interface CommitMetadata {
+  readonly hash: string
+  readonly parents: string[]
+  readonly author: CommitIdentity
+  readonly committer: CommitIdentity
+  readonly subject: string
+}
+
+export interface CommitRange {
+  readonly base: string
+  readonly head: string
+  readonly commits: string[]
+  readonly paths: string[]
+}
+
+export interface MergeSuccess {
+  readonly type: "merged"
+  readonly commit: string
+}
+
+export interface MergeConflict {
+  readonly type: "conflict"
+  readonly paths: string[]
+  readonly diagnostic: string
+}
+
+export interface MergeFailure {
+  readonly type: "failed"
+  readonly diagnostic: string
+}
+
+export type MergeResult = MergeSuccess | MergeConflict | MergeFailure
+
 export interface Result {
   readonly exitCode: number
   readonly text: () => string
@@ -87,6 +143,16 @@ export interface Interface {
   readonly patchUntracked: (cwd: string, file: string, options?: PatchOptions) => Effect.Effect<Patch>
   readonly statUntracked: (cwd: string, file: string) => Effect.Effect<Stat | undefined>
   readonly applyPatch: (cwd: string, patch: string) => Effect.Effect<Result>
+  readonly repository: (cwd: string) => Effect.Effect<Repository | undefined>
+  readonly initialize: (cwd: string) => Effect.Effect<Result>
+  readonly porcelainStatus: (cwd: string) => Effect.Effect<PorcelainStatus | undefined>
+  readonly resolveRef: (cwd: string, ref?: string) => Effect.Effect<string | undefined>
+  readonly commitScoped: (cwd: string, input: ScopedCommitInput) => Effect.Effect<Result>
+  readonly commitMetadata: (cwd: string, ref: string) => Effect.Effect<CommitMetadata | undefined>
+  readonly commitRange: (cwd: string, base: string, head?: string) => Effect.Effect<CommitRange | undefined>
+  readonly changedPaths: (cwd: string, from: string, to?: string) => Effect.Effect<string[] | undefined>
+  readonly mergeInto: (cwd: string, ref: string) => Effect.Effect<MergeResult>
+  readonly abortMerge: (cwd: string) => Effect.Effect<Result>
 }
 
 const kind = (code: string): Kind => {
@@ -96,6 +162,15 @@ const kind = (code: string): Kind => {
   if (code.includes("D") && !code.includes("A")) return "deleted"
   return "modified"
 }
+
+const diagnostic = (result: Result) => result.stderr.toString("utf8").trim() || out(result) || `git exited ${result.exitCode}`
+
+const validPath = (value: string) => {
+  const normalized = value.replace(/\\/g, "/")
+  return Boolean(value) && !normalized.startsWith("/") && !normalized.split("/").includes("..") && normalized !== "."
+}
+
+const validIdentity = (value: CommitIdentity) => Boolean(value.name.trim() && value.email.trim())
 
 export class Service extends Context.Service<Service, Interface>()("@deepagent-code/Git") {}
 
@@ -322,6 +397,129 @@ export const layer = Layer.effect(
       return yield* run(["apply", "-"], { cwd, stdin: stdin(patch) })
     })
 
+    const repository = Effect.fn("Git.repository")(function* (cwd: string) {
+      const [root, prefix] = yield* Effect.all([
+        run(["rev-parse", "--show-toplevel"], { cwd }),
+        run(["rev-parse", "--show-prefix"], { cwd }),
+      ])
+      const value = out(root)
+      if (root.exitCode !== 0 || !value) return
+      return { root: value, prefix: prefix.exitCode === 0 ? out(prefix) : "" } satisfies Repository
+    })
+
+    const initialize = Effect.fn("Git.initialize")(function* (cwd: string) {
+      return yield* run(["init"], { cwd })
+    })
+
+    const porcelainStatus = Effect.fn("Git.porcelainStatus")(function* (cwd: string) {
+      const result = yield* run(["status", "--porcelain=v1", "--untracked-files=all", "--no-renames", "-z", "--", "."], {
+        cwd,
+      })
+      if (result.exitCode !== 0) return
+      const entries = nuls(result.text()).flatMap((item) => {
+        const file = item.slice(3)
+        if (!file) return []
+        const code = item.slice(0, 2)
+        return [{ file, code, status: kind(code) } satisfies Item]
+      })
+      return { entries, paths: entries.map((entry) => entry.file), clean: entries.length === 0 } satisfies PorcelainStatus
+    })
+
+    const resolveRef = Effect.fn("Git.resolveRef")(function* (cwd: string, ref = "HEAD") {
+      const result = yield* run(["rev-parse", "--verify", "--quiet", `${ref}^{commit}`], { cwd })
+      const value = out(result)
+      return result.exitCode === 0 && value ? value : undefined
+    })
+
+    const commitScoped = Effect.fn("Git.commitScoped")(function* (cwd: string, input: ScopedCommitInput) {
+      const paths = [...new Set(input.paths)]
+      if (!input.message.trim() || paths.length === 0 || !paths.every(validPath) || !validIdentity(input.author))
+        return fail(new Error("Commit requires a message, safe relative paths, and a command-scoped author identity"))
+      if (input.committer && !validIdentity(input.committer))
+        return fail(new Error("Commit committer identity must include a name and email"))
+
+      const staged = yield* run(["add", "--", ...paths], { cwd })
+      if (staged.exitCode !== 0) return staged
+
+      const committer = input.committer ?? input.author
+      return yield* run(
+        [
+          "-c",
+          `user.name=${input.author.name}`,
+          "-c",
+          `user.email=${input.author.email}`,
+          "commit",
+          "--no-gpg-sign",
+          "-m",
+          input.message,
+          "--",
+          ...paths,
+        ],
+        {
+          cwd,
+          env: {
+            GIT_AUTHOR_NAME: input.author.name,
+            GIT_AUTHOR_EMAIL: input.author.email,
+            GIT_COMMITTER_NAME: committer.name,
+            GIT_COMMITTER_EMAIL: committer.email,
+          },
+        },
+      )
+    })
+
+    const commitMetadata = Effect.fn("Git.commitMetadata")(function* (cwd: string, ref: string) {
+      const result = yield* run(["show", "-s", "--format=%H%x00%P%x00%an%x00%ae%x00%cn%x00%ce%x00%s", ref], { cwd })
+      if (result.exitCode !== 0) return
+      const [hash, parentText, authorName, authorEmail, committerName, committerEmail, subject] = nuls(result.text())
+      if (!hash || !authorName || !authorEmail || !committerName || !committerEmail || subject === undefined) return
+      return {
+        hash,
+        parents: parentText ? parentText.split(" ") : [],
+        author: { name: authorName, email: authorEmail },
+        committer: { name: committerName, email: committerEmail },
+        subject: subject.trimEnd(),
+      } satisfies CommitMetadata
+    })
+
+    const changedPaths = Effect.fn("Git.changedPaths")(function* (cwd: string, from: string, to = "HEAD") {
+      const result = yield* run(["diff", "--no-ext-diff", "--no-renames", "--name-only", "-z", from, to, "--"], { cwd })
+      return result.exitCode === 0 ? nuls(result.text()) : undefined
+    })
+
+    const commitRange = Effect.fn("Git.commitRange")(function* (cwd: string, base: string, head = "HEAD") {
+      const [resolvedBase, resolvedHead] = yield* Effect.all([resolveRef(cwd, base), resolveRef(cwd, head)])
+      if (!resolvedBase || !resolvedHead) return
+      const [commitsResult, paths] = yield* Effect.all([
+        run(["rev-list", "--reverse", `${resolvedBase}..${resolvedHead}`], { cwd }),
+        changedPaths(cwd, resolvedBase, resolvedHead),
+      ])
+      if (commitsResult.exitCode !== 0 || !paths) return
+      return {
+        base: resolvedBase,
+        head: resolvedHead,
+        commits: commitsResult.text().split(/\r?\n/).filter(Boolean),
+        paths,
+      } satisfies CommitRange
+    })
+
+    const mergeInto = Effect.fn("Git.mergeInto")(function* (cwd: string, ref: string) {
+      const target = yield* resolveRef(cwd, ref)
+      if (!target) return { type: "failed", diagnostic: `Cannot resolve merge ref: ${ref}` } satisfies MergeFailure
+      const result = yield* run(["merge", "--no-ff", "--no-edit", target], { cwd })
+      if (result.exitCode === 0) {
+        const commit = yield* resolveRef(cwd)
+        return { type: "merged", commit: commit ?? "" } satisfies MergeSuccess
+      }
+      const conflicts = yield* run(["diff", "--name-only", "--diff-filter=U", "-z"], { cwd })
+      const paths = conflicts.exitCode === 0 ? nuls(conflicts.text()) : []
+      if (paths.length > 0) return { type: "conflict", paths, diagnostic: diagnostic(result) } satisfies MergeConflict
+      return { type: "failed", diagnostic: diagnostic(result) } satisfies MergeFailure
+    })
+
+    const abortMerge = Effect.fn("Git.abortMerge")(function* (cwd: string) {
+      return yield* run(["merge", "--abort"], { cwd })
+    })
+
     return Service.of({
       run,
       branch,
@@ -338,6 +536,16 @@ export const layer = Layer.effect(
       patchUntracked,
       statUntracked,
       applyPatch,
+      repository,
+      initialize,
+      porcelainStatus,
+      resolveRef,
+      commitScoped,
+      commitMetadata,
+      commitRange,
+      changedPaths,
+      mergeInto,
+      abortMerge,
     })
   }),
 )

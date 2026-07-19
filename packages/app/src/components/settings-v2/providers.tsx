@@ -22,7 +22,14 @@ const PROVIDER_NOTES = [
   { match: (id: string) => id === "anthropic", key: "dialog.provider.anthropic.note" },
   { match: (id: string) => id === "openai", key: "dialog.provider.openai.note" },
   { match: (id: string) => id === "deepseek", key: "dialog.provider.deepseek.note" },
+  { match: (id: string) => id === "google", key: "dialog.provider.google.note" },
+  { match: (id: string) => id === "xai", key: "dialog.provider.xai.note" },
   { match: (id: string) => id === "zhipuai", key: "dialog.provider.zhipuai.note" },
+  { match: (id: string) => id === "zhipuai-coding-plan", key: "dialog.provider.zhipuai-coding-plan.note" },
+  { match: (id: string) => id === "zai", key: "dialog.provider.zai.note" },
+  { match: (id: string) => id === "zai-coding-plan", key: "dialog.provider.zai-coding-plan.note" },
+  { match: (id: string) => id === "kimi-for-coding", key: "dialog.provider.kimi-for-coding.note" },
+  { match: (id: string) => id === "moonshotai-cn", key: "dialog.provider.moonshotai-cn.note" },
 ] as const
 
 const PROVIDER_ICON_SIZE = 16
@@ -91,7 +98,13 @@ export const SettingsProvidersV2: Component = () => {
 
     await serverSync
       .updateConfig({ disabled_providers: next })
-      .then(() => {
+      .then(async () => {
+        // updateConfig only forks the backend instance rebuild (fire-and-forget), so the provider
+        // list the immediate refresh reads back can still include the just-disabled provider. Await an
+        // explicit dispose so the rebuild completes before refreshing — otherwise the row lingers in
+        // the connected list even though the toast reports success.
+        await serverSdk.client.global.dispose().catch(() => undefined)
+        serverSync.refreshProviders()
         showToast({
           variant: "success",
           icon: "circle-check",
@@ -107,7 +120,13 @@ export const SettingsProvidersV2: Component = () => {
   }
 
   const disconnect = async (providerID: string, name: string) => {
-    if (isConfigCustom(providerID)) {
+    // Any config-defined third-party provider — including discovery-mode ones whose config has no
+    // models (isConfigCustom misses those, so before this they fell through to the standard branch,
+    // which only clears a keystore credential the provider doesn't use and left it in the config →
+    // it reappeared on every restart). Route them through disableProvider, which writes
+    // `disabled_providers`; isProviderAllowed then filters the provider out and it stays gone across
+    // restarts.
+    if (isCustomProvider(providerID)) {
       await serverSdk.client.auth.remove({ providerID }).catch(() => undefined)
       await disableProvider(providerID, name)
       return
@@ -132,7 +151,21 @@ export const SettingsProvidersV2: Component = () => {
       })
   }
 
+  // A third-party provider defined via config (including discovery-mode providers whose config has no
+  // models). These open the custom-provider dialog in edit mode so the user can adjust auto-filled
+  // specs; official/api/env providers use the standard connect dialog.
+  const isCustomProvider = (providerID: string) => {
+    const cfg = serverSync.data.config.provider?.[providerID]
+    if (!cfg) return false
+    const resolvedSource = serverSync.data.provider.all.get(providerID)?.source
+    return resolvedSource === "custom" || isConfigCustom(providerID)
+  }
+
   const openProviderConfig = (providerID: string) => {
+    if (isCustomProvider(providerID)) {
+      dialog.push(() => <DialogCustomProvider edit={providerID} back="close" />)
+      return
+    }
     dialog.push(() => <DialogConnectProvider provider={providerID} />)
   }
 

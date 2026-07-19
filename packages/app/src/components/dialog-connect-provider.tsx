@@ -33,6 +33,8 @@ const providerBaseURL: Record<string, string> = {
   "zhipuai-coding-plan": "https://open.bigmodel.cn/api/coding/paas/v4",
   zai: "https://api.z.ai/api/paas/v4",
   "zai-coding-plan": "https://api.z.ai/api/coding/paas/v4",
+  "kimi-for-coding": "https://api.kimi.com/coding/v1",
+  "moonshotai-cn": "https://api.moonshot.cn/v1",
   xai: "https://api.x.ai/v1",
   google: "https://generativelanguage.googleapis.com/v1beta",
 }
@@ -748,7 +750,9 @@ export function DialogConnectProvider(props: { provider: string }) {
       const result = await serverSDK.client.provider.oauth
         .callback({
           providerID: props.provider,
-          method: store.methodIndex,
+          // This view only renders under an oauth method (see method()?.type gate), so methodIndex
+          // is always set here; default to 0 to satisfy the required-number API type.
+          method: store.methodIndex ?? 0,
           code,
         })
         .then((value) => (value.error ? { ok: false as const, error: value.error } : { ok: true as const }))
@@ -801,7 +805,8 @@ export function DialogConnectProvider(props: { provider: string }) {
         const result = await serverSDK.client.provider.oauth
           .callback({
             providerID: props.provider,
-            method: store.methodIndex,
+            // Reached only via the oauth "auto" method branch, so methodIndex is set; default to 0.
+            method: store.methodIndex ?? 0,
           })
           .then((value) => (value.error ? { ok: false as const, error: value.error } : { ok: true as const }))
           .catch((error) => ({ ok: false as const, error }))

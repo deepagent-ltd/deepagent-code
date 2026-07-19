@@ -112,7 +112,11 @@ export interface LayerOptions {
     event: DeepAgentEvent.Event,
     files: ReadonlyArray<string>,
   ) => Effect.Effect<ReadonlyArray<string>>
+  //   §E2 token budget — injectable clock for the per-agent-per-hour LLM token budget's fixed window.
+  //   Defaults to Date.now; tests inject a mutable clock to cross the window boundary deterministically.
   readonly now?: () => number
+  //   §E2 token budget window (ms). Defaults to 1 hour — the §E2 "max_tokens_per_hour" cadence.
+  readonly tokenBudgetWindowMs?: number
 }
 
 export const layerWith = (options: LayerOptions) =>
@@ -127,6 +131,29 @@ export const layerWith = (options: LayerOptions) =>
       const symbolsForFiles = options.symbolsForFiles
       const runner = options.runner
       const now = options.now ?? Date.now
+      const tokenBudgetWindowMs = options.tokenBudgetWindowMs ?? 3_600_000 // 1h — §E2 max_tokens_per_hour
+      // §E2 LLM token budget — a per-agent fixed-window token accumulator (agentID → {windowStart, used}).
+      // A subtask is admitted only if the agent is not ALREADY over its declared maxTokensPerHour; after a
+      // turn we DEBIT the runner's reported tokensUsed. In-memory + process-local (mirrors the bus's
+      // publishLimiter): a single runtime instance owns it. P4.1 — the production event turn runner now
+      // threads the REAL per-turn token total (input+output+reasoning) from the prompt result, so this
+      // budget is LIVE: an agent over maxTokensPerHour genuinely defers. (A stub runner that reports 0 is
+      // still a harmless no-op debit — the tracker + enforcement are real either way.)
+      const tokenUsage = new Map<string, { windowStart: number; used: number }>()
+      const tokensUsedThisHour = (agentID: string, at: number): number => {
+        const bucket = tokenUsage.get(agentID)
+        if (!bucket || at - bucket.windowStart >= tokenBudgetWindowMs) return 0
+        return bucket.used
+      }
+      const debitTokens = (agentID: string, tokens: number, at: number): void => {
+        if (tokens <= 0) return
+        const bucket = tokenUsage.get(agentID)
+        if (!bucket || at - bucket.windowStart >= tokenBudgetWindowMs) {
+          tokenUsage.set(agentID, { windowStart: at, used: tokens })
+        } else {
+          bucket.used += tokens
+        }
+      }
       const trustedSources = options.trustedSources
       const trustedSourcesFor = options.trustedSourcesFor
       const actorHasPermission = options.actorHasPermission ?? (() => Effect.succeed(true))
@@ -267,6 +294,19 @@ export const layerWith = (options: LayerOptions) =>
               continue
             }
 
+            // §C1 max_files_changed — the agent's declared per-subtask file-scope ceiling. A subtask
+            // whose declared write scope exceeds it is BLOCKED (terminal, not deferred): the partition's
+            // fileScope is fixed, so a retry would present the SAME oversized scope — blocking is the
+            // honest outcome (deferring would spin forever). Unset ⇒ no ceiling. Checked right after the
+            // bind (it is an agent-vs-subtask fact) and before the autonomy/security gates.
+            const maxFilesChanged = agent.limits?.maxFilesChanged
+            if (maxFilesChanged != null && maxFilesChanged >= 0 && subtask.fileScope.length > maxFilesChanged) {
+              outcomes.push({ taskID: subtask.id, capability: subtask.capability, status: "blocked", agentID: agent.id, reason: "max_files_changed" })
+              yield* emit(event, { type: "agent.task.blocked", taskID: subtask.id, reason: "max_files_changed" }, `coord:${subtask.id}:blocked`)
+              // terminal (retrying won't shrink the scope) — do NOT mark hasUnfinished.
+              continue
+            }
+
             // §D autonomy gate — the agent's ceiling vs the subtask's required level.
             const autonomy = AutonomyPolicy.decide({
               agentCeiling: AutonomyPolicy.resolveCeiling(agent),
@@ -349,6 +389,21 @@ export const layerWith = (options: LayerOptions) =>
                 continue
               }
             }
+            // §E2 LLM token budget — a per-agent-per-hour ceiling on tokens consumed. If the agent is
+            // ALREADY at/over its declared maxTokensPerHour, DEFER this subtask (retryable — the window
+            // rolls over, unlike max_files_changed which is terminal). Checked before acquiring a slot so
+            // there is nothing to release on defer. Only bites when a budget is declared AND the runner
+            // reports real token usage. P4.1: the production event turn runner now threads the real
+            // per-turn total (input+output+reasoning) from the prompt result, so this gate is live in
+            // production. A stub runner that reports 0 is a harmless no-op debit (budget enforcement
+            // is correct; the gate just never triggers for stubs).
+            const maxTokensPerHour = agent.limits?.maxTokensPerHour
+            if (maxTokensPerHour != null && maxTokensPerHour >= 0 && tokensUsedThisHour(agent.id, now()) >= maxTokensPerHour) {
+              outcomes.push({ taskID: subtask.id, capability: subtask.capability, status: "deferred", agentID: agent.id, reason: "token_budget_exceeded" })
+              hasUnfinished = true
+              continue
+            }
+
             // §E2 concurrency cap — acquire a per-workspace execution slot. Over cap ⇒ DEFER (retryable
             // via the bus, not dropped), so a burst never runs more than the workspace's cap at once.
             const slot = concurrency ? yield* concurrency.acquire(event.workspaceID) : undefined
@@ -436,6 +491,11 @@ export const layerWith = (options: LayerOptions) =>
                 }),
               ),
             )
+            // §E2 — DEBIT the tokens this turn actually consumed against the agent's per-hour budget, so
+            // the NEXT subtask this pass (and future events within the window) see the running total. P4.1 —
+            // the event turn runner now reports the real total, so this debit is live (a stub runner that
+            // reports 0 is simply a no-op debit).
+            debitTokens(agent.id, result.tokensUsed, now())
 
             if (result.ok) {
               outcomes.push({ taskID: subtask.id, capability: subtask.capability, status: "completed", agentID: agent.id })

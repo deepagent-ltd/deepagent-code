@@ -47,6 +47,15 @@ const model = (providerID: string, modelID: string) =>
     headers: {},
   }) as any
 
+// Prompt-cache split (docs/deepagent-cache-hit-fix-plan.md): the round/stage/budget context is no
+// longer baked into the cached system prefix — it is appended as a trailing user message. Read it
+// back from the LAST message so the round-advance assertions test the right place.
+const tailContext = (prepared: { messages: any[] }): string => {
+  const last = prepared.messages[prepared.messages.length - 1]
+  if (!last || last.role !== "user") return ""
+  return typeof last.content === "string" ? last.content : JSON.stringify(last.content)
+}
+
 async function prepare(
   providerID: string,
   modelID: string,
@@ -87,7 +96,10 @@ describe("DeepAgent request prep", () => {
     expect(deepagent.system[0]).toContain("DeepAgent Code")
     expect(deepagent.system[0]).not.toContain("DeepCode")
     expect(deepagent.system[0]).toContain("High")
-    expect(deepagent.system[0]).toContain("first_fast_design")
+    // Prompt-cache split: the activation stage is round-derived and now lives in the volatile tail
+    // message, NOT the cached system prefix.
+    expect(deepagent.system[0]).not.toContain("first_fast_design")
+    expect(tailContext(deepagent)).toContain("first_fast_design")
     expect(deepagent.system[0]).not.toContain("generic agent prompt")
     expect(deepagent.system[0]).not.toContain("You are deepagent-code")
     expect(deepagent.messages[0]).toMatchObject({
@@ -147,30 +159,26 @@ describe("DeepAgent request prep", () => {
     AgentGateway.configure({ enabled: false, agentMode: "high" })
   })
 
-  // §5b: on the non-DeepAgent path at a fan-out-capable mode, the runtime decision (from the user
-  // request's ComplexitySignals) is injected as CONCRETE, task-specific numbers — not just generic
-  // guidance. DeepAgent is DISABLED here but agentMode is high, so the else-branch fires.
-  test("§5b injects a concrete fan-out decision for a complex request (non-DeepAgent, high)", async () => {
+  // Prompt-cache split (docs/deepagent-cache-hit-fix-plan.md): the non-DeepAgent path no longer inlines
+  // a per-turn fan-out VERDICT into the system prompt — that was request-text-derived and busted the
+  // cache. The system block now carries only the STABLE, mode-derived generic guidance, so it is
+  // byte-identical regardless of the request. (The DeepAgent path surfaces the concrete verdict via the
+  // volatile tail context instead.)
+  test("§5b system prompt carries only stable orchestration guidance, no per-turn verdict (non-DeepAgent, high)", async () => {
     AgentGateway.configure({ enabled: false, agentMode: "high" })
-    const prepared = await prepare("deepseek", "deepseek-v4-flash", "ses_orch_decision_complex", {
-      messages: [
-        {
-          role: "user",
-          content: "migrate the auth interface across subsystems and review it thoroughly",
-        },
-      ],
+    const complex = await prepare("deepseek", "deepseek-v4-flash", "ses_orch_decision_complex", {
+      messages: [{ role: "user", content: "migrate the auth interface across subsystems and review it thoroughly" }],
     })
-    expect(prepared.system[0]).toContain("本轮调度判定")
-    expect(prepared.system[0]).toContain("researcher")
-    AgentGateway.configure({ enabled: false, agentMode: "high" })
-  })
-
-  test("§5b a trivial single-file typo request is advised NOT to fan out (non-DeepAgent, high)", async () => {
-    AgentGateway.configure({ enabled: false, agentMode: "high" })
-    const prepared = await prepare("deepseek", "deepseek-v4-flash", "ses_orch_decision_trivial", {
+    const trivial = await prepare("deepseek", "deepseek-v4-flash", "ses_orch_decision_trivial", {
       messages: [{ role: "user", content: "fix the typo in utils.ts" }],
     })
-    expect(prepared.system[0]).toContain("不建议扇出")
+    // Generic guidance is present...
+    expect(complex.system[0]).toContain("扇出判据")
+    // ...but no task-specific verdict is inlined into the cached prefix.
+    expect(complex.system[0]).not.toContain("本轮调度判定")
+    expect(trivial.system[0]).not.toContain("不建议扇出")
+    // And the orchestration guidance is identical across two very different requests (stable prefix).
+    expect(trivial.system[0]).toBe(complex.system[0])
     AgentGateway.configure({ enabled: false, agentMode: "high" })
   })
 
@@ -230,7 +238,9 @@ describe("DeepAgent request prep", () => {
         ],
       },
     )
-    expect(prepared.system[0]).toContain("第 1 轮")
+    expect(tailContext(prepared)).toContain("第 1 轮")
+    // The round number must NOT be in the cached system prefix (prompt-cache invariant).
+    expect(prepared.system[0]).not.toContain("第 1 轮")
   })
 
   test("explicit round control advances DeepAgent rounds", async () => {
@@ -249,7 +259,7 @@ describe("DeepAgent request prep", () => {
         ],
       },
     )
-    expect(prepared.system[0]).toContain("第 2 轮")
+    expect(tailContext(prepared)).toContain("第 2 轮")
   })
 
   // T3 (S1-v3.4): the advance-trigger set {continue, revise, narrow} advances the round; the terminal
@@ -270,9 +280,32 @@ describe("DeepAgent request prep", () => {
           ],
         },
       )
-      expect(prepared.system[0]).toContain("第 2 轮")
+      expect(tailContext(prepared)).toContain("第 2 轮")
     })
   }
+
+  test("system prefix is byte-stable across rounds (prompt-cache invariant)", async () => {
+    AgentGateway.configure({ enabled: true, agentMode: "high" })
+    const sessionID = `ses_deepagent_prefix_stable_${crypto.randomUUID()}`
+
+    const round1 = await prepare("deepagent", "deepseek-deepseek-v4-flash", sessionID, {
+      messages: [{ role: "user", content: "first" }],
+    })
+    const round2 = await prepare("deepagent", "deepseek-deepseek-v4-flash", sessionID, {
+      metadata: { deepagent: { round_control: { action: "continue" } } },
+      messages: [
+        { role: "user", content: "first" },
+        { role: "assistant", content: "ok" },
+        { role: "user", content: "continue" },
+      ],
+    })
+
+    // The cached system prefix must not change even though the round advanced 1 → 2.
+    expect(round2.system[0]).toBe(round1.system[0])
+    // ...and the round actually advanced, proving the round number lives only in the volatile tail.
+    expect(tailContext(round1)).toContain("第 1 轮")
+    expect(tailContext(round2)).toContain("第 2 轮")
+  })
 
   for (const action of ["stop", "escalate"]) {
     test(`terminal round control "${action}" does NOT advance rounds`, async () => {
@@ -290,7 +323,7 @@ describe("DeepAgent request prep", () => {
           ],
         },
       )
-      expect(prepared.system[0]).toContain("第 1 轮")
+      expect(tailContext(prepared)).toContain("第 1 轮")
     })
   }
 
@@ -369,5 +402,133 @@ describe("DeepAgent request prep", () => {
         ],
       },
     })
+  })
+})
+
+// S41-2: goal-loop scorer false positives. extractValidationResults must only treat outputs of the
+// DECLARED validation commands as validation evidence (diagnostic bash calls like grep/tail of logs
+// must not poison the score), and per declared command the LATEST run must win so a fixed failure
+// does not stay "failed" forever.
+describe("extractValidationResults (S41-2)", () => {
+  const validationCommands = ["bun run typecheck", "bun run lint", "bun run test"]
+
+  const bashCall = (id: string, command: string) =>
+    ({
+      role: "assistant",
+      content: [{ type: "tool-call", toolCallId: id, toolName: "bash", input: { command } }],
+    }) as any
+
+  const bashResult = (id: string, output: string) =>
+    ({
+      role: "tool",
+      content: [
+        { type: "tool-result", toolCallId: id, toolName: "bash", output: { type: "text", value: output } },
+      ],
+    }) as any
+
+  test("ignores diagnostic bash outputs that merely mention errors", () => {
+    const results = LLMRequestPrep.extractValidationResults(
+      [
+        bashCall("c1", "grep '(fail)' /tmp/turbo-test.log | tail -5"),
+        bashResult("c1", "ERROR run failed: command exited (1)\nerror: script exited with code 1"),
+        bashCall("c2", "bun run typecheck >/dev/null 2>&1 && echo done"),
+        bashResult("c2", "typecheck validation exit code: 0"),
+      ],
+      validationCommands,
+    )
+    expect(results).toHaveLength(1)
+    expect(results[0]).toMatchObject({ command: "bun run typecheck", passed: true, exit_code: 0 })
+  })
+
+  test("latest run per declared command wins over an older failure", () => {
+    const results = LLMRequestPrep.extractValidationResults(
+      [
+        bashCall("c1", "bun run test"),
+        bashResult("c1", "error: script \"test\" exited with code 1"),
+        bashCall("c2", "bun run test >/dev/null 2>&1 && echo done"),
+        bashResult("c2", "test validation exit code: 0"),
+      ],
+      validationCommands,
+    )
+    expect(results).toHaveLength(1)
+    expect(results[0]).toMatchObject({ command: "bun run test", passed: true, exit_code: 0 })
+  })
+
+  test("keeps a genuinely failing declared command as failed with its real command name", () => {
+    const results = LLMRequestPrep.extractValidationResults(
+      [bashCall("c1", "bun run test"), bashResult("c1", "20 passed, 1 failed")],
+      validationCommands,
+    )
+    expect(results).toHaveLength(1)
+    expect(results[0]).toMatchObject({ command: "bun run test", passed: false, exit_code: 1 })
+  })
+
+  test("one combined invocation covers every declared command it contains", () => {
+    const results = LLMRequestPrep.extractValidationResults(
+      [
+        bashCall("c1", "bun run typecheck && bun run lint && bun run test"),
+        bashResult("c1", "all three declared validation commands exit code: 0"),
+      ],
+      validationCommands,
+    )
+    expect(results).toHaveLength(3)
+    expect(results.map((item) => item.command).sort()).toEqual([...validationCommands].sort())
+    expect(results.every((item) => item.passed)).toBe(true)
+  })
+
+  test("returns nothing when no validation commands are declared", () => {
+    const results = LLMRequestPrep.extractValidationResults(
+      [bashCall("c1", "bun run test"), bashResult("c1", "FAILED")],
+      [],
+    )
+    expect(results).toHaveLength(0)
+  })
+})
+
+// STALE-REHARVEST GUARD: extractValidationResults re-scans the WHOLE transcript every turn, so a single
+// early test run (e.g. "✓ cancel with queued callers [3882.11ms]") is re-extracted verbatim on every
+// later turn as long as it stays in history. validationFingerprint lets the caller tell a genuine NEW
+// run apart from a stale re-harvest, so the same result is not re-recorded as a fresh candidate N times
+// (the "26轮逐字不变" duplication).
+describe("validationFingerprint (stale-reharvest guard)", () => {
+  const vr = (command: string, exit_code: number, output: string): AgentGateway.ValidationResult => ({
+    command,
+    passed: exit_code === 0,
+    exit_code,
+    output,
+    duration_ms: 0,
+  })
+
+  test("identical result sets fingerprint equal (a stale re-harvest is detected)", () => {
+    const a = [vr("bun run test", 0, "✓ cancel with queued callers [3882.11ms]")]
+    const b = [vr("bun run test", 0, "✓ cancel with queued callers [3882.11ms]")]
+    expect(LLMRequestPrep.validationFingerprint(a)).toBe(LLMRequestPrep.validationFingerprint(b))
+  })
+
+  test("is order-independent across map-iteration order", () => {
+    const a = [vr("bun run typecheck", 0, "ok"), vr("bun run test", 0, "ok")]
+    const b = [vr("bun run test", 0, "ok"), vr("bun run typecheck", 0, "ok")]
+    expect(LLMRequestPrep.validationFingerprint(a)).toBe(LLMRequestPrep.validationFingerprint(b))
+  })
+
+  test("a genuine state change (pass→fail via exit code) fingerprints differently", () => {
+    const pass = [vr("bun run test", 0, "20 passed")]
+    const fail = [vr("bun run test", 1, "19 passed, 1 failed")]
+    expect(LLMRequestPrep.validationFingerprint(pass)).not.toBe(LLMRequestPrep.validationFingerprint(fail))
+  })
+
+  test("volatile output with the SAME exit code fingerprints EQUAL (guard not defeated by noise)", () => {
+    // Same command, same exit 0, but the output carries a volatile duration/timestamp. Keying on
+    // command+exit_code (not output) means this is correctly seen as the SAME evidence, so a noisy
+    // re-harvest does not masquerade as a new run.
+    const run1 = [vr("bun run test", 0, "✓ cancel with queued callers [3882.11ms]")]
+    const run2 = [vr("bun run test", 0, "✓ cancel with queued callers [4021.55ms]")]
+    expect(LLMRequestPrep.validationFingerprint(run1)).toBe(LLMRequestPrep.validationFingerprint(run2))
+  })
+
+  test("an empty set differs from any non-empty set (first evidence is always new)", () => {
+    expect(LLMRequestPrep.validationFingerprint([])).not.toBe(
+      LLMRequestPrep.validationFingerprint([vr("bun run test", 0, "ok")]),
+    )
   })
 })

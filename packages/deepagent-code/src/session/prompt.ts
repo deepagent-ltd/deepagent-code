@@ -15,9 +15,17 @@ import { ProviderTransform } from "@/provider/transform"
 import { Auth } from "@/auth"
 import { configureGateway } from "@/deepagent/config"
 
-import { type Tool as AITool, tool, jsonSchema, generateText, streamText, type ModelMessage } from "ai"
+import { type Tool as AITool, tool, jsonSchema, streamText, type ModelMessage } from "ai"
 import type { JSONSchema7 } from "@ai-sdk/provider"
 import { SessionCompaction } from "./compaction"
+import {
+  overflowStatus,
+  tokensUsed,
+  softLandingDecision,
+  outputContinuationMax,
+  initialSoftLandingState,
+  CompactionSoftLandingState,
+} from "./overflow"
 import { SystemPrompt } from "./system"
 import { Instruction } from "./instruction"
 import { Plugin } from "../plugin"
@@ -58,6 +66,8 @@ import * as EffectLogger from "@deepagent-code/core/effect/logger"
 import { InstanceState } from "@/effect/instance-state"
 import { TaskTool, type TaskPromptOps } from "@/tool/task"
 import { SessionRunState } from "./run-state"
+import { SessionSteer } from "./steer"
+import { writeGovernanceAudit } from "./goal-governance-audit"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { archiveSessionOnCompletion } from "@/wiki/session-archive"
 import { EventV2Bridge } from "@/event-v2-bridge"
@@ -82,6 +92,7 @@ import { SessionReminders } from "./reminders"
 import { SessionTools } from "./tools"
 import { LLMEvent } from "@deepagent-code/llm"
 import { ConversationLogWriter } from "./conversation-log-writer"
+import { collectVolatileFacts, refreshWorldState } from "./context-ledger"
 import { CodeIndexTrigger } from "./code-index-trigger"
 
 // @ts-ignore
@@ -111,9 +122,35 @@ function isOrphanedInterruptedTool(part: SessionV1.ToolPart) {
   return part.state.status === "error" && part.state.metadata?.interrupted === true
 }
 
+// §S1.2 — a goal in one of these phases is no longer ticking, so a "goal_steer" would never be drained.
+// promptOrSteer routes to the plain "steer" channel (or a fresh turn) instead. Mirrors goal-manager's
+// isTerminalGoalPhase (kept as a local const to avoid a circular import: goal-manager imports this file).
+const TERMINAL_GOAL_PHASES: ReadonlySet<string> = new Set(["done", "needs_human", "rolled_back", "stopped"])
+
+// §S1.2 — extract the plain text a steer should carry from a PromptInput's parts (text parts only; file/
+// agent/subtask attachments are not re-encoded into a steer's text — a steered turn is a user message).
+const promptInputText = (parts: PromptInput["parts"]): string =>
+  parts
+    .filter((p): p is Extract<PromptInput["parts"][number], { type: "text" }> => p.type === "text")
+    .map((p) => p.text)
+    .join("\n")
+    .trim()
+
 export interface Interface {
   readonly cancel: (sessionID: SessionID) => Effect.Effect<void>
   readonly prompt: (input: PromptInput) => Effect.Effect<SessionV1.WithParts, Image.Error>
+  // V4.1 §S1.1: buffer a mid-turn user message into the durable steer queue for absorption at the next
+  // model-request boundary of the live turn loop. This is the admit() API; S1.2 wires the busy-session
+  // ingress that decides WHEN to route a message here vs. the normal prompt() path. Idempotent on `id`.
+  readonly steer: (input: SteerInput) => Effect.Effect<SessionSteer.Admitted>
+  // V4.1 §S1.2: the busy-session ingress decision. If the session is IDLE (no live turn) → run a normal
+  // turn (prompt). If it is BUSY (mid-turn) and steering is enabled → buffer the message as a steer so
+  // the running turn absorbs it at its next boundary (delivery="goal_steer" when a non-terminal goal is
+  // active — drained by the goal driver between ticks; else "steer" — drained by the session's own
+  // runLoop). Returns a discriminated ack so the caller knows whether a turn ran or the message was
+  // accepted as steering. With steering disabled it falls back to prompt() (which enforces the runner's
+  // own busy semantics), preserving pre-steering behavior exactly.
+  readonly promptOrSteer: (input: PromptInput) => Effect.Effect<PromptOrSteerResult, Image.Error>
   readonly loop: (input: LoopInput) => Effect.Effect<SessionV1.WithParts>
   readonly shell: (input: ShellInput) => Effect.Effect<SessionV1.WithParts, Session.BusyError>
   readonly command: (input: CommandInput) => Effect.Effect<SessionV1.WithParts, Image.Error>
@@ -122,6 +159,7 @@ export interface Interface {
     sessionID: SessionID
     rawInput: string
     outputLanguage?: AgentGateway.DeepAgentPromptPipeline.IntelligenceRefinementOutputLanguage
+    onProgress?: (preview: string) => void
   }) => Effect.Effect<
     {
       prompt_draft_id: string
@@ -165,6 +203,7 @@ export const layer = Layer.effect(
     const scope = yield* Scope.Scope
     const instruction = yield* Instruction.Service
     const state = yield* SessionRunState.Service
+    const steerBuffer = yield* SessionSteer.Service
     const revert = yield* SessionRevert.Service
     const snapshot = yield* Snapshot.Service
     const summary = yield* SessionSummary.Service
@@ -813,10 +852,47 @@ export const layer = Layer.effect(
       return undefined
     }
 
+    const partialIntelligencePrompt = (text: string) => {
+      const match = /"refined_prompt"\s*:\s*"/.exec(text)
+      if (!match) return
+      const escapes: Record<string, string> = {
+        '"': '"',
+        "\\": "\\",
+        "/": "/",
+        b: "\b",
+        f: "\f",
+        n: "\n",
+        r: "\r",
+        t: "\t",
+      }
+      let preview = ""
+      for (let index = match.index + match[0].length; index < text.length; index++) {
+        const character = text[index]!
+        if (character === '"') return preview
+        if (character !== "\\") {
+          preview += character
+          continue
+        }
+        const escaped = text[index + 1]
+        if (!escaped) return preview
+        if (escaped !== "u") {
+          preview += escapes[escaped] ?? escaped
+          index++
+          continue
+        }
+        const code = text.slice(index + 2, index + 6)
+        if (!/^[0-9a-f]{4}$/i.test(code)) return preview
+        preview += String.fromCharCode(Number.parseInt(code, 16))
+        index += 5
+      }
+      return preview
+    }
+
     const generateIntelligenceRefinement = Effect.fnUntraced(function* (input: {
       sessionID: SessionID
       rawInput: string
       outputLanguage?: AgentGateway.DeepAgentPromptPipeline.IntelligenceRefinementOutputLanguage
+      onProgress?: (preview: string) => void
     }) {
       const cfg = yield* config.get()
       const model = yield* intelligenceRefinementModel(input.sessionID)
@@ -827,7 +903,9 @@ export const layer = Layer.effect(
       const modelAuth = modelAuthID ? yield* auth.get(modelAuthID).pipe(Effect.orDie) : undefined
       const authInfo = model.providerID === "deepagent" ? (modelAuth ?? providerAuth) : providerAuth
       const isOpenaiOauth = (model.providerID === "openai" || modelAuthID === "openai") && authInfo?.type === "oauth"
-      const system = AgentGateway.DeepAgentPromptPipeline.intelligenceRefinementSystemPrompt(input.outputLanguage ?? "english")
+      const system = AgentGateway.DeepAgentPromptPipeline.intelligenceRefinementSystemPrompt(
+        input.outputLanguage ?? "english",
+      )
 
       // Feed the refiner the recent conversation so it reuses already-stated facts (target
       // directory, paths, prior decisions) instead of guessing them and emitting misleading
@@ -859,7 +937,7 @@ export const layer = Layer.effect(
           { role: "user", content: input.rawInput },
         ],
         model: language,
-      } satisfies Parameters<typeof generateText>[0]
+      } satisfies Parameters<typeof streamText>[0]
       const run = {
         callKind: "auxiliary_ai_call" as const,
         feature: "intelligence_prompt_prepare",
@@ -874,29 +952,33 @@ export const layer = Layer.effect(
         },
       }
 
-      if (isOpenaiOauth) {
-        return yield* AgentGateway.runAuxiliary(
-          run,
-          Effect.tryPromise(async () => {
-            const result = streamText({
-              ...params,
-              providerOptions: ProviderTransform.providerOptions(resolved, { instructions: system, store: false }),
-              onError: () => {},
-            })
-            let text = ""
-            for await (const part of result.fullStream) {
-              if (part.type === "error") throw part.error
-              if (part.type === "text-delta") text += part.text
-            }
-            return extractIntelligenceJson(text)
-          }),
-        )
-      }
-
-      configureGateway(cfg)
+      if (!isOpenaiOauth) configureGateway(cfg)
       return yield* AgentGateway.runAuxiliary(
         run,
-        Effect.tryPromise(() => generateText(params).then((r) => extractIntelligenceJson(r.text))),
+        Effect.tryPromise(async (signal) => {
+          const result = streamText({
+            ...params,
+            ...(isOpenaiOauth
+              ? {
+                  providerOptions: ProviderTransform.providerOptions(resolved, { instructions: system, store: false }),
+                  onError: () => {},
+                }
+              : {}),
+            abortSignal: signal,
+          })
+          let text = ""
+          let preview = ""
+          for await (const part of result.fullStream) {
+            if (part.type === "error") throw part.error
+            if (part.type !== "text-delta") continue
+            text += part.text
+            const next = partialIntelligencePrompt(text)
+            if (!next || next === preview) continue
+            preview = next
+            input.onProgress?.(preview)
+          }
+          return extractIntelligenceJson(text)
+        }),
       )
     })
 
@@ -910,6 +992,7 @@ export const layer = Layer.effect(
       sessionID: SessionID
       rawInput: string
       outputLanguage?: AgentGateway.DeepAgentPromptPipeline.IntelligenceRefinementOutputLanguage
+      onProgress?: (preview: string) => void
     }) {
       const ctx = yield* InstanceState.context
       const home = new AgentGateway.DeepAgentWorkspace.DeepAgentCodeHome(Global.Path.agent.data)
@@ -1796,8 +1879,209 @@ export const layer = Layer.effect(
       throw new Error("Impossible")
     })
 
-    const runLoop: (sessionID: SessionID) => Effect.Effect<SessionV1.WithParts> = Effect.fn("SessionPrompt.run")(
-      function* (sessionID: SessionID) {
+    // V4.1 §S1.1: drain the durable steer buffer and PERSIST each pending steer as an ordinary V1 user
+    // message at the TAIL of history — exactly the append path a normal prompt uses (updateMessage +
+    // updatePart). This is codex's "drain pendingInput into history as a role:user tail message". Because
+    // the steer lands as a plain history message BEFORE the single volatile round-context tail assembled
+    // in llm/request.ts, the cached system prefix and the single trailing volatile message are both
+    // untouched — cache-safe (see request.ts applyCaching slice(-2)). Returns the count drained so the
+    // caller can decide whether the freshly-read history now includes new tail user messages.
+    //
+    // EXACTLY-ONCE, PERSIST-FIRST (no loss + no duplicate). We (1) read the pending steers non-
+    // consumingly, (2) materialize each as a history message, THEN (3) mark them consumed. If the process
+    // crashes between (2) and (3) the row stays pending, so the next drain re-materializes it — a no-op
+    // because BOTH the message id AND its text part id are DERIVED FROM THE STEER ID (stable across
+    // replays), and the V1 projector upserts on those ids (MessageUpdated/PartUpdated →
+    // onConflictDoUpdate on the id). So re-persisting hits the same row (idempotent), never a duplicate
+    // turn. The steer id is an ascending SessionMessage.ID minted at admit time, so tail-sorting (Check 3)
+    // is preserved. This replaces the earlier stamp-then-persist ordering, whose crash window between the
+    // consume stamp and the message write could lose a steer permanently.
+    const steerPartID = (messageID: MessageID) =>
+      // Deterministic, valid PartID (prt_<message-suffix>) so a replayed persist targets the SAME part
+      // row and the projector's onConflictDoUpdate makes it a no-op instead of appending a duplicate.
+      PartID.make("prt_" + messageID.slice("msg_".length))
+    const drainSteers = Effect.fn("SessionPrompt.drainSteers")(function* (sessionID: SessionID) {
+      if (!flags.v4Steering) return 0
+      const pending = yield* steerBuffer.pending(sessionID)
+      if (pending.length === 0) return 0
+      const current = yield* db
+        .select({ agent: SessionTable.agent, model: SessionTable.model })
+        .from(SessionTable)
+        .where(eq(SessionTable.id, sessionID))
+        .get()
+        .pipe(Effect.orDie)
+      const defaultAgent = current?.agent ?? (yield* agents.defaultInfo())?.name ?? "build"
+      const resolved = current?.model
+        ? {
+            providerID: ProviderV2.ID.make(current.model.providerID),
+            modelID: ModelV2.ID.make(current.model.id),
+            variant:
+              current.model.variant && current.model.variant !== "default" ? current.model.variant : undefined,
+          }
+        : yield* currentModel(sessionID)
+      const variant = "variant" in resolved ? resolved.variant : undefined
+      const persisted: SessionMessage.ID[] = []
+      for (const admitted of pending) {
+        const agentName = admitted.prompt.agents?.[0]?.name ?? defaultAgent
+        const info: SessionV1.User = {
+          id: MessageID.make(admitted.id),
+          role: "user",
+          sessionID,
+          time: { created: admitted.timeCreated },
+          agent: agentName,
+          model: {
+            providerID: resolved.providerID,
+            modelID: resolved.modelID,
+            ...(variant ? { variant } : {}),
+          },
+        }
+        // PERSIST-FIRST: materialize the history message + its text part (both keyed by the steer id, so
+        // a replay after a mid-drain crash is an idempotent upsert, not a duplicate) BEFORE stamping the
+        // steer consumed below.
+        yield* sessions.updateMessage(info)
+        yield* sessions.updatePart({
+          id: steerPartID(info.id),
+          messageID: info.id,
+          sessionID,
+          type: "text",
+          text: admitted.prompt.text,
+        })
+        persisted.push(admitted.id)
+        yield* elog.info("steer absorbed at boundary", { sessionID, messageID: info.id, seq: admitted.seq })
+      }
+      // Only AFTER every steer is durably in history do we mark them consumed. A crash before this leaves
+      // them pending → re-materialized (idempotently) on the next drain. No loss, no double-apply.
+      yield* steerBuffer.markConsumed(sessionID, persisted)
+      return pending.length
+    })
+
+    // ── V4.0.1 P0: three-layer SOFT-LANDING compaction ─────────────────────────────────────────────
+    // The durable soft-landing state lives on session metadata (survives cold recovery, same store as
+    // every other durable session field). This key namespaces it so it never collides with other
+    // metadata producers.
+    const SOFT_LANDING_METADATA_KEY = "compactionSoftLanding"
+    const decodeSoftLanding = Schema.decodeUnknownOption(CompactionSoftLandingState)
+
+    const readSoftLandingState: (sessionID: SessionID) => Effect.Effect<CompactionSoftLandingState> = Effect.fn(
+      "SessionPrompt.readSoftLandingState",
+    )(function* (sessionID: SessionID) {
+      const session = yield* sessions.get(sessionID).pipe(Effect.orElseSucceed(() => undefined))
+      const raw = session?.metadata?.[SOFT_LANDING_METADATA_KEY]
+      return Option.getOrElse(decodeSoftLanding(raw), () => initialSoftLandingState)
+    })
+
+    const writeSoftLandingState: (
+      sessionID: SessionID,
+      state: CompactionSoftLandingState,
+    ) => Effect.Effect<void> = Effect.fn("SessionPrompt.writeSoftLandingState")(function* (sessionID, state) {
+      const session = yield* sessions.get(sessionID).pipe(Effect.orElseSucceed(() => undefined))
+      // Merge into existing metadata so we never clobber a co-tenant key.
+      const metadata = { ...(session?.metadata ?? {}), [SOFT_LANDING_METADATA_KEY]: state }
+      yield* sessions.setMetadata({ sessionID, metadata }).pipe(Effect.ignore)
+    })
+
+    // reminder (soft line): a lightweight, non-compacting tail nudge asking the model to persist key
+    // decisions/findings into the plan's evidence/worklog. Reuses the SAME tail-user-message channel as
+    // steering (never mutates the static system prefix → prompt cache stays intact). `synthetic` marks
+    // it internal so it doesn't leak into previews/archives; it still reaches the model as a user text.
+    const REMINDER_TAIL_TEXT = [
+      "<system-reminder>",
+      "上下文接近上限。请把关键决策 / 发现 / 下一步意图写进 plan 的 evidence 或 worklog，避免压缩时丢失。",
+      "文件与环境的当前值无需复述，系统会自动重注入。",
+      "</system-reminder>",
+    ].join("\n")
+
+    const injectTailReminder: (
+      sessionID: SessionID,
+      text: string,
+      model: { providerID: ProviderV2.ID; modelID: ModelV2.ID },
+      agentName: string,
+    ) => Effect.Effect<void> = Effect.fn("SessionPrompt.injectTailReminder")(function* (
+      sessionID,
+      text,
+      model,
+      agentName,
+    ) {
+      const msg = yield* sessions.updateMessage({
+        id: MessageID.ascending(),
+        role: "user",
+        sessionID,
+        agent: agentName,
+        model,
+        time: { created: Date.now() },
+      })
+      yield* sessions.updatePart({
+        id: PartID.ascending(),
+        messageID: msg.id,
+        sessionID,
+        type: "text",
+        synthetic: true,
+        text,
+      })
+    })
+
+    // fallback ("临终笔记" line): the last chance before a hard compaction. All tools stay available so
+    // the model can call the plan-edit tool to固化 un-persisted state. Under a goal (loop/design) mode we
+    // additionally name the plan tool. §2.4 template — short, natural language.
+    const fallbackTailText = (sessionID: SessionID) => {
+      const goalActive = AgentGateway.DeepAgentSessionState.getActiveGoal(sessionID) != null
+      return [
+        "<system-reminder>",
+        "上下文即将压缩。这是压缩前最后一次机会。",
+        "请立刻把以下内容写入持久状态，不要开始新的探索：",
+        "- 尚未记录的关键决策与理由",
+        "- 已经得到但未落盘的中间结论 / 数据引用",
+        "- 明确的下一步意图（写进 plan 的 next / worklog）",
+        goalActive ? "用 `plan` 工具更新 goal+plan，把上述内容落进 evidence/worklog。" : "",
+        "完成落盘后停止本轮。文件与环境的当前值无需复述，系统会自动重注入。",
+        "</system-reminder>",
+      ]
+        .filter(Boolean)
+        .join("\n")
+    }
+
+    // V4.0.1 P0b OUTPUT soft-landing — the "continue from the cutoff" nudge injected when a response was
+    // truncated at the output-token ceiling (finish === "length") with no pending tool call. Unlike Codex
+    // (which re-sends the identical request and re-hits the same cap), we append the model's already-
+    // streamed partial text as history and ask it to RESUME — so the pieces stitch by continuation.
+    const OUTPUT_CONTINUE_TAIL_TEXT = [
+      "<system-reminder>",
+      "你上一轮的输出因达到输出长度上限被截断（未自然结束）。请直接从被截断处继续，",
+      "不要重复已经输出的内容，也不要重新开头。若已实质完成，简短收尾即可。",
+      "</system-reminder>",
+    ].join("\n")
+
+    // V4.0.1 P1 (§3.3) — post-hard-compaction World State re-injection. After a hard compaction the
+    // (now-narrowed) summary deliberately dropped file/env/diagnostics; this re-injects their LATEST
+    // values as a TAIL user block (reuses the SAME injectTailReminder primitive — never the static system
+    // prefix, so prompt cache is preserved) so the model sees current truth, not a stale summary value.
+    // Gated by worldStateReinjection (the same flag that narrowed the summary — no information hole).
+    // Bounded IO: git + env only, collected once per compaction. Default-safe: any defect ⇒ no-op.
+    const injectWorldStateTail: (
+      sessionID: SessionID,
+      workspacePath: string | undefined,
+      model: { providerID: ProviderV2.ID; modelID: ModelV2.ID },
+      agentName: string,
+    ) => Effect.Effect<void> = Effect.fn("SessionPrompt.injectWorldStateTail")(function* (
+      sessionID,
+      workspacePath,
+      model,
+      agentName,
+    ) {
+      if (!workspacePath) return
+      const facts = yield* collectVolatileFacts(workspacePath)
+      const rendered = yield* refreshWorldState({ workspacePath, facts })
+      if (rendered.trim().length > 0) yield* injectTailReminder(sessionID, rendered, model, agentName)
+    })
+
+    const runLoop: (sessionID: SessionID, drainFirst?: boolean) => Effect.Effect<SessionV1.WithParts> = Effect.fn(
+      "SessionPrompt.run",
+    )(
+      // §S1.2: `drainFirst` — a PURE-DRAIN turn (started to absorb a steer that landed in the isBusy→admit
+      // race, with no initiating user message of its own) must drain on step 0 too; otherwise the step-0
+      // skip + the immediate finish check would break before the steer is ever consumed. A normal turn
+      // leaves it false so the initiating message samples first (S1.1).
+      function* (sessionID: SessionID, drainFirst = false) {
         const ctx = yield* InstanceState.context
         const slog = elog.with({ sessionID })
         let structured: unknown
@@ -1827,6 +2111,17 @@ export const layer = Layer.effect(
         while (true) {
           yield* status.set(sessionID, { type: "busy" })
           yield* slog.info("loop", { step })
+
+          // V4.1 §S1.1 STEER DRAIN POINT — absorb-at-boundary, NOT abort. Drain the durable steer buffer
+          // at the TOP of each iteration and persist each pending steer as a tail user message BEFORE we
+          // re-read history below, so the fresh read picks it up at the end of history (codex's
+          // drain-at-turn-top). SKIP the FIRST iteration (step === 0): the initiating user message must
+          // sample first, matching codex. The in-flight model stream + tool loop of the PREVIOUS
+          // iteration have already completed by the time we re-enter here, so nothing is interrupted.
+          // A drained steer's id (MessageID.ascending) sorts after the last assistant, which flips the
+          // top-of-loop finish check (`lastUser.id < lastAssistant.id`) to keep looping — so a steer that
+          // arrived after the model said "done" is naturally absorbed on this next pass.
+          if (step > 0 || drainFirst) yield* drainSteers(sessionID)
 
           let msgs = yield* MessageV2.filterCompactedEffect(sessionID).pipe(
             Effect.provideService(Database.Service, database),
@@ -1858,6 +2153,27 @@ export const layer = Layer.effect(
             !hasToolCalls &&
             lastUser.id < lastAssistant.id
           ) {
+            // V4.0.1 P0b OUTPUT soft-landing — a response cut off at the output-token ceiling finishes with
+            // "length" (never "tool-calls", so it reaches here). Instead of ending the turn mid-sentence,
+            // inject a bounded "continue from the cutoff" nudge and loop once more so the model resumes; the
+            // already-streamed partial is in history, so the continuation stitches on. Bounded by
+            // OUTPUT_CONTINUATION_MAX consecutive continuations (a fresh count each turn once a natural stop
+            // resets it) to prevent an infinite loop — the knob Codex lacks. Context growth from the extra
+            // turn is caught by the top-of-loop overflow check on the next pass (compaction stays separate).
+            if (flags.outputSoftLanding && lastAssistant.finish === "length") {
+              const sls = yield* readSoftLandingState(sessionID)
+              const done = sls.outputContinuationCount ?? 0
+              if (done < outputContinuationMax()) {
+                yield* writeSoftLandingState(sessionID, { ...sls, outputContinuationCount: done + 1 })
+                yield* injectTailReminder(sessionID, OUTPUT_CONTINUE_TAIL_TEXT, lastUser.model, lastUser.agent)
+                yield* slog.info("output soft-landing: continuing after length cutoff", {
+                  continuation: done + 1,
+                  max: outputContinuationMax(),
+                })
+                continue
+              }
+              yield* slog.warn("output soft-landing: continuation cap reached, ending turn", { max: outputContinuationMax() })
+            }
             const orphan = lastAssistantMsg?.parts.find(
               (part): part is SessionV1.ToolPart => part.type === "tool" && isOrphanedInterruptedTool(part),
             )
@@ -1870,6 +2186,13 @@ export const layer = Layer.effect(
             }
             yield* slog.info("exiting loop")
             break
+          }
+          // Output soft-landing: a natural stop (or any non-length finish that keeps looping via tool
+          // calls) resets the consecutive-continuation run so a later length cutoff gets the full budget.
+          if (flags.outputSoftLanding && lastAssistant?.finish && lastAssistant.finish !== "length") {
+            const sls = yield* readSoftLandingState(sessionID)
+            if ((sls.outputContinuationCount ?? 0) !== 0)
+              yield* writeSoftLandingState(sessionID, { ...sls, outputContinuationCount: 0 })
           }
 
           step++
@@ -1903,13 +2226,73 @@ export const layer = Layer.effect(
             continue
           }
 
-          if (
-            lastFinished &&
-            lastFinished.summary !== true &&
-            (yield* compaction.isOverflow({ tokens: lastFinished.tokens, model }))
-          ) {
-            yield* compaction.create({ sessionID, agent: lastUser.agent, model: lastUser.model, auto: true })
-            continue
+          // V4.0.1 P0 — turn-start soft-landing / overflow check. With softLandingCompaction OFF this is
+          // byte-for-byte the pre-V4.0.1 single-threshold path (isOverflow → compaction.create). With it
+          // ON, overflowStatus layers ok → reminder → fallback → hard: warn (tail nudge), then one forced
+          // "临终笔记" fallback (all tools retained), then the SAME hard compaction. `phase === "hard"` is
+          // exactly `isOverflow`, and the reminder/fallback layers never move the hard line, so the
+          // compaction trigger is unchanged.
+          if (lastFinished && lastFinished.summary !== true) {
+            if (!flags.softLandingCompaction) {
+              if (yield* compaction.isOverflow({ tokens: lastFinished.tokens, model })) {
+                yield* compaction.create({ sessionID, agent: lastUser.agent, model: lastUser.model, auto: true })
+                continue
+              }
+            } else {
+              const cfg = yield* config.get()
+              const slState0 = yield* readSoftLandingState(sessionID)
+              // BodyAfterPrefix (§2.3, Codex core/src/state/auto_compact_window.rs): latch a per-window
+              // input-token BASELINE from the provider-reported input side of the FIRST response of this
+              // window (input + cached read/write = the full billed input, matching the goal ledger's
+              // carriedPrefix). Once set it is pinned for the window (cleared on the epoch bump at a hard
+              // compaction) — server-observed only, no tokenizer. `overflowStatus` subtracts it so the
+              // lines fire on body growth; a full-window safety cap still guards the raw total.
+              const billedInput =
+                lastFinished.tokens.input + lastFinished.tokens.cache.read + lastFinished.tokens.cache.write
+              const slState =
+                slState0.prefillInputTokens === undefined && billedInput > 0
+                  ? { ...slState0, prefillInputTokens: billedInput }
+                  : slState0
+              if (slState !== slState0) yield* writeSoftLandingState(sessionID, slState)
+              const status = overflowStatus({
+                cfg,
+                model,
+                outputTokenMax: flags.outputTokenMax,
+                tokens: tokensUsed(lastFinished.tokens),
+                prefixTokens: slState.prefillInputTokens ?? 0,
+                softLanding: true,
+              })
+              const { action, nextState } = softLandingDecision({ status, state: slState, step })
+              if (action === "reminder") {
+                yield* writeSoftLandingState(sessionID, nextState)
+                yield* injectTailReminder(sessionID, REMINDER_TAIL_TEXT, lastUser.model, lastUser.agent)
+                yield* slog.info("soft-landing reminder injected", { used: status.used, softLine: status.softLine })
+                continue
+              }
+              if (action === "fallback") {
+                yield* writeSoftLandingState(sessionID, nextState)
+                yield* injectTailReminder(sessionID, fallbackTailText(sessionID), lastUser.model, lastUser.agent)
+                yield* slog.info("soft-landing fallback injected", {
+                  used: status.used,
+                  fallbackLine: status.fallbackLine,
+                })
+                continue
+              }
+              if (action === "hard") {
+                // Bump the generation + reset flags BEFORE compaction so a mid-compaction crash still
+                // recovers into the fresh window (the durable write is the世代 marker).
+                yield* writeSoftLandingState(sessionID, nextState)
+                yield* compaction.create({ sessionID, agent: lastUser.agent, model: lastUser.model, auto: true })
+                // P1 §3.3: re-inject the latest World State as a TAIL block right after the hard compaction
+                // so the model sees current file/env values, not the summary's (now-narrowed) stale ones.
+                // Ordered after compaction.create ⇒ higher message id ⇒ sits at the tail after the summary.
+                if (flags.worldStateReinjection)
+                  yield* injectWorldStateTail(sessionID, ctx.directory, lastUser.model, lastUser.agent)
+                continue
+              }
+              // action === "none": fallback already delivered this epoch (still under hard line), reminder
+              // debounced, or below the soft line — proceed with the turn normally.
+            }
           }
 
           const agent = yield* agents.get(lastUser.agent)
@@ -2060,6 +2443,16 @@ export const layer = Layer.effect(
 
             if (result === "stop") return "break" as const
             if (result === "compact") {
+              // V4.0.1 P0 — a turn-internal hard compaction (the provider signalled overflow mid-stream).
+              // This IS a hard rollover, so bump the soft-landing generation + reset its flags so the next
+              // window can warn + flush again. Gated by softLandingCompaction; OFF ⇒ unchanged behavior.
+              if (flags.softLandingCompaction) {
+                const slState = yield* readSoftLandingState(sessionID)
+                yield* writeSoftLandingState(sessionID, {
+                  windowEpoch: slState.windowEpoch + 1,
+                  autoCompactFallbackDelivered: false,
+                })
+              }
               yield* compaction.create({
                 sessionID,
                 agent: lastUser.agent,
@@ -2067,13 +2460,27 @@ export const layer = Layer.effect(
                 auto: true,
                 overflow: !handle.message.finish,
               })
+              // P1 §3.3: re-inject the latest World State as a TAIL block right after this hard rollover
+              // (same responsibility-separation intent as the turn-start branch). Gated by the same flag.
+              if (flags.worldStateReinjection)
+                yield* injectWorldStateTail(sessionID, ctx.directory, lastUser.model, lastUser.agent)
             }
             return "continue" as const
           }).pipe(
             Effect.ensuring(instruction.clear(handle.message.id)),
             Effect.onInterrupt(() => finalizeInterruptedAssistant),
           )
-          if (outcome === "break") break
+          // V4.1 §S1.1 needsFollowUp: the model finished this step (outcome === "break"), but if a steer
+          // arrived while it was running, do NOT exit — loop once more so the top-of-loop drain absorbs
+          // it (codex: needsFollowUp = modelSaidContinue || pendingInput-nonempty). A non-consuming peek;
+          // the actual drain (consume-once) happens at the next iteration's top. Gated by the flag.
+          if (outcome === "break") {
+            if (flags.v4Steering && (yield* steerBuffer.hasPending(sessionID))) {
+              yield* slog.info("steer pending at model boundary, continuing to absorb")
+              continue
+            }
+            break
+          }
           continue
         }
 
@@ -2091,10 +2498,108 @@ export const layer = Layer.effect(
       },
     )
 
+    // V4.1 §S1.1: admit a mid-turn user message into the durable steer buffer. Pure buffering — it does
+    // NOT interrupt the in-flight run; the runLoop absorbs it at its next model-request boundary (see
+    // drainSteers below). With the kill-switch OFF this is a no-op guard: the caller (S1.2 ingress)
+    // must not route here when steering is disabled, but we defensively refuse to buffer so an
+    // orphaned steer can never accumulate undrained. Idempotent on `id`.
+    const steer: (input: SteerInput) => Effect.Effect<SessionSteer.Admitted> = Effect.fn("SessionPrompt.steer")(
+      function* (input: SteerInput) {
+        if (!flags.v4Steering)
+          return yield* Effect.die(new NamedError.Unknown({ message: "Steering is disabled (v4Steering=false)" }))
+        const prompt = Prompt.fromUserMessage({
+          text: input.text,
+          ...(input.files === undefined ? {} : { files: input.files }),
+          ...(input.agents === undefined ? {} : { agents: input.agents }),
+          ...(input.references === undefined ? {} : { references: input.references }),
+        })
+        // §S1.3 delivery channel: "goal_steer" is drained by the goal driver between ticks; "steer"
+        // (default) by the session's own runLoop. The two never contend on the same buffer rows.
+        const delivery = input.delivery ?? "steer"
+        const admitted = yield* steerBuffer.admit({
+          id: input.messageID ?? SessionMessage.ID.create(),
+          sessionID: input.sessionID,
+          prompt,
+          delivery,
+        })
+        yield* elog.info("steer admitted", {
+          sessionID: input.sessionID,
+          messageID: admitted.id,
+          seq: admitted.seq,
+          delivery,
+        })
+        return admitted
+      },
+    )
+
+    // V4.1 §S1.2 — the ingress decision. Both the HTTP prompt route and the IM agent executor call THIS
+    // instead of prompt() directly, so the steer-vs-turn choice lives in exactly one place.
+    //
+    // Routing (in priority order):
+    //   1. steering OFF → prompt() (exact pre-steering behavior; the runner enforces its own busy policy).
+    //   2. a NON-terminal active GOAL on this session → "goal_steer". A goal runs as a detached background
+    //      job in CHILD sessions and does NOT busy the parent runner, so we must key off the active-goal
+    //      pointer, NOT isBusy (an earlier version gated goal_steer behind isBusy and it was unreachable in
+    //      the pure-goal case). The goal driver drains "goal_steer" between ticks (§S1.3); paused → drained
+    //      on resume; terminal phases never buffer (the goalActive check below excludes them).
+    //   3. else, the parent runner is BUSY (a live chat turn) → "steer", absorbed at that turn's next
+    //      boundary (§S1.1). Race: if the turn ends between the isBusy read and the admit, the steer is
+    //      durable but the still-running loop won't see it — so we start a PURE-DRAIN turn (drainFirst)
+    //      that drains on step 0. ensureRunning makes this a no-op await if a turn is (still) running, so
+    //      there is no double-turn; if idle, it runs one drain turn. Forked so the ingress returns promptly.
+    //   4. else idle, no goal → prompt() runs a normal turn.
+    const promptOrSteer: (input: PromptInput) => Effect.Effect<PromptOrSteerResult, Image.Error> = Effect.fn(
+      "SessionPrompt.promptOrSteer",
+    )(function* (input: PromptInput) {
+      if (!flags.v4Steering) {
+        const message = yield* prompt(input)
+        return { kind: "turn" as const, message }
+      }
+      // (2) Active-goal check FIRST — independent of the parent runner's busy flag.
+      const goal = AgentGateway.DeepAgentSessionState.getActiveGoal(input.sessionID)
+      const goalActive = goal != null && !TERMINAL_GOAL_PHASES.has(goal.phase)
+      if (goalActive) {
+        const text = promptInputText(input.parts)
+        const admitted = yield* steer({
+          sessionID: input.sessionID,
+          text,
+          delivery: "goal_steer",
+        })
+        // V4.1 governance audit — this is the REAL user goal-steer path (the ingress every busy-goal
+        // steer flows through). Record the human intervention into the goal's Document Graph alongside
+        // the per-tick worklog trail. Length only (not free-text) to keep the body bounded + PII-light;
+        // best-effort (never blocks the steer). goal!.goalId is safe here: goalActive ⇒ goal != null.
+        writeGovernanceAudit(input.sessionID, goal!.goalId, "steer", { textChars: text.trim().length })
+        return { kind: "steer" as const, delivery: "goal_steer" as const, admitted }
+      }
+      // (3) No active goal → a parent chat turn in flight becomes a chat steer.
+      const busy = yield* state.isBusy(input.sessionID)
+      if (!busy) {
+        // (4) idle, no goal → normal turn.
+        const message = yield* prompt(input)
+        return { kind: "turn" as const, message }
+      }
+      // Let steer() mint a fresh ascending SessionMessage.ID (tail-sorting, §S1.1 Check 3). We do NOT
+      // forward input.messageID: it is a PromptInput MessageID (a different brand) and a client-supplied id
+      // could be non-ascending and insert mid-history — breaking order + cache.
+      const admitted = yield* steer({
+        sessionID: input.sessionID,
+        text: promptInputText(input.parts),
+        delivery: "steer",
+      })
+      // Race guard (see header): a pure-drain turn absorbs a steer stranded by the isBusy→admit window.
+      yield* loop({ sessionID: input.sessionID, drainFirst: true }).pipe(Effect.ignore, Effect.forkIn(scope))
+      return { kind: "steer" as const, delivery: "steer" as const, admitted }
+    })
+
     const loop: (input: LoopInput) => Effect.Effect<SessionV1.WithParts> = Effect.fn("SessionPrompt.loop")(function* (
       input: LoopInput,
     ) {
-      return yield* state.ensureRunning(input.sessionID, lastAssistant(input.sessionID), runLoop(input.sessionID))
+      return yield* state.ensureRunning(
+        input.sessionID,
+        lastAssistant(input.sessionID),
+        runLoop(input.sessionID, input.drainFirst ?? false),
+      )
     })
 
     const shell: (input: ShellInput) => Effect.Effect<SessionV1.WithParts, Session.BusyError> = Effect.fn(
@@ -2224,6 +2729,8 @@ export const layer = Layer.effect(
     return Service.of({
       cancel,
       prompt,
+      steer,
+      promptOrSteer,
       loop,
       shell,
       command,
@@ -2267,6 +2774,7 @@ export const defaultLayer = Layer.suspend(() =>
         CrossSpawnSpawner.defaultLayer,
         RuntimeFlags.defaultLayer,
         EventV2Bridge.defaultLayer,
+        SessionSteer.defaultLayer,
       ),
     ),
   ),
@@ -2301,8 +2809,35 @@ export const PromptInput = Schema.Struct({
 })
 export type PromptInput = Schema.Schema.Type<typeof PromptInput>
 
+// V4.1 §S1.1: the shape a mid-turn steer is admitted with. Deliberately the reduced Prompt payload (a
+// steer is a plain user turn) — file/agent/reference attachments carry through so a steered @mention or
+// attachment is preserved. `messageID` is optional so an at-least-once ingress (S1.2) can supply a
+// stable idempotency id; when omitted, admit generates one.
+export const SteerInput = Schema.Struct({
+  sessionID: SessionID,
+  messageID: Schema.optional(SessionMessage.ID),
+  text: Schema.String,
+  files: Schema.optional(Schema.Array(FileAttachment)),
+  agents: Schema.optional(Schema.Array(AgentAttachment)),
+  references: Schema.optional(Schema.Array(ReferenceAttachment)),
+  // §S1.3 delivery channel: "steer" (default, drained by the session runLoop) or "goal_steer" (drained
+  // by the goal driver between ticks). Omitted ⇒ "steer".
+  delivery: Schema.optional(Schema.Literals(["steer", "goal_steer"])),
+})
+export type SteerInput = Schema.Schema.Type<typeof SteerInput>
+
+// §S1.2 the discriminated ack returned by promptOrSteer: either a completed turn (the session was idle)
+// or an accepted steer (the session was mid-turn; the running/next turn absorbs it). The `delivery` tells
+// the caller which channel absorbed it ("steer" = this session's turn, "goal_steer" = the active goal).
+export type PromptOrSteerResult =
+  | { readonly kind: "turn"; readonly message: SessionV1.WithParts }
+  | { readonly kind: "steer"; readonly delivery: "steer" | "goal_steer"; readonly admitted: SessionSteer.Admitted }
+
 export class LoopInput extends Schema.Class<LoopInput>("SessionPrompt.LoopInput")({
   sessionID: SessionID,
+  // §S1.2: start a pure-drain turn that absorbs a pending steer on step 0 (no initiating message). Only
+  // set by promptOrSteer's race guard; a normal loop() leaves it unset (false).
+  drainFirst: Schema.optional(Schema.Boolean),
 }) {}
 
 export const ShellInput = Schema.Struct({

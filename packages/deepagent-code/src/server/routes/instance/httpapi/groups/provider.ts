@@ -50,14 +50,31 @@ export const ProviderModelDiscoverInput = Schema.Struct({
   headers: Schema.optional(Schema.Record(Schema.String, Schema.String)),
 })
 
+// Best-effort specs matched from the models.dev catalog by model id (cross-provider). Present only
+// when the discovered id matches a known catalog model; the dialog uses it to pre-fill the editable
+// spec fields. Purely additive/optional — clients that ignore it keep working.
+export const ProviderDiscoveredModelSpec = Schema.Struct({
+  context: Schema.Finite,
+  output: Schema.Finite,
+  reasoning: Schema.Boolean,
+  temperature: Schema.Boolean,
+  toolcall: Schema.Boolean,
+  matchedFrom: Schema.String,
+})
+
 export const ProviderDiscoveredModel = Schema.Struct({
   id: Schema.String,
   name: Schema.String,
+  spec: Schema.optional(ProviderDiscoveredModelSpec),
 })
 
 export const ProviderModelDiscoverResult = Schema.Struct({
   providerID: Schema.String,
   baseURL: Schema.String,
+  // The protocol that actually answered discovery. When the client omits `kind`, the server probes
+  // openai-compatible then anthropic and reports whichever succeeded so the client can persist the
+  // matching SDK npm.
+  kind: Schema.Literals(["openai-compatible", "anthropic"]),
   models: Schema.Array(ProviderDiscoveredModel),
   selected: ProviderDiscoveredModel,
 })

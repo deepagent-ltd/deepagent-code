@@ -60,6 +60,17 @@ function errors(list: PromiseSettledResult<unknown>[]) {
   return list.filter((item): item is PromiseRejectedResult => item.status === "rejected").map((item) => item.reason)
 }
 
+// A bootstrap query can be cancelled rather than genuinely failing: refreshProviders() both refetches
+// and invalidates the same providers query key, so the superseded in-flight fetch rejects with a
+// TanStack CancelledError; disposing/rebuilding the backend aborts in-flight requests the same way.
+// These are benign races (a newer load replaces this one), not load failures — surfacing them as an
+// error toast ("无法加载 …" / cancelled) is a false alarm, so skip the toast for them.
+function isCancellation(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false
+  const name = (error as { name?: unknown }).name
+  return name === "CancelledError" || name === "AbortError"
+}
+
 const providerRev = new Map<string, number>()
 
 export function clearProviderRev(scope: ServerScope, directory: string) {
@@ -314,6 +325,7 @@ export async function bootstrapDirectory(input: {
       input.mcp && (() => input.queryClient.fetchQuery(loadMcpQuery(input.scope, input.directory, input.sdk))),
       () =>
         input.queryClient.fetchQuery(loadProvidersQuery(input.scope, input.directory, input.sdk)).catch((err) => {
+          if (isCancellation(err)) return
           const project = getFilename(input.directory)
           showToast({
             variant: "error",
@@ -324,7 +336,7 @@ export async function bootstrapDirectory(input: {
     ].filter(Boolean) as (() => Promise<any>)[]
 
     await waitForPaint()
-    const slowErrs = errors(await runAll(slow))
+    const slowErrs = errors(await runAll(slow)).filter((err) => !isCancellation(err))
     if (slowErrs.length > 0) {
       console.error("Failed to finish bootstrap instance", slowErrs[0])
       const project = getFilename(input.directory)
