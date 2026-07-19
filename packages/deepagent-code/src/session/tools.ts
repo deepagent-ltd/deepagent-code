@@ -230,7 +230,17 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
               return { title: "Plan update required", output: gate.output, metadata: {} }
             }
             const gateWarnReason = gate.kind === "warn" ? gate.reason : undefined
-            const result = yield* item.execute(args, ctx)
+            const result = yield* item.execute(args, ctx).pipe(
+              // I33-2: any tool execution failure marks the plan stale (tool_failed reason) so the
+              // model is nudged to re-plan before continuing. The gate is warn-only now (v4.0.4 P1),
+              // so this is a soft nudge: plan → stale but the next mutating tool still runs with a
+              // reminder rather than being blocked.
+              Effect.tapError(() =>
+                Effect.sync(() =>
+                  AgentGateway.DeepAgentSessionState.markPlanStale(ctx.sessionID, "tool_failed"),
+                ),
+              ),
+            )
             const withReminder =
               gateWarnReason && typeof result.output === "string"
                 ? { ...result, output: appendPlanGateNote(result.output, gateWarnReason) }

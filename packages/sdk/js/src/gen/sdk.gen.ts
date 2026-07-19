@@ -435,6 +435,7 @@ import type {
   ToolIdsResponses,
   ToolListErrors,
   ToolListResponses,
+  TrustedSourcesInput,
   TuiAppendPromptErrors,
   TuiAppendPromptResponses,
   TuiClearPromptErrors,
@@ -528,6 +529,10 @@ import type {
   WebhookMonitorResponses,
   WebhookPrErrors,
   WebhookPrResponses,
+  WorkspaceConfigTrustedSourcesGetErrors,
+  WorkspaceConfigTrustedSourcesGetResponses,
+  WorkspaceConfigTrustedSourcesPutErrors,
+  WorkspaceConfigTrustedSourcesPutResponses,
   WorktreeChangesErrors,
   WorktreeChangesResponses,
   WorktreeCreateErrors,
@@ -2220,6 +2225,7 @@ export class Knowledge extends HeyApiClient {
         approved: boolean
         note?: string
       }
+      snapshotId?: string
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -2234,6 +2240,7 @@ export class Knowledge extends HeyApiClient {
             { in: "body", key: "origin" },
             { in: "body", key: "verdict" },
             { in: "body", key: "approval" },
+            { in: "body", key: "snapshotId" },
           ],
         },
       ],
@@ -8735,6 +8742,94 @@ export class Tui extends HeyApiClient {
   }
 }
 
+export class TrustedSources extends HeyApiClient {
+  /**
+   * Get trusted event sources
+   *
+   * V4.0 §E1: return the resolved trusted event sources list for a workspace. Returns DEFAULT_TRUSTED_SOURCES (["im","system","schedule"]) when no config row exists.
+   */
+  public get<ThrowOnError extends boolean = false>(
+    parameters: {
+      workspaceID: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "workspaceID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<
+      WorkspaceConfigTrustedSourcesGetResponses,
+      WorkspaceConfigTrustedSourcesGetErrors,
+      ThrowOnError
+    >({
+      url: "/workspace/{workspaceID}/config/trusted-sources",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Replace trusted event sources
+   *
+   * V4.0 §E1: replace the trusted event sources list for a workspace. Each entry must be a valid DeepAgentEvent.EventSource ("im"|"git"|"ci"|"pr"|"monitor"|"schedule"|"system"). Invalid sources are rejected with 400 at the schema boundary.
+   */
+  public put<ThrowOnError extends boolean = false>(
+    parameters: {
+      workspaceID: string
+      directory?: string
+      workspace?: string
+      trustedSourcesInput?: TrustedSourcesInput
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "workspaceID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { key: "trustedSourcesInput", map: "body" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).put<
+      WorkspaceConfigTrustedSourcesPutResponses,
+      WorkspaceConfigTrustedSourcesPutErrors,
+      ThrowOnError
+    >({
+      url: "/workspace/{workspaceID}/config/trusted-sources",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+}
+
+export class WorkspaceConfig extends HeyApiClient {
+  private _trustedSources?: TrustedSources
+  get trustedSources(): TrustedSources {
+    return (this._trustedSources ??= new TrustedSources({ client: this.client }))
+  }
+}
+
 export class Health extends HeyApiClient {
   /**
    * Check server health
@@ -9680,6 +9775,11 @@ export class DeepAgentCodeClient extends HeyApiClient {
   private _tui?: Tui
   get tui(): Tui {
     return (this._tui ??= new Tui({ client: this.client }))
+  }
+
+  private _workspaceConfig?: WorkspaceConfig
+  get workspaceConfig(): WorkspaceConfig {
+    return (this._workspaceConfig ??= new WorkspaceConfig({ client: this.client }))
   }
 
   private _v2?: V2

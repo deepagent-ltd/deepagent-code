@@ -129,6 +129,8 @@ describe("persist localStorage resilience", () => {
         persistTesting.workspaceStorage("C:\\Users\\foo"),
         persistTesting.legacyAppWorkspaceStorage("C:/Users/foo"),
         persistTesting.legacyAppWorkspaceStorage("C:\\Users\\foo"),
+        persistTesting.legacyEncodedWorkspaceStorage("C:/Users/foo"),
+        persistTesting.legacyEncodedWorkspaceStorage("C:\\Users\\foo"),
       ]),
     )
   })
@@ -142,6 +144,8 @@ describe("persist localStorage resilience", () => {
         persistTesting.workspaceStorage("C:\\Users\\foo"),
         persistTesting.legacyAppWorkspaceStorage("C:/Users/foo"),
         persistTesting.legacyAppWorkspaceStorage("C:\\Users\\foo"),
+        persistTesting.legacyEncodedWorkspaceStorage("C:/Users/foo"),
+        persistTesting.legacyEncodedWorkspaceStorage("C:\\Users\\foo"),
       ]),
     )
   })
@@ -169,13 +173,16 @@ describe("persist localStorage resilience", () => {
 
   test("removes legacy workspace storage when removing persisted target", () => {
     const target = Persist.workspace("C:\\Users\\foo", "terminal")
+    const encoded = persistTesting.legacyEncodedWorkspaceStorage("C:\\Users\\foo")
     storage.setItem(`${target.storage}:${target.key}`, '{"value":1}')
     storage.setItem(`${target.legacyStorageNames![0]}:${target.key}`, '{"value":2}')
+    storage.setItem(`${encoded}:${target.key}`, '{"value":3}')
 
     removePersisted(target)
 
     expect(storage.getItem(`${target.storage}:${target.key}`)).toBeNull()
     expect(storage.getItem(`${target.legacyStorageNames![0]}:${target.key}`)).toBeNull()
+    expect(storage.getItem(`${encoded}:${target.key}`)).toBeNull()
   })
 
   test("server workspace target preserves local storage and isolates remote storage", () => {

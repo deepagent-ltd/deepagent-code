@@ -134,6 +134,12 @@ export interface Interface {
   }) => Effect.Effect<void>
   /** §A3 retry scan — pending deliveries whose backoff has elapsed (Router/Scheduler drives re-delivery). */
   readonly dueRetries: (now?: number) => Effect.Effect<ReadonlyArray<DeliveryTracker>>
+  /**
+   * K40-4: real pending-delivery count per workspace — the durable backlog depth for the
+   * backpressure gate. Counts deepagent_event_delivery rows with status='pending' scoped
+   * to the given workspaceID (via the event join). Use this instead of in-flight counters.
+   */
+  readonly pendingDeliveryCount: (workspaceID: string) => Effect.Effect<number>
   /** Load a single event by id from the durable log — used by the retry pump to re-dispatch a nacked delivery. */
   readonly getByID: (eventID: DeepAgentEvent.ID) => Effect.Effect<DeepAgentEvent.Event | undefined>
   /**
@@ -730,6 +736,24 @@ export const layerWith = (options?: LayerOptions) =>
           return rows.map(trackerOf)
         })
 
+      // K40-4: real durable backlog depth per workspace — count pending delivery rows whose source event
+      // belongs to the given workspace. This is the authoritative backpressure signal: it reflects the
+      // number of events that are owed to at least one consumer group but not yet acked. Uses the existing
+      // `deepagent_event_workspace_created_idx` index on (workspace_id, created_at) for the join filter.
+      const pendingDeliveryCount: Interface["pendingDeliveryCount"] = (workspaceID) =>
+        db
+          .select({ count: sql<number>`count(*)` })
+          .from(DeepAgentEventDeliveryTable)
+          .innerJoin(DeepAgentEventTable, eq(DeepAgentEventDeliveryTable.event_id, DeepAgentEventTable.id))
+          .where(
+            and(
+              eq(DeepAgentEventDeliveryTable.status, "pending"),
+              eq(DeepAgentEventTable.workspace_id, workspaceID),
+            ),
+          )
+          .get()
+          .pipe(Effect.orDie, Effect.map((row) => row?.count ?? 0))
+
       const getByID: Interface["getByID"] = (eventID) =>
         db
           .select()
@@ -866,6 +890,7 @@ export const layerWith = (options?: LayerOptions) =>
         deadLetters,
         recordDrop,
         dueRetries,
+        pendingDeliveryCount,
         getByID,
         sweep,
         sweepPublishLimiter,
