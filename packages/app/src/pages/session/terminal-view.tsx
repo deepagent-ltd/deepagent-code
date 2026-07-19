@@ -210,6 +210,7 @@ function LeafPane(props: { node: PaneLeaf }) {
     <div
       ref={ref}
       data-terminal-pane={props.node.id}
+      data-active-terminal={activeId()}
       data-focused={focused() ? "true" : undefined}
       class="absolute inset-0 flex flex-col overflow-hidden border bg-background-stronger"
       classList={{
@@ -222,15 +223,7 @@ function LeafPane(props: { node: PaneLeaf }) {
       <DragDropProvider onDragOver={handleDragOver} collisionDetector={closestCenter}>
         <DragDropSensors />
         <ConstrainDragYAxis />
-        <Tabs
-          variant="alt"
-          value={activeId()}
-          onChange={(id) => {
-            terminal.setFocusedPane(props.node.id)
-            terminal.activateInPane(props.node.id, id)
-          }}
-          class="!h-auto !flex-none"
-        >
+        <Tabs variant="alt" value={activeId()} class="!h-auto !flex-none">
           <div class="flex items-stretch h-10 border-b border-border-weak-base bg-background-base">
             <Tabs.List class="h-10 min-w-0 flex-1 !border-b-0">
               <SortableProvider ids={ids()}>
@@ -242,7 +235,6 @@ function LeafPane(props: { node: PaneLeaf }) {
         <div class="flex-1 min-h-0 relative bg-background-stronger">
           <Show
             when={activeId()}
-            keyed
             fallback={
               <TerminalEmptyState
                 creating={terminal.creating()}
@@ -251,14 +243,13 @@ function LeafPane(props: { node: PaneLeaf }) {
               />
             }
           >
-            {(id) => (
-              <Show
-                when={ptys().find((pty) => pty.id === id)}
-                fallback={<TerminalEmptyState creating={terminal.creating()} onRetry={() => void terminal.new()} />}
-              >
-                {(pty) => <TerminalSessionView pty={pty()} focused={focused()} />}
-              </Show>
-            )}
+            <For each={ptys()}>
+              {(pty) => (
+                <Show when={activeId() === pty.id}>
+                  <TerminalSessionView pty={pty} focused={focused()} />
+                </Show>
+              )}
+            </For>
           </Show>
         </div>
       </DragDropProvider>
@@ -332,17 +323,10 @@ function TerminalSessionView(props: { pty: LocalPTY; focused: boolean }) {
 }
 
 function PaneRenderer(props: { node: PaneNode }) {
-  const split = () => {
-    const node = props.node
-    return node.kind === "split" ? node : undefined
-  }
-  const leaf = () => {
-    const node = props.node
-    return node.kind === "leaf" ? node : undefined
-  }
+  const split = () => props.node.kind === "split"
   return (
-    <Show when={split()} fallback={<Show when={leaf()}>{(node) => <LeafPane node={node()} />}</Show>}>
-      {(node) => <SplitPane node={node()} />}
+    <Show when={split()} fallback={<LeafPane node={props.node as PaneLeaf} />}>
+      <SplitPane node={props.node as Extract<PaneNode, { kind: "split" }>} />
     </Show>
   )
 }

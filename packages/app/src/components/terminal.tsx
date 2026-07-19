@@ -562,6 +562,7 @@ export const Terminal = (props: TerminalProps) => {
           reportedReady = false
           lastSize = undefined
           scheduleSize(t.cols, t.rows)
+          markReady()
         }
 
         const handleMessage = (event: MessageEvent) => {
@@ -662,6 +663,7 @@ export const Terminal = (props: TerminalProps) => {
     <div
       ref={container}
       data-component="terminal"
+      data-terminal-pty-id={id}
       data-prevent-autofocus
       tabIndex={-1}
       style={{ "background-color": terminalColors().background }}
