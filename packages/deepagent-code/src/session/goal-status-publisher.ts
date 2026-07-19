@@ -42,6 +42,8 @@ export type GoalStatusPublisherDeps = {
   readonly approvalQueue: ApprovalQueue.Interface
   /** Whether the V4 event-driven layer is on (gates the bus + approval-queue mirror; default V3.9 path is unchanged). */
   readonly v4MultiAgentRuntime: boolean
+  /** Whether the goal-tick event-driven chain is on independently of v4MultiAgentRuntime. */
+  readonly v4GoalTickEventDriven: boolean
   /** The store-root resolver for the goal's plan doc (mirrorGoalPlanToSession reads it). */
   readonly goalStoreRoot: (sessionID: string) => string
   /**
