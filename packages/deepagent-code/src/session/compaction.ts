@@ -356,12 +356,7 @@ export const layer = Layer.effect(
         { sessionID: input.sessionID },
         { context: [], prompt: undefined },
       )
-      // V4.0.1 P1 (§3.4/§3.5): narrow the summary to four buckets ONLY when worldStateReinjection is on —
-      // it MUST be the same flag that gates re-injection, else "summary drops files, nothing re-injects"
-      // opens an information hole. Flag OFF ⇒ legacy SUMMARY_TEMPLATE, byte-for-byte pre-V4.0.1.
-      const nextPrompt =
-        compacting.prompt ??
-        buildPrompt({ previousSummary, context: compacting.context, narrow: flags.worldStateReinjection })
+      const nextPrompt = compacting.prompt ?? buildPrompt({ previousSummary, context: compacting.context })
       const msgs = structuredClone(selected.head)
       yield* plugin.trigger("experimental.chat.messages.transform", {}, { messages: msgs })
       const modelMessages = yield* MessageV2.toModelMessagesEffect(msgs, model, {

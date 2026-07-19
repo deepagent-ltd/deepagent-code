@@ -216,13 +216,6 @@ export const layer = Layer.effect(
       const userMessageID = context.findLast((message) => message.type === "user")?.id
       const toolMaterialization = yield* tools.materialize(agent.info?.permissions)
       const promptCacheKey = /^ses_[0-9a-f]{64}$/.test(session.id) ? session.id.slice(4) : session.id
-      // T4.5 GUARD — potential system-prompt fork, harmless TODAY. This V2 core runner assembles its
-      // own system prompt: the DeepAgent prompt when AgentGateway.systemPrompt is non-empty, else the
-      // agent/baseline fallback. Production does NOT reach this branch — deepagent-code's own
-      // LLM.Service split path (packages/deepagent-code/src/session/llm) owns the live turn and builds
-      // the cache-stable prefix + volatile tail (prompt-policy.ts). If this runner ever becomes a live
-      // turn path, reconcile it with that split (build the same stable prefix here) or the two will
-      // diverge and this one will bust the prompt cache. Keep the two in sync when touching either.
       const deepagentSystem = AgentGateway.systemPrompt(model.provider)
       const requestSystem =
         deepagentSystem.length > 0

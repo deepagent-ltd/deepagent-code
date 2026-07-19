@@ -240,9 +240,7 @@ export const arbitrate = (
   const winners = ordered.filter((op) => op.verdict === decision)
   const dissent = ordered.filter((op) => op.verdict !== decision)
 
-  // ---- Rule 5: critical dissent escalation (§C.6 dissent 涉 critical → needs_human) ---------
-  // Evaluated LAST (after tally + tie), per the header docstring: "dissent" is only defined once a
-  // winning decision exists, so critical-dissent can only escalate an already-computed decision.
+  // ---- Rule 3: critical dissent escalation (§C.6 dissent 涉 critical → needs_human) ---------
   if (policy.criticalDissentNeedsHuman && dissent.some(hasCriticalFinding)) {
     escalate = true
   }

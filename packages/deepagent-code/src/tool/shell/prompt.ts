@@ -93,8 +93,8 @@ function bashCommandSection(chain: string, limits: Limits, defaultTimeoutMs: num
 2. Command Execution:
    - Always quote file paths that contain spaces with double quotes (e.g., rm "path with spaces/file.txt")
    - Examples of proper quoting:
-     - mkdir "$HOME/My Documents" (correct)
-     - mkdir $HOME/My Documents (incorrect - will fail)
+     - mkdir "/Users/name/My Documents" (correct)
+     - mkdir /Users/name/My Documents (incorrect - will fail)
      - python "/path/with spaces/script.py" (correct)
      - python /path/with spaces/script.py (incorrect - will fail)
    - After ensuring proper quoting, execute the command.

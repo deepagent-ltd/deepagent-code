@@ -14,7 +14,7 @@
   <a href="https://github.com/deepagent-ltd/deepagent-code-enterprise">Enterprise</a>
 </p>
 
-<p align="center"><sub>Desktop 1.4.1 · DeepAgent Core V4.1</sub></p>
+<p align="center"><sub>Desktop 1.4.2 · DeepAgent Core V4.0</sub></p>
 
 ---
 
@@ -105,8 +105,12 @@ V4.1 brings the complete DeepAgent control plane together:
 
 ## Installation
 
+> **Note:** The `deepagent-code` npm package is not yet publicly published.
+> Install via the desktop app or the install script below.
+
 ```bash
-npm install -g deepagent-code
+# Install script (macOS / Linux)
+curl -fsSL https://deepagent.ltd/install | bash
 ```
 
 Then run:
@@ -183,7 +187,7 @@ reference (base URL overrides, headers, per-model config, gateways).
 Start the agent and give it a task:
 
 ```bash
-deepagent-code "add rate limiting to /api/users endpoint"
+deepagent-code run "add rate limiting to /api/users endpoint"
 ```
 
 The agent will:

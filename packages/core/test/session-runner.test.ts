@@ -313,13 +313,6 @@ const insertSession = (id: SessionV2.ID) =>
 
 const setup = Effect.gen(function* () {
   const { db } = yield* Database.Service
-  // AgentGateway is a PROCESS-GLOBAL: a prior test (in this file or another) that called
-  // AgentGateway.configure({enabled:true}) leaves the DeepAgent runtime active, which prepends the
-  // DeepAgent system prompt ("我是 DeepAgent Code…") and makes these transport tests' system-array
-  // assertions order-dependent (green alone, red after a DeepAgent test). Reset to the DISABLED default
-  // at the start of every test so the baseline is deterministic; the tests that specifically exercise the
-  // DeepAgent prompt opt in explicitly with their own configure({enabled:true}).
-  AgentGateway.configure({ enabled: false, agentMode: "high" })
   response = []
   systemBaseline = "Initial context"
   systemRemoved = false
@@ -597,7 +590,7 @@ describe("SessionRunnerLLM", () => {
       expect(contexts).toEqual([
         {
           sessionID,
-          agent: AgentV2.ID.make("auto"),
+          agent: AgentV2.ID.make("build"),
           assistantMessageID: expect.stringMatching(/^msg_/),
           toolCallID: "call-application",
         },
@@ -931,10 +924,7 @@ describe("SessionRunnerLLM", () => {
       yield* setup
       const session = yield* SessionV2.Service
       const events = yield* EventV2.Service
-      // The session's default agent is "auto" (AgentV2.defaultID, renamed from "build" in the mode
-      // redesign); key the skill baseline on the ACTIVE agent so its guidance actually composes into the
-      // system prompt. Keyed on "build" it never matched the running agent → guidance silently dropped.
-      skillBaselines.set(AgentV2.defaultID, "Build skills")
+      skillBaselines.set(AgentV2.ID.make("build"), "Build skills")
       yield* session.prompt({ sessionID, prompt: new Prompt({ text: "First" }), resume: false })
 
       requests.length = 0

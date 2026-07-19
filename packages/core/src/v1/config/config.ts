@@ -202,6 +202,24 @@ export const Info = Schema.Struct({
       }),
     }),
   ),
+  v4PanelAutoConvene: Schema.optional(Schema.Boolean).annotate({
+    description: "V4 panel auto-convene feature flag (default: false)",
+  }),
+  v4AgentPushEnabled: Schema.optional(Schema.Boolean).annotate({
+    description: "V4 agent push feature flag (default: false)",
+  }),
+  v4EventDrivenIm: Schema.optional(Schema.Boolean).annotate({
+    description: "V4 event-driven IM feature flag (default: false)",
+  }),
+  v4MultiAgentRuntime: Schema.optional(Schema.Boolean).annotate({
+    description: "V4 multi-agent runtime feature flag (default: false)",
+  }),
+  v4EventDrivenArchive: Schema.optional(Schema.Boolean).annotate({
+    description: "V4 event-driven archive feature flag (default: false)",
+  }),
+  v4Steering: Schema.optional(Schema.Boolean).annotate({
+    description: "V4 steering feature flag (default: false)",
+  }),
 }).annotate({ identifier: "Config" })
 
 export type Info = DeepMutable<Schema.Schema.Type<typeof Info>>

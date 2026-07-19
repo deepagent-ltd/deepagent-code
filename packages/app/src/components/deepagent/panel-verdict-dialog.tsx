@@ -1,6 +1,5 @@
 import { For, Show } from "solid-js"
 import { Dialog } from "@deepagent-code/ui/v2/dialog-v2"
-import { useLanguage } from "@/context/language"
 import type { PanelVerdict } from "./panel-goal.api"
 
 /**
@@ -8,32 +7,28 @@ import type { PanelVerdict } from "./panel-goal.api"
  * arbiter's confidence + round count, the grounding evidence, and any preserved dissent (§C.8 不丢信息).
  */
 
-const DECISION_LABEL_KEY: Record<PanelVerdict["decision"], string> = {
-  approve: "composer.panel.verdict.approve",
-  revise: "composer.panel.verdict.revise",
-  block: "composer.panel.verdict.block",
-  needs_human: "composer.panel.verdict.needsHuman",
+const DECISION_LABEL: Record<PanelVerdict["decision"], string> = {
+  approve: "Approve",
+  revise: "Revise",
+  block: "Block",
+  needs_human: "Needs a human",
 }
 
 export function PanelVerdictDialog(props: { verdict: PanelVerdict }) {
-  const language = useLanguage()
   const v = () => props.verdict
   return (
-    <Dialog size="large" variant="settings" title={language.t("composer.panel.verdict.title")}>
+    <Dialog size="large" variant="settings" title="Expert panel verdict">
       <div class="flex flex-col gap-4 p-1" data-component="panel-verdict">
         <div class="flex items-center gap-2">
-          <span class="text-15-medium text-text-base">{language.t(DECISION_LABEL_KEY[v().decision] as never)}</span>
+          <span class="text-15-medium text-text-base">{DECISION_LABEL[v().decision]}</span>
           <span class="text-13-regular text-text-muted">
-            {language.t(v().rounds === 1 ? "composer.panel.verdict.meta.one" : "composer.panel.verdict.meta.other", {
-              confidence: (v().confidence * 100).toFixed(0),
-              rounds: v().rounds,
-            })}
+            {(v().confidence * 100).toFixed(0)}% confidence · {v().rounds} {v().rounds === 1 ? "round" : "rounds"}
           </span>
         </div>
 
         <Show when={v().evidence.length > 0}>
           <div class="flex flex-col gap-1">
-            <span class="text-13-medium text-text-base">{language.t("composer.panel.verdict.evidence")}</span>
+            <span class="text-13-medium text-text-base">Evidence</span>
             <ul class="flex flex-col gap-1">
               <For each={v().evidence}>
                 {(e) => <li class="text-13-regular text-text-muted">{e}</li>}
@@ -44,7 +39,7 @@ export function PanelVerdictDialog(props: { verdict: PanelVerdict }) {
 
         <Show when={v().dissent.length > 0}>
           <div class="flex flex-col gap-2">
-            <span class="text-13-medium text-text-base">{language.t("composer.panel.verdict.dissent")}</span>
+            <span class="text-13-medium text-text-base">Dissent (overruled)</span>
             <For each={v().dissent}>
               {(d) => (
                 <div class="flex flex-col gap-1 rounded-md border border-border-subtle p-2">
