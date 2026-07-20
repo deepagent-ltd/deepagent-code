@@ -332,6 +332,15 @@ export type ApiError = {
   }
 }
 
+export type OutputDegenerationError = {
+  name: "OutputDegenerationError"
+  data: {
+    chars: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    ratio: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    detectorVersion: string
+  }
+}
+
 export type AssistantMessage = {
   id: string
   sessionID: string
@@ -348,6 +357,7 @@ export type AssistantMessage = {
     | StructuredOutputError
     | ContextOverflowError
     | ApiError
+    | OutputDegenerationError
   parentID: string
   modelID: string
   providerID: string
@@ -1412,6 +1422,7 @@ export type GlobalEvent = {
             | StructuredOutputError
             | ContextOverflowError
             | ApiError
+            | OutputDegenerationError
         }
       }
     | {
@@ -3393,6 +3404,15 @@ export type ProviderNotFoundError = {
 
 export type EffectHttpApiErrorForbidden = {
   _tag: "Forbidden"
+}
+
+export type OutputDegenerationError1 = {
+  name: "OutputDegenerationError"
+  data: {
+    chars: number | "NaN" | "Infinity" | "-Infinity"
+    ratio: number | "NaN" | "Infinity" | "-Infinity"
+    detectorVersion: string
+  }
 }
 
 export type EventTuiPromptAppend2 = {
@@ -5578,6 +5598,7 @@ export type EventSessionError = {
       | StructuredOutputError
       | ContextOverflowError
       | ApiError
+      | OutputDegenerationError1
   }
 }
 
