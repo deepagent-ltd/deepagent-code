@@ -1727,6 +1727,20 @@ export const layer = Layer.effect(
                 headers: mergeDeep(mergeDeep(existingModel?.headers ?? {}, group.options?.headers as Record<string, string> ?? {}), model.headers ?? {}),
                 family: model.family ?? existingModel?.family ?? catalogModel?.family ?? "",
                 release_date: model.release_date ?? existingModel?.release_date ?? catalogModel?.release_date ?? "",
+                cost: {
+                  input: model.cost?.input ?? existingModel?.cost.input ?? catalogModel?.cost?.input ?? 0,
+                  output: model.cost?.output ?? existingModel?.cost.output ?? catalogModel?.cost?.output ?? 0,
+                  ...(model.cost?.cache_read != null || existingModel?.cost.cache_read != null
+                    ? { cache_read: model.cost?.cache_read ?? existingModel?.cost.cache_read }
+                    : {}),
+                  ...(model.cost?.cache_write != null || existingModel?.cost.cache_write != null
+                    ? { cache_write: model.cost?.cache_write ?? existingModel?.cost.cache_write }
+                    : {}),
+                },
+                limit: {
+                  context: model.limit?.context ?? existingModel?.limit.context ?? catalogModel?.limit?.context ?? 0,
+                  output: model.limit?.output ?? existingModel?.limit.output ?? catalogModel?.limit?.output ?? 0,
+                },
                 variants: {},
               }
               const merged = mergeDeep(ProviderTransform.variants(parsedModel), model.variants ?? {})
