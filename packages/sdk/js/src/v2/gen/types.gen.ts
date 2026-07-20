@@ -1845,6 +1845,75 @@ export type AgentConfig = {
   [key: string]: unknown
 }
 
+export type ProviderModelGroup = {
+  name?: string
+  npm?: string
+  options?: {
+    apiKey?: string
+    baseURL?: string
+    timeout?: number | false
+  }
+  discovery?: boolean
+  models?: {
+    [key: string]: {
+      id?: string
+      name?: string
+      family?: string
+      release_date?: string
+      attachment?: boolean
+      reasoning?: boolean
+      temperature?: boolean
+      tool_call?: boolean
+      interleaved?:
+        | true
+        | {
+            field: "reasoning" | "reasoning_content" | "reasoning_details"
+          }
+      cost?: {
+        input: number
+        output: number
+        cache_read?: number
+        cache_write?: number
+        context_over_200k?: {
+          input: number
+          output: number
+          cache_read?: number
+          cache_write?: number
+        }
+      }
+      limit?: {
+        context: number
+        input?: number
+        output?: number
+      }
+      modalities?: {
+        input?: Array<"text" | "audio" | "image" | "video" | "pdf">
+        output?: Array<"text" | "audio" | "image" | "video" | "pdf">
+      }
+      experimental?: boolean
+      status?: "alpha" | "beta" | "deprecated" | "active"
+      provider?: {
+        npm?: string
+        api?: string
+      }
+      options?: {
+        [key: string]: unknown
+      }
+      headers?: {
+        [key: string]: string
+      }
+      /**
+       * Variant-specific configuration
+       */
+      variants?: {
+        [key: string]: {
+          disabled?: boolean
+        }
+      }
+    }
+  }
+}
+
 export type ProviderConfig = {
   api?: string
   name?: string
@@ -1928,6 +1997,9 @@ export type ProviderConfig = {
         }
       }
     }
+  }
+  groups?: {
+    [key: string]: ProviderModelGroup
   }
 }
 
@@ -2142,12 +2214,6 @@ export type Config = {
       max_concurrency?: number
     }
   }
-  v4PanelAutoConvene?: boolean
-  v4AgentPushEnabled?: boolean
-  v4EventDrivenIm?: boolean
-  v4MultiAgentRuntime?: boolean
-  v4EventDrivenArchive?: boolean
-  v4Steering?: boolean
 }
 
 export type ProjectListItem = {
