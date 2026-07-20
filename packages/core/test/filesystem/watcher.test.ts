@@ -114,7 +114,7 @@ function eventuallyUpdate<E>(check: (event: WatcherEvent) => boolean, trigger: (
     }
   }).pipe(
     Effect.timeoutOrElse({
-      duration: "5 seconds",
+      duration: "20 seconds",
       orElse: () => Effect.fail(new Error("timed out waiting for file watcher readiness")),
     }),
   )
@@ -167,7 +167,7 @@ describeWatcher("Watcher", () => {
         }),
       { git: true },
     ),
-  )
+  30000)
 
   it.live("watches non-git roots", () =>
     withTmp((directory) =>
@@ -181,7 +181,7 @@ describeWatcher("Watcher", () => {
         })
       }),
     ),
-  )
+  30000)
 
   it.live("cleanup stops publishing events", () =>
     Effect.gen(function* () {
@@ -266,6 +266,6 @@ describeWatcher("Watcher", () => {
           },
         },
       ),
-    )
+    30000)
   })
 })

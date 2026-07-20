@@ -500,19 +500,25 @@ const buildDeepAgentPromptContext = Effect.fn("LLMRequestPrep.buildDeepAgentProm
   }
 
   if (previousValidationResults.length > 0) {
-    // Round-context suppression (v4.0.4): filter out failing results that the model has acknowledged.
-    // Single-item fingerprint: "command exit_code" — same scheme as validationFingerprint() but per-item.
-    const suppressedFps = AgentGateway.DeepAgentSessionState.getSuppressedFingerprints(input.sessionID)
+    // Round-context suppression (PR-4): filter out failing results that the model has explicitly
+    // dismissed via dismiss_validation_failure. Uses field-level matching instead of fragile
+    // substring heuristics (old `includes`/`startsWith` on flat strings).
+    const suppressedValidations = AgentGateway.DeepAgentSessionState.getSuppressedValidations(input.sessionID)
     let activeResults = previousValidationResults
-    if (suppressedFps.length > 0) {
-      // Evict stale suppressions for commands that re-ran with a new exit_code.
+    if (suppressedValidations.length > 0) {
+      // Evict stale suppressions: if the same command re-ran with a DIFFERENT exit code, the old
+      // dismissal no longer applies to this new result — auto-unsuppress so the regression surfaces.
       for (const r of previousValidationResults) {
-        const fp = `${r.command} ${r.exit_code}`
-        const stale = suppressedFps.find((s) => s !== fp && s.startsWith(r.command + " "))
-        if (stale) AgentGateway.DeepAgentSessionState.unsuppressFingerprint(input.sessionID, stale)
+        const stale = suppressedValidations.find(
+          (s) => s.command === r.command && s.exitCode !== r.exit_code,
+        )
+        if (stale) AgentGateway.DeepAgentSessionState.unsuppressValidation(input.sessionID, stale.fingerprint)
       }
-      const current = AgentGateway.DeepAgentSessionState.getSuppressedFingerprints(input.sessionID)
-      activeResults = previousValidationResults.filter((r) => r.passed || !current.includes(`${r.command} ${r.exit_code}`))
+      const current = AgentGateway.DeepAgentSessionState.getSuppressedValidations(input.sessionID)
+      const currentFps = new Set(current.map((v) => v.fingerprint))
+      activeResults = previousValidationResults.filter(
+        (r) => r.passed || !currentFps.has(`${r.command} ${r.exit_code}`),
+      )
     }
     // STALE-REHARVEST GUARD: extractValidationResults re-scans the WHOLE transcript every turn, so a
     // test result from an earlier round (with its frozen `[Nms]` duration) is re-extracted verbatim on
@@ -536,11 +542,26 @@ const buildDeepAgentPromptContext = Effect.fn("LLMRequestPrep.buildDeepAgentProm
     if (state) {
       AgentGateway.DeepAgentSessionState.advanceToNextRound(input.sessionID, "continue")
     }
-  } else if (sessionExistedBefore) {
-    // U1: a fresh user message on an already-running session (not a model-driven round continue) is
-    // the "user appended a new instruction" signal — the existing plan may no longer match intent,
-    // so flip the latch from this runtime fact rather than waiting for the model to notice.
-    AgentGateway.DeepAgentSessionState.markPlanStale(input.sessionID, "user_appended")
+  }
+  // PR-3: user_appended is now an INDEPENDENT check, no longer in the else-if chain above.
+  // Rationale: (a) even when validation results are present, a co-occurring genuine new user
+  // message should still flip the stale latch; (b) injectTailReminder creates a new SessionV1.User
+  // message with a fresh MessageID.ascending() on every call, so input.user.id is unreliable as a
+  // user-identity signal without first filtering synthetic injections. We gate on two conditions:
+  //   1. deepAgentRoundControl !== "continue": skip AI-driven macro-round advances.
+  //   2. !isLastUserMessageSynthetic: skip runtime injections (tail-reminder <system-reminder> and
+  //      post-compaction <world-state> re-injection — see SYNTHETIC_USER_PREFIXES).
+  // observeUserAdmission records the baseline on the first real observation ("initial"), is a no-op
+  // when the same message reappears ("same"), and marks stale only for a genuinely new ID ("new").
+  if (
+    sessionExistedBefore &&
+    deepAgentRoundControl(input.user.metadata) !== "continue" &&
+    !isLastUserMessageSynthetic(input.messages)
+  ) {
+    const obs = AgentGateway.DeepAgentSessionState.observeUserAdmission(input.sessionID, input.user.id)
+    if (obs === "new") {
+      AgentGateway.DeepAgentSessionState.markPlanStale(input.sessionID, "user_appended")
+    }
   }
 
   const runtimeInstructions = [...input.system, ...(input.user.system ? [input.user.system] : [])]
@@ -565,6 +586,39 @@ function extractLatestUserContent(messages: ModelMessage[]): string | null {
     return null
   }
   return null
+}
+
+// Leading tags of every synthetic user-role block injected by the runtime (never by a real user).
+// injectTailReminder-family messages open with <system-reminder> (soft-landing / compaction /
+// output-continuation reminders); the post-compaction World State re-injection (injectWorldStateTail
+// → renderWorldState) opens with <world-state>. Both create a fresh MessageID.ascending() every call,
+// so input.user.id cannot distinguish them from a genuine new admission — content-prefix detection is
+// the compat-V1 proxy (PrepareInput carries only User metadata, not SessionV1.Part.synthetic flags).
+const SYNTHETIC_USER_PREFIXES = ["<system-reminder>", "<world-state>"] as const
+
+/**
+ * Returns true when the last user-role ModelMessage in the array is entirely a synthetic runtime
+ * injection (see SYNTHETIC_USER_PREFIXES). Real user admissions never start with these tags.
+ * Used by PR-3 to keep synthetic tail injections from being mistaken for new user input and
+ * spuriously flipping the plan-stale latch.
+ */
+function isLastUserMessageSynthetic(messages: ModelMessage[]): boolean {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i]
+    if (msg.role !== "user") continue
+    const text =
+      typeof msg.content === "string"
+        ? msg.content
+        : Array.isArray(msg.content)
+          ? msg.content
+              .filter((p): p is { type: "text"; text: string } => p.type === "text")
+              .map((p) => p.text)
+              .join("")
+          : ""
+    const trimmed = text.trimStart()
+    return SYNTHETIC_USER_PREFIXES.some((prefix) => trimmed.startsWith(prefix))
+  }
+  return false
 }
 
 const isValidAgentMode = (value: unknown): value is AgentGateway.AgentMode =>

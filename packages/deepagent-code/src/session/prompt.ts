@@ -2400,11 +2400,30 @@ export const layer = Layer.effect(
 
             yield* plugin.trigger("experimental.chat.messages.transform", {}, { messages: msgs })
 
+            // PR-1: Compute terminal boundary for reasoning model-view projection.
+            // The most recent settled assistant message (has finish, no pending tool calls)
+            // defines the boundary — reasoning from all messages at or before this ID is
+            // stripped from the model view. Provider replay constraints (signed thinking)
+            // only apply to the active continuation chain, not settled history.
+            let terminalBoundaryID: MessageID | undefined
+            for (const msg of msgs) {
+              if (msg.info.role !== "assistant") continue
+              if (!msg.info.finish) continue
+              const hasPendingToolCalls = msg.parts.some(
+                (part): part is SessionV1.ToolPart =>
+                  part.type === "tool" && !part.metadata?.providerExecuted && !isOrphanedInterruptedTool(part),
+              )
+              if (hasPendingToolCalls) continue
+              if (!terminalBoundaryID || msg.info.id > terminalBoundaryID) {
+                terminalBoundaryID = msg.info.id
+              }
+            }
+
             const [skills, env, instructions, modelMsgs] = yield* Effect.all([
               sys.skills(agent),
               sys.environment(model),
               instruction.system().pipe(Effect.orDie),
-              MessageV2.toModelMessagesEffect(msgs, model),
+              MessageV2.toModelMessagesEffect(msgs, model, { terminalBoundaryID }),
             ])
             const system = [...env, ...instructions, ...(skills ? [skills] : [])]
             const format = lastUser.format ?? { type: "text" as const }
