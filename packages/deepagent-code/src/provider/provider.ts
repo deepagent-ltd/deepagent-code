@@ -1716,6 +1716,7 @@ export const layer = Layer.effect(
                     audio: model.modalities?.output?.includes("audio") ?? existingModel?.capabilities.output.audio ?? catalogModel?.modalities?.output?.includes("audio") ?? false,
                     image: model.modalities?.output?.includes("image") ?? existingModel?.capabilities.output.image ?? catalogModel?.modalities?.output?.includes("image") ?? false,
                     video: model.modalities?.output?.includes("video") ?? existingModel?.capabilities.output.video ?? catalogModel?.modalities?.output?.includes("video") ?? false,
+                    pdf: model.modalities?.output?.includes("pdf") ?? existingModel?.capabilities.output.pdf ?? catalogModel?.modalities?.output?.includes("pdf") ?? false,
                   },
                 },
                 options: mergeDeep(
