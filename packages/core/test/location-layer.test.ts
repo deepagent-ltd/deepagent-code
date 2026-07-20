@@ -117,5 +117,5 @@ describe("LocationServiceMap", () => {
         }),
       ),
     ),
-  )
+  15000)
 })

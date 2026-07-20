@@ -37,6 +37,89 @@ import { ToolOutput } from "@deepagent-code/core/tool-output"
 const DOOM_LOOP_THRESHOLD = 3
 const log = Log.create({ service: "session.processor" })
 
+// PR-2: N-gram sliding-window degeneration detector for reasoning streams.
+// Detects repetitive/stuck output before it grows unbounded; configurable via
+// RuntimeFlags.degenerationDetectorMode ("off" | "shadow" | "enforce").
+const DEGENERATION_DETECTOR_VERSION = "1.0"
+const DEGENERATION_ENABLE_THRESHOLD = 20_000  // chars before detection starts
+const DEGENERATION_WINDOW_SIZE = 4_000        // sliding window width in chars
+const DEGENERATION_SAMPLE_INTERVAL = 500      // chars between samples
+const DEGENERATION_N = 4                       // N-gram size
+const DEGENERATION_RATIO_THRESHOLD = 0.70     // repeated N-gram fraction
+const DEGENERATION_SIMILARITY_THRESHOLD = 0.85 // Jaccard threshold between windows
+const DEGENERATION_K = 3                       // consecutive samples required
+
+class DegenerationDetector {
+  private totalChars = 0
+  private windowText = ""
+  private charsSinceLastSample = 0
+  private prevNgramSet: Set<string> | undefined
+  private consecutiveHits = 0
+
+  constructor(private readonly mode: string) {}
+
+  private computeNgrams(text: string): Map<string, number> {
+    const counts = new Map<string, number>()
+    for (let i = 0; i <= text.length - DEGENERATION_N; i++) {
+      const ng = text.slice(i, i + DEGENERATION_N)
+      counts.set(ng, (counts.get(ng) ?? 0) + 1)
+    }
+    return counts
+  }
+
+  private repetitionRatio(ngrams: Map<string, number>): number {
+    let total = 0
+    let repeated = 0
+    for (const count of ngrams.values()) {
+      total += count
+      if (count > 1) repeated += count - 1
+    }
+    return total === 0 ? 0 : repeated / total
+  }
+
+  private jaccard(a: Set<string>, b: Set<string>): number {
+    if (a.size === 0 && b.size === 0) return 0
+    let intersection = 0
+    for (const item of a) if (b.has(item)) intersection++
+    const union = a.size + b.size - intersection
+    return union === 0 ? 0 : intersection / union
+  }
+
+  /** Feed a reasoning delta; returns the chars and ratio if degeneration is confirmed. */
+  feed(delta: string): { triggered: boolean; chars?: number; ratio?: number } {
+    if (this.mode === "off") return { triggered: false }
+
+    this.totalChars += delta.length
+    this.charsSinceLastSample += delta.length
+
+    // Maintain sliding window: keep only the last WINDOW_SIZE chars
+    const combined = this.windowText + delta
+    this.windowText =
+      combined.length > DEGENERATION_WINDOW_SIZE
+        ? combined.slice(combined.length - DEGENERATION_WINDOW_SIZE)
+        : combined
+
+    if (this.totalChars < DEGENERATION_ENABLE_THRESHOLD) return { triggered: false }
+    if (this.charsSinceLastSample < DEGENERATION_SAMPLE_INTERVAL) return { triggered: false }
+
+    this.charsSinceLastSample = 0
+
+    const ngrams = this.computeNgrams(this.windowText)
+    const ratio = this.repetitionRatio(ngrams)
+    const currentSet = new Set(ngrams.keys())
+    const sim = this.prevNgramSet ? this.jaccard(this.prevNgramSet, currentSet) : 0
+    this.prevNgramSet = currentSet
+
+    const hit = ratio > DEGENERATION_RATIO_THRESHOLD && sim > DEGENERATION_SIMILARITY_THRESHOLD
+    this.consecutiveHits = hit ? this.consecutiveHits + 1 : 0
+
+    if (this.consecutiveHits >= DEGENERATION_K) {
+      return { triggered: true, chars: this.totalChars, ratio }
+    }
+    return { triggered: false }
+  }
+}
+
 export type Result = "compact" | "stop" | "continue"
 
 export interface Handle {
@@ -86,6 +169,7 @@ interface ProcessorContext extends Input {
   currentText: SessionV1.TextPart | undefined
   currentTextID: string | undefined
   reasoningMap: Record<string, SessionV1.ReasoningPart>
+  degenerationDetectors: Record<string, DegenerationDetector>
   v2AssistantMessageID: SessionMessage.ID | undefined
 }
 
@@ -128,6 +212,7 @@ export const layer = Layer.effect(
         currentText: undefined,
         currentTextID: undefined,
         reasoningMap: {},
+        degenerationDetectors: {},
         v2AssistantMessageID: undefined,
       }
       const mirrorAssistant = flags.experimentalEventSystem && !input.assistantMessage.summary
@@ -396,6 +481,14 @@ export const layer = Layer.effect(
               time: { start: Date.now() },
               metadata: value.providerMetadata,
             }
+            // PR-2: Allocate a degeneration detector per reasoning stream.
+            // Summary (compaction) processors are excluded — they are short-lived
+            // and use a distinct reasoning style that should never be circuit-broken.
+            if (!ctx.assistantMessage.summary) {
+              ctx.degenerationDetectors[value.id] = new DegenerationDetector(
+                flags.degenerationDetectorMode,
+              )
+            }
             yield* session.updatePart(ctx.reasoningMap[value.id])
             return
 
@@ -420,6 +513,30 @@ export const layer = Layer.effect(
               field: "text",
               delta: value.text,
             })
+            // PR-2: Run the N-gram degeneration check after persisting the delta.
+            {
+              const detector = ctx.degenerationDetectors[value.id]
+              if (detector) {
+                const check = detector.feed(value.text)
+                if (check.triggered) {
+                  const chars = check.chars ?? ctx.reasoningMap[value.id].text.length
+                  const ratio = check.ratio ?? 0
+                  slog.warn("reasoning degeneration detected", {
+                    reasoningID: value.id,
+                    chars,
+                    ratio,
+                    mode: flags.degenerationDetectorMode,
+                  })
+                  if (flags.degenerationDetectorMode === "enforce") {
+                    throw new SessionV1.OutputDegenerationError({
+                      chars,
+                      ratio,
+                      detectorVersion: DEGENERATION_DETECTOR_VERSION,
+                    })
+                  }
+                }
+              }
+            }
             return
 
           case "reasoning-end":
@@ -972,6 +1089,7 @@ export const layer = Layer.effect(
             ctx.currentText = undefined
             ctx.currentTextID = undefined
             ctx.reasoningMap = {}
+            ctx.degenerationDetectors = {}
             yield* status.set(ctx.sessionID, { type: "busy" })
             const stream = llm.stream(streamInput)
 

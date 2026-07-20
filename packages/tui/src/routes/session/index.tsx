@@ -1464,6 +1464,15 @@ function UserMessage(props: {
   )
 }
 
+// Not every assistant error carries a human `data.message` — OutputDegenerationError's data is
+// { chars, ratio, detectorVersion }. Probe for a string message and fall back to the error name.
+function errorMessageText(error: AssistantMessage["error"]): string | undefined {
+  if (!error) return undefined
+  const data = error.data as Record<string, unknown> | undefined
+  if (typeof data?.message === "string") return data.message
+  return error.name
+}
+
 function AssistantMessage(props: { message: AssistantMessage; parts: Part[]; last: boolean }) {
   const ctx = use()
   const local = useLocal()
@@ -1536,7 +1545,7 @@ function AssistantMessage(props: { message: AssistantMessage; parts: Part[]; las
           customBorderChars={SplitBorder.customBorderChars}
           borderColor={theme.error}
         >
-          <text fg={theme.textMuted}>{props.message.error?.data.message}</text>
+          <text fg={theme.textMuted}>{errorMessageText(props.message.error)}</text>
         </box>
       </Show>
       <Switch>

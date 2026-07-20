@@ -75,18 +75,18 @@ describe("RuntimeFlags", () => {
     }),
   )
 
-  it.effect("§H3 / V4.1: high-risk V4.0 capability flags default OFF; v4MultiAgentRuntime is promoted ON", () =>
+  it.effect("§H3 / V4.1: flag rollout posture — promoted-ON vs still-opt-in", () =>
     Effect.gen(function* () {
       const flags = yield* readFlags.pipe(Effect.provide(fromConfig({})))
-      // The remaining high-risk / known-buggy capabilities stay operator opt-in (default OFF).
+      // Still operator opt-in (default OFF): experimental or risky features not yet broadly tested.
       expect(flags.v4EventDrivenIm).toBe(false)
-      expect(flags.v4AgentPushEnabled).toBe(false)
       expect(flags.v4ThreadEnabled).toBe(false)
       expect(flags.v4FileUploadEnabled).toBe(false)
-      expect(flags.v4PanelAutoConvene).toBe(false)
+      // Promoted ON (stableOn): daemon audit GO, broadly deployed.
+      expect(flags.v4AgentPushEnabled).toBe(true)
+      expect(flags.v4PanelAutoConvene).toBe(true)
       // V4.1: the Multi-Agent Runtime master switch is PROMOTED ON — the daemon audit is GO and the §N
-      // event-driven goal-tick chain (with cross-process cold recovery) is now the live driver. Autonomous
-      // level_2 edits are the intended semantic (governed by agent descriptors, guarded by the safety gates).
+      // event-driven goal-tick chain (with cross-process cold recovery) is now the live driver.
       expect(flags.v4MultiAgentRuntime).toBe(true)
     }),
   )
@@ -100,19 +100,19 @@ describe("RuntimeFlags", () => {
     }),
   )
 
-  it.effect("§H1: each remaining V4.0 flag is an independent opt-in (=true enables just that one)", () =>
+  it.effect("§H1: each still-opt-in V4.0 flag is an independent opt-in (=true enables just that one)", () =>
     Effect.gen(function* () {
-      // turning ONE on must not turn the others on — an operator advances the rollout capability by
-      // capability. This also proves the override path still works: the default is OFF but env `=true`
-      // enables it (verification + staged rollout depend on this). Uses v4AgentPushEnabled, which stays
-      // OFF-by-default after the V4.1 v4MultiAgentRuntime promotion.
+      // turning ONE still-opt-in flag on must not affect others — operator advances rollout
+      // capability by capability. Uses v4ThreadEnabled, which remains OFF-by-default.
       const flags = yield* readFlags.pipe(
-        Effect.provide(fromConfig({ DEEPAGENT_CODE_V4_AGENT_PUSH_ENABLED: "true" })),
+        Effect.provide(fromConfig({ DEEPAGENT_CODE_V4_THREAD_ENABLED: "true" })),
       )
-      expect(flags.v4AgentPushEnabled).toBe(true)
+      expect(flags.v4ThreadEnabled).toBe(true)
       expect(flags.v4EventDrivenIm).toBe(false)
-      expect(flags.v4PanelAutoConvene).toBe(false)
-      expect(flags.v4ThreadEnabled).toBe(false)
+      expect(flags.v4FileUploadEnabled).toBe(false)
+      // stableOn flags are unaffected by the override — they remain ON
+      expect(flags.v4AgentPushEnabled).toBe(true)
+      expect(flags.v4PanelAutoConvene).toBe(true)
     }),
   )
 
