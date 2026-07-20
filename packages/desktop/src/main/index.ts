@@ -268,6 +268,23 @@ const main = Effect.gen(function* () {
     recordFatalRendererError: (error) => writeLog("renderer", "fatal renderer error", { ...error }, "error"),
   })
   registerWslIpcHandlers(wslServers)
+
+  mainWindow = createMainWindow()
+  if (mainWindow) {
+    createMenu({
+      trigger: (id) => {
+        const win = BrowserWindow.getFocusedWindow() ?? mainWindow
+        if (win) sendMenuCommand(win, id)
+      },
+      checkForUpdates: () => {
+        void showUpdaterDialog(updater, true)
+      },
+      relaunch: () => {
+        relaunch()
+      },
+    })
+  }
+
   void updater.start()
   const updateTimer = setInterval(() => void updater.check(), 10 * 60 * 1000)
   updateTimer.unref()
@@ -323,11 +340,6 @@ const main = Effect.gen(function* () {
       }),
     )
     server = listener
-    yield* Deferred.succeed(serverReady, {
-      url,
-      username: "deepagent-code",
-      password,
-    })
 
     if (process.platform === "win32") {
       void wslServers.initialize().catch((error) => logger.error("wsl server initialization failed", error))
@@ -335,33 +347,23 @@ const main = Effect.gen(function* () {
 
     yield* Effect.promise(() => health.wait).pipe(
       Effect.timeout("30 seconds"),
-      Effect.catch((e) =>
+      Effect.tapError((e) =>
         Effect.sync(() => {
           logger.error("sidecar health check failed", e.toString())
         }),
       ),
     )
 
+    yield* Deferred.succeed(serverReady, {
+      url,
+      username: "deepagent-code",
+      password,
+    })
+
     logger.log("loading task finished")
   }).pipe(forwardInitializationFailure(serverReady), Effect.forkChild)
 
   yield* Fiber.await(loadingTask)
-
-  mainWindow = createMainWindow()
-  if (mainWindow) {
-    createMenu({
-      trigger: (id) => {
-        const win = BrowserWindow.getFocusedWindow() ?? mainWindow
-        if (win) sendMenuCommand(win, id)
-      },
-      checkForUpdates: () => {
-        void showUpdaterDialog(updater, true)
-      },
-      relaunch: () => {
-        relaunch()
-      },
-    })
-  }
 })
 
 Effect.runFork(main)

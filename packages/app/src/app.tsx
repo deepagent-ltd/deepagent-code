@@ -193,10 +193,10 @@ function ConnectionGate(props: ParentProps<{ disableHealthCheck?: boolean }>) {
 
   const [checkMode, setCheckMode] = createSignal<"blocking" | "background">("blocking")
 
-  // performs repeated health check with a grace period for
-  // non-http connections, otherwise fails instantly
+  // Desktop sidecars enter the provider only after their main-process health check.
+  // Other non-http connections get a grace period; HTTP connections fail instantly.
   const [startupHealthCheck, healthCheckActions] = createResource(() =>
-    props.disableHealthCheck
+    props.disableHealthCheck || server.current?.type === "sidecar"
       ? true
       : Effect.gen(function* () {
           if (!server.current) return true
