@@ -241,6 +241,14 @@ export class Service extends ConfigService.Service<Service>()("@deepagent-code/R
   // ONLY the runLoop steer drain — it does NOT activate the dormant experimentalEventSystem V2 runner.
   // Disable with DEEPAGENT_CODE_V4_STEERING=false.
   v4Steering: stableOn("DEEPAGENT_CODE_V4_STEERING"),
+  // PR-2: Streaming degeneration detector mode for reasoning outputs.
+  // "off"    — detector is disabled; all output passes through unmodified.
+  // "shadow" — detector runs and logs hits, but never triggers a circuit break (default).
+  // "enforce"— detector triggers a circuit break on confirmed degeneration (production opt-in).
+  // Set DEEPAGENT_CODE_REASONING_DEGENERATION_MODE=enforce to activate hard enforcement.
+  degenerationDetectorMode: Config.string("DEEPAGENT_CODE_REASONING_DEGENERATION_MODE").pipe(
+    Config.withDefault("enforce"),
+  ),
   client: Config.string("DEEPAGENT_CODE_CLIENT").pipe(Config.withDefault("cli")),
 }) {}
 

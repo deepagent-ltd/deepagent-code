@@ -315,7 +315,9 @@ export function SessionTurn(
     return undefined
   })
   const errorText = createMemo(() => {
-    const msg = error()?.data?.message
+    // Not every assistant error carries a `data.message` — OutputDegenerationError's data is
+    // { chars, ratio, detectorVersion }. Read `data` as a loose record and probe for `message`.
+    const msg = (error()?.data as Record<string, unknown> | undefined)?.message
     if (typeof msg === "string") return unwrap(msg)
     if (msg === undefined || msg === null) return ""
     // oxlint-disable-next-line no-base-to-string -- msg is unknown from error data, coercion is intentional
