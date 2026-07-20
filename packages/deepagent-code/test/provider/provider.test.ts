@@ -2222,3 +2222,72 @@ it.effect("deepagent-code loader keeps paid models when auth exists", () =>
     expect(keyedCount).toBeGreaterThan(0)
   }).pipe(provideMultiInstance),
 )
+
+// ── model groups (v4.0.6) ─────────────────────────────────────────────────────────────────────
+
+it.effect("provider groups: models in a group use the group npm (protocol override)", () =>
+  Effect.gen(function* () {
+    const dir = yield* tmpdirScoped({
+      config: {
+        provider: {
+          mygateway: {
+            name: "My Gateway",
+            npm: "@ai-sdk/openai-compatible",
+            options: { baseURL: "https://gateway.example.com/v1", apiKey: "default-key" },
+            models: { "gpt-4o": { name: "GPT-4o", tool_call: true, limit: { context: 128000, output: 4096 } } },
+            groups: {
+              "anthropic-group": {
+                npm: "@ai-sdk/anthropic",
+                options: { apiKey: "claude-key" },
+                models: {
+                  "claude-3-5-sonnet": { name: "Claude 3.5 Sonnet", tool_call: true, limit: { context: 200000, output: 8096 } },
+                },
+              },
+            },
+          },
+        },
+      },
+    })
+    const providers = yield* Provider.use.list().pipe(provideInstanceEffect(dir)).pipe(provideMultiInstance)
+    const mygateway = providers[ProviderV2.ID.make("mygateway")]
+    expect(mygateway).toBeDefined()
+    const gpt4o = mygateway.models[ModelV2.ID.make("gpt-4o")]
+    expect(gpt4o?.api.npm).toBe("@ai-sdk/openai-compatible")
+    const claude = mygateway.models[ModelV2.ID.make("claude-3-5-sonnet")]
+    expect(claude?.api.npm).toBe("@ai-sdk/anthropic")
+  }).pipe(provideMultiInstance),
+)
+
+it.effect("provider groups: multiple groups coexist under one provider with separate group tags", () =>
+  Effect.gen(function* () {
+    const dir = yield* tmpdirScoped({
+      config: {
+        provider: {
+          mygateway: {
+            npm: "@ai-sdk/openai-compatible",
+            options: { baseURL: "https://gateway.example.com/v1", apiKey: "default-key" },
+            groups: {
+              "group-a": {
+                options: { apiKey: "group-a-key" },
+                models: { "model-a": { name: "Model A", tool_call: true, limit: { context: 16000, output: 4096 } } },
+              },
+              "group-b": {
+                options: { apiKey: "group-b-key" },
+                models: { "model-b": { name: "Model B", tool_call: true, limit: { context: 32000, output: 4096 } } },
+              },
+            },
+          },
+        },
+      },
+    })
+    const providers = yield* Provider.use.list().pipe(provideInstanceEffect(dir)).pipe(provideMultiInstance)
+    const mygateway = providers[ProviderV2.ID.make("mygateway")]
+    const modelA = mygateway.models[ModelV2.ID.make("model-a")]
+    const modelB = mygateway.models[ModelV2.ID.make("model-b")]
+    expect(modelA).toBeDefined()
+    expect(modelB).toBeDefined()
+    expect((modelA.options as Record<string, unknown>)["__group"]).toBe("group-a")
+    expect((modelB.options as Record<string, unknown>)["__group"]).toBe("group-b")
+    expect(Object.keys(mygateway.models)).toHaveLength(2)
+  }).pipe(provideMultiInstance),
+)
