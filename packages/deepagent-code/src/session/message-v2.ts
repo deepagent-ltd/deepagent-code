@@ -10,6 +10,7 @@ import {
   CompactionPart,
   ContextOverflowError,
   Info,
+  OutputDegenerationError,
   OutputLengthError,
   Part,
   StructuredOutputError,
@@ -164,7 +165,7 @@ function providerMeta(metadata: Record<string, any> | undefined) {
 export const toModelMessagesEffect = Effect.fnUntraced(function* (
   input: WithParts[],
   model: Provider.Model,
-  options?: { stripMedia?: boolean; toolOutputMaxChars?: number },
+  options?: { stripMedia?: boolean; toolOutputMaxChars?: number; terminalBoundaryID?: MessageID },
 ) {
   const result: UIMessage[] = []
   const toolNames = new Set<string>()
@@ -393,6 +394,12 @@ export const toModelMessagesEffect = Effect.fnUntraced(function* (
             })
         }
         if (part.type === "reasoning") {
+          // PR-1: Only include reasoning for active (non-settled) assistant messages.
+          // A settled message has id <= terminalBoundaryID (the most recent terminal
+          // assistant in history). This applies to both same-model (signed thinking)
+          // and cross-model (text conversion), satisfying provider replay constraints.
+          const isActive = !options?.terminalBoundaryID || msg.info.id > options.terminalBoundaryID
+          if (!isActive) continue
           if (differentModel) {
             if (part.text.trim().length > 0)
               assistantMessage.parts.push({
@@ -450,7 +457,7 @@ export const toModelMessagesEffect = Effect.fnUntraced(function* (
 export function toModelMessages(
   input: WithParts[],
   model: Provider.Model,
-  options?: { stripMedia?: boolean; toolOutputMaxChars?: number },
+  options?: { stripMedia?: boolean; toolOutputMaxChars?: number; terminalBoundaryID?: MessageID },
 ): Promise<ModelMessage[]> {
   return Effect.runPromise(toModelMessagesEffect(input, model, options).pipe(Effect.provide(EffectLogger.layer)))
 }
@@ -646,6 +653,8 @@ export function fromError(
         },
       ).toObject()
     case OutputLengthError.isInstance(e):
+      return e
+    case OutputDegenerationError.isInstance(e):
       return e
     case LoadAPIKeyError.isInstance(e):
       return new AuthError(

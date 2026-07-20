@@ -259,7 +259,7 @@ describe("DeepAgentEventBus", () => {
     }),
   )
 
-  it.effect(
+  it.live(
     "§A3 at-least-once: a grouped subscriber gets a durable pending delivery on publish (recoverable without nack)",
     () =>
       Effect.gen(function* () {
@@ -269,7 +269,11 @@ describe("DeepAgentEventBus", () => {
         const fiber = yield* bus
           .subscribe({ group: "router" })
           .pipe(Stream.take(1), Stream.runCollect, Effect.forkScoped)
-        yield* Effect.yieldNow
+        // grouped subscribe creates a Stream.merge of two PubSub fibers (normal + high-priority
+        // channels); a single yieldNow only flushes one scheduler tick, not enough for both fibers
+        // to acquire their PubSub subscriptions. Sleep 10ms in live mode so both subscriptions are
+        // active before publish fires.
+        yield* Effect.sleep("10 millis")
         const event = yield* bus.publish(input({ idempotencyKey: "alo-1" }))
         yield* Fiber.join(fiber)
         // the subscriber received it but has NOT acked — at-least-once means a pending row exists,

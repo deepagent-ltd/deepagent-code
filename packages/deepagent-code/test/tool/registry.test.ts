@@ -133,12 +133,21 @@ afterEach(async () => {
 })
 
 describe("tool.registry", () => {
-  it.instance("does not expose task_status", () =>
+  it.instance("exposes task_status (v4.0.4 block1 1c: read-only subagent status view)", () =>
     Effect.gen(function* () {
       const registry = yield* ToolRegistry.Service
       const ids = yield* registry.ids()
 
-      expect(ids).not.toContain("task_status")
+      expect(ids).toContain("task_status")
+    }),
+  )
+
+  it.instance("exposes dismiss_validation (v4.0.5 PR-4: validation dismissal closure)", () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      const ids = yield* registry.ids()
+
+      expect(ids).toContain("dismiss_validation_failure")
     }),
   )
 

@@ -163,11 +163,12 @@ function formatUsage(
 export function formatError(error: {
   name?: string
   message?: string
-  data?: {
-    message?: string
-  }
+  // Some structured errors (e.g. OutputDegenerationError) carry a non-message `data` shape
+  // ({ chars, ratio, detectorVersion }), so `data` is a loose record here and we probe for a
+  // string `message` field rather than requiring it.
+  data?: Record<string, unknown>
 }): string {
-  if (error.data?.message) {
+  if (typeof error.data?.message === "string") {
     return error.data.message
   }
 

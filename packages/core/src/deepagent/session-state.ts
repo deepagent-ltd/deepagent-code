@@ -30,6 +30,25 @@ import {
   type PlanDoc,
 } from "./plan-controller"
 
+/**
+ * A structured record of a validation failure that the model has explicitly dismissed via the
+ * dismiss_validation_failure tool. Replaces the flat `string[]` fingerprint list (v4.0.4) so
+ * dismissals carry an audit trail (who dismissed it, why, when) and so command + exitCode are
+ * matched by field rather than fragile substring heuristics.
+ */
+export interface SuppressedValidation {
+  /** The shell command that produced the failing result. */
+  command: string
+  /** The exit code of the failing run (double-confirms the dismissal target). */
+  exitCode: number
+  /** Composite key: `"${command} ${exitCode}"`. Same scheme as validationFingerprint() per-item. */
+  fingerprint: string
+  /** Free-text reason supplied by the model (surfaced in audit/logs). */
+  reason: string
+  /** Unix-ms timestamp of when the dismissal was recorded. */
+  suppressedAt: number
+}
+
 export type SessionRunState = {
   sessionId: string
   mode: AgentMode
@@ -55,11 +74,12 @@ export type SessionRunState = {
   // update. The SEMANTIC primary trigger for the progress nudge ("a step probably just finished").
   // Reset with the counter on a real status change.
   validationPassedSinceReport: boolean
-  // Round-context: fingerprints (command + " " + exit_code) of validation failures the model has
-  // acknowledged as false positives or already-handled. Matching failures are suppressed (not
-  // re-injected next round). Empty set = no change in behaviour. Cleared when a genuinely new
-  // result for the same command arrives, so real regressions are never silently swallowed.
-  suppressedFingerprints: string[]
+  // Round-context: structured records of validation failures the model has explicitly dismissed
+  // (via the dismiss_validation_failure tool). Each entry carries the exact command, exit code,
+  // a human-readable reason for audit, and a timestamp. Matching failures are filtered from the
+  // round-context injection. Auto-evicted when the same command re-runs with a DIFFERENT exit
+  // code (genuine regression), so real regressions are never silently swallowed.
+  suppressedValidations: SuppressedValidation[]
   // V3.9 §C: whether this conversation has EXPLICITLY toggled the Expert Panel "armed" state from the
   // chat dialog. `null` = never toggled → the effective armed state falls back to the global
   // `expertPanelDefault` setting (resolved server-side, so the UI reflects the server default without a
@@ -78,6 +98,12 @@ export type SessionRunState = {
   activeGoal: ActiveGoalPointer | null
   createdAt: string
   completedAt: string | null
+  // PR-3: the message ID of the last REAL user admission message observed by
+  // buildDeepAgentPromptContext. Used to gate markPlanStale("user_appended") so that synthetic
+  // tail-reminder messages (injected by injectTailReminder with a new MessageID.ascending() each
+  // call) are never mistaken for genuine new user inputs. undefined = not yet recorded (session
+  // created before this field was added; treated as "initial" on first observation).
+  lastAdmissionUserMessageId: string | undefined
 }
 
 // V3.9 §D: session-state pointer to a running goal. The GoalLoop's GoalStatus (persisted in the
@@ -132,12 +158,13 @@ export const getOrCreate = (sessionId: string, mode: AgentMode): SessionRunState
     planLatch: initialPlanLatch(),
     mutationsSinceReport: 0,
     validationPassedSinceReport: false,
-    suppressedFingerprints: [],
+    suppressedValidations: [],
     panelArmed: null,
     panelRounds: null,
     activeGoal: null,
     createdAt: new Date().toISOString(),
     completedAt: null,
+    lastAdmissionUserMessageId: undefined,
   }
   sessions.set(sessionId, state)
   saveToDisk()
@@ -303,31 +330,71 @@ export const mutationsSinceReport = (sessionId: string): number => sessions.get(
 export const validationPassedSinceReport = (sessionId: string): boolean =>
   sessions.get(sessionId)?.validationPassedSinceReport ?? false
 
-// Round-context suppression helpers (v4.0.4)
-export const suppressFingerprint = (sessionId: string, fingerprint: string): void => {
-  const state = sessions.get(sessionId)
-  if (!state || state.suppressedFingerprints.includes(fingerprint)) return
-  state.suppressedFingerprints = [...state.suppressedFingerprints, fingerprint]
-  saveToDisk()
-}
-export const unsuppressFingerprint = (sessionId: string, fingerprint: string): void => {
+// Round-context suppression helpers (v4.0.4 → upgraded PR-4)
+// All callers should use suppressValidation / unsuppressValidation / getSuppressedValidations.
+// getSuppressedFingerprints is a backward-compat shim for request.ts transition callers.
+
+export const suppressValidation = (
+  sessionId: string,
+  command: string,
+  exitCode: number,
+  reason: string,
+): void => {
   const state = sessions.get(sessionId)
   if (!state) return
-  const next = state.suppressedFingerprints.filter((f) => f !== fingerprint)
-  if (next.length === state.suppressedFingerprints.length) return
-  state.suppressedFingerprints = next
+  const fingerprint = `${command} ${exitCode}`
+  const existing = state.suppressedValidations.findIndex((v) => v.fingerprint === fingerprint)
+  if (existing >= 0) {
+    // Update reason in-place (idempotent, but refresh audit fields).
+    state.suppressedValidations = state.suppressedValidations.map((v, i) =>
+      i === existing ? { ...v, reason, suppressedAt: Date.now() } : v,
+    )
+  } else {
+    state.suppressedValidations = [
+      ...state.suppressedValidations,
+      { command, exitCode, fingerprint, reason, suppressedAt: Date.now() },
+    ]
+  }
   saveToDisk()
 }
-export const isFingerprintSuppressed = (sessionId: string, fingerprint: string): boolean =>
-  sessions.get(sessionId)?.suppressedFingerprints.includes(fingerprint) ?? false
-export const clearSuppressedFingerprints = (sessionId: string): void => {
+
+export const unsuppressValidation = (sessionId: string, fingerprint: string): void => {
   const state = sessions.get(sessionId)
-  if (!state || state.suppressedFingerprints.length === 0) return
-  state.suppressedFingerprints = []
+  if (!state) return
+  const next = state.suppressedValidations.filter((v) => v.fingerprint !== fingerprint)
+  if (next.length === state.suppressedValidations.length) return
+  state.suppressedValidations = next
   saveToDisk()
 }
+
+export const getSuppressedValidations = (sessionId: string): readonly SuppressedValidation[] =>
+  sessions.get(sessionId)?.suppressedValidations ?? []
+
+/** Backward-compat shim: returns only the fingerprint strings. Used by request.ts during migration. */
 export const getSuppressedFingerprints = (sessionId: string): readonly string[] =>
-  sessions.get(sessionId)?.suppressedFingerprints ?? []
+  getSuppressedValidations(sessionId).map((v) => v.fingerprint)
+
+export const isFingerprintSuppressed = (sessionId: string, fingerprint: string): boolean =>
+  getSuppressedValidations(sessionId).some((v) => v.fingerprint === fingerprint)
+
+export const clearSuppressedValidations = (sessionId: string): void => {
+  const state = sessions.get(sessionId)
+  if (!state || state.suppressedValidations.length === 0) return
+  state.suppressedValidations = []
+  saveToDisk()
+}
+
+/** @deprecated Use suppressValidation(). Retained as alias for call-sites not yet migrated. */
+export const suppressFingerprint = (sessionId: string, fingerprint: string): void => {
+  const lastSpace = fingerprint.lastIndexOf(" ")
+  const command = lastSpace >= 0 ? fingerprint.slice(0, lastSpace) : fingerprint
+  const exitCode = lastSpace >= 0 ? parseInt(fingerprint.slice(lastSpace + 1), 10) : 0
+  suppressValidation(sessionId, command, isNaN(exitCode) ? 0 : exitCode, "legacy-call")
+}
+
+/** @deprecated Use unsuppressValidation(). Retained as alias. */
+export const unsuppressFingerprint = (sessionId: string, fingerprint: string): void =>
+  unsuppressValidation(sessionId, fingerprint)
 
 // U10 / P2-E: a compact summary of the latest validation run, used as step evidence when a step
 // moves to `done`. Null when nothing has been validated yet.
@@ -348,6 +415,36 @@ export const markPlanStale = (sessionId: string, reason: StaleReason): void => {
   if (next === state.planLatch) return
   state.planLatch = next
   saveToDisk()
+}
+
+export type UserMessageObservation = "initial" | "same" | "new"
+
+/**
+ * Observes a user admission message and returns whether it is the first,
+ * same as last time, or genuinely new. Used to gate markPlanStale("user_appended")
+ * so that only real user inputs — not synthetic reminders or tool continuations —
+ * trigger plan staleness.
+ *
+ * "initial": first time this session is seen; records the baseline ID, does NOT
+ *   mark stale. Old state without lastAdmissionUserMessageId migrates here.
+ * "same": same ID as last recorded; this is a tool continuation, skip.
+ * "new": different ID; this is a genuine new user message, caller should mark stale.
+ */
+export const observeUserAdmission = (
+  sessionId: string,
+  admissionMessageId: string,
+): UserMessageObservation => {
+  const state = sessions.get(sessionId)
+  if (!state) return "initial"
+  if (state.lastAdmissionUserMessageId === undefined) {
+    state.lastAdmissionUserMessageId = admissionMessageId
+    saveToDisk()
+    return "initial"
+  }
+  if (state.lastAdmissionUserMessageId === admissionMessageId) return "same"
+  state.lastAdmissionUserMessageId = admissionMessageId
+  saveToDisk()
+  return "new"
 }
 
 // U1: clear the latch directly (used by tests / explicit replan); setPlan is the normal path.
@@ -457,8 +554,30 @@ function normalizeState(state: SessionRunState): SessionRunState {
     // Backfill: sessions persisted before U10 have no counter on disk.
     mutationsSinceReport: state.mutationsSinceReport ?? 0,
     validationPassedSinceReport: state.validationPassedSinceReport ?? false,
-    // Backfill: sessions persisted before round-context suppression feature have no set on disk.
-    suppressedFingerprints: state.suppressedFingerprints ?? [],
+    // Backfill/migration: sessions persisted before v4.0.4 have no suppressedValidations field;
+    // sessions persisted between v4.0.4 and this change carry the OLD `suppressedFingerprints:
+    // string[]` format. Migrate both cases into the new SuppressedValidation[] shape.
+    // Old fingerprint format: "${command} ${exit_code}" — split on the LAST space so commands
+    // that contain spaces are handled correctly (exit codes are always digits).
+    suppressedValidations: (() => {
+      const raw = state as unknown as Record<string, unknown>
+      if (Array.isArray(state.suppressedValidations)) return state.suppressedValidations
+      const legacy = raw.suppressedFingerprints
+      if (!Array.isArray(legacy)) return []
+      const now = Date.now()
+      return (legacy as string[]).map((fp): SuppressedValidation => {
+        const lastSpace = fp.lastIndexOf(" ")
+        const command = lastSpace >= 0 ? fp.slice(0, lastSpace) : fp
+        const exitCode = lastSpace >= 0 ? parseInt(fp.slice(lastSpace + 1), 10) : 0
+        return {
+          command,
+          exitCode: isNaN(exitCode) ? 0 : exitCode,
+          fingerprint: fp,
+          reason: "migrated",
+          suppressedAt: now,
+        }
+      })
+    })(),
     // Backfill: sessions persisted before V3.9 §C/§D have neither slot on disk. panelArmed backfills to
     // null (= not explicitly toggled → follows the global default), NOT false.
     panelArmed: state.panelArmed ?? null,
@@ -466,6 +585,10 @@ function normalizeState(state: SessionRunState): SessionRunState {
     panelRounds: state.panelRounds ?? null,
     activeGoal: state.activeGoal ?? null,
   }
+  // PR-4 migration cleanup: the legacy `suppressedFingerprints: string[]` field is carried through by
+  // the `...state` spread above. Once its contents are migrated into `suppressedValidations`, drop the
+  // orphan so it is not re-persisted forever as dead data on the next saveToDisk().
+  delete (normalized as unknown as Record<string, unknown>).suppressedFingerprints
   sessions.set(state.sessionId, normalized)
   return normalized
 }
