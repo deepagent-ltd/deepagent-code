@@ -1728,18 +1728,17 @@ export const layer = Layer.effect(
                 family: model.family ?? existingModel?.family ?? catalogModel?.family ?? "",
                 release_date: model.release_date ?? existingModel?.release_date ?? catalogModel?.release_date ?? "",
                 cost: {
-                  input: model.cost?.input ?? existingModel?.cost.input ?? catalogModel?.cost?.input ?? 0,
-                  output: model.cost?.output ?? existingModel?.cost.output ?? catalogModel?.cost?.output ?? 0,
-                  ...(model.cost?.cache_read != null || existingModel?.cost.cache_read != null
-                    ? { cache_read: model.cost?.cache_read ?? existingModel?.cost.cache_read }
-                    : {}),
-                  ...(model.cost?.cache_write != null || existingModel?.cost.cache_write != null
-                    ? { cache_write: model.cost?.cache_write ?? existingModel?.cost.cache_write }
-                    : {}),
+                  input: model.cost?.input ?? existingModel?.cost?.input ?? catalogModel?.cost?.input ?? 0,
+                  output: model.cost?.output ?? existingModel?.cost?.output ?? catalogModel?.cost?.output ?? 0,
+                  cache: {
+                    read: model.cost?.cache_read ?? existingModel?.cost?.cache.read ?? catalogModel?.cost?.cache_read ?? 0,
+                    write: model.cost?.cache_write ?? existingModel?.cost?.cache.write ?? catalogModel?.cost?.cache_write ?? 0,
+                  },
                 },
                 limit: {
-                  context: model.limit?.context ?? existingModel?.limit.context ?? catalogModel?.limit?.context ?? 0,
-                  output: model.limit?.output ?? existingModel?.limit.output ?? catalogModel?.limit?.output ?? 0,
+                  context: model.limit?.context ?? existingModel?.limit?.context ?? catalogModel?.limit?.context ?? 0,
+                  input: model.limit?.input ?? existingModel?.limit?.input ?? catalogModel?.limit?.input,
+                  output: model.limit?.output ?? existingModel?.limit?.output ?? catalogModel?.limit?.output ?? 0,
                 },
                 variants: {},
               }
