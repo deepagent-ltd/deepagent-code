@@ -1704,6 +1704,7 @@ export const layer = Layer.effect(
                     (existingModel?.capabilities.reasoning || catalogModel?.reasoning || inferredReasoning(providerID, apiID, modelID)),
                   attachment: model.attachment ?? existingModel?.capabilities.attachment ?? catalogModel?.attachment ?? false,
                   toolcall: model.tool_call ?? existingModel?.capabilities.toolcall ?? catalogModel?.tool_call ?? true,
+                  interleaved: model.interleaved ?? existingModel?.capabilities.interleaved ?? false,
                   input: {
                     text: model.modalities?.input?.includes("text") ?? existingModel?.capabilities.input.text ?? catalogModel?.modalities?.input?.includes("text") ?? true,
                     audio: model.modalities?.input?.includes("audio") ?? existingModel?.capabilities.input.audio ?? catalogModel?.modalities?.input?.includes("audio") ?? false,
