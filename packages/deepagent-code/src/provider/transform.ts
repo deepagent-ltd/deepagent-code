@@ -838,14 +838,26 @@ export function variants(model: Provider.Model): Record<string, Record<string, a
     case "venice-ai-sdk-provider":
     // https://docs.venice.ai/overview/guides/reasoning-models#reasoning-effort
     case "@ai-sdk/openai-compatible": {
-      // For GPT-5.x versioned models routed through an openai-compatible endpoint, respect their
-      // extended effort tiers (xhigh from v5.2+) — same resolution logic as @ai-sdk/gateway.
-      // All other models on this adapter fall back to the base low/medium/high set.
       const apiId = model.api.id.toLowerCase()
+
+      // Anthropic models (Claude family) routed through an openai-compatible gateway — the gateway
+      // translates OpenAI-shaped `reasoningEffort` to Anthropic's native thinking API. Use the same
+      // adaptive effort set as the direct @ai-sdk/anthropic path (including xhigh for Opus 4.7+ and
+      // Fable 5+), expressed as `reasoningEffort` so the gateway can forward it correctly.
+      if (adaptiveEfforts && /\bclaude\b/i.test(apiId)) {
+        return Object.fromEntries(adaptiveEfforts.map((effort) => [effort, { reasoningEffort: effort }]))
+      }
+
+      // GPT-5.x versioned models support extended effort tiers (xhigh from v5.2+). Strip `none` and
+      // `minimal` — those are Responses-API-only tiers that openai-compatible endpoints do not
+      // implement, so exposing them would produce 400 errors on most third-party gateways.
       if (GPT5_FAMILY_RE.test(apiId)) {
-        const openaiCompatEfforts = openaiCompatibleReasoningEfforts(apiId)
+        const openaiCompatEfforts = openaiCompatibleReasoningEfforts(apiId).filter(
+          (e) => e !== "none" && e !== "minimal",
+        )
         return Object.fromEntries(openaiCompatEfforts.map((effort) => [effort, { reasoningEffort: effort }]))
       }
+
       const efforts = [...WIDELY_SUPPORTED_EFFORTS]
       if (apiId.includes("deepseek-v4")) {
         efforts.push("max")
