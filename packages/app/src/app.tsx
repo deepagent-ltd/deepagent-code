@@ -33,7 +33,7 @@ import { DebugProvider } from "@/context/debug"
 import { FileProvider } from "@/context/file"
 import { GatewayProvider } from "@/context/gateway"
 import { ServerSDKProvider } from "@/context/server-sdk"
-import { ServerSyncProvider, useServerSync } from "@/context/server-sync"
+import { ServerSyncProvider } from "@/context/server-sync"
 import { GlobalProvider } from "@/context/global"
 import { HighlightsProvider } from "@/context/highlights"
 import { LanguageProvider, type Locale, useLanguage } from "@/context/language"
@@ -46,7 +46,6 @@ import { ServerConnection, ServerProvider, serverName, useServer } from "@/conte
 import { SettingsProvider } from "@/context/settings"
 import { TerminalProvider } from "@/context/terminal"
 import { TabsProvider, useTabs } from "@/context/tabs"
-import { base64Encode } from "@deepagent-code/core/util/encode"
 import { WslServersProvider } from "@/wsl/context"
 import DirectoryLayout from "@/pages/directory-layout"
 import Layout from "@/pages/layout"
@@ -147,22 +146,18 @@ function RouterRoot(props: ParentProps<{ appChildren?: JSX.Element }>) {
   const tabs = useTabs()
   const navigate = useNavigate()
   const location = useLocation()
-  const sync = useServerSync()
 
-  // On startup: navigate to the most recently updated project's session LIST (/:dir/session,
-  // no specific session ID). This gets the user to the session list immediately so the right
-  // panel shows content, without conflicting with autoselecting which handles the final
-  // session selection in the background. RouterRoot only fires once (when at "/").
+  // On startup: as soon as persisted tabs are loaded (local disk, no HTTP calls),
+  // navigate to the last visited project's session list. This matches opencode's approach —
+  // use local/cached data to drive the first frame, let the server data fill in asynchronously.
+  // We navigate to /:dir/session (no specific session ID) so autoselecting can handle
+  // the final session selection independently without conflicting navigation.
   createEffect(() => {
     if (!tabs.ready()) return
     if (location.pathname !== "/") return
-    if (!sync.ready) return
-    const sorted = sync.data.project
-      .slice()
-      .sort((a, b) => (b.time.updated ?? b.time.created) - (a.time.updated ?? a.time.created))
-    const first = sorted[0]
+    const first = tabs.store[0]
     if (!first) return
-    navigate(`/${base64Encode(first.worktree)}/session`, { replace: true })
+    navigate(`/${first.dirBase64}/session`, { replace: true })
   })
 
   return (
