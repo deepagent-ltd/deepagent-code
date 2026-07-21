@@ -733,12 +733,16 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
         },
       },
       dock: {
-        // Deprecated compatibility metadata. New UI must use view(session).panel;
-        // only locations and the shared Bottom Panel dimension remain global.
+        // Phase 3: terminal is now side-native in the right panel (independent host).
+        // dock.location("terminal") is forced to "bottom" to avoid stale stored "side"
+        // values making the bottom terminal unreachable. Move operations for terminal
+        // are intentionally no-ops; only debug-console and problems remain movable.
         location(id: DockPanelID): DockLocation {
+          if (id === "terminal") return "bottom"
           return store.dock?.location?.[id] ?? DOCK_DEFAULT_LOCATION[id]
         },
         setLocation(id: DockPanelID, location: DockLocation) {
+          if (id === "terminal") return // terminal location is now fixed
           if (!store.dock) {
             setStore("dock", { location: { [id]: location } as Record<DockPanelID, DockLocation> })
             return
@@ -746,6 +750,7 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
           setStore("dock", "location", id, location)
         },
         move(id: DockPanelID) {
+          if (id === "terminal") return // terminal is no longer movable
           const current = store.dock?.location?.[id] ?? DOCK_DEFAULT_LOCATION[id]
           const next: DockLocation = current === "bottom" ? "side" : "bottom"
           if (!store.dock) {
@@ -755,7 +760,7 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
           setStore("dock", "location", id, next)
         },
         bottomCount: createMemo(
-          () => DOCK_PANEL_IDS.filter((id) => (store.dock?.location?.[id] ?? DOCK_DEFAULT_LOCATION[id]) === "bottom").length,
+          () => DOCK_PANEL_IDS.filter((id) => (id === "terminal" ? true : (store.dock?.location?.[id] ?? DOCK_DEFAULT_LOCATION[id]) === "bottom")).length,
         ),
       },
       review: {

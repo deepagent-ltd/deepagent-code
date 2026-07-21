@@ -43,7 +43,7 @@ import { useSDK } from "@/context/sdk"
 import { useServerSDK } from "@/context/server-sdk"
 import { useSettings } from "@/context/settings"
 import { useSync } from "@/context/sync"
-import { useTerminal } from "@/context/terminal"
+import { useTerminalHosts } from "@/context/terminal"
 import { DialogDeepAgentPromptConfirm } from "@/components/dialog-deepagent-prompt-confirm"
 import {
   type DeepAgentPromptPrepareResult,
@@ -203,7 +203,7 @@ export default function Page() {
   const settings = useSettings()
   const prompt = usePrompt()
   const comments = useComments()
-  const terminal = useTerminal()
+  const terminalHosts = useTerminalHosts()
   const server = useServer()
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams<{ prompt?: string }>()
@@ -852,15 +852,12 @@ export default function Page() {
       return
     }
 
-    // Prefer the open terminal over the composer when it can take focus
-    const terminalVisible = (() => {
-      const panel = view().panel
-      return panel.location("terminal") === "bottom"
-        ? panel.bottom.opened() && panel.bottom.activeView() === "terminal"
-        : view().rightPanel.mode() === "terminal"
-    })()
-    if (terminalVisible) {
-      const id = terminal.active()
+    // Prefer the open terminal over the composer when it can take focus.
+    // Phase 3: check both bottom and side hosts.
+    const bottomVisible = view().panel.bottom.opened() && view().panel.bottom.activeView() === "terminal"
+    const sideVisible = view().rightPanel.mode() === "terminal"
+    if (bottomVisible || sideVisible) {
+      const id = bottomVisible ? terminalHosts.bottom.active() : terminalHosts.side.active()
       if (id && shouldFocusTerminalOnKeyDown(event) && focusTerminalById(id)) return
     }
 

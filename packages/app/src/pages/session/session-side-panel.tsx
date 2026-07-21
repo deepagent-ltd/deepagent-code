@@ -7,6 +7,7 @@ import { Tooltip } from "@deepagent-code/ui/tooltip"
 import { ResizeHandle } from "@deepagent-code/ui/resize-handle"
 import type { SnapshotFileDiff, VcsFileDiff } from "@deepagent-code/sdk/v2"
 import { RIGHT_PANEL_RAIL_PX, type RightPanelWidthBucket, type DockPanelID } from "@/context/layout"
+import { useTerminalHosts } from "@/context/terminal"
 
 import FileTree from "@/components/file-tree"
 import { SidePanelMcp } from "@/pages/session/side-panel-mcp"
@@ -53,9 +54,9 @@ type PanelMode =
 
 type PanelGroup = "code" | "agents" | "env" | "dev" | "dock"
 
-// Movable panel views appear in this rail only when their persisted location is
-// side. Other entries remain side-native.
-const DOCK_PANEL_MODES: readonly DockPanelID[] = ["terminal", "debug-console", "problems"]
+// Phase 3: terminal is now side-native and always visible in the rail.
+// Only debug-console and problems are still movable dock views.
+const MOVABLE_DOCK_MODES: readonly DockPanelID[] = ["debug-console", "problems"]
 
 type PanelDef = {
   readonly mode: PanelMode
@@ -116,6 +117,7 @@ export function SessionSidePanel(props: {
   const language = useLanguage()
   const command = useCommand()
   const sync = useSync()
+  const terminalHosts = useTerminalHosts()
   const { params, sessionKey, tabs, view } = useSessionLayout()
 
   const isDesktop = createMediaQuery("(min-width: 768px)")
@@ -285,7 +287,20 @@ export function SessionSidePanel(props: {
   const openPanel = (mode: PanelMode) => {
     view().reviewPanel.close()
     layout.fileTree.close()
-    if (DOCK_PANEL_MODES.includes(mode as DockPanelID)) {
+    // Phase 3: terminal is side-native — create a side PTY if needed, then open the panel.
+    if (mode === "terminal") {
+      if (isActive("terminal")) {
+        view().rightPanel.close()
+        return
+      }
+      // Create the first side PTY lazily when the side panel opens for the first time.
+      if (terminalHosts.side.all().length === 0) {
+        void terminalHosts.side.new()
+      }
+      view().rightPanel.open("terminal")
+      return
+    }
+    if (MOVABLE_DOCK_MODES.includes(mode as DockPanelID)) {
       view().panel.toggle(mode as DockPanelID)
       return
     }
@@ -310,9 +325,9 @@ export function SessionSidePanel(props: {
   }
   const railItems = createMemo(() =>
     PANELS
-      // Dock panels (terminal / debug-console) only appear in the rail when docked to the side; when
-      // in the bottom dock they're reached there instead.
-      .filter((p) => (DOCK_PANEL_MODES.includes(p.mode as DockPanelID) ? view().panel.location(p.mode as DockPanelID) === "side" : true))
+      // Phase 3: terminal is side-native — always show in the rail.
+      // Other movable dock panels (debug-console, problems) only appear when docked to the side.
+      .filter((p) => (MOVABLE_DOCK_MODES.includes(p.mode as DockPanelID) ? view().panel.location(p.mode as DockPanelID) === "side" : true))
       .map((p) => ({
         ...p,
         title: language.t(p.titleKey),
