@@ -33,7 +33,7 @@ import { DebugProvider } from "@/context/debug"
 import { FileProvider } from "@/context/file"
 import { GatewayProvider } from "@/context/gateway"
 import { ServerSDKProvider } from "@/context/server-sdk"
-import { ServerSyncProvider } from "@/context/server-sync"
+import { ServerSyncProvider, useServerSync } from "@/context/server-sync"
 import { GlobalProvider } from "@/context/global"
 import { HighlightsProvider } from "@/context/highlights"
 import { LanguageProvider, type Locale, useLanguage } from "@/context/language"
@@ -46,6 +46,7 @@ import { ServerConnection, ServerProvider, serverName, useServer } from "@/conte
 import { SettingsProvider } from "@/context/settings"
 import { TerminalProvider } from "@/context/terminal"
 import { TabsProvider, tabHref, useTabs } from "@/context/tabs"
+import { base64Encode } from "@deepagent-code/core/util/encode"
 import { WslServersProvider } from "@/wsl/context"
 import DirectoryLayout from "@/pages/directory-layout"
 import Layout from "@/pages/layout"
@@ -146,16 +147,24 @@ function RouterRoot(props: ParentProps<{ appChildren?: JSX.Element }>) {
   const tabs = useTabs()
   const navigate = useNavigate()
   const location = useLocation()
+  const sync = useServerSync()
 
-  // On startup: when persisted tabs finish loading and the app is sitting at "/" (Home),
-  // navigate directly to the most recently opened session tab so the user lands on their
-  // last conversation without having to click through the project list.
+  // On startup: when at "/" (Home), navigate to the first project in the left sidebar
+  // (most recently updated project). Waits for sync.ready so we only navigate after the
+  // server is confirmed responsive — this prevents the "列出文件失败" race condition
+  // that occurred when Phase 4 delivered credentials before the health check, causing
+  // immediate file-listing requests before the sidecar was fully initialized.
   createEffect(() => {
     if (!tabs.ready()) return
     if (location.pathname !== "/") return
-    const first = tabs.store[0]
-    if (!first) return
-    navigate(tabHref(first), { replace: true })
+    if (!sync.ready) return
+    const sorted = sync.data.project
+      .slice()
+      .sort((a, b) => (b.time.updated ?? b.time.created) - (a.time.updated ?? a.time.created))
+    const first = sorted[0]
+    if (first) {
+      navigate(`/${base64Encode(first.worktree)}/session`, { replace: true })
+    }
   })
 
   return (
