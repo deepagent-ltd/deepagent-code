@@ -111,7 +111,24 @@ IMPORTANT:
 - Complete all necessary research and tool calls BEFORE calling this tool
 - This tool provides your final answer - no further actions are taken after calling it`
 
-const STRUCTURED_OUTPUT_SYSTEM_PROMPT = `IMPORTANT: The user has requested structured output. You MUST use the StructuredOutput tool to provide your final response. Do NOT respond with plain text - you MUST call the StructuredOutput tool with your answer formatted according to the schema.`
+// P1: Build a schema-aware system prompt that injects the required field names so the model
+// knows the exact schema even during extended-thinking (xhigh) reasoning, without relying
+// solely on the tool definition which may not be visible during the thinking phase.
+function buildStructuredOutputSystemPrompt(schema: Record<string, any>): string {
+  const fields = extractSchemaTopLevelFields(schema)
+  const fieldHint =
+    fields.length > 0
+      ? `\nThe StructuredOutput tool requires these top-level fields: ${fields.join(", ")}. Use ONLY these exact field names.`
+      : ""
+  return `IMPORTANT: The user has requested structured output. You MUST use the StructuredOutput tool to provide your final response. Do NOT respond with plain text - you MUST call the StructuredOutput tool with your answer formatted according to the schema.${fieldHint}`
+}
+
+function extractSchemaTopLevelFields(schema: Record<string, any>): string[] {
+  if (!schema || typeof schema !== "object") return []
+  const props = schema.properties
+  if (!props || typeof props !== "object") return []
+  return Object.keys(props)
+}
 
 const log = Log.create({ service: "session.prompt" })
 const elog = EffectLogger.create({ service: "session.prompt" })
@@ -2086,6 +2103,12 @@ export const layer = Layer.effect(
         const slog = elog.with({ sessionID })
         let structured: unknown
         let step = 0
+        // P0: count StructuredOutput tool-call attempts that did NOT produce a valid structured
+        // result (schema validation rejected the arguments). When this reaches the format's
+        // retryCount ceiling we inject a corrective hint and exit — preventing the infinite loop
+        // that occurs when the model repeatedly guesses wrong field names (e.g. "summary" instead
+        // of "module" for ResearchResult) and the AI SDK silently rejects them before execute().
+        let structuredFailedAttempts = 0
         const session = yield* sessions.get(sessionID).pipe(Effect.orDie)
 
         // V3.8 App-A C2.5 (Stage 5): the Conversation Log writer. Constructed ONCE per run so its
@@ -2427,7 +2450,10 @@ export const layer = Layer.effect(
             ])
             const system = [...env, ...instructions, ...(skills ? [skills] : [])]
             const format = lastUser.format ?? { type: "text" as const }
-            if (format.type === "json_schema") system.push(STRUCTURED_OUTPUT_SYSTEM_PROMPT)
+            // P1: inject schema-aware prompt so the model knows the exact field names even
+            // during extended-thinking (xhigh) reasoning where the tool definition may not
+            // be immediately visible when the model starts generating its thinking tokens.
+            if (format.type === "json_schema") system.push(buildStructuredOutputSystemPrompt(format.schema))
             const result = yield* handle.process({
               user: lastUser,
               agent,
@@ -2457,6 +2483,47 @@ export const layer = Layer.effect(
                 }).toObject()
                 yield* sessions.updateMessage(handle.message)
                 return "break" as const
+              }
+            }
+
+            // P0: StructuredOutput retry-cap. When the model made tool-calls (finish === "tool-calls")
+            // but structured is still undefined, it means the StructuredOutput call was either:
+            //   (a) schema-validation-rejected by the AI SDK (wrong field names) — execute() never ran
+            //   (b) the model called other tools instead
+            // Either way, count the attempt. Once retryCount is exhausted, inject a corrective
+            // synthetic nudge that repeats the required field names and exit. This breaks the
+            // infinite loop where the model repeatedly guesses incorrect schema fields (the
+            // "summary/key_findings" vs "module/mechanism/keyFiles" problem observed in production).
+            if (format.type === "json_schema" && handle.message.finish === "tool-calls") {
+              const retryMax = format.retryCount ?? 2
+              structuredFailedAttempts++
+              if (structuredFailedAttempts >= retryMax) {
+                const fields = extractSchemaTopLevelFields(format.schema)
+                const fieldList = fields.length > 0 ? fields.join(", ") : "(see schema)"
+                handle.message.error = new SessionV1.StructuredOutputError({
+                  message: `StructuredOutput schema validation failed after ${structuredFailedAttempts} attempt(s). Required fields: ${fieldList}`,
+                  retries: structuredFailedAttempts,
+                }).toObject()
+                yield* sessions.updateMessage(handle.message)
+                yield* slog.warn("structured-output retry cap reached", {
+                  attempts: structuredFailedAttempts,
+                  retryMax,
+                  fields: fieldList,
+                })
+                return "break" as const
+              }
+              // Inject a corrective hint before the next attempt so the model sees the exact
+              // field names inline in the conversation rather than only in the tool definition.
+              const fields = extractSchemaTopLevelFields(format.schema)
+              if (fields.length > 0) {
+                yield* sessions.updatePart({
+                  id: PartID.ascending(),
+                  messageID: handle.message.id,
+                  sessionID,
+                  type: "text",
+                  text: `[structured-output correction] Your StructuredOutput call did not match the required schema. Required top-level fields: ${fields.join(", ")}. Please call StructuredOutput again using EXACTLY these field names.`,
+                  synthetic: true,
+                } satisfies SessionV1.TextPart)
               }
             }
 
@@ -2959,6 +3026,9 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value)
 
 /** @internal Exported for testing */
+/** @internal Exported for testing */
+export { buildStructuredOutputSystemPrompt, extractSchemaTopLevelFields }
+
 export function createStructuredOutputTool(input: {
   schema: Record<string, any>
   onSuccess: (output: unknown) => void
