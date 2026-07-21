@@ -9,7 +9,7 @@ import { Font } from "@deepagent-code/ui/font"
 import { Splash } from "@deepagent-code/ui/logo"
 import { ThemeProvider } from "@deepagent-code/ui/theme/context"
 import { MetaProvider } from "@solidjs/meta"
-import { type BaseRouterProps, Navigate, Route, Router, useLocation, useNavigate } from "@solidjs/router"
+import { type BaseRouterProps, Navigate, Route, Router } from "@solidjs/router"
 import { QueryClient, QueryClientProvider } from "@tanstack/solid-query"
 import { Effect } from "effect"
 import {
@@ -33,7 +33,7 @@ import { DebugProvider } from "@/context/debug"
 import { FileProvider } from "@/context/file"
 import { GatewayProvider } from "@/context/gateway"
 import { ServerSDKProvider } from "@/context/server-sdk"
-import { ServerSyncProvider, useServerSync } from "@/context/server-sync"
+import { ServerSyncProvider } from "@/context/server-sync"
 import { GlobalProvider } from "@/context/global"
 import { HighlightsProvider } from "@/context/highlights"
 import { LanguageProvider, type Locale, useLanguage } from "@/context/language"
@@ -45,8 +45,7 @@ import { PromptProvider } from "@/context/prompt"
 import { ServerConnection, ServerProvider, serverName, useServer } from "@/context/server"
 import { SettingsProvider } from "@/context/settings"
 import { TerminalProvider } from "@/context/terminal"
-import { TabsProvider, tabHref, useTabs } from "@/context/tabs"
-import { base64Encode } from "@deepagent-code/core/util/encode"
+import { TabsProvider } from "@/context/tabs"
 import { WslServersProvider } from "@/wsl/context"
 import DirectoryLayout from "@/pages/directory-layout"
 import Layout from "@/pages/layout"
@@ -144,37 +143,6 @@ function SessionProviders(props: ParentProps) {
 }
 
 function RouterRoot(props: ParentProps<{ appChildren?: JSX.Element }>) {
-  const tabs = useTabs()
-  const navigate = useNavigate()
-  const location = useLocation()
-  const sync = useServerSync()
-
-  // Preload the Session component as soon as tabs are ready — triggers the lazy dynamic
-  // import during the bootstrap wait so module loading overlaps with network requests.
-  createEffect(() => {
-    if (!tabs.ready()) return
-    Session.preload?.()
-  })
-
-  // On startup: when at "/" (Home) and sync is ready, navigate directly to the most
-  // recently updated project. If there's a persisted tab for that project, navigate
-  // straight to the session (with ID) so the conversation is visible immediately.
-  // Waiting for sync.ready ensures the server is responsive before we trigger file listing.
-  createEffect(() => {
-    if (!tabs.ready()) return
-    if (location.pathname !== "/") return
-    if (!sync.ready) return
-    const sorted = sync.data.project
-      .slice()
-      .sort((a, b) => (b.time.updated ?? b.time.created) - (a.time.updated ?? a.time.created))
-    const first = sorted[0]
-    if (!first) return
-    const firstDirBase64 = base64Encode(first.worktree)
-    // Prefer a persisted tab for this project so we land on the last-used session.
-    const tab = tabs.store.find((t) => t.dirBase64 === firstDirBase64)
-    navigate(tab ? tabHref(tab) : `/${firstDirBase64}/session`, { replace: true })
-  })
-
   return (
     <AppShellProviders>
       {/*<Suspense fallback={<Loading />}>*/}
