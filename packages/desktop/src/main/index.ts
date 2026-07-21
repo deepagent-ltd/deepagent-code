@@ -349,7 +349,7 @@ const main = Effect.gen(function* () {
     // to the renderer. Listener-ready ≠ API-ready; delivering credentials too early
     // causes the renderer to race against an uninitialized sidecar, which can result
     // in failed bootstrap requests and a "local server disconnected" splash.
-    // Timeout is 15 s (down from the old 30 s) — enough for any healthy startup.
+    // Timeout is 15 s (down from the old 30 s). On failure we log and continue.
     yield* Effect.promise(() => health.wait).pipe(
       Effect.timeout("15 seconds"),
       Effect.tapError((e) =>
@@ -357,7 +357,7 @@ const main = Effect.gen(function* () {
           logger.error("sidecar health check failed", e.toString())
         }),
       ),
-      Effect.orElse(() => Effect.void),
+      Effect.ignore,
     )
 
     yield* Deferred.succeed(serverReady, {
