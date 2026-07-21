@@ -1,4 +1,4 @@
-import { For, Match, Show, Switch, createEffect, createMemo, createResource, createSignal, type ComponentProps, type JSX } from "solid-js"
+import { For, Match, Show, Switch, createEffect, createMemo, createSignal, type ComponentProps, type JSX } from "solid-js"
 import { createMediaQuery } from "@solid-primitives/media"
 import { Tabs } from "@deepagent-code/ui/tabs"
 import { IconButton } from "@deepagent-code/ui/icon-button"
@@ -16,9 +16,7 @@ import { useDebug } from "@/context/debug"
 import { useFile, type SelectedLineRange } from "@/context/file"
 import { useLanguage } from "@/context/language"
 import { useLayout } from "@/context/layout"
-import { useSDK } from "@/context/sdk"
 import { useSync } from "@/context/sync"
-import { fetchCapabilities } from "@/components/deepagent/panel-goal.api"
 import { createOpenSessionFileTab, createSessionTabs, type Sizing } from "@/pages/session/helpers"
 import { IdeFileEditor } from "@/pages/session/ide-file-editor"
 import { setSessionHandoff } from "@/pages/session/handoff"
@@ -29,7 +27,6 @@ import { SidePanelWorktree } from "@/pages/session/side-panel-worktree"
 import { SidePanelDebug } from "@/pages/session/side-panel-debug"
 import { SidePanelProfile } from "@/pages/session/side-panel-profile"
 import { SidePanelIM } from "@/pages/session/side-panel-im"
-import { SidePanelOversight } from "@/pages/session/side-panel-oversight"
 import { SidePanelDockHeader, SidePanelTerminal, SidePanelDebugConsole } from "@/pages/session/side-panel-terminal"
 import { ProblemsPanel } from "@/pages/session/problems-panel"
 
@@ -44,7 +41,6 @@ type PanelMode =
   | "files"
   | "subagents"
   | "im"
-  | "oversight"
   | "browser"
   | "worktree"
   | "mcp"
@@ -70,8 +66,6 @@ type PanelDef = {
   readonly bucket: RightPanelWidthBucket
   // Keybind command id (rendered on the rail tooltip), if any.
   readonly keybind?: string
-  // Gate the entry on a server capability (T1.1). Absent ⇒ always shown.
-  readonly capability?: "oversight"
 }
 
 // Order = rail order. Groups are contiguous so the rail can draw a divider between them.
@@ -79,10 +73,9 @@ const PANELS: readonly PanelDef[] = [
   // Code
   { mode: "review", icon: "review", titleKey: "session.tab.review", group: "code", bucket: "wide", keybind: "review.toggle" },
   { mode: "files", icon: "file-tree", titleKey: "settings.general.row.showFileTree.title", group: "code", bucket: "wide", keybind: "fileTree.toggle" },
-  // Agents
+  // Agents — subagents is now the unified "子Agent监督" entry (Phase 2: oversight merged in).
   { mode: "subagents", icon: "agent-tree", titleKey: "session.subagents.title", group: "agents", bucket: "narrow" },
   { mode: "im", icon: "bubble-5", titleKey: "session.tab.im", group: "agents", bucket: "narrow" },
-  { mode: "oversight", icon: "oversight", titleKey: "session.panel.oversight", group: "agents", bucket: "narrow", capability: "oversight" },
   // Env
   { mode: "browser", icon: "window-cursor", titleKey: "browser.title", group: "env", bucket: "narrow" },
   { mode: "worktree", icon: "branch", titleKey: "worktree.title", group: "env", bucket: "narrow" },
@@ -123,39 +116,14 @@ export function SessionSidePanel(props: {
   const language = useLanguage()
   const command = useCommand()
   const sync = useSync()
-  const sdk = useSDK()
   const { params, sessionKey, tabs, view } = useSessionLayout()
 
   const isDesktop = createMediaQuery("(min-width: 768px)")
 
-  // T1.1 — gate flag-off panel entries on the server's advertised capabilities so an entry never opens
-  // a permanently-empty dead-end. The Oversight Approval Queue's producers live behind
-  // v4MultiAgentRuntime (default OFF); when it is off the queue can never be fed, so we hide the icon
-  // rather than let a user open an empty panel with no way to populate it. Tolerant of an older server
-  // (fetch fails ⇒ all V4 flags treated OFF ⇒ entry hidden).
-  const [capabilities] = createResource(() =>
-    fetchCapabilities(sdk.client as unknown as Parameters<typeof fetchCapabilities>[0]).catch(() => null),
-  )
-  const oversightEnabled = () => capabilities()?.v4MultiAgentRuntime ?? false
-
-  // T3.3 rail badge: the count of PENDING Approval-Queue items, so a supervisor sees a number on the
-  // Oversight icon without opening the panel. Only fetched when the capability is on (else the route
-  // fails-closed); best-effort — a failure just yields 0 (no badge).
-  const [oversightApprovals] = createResource(oversightEnabled, async (enabled) => {
-    if (!enabled) return 0
-    try {
-      const { fetchOversightApprovals } = await import("@/components/deepagent/oversight.api")
-      const items = await fetchOversightApprovals(sdk.client as unknown as Parameters<typeof fetchOversightApprovals>[0])
-      return items.length
-    } catch {
-      return 0
-    }
-  })
-  const oversightPendingCount = () => oversightApprovals() ?? 0
-
   // Subagents = child sessions (parentID === current). Surface a live count on the sidebar icon so
-  // the user sees a spawn happened without opening the panel; the running count (session_working)
-  // drives a pulsing badge, matching the running dot inside the panel list.
+  // the user sees a spawn happened without opening the panel.
+  // Phase 2 (§3.5): badge covers running + interrupted so the user notices any subagent that needs
+  // attention without opening the panel.
   const subagentChildren = createMemo(() => {
     const id = params.id
     if (!id) return []
@@ -163,6 +131,16 @@ export function SessionSidePanel(props: {
   })
   const runningSubagentCount = createMemo(
     () => subagentChildren().filter((s) => sync.data.session_working(s.id)).length,
+  )
+  const interruptedSubagentCount = createMemo(
+    () =>
+      subagentChildren().filter((s) => {
+        const sub = (s.metadata?.["deepagent"] as { subagent?: { interrupted?: boolean } } | undefined)?.subagent
+        return sub?.interrupted === true
+      }).length,
+  )
+  const subagentAttentionCount = createMemo(
+    () => runningSubagentCount() + interruptedSubagentCount(),
   )
 
   // T3.1: the active panel mode (desktop only), derived once from the layout store instead of one memo
@@ -321,17 +299,17 @@ export function SessionSidePanel(props: {
   // stays visible, so the user re-opens with one click.
   const closePanel = () => view().rightPanel.close()
 
-  // T3.1/T3.3: the rail entries, derived from PANELS — capability-gated (T1.1), with a live badge count
-  // per panel. review-change-count / running-subagent-count / oversight-pending feed `item.badge`; the
-  // rail renders whatever number is present.
+  // T3.1/T3.3: the rail entries, derived from PANELS — with a live badge count per panel.
+  // review-change-count / subagent-attention-count feed `item.badge`; the rail renders whatever
+  // number is present.
+  // Phase 2: subagent badge = running + interrupted (§3.5 — covers all states needing attention).
   const badgeFor = (mode: PanelMode): number | undefined => {
     if (mode === "review") return props.hasReview() ? props.reviewCount() : undefined
-    if (mode === "subagents") return runningSubagentCount() > 0 ? runningSubagentCount() : undefined
-    if (mode === "oversight") return oversightPendingCount() > 0 ? oversightPendingCount() : undefined
+    if (mode === "subagents") return subagentAttentionCount() > 0 ? subagentAttentionCount() : undefined
     return undefined
   }
   const railItems = createMemo(() =>
-    PANELS.filter((p) => (p.capability === "oversight" ? oversightEnabled() : true))
+    PANELS
       // Dock panels (terminal / debug-console) only appear in the rail when docked to the side; when
       // in the bottom dock they're reached there instead.
       .filter((p) => (DOCK_PANEL_MODES.includes(p.mode as DockPanelID) ? view().panel.location(p.mode as DockPanelID) === "side" : true))
@@ -580,9 +558,6 @@ export function SessionSidePanel(props: {
               </Match>
               <Match when={isActive("im")}>
                 <SidePanelIM onClose={closePanel} />
-              </Match>
-              <Match when={isActive("oversight")}>
-                <SidePanelOversight onClose={closePanel} />
               </Match>
               <Match when={isActive("terminal")}>
                 <SidePanelTerminal onClose={() => view().panel.toggle("terminal")} />

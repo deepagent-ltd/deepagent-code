@@ -105,6 +105,8 @@ type SessionView = {
   // U3/U4/U7: added "worktree" (isolated worktree diff/merge), "subagents" (child-session list),
   // "browser" (isolated WebContentsView).
   // T3.2: the "menu" mode is gone — an always-on icon rail replaced the full-panel menu list.
+  // Phase 2: "oversight" removed as standalone panel; kept in union only for backward-compat
+  // migration — any stored "oversight" is silently mapped to "subagents" at read time.
   rightPanelMode?:
     | "review"
     | "files"
@@ -905,7 +907,13 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
         const key = createSessionKeyReader(sessionKey, ensureKey)
         const s = createMemo(() => store.sessionView[key()] ?? { scroll: {} })
         const reviewPanelOpened = createMemo(() => store.review?.panelOpened ?? true)
-        const rightPanelMode = createMemo(() => store.sessionView[key()]?.rightPanelMode)
+        const rightPanelMode = createMemo(() => {
+          const mode = store.sessionView[key()]?.rightPanelMode
+          // Phase 2 backward-compat: "oversight" was merged into "subagents". Any session that
+          // persisted "oversight" should silently open the unified subagents panel instead.
+          if (mode === "oversight") return "subagents" as SessionRightPanelMode
+          return mode
+        })
         const bottomPanel = createMemo(() => {
           const current = store.sessionView[key()]
           // One-way compatibility migration from the pre-panel global terminal flag.
