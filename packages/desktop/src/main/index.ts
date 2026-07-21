@@ -345,23 +345,26 @@ const main = Effect.gen(function* () {
       void wslServers.initialize().catch((error) => logger.error("wsl server initialization failed", error))
     }
 
-    yield* Deferred.succeed(serverReady, {
-      url,
-      username: "deepagent-code",
-      password,
-    })
-
-    // Health check runs in background — failure only logs, does not block renderer
+    // Wait for the sidecar to be ready for API requests before delivering credentials
+    // to the renderer. Listener-ready ≠ API-ready; delivering credentials too early
+    // causes the renderer to race against an uninitialized sidecar, which can result
+    // in failed bootstrap requests and a "local server disconnected" splash.
+    // Timeout is 15 s (down from the old 30 s) — enough for any healthy startup.
     yield* Effect.promise(() => health.wait).pipe(
-      Effect.timeout("30 seconds"),
+      Effect.timeout("15 seconds"),
       Effect.tapError((e) =>
         Effect.sync(() => {
           logger.error("sidecar health check failed", e.toString())
         }),
       ),
-      Effect.ignore,
-      Effect.forkDetach,
+      Effect.orElse(() => Effect.void),
     )
+
+    yield* Deferred.succeed(serverReady, {
+      url,
+      username: "deepagent-code",
+      password,
+    })
 
     logger.log("loading task finished")
   }).pipe(forwardInitializationFailure(serverReady), Effect.forkChild)
