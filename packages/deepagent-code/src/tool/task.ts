@@ -174,7 +174,7 @@ interface AttemptBundle {
   readonly worktree: Worktree.Interface | undefined
   readonly nextSession: Session.Info
   readonly metadata: AttemptMetadata
-  readonly markFinished: (state: "completed" | "error" | "cancelled") => Effect.Effect<void, unknown>
+  readonly markFinished: (state: "completed" | "error" | "cancelled" | "interrupted", reason?: "human" | "parent_interrupted" | "timeout" | "takeover" | "runtime_error") => Effect.Effect<void, unknown>
   readonly inject: (state: "completed" | "error", text: string, takeovers: number) => Effect.Effect<unknown, unknown>
   readonly mergeWorktree: () => Effect.Effect<void, unknown>
   readonly teardownWorktree: (force: boolean) => Effect.Effect<unknown, unknown>
@@ -391,7 +391,8 @@ export const TaskTool = Tool.define(
           })
 
           const markFinished = Effect.fn("TaskTool.markSubagentFinished")(function* (
-            state: "completed" | "error" | "cancelled",
+            state: "completed" | "error" | "cancelled" | "interrupted",
+            reason?: "human" | "parent_interrupted" | "timeout" | "takeover" | "runtime_error",
           ) {
             const current = yield* sessions.get(a.nextSession.id).pipe(Effect.orDie)
             yield* sessions
@@ -401,7 +402,9 @@ export const TaskTool = Tool.define(
                   ...(current.metadata ?? {}),
                   deepagent: {
                     ...((current.metadata?.["deepagent"] as Record<string, unknown> | undefined) ?? {}),
-                    subagent: { finished: true, state, at: Date.now() },
+                    // §4.3 SubagentRunMetadata: state is the durable authority for terminal state.
+                    // Compat: old data using `finished: true` with state is still readable unchanged.
+                    subagent: { finished: true, state, at: Date.now(), ...(reason ? { reason } : {}) },
                   },
                 },
               })
@@ -616,9 +619,18 @@ export const TaskTool = Tool.define(
               }
             }
             if (outcome.kind === "cancelled") {
-              yield* b.markFinished("cancelled")
+              // §4.3/4.6: "cancelled" from the abort signal means human interrupted the task.
+              // Write "interrupted" (not "cancelled") so parent agent and supervision UI can
+              // distinguish voluntary human stop with preserved work from a runtime failure.
+              // Do NOT force-remove the worktree — partial work may be worth recovering.
+              yield* b.markFinished("interrupted", "human")
               yield* b.teardownWorktree(false)
-              return yield* Effect.fail(new Error("Task cancelled"))
+              return yield* Effect.fail(
+                new Error(
+                  `Task interrupted by the user. Partial work is preserved in subagent session ${b.nextSession.id}. ` +
+                    `Call task_read({ task_id: "${b.nextSession.id}" }) before retrying or duplicating the task.`,
+                ),
+              )
             }
             if (takeovers >= takeoverLimit) {
               yield* background.cancel(b.nextSession.id).pipe(Effect.ignore)
@@ -890,7 +902,11 @@ export const TaskTool = Tool.define(
           if (msgError && SessionV1.StructuredOutputError.isInstance(msgError)) {
             return yield* Effect.fail(
               new Error(
-                `StructuredOutput failed (${msgError.data.retries} attempt(s)): ${msgError.data.message}`,
+                // U1: include the child session ID so the parent agent can recover partial work via
+                // task_read({ task_id: nextSession.id }) before retrying or duplicating the task.
+                `StructuredOutput failed (${msgError.data.retries} attempt(s)): ${msgError.data.message}. ` +
+                  `Partial research is preserved in subagent session ${nextSession.id}. ` +
+                  `Call task_read({ task_id: "${nextSession.id}" }) to recover completed work before retrying.`,
               ),
             )
           }
@@ -938,7 +954,8 @@ export const TaskTool = Tool.define(
       // only flips the UI to "已完成" and disables the composer; it touches no message/part data.
       // Read-merge because setMetadata replaces the whole metadata object.
       const markFinished = Effect.fn("TaskTool.markSubagentFinished")(function* (
-        state: "completed" | "error" | "cancelled",
+        state: "completed" | "error" | "cancelled" | "interrupted",
+        reason?: "human" | "parent_interrupted" | "timeout" | "takeover" | "runtime_error",
       ) {
         // Resume (`params.task_id`) reuses an existing session; a fresh finish marker is still correct
         // (the reused session just completed another turn), so no special-casing is needed.
@@ -950,7 +967,8 @@ export const TaskTool = Tool.define(
               ...(current.metadata ?? {}),
               deepagent: {
                 ...((current.metadata?.["deepagent"] as Record<string, unknown> | undefined) ?? {}),
-                subagent: { finished: true, state, at: Date.now() },
+                // §4.3: state is the durable terminal-state authority; reason narrows the cause.
+                subagent: { finished: true, state, at: Date.now(), ...(reason ? { reason } : {}) },
               },
             },
           })
@@ -1051,8 +1069,13 @@ export const TaskTool = Tool.define(
               return yield* Effect.fail(new Error(result.error ?? "Task failed"))
             }
             if (result?.status === "cancelled") {
-              yield* markFinished("cancelled")
-              return yield* Effect.fail(new Error("Task cancelled"))
+              yield* markFinished("interrupted", "human")
+              return yield* Effect.fail(
+                new Error(
+                  `Task interrupted by the user. Partial work is preserved in subagent session ${nextSession.id}. ` +
+                    `Call task_read({ task_id: "${nextSession.id}" }) before retrying or duplicating the task.`,
+                ),
+              )
             }
             yield* markFinished("completed")
             return {
