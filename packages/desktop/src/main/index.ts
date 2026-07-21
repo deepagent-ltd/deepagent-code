@@ -345,6 +345,13 @@ const main = Effect.gen(function* () {
       void wslServers.initialize().catch((error) => logger.error("wsl server initialization failed", error))
     }
 
+    yield* Deferred.succeed(serverReady, {
+      url,
+      username: "deepagent-code",
+      password,
+    })
+
+    // Health check runs in background — failure only logs, does not block renderer
     yield* Effect.promise(() => health.wait).pipe(
       Effect.timeout("30 seconds"),
       Effect.tapError((e) =>
@@ -352,13 +359,9 @@ const main = Effect.gen(function* () {
           logger.error("sidecar health check failed", e.toString())
         }),
       ),
+      Effect.ignore,
+      Effect.forkDetach,
     )
-
-    yield* Deferred.succeed(serverReady, {
-      url,
-      username: "deepagent-code",
-      password,
-    })
 
     logger.log("loading task finished")
   }).pipe(forwardInitializationFailure(serverReady), Effect.forkChild)
