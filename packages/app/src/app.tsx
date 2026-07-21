@@ -9,7 +9,7 @@ import { Font } from "@deepagent-code/ui/font"
 import { Splash } from "@deepagent-code/ui/logo"
 import { ThemeProvider } from "@deepagent-code/ui/theme/context"
 import { MetaProvider } from "@solidjs/meta"
-import { type BaseRouterProps, Navigate, Route, Router } from "@solidjs/router"
+import { type BaseRouterProps, Navigate, Route, Router, useLocation, useNavigate } from "@solidjs/router"
 import { QueryClient, QueryClientProvider } from "@tanstack/solid-query"
 import { Effect } from "effect"
 import {
@@ -33,7 +33,7 @@ import { DebugProvider } from "@/context/debug"
 import { FileProvider } from "@/context/file"
 import { GatewayProvider } from "@/context/gateway"
 import { ServerSDKProvider } from "@/context/server-sdk"
-import { ServerSyncProvider } from "@/context/server-sync"
+import { ServerSyncProvider, useServerSync } from "@/context/server-sync"
 import { GlobalProvider } from "@/context/global"
 import { HighlightsProvider } from "@/context/highlights"
 import { LanguageProvider, type Locale, useLanguage } from "@/context/language"
@@ -45,7 +45,8 @@ import { PromptProvider } from "@/context/prompt"
 import { ServerConnection, ServerProvider, serverName, useServer } from "@/context/server"
 import { SettingsProvider } from "@/context/settings"
 import { TerminalProvider } from "@/context/terminal"
-import { TabsProvider } from "@/context/tabs"
+import { TabsProvider, useTabs } from "@/context/tabs"
+import { base64Encode } from "@deepagent-code/core/util/encode"
 import { WslServersProvider } from "@/wsl/context"
 import DirectoryLayout from "@/pages/directory-layout"
 import Layout from "@/pages/layout"
@@ -143,6 +144,27 @@ function SessionProviders(props: ParentProps) {
 }
 
 function RouterRoot(props: ParentProps<{ appChildren?: JSX.Element }>) {
+  const tabs = useTabs()
+  const navigate = useNavigate()
+  const location = useLocation()
+  const sync = useServerSync()
+
+  // On startup: navigate to the most recently updated project's session LIST (/:dir/session,
+  // no specific session ID). This gets the user to the session list immediately so the right
+  // panel shows content, without conflicting with autoselecting which handles the final
+  // session selection in the background. RouterRoot only fires once (when at "/").
+  createEffect(() => {
+    if (!tabs.ready()) return
+    if (location.pathname !== "/") return
+    if (!sync.ready) return
+    const sorted = sync.data.project
+      .slice()
+      .sort((a, b) => (b.time.updated ?? b.time.created) - (a.time.updated ?? a.time.created))
+    const first = sorted[0]
+    if (!first) return
+    navigate(`/${base64Encode(first.worktree)}/session`, { replace: true })
+  })
+
   return (
     <AppShellProviders>
       {/*<Suspense fallback={<Loading />}>*/}
