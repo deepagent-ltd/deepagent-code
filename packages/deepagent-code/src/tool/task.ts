@@ -882,6 +882,18 @@ export const TaskTool = Tool.define(
         if (resolvedOutputSchema) {
           const structured = result.info.role === "assistant" ? result.info.structured : undefined
           if (structured !== undefined) return JSON.stringify(structured)
+          // B3 fix: when the retry cap fired, the assistant message carries a StructuredOutputError.
+          // Silently returning "" here would make the parent agent see an empty success result and
+          // lose all signal that the subagent failed to produce structured output. Surface the error
+          // explicitly so the task tool's error path propagates it correctly to the parent.
+          const msgError = result.info.role === "assistant" ? result.info.error : undefined
+          if (msgError && SessionV1.StructuredOutputError.isInstance(msgError)) {
+            return yield* Effect.fail(
+              new Error(
+                `StructuredOutput failed (${msgError.data.retries} attempt(s)): ${msgError.data.message}`,
+              ),
+            )
+          }
         }
         return result.parts.findLast((item) => item.type === "text")?.text ?? ""
       })

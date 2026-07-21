@@ -2486,44 +2486,59 @@ export const layer = Layer.effect(
               }
             }
 
-            // P0: StructuredOutput retry-cap. When the model made tool-calls (finish === "tool-calls")
-            // but structured is still undefined, it means the StructuredOutput call was either:
-            //   (a) schema-validation-rejected by the AI SDK (wrong field names) — execute() never ran
-            //   (b) the model called other tools instead
-            // Either way, count the attempt. Once retryCount is exhausted, inject a corrective
-            // synthetic nudge that repeats the required field names and exit. This breaks the
-            // infinite loop where the model repeatedly guesses incorrect schema fields (the
-            // "summary/key_findings" vs "module/mechanism/keyFiles" problem observed in production).
+            // P0: StructuredOutput retry-cap. Only fires when:
+            //   1. format is json_schema (structured-output mode)
+            //   2. the model made tool-calls (finish === "tool-calls")
+            //   3. structured is still undefined (StructuredOutput was NOT successfully captured)
+            //   4. the current turn's parts actually contain a StructuredOutput call
+            //      (B1 fix: filter to ONLY StructuredOutput failures, not any tool call)
+            //
+            // When the model called StructuredOutput but AI SDK schema-validation rejected the
+            // arguments (wrong field names like "summary" instead of "module"), execute() never
+            // runs, onSuccess never fires, and structured stays undefined — causing an infinite
+            // loop. The retry-cap truncates this loop.
             if (format.type === "json_schema" && handle.message.finish === "tool-calls") {
-              const retryMax = format.retryCount ?? 2
-              structuredFailedAttempts++
-              if (structuredFailedAttempts >= retryMax) {
+              // Re-read the latest message parts to detect if StructuredOutput was attempted
+              // this step. We check the CURRENT assistant message's parts (by handle.message.id).
+              const latestMsgs = yield* MessageV2.filterCompactedEffect(sessionID).pipe(
+                Effect.provideService(Database.Service, database),
+              )
+              const currentAssistantMsg = latestMsgs.findLast(
+                (m) => m.info.role === "assistant" && m.info.id === handle.message.id,
+              )
+              const hadStructuredOutputCall = currentAssistantMsg?.parts.some(
+                (p) => p.type === "tool" && p.tool === "StructuredOutput",
+              ) ?? false
+
+              if (hadStructuredOutputCall) {
+                const retryMax = format.retryCount ?? 2
+                structuredFailedAttempts++
                 const fields = extractSchemaTopLevelFields(format.schema)
                 const fieldList = fields.length > 0 ? fields.join(", ") : "(see schema)"
-                handle.message.error = new SessionV1.StructuredOutputError({
-                  message: `StructuredOutput schema validation failed after ${structuredFailedAttempts} attempt(s). Required fields: ${fieldList}`,
-                  retries: structuredFailedAttempts,
-                }).toObject()
-                yield* sessions.updateMessage(handle.message)
-                yield* slog.warn("structured-output retry cap reached", {
-                  attempts: structuredFailedAttempts,
-                  retryMax,
-                  fields: fieldList,
-                })
-                return "break" as const
-              }
-              // Inject a corrective hint before the next attempt so the model sees the exact
-              // field names inline in the conversation rather than only in the tool definition.
-              const fields = extractSchemaTopLevelFields(format.schema)
-              if (fields.length > 0) {
-                yield* sessions.updatePart({
-                  id: PartID.ascending(),
-                  messageID: handle.message.id,
-                  sessionID,
-                  type: "text",
-                  text: `[structured-output correction] Your StructuredOutput call did not match the required schema. Required top-level fields: ${fields.join(", ")}. Please call StructuredOutput again using EXACTLY these field names.`,
-                  synthetic: true,
-                } satisfies SessionV1.TextPart)
+                if (structuredFailedAttempts >= retryMax) {
+                  handle.message.error = new SessionV1.StructuredOutputError({
+                    message: `StructuredOutput schema validation failed after ${structuredFailedAttempts} attempt(s). Required fields: ${fieldList}`,
+                    retries: structuredFailedAttempts,
+                  }).toObject()
+                  yield* sessions.updateMessage(handle.message)
+                  yield* slog.warn("structured-output retry cap reached", {
+                    attempts: structuredFailedAttempts,
+                    retryMax,
+                    fields: fieldList,
+                  })
+                  return "break" as const
+                }
+                // B2 fix: inject via injectTailReminder (user-side synthetic message) so the
+                // correction text appears as a user instruction in the next model context —
+                // not as assistant output (which the model treats with lower compliance).
+                if (fields.length > 0) {
+                  yield* injectTailReminder(
+                    sessionID,
+                    `[structured-output correction] Your StructuredOutput call did not match the required schema. Required top-level fields: ${fieldList}. Please call StructuredOutput again using EXACTLY these field names.`,
+                    lastUser.model,
+                    lastUser.agent,
+                  )
+                }
               }
             }
 
