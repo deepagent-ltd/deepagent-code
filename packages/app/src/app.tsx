@@ -149,11 +149,17 @@ function RouterRoot(props: ParentProps<{ appChildren?: JSX.Element }>) {
   const location = useLocation()
   const sync = useServerSync()
 
-  // On startup: when at "/" (Home), navigate to the first project in the left sidebar
-  // (most recently updated project). Waits for sync.ready so we only navigate after the
-  // server is confirmed responsive — this prevents the "列出文件失败" race condition
-  // that occurred when Phase 4 delivered credentials before the health check, causing
-  // immediate file-listing requests before the sidecar was fully initialized.
+  // Preload the Session component as soon as tabs are ready — triggers the lazy dynamic
+  // import during the bootstrap wait so module loading overlaps with network requests.
+  createEffect(() => {
+    if (!tabs.ready()) return
+    Session.preload?.()
+  })
+
+  // On startup: when at "/" (Home) and sync is ready, navigate directly to the most
+  // recently updated project. If there's a persisted tab for that project, navigate
+  // straight to the session (with ID) so the conversation is visible immediately.
+  // Waiting for sync.ready ensures the server is responsive before we trigger file listing.
   createEffect(() => {
     if (!tabs.ready()) return
     if (location.pathname !== "/") return
@@ -162,9 +168,11 @@ function RouterRoot(props: ParentProps<{ appChildren?: JSX.Element }>) {
       .slice()
       .sort((a, b) => (b.time.updated ?? b.time.created) - (a.time.updated ?? a.time.created))
     const first = sorted[0]
-    if (first) {
-      navigate(`/${base64Encode(first.worktree)}/session`, { replace: true })
-    }
+    if (!first) return
+    const firstDirBase64 = base64Encode(first.worktree)
+    // Prefer a persisted tab for this project so we land on the last-used session.
+    const tab = tabs.store.find((t) => t.dirBase64 === firstDirBase64)
+    navigate(tab ? tabHref(tab) : `/${firstDirBase64}/session`, { replace: true })
   })
 
   return (
