@@ -591,8 +591,16 @@ function anthropicOpus47OrLater(apiId: string) {
   return major > 4 || (major === 4 && minor >= 7)
 }
 
+// Matches "fable-5", "claude-fable-5", "claude-fable-5-20260720", etc.
+// Fable 5 supports the full adaptive thinking effort set (same as Opus 4.7+).
+function anthropicFable5OrLater(apiId: string) {
+  const m = /fable[._-]?(\d+)/i.exec(apiId)
+  return m !== null && Number(m[1]) >= 5
+}
+
 function anthropicAdaptiveEfforts(apiId: string): string[] | null {
-  if (anthropicOpus47OrLater(apiId)) {
+  // Opus 4.7+ and Fable 5+ support the full adaptive effort set including xhigh.
+  if (anthropicOpus47OrLater(apiId) || anthropicFable5OrLater(apiId)) {
     return ["low", "medium", "high", "xhigh", "max"]
   }
   if (
@@ -648,7 +656,9 @@ export function variants(model: Provider.Model): Record<string, Record<string, a
   if (!model.capabilities.reasoning) return {}
 
   const id = model.id.toLowerCase()
-  const adaptiveOpus = anthropicOpus47OrLater(model.api.id)
+  // `adaptiveOpus` gates the `display: "summarized"` inject. Opus 4.7+ flipped the API default
+  // for thinking-display to "omitted"; Fable 5+ follows the same convention.
+  const adaptiveOpus = anthropicOpus47OrLater(model.api.id) || anthropicFable5OrLater(model.api.id)
   const adaptiveEfforts = anthropicAdaptiveEfforts(model.api.id)
   if (glm52(model)) {
     if (model.api.npm === "@openrouter/ai-sdk-provider") {
@@ -827,12 +837,21 @@ export function variants(model: Provider.Model): Record<string, Record<string, a
     // https://v5.ai-sdk.dev/providers/ai-sdk-providers/deepinfra
     case "venice-ai-sdk-provider":
     // https://docs.venice.ai/overview/guides/reasoning-models#reasoning-effort
-    case "@ai-sdk/openai-compatible":
+    case "@ai-sdk/openai-compatible": {
+      // For GPT-5.x versioned models routed through an openai-compatible endpoint, respect their
+      // extended effort tiers (xhigh from v5.2+) — same resolution logic as @ai-sdk/gateway.
+      // All other models on this adapter fall back to the base low/medium/high set.
+      const apiId = model.api.id.toLowerCase()
+      if (GPT5_FAMILY_RE.test(apiId)) {
+        const openaiCompatEfforts = openaiCompatibleReasoningEfforts(apiId)
+        return Object.fromEntries(openaiCompatEfforts.map((effort) => [effort, { reasoningEffort: effort }]))
+      }
       const efforts = [...WIDELY_SUPPORTED_EFFORTS]
-      if (model.api.id.toLowerCase().includes("deepseek-v4")) {
+      if (apiId.includes("deepseek-v4")) {
         efforts.push("max")
       }
       return Object.fromEntries(efforts.map((effort) => [effort, { reasoningEffort: effort }]))
+    }
 
     case "@ai-sdk/azure":
       // https://v5.ai-sdk.dev/providers/ai-sdk-providers/azure

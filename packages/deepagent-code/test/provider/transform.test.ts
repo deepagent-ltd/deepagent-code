@@ -2528,6 +2528,37 @@ describe("ProviderTransform.variants", () => {
     })
   })
 
+  // Bug fix: gpt-5.x models on @ai-sdk/openai-compatible endpoints now get the extended
+  // effort set (xhigh from gpt-5.2+). Previously the adapter always returned low/medium/high.
+  test("openai-compatible gpt-5.6-sol returns xhigh reasoning effort", () => {
+    const model = createMockModel({
+      id: "cortecs/gpt-5.6-sol",
+      providerID: "cortecs",
+      api: {
+        id: "gpt-5.6-sol",
+        url: "https://api.cortecs.ai/v1",
+        npm: "@ai-sdk/openai-compatible",
+      },
+    })
+    const result = ProviderTransform.variants(model)
+    expect(Object.keys(result)).toEqual(["none", "low", "medium", "high", "xhigh"])
+    expect(result.xhigh).toEqual({ reasoningEffort: "xhigh" })
+  })
+
+  test("openai-compatible non-gpt5 model still gets only low/medium/high", () => {
+    const model = createMockModel({
+      id: "third-party/some-model",
+      providerID: "third-party",
+      api: {
+        id: "some-model",
+        url: "https://api.third-party.ai/v1",
+        npm: "@ai-sdk/openai-compatible",
+      },
+    })
+    const result = ProviderTransform.variants(model)
+    expect(Object.keys(result)).toEqual(["low", "medium", "high"])
+  })
+
   test("mistral models with reasoning support return variants", () => {
     const model = createMockModel({
       id: "mistral/mistral-small-latest",
@@ -3385,6 +3416,14 @@ describe("ProviderTransform.variants", () => {
       {
         name: "opus 4.8",
         apiIds: ["claude-opus-4-8", "claude-opus-4.8"],
+        efforts: ["low", "medium", "high", "xhigh", "max"],
+        expectedHigh: { thinking: { type: "adaptive", display: "summarized" }, effort: "high" },
+      },
+      {
+        // Bug fix: Fable 5 is a distinct Claude model family that supports the full adaptive
+        // effort set (including xhigh) with display: "summarized" (like Opus 4.7+).
+        name: "fable 5",
+        apiIds: ["claude-fable-5", "claude-fable-5-20260720"],
         efforts: ["low", "medium", "high", "xhigh", "max"],
         expectedHigh: { thinking: { type: "adaptive", display: "summarized" }, effort: "high" },
       },
