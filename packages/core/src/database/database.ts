@@ -29,7 +29,8 @@ export const layer = Layer.effect(
     yield* db.run("PRAGMA busy_timeout = 5000")
     yield* db.run("PRAGMA cache_size = -64000")
     yield* db.run("PRAGMA foreign_keys = ON")
-    yield* db.run("PRAGMA wal_checkpoint(PASSIVE)")
+    // wal_checkpoint removed from startup: it blocked the "ready" signal by 1-3 s
+    // on large databases. SQLite auto-checkpoints at wal_autocheckpoint = 1000 pages.
     yield* DatabaseMigration.apply(db)
 
     return { db }
