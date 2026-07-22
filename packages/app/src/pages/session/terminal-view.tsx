@@ -245,8 +245,8 @@ function LeafPane(props: { node: PaneLeaf }) {
           >
             <For each={ptys()}>
               {(pty) => (
-                <Show when={activeId() === pty.id}>
-                  <TerminalSessionView pty={pty} focused={focused()} />
+                <Show when={activeId() === pty.id && pty} keyed>
+                  {(activePty) => <TerminalSessionView pty={activePty} focused={focused()} />}
                 </Show>
               )}
             </For>
@@ -374,7 +374,9 @@ export function TerminalPanes() {
   const terminal = useTerminal()
   return (
     <div class="absolute inset-0 flex">
-      <PaneRenderer node={terminal.root()} />
+      <Show when={terminal.root()} keyed>
+        {(node) => <PaneRenderer node={node} />}
+      </Show>
     </div>
   )
 }
@@ -393,20 +395,7 @@ export function useTerminalLifecycle(opts: {
 }) {
   const terminal = useTerminal()
   const [autoCreated, setAutoCreated] = createSignal(false)
-
-  createEffect(() => {
-    if (!opts.active()) {
-      setAutoCreated(false)
-      return
-    }
-    if (terminal.all().length !== 0) {
-      setAutoCreated(false)
-      return
-    }
-    if (!terminal.ready() || terminal.creating() || terminal.createError() || autoCreated()) return
-    void terminal.new()
-    setAutoCreated(true)
-  })
+  const [closing, setClosing] = createSignal(false)
 
   createEffect(
     on(
@@ -414,10 +403,29 @@ export function useTerminalLifecycle(opts: {
       (request, previous) => {
         if (previous === undefined || request === previous) return
         if (!opts.active()) return
+        // pty.deleted clears the final tab before this effect runs. Mark the host as closing
+        // before hiding it so the empty-state effect cannot recreate a PTY during unmount.
+        setClosing(true)
         opts.close()
       },
     ),
   )
+
+  createEffect(() => {
+    if (!opts.active()) {
+      setAutoCreated(false)
+      setClosing(false)
+      return
+    }
+    if (closing()) return
+    if (terminal.all().length !== 0) {
+      setAutoCreated(false)
+      return
+    }
+    if (!terminal.ready() || terminal.creating() || terminal.createError() || autoCreated()) return
+    setAutoCreated(true)
+    void terminal.new()
+  })
 
   const focus = (id: string) => {
     focusTerminalById(id)

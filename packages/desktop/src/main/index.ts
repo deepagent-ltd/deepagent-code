@@ -345,13 +345,19 @@ const main = Effect.gen(function* () {
       void wslServers.initialize().catch((error) => logger.error("wsl server initialization failed", error))
     }
 
+    // Wait for the sidecar to be ready for API requests before delivering credentials
+    // to the renderer. Listener-ready ≠ API-ready; delivering credentials too early
+    // causes the renderer to race against an uninitialized sidecar, which can result
+    // in failed bootstrap requests and a "local server disconnected" splash.
+    // Timeout is 15 s (down from the old 30 s). On failure we log and continue.
     yield* Effect.promise(() => health.wait).pipe(
-      Effect.timeout("30 seconds"),
+      Effect.timeout("15 seconds"),
       Effect.tapError((e) =>
         Effect.sync(() => {
           logger.error("sidecar health check failed", e.toString())
         }),
       ),
+      Effect.ignore,
     )
 
     yield* Deferred.succeed(serverReady, {
