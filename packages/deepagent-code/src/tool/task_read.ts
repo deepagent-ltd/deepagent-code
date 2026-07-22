@@ -1,4 +1,5 @@
 import * as Tool from "./tool"
+import { MessageV2 } from "@/session/message-v2"
 import { Session } from "@/session/session"
 import { SessionV1 } from "@deepagent-code/core/v1/session"
 import { Effect, Schema } from "effect"
@@ -92,21 +93,15 @@ export const TaskReadTool = Tool.define(
         )
       }
 
-      // Read messages — Session.messages returns them oldest-first, we reverse for newest-first cursor.
-      const allMessages = yield* sessions
-        .messages({ sessionID: childSessionID, limit: MAX_LIMIT + 1 })
-        .pipe(Effect.catchCause(() => Effect.succeed([] as SessionV1.WithParts[])))
-
-      // Apply `before` cursor (message ID boundary for pagination).
-      const beforeID = params.before
-      const filteredMessages = beforeID
-        ? allMessages.filter((m) => m.info.id < beforeID)
-        : allMessages
-
-      // Take newest `limit` messages.
-      const page = filteredMessages.slice(-limit)
-      const hasMore = filteredMessages.length > limit
-      const nextCursor = page[0]?.info.id
+      // MessageV2.page applies the opaque cursor in storage and returns chronological items.
+      const result = yield* MessageV2.page({
+        sessionID: childSessionID,
+        limit,
+        before: params.before,
+      }).pipe(Effect.catchCause(() => Effect.succeed({ items: [] as SessionV1.WithParts[], more: false })))
+      const page = result.items
+      const hasMore = result.more
+      const nextCursor = result.cursor
 
       // Read durable state from metadata.
       const deepagent = child.metadata?.["deepagent"] as Record<string, unknown> | undefined

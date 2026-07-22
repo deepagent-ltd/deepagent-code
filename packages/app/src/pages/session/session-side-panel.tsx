@@ -22,7 +22,7 @@ import { createOpenSessionFileTab, createSessionTabs, type Sizing } from "@/page
 import { IdeFileEditor } from "@/pages/session/ide-file-editor"
 import { setSessionHandoff } from "@/pages/session/handoff"
 import { useSessionLayout } from "@/pages/session/session-layout"
-import { SidePanelSubagents } from "@/pages/session/side-panel-subagents"
+import { SidePanelSubagents, isSubagentInterrupted } from "@/pages/session/side-panel-subagents"
 import { SidePanelBrowser } from "@/pages/session/side-panel-browser"
 import { SidePanelWorktree } from "@/pages/session/side-panel-worktree"
 import { SidePanelDebug } from "@/pages/session/side-panel-debug"
@@ -135,11 +135,7 @@ export function SessionSidePanel(props: {
     () => subagentChildren().filter((s) => sync.data.session_working(s.id)).length,
   )
   const interruptedSubagentCount = createMemo(
-    () =>
-      subagentChildren().filter((s) => {
-        const sub = (s.metadata?.["deepagent"] as { subagent?: { interrupted?: boolean } } | undefined)?.subagent
-        return sub?.interrupted === true
-      }).length,
+    () => subagentChildren().filter(isSubagentInterrupted).length,
   )
   const subagentAttentionCount = createMemo(
     () => runningSubagentCount() + interruptedSubagentCount(),

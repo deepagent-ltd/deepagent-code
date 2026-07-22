@@ -23,6 +23,13 @@ import { OversightDashboard } from "@/components/deepagent/oversight-dashboard"
 // (scope+route SessionStateKey): that never equals a child's parentID, so the list was always
 // empty. Resolving it internally here (like SidePanelIM / SidePanelDebug do) keeps the contract
 // simple and immune to that mismatch.
+export function isSubagentInterrupted(child: { metadata?: Record<string, unknown> }): boolean {
+  const sub = (
+    child.metadata?.["deepagent"] as { subagent?: { state?: string; interrupted?: boolean } } | undefined
+  )?.subagent
+  return sub?.state === "interrupted" || sub?.interrupted === true
+}
+
 export const SidePanelSubagents: Component<{ onClose: () => void }> = (props) => {
   const sync = useSync()
   const language = useLanguage()
@@ -56,10 +63,7 @@ export const SidePanelSubagents: Component<{ onClose: () => void }> = (props) =>
     const sub = (child.metadata?.["deepagent"] as { subagent?: { finished?: boolean } } | undefined)?.subagent
     return sub?.finished === true
   }
-  const isInterrupted = (child: { metadata?: Record<string, unknown> }): boolean => {
-    const sub = (child.metadata?.["deepagent"] as { subagent?: { interrupted?: boolean } } | undefined)?.subagent
-    return sub?.interrupted === true
-  }
+  const isInterrupted = isSubagentInterrupted
   const statusOf = (
     child: { id: string; metadata?: Record<string, unknown> },
   ): "running" | "finished" | "interrupted" | "idle" => {
