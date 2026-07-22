@@ -2,6 +2,7 @@ import path from "path"
 import { Effect, Layer, Record, Result, Schema, Context } from "effect"
 import { NonNegativeInt } from "@deepagent-code/core/schema"
 import { Global } from "@deepagent-code/core/global"
+import { Flag } from "@deepagent-code/core/flag/flag"
 import { FSUtil } from "@deepagent-code/core/fs-util"
 
 export const OAUTH_DUMMY_KEY = "deepagent-code-oauth-dummy-key"
@@ -70,6 +71,13 @@ export const layer = Layer.effect(
     })
 
     const set = Effect.fn("Auth.set")(function* (key: string, info: Info) {
+      // Server Edition (§20.4): gateway-managed containers receive provider keys
+      // via env injection; persisting them to the workspace volume is forbidden.
+      if (Flag.DEEPAGENT_SERVER_MODE)
+        return yield* new AuthError({
+          message:
+            "Provider credentials are managed by the gateway in server mode; persisting auth.json is disabled (DEEPAGENT_SERVER_MODE)",
+        })
       const norm = key.replace(/\/+$/, "")
       const data = yield* all()
       if (norm !== key) delete data[key]
@@ -80,6 +88,11 @@ export const layer = Layer.effect(
     })
 
     const remove = Effect.fn("Auth.remove")(function* (key: string) {
+      if (Flag.DEEPAGENT_SERVER_MODE)
+        return yield* new AuthError({
+          message:
+            "Provider credentials are managed by the gateway in server mode; modifying auth.json is disabled (DEEPAGENT_SERVER_MODE)",
+        })
       const norm = key.replace(/\/+$/, "")
       const data = yield* all()
       delete data[key]
