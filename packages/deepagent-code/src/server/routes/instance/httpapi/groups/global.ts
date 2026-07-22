@@ -24,6 +24,9 @@ const GlobalHealth = Schema.Struct({
 const GlobalCapabilities = Schema.Struct({
   protocolVersion: Schema.String,
   version: Schema.String,
+  // deepagent-code commit the data plane was built from; only present when CI
+  // injected DEEPAGENT_CODE_COMMIT (workspace images), absent on local builds.
+  commit: Schema.optional(Schema.String),
   features: Schema.Struct({
     im: Schema.Boolean,
     sessions: Schema.Boolean,

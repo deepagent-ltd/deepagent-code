@@ -6,6 +6,7 @@ import { EventV2 } from "@deepagent-code/core/event"
 import { Installation } from "@/installation"
 import { disposeAllInstancesAndEmitGlobalDisposed, disposeInstancesForDirectories } from "@/server/global-lifecycle"
 import { InstallationVersion } from "@deepagent-code/core/installation/version"
+import { Flag } from "@deepagent-code/core/flag/flag"
 import { IM_PROTOCOL_VERSION } from "@deepagent-code/core/im/protocol"
 import * as Log from "@deepagent-code/core/util/log"
 import { Effect, Queue, Schema } from "effect"
@@ -91,6 +92,7 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
       return {
         protocolVersion: IM_PROTOCOL_VERSION,
         version: InstallationVersion,
+        commit: Flag.DEEPAGENT_CODE_COMMIT,
         features: {
           im: true,
           sessions: true,
