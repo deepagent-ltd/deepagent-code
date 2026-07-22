@@ -111,7 +111,24 @@ IMPORTANT:
 - Complete all necessary research and tool calls BEFORE calling this tool
 - This tool provides your final answer - no further actions are taken after calling it`
 
-const STRUCTURED_OUTPUT_SYSTEM_PROMPT = `IMPORTANT: The user has requested structured output. You MUST use the StructuredOutput tool to provide your final response. Do NOT respond with plain text - you MUST call the StructuredOutput tool with your answer formatted according to the schema.`
+// P1: Build a schema-aware system prompt that injects the required field names so the model
+// knows the exact schema even during extended-thinking (xhigh) reasoning, without relying
+// solely on the tool definition which may not be visible during the thinking phase.
+function buildStructuredOutputSystemPrompt(schema: Record<string, any>): string {
+  const fields = extractSchemaTopLevelFields(schema)
+  const fieldHint =
+    fields.length > 0
+      ? `\nThe StructuredOutput tool requires these top-level fields: ${fields.join(", ")}. Use ONLY these exact field names.`
+      : ""
+  return `IMPORTANT: The user has requested structured output. You MUST use the StructuredOutput tool to provide your final response. Do NOT respond with plain text - you MUST call the StructuredOutput tool with your answer formatted according to the schema.${fieldHint}`
+}
+
+function extractSchemaTopLevelFields(schema: Record<string, any>): string[] {
+  if (!schema || typeof schema !== "object") return []
+  const props = schema.properties
+  if (!props || typeof props !== "object") return []
+  return Object.keys(props)
+}
 
 const log = Log.create({ service: "session.prompt" })
 const elog = EffectLogger.create({ service: "session.prompt" })
@@ -2086,6 +2103,12 @@ export const layer = Layer.effect(
         const slog = elog.with({ sessionID })
         let structured: unknown
         let step = 0
+        // P0: count StructuredOutput tool-call attempts that did NOT produce a valid structured
+        // result (schema validation rejected the arguments). When this reaches the format's
+        // retryCount ceiling we inject a corrective hint and exit — preventing the infinite loop
+        // that occurs when the model repeatedly guesses wrong field names (e.g. "summary" instead
+        // of "module" for ResearchResult) and the AI SDK silently rejects them before execute().
+        let structuredFailedAttempts = 0
         const session = yield* sessions.get(sessionID).pipe(Effect.orDie)
 
         // V3.8 App-A C2.5 (Stage 5): the Conversation Log writer. Constructed ONCE per run so its
@@ -2427,7 +2450,10 @@ export const layer = Layer.effect(
             ])
             const system = [...env, ...instructions, ...(skills ? [skills] : [])]
             const format = lastUser.format ?? { type: "text" as const }
-            if (format.type === "json_schema") system.push(STRUCTURED_OUTPUT_SYSTEM_PROMPT)
+            // P1: inject schema-aware prompt so the model knows the exact field names even
+            // during extended-thinking (xhigh) reasoning where the tool definition may not
+            // be immediately visible when the model starts generating its thinking tokens.
+            if (format.type === "json_schema") system.push(buildStructuredOutputSystemPrompt(format.schema))
             const result = yield* handle.process({
               user: lastUser,
               agent,
@@ -2457,6 +2483,62 @@ export const layer = Layer.effect(
                 }).toObject()
                 yield* sessions.updateMessage(handle.message)
                 return "break" as const
+              }
+            }
+
+            // P0: StructuredOutput retry-cap. Only fires when:
+            //   1. format is json_schema (structured-output mode)
+            //   2. the model made tool-calls (finish === "tool-calls")
+            //   3. structured is still undefined (StructuredOutput was NOT successfully captured)
+            //   4. the current turn's parts actually contain a StructuredOutput call
+            //      (B1 fix: filter to ONLY StructuredOutput failures, not any tool call)
+            //
+            // When the model called StructuredOutput but AI SDK schema-validation rejected the
+            // arguments (wrong field names like "summary" instead of "module"), execute() never
+            // runs, onSuccess never fires, and structured stays undefined — causing an infinite
+            // loop. The retry-cap truncates this loop.
+            if (format.type === "json_schema" && handle.message.finish === "tool-calls") {
+              // Re-read the latest message parts to detect if StructuredOutput was attempted
+              // this step. We check the CURRENT assistant message's parts (by handle.message.id).
+              const latestMsgs = yield* MessageV2.filterCompactedEffect(sessionID).pipe(
+                Effect.provideService(Database.Service, database),
+              )
+              const currentAssistantMsg = latestMsgs.findLast(
+                (m) => m.info.role === "assistant" && m.info.id === handle.message.id,
+              )
+              const hadStructuredOutputCall = currentAssistantMsg?.parts.some(
+                (p) => p.type === "tool" && p.tool === "StructuredOutput",
+              ) ?? false
+
+              if (hadStructuredOutputCall) {
+                const retryMax = format.retryCount ?? 2
+                structuredFailedAttempts++
+                const fields = extractSchemaTopLevelFields(format.schema)
+                const fieldList = fields.length > 0 ? fields.join(", ") : "(see schema)"
+                if (structuredFailedAttempts >= retryMax) {
+                  handle.message.error = new SessionV1.StructuredOutputError({
+                    message: `StructuredOutput schema validation failed after ${structuredFailedAttempts} attempt(s). Required fields: ${fieldList}`,
+                    retries: structuredFailedAttempts,
+                  }).toObject()
+                  yield* sessions.updateMessage(handle.message)
+                  yield* slog.warn("structured-output retry cap reached", {
+                    attempts: structuredFailedAttempts,
+                    retryMax,
+                    fields: fieldList,
+                  })
+                  return "break" as const
+                }
+                // B2 fix: inject via injectTailReminder (user-side synthetic message) so the
+                // correction text appears as a user instruction in the next model context —
+                // not as assistant output (which the model treats with lower compliance).
+                if (fields.length > 0) {
+                  yield* injectTailReminder(
+                    sessionID,
+                    `[structured-output correction] Your StructuredOutput call did not match the required schema. Required top-level fields: ${fieldList}. Please call StructuredOutput again using EXACTLY these field names.`,
+                    lastUser.model,
+                    lastUser.agent,
+                  )
+                }
               }
             }
 
@@ -2583,6 +2665,12 @@ export const layer = Layer.effect(
           sessionID: input.sessionID,
           text,
           delivery: "goal_steer",
+          // §S1.2 ID bridge: forward the client-supplied messageID so the steer row carries the same
+          // id as the frontend's optimistic message — prevents a duplicate entry when drainSteers
+          // materialises the steer into V1 history. PromptInput.messageID is a different Schema brand
+          // (MessageID vs SessionMessage.ID) but both are ascending-string ids at runtime; the cast is
+          // safe because sendFollowupDraft always mints via Identifier.ascending().
+          messageID: input.messageID as unknown as SessionMessage.ID | undefined,
         })
         // V4.1 governance audit — this is the REAL user goal-steer path (the ingress every busy-goal
         // steer flows through). Record the human intervention into the goal's Document Graph alongside
@@ -2598,13 +2686,17 @@ export const layer = Layer.effect(
         const message = yield* prompt(input)
         return { kind: "turn" as const, message }
       }
-      // Let steer() mint a fresh ascending SessionMessage.ID (tail-sorting, §S1.1 Check 3). We do NOT
-      // forward input.messageID: it is a PromptInput MessageID (a different brand) and a client-supplied id
-      // could be non-ascending and insert mid-history — breaking order + cache.
+      // §S1.2 ID bridge: forward the client-supplied messageID so the steer row carries the same id as
+      // the frontend's optimistic message — prevents a duplicate entry when drainSteers materialises
+      // the steer into V1 history. PromptInput.messageID is a different Schema brand (MessageID vs
+      // SessionMessage.ID) but both are ascending-string ids at runtime; the cast is safe because
+      // sendFollowupDraft always mints via Identifier.ascending(). steer() will still generate a fresh
+      // ascending id when messageID is omitted (e.g. non-async callers that don't supply one).
       const admitted = yield* steer({
         sessionID: input.sessionID,
         text: promptInputText(input.parts),
         delivery: "steer",
+        messageID: input.messageID as unknown as SessionMessage.ID | undefined,
       })
       // Race guard (see header): a pure-drain turn absorbs a steer stranded by the isBusy→admit window.
       yield* loop({ sessionID: input.sessionID, drainFirst: true }).pipe(Effect.ignore, Effect.forkIn(scope))
@@ -2959,6 +3051,9 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value)
 
 /** @internal Exported for testing */
+/** @internal Exported for testing */
+export { buildStructuredOutputSystemPrompt, extractSchemaTopLevelFields }
+
 export function createStructuredOutputTool(input: {
   schema: Record<string, any>
   onSuccess: (output: unknown) => void

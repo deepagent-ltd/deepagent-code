@@ -1,6 +1,6 @@
 export * as SupervisorNotifier from "./supervisor-notifier"
 
-import { Context, Effect, Layer, Stream, Schedule, Duration, Cause } from "effect"
+import { Context, Deferred, Effect, Layer, Stream, Schedule, Duration, Cause } from "effect"
 import { and, eq, isNull, inArray } from "drizzle-orm"
 import { Database } from "@deepagent-code/core/database/database"
 import { DeepAgentEventBus } from "@deepagent-code/core/deepagent/deepagent-event-bus"
@@ -260,9 +260,12 @@ export const layerWith = (options?: LayerOptions) =>
         })
 
       if (runLoop) {
+        yield* bus.registerConsumerGroup(NOTIFY_GROUP)
+        const ready = yield* Deferred.make<void>()
         yield* bus
           .subscribe({ group: NOTIFY_GROUP })
           .pipe(
+            Stream.onStart(Deferred.succeed(ready, undefined)),
             Stream.runForEach((event) =>
               handle(event).pipe(
                 Effect.asVoid,
@@ -273,6 +276,7 @@ export const layerWith = (options?: LayerOptions) =>
             ),
             Effect.forkScoped,
           )
+        yield* Deferred.await(ready)
 
         yield* pumpRetries()
           .pipe(
