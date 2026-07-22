@@ -339,6 +339,34 @@ describe("runtime terminal controller", () => {
     }
   })
 
+  test("collapses a split to its surviving pane when closing that pane's final terminal", async () => {
+    let sequence = 0
+    const harness = terminalHarness(async () => {
+      sequence += 1
+      return { data: { id: `pty-${sequence}`, title: `Terminal ${sequence}` } }
+    })
+    try {
+      await harness.session.new()
+      harness.session.setPaneBounds(harness.session.focusedPaneId(), { width: 1_000, height: 400 })
+      expect(await harness.session.split("horizontal")).toBeTrue()
+
+      const [first, second] = harness.session.all()
+      expect(first).toBeDefined()
+      expect(second).toBeDefined()
+      await harness.session.close(second!.id)
+
+      const root = harness.session.root()
+      expect(root.kind).toBe("leaf")
+      if (root.kind !== "leaf") throw new Error("expected split to collapse to a leaf")
+      expect(root.ptys).toEqual([first!.id])
+      expect(root.activeId).toBe(first!.id)
+      expect(harness.session.focusedPaneId()).toBe(root.id)
+      expect(harness.session.closeRequest()).toBe(0)
+    } finally {
+      harness.dispose()
+    }
+  })
+
   test("requests panel close only when the user closes the final tab", async () => {
     const harness = terminalHarness(async () => ({ data: { id: "pty-server-1", title: "Terminal 1" } }))
     try {

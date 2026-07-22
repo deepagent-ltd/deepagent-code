@@ -174,9 +174,10 @@ interface AttemptBundle {
   readonly worktree: Worktree.Interface | undefined
   readonly nextSession: Session.Info
   readonly metadata: AttemptMetadata
-  readonly markFinished: (state: "completed" | "error" | "cancelled") => Effect.Effect<void, unknown>
+  readonly markFinished: (state: "completed" | "error" | "cancelled" | "interrupted", reason?: "human" | "parent_interrupted" | "timeout" | "takeover" | "runtime_error") => Effect.Effect<void, unknown>
   readonly inject: (state: "completed" | "error", text: string, takeovers: number) => Effect.Effect<unknown, unknown>
-  readonly mergeWorktree: () => Effect.Effect<void, unknown>
+  readonly automaticWriteIsolation: boolean
+  readonly mergeWorktree: () => Effect.Effect<boolean, unknown>
   readonly teardownWorktree: (force: boolean) => Effect.Effect<unknown, unknown>
 }
 
@@ -391,7 +392,8 @@ export const TaskTool = Tool.define(
           })
 
           const markFinished = Effect.fn("TaskTool.markSubagentFinished")(function* (
-            state: "completed" | "error" | "cancelled",
+            state: "completed" | "error" | "cancelled" | "interrupted",
+            reason?: "human" | "parent_interrupted" | "timeout" | "takeover" | "runtime_error",
           ) {
             const current = yield* sessions.get(a.nextSession.id).pipe(Effect.orDie)
             yield* sessions
@@ -401,7 +403,9 @@ export const TaskTool = Tool.define(
                   ...(current.metadata ?? {}),
                   deepagent: {
                     ...((current.metadata?.["deepagent"] as Record<string, unknown> | undefined) ?? {}),
-                    subagent: { finished: true, state, at: Date.now() },
+                    // §4.3 SubagentRunMetadata: state is the durable authority for terminal state.
+                    // Compat: old data using `finished: true` with state is still readable unchanged.
+                    subagent: { finished: true, state, at: Date.now(), ...(reason ? { reason } : {}) },
                   },
                 },
               })
@@ -466,8 +470,9 @@ export const TaskTool = Tool.define(
           // worktree for recovery; teardownWorktree(false) is then called by the caller to keep it.
           //
           // We resolve Git.Service here (at bundle-build time inside startAttempt) so that
-          // mergeWorktree itself can be typed as () => Effect<void, unknown> (no service requirements):
-          // the service is captured in the closure, not re-required at call time.
+          // mergeWorktree itself can be typed without service requirements: the service is captured
+          // in the closure. `true` reports a successful automatic merge, whose worker may be removed.
+          // `false` means no automatic merge was applicable and therefore must keep fail-closed cleanup.
           const automaticWriteIsolation = params.isolation !== "worktree" && !!a.worktreeInfo
           const parentDir = parent.directory
           const gitOpt = yield* Effect.serviceOption(Git.Service)
@@ -476,10 +481,10 @@ export const TaskTool = Tool.define(
               ? yield* gitOpt.value.resolveRef(parentDir).pipe(Effect.orElseSucceed(() => undefined))
               : undefined
           const mergeWorktree = Effect.fn("TaskTool.mergeWorktree")(function* () {
-            if (!a.worktreeInfo || !automaticWriteIsolation || !parentDir || Option.isNone(gitOpt)) return
+            if (!a.worktreeInfo || !automaticWriteIsolation || !parentDir || Option.isNone(gitOpt)) return false
             const git = gitOpt.value
             const workerBranch = a.worktreeInfo.branch
-            if (!workerBranch) return // detached HEAD on worker — nothing to merge
+            if (!workerBranch) return false // detached HEAD on worker — nothing to merge
             const currentParentHead = yield* git.resolveRef(parentDir).pipe(Effect.orElseSucceed(() => undefined))
             if (currentParentHead !== parentBaselineHead) {
               // Parent advanced — preserve worker for human resolution; caller treats this as merge failure.
@@ -492,7 +497,7 @@ export const TaskTool = Tool.define(
               )
             }
             const result = yield* git.mergeInto(parentDir, workerBranch)
-            if (result.type === "merged") return
+            if (result.type === "merged") return true
             // On conflict or failure: abort merge state so parent checkout is usable, then re-throw
             // so the caller knows to preserve the worker worktree.
             yield* git.abortMerge(parentDir).pipe(Effect.ignore)
@@ -513,6 +518,7 @@ export const TaskTool = Tool.define(
             worktree: a.worktree,
             nextSession: a.nextSession,
             metadata,
+            automaticWriteIsolation,
             markFinished,
             inject,
             mergeWorktree,
@@ -590,7 +596,6 @@ export const TaskTool = Tool.define(
             if (outcome.kind === "promoted") return backgroundResult(b)
             if (outcome.kind === "completed") {
               const merged = yield* b.mergeWorktree().pipe(
-                Effect.as(true),
                 Effect.catchCause((cause) =>
                   Effect.gen(function* () {
                     const diagnostic = Cause.squash(cause)
@@ -601,9 +606,9 @@ export const TaskTool = Tool.define(
                   }),
                 ),
               )
-              if (!merged) return yield* Effect.fail(new Error("Worktree merge-back failed"))
+              if (!merged && b.automaticWriteIsolation) return yield* Effect.fail(new Error("Worktree merge-back failed"))
               yield* b.markFinished("completed")
-              yield* b.teardownWorktree(true)
+              yield* b.teardownWorktree(merged)
               return {
                 title: params.description,
                 metadata: b.metadata,
@@ -616,9 +621,18 @@ export const TaskTool = Tool.define(
               }
             }
             if (outcome.kind === "cancelled") {
-              yield* b.markFinished("cancelled")
+              // §4.3/4.6: "cancelled" from the abort signal means human interrupted the task.
+              // Write "interrupted" (not "cancelled") so parent agent and supervision UI can
+              // distinguish voluntary human stop with preserved work from a runtime failure.
+              // Do NOT force-remove the worktree — partial work may be worth recovering.
+              yield* b.markFinished("interrupted", "human")
               yield* b.teardownWorktree(false)
-              return yield* Effect.fail(new Error("Task cancelled"))
+              return yield* Effect.fail(
+                new Error(
+                  `Task interrupted by the user. Partial work is preserved in subagent session ${b.nextSession.id}. ` +
+                    `Call task_read({ task_id: "${b.nextSession.id}" }) before retrying or duplicating the task.`,
+                ),
+              )
             }
             if (takeovers >= takeoverLimit) {
               yield* background.cancel(b.nextSession.id).pipe(Effect.ignore)
@@ -651,7 +665,6 @@ export const TaskTool = Tool.define(
             const status = waited.info?.status
             if (!waited.timedOut && status === "completed") {
               const merged = yield* b.mergeWorktree().pipe(
-                Effect.as(true),
                 Effect.catchCause((cause) =>
                   Effect.gen(function* () {
                     const diagnostic = Cause.squash(cause)
@@ -662,9 +675,9 @@ export const TaskTool = Tool.define(
                   }),
                 ),
               )
-              if (!merged) return
+              if (!merged && b.automaticWriteIsolation) return
               yield* b.markFinished("completed")
-              yield* b.teardownWorktree(true)
+              yield* b.teardownWorktree(merged)
               yield* b.inject("completed", waited.info?.output ?? "", takeovers)
               return
             }
@@ -882,6 +895,22 @@ export const TaskTool = Tool.define(
         if (resolvedOutputSchema) {
           const structured = result.info.role === "assistant" ? result.info.structured : undefined
           if (structured !== undefined) return JSON.stringify(structured)
+          // B3 fix: when the retry cap fired, the assistant message carries a StructuredOutputError.
+          // Silently returning "" here would make the parent agent see an empty success result and
+          // lose all signal that the subagent failed to produce structured output. Surface the error
+          // explicitly so the task tool's error path propagates it correctly to the parent.
+          const msgError = result.info.role === "assistant" ? result.info.error : undefined
+          if (msgError && SessionV1.StructuredOutputError.isInstance(msgError)) {
+            return yield* Effect.fail(
+              new Error(
+                // U1: include the child session ID so the parent agent can recover partial work via
+                // task_read({ task_id: nextSession.id }) before retrying or duplicating the task.
+                `StructuredOutput failed (${msgError.data.retries} attempt(s)): ${msgError.data.message}. ` +
+                  `Partial research is preserved in subagent session ${nextSession.id}. ` +
+                  `Call task_read({ task_id: "${nextSession.id}" }) to recover completed work before retrying.`,
+              ),
+            )
+          }
         }
         return result.parts.findLast((item) => item.type === "text")?.text ?? ""
       })
@@ -926,7 +955,8 @@ export const TaskTool = Tool.define(
       // only flips the UI to "已完成" and disables the composer; it touches no message/part data.
       // Read-merge because setMetadata replaces the whole metadata object.
       const markFinished = Effect.fn("TaskTool.markSubagentFinished")(function* (
-        state: "completed" | "error" | "cancelled",
+        state: "completed" | "error" | "cancelled" | "interrupted",
+        reason?: "human" | "parent_interrupted" | "timeout" | "takeover" | "runtime_error",
       ) {
         // Resume (`params.task_id`) reuses an existing session; a fresh finish marker is still correct
         // (the reused session just completed another turn), so no special-casing is needed.
@@ -938,7 +968,8 @@ export const TaskTool = Tool.define(
               ...(current.metadata ?? {}),
               deepagent: {
                 ...((current.metadata?.["deepagent"] as Record<string, unknown> | undefined) ?? {}),
-                subagent: { finished: true, state, at: Date.now() },
+                // §4.3: state is the durable terminal-state authority; reason narrows the cause.
+                subagent: { finished: true, state, at: Date.now(), ...(reason ? { reason } : {}) },
               },
             },
           })
@@ -1039,8 +1070,13 @@ export const TaskTool = Tool.define(
               return yield* Effect.fail(new Error(result.error ?? "Task failed"))
             }
             if (result?.status === "cancelled") {
-              yield* markFinished("cancelled")
-              return yield* Effect.fail(new Error("Task cancelled"))
+              yield* markFinished("interrupted", "human")
+              return yield* Effect.fail(
+                new Error(
+                  `Task interrupted by the user. Partial work is preserved in subagent session ${nextSession.id}. ` +
+                    `Call task_read({ task_id: "${nextSession.id}" }) before retrying or duplicating the task.`,
+                ),
+              )
             }
             yield* markFinished("completed")
             return {
