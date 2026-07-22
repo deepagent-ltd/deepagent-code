@@ -57,7 +57,7 @@ export const { use: useTabs, provider: TabsProvider } = createSimpleContext({
       },
       createStore<Tab[]>([]),
     )
-    const [active, setActive, _, activeReady] = persisted(
+    const [active, setActive, _activePersist, activeReady] = persisted(
       Persist.global("tabs.active"),
       createStore({ key: undefined as string | undefined }),
     )

@@ -1,10 +1,10 @@
 import { describe, expect, test } from "bun:test"
-import { isInterruptedSubagent } from "./subagent-state"
+import { isSubagentInterrupted } from "./subagent-state"
 
-describe("isInterruptedSubagent", () => {
+describe("isSubagentInterrupted", () => {
   test("recognizes durable state and legacy boolean interruption markers", () => {
-    expect(isInterruptedSubagent({ deepagent: { subagent: { state: "interrupted" } } })).toBe(true)
-    expect(isInterruptedSubagent({ deepagent: { subagent: { interrupted: true } } })).toBe(true)
-    expect(isInterruptedSubagent({ deepagent: { subagent: { state: "finished" } } })).toBe(false)
+    expect(isSubagentInterrupted({ deepagent: { subagent: { state: "interrupted" } } })).toBe(true)
+    expect(isSubagentInterrupted({ deepagent: { subagent: { interrupted: true } } })).toBe(true)
+    expect(isSubagentInterrupted({ deepagent: { subagent: { state: "finished" } } })).toBe(false)
   })
 })

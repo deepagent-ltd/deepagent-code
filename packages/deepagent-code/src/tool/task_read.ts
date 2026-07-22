@@ -98,9 +98,9 @@ export const TaskReadTool = Tool.define(
         sessionID: childSessionID,
         limit,
         before: params.before,
-      }).pipe(Effect.catchCause(() => Effect.succeed({ items: [] as SessionV1.WithParts[], more: false })))
+      }).pipe(Effect.catchCause(() => Effect.succeed({ items: [] as SessionV1.WithParts[], more: false, cursor: undefined as string | undefined })))
       const page = result.items
-      const nextCursor = result.cursor
+      const nextCursor: string | undefined = result.cursor
       // A cursor is the only valid continuation token. Never advertise another page when a
       // storage implementation reports `more` without one: callers would resend `undefined`
       // and restart from the newest messages.
@@ -170,7 +170,7 @@ export const TaskReadTool = Tool.define(
           state: durableState,
           messageCount: page.length,
           hasMore,
-          before: nextCursor,
+          ...(nextCursor !== undefined ? { before: nextCursor } : {}),
         },
         output: transcript + paginationHint,
       }
@@ -180,7 +180,7 @@ export const TaskReadTool = Tool.define(
       description: DESCRIPTION,
       parameters: Parameters,
       execute: (params: Schema.Schema.Type<typeof Parameters>, ctx: Tool.Context) =>
-        run(params, ctx).pipe(Effect.catchCause((cause) => Effect.die(cause))),
+        run(params, ctx).pipe(Effect.catchCause((cause) => Effect.die(cause))) as unknown as Effect.Effect<Tool.ExecuteResult>,
     }
   }),
 )

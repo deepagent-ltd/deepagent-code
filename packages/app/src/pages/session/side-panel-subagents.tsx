@@ -6,7 +6,7 @@ import { useNavigate, useParams } from "@solidjs/router"
 import { useSDK } from "@/context/sdk"
 import { fetchCapabilities } from "@/components/deepagent/panel-goal.api"
 import { OversightDashboard } from "@/components/deepagent/oversight-dashboard"
-import { isInterruptedSubagent } from "./subagent-state"
+import { isSubagentInterrupted } from "./subagent-state"
 
 // Phase 2 (§3): SidePanelSubagents is now the single "子Agent监督" entry for the right rail.
 // It holds a `selectedSessionID` to track which subagent is being inspected; that selection
