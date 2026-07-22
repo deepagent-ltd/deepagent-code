@@ -1,7 +1,7 @@
 import { afterAll, beforeEach, describe, expect, it } from "bun:test"
 import { Effect, Option, Result } from "effect"
 import * as NodeServices from "@effect/platform-node/NodeServices"
-import { mkdtemp, readFile, rm, stat } from "fs/promises"
+import { mkdtemp, readFile, rm, stat, writeFile } from "fs/promises"
 import { tmpdir } from "os"
 import path from "path"
 import { ServerMode } from "../src/services/server-mode"
@@ -310,6 +310,48 @@ describe("ServerMode.transport", () => {
     expect(response.status).toBe(200)
     expect(gateway.refreshCalls).toBe(1)
     expect(gateway.sessionBodies).toEqual([payload, payload])
+  })
+
+  it("coalesces concurrent 401s into a single refresh", async () => {
+    const transport = await run(
+      service.pipe(
+        Effect.flatMap((s) => s.login(base, "a@b.c", "pw")),
+        Effect.flatMap(() => service),
+        Effect.flatMap((s) => s.useWorkspace("ctr-1")),
+        Effect.flatMap(() => service),
+        Effect.flatMap((s) => s.transport()),
+      ),
+    )
+    expect(Option.isSome(transport)).toBe(true)
+    if (Option.isNone(transport)) return
+
+    gateway.validAccess = "tok-2"
+    const responses = await Promise.all(
+      Array.from({ length: 5 }, () => transport.value.fetch(`${transport.value.url}/ping`)),
+    )
+    expect(responses.map((response) => response.status)).toEqual([200, 200, 200, 200, 200])
+    expect(gateway.refreshCalls).toBe(1)
+  })
+
+  it("surfaces session expiry when the gateway rejects the refresh token", async () => {
+    const transport = await run(
+      service.pipe(
+        Effect.flatMap((s) => s.login(base, "a@b.c", "pw")),
+        Effect.flatMap(() => service),
+        Effect.flatMap((s) => s.useWorkspace("ctr-1")),
+        Effect.flatMap(() => service),
+        Effect.flatMap((s) => s.transport()),
+      ),
+    )
+    expect(Option.isSome(transport)).toBe(true)
+    if (Option.isNone(transport)) return
+
+    // Corrupt the persisted refresh token so the 401 retry cannot recover
+    const persisted = JSON.parse(await readFile(stateFile(), "utf8"))
+    await writeFile(stateFile(), JSON.stringify({ ...persisted, refreshToken: "ref-bad" }))
+    gateway.validAccess = "tok-2"
+    await expect(transport.value.fetch(`${transport.value.url}/ping`)).rejects.toThrow("Session expired")
+    expect(gateway.refreshCalls).toBe(1)
   })
 
   it("fails when logged in but no workspace is selected", async () => {
