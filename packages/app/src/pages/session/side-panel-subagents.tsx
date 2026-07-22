@@ -6,6 +6,7 @@ import { useNavigate, useParams } from "@solidjs/router"
 import { useSDK } from "@/context/sdk"
 import { fetchCapabilities } from "@/components/deepagent/panel-goal.api"
 import { OversightDashboard } from "@/components/deepagent/oversight-dashboard"
+import { isInterruptedSubagent } from "./subagent-state"
 
 // Phase 2 (§3): SidePanelSubagents is now the single "子Agent监督" entry for the right rail.
 // It holds a `selectedSessionID` to track which subagent is being inspected; that selection
@@ -23,12 +24,6 @@ import { OversightDashboard } from "@/components/deepagent/oversight-dashboard"
 // (scope+route SessionStateKey): that never equals a child's parentID, so the list was always
 // empty. Resolving it internally here (like SidePanelIM / SidePanelDebug do) keeps the contract
 // simple and immune to that mismatch.
-export function isSubagentInterrupted(child: { metadata?: Record<string, unknown> }): boolean {
-  const sub = (
-    child.metadata?.["deepagent"] as { subagent?: { state?: string; interrupted?: boolean } } | undefined
-  )?.subagent
-  return sub?.state === "interrupted" || sub?.interrupted === true
-}
 
 export const SidePanelSubagents: Component<{ onClose: () => void }> = (props) => {
   const sync = useSync()

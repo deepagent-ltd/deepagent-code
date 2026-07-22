@@ -51,7 +51,7 @@ const execCtx = (sessionID: SessionID) => ({
   ask: () => Effect.void,
 })
 
-const addTextMessage = (sessionID: SessionID, text: string) =>
+const addTextMessage = (sessionID: SessionID, text: string, created = Date.now()) =>
   Effect.gen(function* () {
     const sessions = yield* Session.Service
     const message = yield* sessions.updateMessage({
@@ -60,7 +60,7 @@ const addTextMessage = (sessionID: SessionID, text: string) =>
       sessionID,
       agent: "build",
       model: { providerID: ProviderV2.ID.make("test"), modelID: ModelV2.ID.make("test") },
-      time: { created: Date.now() },
+      time: { created },
     })
     yield* sessions.updatePart({
       id: PartID.ascending(),
@@ -71,7 +71,7 @@ const addTextMessage = (sessionID: SessionID, text: string) =>
     })
   })
 
-const readTexts = (output: string) => [...output.matchAll(/<text>([^<]+)<\/text>/g)].map((match) => match[1])
+const readTexts = (output: string) => [...output.matchAll(/<message[^>]*>\s*([^<]+?)\s*<\/message>/g)].map((match) => match[1])
 
 describe("tool.task_read", () => {
   it.instance("pages 203 child messages through storage cursors without duplicates", () =>
@@ -81,7 +81,7 @@ describe("tool.task_read", () => {
       const child = yield* sessions.create({ parentID: parent.id, agent: "general", title: "Long task" })
       const expected = Array.from({ length: 203 }, (_, index) => `message-${String(index + 1).padStart(3, "0")}`)
 
-      for (const text of expected) yield* addTextMessage(child.id, text)
+      for (const [index, text] of expected.entries()) yield* addTextMessage(child.id, text, 1_700_000_000_000 + index)
 
       const tool = yield* TaskReadTool
       const def = yield* tool.init()

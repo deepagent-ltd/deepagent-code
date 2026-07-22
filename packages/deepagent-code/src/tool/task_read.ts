@@ -100,8 +100,11 @@ export const TaskReadTool = Tool.define(
         before: params.before,
       }).pipe(Effect.catchCause(() => Effect.succeed({ items: [] as SessionV1.WithParts[], more: false })))
       const page = result.items
-      const hasMore = result.more
       const nextCursor = result.cursor
+      // A cursor is the only valid continuation token. Never advertise another page when a
+      // storage implementation reports `more` without one: callers would resend `undefined`
+      // and restart from the newest messages.
+      const hasMore = result.more && nextCursor !== undefined
 
       // Read durable state from metadata.
       const deepagent = child.metadata?.["deepagent"] as Record<string, unknown> | undefined
@@ -162,7 +165,13 @@ export const TaskReadTool = Tool.define(
 
       return {
         title: `Task transcript: ${child.title ?? childSessionID}`,
-        metadata: { sessionID: childSessionID, state: durableState, messageCount: page.length, hasMore },
+        metadata: {
+          sessionID: childSessionID,
+          state: durableState,
+          messageCount: page.length,
+          hasMore,
+          before: nextCursor,
+        },
         output: transcript + paginationHint,
       }
     })
