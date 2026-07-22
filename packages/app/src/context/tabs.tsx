@@ -20,6 +20,16 @@ export type Tab = SessionTab
 export const tabHref = (tab: Tab) => `/${tab.dirBase64}/session/${tab.sessionId}`
 export const tabKey = (tab: Tab) => `${tab.server}\n${tabHref(tab)}`
 
+export function activeTab(tabs: Tab[], key?: string) {
+  return tabs.find((tab) => tabKey(tab) === key) ?? tabs[0]
+}
+
+export function startupTab(tabs: Tab[], activeKey: string | undefined, servers: ServerConnection.Any[]) {
+  const tab = activeTab(tabs, activeKey)
+  if (!tab) return
+  return servers.some((server) => ServerConnection.key(server) === tab.server) ? tab : undefined
+}
+
 export function sessionHasOpenTab(tabs: Tab[], server: ServerConnection.Key, session: Session) {
   const dirBase64 = base64Encode(session.directory)
   return tabs.some(
@@ -47,6 +57,10 @@ export const { use: useTabs, provider: TabsProvider } = createSimpleContext({
       },
       createStore<Tab[]>([]),
     )
+    const [active, setActive, _, activeReady] = persisted(
+      Persist.global("tabs.active"),
+      createStore({ key: undefined as string | undefined }),
+    )
 
     const params = useParams()
     const navigate = useNavigate()
@@ -61,6 +75,7 @@ export const { use: useTabs, provider: TabsProvider } = createSimpleContext({
     })
 
     const navigateTab = (tab: Tab) => {
+      setActive("key", tabKey(tab))
       const href = tabHref(tab)
       if (tab.server === server.key) {
         navigate(href)
@@ -96,12 +111,19 @@ export const { use: useTabs, provider: TabsProvider } = createSimpleContext({
             }),
           )
           if (nextTab) navigateTab(nextTab)
-          else navigate("/")
+          else {
+            setActive("key", undefined)
+            navigate("/")
+          }
         }).finally(() => closing.delete(key))
       },
       removeServer(key: ServerConnection.Key) {
         setStore((tabs) => tabs.filter((tab) => tab.server !== key))
+        if (active.key?.startsWith(`${key}\n`)) setActive("key", undefined)
         if (server.key === key) navigate("/")
+      },
+      setActive(tab: Tab) {
+        navigateTab(tab)
       },
       removeSessions: (input: SessionTabsRemovedDetail) => {
         void startTransition(() => {
@@ -145,6 +167,6 @@ export const { use: useTabs, provider: TabsProvider } = createSimpleContext({
       },
     }
 
-    return { ...actions, store, ready }
+    return { ...actions, active, ready: () => ready() && activeReady(), store }
   },
 })
