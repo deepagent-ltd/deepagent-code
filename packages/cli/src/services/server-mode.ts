@@ -58,7 +58,9 @@ export const layer = Layer.effect(
     // must log in against the pinned gateway first.
     const resolve = Effect.fnUntraced(function* () {
       const stored = yield* read().pipe(Effect.option)
-      const pinned = process.env.DEEPAGENT_GATEWAY_URL
+      // Normalize the same way login does, otherwise a trailing slash in the
+      // env var never matches the stored gateway and reads as "not logged in".
+      const pinned = process.env.DEEPAGENT_GATEWAY_URL?.replace(/\/+$/, "")
       const gatewayUrl = pinned ?? (Option.isSome(stored) ? stored.value.gatewayUrl : undefined)
       if (gatewayUrl === undefined) return Option.none<{ gatewayUrl: string; state: State }>()
       if (Option.isNone(stored) || stored.value.gatewayUrl !== gatewayUrl) {
@@ -104,12 +106,16 @@ export const layer = Layer.effect(
         try: () => response.json() as Promise<Record<string, unknown>>,
         catch: () => new Error("Gateway returned an invalid refresh response"),
       })
-      if (typeof body.access_token !== "string")
+      // The gateway returns the access token as camelCase `accessToken` in the
+      // JSON body; the refresh token only ever travels as the HttpOnly cookie.
+      if (typeof body.accessToken !== "string")
         return yield* Effect.fail(new Error("Gateway returned an invalid refresh response"))
+      const rotated = response.headers.get("set-cookie")?.match(/(?:^|;\s*)refresh_token=([^;]+)/)?.[1]
       const next: State = {
         ...current,
-        accessToken: body.access_token,
-        refreshToken: typeof body.refresh_token === "string" ? body.refresh_token : current.refreshToken,
+        accessToken: body.accessToken,
+        refreshToken:
+          typeof body.refresh_token === "string" ? body.refresh_token : (rotated ?? current.refreshToken),
         expiresAt:
           typeof body.expires_in === "number" ? Date.now() + body.expires_in * 1000 : current.expiresAt,
       }
@@ -168,7 +174,7 @@ export const layer = Layer.effect(
         try: () => response.json() as Promise<Record<string, unknown>>,
         catch: () => new Error("Gateway returned an invalid login response"),
       })
-      if (typeof body.access_token !== "string")
+      if (typeof body.accessToken !== "string")
         return yield* Effect.fail(new Error("Gateway returned an invalid login response"))
       const cookie = response.headers.get("set-cookie") ?? undefined
       const refreshToken =
@@ -177,7 +183,7 @@ export const layer = Layer.effect(
           : cookie?.match(/(?:^|;\s*)refresh_token=([^;]+)/)?.[1]
       const state: State = {
         gatewayUrl,
-        accessToken: body.access_token,
+        accessToken: body.accessToken,
         refreshToken,
         expiresAt: typeof body.expires_in === "number" ? Date.now() + body.expires_in * 1000 : undefined,
       }
@@ -201,31 +207,34 @@ export const layer = Layer.effect(
     const workspaces = Effect.fn("cli.server-mode.workspaces")(function* () {
       const resolved = yield* resolve()
       if (Option.isNone(resolved)) return yield* Effect.fail(new Error("Not logged in"))
-      const response = yield* authed(`${resolved.value.gatewayUrl}/control/v1/workspaces`)
+      // The gateway maps each user to a single container (one workspace per
+      // user). GET 404 means none exists yet; POST is the idempotent ensure
+      // that provisions it (200 exists | 202 provisioning).
+      let response = yield* authed(`${resolved.value.gatewayUrl}/control/v1/containers`)
+      if (response.status === 404) {
+        response = yield* authed(`${resolved.value.gatewayUrl}/control/v1/containers`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: "{}",
+        })
+      }
       if (!response.ok) {
         const message = yield* gatewayError(response)
         return yield* Effect.fail(new Error(`Failed to list workspaces: ${message}`))
       }
       const body = yield* Effect.tryPromise({
-        try: () => response.json(),
+        try: () => response.json() as Promise<{ id?: unknown; status?: unknown }>,
         catch: () => new Error("Gateway returned an invalid workspaces response"),
       })
-      const list = Array.isArray(body)
-        ? body
-        : Array.isArray((body as { workspaces?: unknown })?.workspaces)
-          ? (body as { workspaces: unknown[] }).workspaces
-          : undefined
-      if (!list) return yield* Effect.fail(new Error("Gateway returned an invalid workspaces response"))
-      return list.map(
-        (entry): Workspace => ({
-          id: String((entry as { id?: unknown }).id ?? ""),
-          name: typeof (entry as { name?: unknown }).name === "string" ? (entry as { name: string }).name : undefined,
-          status:
-            typeof (entry as { status?: unknown }).status === "string"
-              ? (entry as { status: string }).status
-              : undefined,
-        }),
-      )
+      if (typeof body.id !== "string")
+        return yield* Effect.fail(new Error("Gateway returned an invalid workspaces response"))
+      return [
+        {
+          id: body.id,
+          name: undefined,
+          status: typeof body.status === "string" ? body.status : undefined,
+        },
+      ]
     })
 
     const useWorkspace = Effect.fn("cli.server-mode.useWorkspace")(function* (id: string) {
@@ -251,19 +260,24 @@ export const layer = Layer.effect(
           ),
         )
       const remote = async (input: RequestInfo | URL, init?: RequestInit) => {
-        const send = (token: string) => {
-          const headers = new Headers(input instanceof Request ? input.headers : undefined)
+        // The SDK hands us a single Request object whose body the first
+        // attempt consumes; clone upfront so the 401 retry stays replayable.
+        const retry = input instanceof Request && input.body !== null ? input.clone() : input
+        const send = (token: string, source: RequestInfo | URL) => {
+          const headers = new Headers(source instanceof Request ? source.headers : undefined)
           new Headers(init?.headers).forEach((value, key) => headers.set(key, value))
           headers.set("authorization", `Bearer ${token}`)
-          return fetch(input as RequestInfo | URL, { ...init, headers })
+          return fetch(source, { ...init, headers })
         }
-        const first = await send(await Effect.runPromise(accessToken()))
+        const first = await send(await Effect.runPromise(accessToken()), input)
         if (first.status !== 401) return first
         const refreshed = await refreshOnce()
-        return send(refreshed.accessToken)
+        return send(refreshed.accessToken, retry)
       }
+      // The data-plane proxy locates the caller's container from the JWT, so
+      // the base URL is a bare `/w` without a workspace id segment.
       return Option.some({
-        url: `${gatewayUrl}/w/${state.workspaceId}`,
+        url: `${gatewayUrl}/w`,
         headers: {},
         fetch: remote,
       })
