@@ -13,6 +13,7 @@ import { McpOAuthProvider } from "../../mcp/oauth-provider"
 import { Config } from "@/config/config"
 import { ConfigMCPV1 } from "@deepagent-code/core/v1/config/mcp"
 import { InstanceRef } from "@/effect/instance-ref"
+import { AppRuntime } from "@/effect/app-runtime"
 import { InstallationVersion } from "@deepagent-code/core/installation/version"
 import path from "path"
 import { Global } from "@deepagent-code/core/global"
@@ -507,9 +508,18 @@ export const McpAddCommand = effectCmd({
               ...(Object.keys(environment).length ? { environment } : {}),
             }
 
-        const configPath = await resolveConfigPath(Global.Path.config, true)
-        await addMcpToConfig(args.name, mcpConfig, configPath)
-        prompts.log.success(`MCP server "${args.name}" added to ${configPath}`)
+        const config = await AppRuntime.runPromise(Config.Service)
+        const current = await AppRuntime.runPromise(config.getGlobal())
+        await AppRuntime.runPromise(
+          config.updateGlobal({
+            ...current,
+            mcp: {
+              ...current.mcp,
+              [args.name]: mcpConfig,
+            },
+          }),
+        )
+        prompts.log.success(`MCP server "${args.name}" added to ${path.join(Global.Path.config, "config.jsonc")}`)
         return
       }
 
