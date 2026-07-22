@@ -293,10 +293,6 @@ export function SessionSidePanel(props: {
         view().rightPanel.close()
         return
       }
-      // Create the first side PTY lazily when the side panel opens for the first time.
-      if (terminalHosts.side.all().length === 0) {
-        void terminalHosts.side.new()
-      }
       view().rightPanel.open("terminal")
       return
     }
@@ -575,7 +571,7 @@ export function SessionSidePanel(props: {
                 <SidePanelIM onClose={closePanel} />
               </Match>
               <Match when={isActive("terminal")}>
-                <SidePanelTerminal onClose={() => view().panel.toggle("terminal")} />
+                <SidePanelTerminal onClose={() => view().rightPanel.close()} />
               </Match>
               <Match when={isActive("debug-console")}>
                 <SidePanelDebugConsole onClose={() => view().panel.toggle("debug-console")} />
