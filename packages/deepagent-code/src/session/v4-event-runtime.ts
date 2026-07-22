@@ -1,6 +1,7 @@
 export * as V4EventRuntime from "./v4-event-runtime"
 
 import { Cause, Duration, Effect, Layer, Schedule } from "effect"
+import { LMNEvents } from "@deepagent-code/core/deepagent/lmn-events"
 import { DeepAgentEventBus } from "@deepagent-code/core/deepagent/deepagent-event-bus"
 import { ApprovalQueue } from "@deepagent-code/core/deepagent/approval-queue"
 import { WorkspaceConfig } from "@deepagent-code/core/deepagent/workspace-config"
@@ -21,21 +22,21 @@ import { InstanceRef, WorkspaceRef } from "@/effect/instance-ref"
 import { WorkspaceV2 } from "@deepagent-code/core/workspace"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { MultiAgentRuntime } from "./multi-agent-runtime"
-import { EventDispatcher } from "./event-dispatcher"
+import { EventDispatcher, DISPATCH_GROUP } from "./event-dispatcher"
 import type { SubagentTurnRunner, SubagentTurnResult } from "./goal-loop-wiring"
 import { MessageID } from "./schema"
 import { SessionCompletedPublisher } from "./session-completed-publisher"
-import { EventDrivenArchiver } from "@/wiki/event-driven-archiver"
-import { PanelConveneConsumer } from "@/panel/panel-convene-consumer"
+import { EventDrivenArchiver, ARCHIVE_GROUP } from "@/wiki/event-driven-archiver"
+import { PanelConveneConsumer, CONVENE_GROUP } from "@/panel/panel-convene-consumer"
 import { consultPanel } from "@/panel/consult"
 import type { PanelTurnRunner } from "@/panel/panelist-runner"
 import { makeTaskSubagentRunner } from "./goal-loop-wiring"
 // §B2/§E4 (P2.8) — proactive push stack.
 import { AgentPush } from "./agent-push"
 import { DigestBuilder } from "./digest-builder"
-import { SupervisorNotifier } from "./supervisor-notifier"
+import { SupervisorNotifier, NOTIFY_GROUP } from "./supervisor-notifier"
 // V4.1 §N — the event-driven goal-tick consumer + its production cold-reconstruction port.
-import { GoalTickConsumer } from "./goal-tick-consumer"
+import { GoalTickConsumer, TICK_GROUP } from "./goal-tick-consumer"
 import { GoalTickPort } from "./goal-tick-port"
 import { goalStoreRoot } from "./goal-manager"
 import { SessionRevert } from "./revert"
@@ -457,6 +458,22 @@ const anyV4DaemonEnabled = (flags: RuntimeFlags.Info): boolean =>
   flags.v4AgentPushEnabled ||
   flags.v4EventDrivenArchive
 
+// Register the durable delivery policy before any V4 publisher can emit. `Layer.mergeAll` starts
+// components concurrently, so relying on each consumer's live subscribe stream loses first-start events.
+// Individual consumers repeat this idempotently for standalone use; this layer establishes the runtime
+// producer-after-registration boundary. Disabled groups are deliberately absent and accrue no backlog.
+const consumerRegistrationLayer = Layer.effectDiscard(
+  Effect.gen(function* () {
+    const flags = yield* RuntimeFlags.Service
+    const bus = yield* DeepAgentEventBus.Service
+    if (anyV4DaemonEnabled(flags)) yield* bus.registerConsumerGroup(DISPATCH_GROUP)
+    if (flags.v4MultiAgentRuntime) yield* bus.registerConsumerGroup(TICK_GROUP, LMNEvents.GOAL_TICK_REQUESTED)
+    if (flags.v4PanelAutoConvene) yield* bus.registerConsumerGroup(CONVENE_GROUP)
+    if (flags.v4EventDrivenArchive || flags.v4MultiAgentRuntime) yield* bus.registerConsumerGroup(ARCHIVE_GROUP)
+    if (flags.v4AgentPushEnabled) yield* bus.registerConsumerGroup(NOTIFY_GROUP)
+  }),
+)
+
 // The EventDispatcher layer whose DispatchPort is the live MultiAgentRuntime. Its subscribe/tick/retry
 // daemons run only when a V4 daemon is enabled (else runLoops:false ⇒ built but dormant). The dispatcher
 // additionally flag-checks v4MultiAgentRuntime per event before dispatching.
@@ -776,6 +793,7 @@ export const layer = Layer.mergeAll(
   // Shares the ONE DeepAgentEventBus + ApprovalQueue + session stack with the rest of the runtime.
   goalTickConsumerLayer,
 ).pipe(
+  Layer.provideMerge(consumerRegistrationLayer),
   Layer.provideMerge(runtimeLayer),
 )
 

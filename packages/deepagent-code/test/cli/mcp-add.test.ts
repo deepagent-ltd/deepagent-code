@@ -1,5 +1,6 @@
 import { describe, expect } from "bun:test"
 import { Effect } from "effect"
+import { parse } from "jsonc-parser"
 import path from "path"
 import { cliIt } from "../lib/cli-process"
 
@@ -21,9 +22,8 @@ describe("deepagentCode mcp add (non-interactive subprocess)", () => {
         ])
         deepagentCode.expectExit(result, 0)
 
-        const config = yield* Effect.promise(() =>
-          Bun.file(path.join(home, ".config", "deepagent-code", "deepagent-code.json")).json(),
-        )
+        const configPath = path.join(home, ".deepagent", "code", "config.jsonc")
+        const config = parse(yield* Effect.promise(() => Bun.file(configPath).text()))
         expect(config.mcp.github).toEqual({
           type: "remote",
           url: "https://example.com/mcp",
@@ -32,6 +32,9 @@ describe("deepagentCode mcp add (non-interactive subprocess)", () => {
             "X-Option": "one=two",
           },
         })
+        expect(
+          yield* Effect.promise(() => Bun.file(path.join(home, ".config", "deepagent-code", "deepagent-code.json")).exists()),
+        ).toBe(false)
       }),
     60_000,
   )
@@ -57,9 +60,8 @@ describe("deepagentCode mcp add (non-interactive subprocess)", () => {
         ])
         deepagentCode.expectExit(result, 0)
 
-        const config = yield* Effect.promise(() =>
-          Bun.file(path.join(home, ".config", "deepagent-code", "deepagent-code.json")).json(),
-        )
+        const configPath = path.join(home, ".deepagent", "code", "config.jsonc")
+        const config = parse(yield* Effect.promise(() => Bun.file(configPath).text()))
         expect(config.mcp.local).toEqual({
           type: "local",
           command: ["npx", "-y", "@example/server", "--label", "two words"],
@@ -68,6 +70,9 @@ describe("deepagentCode mcp add (non-interactive subprocess)", () => {
             VALUE: "one=two",
           },
         })
+        expect(
+          yield* Effect.promise(() => Bun.file(path.join(home, ".config", "deepagent-code", "deepagent-code.json")).exists()),
+        ).toBe(false)
       }),
     60_000,
   )

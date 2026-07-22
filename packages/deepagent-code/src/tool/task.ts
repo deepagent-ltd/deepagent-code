@@ -176,7 +176,8 @@ interface AttemptBundle {
   readonly metadata: AttemptMetadata
   readonly markFinished: (state: "completed" | "error" | "cancelled" | "interrupted", reason?: "human" | "parent_interrupted" | "timeout" | "takeover" | "runtime_error") => Effect.Effect<void, unknown>
   readonly inject: (state: "completed" | "error", text: string, takeovers: number) => Effect.Effect<unknown, unknown>
-  readonly mergeWorktree: () => Effect.Effect<void, unknown>
+  readonly automaticWriteIsolation: boolean
+  readonly mergeWorktree: () => Effect.Effect<boolean, unknown>
   readonly teardownWorktree: (force: boolean) => Effect.Effect<unknown, unknown>
 }
 
@@ -469,8 +470,9 @@ export const TaskTool = Tool.define(
           // worktree for recovery; teardownWorktree(false) is then called by the caller to keep it.
           //
           // We resolve Git.Service here (at bundle-build time inside startAttempt) so that
-          // mergeWorktree itself can be typed as () => Effect<void, unknown> (no service requirements):
-          // the service is captured in the closure, not re-required at call time.
+          // mergeWorktree itself can be typed without service requirements: the service is captured
+          // in the closure. `true` reports a successful automatic merge, whose worker may be removed.
+          // `false` means no automatic merge was applicable and therefore must keep fail-closed cleanup.
           const automaticWriteIsolation = params.isolation !== "worktree" && !!a.worktreeInfo
           const parentDir = parent.directory
           const gitOpt = yield* Effect.serviceOption(Git.Service)
@@ -479,10 +481,10 @@ export const TaskTool = Tool.define(
               ? yield* gitOpt.value.resolveRef(parentDir).pipe(Effect.orElseSucceed(() => undefined))
               : undefined
           const mergeWorktree = Effect.fn("TaskTool.mergeWorktree")(function* () {
-            if (!a.worktreeInfo || !automaticWriteIsolation || !parentDir || Option.isNone(gitOpt)) return
+            if (!a.worktreeInfo || !automaticWriteIsolation || !parentDir || Option.isNone(gitOpt)) return false
             const git = gitOpt.value
             const workerBranch = a.worktreeInfo.branch
-            if (!workerBranch) return // detached HEAD on worker — nothing to merge
+            if (!workerBranch) return false // detached HEAD on worker — nothing to merge
             const currentParentHead = yield* git.resolveRef(parentDir).pipe(Effect.orElseSucceed(() => undefined))
             if (currentParentHead !== parentBaselineHead) {
               // Parent advanced — preserve worker for human resolution; caller treats this as merge failure.
@@ -495,7 +497,7 @@ export const TaskTool = Tool.define(
               )
             }
             const result = yield* git.mergeInto(parentDir, workerBranch)
-            if (result.type === "merged") return
+            if (result.type === "merged") return true
             // On conflict or failure: abort merge state so parent checkout is usable, then re-throw
             // so the caller knows to preserve the worker worktree.
             yield* git.abortMerge(parentDir).pipe(Effect.ignore)
@@ -516,6 +518,7 @@ export const TaskTool = Tool.define(
             worktree: a.worktree,
             nextSession: a.nextSession,
             metadata,
+            automaticWriteIsolation,
             markFinished,
             inject,
             mergeWorktree,
@@ -593,7 +596,6 @@ export const TaskTool = Tool.define(
             if (outcome.kind === "promoted") return backgroundResult(b)
             if (outcome.kind === "completed") {
               const merged = yield* b.mergeWorktree().pipe(
-                Effect.as(true),
                 Effect.catchCause((cause) =>
                   Effect.gen(function* () {
                     const diagnostic = Cause.squash(cause)
@@ -604,9 +606,9 @@ export const TaskTool = Tool.define(
                   }),
                 ),
               )
-              if (!merged) return yield* Effect.fail(new Error("Worktree merge-back failed"))
+              if (!merged && b.automaticWriteIsolation) return yield* Effect.fail(new Error("Worktree merge-back failed"))
               yield* b.markFinished("completed")
-              yield* b.teardownWorktree(true)
+              yield* b.teardownWorktree(merged)
               return {
                 title: params.description,
                 metadata: b.metadata,
@@ -663,7 +665,6 @@ export const TaskTool = Tool.define(
             const status = waited.info?.status
             if (!waited.timedOut && status === "completed") {
               const merged = yield* b.mergeWorktree().pipe(
-                Effect.as(true),
                 Effect.catchCause((cause) =>
                   Effect.gen(function* () {
                     const diagnostic = Cause.squash(cause)
@@ -674,9 +675,9 @@ export const TaskTool = Tool.define(
                   }),
                 ),
               )
-              if (!merged) return
+              if (!merged && b.automaticWriteIsolation) return
               yield* b.markFinished("completed")
-              yield* b.teardownWorktree(true)
+              yield* b.teardownWorktree(merged)
               yield* b.inject("completed", waited.info?.output ?? "", takeovers)
               return
             }
