@@ -2,10 +2,10 @@ import { Context, Effect, Layer, Option } from "effect"
 import { Daemon } from "./daemon"
 import { ServerMode } from "./server-mode"
 
-export interface Transport {
-  readonly url: string
-  readonly headers: RequestInit["headers"]
-  readonly fetch?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
+// The local daemon has no custom fetch, so Connection widens the server-mode
+// transport shape instead of redefining it.
+export interface Transport extends Omit<ServerMode.Transport, "fetch"> {
+  readonly fetch?: ServerMode.Transport["fetch"]
 }
 
 export interface Interface {

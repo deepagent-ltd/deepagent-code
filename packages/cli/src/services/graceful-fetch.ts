@@ -13,7 +13,10 @@ export const gracefulFetch = (base: (input: RequestInfo | URL, init?: RequestIni
     async (input: RequestInfo | URL, init?: RequestInit) => {
       const response = await base(input, init)
       if (response.status !== 404) return response
-      const fallback = legacyDefaults[new URL(input instanceof Request ? input.url : input).pathname]
+      // Server-mode requests arrive under the bare /w proxy prefix; strip it so
+      // the same legacy endpoints match in both daemon and gateway mode.
+      const pathname = new URL(input instanceof Request ? input.url : input).pathname.replace(/^\/w(?=\/|$)/, "")
+      const fallback = legacyDefaults[pathname]
       if (fallback === undefined) return response
       return Response.json(fallback)
     },

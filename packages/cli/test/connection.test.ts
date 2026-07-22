@@ -103,4 +103,19 @@ describe("Connection.transport", () => {
     if (Result.isFailure(result)) expect(String(result.failure)).toContain("No workspace selected")
     expect(daemon.calls).toBe(0)
   })
+
+  it("warns and falls back to the daemon when the pinned gateway has no matching login", async () => {
+    process.env.DEEPAGENT_GATEWAY_URL = base
+    const written: string[] = []
+    const original = process.stderr.write
+    process.stderr.write = ((chunk: unknown) => (written.push(String(chunk)), true)) as typeof process.stderr.write
+    try {
+      const result = await run(transport)
+      expect(result.url).toBe("daemon://local")
+      expect(daemon.calls).toBe(1)
+      expect(written.join("")).toContain("Falling back to the local daemon")
+    } finally {
+      process.stderr.write = original
+    }
+  })
 })

@@ -13,11 +13,11 @@ export default Runtime.handler(
     const current = yield* serverMode
       .status()
       .pipe(Effect.map((state) => (Option.isSome(state) ? state.value.workspaceId : undefined)))
-    for (const workspace of list) {
+    list.forEach((workspace) => {
       const selected = current === workspace.id ? "*" : " "
       process.stdout.write(
         `${selected} ${workspace.id}  ${workspace.name ?? "-"}  ${workspace.status ?? "-"}` + EOL,
       )
-    }
+    })
   }),
 )

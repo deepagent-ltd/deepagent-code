@@ -34,6 +34,17 @@ describe("gracefulFetch", () => {
     expect(await response.json()).toEqual({ all: [], default: {}, connected: [] })
   })
 
+  it("matches legacy endpoints under the server-mode /w proxy prefix", async () => {
+    const base = async () => new Response(null, { status: 404 })
+    const fetcher = gracefulFetch(base)
+    expect(await (await fetcher("http://gateway/w/config")).json()).toEqual({})
+    expect(await (await fetcher("http://gateway/w/agent")).json()).toEqual([])
+    expect(await (await fetcher("http://gateway/w/config/providers")).json()).toEqual({
+      providers: [],
+      default: {},
+    })
+  })
+
   it("delegates to the injected base fetch — the server-mode transport seam", async () => {
     const seen: string[] = []
     const base = async (input: RequestInfo | URL) => {

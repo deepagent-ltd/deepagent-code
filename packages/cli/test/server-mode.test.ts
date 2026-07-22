@@ -159,6 +159,22 @@ describe("ServerMode.login", () => {
     expect(Result.isFailure(result)).toBe(true)
     if (Result.isFailure(result)) expect(String(result.failure)).toContain("bad credentials")
   })
+
+  it("keeps the selected workspace when re-logging into the same gateway", async () => {
+    const state = await run(
+      service.pipe(
+        Effect.flatMap((s) => s.login(base, "a@b.c", "pw")),
+        Effect.flatMap(() => service),
+        Effect.flatMap((s) => s.useWorkspace("ctr-1")),
+        Effect.flatMap(() => service),
+        Effect.flatMap((s) => s.login(base, "a@b.c", "pw")),
+        Effect.flatMap(() => service),
+        Effect.flatMap((s) => s.status()),
+      ),
+    )
+    expect(Option.isSome(state)).toBe(true)
+    if (Option.isSome(state)) expect(state.value.workspaceId).toBe("ctr-1")
+  })
 })
 
 describe("ServerMode.workspaces", () => {

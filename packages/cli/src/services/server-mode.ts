@@ -4,7 +4,7 @@ import path from "path"
 
 export interface Transport {
   readonly url: string
-  readonly headers: Record<string, string>
+  readonly headers: RequestInit["headers"]
   readonly fetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
 }
 
@@ -41,6 +41,8 @@ export const layer = Layer.effect(
     const directory = Global.Path.state
     const file = path.join(directory, "server-mode.json")
 
+    // A missing or corrupt state file decodes as "logged out" everywhere read
+    // is used via Effect.option; the next login rewrites the file.
     const read = Effect.fnUntraced(function* () {
       const text = yield* fs.readFileString(file)
       return yield* Schema.decodeUnknownEffect(Schema.fromJsonString(State))(text)
@@ -181,11 +183,18 @@ export const layer = Layer.effect(
         typeof body.refresh_token === "string"
           ? body.refresh_token
           : cookie?.match(/(?:^|;\s*)refresh_token=([^;]+)/)?.[1]
+      // Re-login against the same gateway keeps the selected workspace;
+      // the container id survives credential rotation.
+      const previous = yield* read().pipe(Effect.option)
       const state: State = {
         gatewayUrl,
         accessToken: body.accessToken,
         refreshToken,
         expiresAt: typeof body.expires_in === "number" ? Date.now() + body.expires_in * 1000 : undefined,
+        workspaceId:
+          Option.isSome(previous) && previous.value.gatewayUrl === gatewayUrl
+            ? previous.value.workspaceId
+            : undefined,
       }
       yield* write(state)
       return state
@@ -210,14 +219,15 @@ export const layer = Layer.effect(
       // The gateway maps each user to a single container (one workspace per
       // user). GET 404 means none exists yet; POST is the idempotent ensure
       // that provisions it (200 exists | 202 provisioning).
-      let response = yield* authed(`${resolved.value.gatewayUrl}/control/v1/containers`)
-      if (response.status === 404) {
-        response = yield* authed(`${resolved.value.gatewayUrl}/control/v1/containers`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: "{}",
-        })
-      }
+      const found = yield* authed(`${resolved.value.gatewayUrl}/control/v1/containers`)
+      const response =
+        found.status === 404
+          ? yield* authed(`${resolved.value.gatewayUrl}/control/v1/containers`, {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: "{}",
+            })
+          : found
       if (!response.ok) {
         const message = yield* gatewayError(response)
         return yield* Effect.fail(new Error(`Failed to list workspaces: ${message}`))
@@ -250,10 +260,19 @@ export const layer = Layer.effect(
     })
 
     const transport = Effect.fn("cli.server-mode.transport")(function* () {
-      const resolved = yield* resolve()
+      // A pinned gateway without a matching login must not brick local usage:
+      // warn and return none so Connection falls back to the local daemon.
+      // Command paths (workspaces, useWorkspace) keep the fail-fast login hint.
+      const resolved = yield* resolve().pipe(
+        Effect.catch((error) =>
+          Effect.sync(() => {
+            process.stderr.write(`${error.message} Falling back to the local daemon.\n`)
+            return Option.none<{ gatewayUrl: string; state: State }>()
+          }),
+        ),
+      )
       if (Option.isNone(resolved)) return Option.none()
-      const { gatewayUrl, state } = resolved.value
-      if (!state.workspaceId)
+      if (!resolved.value.state.workspaceId)
         return yield* Effect.fail(
           new Error(
             "No workspace selected. Run `dacode workspace list` and `dacode workspace use <id>` first.",
@@ -277,7 +296,7 @@ export const layer = Layer.effect(
       // The data-plane proxy locates the caller's container from the JWT, so
       // the base URL is a bare `/w` without a workspace id segment.
       return Option.some({
-        url: `${gatewayUrl}/w`,
+        url: `${resolved.value.gatewayUrl}/w`,
         headers: {},
         fetch: remote,
       })
