@@ -1,6 +1,6 @@
 export * as PanelConveneConsumer from "./panel-convene-consumer"
 
-import { Context, Effect, Layer, Stream, Schedule, Duration, Cause } from "effect"
+import { Context, Deferred, Effect, Layer, Stream, Schedule, Duration, Cause } from "effect"
 import { DeepAgentEventBus } from "@deepagent-code/core/deepagent/deepagent-event-bus"
 import { DeepAgentEvent } from "@deepagent-code/core/deepagent/deepagent-event"
 import { LMNEvents } from "@deepagent-code/core/deepagent/lmn-events"
@@ -255,9 +255,12 @@ export const layerWith = (options: LayerOptions) =>
         })
 
       if (runLoop) {
+        yield* bus.registerConsumerGroup(CONVENE_GROUP)
+        const ready = yield* Deferred.make<void>()
         yield* bus
           .subscribe({ group: CONVENE_GROUP })
           .pipe(
+            Stream.onStart(Deferred.succeed(ready, undefined)),
             Stream.runForEach((event) =>
               handle(event).pipe(
                 Effect.catchCause((cause) =>
@@ -268,6 +271,7 @@ export const layerWith = (options: LayerOptions) =>
             ),
             Effect.forkScoped,
           )
+        yield* Deferred.await(ready)
 
         yield* pumpRetries()
           .pipe(

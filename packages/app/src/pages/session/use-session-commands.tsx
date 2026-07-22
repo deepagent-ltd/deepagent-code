@@ -10,7 +10,7 @@ import { usePermission } from "@/context/permission"
 import { usePrompt } from "@/context/prompt"
 import { useSDK } from "@/context/sdk"
 import { useSync } from "@/context/sync"
-import { useTerminal } from "@/context/terminal"
+import { useTerminalHosts } from "@/context/terminal"
 import { showToast } from "@/utils/toast"
 import { findLast } from "@deepagent-code/core/util/array"
 import { createSessionTabs } from "@/pages/session/helpers"
@@ -43,7 +43,7 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
   const prompt = usePrompt()
   const sdk = useSDK()
   const sync = useSync()
-  const terminal = useTerminal()
+  const terminalHosts = useTerminalHosts()
   const layout = useLayout()
   const navigate = useNavigate()
   const { params, tabs, view } = useSessionLayout()
@@ -259,8 +259,9 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
     addSelectionToContext(path, selectionFromLines(range))
   }
 
+  // Phase 3: openTerminal always creates in the bottom host and opens the bottom panel.
   const openTerminal = () => {
-    terminal.new()
+    void terminalHosts.bottom.new()
     view().panel.reveal("terminal")
   }
 
@@ -518,7 +519,7 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
       title: language.t("command.problems.reveal"),
       onSelect: () => view().panel.reveal("problems"),
     }),
-    ...(["terminal", "debug-console", "problems"] as const).flatMap((id) => {
+    ...(["debug-console", "problems"] as const).flatMap((id) => {
       const label = language.t(`session.panel.${id === "debug-console" ? "debugConsole" : id}`)
       const location = view().panel.location(id)
       return [
@@ -540,6 +541,12 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
           onSelect: () => view().panel.move(id, "bottom"),
         }),
       ]
+    }),
+    // Phase 3: terminal show command always opens bottom terminal (no move commands).
+    viewCommand({
+      id: "panel.terminal.show",
+      title: `${language.t("session.panel.showView")}: ${language.t("session.panel.terminal")}`,
+      onSelect: () => view().panel.reveal("terminal"),
     }),
     viewCommand({
       id: "review.toggle",
@@ -569,13 +576,14 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
     }),
   ]
 
-  const terminalOpen = () => {
-    const panel = view().panel
-    return panel.location("terminal") === "bottom"
-      ? panel.bottom.opened() && panel.bottom.activeView() === "terminal"
-      : view().rightPanel.mode() === "terminal"
-  }
-  const focusedPane = () => terminal.focusedPaneId()
+  // Phase 3: terminal commands route to the bottom host. The side terminal is
+  // opened from the right-panel rail (session-side-panel.tsx) rather than commands.
+  const bottomTerminalOpen = () =>
+    view().panel.bottom.opened() && view().panel.bottom.activeView() === "terminal"
+  const sideTerminalOpen = () => view().rightPanel.mode() === "terminal"
+  const terminalOpen = () => bottomTerminalOpen() || sideTerminalOpen()
+  // Keybind commands operate on the bottom terminal session.
+  const focusedPane = () => terminalHosts.bottom.focusedPaneId()
   const terminalCmds = () => [
     terminalCommand({
       id: "terminal.new",
@@ -585,53 +593,47 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
       onSelect: openTerminal,
     }),
     terminalCommand({
-      // V3.7 review P1-1: split/close moved to the ctrl+alt+* family (matching
-      // terminal.new's ctrl+alt+t) to avoid colliding with fileTree.toggle (mod+\)
-      // and tab.close (mod+w) — mod resolves to ctrl on non-Mac, so ctrl+\/ctrl+w
-      // were being preempted by the earlier-registered view/file commands.
-      // Only a left/right (side-by-side) split is exposed. Keep the command and
-      // toolbar on the same direction so both entry points have identical layout.
       id: "terminal.split",
       title: language.t("command.terminal.split"),
       description: language.t("command.terminal.split.description"),
       keybind: "ctrl+alt+\\",
-      disabled: !terminalOpen() || !terminal.canSplit(focusedPane()),
-      onSelect: () => terminal.split("horizontal"),
+      disabled: !bottomTerminalOpen() || !terminalHosts.bottom.canSplit(focusedPane()),
+      onSelect: () => void terminalHosts.bottom.split("horizontal"),
     }),
     terminalCommand({
       id: "terminal.closePane",
       title: language.t("command.terminal.closePane"),
       keybind: "ctrl+alt+w",
-      disabled: !terminalOpen(),
-      onSelect: () => void terminal.closePane(focusedPane()),
+      disabled: !bottomTerminalOpen(),
+      onSelect: () => void terminalHosts.bottom.closePane(focusedPane()),
     }),
     terminalCommand({
       id: "terminal.focus.left",
       title: language.t("command.terminal.focus.left"),
       keybind: "ctrl+arrowleft",
-      disabled: !terminalOpen(),
-      onSelect: () => terminal.focusNeighbor("left"),
+      disabled: !bottomTerminalOpen(),
+      onSelect: () => terminalHosts.bottom.focusNeighbor("left"),
     }),
     terminalCommand({
       id: "terminal.focus.right",
       title: language.t("command.terminal.focus.right"),
       keybind: "ctrl+arrowright",
-      disabled: !terminalOpen(),
-      onSelect: () => terminal.focusNeighbor("right"),
+      disabled: !bottomTerminalOpen(),
+      onSelect: () => terminalHosts.bottom.focusNeighbor("right"),
     }),
     terminalCommand({
       id: "terminal.focus.up",
       title: language.t("command.terminal.focus.up"),
       keybind: "ctrl+arrowup",
-      disabled: !terminalOpen(),
-      onSelect: () => terminal.focusNeighbor("up"),
+      disabled: !bottomTerminalOpen(),
+      onSelect: () => terminalHosts.bottom.focusNeighbor("up"),
     }),
     terminalCommand({
       id: "terminal.focus.down",
       title: language.t("command.terminal.focus.down"),
       keybind: "ctrl+arrowdown",
-      disabled: !terminalOpen(),
-      onSelect: () => terminal.focusNeighbor("down"),
+      disabled: !bottomTerminalOpen(),
+      onSelect: () => terminalHosts.bottom.focusNeighbor("down"),
     }),
   ]
 

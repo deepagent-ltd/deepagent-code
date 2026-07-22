@@ -1,6 +1,6 @@
 import { createStore } from "solid-js/store"
 import { createSimpleContext } from "@deepagent-code/ui/context"
-import { batch, createMemo, createSignal, onCleanup, onMount } from "solid-js"
+import { batch, createContext, createMemo, createSignal, onCleanup, onMount, useContext, type JSX, type ParentProps } from "solid-js"
 import { useSDK } from "./sdk"
 import { usePlatform, type Platform } from "./platform"
 import { useServer } from "./server"
@@ -727,8 +727,11 @@ function createWorkspaceTerminalSession(
 
 /** @internal */ export const TerminalTesting = { createWorkspaceTerminalSession }
 
-export const { use: useTerminal, provider: TerminalProvider } = createSimpleContext({
-  name: "Terminal",
+export type TerminalHostID = "bottom" | "side"
+
+// Dual-host provider — creates independent bottom and side sessions sharing one PTY service.
+const { use: useTerminalDual, provider: TerminalProvider } = createSimpleContext({
+  name: "TerminalDual",
   gate: false,
   init: () => {
     const sdk = useSDK()
@@ -737,9 +740,10 @@ export const { use: useTerminal, provider: TerminalProvider } = createSimpleCont
     const scope = server.scope()
     let runtimeId: string | undefined
     let runtimeRequest: Promise<void> | undefined
-    let terminal: TerminalSession | undefined
+    let bottomSession: TerminalSession | undefined
+    let sideSession: TerminalSession | undefined
 
-    const ensureRuntime = () => {
+    const ensureRuntime = (): Promise<void> => {
       if (runtimeRequest) return runtimeRequest
       runtimeRequest = sdk.client.global
         .health({ cache: "no-store" })
@@ -752,7 +756,8 @@ export const { use: useTerminal, provider: TerminalProvider } = createSimpleCont
           if (runtimeId === next) return
           console.info("[terminal] server runtime changed", { previousRuntimeId: runtimeId, runtimeId: next })
           runtimeId = next
-          terminal?.resetRuntime()
+          bottomSession?.resetRuntime()
+          sideSession?.resetRuntime()
         })
         .catch((error) => {
           if (import.meta.env.DEV) console.debug("[terminal] runtime check failed", error)
@@ -760,26 +765,63 @@ export const { use: useTerminal, provider: TerminalProvider } = createSimpleCont
         .finally(() => {
           runtimeRequest = undefined
         })
-      return runtimeRequest
+      return runtimeRequest as Promise<void>
     }
 
-    terminal = createWorkspaceTerminalSession(sdk, { id: () => runtimeId, ensure: ensureRuntime })
-    const registered = { dir: sdk.directory, scope, value: terminal }
-    sessions.add(registered)
+    const runtime = { id: () => runtimeId, ensure: ensureRuntime }
+    bottomSession = createWorkspaceTerminalSession(sdk, runtime)
+    sideSession = createWorkspaceTerminalSession(sdk, runtime)
+
+    const bottomReg = { dir: sdk.directory, scope, value: bottomSession }
+    const sideReg = { dir: sdk.directory, scope, value: sideSession }
+    sessions.add(bottomReg)
+    sessions.add(sideReg)
     removeTerminalPersistence(sdk.directory, undefined, platform, scope)
 
     onMount(() => {
       void ensureRuntime()
       const timer = setInterval(() => {
-        if (terminal?.all().length) void ensureRuntime()
+        if (bottomSession?.all().length || sideSession?.all().length) void ensureRuntime()
       }, RUNTIME_POLL_MS)
       onCleanup(() => clearInterval(timer))
     })
     onCleanup(() => {
-      sessions.delete(registered)
-      terminal?.clear()
+      sessions.delete(bottomReg)
+      sessions.delete(sideReg)
+      bottomSession?.clear()
+      sideSession?.clear()
     })
 
-    return terminal
+    return { bottom: bottomSession, side: sideSession }
   },
 })
+
+// Re-export TerminalProvider for app.tsx
+export { TerminalProvider }
+
+// useTerminalHosts — returns { bottom, side } for callers that need to address a specific host.
+export function useTerminalHosts() {
+  return useTerminalDual()
+}
+
+// Per-render-tree host context — populated by BottomTerminalProvider / SideTerminalProvider.
+// All components inside terminal-view.tsx (TerminalPanes, TerminalActions, …) consume this.
+const TerminalHostContext = createContext<TerminalSession | undefined>(undefined)
+
+export function useTerminal(): TerminalSession {
+  const ctx = useContext(TerminalHostContext)
+  if (!ctx) throw new Error("useTerminal must be called inside BottomTerminalProvider or SideTerminalProvider")
+  return ctx
+}
+
+/** Wrap the bottom-dock rendering subtree so all terminal-view components target the bottom session. */
+export function BottomTerminalProvider(props: ParentProps) {
+  const hosts = useTerminalDual()
+  return <TerminalHostContext.Provider value={hosts.bottom}>{props.children}</TerminalHostContext.Provider>
+}
+
+/** Wrap the side-panel rendering subtree so all terminal-view components target the side session. */
+export function SideTerminalProvider(props: ParentProps) {
+  const hosts = useTerminalDual()
+  return <TerminalHostContext.Provider value={hosts.side}>{props.children}</TerminalHostContext.Provider>
+}

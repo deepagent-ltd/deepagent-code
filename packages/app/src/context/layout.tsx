@@ -105,6 +105,8 @@ type SessionView = {
   // U3/U4/U7: added "worktree" (isolated worktree diff/merge), "subagents" (child-session list),
   // "browser" (isolated WebContentsView).
   // T3.2: the "menu" mode is gone — an always-on icon rail replaced the full-panel menu list.
+  // Phase 2: "oversight" removed as standalone panel; kept in union only for backward-compat
+  // migration — any stored "oversight" is silently mapped to "subagents" at read time.
   rightPanelMode?:
     | "review"
     | "files"
@@ -326,7 +328,7 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
       { ...target, migrate },
       createStore({
         sidebar: {
-          opened: false,
+          opened: true,
           width: DEFAULT_SIDEBAR_WIDTH,
           workspaces: {} as Record<string, boolean>,
           workspacesDefault: false,
@@ -731,12 +733,16 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
         },
       },
       dock: {
-        // Deprecated compatibility metadata. New UI must use view(session).panel;
-        // only locations and the shared Bottom Panel dimension remain global.
+        // Phase 3: terminal is now side-native in the right panel (independent host).
+        // dock.location("terminal") is forced to "bottom" to avoid stale stored "side"
+        // values making the bottom terminal unreachable. Move operations for terminal
+        // are intentionally no-ops; only debug-console and problems remain movable.
         location(id: DockPanelID): DockLocation {
+          if (id === "terminal") return "bottom"
           return store.dock?.location?.[id] ?? DOCK_DEFAULT_LOCATION[id]
         },
         setLocation(id: DockPanelID, location: DockLocation) {
+          if (id === "terminal") return // terminal location is now fixed
           if (!store.dock) {
             setStore("dock", { location: { [id]: location } as Record<DockPanelID, DockLocation> })
             return
@@ -744,6 +750,7 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
           setStore("dock", "location", id, location)
         },
         move(id: DockPanelID) {
+          if (id === "terminal") return // terminal is no longer movable
           const current = store.dock?.location?.[id] ?? DOCK_DEFAULT_LOCATION[id]
           const next: DockLocation = current === "bottom" ? "side" : "bottom"
           if (!store.dock) {
@@ -753,7 +760,7 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
           setStore("dock", "location", id, next)
         },
         bottomCount: createMemo(
-          () => DOCK_PANEL_IDS.filter((id) => (store.dock?.location?.[id] ?? DOCK_DEFAULT_LOCATION[id]) === "bottom").length,
+          () => DOCK_PANEL_IDS.filter((id) => (id === "terminal" ? true : (store.dock?.location?.[id] ?? DOCK_DEFAULT_LOCATION[id]) === "bottom")).length,
         ),
       },
       review: {
@@ -905,7 +912,13 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
         const key = createSessionKeyReader(sessionKey, ensureKey)
         const s = createMemo(() => store.sessionView[key()] ?? { scroll: {} })
         const reviewPanelOpened = createMemo(() => store.review?.panelOpened ?? true)
-        const rightPanelMode = createMemo(() => store.sessionView[key()]?.rightPanelMode)
+        const rightPanelMode = createMemo(() => {
+          const mode = store.sessionView[key()]?.rightPanelMode
+          // Phase 2 backward-compat: "oversight" was merged into "subagents". Any session that
+          // persisted "oversight" should silently open the unified subagents panel instead.
+          if (mode === "oversight") return "subagents" as SessionRightPanelMode
+          return mode
+        })
         const bottomPanel = createMemo(() => {
           const current = store.sessionView[key()]
           // One-way compatibility migration from the pre-panel global terminal flag.
