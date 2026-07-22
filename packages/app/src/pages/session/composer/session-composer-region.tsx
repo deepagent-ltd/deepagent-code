@@ -40,6 +40,7 @@ export function SessionComposerRegion(props: {
     onAbort: () => void
     onSend: (id: string) => void
     onEdit: (id: string) => void
+    onDelete: (id: string) => void
     onEditLoaded: () => void
   }
   revert?: {
@@ -279,6 +280,7 @@ export function SessionComposerRegion(props: {
                   sending={props.followup!.sending}
                   onSend={props.followup!.onSend}
                   onEdit={props.followup!.onEdit}
+                  onDelete={props.followup!.onDelete}
                 />
               </Show>
               <Show

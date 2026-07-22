@@ -1444,11 +1444,10 @@ export default function Page() {
   })
 
   const followupMutation = useMutation(() => ({
-    mutationFn: async (input: { sessionID: string; id: string; manual?: boolean }) => {
+    mutationFn: async (input: { sessionID: string; id: string }) => {
       const item = (followup.items[input.sessionID] ?? []).find((entry) => entry.id === input.id)
       if (!item) return
 
-      if (input.manual) setFollowup("paused", input.sessionID, undefined)
       setFollowup("failed", input.sessionID, undefined)
 
       const ok = await sendFollowupDraft({
@@ -1466,7 +1465,7 @@ export default function Page() {
       if (!ok) return
 
       setFollowup("items", input.sessionID, (items) => (items ?? []).filter((entry) => entry.id !== input.id))
-      if (input.manual) resumeScroll()
+      resumeScroll()
     },
   }))
 
@@ -1483,7 +1482,9 @@ export default function Page() {
   const queueEnabled = createMemo(() => {
     const id = params.id
     if (!id) return false
-    return settings.general.followup() === "queue" && busy(id) && !composer.blocked() && !isChildSession()
+    // Steers are deliberate mid-turn instructions. Keep them locally editable until the
+    // user explicitly sends from the dock; only then does promptAsync admit them server-side.
+    return busy(id) && !composer.blocked() && !isChildSession()
   })
 
   const followupText = (item: FollowupDraft) => {
@@ -1514,13 +1515,13 @@ export default function Page() {
 
   const followupDock = createMemo(() => queuedFollowups().map((item) => ({ id: item.id, text: followupText(item) })))
 
-  const sendFollowup = (sessionID: string, id: string, opts?: { manual?: boolean }) => {
+  const sendFollowup = (sessionID: string, id: string) => {
     if (sync.session.get(sessionID)?.parentID) return Promise.resolve()
     const item = (followup.items[sessionID] ?? []).find((entry) => entry.id === id)
     if (!item) return Promise.resolve()
     if (followupBusy(sessionID)) return Promise.resolve()
 
-    return followupMutation.mutateAsync({ sessionID, id, manual: opts?.manual })
+    return followupMutation.mutateAsync({ sessionID, id })
   }
 
   const editFollowup = (id: string) => {
@@ -1538,6 +1539,15 @@ export default function Page() {
       prompt: item.prompt,
       context: item.context,
     })
+  }
+
+  const deleteFollowup = (id: string) => {
+    const sessionID = params.id
+    if (!sessionID) return
+    if (followupBusy(sessionID)) return
+
+    setFollowup("items", sessionID, (items) => (items ?? []).filter((entry) => entry.id !== id))
+    setFollowup("failed", sessionID, (value) => (value === id ? undefined : value))
   }
 
   const clearFollowupEdit = () => {
@@ -1661,22 +1671,6 @@ export default function Page() {
 
   const actions = { revert, fork }
 
-  createEffect(() => {
-    const sessionID = params.id
-    if (!sessionID) return
-
-    const item = queuedFollowups()[0]
-    if (!item) return
-    if (followupBusy(sessionID)) return
-    if (followup.failed[sessionID] === item.id) return
-    if (followup.paused[sessionID]) return
-    if (isChildSession()) return
-    if (composer.blocked()) return
-    if (busy(sessionID)) return
-
-    void sendFollowup(sessionID, item.id)
-  })
-
   createResizeObserver(
     () => promptDock,
     ({ height }) => {
@@ -1772,9 +1766,10 @@ export default function Page() {
                 setFollowup("paused", id, true)
               },
               onSend: (id) => {
-                void sendFollowup(params.id!, id, { manual: true })
+                void sendFollowup(params.id!, id)
               },
               onEdit: editFollowup,
+              onDelete: deleteFollowup,
               onEditLoaded: clearFollowupEdit,
             }
           : undefined
