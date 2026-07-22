@@ -35,7 +35,10 @@ export const Flag = {
   DEEPAGENT_CODE_COMMIT: process.env["DEEPAGENT_CODE_COMMIT"],
   // Server Edition: when running inside a gateway-managed workspace container,
   // provider keys are injected via env and must not persist to the volume (§20.4).
-  DEEPAGENT_SERVER_MODE: truthy("DEEPAGENT_SERVER_MODE"),
+  // Getter so tests can toggle it per-case (matches the experimental-flag pattern).
+  get DEEPAGENT_SERVER_MODE() {
+    return truthy("DEEPAGENT_SERVER_MODE")
+  },
 
   // Experimental
   DEEPAGENT_CODE_EXPERIMENTAL_FILEWATCHER: Config.boolean("DEEPAGENT_CODE_EXPERIMENTAL_FILEWATCHER").pipe(
