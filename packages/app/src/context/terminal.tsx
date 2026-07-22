@@ -52,6 +52,8 @@ export type LocalPTY = {
   titleNumber: number
   status: TerminalStatus
   error?: TerminalFailure
+  /** True when restored from cross-project navigation cache; cleared on first ready. */
+  restored?: boolean
 }
 
 export type TerminalStore = {
@@ -567,6 +569,7 @@ function createWorkspaceTerminalSession(
             titleNumber: p.titleNumber,
             status: "connecting" as TerminalStatus,
             error: undefined,
+            restored: true,
           })),
         )
         setRootSignal(clonePaneTree(snapshot.root))
@@ -671,7 +674,7 @@ function createWorkspaceTerminalSession(
     setStatus(id: string, ptyId: string, status: TerminalStatus, error?: TerminalFailure) {
       const index = store.all.findIndex((pty) => pty.id === id && pty.ptyId === ptyId)
       if (index === -1) return
-      setStore("all", index, { status, error: status === "ready" ? undefined : error })
+      setStore("all", index, { status, error: status === "ready" ? undefined : error, ...(status === "ready" ? { restored: false } : {}) })
     },
     update(input: Partial<LocalPTY> & { id: string }) {
       if (input.title === undefined) return
