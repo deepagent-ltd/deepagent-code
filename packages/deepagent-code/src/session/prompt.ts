@@ -2665,6 +2665,12 @@ export const layer = Layer.effect(
           sessionID: input.sessionID,
           text,
           delivery: "goal_steer",
+          // §S1.2 ID bridge: forward the client-supplied messageID so the steer row carries the same
+          // id as the frontend's optimistic message — prevents a duplicate entry when drainSteers
+          // materialises the steer into V1 history. PromptInput.messageID is a different Schema brand
+          // (MessageID vs SessionMessage.ID) but both are ascending-string ids at runtime; the cast is
+          // safe because sendFollowupDraft always mints via Identifier.ascending().
+          messageID: input.messageID as unknown as SessionMessage.ID | undefined,
         })
         // V4.1 governance audit — this is the REAL user goal-steer path (the ingress every busy-goal
         // steer flows through). Record the human intervention into the goal's Document Graph alongside
@@ -2680,13 +2686,17 @@ export const layer = Layer.effect(
         const message = yield* prompt(input)
         return { kind: "turn" as const, message }
       }
-      // Let steer() mint a fresh ascending SessionMessage.ID (tail-sorting, §S1.1 Check 3). We do NOT
-      // forward input.messageID: it is a PromptInput MessageID (a different brand) and a client-supplied id
-      // could be non-ascending and insert mid-history — breaking order + cache.
+      // §S1.2 ID bridge: forward the client-supplied messageID so the steer row carries the same id as
+      // the frontend's optimistic message — prevents a duplicate entry when drainSteers materialises
+      // the steer into V1 history. PromptInput.messageID is a different Schema brand (MessageID vs
+      // SessionMessage.ID) but both are ascending-string ids at runtime; the cast is safe because
+      // sendFollowupDraft always mints via Identifier.ascending(). steer() will still generate a fresh
+      // ascending id when messageID is omitted (e.g. non-async callers that don't supply one).
       const admitted = yield* steer({
         sessionID: input.sessionID,
         text: promptInputText(input.parts),
         delivery: "steer",
+        messageID: input.messageID as unknown as SessionMessage.ID | undefined,
       })
       // Race guard (see header): a pure-drain turn absorbs a steer stranded by the isBusy→admit window.
       yield* loop({ sessionID: input.sessionID, drainFirst: true }).pipe(Effect.ignore, Effect.forkIn(scope))
