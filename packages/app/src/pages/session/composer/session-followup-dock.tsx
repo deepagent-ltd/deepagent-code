@@ -10,6 +10,7 @@ export function SessionFollowupDock(props: {
   sending?: string
   onSend: (id: string) => void
   onEdit: (id: string) => void
+  onDelete: (id: string) => void
 }) {
   const language = useLanguage()
   const [store, setStore] = createStore({
@@ -99,6 +100,15 @@ export function SessionFollowupDock(props: {
                 >
                   {language.t("session.followupDock.edit")}
                 </Button>
+                <IconButton
+                  icon="close"
+                  size="small"
+                  variant="ghost"
+                  disabled={!!props.sending}
+                  onClick={() => props.onDelete(item.id)}
+                  title={language.t("session.followupDock.delete")}
+                  aria-label={language.t("session.followupDock.delete")}
+                />
               </div>
             )}
           </For>

@@ -7,7 +7,7 @@ import { IconButton } from "@deepagent-code/ui/icon-button"
 import { Tooltip } from "@deepagent-code/ui/tooltip"
 import { useLanguage } from "@/context/language"
 import { useLayout, type DockPanelID } from "@/context/layout"
-import { useTerminal } from "@/context/terminal"
+import { BottomTerminalProvider, useTerminal } from "@/context/terminal"
 import { terminalTabLabel } from "@/pages/session/terminal-label"
 import { createSizing } from "@/pages/session/helpers"
 import { setTerminalHandoff } from "@/pages/session/handoff"
@@ -22,7 +22,8 @@ type Props = {
   onOpenFile: (path: string, line: number) => void
 }
 
-export function TerminalPanel(props: Props) {
+/** Inner content rendered under BottomTerminalProvider context. */
+function TerminalPanelContent(props: Props) {
   const layout = useLayout()
   const terminal = useTerminal()
   const language = useLanguage()
@@ -32,6 +33,8 @@ export function TerminalPanel(props: Props) {
   const panel = () => view().panel
   const opened = createMemo(() => panel().bottom.opened())
   const active = createMemo(() => panel().bottom.activeView())
+  // Bottom panel only shows the non-terminal dock panels (debug-console, problems).
+  // Terminal is no longer a movable dock view — it is bottom-native here.
   const bottomTabs = createMemo<DockPanelID[]>(() => panel().viewsAt("bottom"))
   const visible = createMemo(() => opened())
   const [store, setStore] = createStore({
@@ -42,20 +45,17 @@ export function TerminalPanel(props: Props) {
   const max = () => store.view * 0.6
   const pane = () => Math.min(height(), max())
   const close = () => panel().bottom.toggle()
-  const terminalVisible = createMemo(() => {
-    const current = panel()
-    return current.location("terminal") === "bottom"
-      ? current.bottom.opened() && current.bottom.activeView() === "terminal"
-      : view().rightPanel.mode() === "terminal"
-  })
 
-  // This is the only lifecycle owner. Exactly one visible host mounts the pane
-  // tree; moving the panel reconnects renderers to the same runtime PTYs.
+  // Bottom terminal is visible when the bottom panel is open with terminal as active view.
+  const terminalVisible = createMemo(() =>
+    panel().bottom.opened() && panel().bottom.activeView() === "terminal",
+  )
+
+  // Lifecycle owner for the bottom host — auto-creates, auto-focuses, closes panel when empty.
   useTerminalLifecycle({
     active: terminalVisible,
     close: () => panel().toggle("terminal"),
-    rootEl: () =>
-      document.querySelector<HTMLElement>('[data-terminal-host="bottom"], [data-terminal-host="side"]') ?? root,
+    rootEl: () => document.querySelector<HTMLElement>('[data-terminal-host="bottom"]') ?? root,
   })
 
   onMount(() => {
@@ -149,20 +149,7 @@ export function TerminalPanel(props: Props) {
               <Show when={active() === "terminal"}>
                 <div class="h-4 w-px shrink-0 bg-border-weaker-base" aria-hidden="true" />
               </Show>
-              <Show when={active() && panel().sideAvailable()}>
-                <Tooltip value={language.t("session.panel.moveToSide")}>
-                  <IconButton
-                    icon="layout-right"
-                    variant="ghost"
-                    iconSize="normal"
-                    aria-label={language.t("session.panel.moveToSide")}
-                    onClick={() => {
-                      const current = active()
-                      if (current) panel().move(current, "side")
-                    }}
-                  />
-                </Tooltip>
-              </Show>
+              {/* "Move to side" button removed — bottom and side are now independent hosts. */}
               <Tooltip value={language.t("common.close")}>
                 <IconButton
                   icon="close"
@@ -178,22 +165,8 @@ export function TerminalPanel(props: Props) {
             <Show
               when={active()}
               fallback={
-                <div class="size-full flex flex-col items-center justify-center gap-2 text-13-regular text-text-weak">
+                <div class="size-full flex items-center justify-center text-13-regular text-text-weak">
                   <div>{language.t("session.panel.emptyBottom")}</div>
-                  <For
-                    each={(["terminal", "debug-console", "problems"] as DockPanelID[]).filter(
-                      (id) => panel().location(id) === "side",
-                    )}
-                  >
-                    {(id) => (
-                      <button
-                        class="text-13-medium text-text-info hover:underline"
-                        onClick={() => panel().move(id, "bottom")}
-                      >
-                        {language.t(PANEL_META[id].titleKey)}
-                      </button>
-                    )}
-                  </For>
                 </div>
               }
             >
@@ -226,5 +199,15 @@ export function TerminalPanel(props: Props) {
         </div>
       </div>
     </div>
+  )
+}
+
+/** Bottom-dock terminal panel. Provides the BottomTerminalProvider context so all
+ *  terminal-view components (TerminalPanes, TerminalActions, …) target the bottom session. */
+export function TerminalPanel(props: Props) {
+  return (
+    <BottomTerminalProvider>
+      <TerminalPanelContent {...props} />
+    </BottomTerminalProvider>
   )
 }
