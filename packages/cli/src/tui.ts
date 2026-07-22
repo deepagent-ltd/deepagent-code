@@ -3,13 +3,17 @@ import { TuiConfig } from "@deepagent-code/tui/config"
 import { Effect } from "effect"
 import { Global } from "@deepagent-code/core/global"
 
-export function runTui(transport: { url: string; headers: RequestInit["headers"] }) {
+export function runTui(transport: {
+  url: string
+  headers: RequestInit["headers"]
+  fetch?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
+}) {
   const config = TuiConfig.resolve({}, { terminalSuspend: false })
   return run({
     ...transport,
     args: {},
     config,
-    fetch: gracefulFetch,
+    fetch: gracefulFetch(transport.fetch ?? fetch),
     pluginHost: {
       async start() {},
       async dispose() {},
@@ -24,13 +28,14 @@ const legacyDefaults: Record<string, unknown> = {
   "/config": {},
 }
 
-const gracefulFetch = Object.assign(
-  async (input: RequestInfo | URL, init?: RequestInit) => {
-    const response = await fetch(input, init)
-    if (response.status !== 404) return response
-    const fallback = legacyDefaults[new URL(input instanceof Request ? input.url : input).pathname]
-    if (fallback === undefined) return response
-    return Response.json(fallback)
-  },
-  { preconnect: fetch.preconnect },
-)
+const gracefulFetch = (base: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>) =>
+  Object.assign(
+    async (input: RequestInfo | URL, init?: RequestInit) => {
+      const response = await base(input, init)
+      if (response.status !== 404) return response
+      const fallback = legacyDefaults[new URL(input instanceof Request ? input.url : input).pathname]
+      if (fallback === undefined) return response
+      return Response.json(fallback)
+    },
+    { preconnect: fetch.preconnect },
+  )
