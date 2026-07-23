@@ -413,6 +413,13 @@ export const SessionItem = (props: SessionItemProps): JSX.Element => {
             <ContextMenu.Item onSelect={() => void props.archiveSession(props.session)}>
               <ContextMenu.ItemLabel>{language.t("common.archive")}</ContextMenu.ItemLabel>
             </ContextMenu.Item>
+            <ContextMenu.Item
+              onSelect={() => {
+                void navigator.clipboard?.writeText(props.session.id)
+              }}
+            >
+              <ContextMenu.ItemLabel>{language.t("common.copyId")}</ContextMenu.ItemLabel>
+            </ContextMenu.Item>
             <ContextMenu.Separator />
             <ContextMenu.Item onSelect={deleteSession}>
               <ContextMenu.ItemLabel>{language.t("common.delete")}</ContextMenu.ItemLabel>
