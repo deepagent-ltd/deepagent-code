@@ -35,7 +35,139 @@ import { toolFileSourceFromUri, Usage, type LLMEvent } from "@deepagent-code/llm
 import { ToolOutput } from "@deepagent-code/core/tool-output"
 
 const DOOM_LOOP_THRESHOLD = 3
+const DOOM_LOOP_SEQUENCE_WINDOW = 12
+const DOOM_LOOP_MIN_REPEATS = 3
+const DOOM_LOOP_MAX_PERIOD = 4
 const log = Log.create({ service: "session.processor" })
+
+// ---------------------------------------------------------------------------
+// F1: Activity-level tool-call sequence tracker
+// ---------------------------------------------------------------------------
+
+/**
+ * Produce a canonical JSON string for any value.  Object keys are sorted
+ * recursively so that `{"b":1,"a":2}` and `{"a":2,"b":1}` produce the same
+ * fingerprint.  Array order is preserved.  `undefined` is serialised as
+ * `null` to match JSON semantics.
+ */
+function canonicalJson(value: unknown): string {
+  if (value === null || value === undefined) return "null"
+  if (typeof value !== "object") return JSON.stringify(value) ?? "null"
+  if (Array.isArray(value)) return "[" + value.map(canonicalJson).join(",") + "]"
+  const obj = value as Record<string, unknown>
+  const pairs = Object.keys(obj)
+    .sort()
+    .map((k) => JSON.stringify(k) + ":" + canonicalJson(obj[k]))
+  return "{" + pairs.join(",") + "}"
+}
+
+/** Build the stable fingerprint for one tool invocation. */
+function toolFingerprint(toolName: string, input: unknown): string {
+  return toolName + ":" + canonicalJson(input)
+}
+
+/**
+ * Activity-level sequence tracker.  One instance is created per durable
+ * user activity and shared across all processor instances (provider steps)
+ * within that activity.
+ *
+ * Lifecycle guarantees (enforced by the caller in prompt.ts):
+ *   - Created fresh at the start of every runLoop call.
+ *   - NOT process-global; NOT persisted across the whole session.
+ *   - Steer events that are merged into the current activity do NOT reset it.
+ */
+export class ToolSequenceTracker {
+  private readonly calls: { fingerprint: string; done: boolean }[] = []
+  private readonly callIdToIndex = new Map<string, number>()
+  private readonly triggeredSequences = new Set<string>()
+
+  /** Record a newly started (running) tool call. */
+  push(callId: string, fingerprint: string): void {
+    this.calls.push({ fingerprint, done: false })
+    this.callIdToIndex.set(callId, this.calls.length - 1)
+    if (this.calls.length > DOOM_LOOP_SEQUENCE_WINDOW) {
+      this.calls.shift()
+      // Adjust stored indices after the shift (oldest entry was removed).
+      for (const [id, idx] of this.callIdToIndex) {
+        const next = idx - 1
+        if (next < 0) this.callIdToIndex.delete(id)
+        else this.callIdToIndex.set(id, next)
+      }
+    }
+  }
+
+  /**
+   * Mark a call as done (completed or failed).  Must be called from
+   * settleToolCall so that the "prior calls must be done" invariant holds
+   * before the next tool starts.
+   */
+  markDone(callId: string): void {
+    const idx = this.callIdToIndex.get(callId)
+    if (idx !== undefined && idx >= 0 && idx < this.calls.length) {
+      this.calls[idx].done = true
+    }
+    this.callIdToIndex.delete(callId)
+  }
+
+  /**
+   * Detect a repeating sequence in the current window.
+   *
+   * Rules:
+   *   - The last call may be running (done = false) — it is the current call.
+   *   - All prior calls in the detection window must have left the pending
+   *     state (done = true).
+   *   - Period 1–4; at least DOOM_LOOP_MIN_REPEATS complete repetitions.
+   *
+   * Returns period/count/sequenceKey on detection, null otherwise.
+   */
+  detect(): { period: number; count: number; sequenceKey: string } | null {
+    if (this.calls.length === 0) return null
+    const fps = this.calls.map((c) => c.fingerprint)
+
+    for (let period = 1; period <= DOOM_LOOP_MAX_PERIOD; period++) {
+      const needed = period * DOOM_LOOP_MIN_REPEATS
+      if (fps.length < needed) continue
+
+      const windowCalls = this.calls.slice(-needed)
+      const windowFps = fps.slice(-needed)
+
+      // All calls except the last (which may still be running) must be done.
+      let priorAllDone = true
+      for (let i = 0; i < windowCalls.length - 1; i++) {
+        if (!windowCalls[i].done) {
+          priorAllDone = false
+          break
+        }
+      }
+      if (!priorAllDone) continue
+
+      const pattern = windowFps.slice(0, period)
+      let matches = true
+      for (let i = period; i < needed; i++) {
+        if (windowFps[i] !== pattern[i % period]) {
+          matches = false
+          break
+        }
+      }
+      if (matches) {
+        // Use NUL as separator — fingerprints contain ":" and tool output
+        // JSON but never raw NUL bytes.
+        return { period, count: DOOM_LOOP_MIN_REPEATS, sequenceKey: pattern.join("\x00") }
+      }
+    }
+    return null
+  }
+
+  /** True if this exact sequence has already raised a permission request. */
+  hasTriggered(sequenceKey: string): boolean {
+    return this.triggeredSequences.has(sequenceKey)
+  }
+
+  /** Record that a permission request was raised for this sequence. */
+  setTriggered(sequenceKey: string): void {
+    this.triggeredSequences.add(sequenceKey)
+  }
+}
 
 // PR-2: N-gram sliding-window degeneration detector for reasoning streams.
 // Detects repetitive/stuck output before it grows unbounded; configurable via
@@ -144,6 +276,13 @@ type Input = {
   assistantMessage: SessionV1.Assistant
   sessionID: SessionID
   model: Provider.Model
+  /**
+   * Shared sequence tracker for the current durable user activity.
+   * Created once in prompt.ts runLoop and passed to every processor.create
+   * call within the same activity so cross-message loops are detectable.
+   * Absent only in legacy callers that have not been updated yet.
+   */
+  sequenceTracker?: ToolSequenceTracker
 }
 
 export interface Interface {
@@ -204,6 +343,7 @@ export const layer = Layer.effect(
         assistantMessage: input.assistantMessage,
         sessionID: input.sessionID,
         model: input.model,
+        sequenceTracker: input.sequenceTracker,
         toolcalls: {},
         shouldBreak: false,
         snapshot: initialSnapshot,
@@ -226,6 +366,9 @@ export const layer = Layer.effect(
         })
 
       const settleToolCall = Effect.fn("SessionProcessor.settleToolCall")(function* (toolCallID: string) {
+        // Notify the activity-level tracker that this call has finished so it
+        // satisfies the "prior calls must be done" precondition for detection.
+        ctx.sequenceTracker?.markDone(toolCallID)
         const done = ctx.toolcalls[toolCallID]?.done
         delete ctx.toolcalls[toolCallID]
         if (done) yield* Deferred.succeed(done, undefined).pipe(Effect.ignore)
@@ -638,23 +781,64 @@ export const layer = Layer.effect(
                 : value.providerMetadata,
             }))
 
+            // ---------------------------------------------------------------
+            // F1: Activity-level cross-message loop detection (primary path)
+            // ---------------------------------------------------------------
+            if (ctx.sequenceTracker) {
+              const fp = toolFingerprint(value.name, input)
+              ctx.sequenceTracker.push(value.id, fp)
+              const detected = ctx.sequenceTracker.detect()
+              if (detected && !ctx.sequenceTracker.hasTriggered(detected.sequenceKey)) {
+                const agent = yield* agents.get(ctx.assistantMessage.agent)
+                yield* permission.ask({
+                  permission: "doom_loop",
+                  patterns: [value.name],
+                  sessionID: ctx.assistantMessage.sessionID,
+                  metadata: {
+                    tool: value.name,
+                    input,
+                    period: detected.period,
+                    count: detected.count,
+                  },
+                  always: [value.name],
+                  ruleset: agent.permission,
+                })
+                ctx.sequenceTracker.setTriggered(detected.sequenceKey)
+              }
+              // Tracker handles all detection for this call; skip legacy path.
+              return
+            }
+
+            // ---------------------------------------------------------------
+            // Legacy per-message detection (fallback when no tracker present)
+            // ---------------------------------------------------------------
             const parts = yield* MessageV2.parts(ctx.assistantMessage.id).pipe(
               Effect.provideService(Database.Service, database),
             )
             const recentParts = parts.slice(-DOOM_LOOP_THRESHOLD)
 
-            if (
-              recentParts.length !== DOOM_LOOP_THRESHOLD ||
-              !recentParts.every(
+            const singleRepeat =
+              recentParts.length === DOOM_LOOP_THRESHOLD &&
+              recentParts.every(
                 (part) =>
                   part.type === "tool" &&
                   part.tool === value.name &&
                   part.state.status !== "pending" &&
                   JSON.stringify(part.state.input) === JSON.stringify(input),
               )
-            ) {
-              return
-            }
+
+            const sequenceRepeat =
+              !singleRepeat &&
+              detectRepeatingSequence(
+                parts
+                  .filter(
+                    (part): part is SessionV1.ToolPart =>
+                      part.type === "tool" && part.state.status !== "pending",
+                  )
+                  .map((part) => `${part.tool}:${JSON.stringify(part.state.input)}`),
+              )
+
+            if (!singleRepeat && !sequenceRepeat) return
 
             const agent = yield* agents.get(ctx.assistantMessage.agent)
             yield* permission.ask({
@@ -1184,5 +1368,24 @@ export const defaultLayer = Layer.suspend(() =>
     Layer.provide(EventV2Bridge.defaultLayer),
   ),
 )
+
+function detectRepeatingSequence(fingerprints: string[]): boolean {
+  const tail = fingerprints.slice(-DOOM_LOOP_SEQUENCE_WINDOW)
+  for (let period = 2; period <= DOOM_LOOP_MAX_PERIOD; period++) {
+    const needed = period * DOOM_LOOP_MIN_REPEATS
+    if (tail.length < needed) continue
+    const window = tail.slice(-needed)
+    const pattern = window.slice(0, period)
+    let matches = true
+    for (let i = period; i < needed; i++) {
+      if (window[i] !== pattern[i % period]) {
+        matches = false
+        break
+      }
+    }
+    if (matches) return true
+  }
+  return false
+}
 
 export * as SessionProcessor from "./processor"

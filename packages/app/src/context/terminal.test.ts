@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, mock, test } from "bun:test"
+import { beforeAll, beforeEach, describe, expect, mock, test } from "bun:test"
 import { createRoot } from "solid-js"
 import { ServerScope } from "@/utils/server-scope"
 
@@ -379,5 +379,204 @@ describe("runtime terminal controller", () => {
     } finally {
       harness.dispose()
     }
+  })
+})
+
+// ── F6 session-scoped terminal cache (LRU, draft migration, scope, clear) ─────
+
+describe("F6: session-scoped terminal cache helpers", () => {
+  // These are resolved from the same module instance already loaded by beforeAll above.
+  let sessionEntryKey: (typeof import("./terminal"))["TerminalTesting"]["sessionEntryKey"]
+  let evictLruEntries: (typeof import("./terminal"))["TerminalTesting"]["evictLruEntries"]
+  let invalidateScopeSnapshots: (typeof import("./terminal"))["TerminalTesting"]["invalidateScopeSnapshots"]
+  let sessionTerminalCache: (typeof import("./terminal"))["TerminalTesting"]["sessionTerminalCache"]
+  let workspaceDiscardFn: (typeof import("./terminal"))["TerminalTesting"]["workspaceDiscardFn"]
+  let clearSessionCache: (typeof import("./terminal"))["TerminalTesting"]["clearSessionCache"]
+  let clearWorkspaceTerminals: typeof import("./terminal")["clearWorkspaceTerminals"]
+  type Scope = typeof import("@/utils/server-scope").ServerScope.local
+
+  beforeAll(async () => {
+    const mod = await import("./terminal")
+    sessionEntryKey = mod.TerminalTesting.sessionEntryKey
+    evictLruEntries = mod.TerminalTesting.evictLruEntries
+    invalidateScopeSnapshots = mod.TerminalTesting.invalidateScopeSnapshots
+    sessionTerminalCache = mod.TerminalTesting.sessionTerminalCache
+    workspaceDiscardFn = mod.TerminalTesting.workspaceDiscardFn
+    clearSessionCache = mod.TerminalTesting.clearSessionCache
+    clearWorkspaceTerminals = mod.clearWorkspaceTerminals
+  })
+
+  function makeSnapshot(ptyId: string) {
+    return {
+      ptys: [{ id: "local-" + ptyId, ptyId, title: "Terminal 1", titleNumber: 1 }],
+      root: { kind: "leaf" as const, id: "pane-1", activeId: "local-" + ptyId, ptys: ["local-" + ptyId] },
+      focusedPaneId: "pane-1",
+    }
+  }
+
+  function makeEntry(ptyId: string, lruTick = 1) {
+    return { bottom: makeSnapshot(ptyId + "-bot"), side: makeSnapshot(ptyId + "-side"), lruTick }
+  }
+
+  const local = "local" as Scope
+  const remote = "ssh:host" as Scope
+
+  describe("sessionEntryKey", () => {
+    test("produces different keys for different session IDs in the same workspace", () => {
+      const k1 = sessionEntryKey(local, "/repo", "sess-A")
+      const k2 = sessionEntryKey(local, "/repo", "sess-B")
+      expect(k1).not.toBe(k2)
+    })
+
+    test("produces different keys for the same session in different scopes", () => {
+      const kLocal = sessionEntryKey(local, "/repo", "sess-A")
+      const kRemote = sessionEntryKey(remote, "/repo", "sess-A")
+      expect(kLocal).not.toBe(kRemote)
+    })
+
+    test("produces different keys for the same session in different directories", () => {
+      const kA = sessionEntryKey(local, "/repo-a", "sess-A")
+      const kB = sessionEntryKey(local, "/repo-b", "sess-A")
+      expect(kA).not.toBe(kB)
+    })
+  })
+
+  describe("evictLruEntries", () => {
+    const dir = "/evict-test"
+
+    beforeEach(() => {
+      clearSessionCache()
+    })
+
+    test("does not evict when non-current count equals the cap (5)", () => {
+      for (let i = 1; i <= 5; i++) {
+        sessionTerminalCache.set(sessionEntryKey(local, dir, "sess-" + i), makeEntry("p" + i, i))
+      }
+      const currentKey = sessionEntryKey(local, dir, "sess-current")
+      sessionTerminalCache.set(currentKey, makeEntry("p-current", 100))
+
+      const discarded: string[] = []
+      evictLruEntries(local, dir, currentKey, (id) => discarded.push(id))
+      expect(discarded).toHaveLength(0)
+      expect(sessionTerminalCache.size).toBe(6)
+    })
+
+    test("evicts oldest non-current entries when count exceeds cap", () => {
+      for (let i = 1; i <= 6; i++) {
+        sessionTerminalCache.set(sessionEntryKey(local, dir, "sess-" + i), makeEntry("p" + i, i))
+      }
+      const currentKey = sessionEntryKey(local, dir, "sess-current")
+      sessionTerminalCache.set(currentKey, makeEntry("p-current", 100))
+
+      const discarded: string[] = []
+      evictLruEntries(local, dir, currentKey, (id) => discarded.push(id))
+
+      // Oldest non-current (sess-1, lruTick=1): 2 PTY IDs discarded
+      expect(discarded).toHaveLength(2)
+      expect(discarded).toContain("p1-bot")
+      expect(discarded).toContain("p1-side")
+      // 6 entries remain: sess-2..6 + current
+      expect(sessionTerminalCache.size).toBe(6)
+      expect(sessionTerminalCache.has(sessionEntryKey(local, dir, "sess-1"))).toBe(false)
+    })
+
+    test("never evicts the current key even when it has the oldest lruTick", () => {
+      const currentKey = sessionEntryKey(local, dir, "sess-current")
+      sessionTerminalCache.set(currentKey, makeEntry("p-current", 0))
+      for (let i = 1; i <= 6; i++) {
+        sessionTerminalCache.set(sessionEntryKey(local, dir, "sess-" + i), makeEntry("p" + i, i + 1))
+      }
+
+      const discarded: string[] = []
+      evictLruEntries(local, dir, currentKey, (id) => discarded.push(id))
+
+      expect(sessionTerminalCache.has(currentKey)).toBe(true)
+      // Oldest non-current (sess-1, lruTick=2) evicted
+      expect(sessionTerminalCache.has(sessionEntryKey(local, dir, "sess-1"))).toBe(false)
+    })
+
+    test("only evicts entries for the given workspace, not other workspaces", () => {
+      const otherDir = "/other-workspace"
+      const otherKey = sessionEntryKey(local, otherDir, "sess-other")
+      sessionTerminalCache.set(otherKey, makeEntry("other", 1))
+      for (let i = 1; i <= 6; i++) {
+        sessionTerminalCache.set(sessionEntryKey(local, dir, "sess-" + i), makeEntry("p" + i, i + 1))
+      }
+      const currentKey = sessionEntryKey(local, dir, "sess-current")
+
+      evictLruEntries(local, dir, currentKey, () => undefined)
+      expect(sessionTerminalCache.has(otherKey)).toBe(true)
+    })
+  })
+
+  describe("invalidateScopeSnapshots", () => {
+    beforeEach(() => {
+      clearSessionCache()
+    })
+
+    test("deletes all entries for the given scope", () => {
+      sessionTerminalCache.set(sessionEntryKey(local, "/repo", "sess-A"), makeEntry("a", 1))
+      sessionTerminalCache.set(sessionEntryKey(local, "/repo", "sess-B"), makeEntry("b", 2))
+      sessionTerminalCache.set(sessionEntryKey(remote, "/repo", "sess-C"), makeEntry("c", 3))
+
+      invalidateScopeSnapshots(local)
+
+      expect(sessionTerminalCache.has(sessionEntryKey(local, "/repo", "sess-A"))).toBe(false)
+      expect(sessionTerminalCache.has(sessionEntryKey(local, "/repo", "sess-B"))).toBe(false)
+      // Remote scope entry must survive
+      expect(sessionTerminalCache.has(sessionEntryKey(remote, "/repo", "sess-C"))).toBe(true)
+    })
+
+    test("is a no-op when no entries match the scope", () => {
+      sessionTerminalCache.set(sessionEntryKey(remote, "/repo", "sess-A"), makeEntry("a", 1))
+      invalidateScopeSnapshots(local)
+      expect(sessionTerminalCache.size).toBe(1)
+    })
+  })
+
+  describe("clearWorkspaceTerminals — cached entries", () => {
+    const dir = "/clear-test"
+
+    beforeEach(() => {
+      clearSessionCache()
+    })
+
+    test("clears all cached entries for the matching workspace and leaves others intact", () => {
+      sessionTerminalCache.set(sessionEntryKey(local, dir, "sess-A"), makeEntry("a", 1))
+      sessionTerminalCache.set(sessionEntryKey(local, dir, "sess-B"), makeEntry("b", 2))
+      // A different workspace — must not be cleared
+      sessionTerminalCache.set(sessionEntryKey(local, "/other", "sess-A"), makeEntry("x", 1))
+
+      clearWorkspaceTerminals(dir, undefined, undefined, local)
+
+      expect(sessionTerminalCache.has(sessionEntryKey(local, dir, "sess-A"))).toBe(false)
+      expect(sessionTerminalCache.has(sessionEntryKey(local, dir, "sess-B"))).toBe(false)
+      expect(sessionTerminalCache.has(sessionEntryKey(local, "/other", "sess-A"))).toBe(true)
+    })
+
+    test("calls registered discardFn for PTY IDs of cleared cached entries", () => {
+      // workspaceScopeKey = ScopedKey.from(scope, dir) = scope + NUL + dir
+      // The separator is the null byte used by ScopedKey.from:
+      const wsKey = "local\0" + dir
+      const discarded: string[] = []
+      workspaceDiscardFn.set(wsKey, (id) => discarded.push(id))
+
+      sessionTerminalCache.set(sessionEntryKey(local, dir, "sess-A"), makeEntry("ptya", 1))
+
+      clearWorkspaceTerminals(dir, undefined, undefined, local)
+
+      expect(discarded).toContain("ptya-bot")
+      expect(discarded).toContain("ptya-side")
+      expect(sessionTerminalCache.size).toBe(0)
+
+      workspaceDiscardFn.delete(wsKey)
+    })
+
+    test("does not throw when no discardFn is registered for the workspace", () => {
+      sessionTerminalCache.set(sessionEntryKey(local, dir, "sess-A"), makeEntry("a", 1))
+      // No workspaceDiscardFn registered — should silently skip pty.remove calls
+      expect(() => clearWorkspaceTerminals(dir, undefined, undefined, local)).not.toThrow()
+      expect(sessionTerminalCache.has(sessionEntryKey(local, dir, "sess-A"))).toBe(false)
+    })
   })
 })
