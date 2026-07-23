@@ -21,6 +21,7 @@
     "deepagent": "./bin/deepagent"
   },
   "exports": {
+    "./server": "./src/server/server.ts",
     "./*": "./src/*.ts"
   },
   "imports": {

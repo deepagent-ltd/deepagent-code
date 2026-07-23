@@ -12,6 +12,25 @@ export const Commands = Spec.make(
         description: "Debugging and troubleshooting tools",
         commands: [Spec.make("agents", { description: "List all agents" })],
       }),
+      Spec.make("login", {
+        description: "Log in to a DeepAgent Server gateway (server mode)",
+        params: {
+          gateway: Argument.string("gateway").pipe(Argument.optional),
+          email: Flag.string("email").pipe(Flag.optional),
+          password: Flag.string("password").pipe(Flag.optional),
+        },
+      }),
+      Spec.make("logout", { description: "Log out of the DeepAgent Server gateway" }),
+      Spec.make("workspace", {
+        description: "Manage DeepAgent Server workspaces (server mode)",
+        commands: [
+          Spec.make("list", { description: "List workspaces on the gateway" }),
+          Spec.make("use", {
+            description: "Select the workspace to connect to",
+            params: { id: Argument.string("id") },
+          }),
+        ],
+      }),
       Spec.make("migrate", { description: "Migrate v1 data to v2" }),
       Spec.make("service", {
         description: "Manage the background server",

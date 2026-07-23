@@ -61,7 +61,7 @@ import { Truncate } from "@/tool/truncate"
 import { Image } from "@/image/image"
 import { decodeDataUrl } from "@/util/data-url"
 import { Process } from "@/util/process"
-import { Cause, Effect, Exit, Latch, Layer, Option, Scope, Context, Schema, Types } from "effect"
+import { Cause, Data, Effect, Exit, Latch, Layer, Option, Scope, Context, Schema, Types } from "effect"
 import * as EffectLogger from "@deepagent-code/core/effect/logger"
 import { InstanceState } from "@/effect/instance-state"
 import { TaskTool, type TaskPromptOps } from "@/tool/task"
@@ -111,7 +111,24 @@ IMPORTANT:
 - Complete all necessary research and tool calls BEFORE calling this tool
 - This tool provides your final answer - no further actions are taken after calling it`
 
-const STRUCTURED_OUTPUT_SYSTEM_PROMPT = `IMPORTANT: The user has requested structured output. You MUST use the StructuredOutput tool to provide your final response. Do NOT respond with plain text - you MUST call the StructuredOutput tool with your answer formatted according to the schema.`
+// P1: Build a schema-aware system prompt that injects the required field names so the model
+// knows the exact schema even during extended-thinking (xhigh) reasoning, without relying
+// solely on the tool definition which may not be visible during the thinking phase.
+function buildStructuredOutputSystemPrompt(schema: Record<string, any>): string {
+  const fields = extractSchemaTopLevelFields(schema)
+  const fieldHint =
+    fields.length > 0
+      ? `\nThe StructuredOutput tool requires these top-level fields: ${fields.join(", ")}. Use ONLY these exact field names.`
+      : ""
+  return `IMPORTANT: The user has requested structured output. You MUST use the StructuredOutput tool to provide your final response. Do NOT respond with plain text - you MUST call the StructuredOutput tool with your answer formatted according to the schema.${fieldHint}`
+}
+
+function extractSchemaTopLevelFields(schema: Record<string, any>): string[] {
+  if (!schema || typeof schema !== "object") return []
+  const props = schema.properties
+  if (!props || typeof props !== "object") return []
+  return Object.keys(props)
+}
 
 const log = Log.create({ service: "session.prompt" })
 const elog = EffectLogger.create({ service: "session.prompt" })
@@ -127,14 +144,48 @@ function isOrphanedInterruptedTool(part: SessionV1.ToolPart) {
 // isTerminalGoalPhase (kept as a local const to avoid a circular import: goal-manager imports this file).
 const TERMINAL_GOAL_PHASES: ReadonlySet<string> = new Set(["done", "needs_human", "rolled_back", "stopped"])
 
-// §S1.2 — extract the plain text a steer should carry from a PromptInput's parts (text parts only; file/
-// agent/subtask attachments are not re-encoded into a steer's text — a steered turn is a user message).
-const promptInputText = (parts: PromptInput["parts"]): string =>
-  parts
+class InvalidInput extends Data.TaggedError("SessionPrompt.InvalidInput")<{ readonly message: string }> {}
+
+// §S1.2 — convert PromptInput parts to the durable Prompt model used by the steer buffer.
+// All part types that have a Prompt equivalent are preserved; subtask parts are explicitly rejected
+// so they never produce a silent empty steer. The steer caller should surface this as a client error.
+const promptInputToPrompt = (
+  parts: PromptInput["parts"],
+): Effect.Effect<Prompt, InvalidInput> => {
+  if (parts.some((p) => p.type === "subtask"))
+    return Effect.fail(
+      new InvalidInput({ message: "Subtask prompt parts cannot be steered while a session is busy" }),
+    )
+  const text = parts
     .filter((p): p is Extract<PromptInput["parts"][number], { type: "text" }> => p.type === "text")
     .map((p) => p.text)
     .join("\n")
     .trim()
+  const files = parts
+    .filter((p): p is Extract<PromptInput["parts"][number], { type: "file" }> => p.type === "file")
+    .map(
+      (p) =>
+        new FileAttachment({
+          uri: p.url,
+          mime: p.mime,
+          ...(p.filename !== undefined ? { name: p.filename } : {}),
+        }),
+    )
+  const agents = parts
+    .filter((p): p is Extract<PromptInput["parts"][number], { type: "agent" }> => p.type === "agent")
+    .map((p) => new AgentAttachment({ name: p.name }))
+  if (text.length === 0 && files.length === 0 && agents.length === 0)
+    return Effect.fail(
+      new InvalidInput({ message: "Steer prompt must contain at least one supported part" }),
+    )
+  return Effect.succeed(
+    Prompt.fromUserMessage({
+      text,
+      ...(files.length === 0 ? {} : { files }),
+      ...(agents.length === 0 ? {} : { agents }),
+    }),
+  )
+}
 
 export interface Interface {
   readonly cancel: (sessionID: SessionID) => Effect.Effect<void>
@@ -142,7 +193,12 @@ export interface Interface {
   // V4.1 §S1.1: buffer a mid-turn user message into the durable steer queue for absorption at the next
   // model-request boundary of the live turn loop. This is the admit() API; S1.2 wires the busy-session
   // ingress that decides WHEN to route a message here vs. the normal prompt() path. Idempotent on `id`.
-  readonly steer: (input: SteerInput) => Effect.Effect<SessionSteer.Admitted>
+  readonly steer: (input: {
+    sessionID: SessionID
+    prompt: Prompt
+    delivery?: SessionSteer.Delivery
+    messageID?: SessionMessage.ID
+  }) => Effect.Effect<SessionSteer.Admitted>
   // V4.1 §S1.2: the busy-session ingress decision. If the session is IDLE (no live turn) → run a normal
   // turn (prompt). If it is BUSY (mid-turn) and steering is enabled → buffer the message as a steer so
   // the running turn absorbs it at its next boundary (delivery="goal_steer" when a non-terminal goal is
@@ -1896,10 +1952,8 @@ export const layer = Layer.effect(
     // turn. The steer id is an ascending SessionMessage.ID minted at admit time, so tail-sorting (Check 3)
     // is preserved. This replaces the earlier stamp-then-persist ordering, whose crash window between the
     // consume stamp and the message write could lose a steer permanently.
-    const steerPartID = (messageID: MessageID) =>
-      // Deterministic, valid PartID (prt_<message-suffix>) so a replayed persist targets the SAME part
-      // row and the projector's onConflictDoUpdate makes it a no-op instead of appending a duplicate.
-      PartID.make("prt_" + messageID.slice("msg_".length))
+    const steerPartID = (messageID: MessageID, suffix?: string) =>
+      PartID.make("prt_" + messageID.slice("msg_".length) + (suffix ?? ""))
     const drainSteers = Effect.fn("SessionPrompt.drainSteers")(function* (sessionID: SessionID) {
       if (!flags.v4Steering) return 0
       const pending = yield* steerBuffer.pending(sessionID)
@@ -1935,17 +1989,35 @@ export const layer = Layer.effect(
             ...(variant ? { variant } : {}),
           },
         }
-        // PERSIST-FIRST: materialize the history message + its text part (both keyed by the steer id, so
-        // a replay after a mid-drain crash is an idempotent upsert, not a duplicate) BEFORE stamping the
-        // steer consumed below.
+        // PERSIST-FIRST: materialize the history message and all durable parts before stamping consumed.
+        // Part IDs are derived from the steer id so post-crash replays are idempotent upserts.
         yield* sessions.updateMessage(info)
-        yield* sessions.updatePart({
-          id: steerPartID(info.id),
-          messageID: info.id,
-          sessionID,
-          type: "text",
-          text: admitted.prompt.text,
-        })
+        if (admitted.prompt.text.length > 0)
+          yield* sessions.updatePart({
+            id: steerPartID(info.id),
+            messageID: info.id,
+            sessionID,
+            type: "text",
+            text: admitted.prompt.text,
+          })
+        for (const [i, file] of (admitted.prompt.files ?? []).entries())
+          yield* sessions.updatePart({
+            id: steerPartID(info.id, `_f${i}`),
+            messageID: info.id,
+            sessionID,
+            type: "file",
+            url: file.uri,
+            mime: file.mime,
+            filename: file.name ?? file.uri,
+          })
+        for (const [i, agent] of (admitted.prompt.agents ?? []).entries())
+          yield* sessions.updatePart({
+            id: steerPartID(info.id, `_a${i}`),
+            messageID: info.id,
+            sessionID,
+            type: "agent",
+            name: agent.name,
+          })
         persisted.push(admitted.id)
         yield* elog.info("steer absorbed at boundary", { sessionID, messageID: info.id, seq: admitted.seq })
       }
@@ -2086,6 +2158,12 @@ export const layer = Layer.effect(
         const slog = elog.with({ sessionID })
         let structured: unknown
         let step = 0
+        // P0: count StructuredOutput tool-call attempts that did NOT produce a valid structured
+        // result (schema validation rejected the arguments). When this reaches the format's
+        // retryCount ceiling we inject a corrective hint and exit — preventing the infinite loop
+        // that occurs when the model repeatedly guesses wrong field names (e.g. "summary" instead
+        // of "module" for ResearchResult) and the AI SDK silently rejects them before execute().
+        let structuredFailedAttempts = 0
         const session = yield* sessions.get(sessionID).pipe(Effect.orDie)
 
         // V3.8 App-A C2.5 (Stage 5): the Conversation Log writer. Constructed ONCE per run so its
@@ -2427,7 +2505,10 @@ export const layer = Layer.effect(
             ])
             const system = [...env, ...instructions, ...(skills ? [skills] : [])]
             const format = lastUser.format ?? { type: "text" as const }
-            if (format.type === "json_schema") system.push(STRUCTURED_OUTPUT_SYSTEM_PROMPT)
+            // P1: inject schema-aware prompt so the model knows the exact field names even
+            // during extended-thinking (xhigh) reasoning where the tool definition may not
+            // be immediately visible when the model starts generating its thinking tokens.
+            if (format.type === "json_schema") system.push(buildStructuredOutputSystemPrompt(format.schema))
             const result = yield* handle.process({
               user: lastUser,
               agent,
@@ -2457,6 +2538,62 @@ export const layer = Layer.effect(
                 }).toObject()
                 yield* sessions.updateMessage(handle.message)
                 return "break" as const
+              }
+            }
+
+            // P0: StructuredOutput retry-cap. Only fires when:
+            //   1. format is json_schema (structured-output mode)
+            //   2. the model made tool-calls (finish === "tool-calls")
+            //   3. structured is still undefined (StructuredOutput was NOT successfully captured)
+            //   4. the current turn's parts actually contain a StructuredOutput call
+            //      (B1 fix: filter to ONLY StructuredOutput failures, not any tool call)
+            //
+            // When the model called StructuredOutput but AI SDK schema-validation rejected the
+            // arguments (wrong field names like "summary" instead of "module"), execute() never
+            // runs, onSuccess never fires, and structured stays undefined — causing an infinite
+            // loop. The retry-cap truncates this loop.
+            if (format.type === "json_schema" && handle.message.finish === "tool-calls") {
+              // Re-read the latest message parts to detect if StructuredOutput was attempted
+              // this step. We check the CURRENT assistant message's parts (by handle.message.id).
+              const latestMsgs = yield* MessageV2.filterCompactedEffect(sessionID).pipe(
+                Effect.provideService(Database.Service, database),
+              )
+              const currentAssistantMsg = latestMsgs.findLast(
+                (m) => m.info.role === "assistant" && m.info.id === handle.message.id,
+              )
+              const hadStructuredOutputCall = currentAssistantMsg?.parts.some(
+                (p) => p.type === "tool" && p.tool === "StructuredOutput",
+              ) ?? false
+
+              if (hadStructuredOutputCall) {
+                const retryMax = format.retryCount ?? 2
+                structuredFailedAttempts++
+                const fields = extractSchemaTopLevelFields(format.schema)
+                const fieldList = fields.length > 0 ? fields.join(", ") : "(see schema)"
+                if (structuredFailedAttempts >= retryMax) {
+                  handle.message.error = new SessionV1.StructuredOutputError({
+                    message: `StructuredOutput schema validation failed after ${structuredFailedAttempts} attempt(s). Required fields: ${fieldList}`,
+                    retries: structuredFailedAttempts,
+                  }).toObject()
+                  yield* sessions.updateMessage(handle.message)
+                  yield* slog.warn("structured-output retry cap reached", {
+                    attempts: structuredFailedAttempts,
+                    retryMax,
+                    fields: fieldList,
+                  })
+                  return "break" as const
+                }
+                // B2 fix: inject via injectTailReminder (user-side synthetic message) so the
+                // correction text appears as a user instruction in the next model context —
+                // not as assistant output (which the model treats with lower compliance).
+                if (fields.length > 0) {
+                  yield* injectTailReminder(
+                    sessionID,
+                    `[structured-output correction] Your StructuredOutput call did not match the required schema. Required top-level fields: ${fieldList}. Please call StructuredOutput again using EXACTLY these field names.`,
+                    lastUser.model,
+                    lastUser.agent,
+                  )
+                }
               }
             }
 
@@ -2517,39 +2654,38 @@ export const layer = Layer.effect(
       },
     )
 
-    // V4.1 §S1.1: admit a mid-turn user message into the durable steer buffer. Pure buffering — it does
-    // NOT interrupt the in-flight run; the runLoop absorbs it at its next model-request boundary (see
-    // drainSteers below). With the kill-switch OFF this is a no-op guard: the caller (S1.2 ingress)
-    // must not route here when steering is disabled, but we defensively refuse to buffer so an
-    // orphaned steer can never accumulate undrained. Idempotent on `id`.
-    const steer: (input: SteerInput) => Effect.Effect<SessionSteer.Admitted> = Effect.fn("SessionPrompt.steer")(
-      function* (input: SteerInput) {
-        if (!flags.v4Steering)
-          return yield* Effect.die(new NamedError.Unknown({ message: "Steering is disabled (v4Steering=false)" }))
-        const prompt = Prompt.fromUserMessage({
-          text: input.text,
-          ...(input.files === undefined ? {} : { files: input.files }),
-          ...(input.agents === undefined ? {} : { agents: input.agents }),
-          ...(input.references === undefined ? {} : { references: input.references }),
-        })
-        // §S1.3 delivery channel: "goal_steer" is drained by the goal driver between ticks; "steer"
-        // (default) by the session's own runLoop. The two never contend on the same buffer rows.
-        const delivery = input.delivery ?? "steer"
-        const admitted = yield* steerBuffer.admit({
-          id: input.messageID ?? SessionMessage.ID.create(),
-          sessionID: input.sessionID,
-          prompt,
-          delivery,
-        })
-        yield* elog.info("steer admitted", {
-          sessionID: input.sessionID,
-          messageID: admitted.id,
-          seq: admitted.seq,
-          delivery,
-        })
-        return admitted
-      },
-    )
+    // V4.1 §S1.1: admit a mid-turn user message into the durable steer buffer.
+    // The canonical durable ID is always server-minted by admit(); the caller's messageID is used
+    // only as an optional correlationID for idempotent retries.
+    const steer: (input: {
+      sessionID: SessionID
+      prompt: Prompt
+      delivery?: SessionSteer.Delivery
+      messageID?: SessionMessage.ID
+    }) => Effect.Effect<SessionSteer.Admitted> = Effect.fn(
+      "SessionPrompt.steer",
+    )(function* (input) {
+      if (!flags.v4Steering)
+        return yield* Effect.die(new NamedError.Unknown({ message: "Steering is disabled (v4Steering=false)" }))
+      const delivery = input.delivery ?? "steer"
+      const admitted = yield* steerBuffer.admit({
+        sessionID: input.sessionID,
+        prompt: input.prompt,
+        delivery,
+        correlationID: input.messageID,
+      }).pipe(
+        Effect.catchTag("SessionSteer.CorrelationConflict", () =>
+          Effect.die(new NamedError.Unknown({ message: "Steer correlation conflict: duplicate follow-up" })),
+        ),
+      )
+      yield* elog.info("steer admitted", {
+        sessionID: input.sessionID,
+        messageID: admitted.id,
+        seq: admitted.seq,
+        delivery,
+      })
+      return admitted
+    })
 
     // V4.1 §S1.2 — the ingress decision. Both the HTTP prompt route and the IM agent executor call THIS
     // instead of prompt() directly, so the steer-vs-turn choice lives in exactly one place.
@@ -2578,17 +2714,22 @@ export const layer = Layer.effect(
       const goal = AgentGateway.DeepAgentSessionState.getActiveGoal(input.sessionID)
       const goalActive = goal != null && !TERMINAL_GOAL_PHASES.has(goal.phase)
       if (goalActive) {
-        const text = promptInputText(input.parts)
+        const steerPrompt = yield* promptInputToPrompt(input.parts).pipe(
+          Effect.catchTag("SessionPrompt.InvalidInput", (e) =>
+            Effect.die(e),
+          ),
+        )
         const admitted = yield* steer({
           sessionID: input.sessionID,
-          text,
+          prompt: steerPrompt,
           delivery: "goal_steer",
+          messageID: input.messageID as unknown as SessionMessage.ID | undefined,
         })
         // V4.1 governance audit — this is the REAL user goal-steer path (the ingress every busy-goal
         // steer flows through). Record the human intervention into the goal's Document Graph alongside
         // the per-tick worklog trail. Length only (not free-text) to keep the body bounded + PII-light;
         // best-effort (never blocks the steer). goal!.goalId is safe here: goalActive ⇒ goal != null.
-        writeGovernanceAudit(input.sessionID, goal!.goalId, "steer", { textChars: text.trim().length })
+        writeGovernanceAudit(input.sessionID, goal!.goalId, "steer", { textChars: steerPrompt.text.trim().length })
         return { kind: "steer" as const, delivery: "goal_steer" as const, admitted }
       }
       // (3) No active goal → a parent chat turn in flight becomes a chat steer.
@@ -2598,13 +2739,16 @@ export const layer = Layer.effect(
         const message = yield* prompt(input)
         return { kind: "turn" as const, message }
       }
-      // Let steer() mint a fresh ascending SessionMessage.ID (tail-sorting, §S1.1 Check 3). We do NOT
-      // forward input.messageID: it is a PromptInput MessageID (a different brand) and a client-supplied id
-      // could be non-ascending and insert mid-history — breaking order + cache.
+      const steerPrompt = yield* promptInputToPrompt(input.parts).pipe(
+        Effect.catchTag("SessionPrompt.InvalidInput", (e) =>
+          Effect.die(e),
+        ),
+      )
       const admitted = yield* steer({
         sessionID: input.sessionID,
-        text: promptInputText(input.parts),
+        prompt: steerPrompt,
         delivery: "steer",
+        messageID: input.messageID as unknown as SessionMessage.ID | undefined,
       })
       // Race guard (see header): a pure-drain turn absorbs a steer stranded by the isBusy→admit window.
       yield* loop({ sessionID: input.sessionID, drainFirst: true }).pipe(Effect.ignore, Effect.forkIn(scope))
@@ -2959,6 +3103,9 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value)
 
 /** @internal Exported for testing */
+/** @internal Exported for testing */
+export { buildStructuredOutputSystemPrompt, extractSchemaTopLevelFields }
+
 export function createStructuredOutputTool(input: {
   schema: Record<string, any>
   onSuccess: (output: unknown) => void
