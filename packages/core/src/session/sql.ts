@@ -185,11 +185,15 @@ export const SessionSteerTable = sqliteTable(
   "session_steer",
   {
     seq: integer().primaryKey({ autoIncrement: true }),
+    // Canonical durable/V1 identity — always server-minted. Never reuse a client optimistic id.
     id: text().$type<SessionMessage.ID>().notNull().unique(),
     session_id: text()
       .$type<SessionSchema.ID>()
       .notNull()
       .references(() => SessionTable.id, { onDelete: "cascade" }),
+    // Optional client retry key isolated from the canonical durable message id. Identical retries
+    // return the stored row; different payload for the same key is a CorrelationConflict.
+    correlation_id: text(),
     prompt: text({ mode: "json" }).notNull().$type<Prompt>(),
     delivery: text().$type<SessionInput.Delivery>().notNull(),
     consumed_seq: integer(),
@@ -199,6 +203,7 @@ export const SessionSteerTable = sqliteTable(
   },
   (table) => [
     index("session_steer_session_pending_seq_idx").on(table.session_id, table.consumed_seq, table.seq),
+    uniqueIndex("session_steer_session_correlation_idx").on(table.session_id, table.correlation_id),
   ],
 )
 

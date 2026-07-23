@@ -54,6 +54,9 @@ export type OversightTraceNode = {
   source: string
   causationID?: string
   createdAt: number
+  // Phase 2: trace nodes may carry the session that emitted them so the UI can reverse-select
+  // the subagent row when the user clicks a trace entry.
+  sessionID?: string
 }
 export type OversightTrace = { nodes: OversightTraceNode[] }
 
@@ -148,7 +151,7 @@ export type HumanTakeoverRecord = {
  */
 export const recordHumanTakeover = async (
   client: OversightClient,
-  input: { reason: string; scope?: string },
+  input: { reason: string; scope?: string; sessionID?: string },
 ): Promise<{ ok: true; record?: HumanTakeoverRecord } | { ok: false; unsupported: boolean; error: string }> => {
   try {
     const response = await client.client.request<HumanTakeoverRecord>({
