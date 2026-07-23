@@ -29,6 +29,12 @@ import "./styles.css"
 import { Splash } from "@deepagent-code/ui/logo"
 import { useTheme } from "@deepagent-code/ui/theme/context"
 
+// renderer.initialization — start: renderer module begins executing.
+// Captured at module level so it includes all synchronous setup before render().
+const rendererStartTime = performance.now()
+/** Set to true the first time the renderer reaches ready() to avoid duplicate logs. */
+let rendererReadyLogged = false
+
 const root = document.getElementById("root")
 if (import.meta.env.DEV && !(root instanceof HTMLElement)) {
   throw new Error(t("error.dev.rootNotFound"))
@@ -329,15 +335,42 @@ render(() => {
 
   function App() {
     const wslServers = useWslServers()
-    const splash = (
-      <div class="h-dvh w-screen flex flex-col items-center justify-center bg-background-base">
-        <Splash class="w-16 h-20 opacity-50 animate-pulse" />
-      </div>
-    )
+
+    // App-ready gate: the app layer fires "deepagent-code:app-ready" once layout
+    // persist + routing + first sessions fetch are all done.  A 5-second failsafe
+    // prevents a permanent hang.  We use an OVERLAY approach: the app renders
+    // immediately (so Layout can mount and do its async work), and the splash sits
+    // on top until appReady fires.  This avoids the circular dependency where the
+    // app can never fire the event because it can't render until the event fires.
+    const [appReady, setAppReady] = createSignal(false)
+    onMount(() => {
+      const fallback = window.setTimeout(() => setAppReady(true), 5_000)
+      window.addEventListener(
+        "deepagent-code:app-ready",
+        () => {
+          clearTimeout(fallback)
+          setAppReady(true)
+        },
+        { once: true },
+      )
+      onCleanup(() => clearTimeout(fallback))
+    })
 
     const ready = createMemo(
       () => !defaultServer.loading && !sidecar.loading && !windowCount.loading && !locale.loading,
     )
+
+    // renderer.initialization — end: basic resources resolved.
+    createEffect(() => {
+      if (!ready() || rendererReadyLogged) return
+      rendererReadyLogged = true
+      const durationMs = Math.round(performance.now() - rendererStartTime)
+      console.info("[startup] telemetry", {
+        event: "renderer.initialization",
+        durationMs,
+        cold: true,
+      })
+    })
     const servers = createMemo(() => {
       const data = initializationData(sidecar)
       const list: ServerConnection.Any[] = []
@@ -361,15 +394,29 @@ render(() => {
     )
 
     return (
-      <Show when={ready()} fallback={splash}>
-        <Show when={effectiveDefaultServer()} keyed>
-          {(key) => (
-            <AppInterface defaultServer={key} servers={servers()} router={MemoryRouter}>
-              <Inner />
-            </AppInterface>
-          )}
+      <>
+        {/* App renders immediately so Layout can mount and do async startup work. */}
+        <Show when={ready()}>
+          <Show when={effectiveDefaultServer()} keyed>
+            {(key) => (
+              <AppInterface defaultServer={key} servers={servers()} router={MemoryRouter}>
+                <Inner />
+              </AppInterface>
+            )}
+          </Show>
         </Show>
-      </Show>
+        {/*
+         * Splash overlay: sits on top until both server resources are ready AND
+         * the app layer has signalled session-UI readiness (deepagent-code:app-ready).
+         * The 5-second failsafe in the onMount above ensures this never hangs
+         * permanently even if the async chain encounters an error.
+         */}
+        <Show when={!ready() || !appReady()}>
+          <div class="fixed inset-0 z-[9999] flex flex-col items-center justify-center bg-background-base">
+            <Splash class="w-16 h-20 opacity-50 animate-pulse" />
+          </div>
+        </Show>
+      </>
     )
   }
 
