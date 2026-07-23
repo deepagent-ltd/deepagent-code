@@ -8,7 +8,16 @@ import { SessionID, MessageID } from "../session/schema"
 import { Identifier } from "@/id/id"
 import { MessageV2 } from "../session/message-v2"
 import { Agent } from "../agent/agent"
-import { deriveSubagentSessionPermission, filterPrimaryToolsForSubagent, subagentIsWriteType } from "../agent/subagent-permissions"
+import {
+  deriveSubagentSessionPermission,
+  filterPrimaryToolsForSubagent,
+  subagentIsWriteType,
+  resolveSessionDepth,
+  admitChildOrFail,
+  MAX_SUBAGENT_DEPTH,
+  SUBAGENT_DEPTH_META_KEY,
+} from "../agent/subagent-permissions"
+import { evaluate as evaluatePermission } from "../permission"
 import type { SessionPrompt } from "../session/prompt"
 import { Config } from "@/config/config"
 import { Cause, Effect, Exit, Option, Schema, Scope } from "effect"
@@ -235,6 +244,54 @@ export const TaskTool = Tool.define(
         ? yield* agent.get(parent.agent).pipe(Effect.catchCause(() => Effect.succeed(undefined)))
         : undefined
 
+      // F5: unified child admission — resolves depth once and validates for ALL creation paths
+      // (takeover and default). Resume (task_id present) takes the validation-only branch; a fresh
+      // spawn takes the full admission-check branch. Both share `childDepth` for metadata writes.
+      const parentDepth = yield* resolveSessionDepth(sessions, ctx.sessionID)
+
+      if (session !== undefined) {
+        // Resume validation: the target session must be a direct child of THIS session with the
+        // expected agent type and a valid depth. Guards against cross-tree resume or injected IDs.
+        if (session.parentID !== ctx.sessionID) {
+          return yield* Effect.fail(
+            new Error(
+              `Cannot resume task "${params.task_id}": it is not a direct child of the current session. ` +
+                `Use a task_id returned by a task you launched in this session.`,
+            ),
+          )
+        }
+        if (session.agent && session.agent !== params.subagent_type) {
+          return yield* Effect.fail(
+            new Error(
+              `Cannot resume task "${params.task_id}": its agent type is "${session.agent}" ` +
+                `but this call requests "${params.subagent_type}". Omit task_id to start a fresh subagent.`,
+            ),
+          )
+        }
+        const resumedDepth = yield* resolveSessionDepth(sessions, session.id)
+        if (resumedDepth > MAX_SUBAGENT_DEPTH) {
+          return yield* Effect.fail(
+            new Error(
+              `Cannot resume task "${params.task_id}": resolved depth ${resumedDepth} exceeds ` +
+                `the hard limit (MAX_SUBAGENT_DEPTH=${MAX_SUBAGENT_DEPTH}).`,
+            ),
+          )
+        }
+      } else {
+        // New session: full admission gate — depth ceiling then delegation permission.
+        const admission = admitChildOrFail({
+          callerDepth: parentDepth,
+          callerAgentPermission: parentAgent?.permission ?? [],
+          callerSessionPermission: parent.permission ?? [],
+          targetAgentType: params.subagent_type,
+        })
+        if ("error" in admission) {
+          return yield* Effect.fail(new Error(admission.error))
+        }
+      }
+      // childDepth is used by BOTH the takeover path and the default path when writing metadata.
+      const childDepth = parentDepth + 1
+
       // v4.0.4 块1 (1a+1b): timeout + takeover — enabled ONLY when DEEPAGENT_CODE_SUBAGENT_TIMEOUT_MS
       // is set; when it is not, execution falls through to the default path below, which stays
       // byte-identical to the pre-flag behavior. timeout and takeover are an inseparable unit: a bare
@@ -292,6 +349,11 @@ export const TaskTool = Tool.define(
               title: params.description + ` (@${next.name} subagent)`,
               agent: next.name,
               ...(worktreeInfo ? { directory: worktreeInfo.directory } : {}),
+              // F5: write normalised depth into metadata so future resolveSessionDepth calls for this
+              // session return the correct value without needing to walk the full parentID chain.
+              metadata: {
+                deepagent: { [SUBAGENT_DEPTH_META_KEY]: childDepth },
+              },
               permission: [
                 ...deriveSubagentSessionPermission({
                   parentSessionPermission: parent.permission ?? [],
@@ -364,12 +426,14 @@ export const TaskTool = Tool.define(
                   }
                 : {}),
               tools: {
-                ...(next.permission.some((rule) => rule.permission === "todowrite") ? {} : { todowrite: false }),
+                // F5: use evaluatePermission (not presence check) — "ask" is not sufficient, only
+                // an explicit "allow" rule on the subagent's own permission makes these tools visible.
+                ...(evaluatePermission("todowrite", "*", next.permission).action === "allow" ? {} : { todowrite: false }),
                 // task_status inspects the PARENT session's dispatched-subagent list, so it is a
                 // task-management capability: gate it on the same `task` permission. A subagent that
                 // cannot dispatch tasks has no sibling list to inspect, and (like `task`) must not be
                 // able to reach into task orchestration unless explicitly granted.
-                ...(next.permission.some((rule) => rule.permission === id) ? {} : { task: false, task_status: false }),
+                ...(evaluatePermission(id, "*", next.permission).action === "allow" ? {} : { task: false, task_status: false }),
                 ...Object.fromEntries((cfg.experimental?.primary_tools ?? []).map((item) => [item, false])),
               },
               parts: promptParts,
@@ -759,6 +823,11 @@ export const TaskTool = Tool.define(
           title: params.description + ` (@${next.name} subagent)`,
           agent: next.name,
           ...(worktreeInfo ? { directory: worktreeInfo.directory } : {}),
+          // F5: write normalised depth into metadata so future resolveSessionDepth calls for this
+          // session return the correct value without needing to walk the full parentID chain.
+          metadata: {
+            deepagent: { [SUBAGENT_DEPTH_META_KEY]: childDepth },
+          },
           permission: [
             ...deriveSubagentSessionPermission({
               parentSessionPermission: parent.permission ?? [],
@@ -880,9 +949,11 @@ export const TaskTool = Tool.define(
             ? { format: new SessionV1.OutputFormatJsonSchema({ type: "json_schema", schema: resolvedOutputSchema }) }
             : {}),
           tools: {
-            ...(next.permission.some((rule) => rule.permission === "todowrite") ? {} : { todowrite: false }),
+            // F5: use evaluatePermission (not presence check) — "ask" is not sufficient, only
+            // an explicit "allow" rule on the subagent's own permission makes these tools visible.
+            ...(evaluatePermission("todowrite", "*", next.permission).action === "allow" ? {} : { todowrite: false }),
             // task_status is gated on the same `task` permission (see the takeover-path block above).
-            ...(next.permission.some((rule) => rule.permission === id) ? {} : { task: false, task_status: false }),
+            ...(evaluatePermission(id, "*", next.permission).action === "allow" ? {} : { task: false, task_status: false }),
             ...Object.fromEntries((cfg.experimental?.primary_tools ?? []).map((item) => [item, false])),
           },
           parts: promptParts,

@@ -52,8 +52,10 @@ function TerminalPanelContent(props: Props) {
   )
 
   // Lifecycle owner for the bottom host — auto-creates, auto-focuses, closes panel when empty.
+  // Gate `active` on runtimeId being set to prevent pty.create firing before the server
+  // instance is ready (cold-start with persisted opened=true produces immediate 503 failures).
   useTerminalLifecycle({
-    active: terminalVisible,
+    active: () => terminalVisible() && (terminal.runtimeId() !== undefined || terminal.all().length > 0),
     close: () => panel().toggle("terminal"),
     rootEl: () => document.querySelector<HTMLElement>('[data-terminal-host="bottom"]') ?? root,
   })
@@ -91,8 +93,11 @@ function TerminalPanelContent(props: Props) {
       inert={!visible()}
       class="relative w-full shrink-0 overflow-hidden bg-background-stronger"
       classList={{
+        // Suppress height animation until layout persisted state has loaded.
+        // Without this guard the panel snaps from 0→pane() height on cold start
+        // when the persisted `opened:true` arrives after the in-memory default.
         "transition-[height] duration-200 ease-[cubic-bezier(0.22,1,0.36,1)] will-change-[height] motion-reduce:transition-none":
-          !size.active(),
+          !size.active() && layout.ready(),
       }}
       style={{ height: visible() ? `${pane()}px` : "0px" }}
     >
