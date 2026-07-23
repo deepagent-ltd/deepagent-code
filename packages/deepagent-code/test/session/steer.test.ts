@@ -321,9 +321,9 @@ off.instance("admit buffers steers, pending returns them in send-order, markCons
     const sessions = yield* Session.Service
     const chat = yield* sessions.create({ title: "Steer unit" })
 
-    yield* steer.admit({ id: SessionMessage.ID.create(), sessionID: chat.id, prompt: mkPrompt("first") })
-    yield* steer.admit({ id: SessionMessage.ID.create(), sessionID: chat.id, prompt: mkPrompt("second") })
-    yield* steer.admit({ id: SessionMessage.ID.create(), sessionID: chat.id, prompt: mkPrompt("third") })
+    yield* steer.admit({ sessionID: chat.id, prompt: mkPrompt("first") })
+    yield* steer.admit({ sessionID: chat.id, prompt: mkPrompt("second") })
+    yield* steer.admit({ sessionID: chat.id, prompt: mkPrompt("third") })
 
     expect(yield* steer.hasPending(chat.id)).toBe(true)
 
@@ -358,9 +358,8 @@ off.instance(
 
       // On the SAME session id: one parent-chat steer (delivery="steer") and one goal-directed steer
       // (delivery="goal_steer"). This models a goal running in a session whose parent runLoop is also live.
-      yield* steer.admit({ id: SessionMessage.ID.create(), sessionID: chat.id, prompt: mkPrompt("chat steer") })
+      yield* steer.admit({ sessionID: chat.id, prompt: mkPrompt("chat steer") })
       yield* steer.admit({
-        id: SessionMessage.ID.create(),
         sessionID: chat.id,
         prompt: mkPrompt("goal guidance"),
         delivery: "goal_steer",
@@ -396,10 +395,10 @@ off.instance("admit is idempotent on message id (no double-buffer)", () =>
     const steer = yield* SessionSteer.Service
     const sessions = yield* Session.Service
     const chat = yield* sessions.create({ title: "Steer idempotent" })
-    const id = SessionMessage.ID.create()
+    const correlationID = SessionMessage.ID.create()
 
-    const a = yield* steer.admit({ id, sessionID: chat.id, prompt: mkPrompt("once") })
-    const b = yield* steer.admit({ id, sessionID: chat.id, prompt: mkPrompt("once") })
+    const a = yield* steer.admit({ correlationID, sessionID: chat.id, prompt: mkPrompt("once") })
+    const b = yield* steer.admit({ correlationID, sessionID: chat.id, prompt: mkPrompt("once") })
     expect(a.seq).toBe(b.seq)
 
     const drained = yield* steer.pending(chat.id)
@@ -418,7 +417,6 @@ off.instance("consume-once survives a fresh drain cycle (durable, no double-appl
     const chat = yield* sessions.create({ title: "Steer durable" })
 
     const admitted = yield* steer.admit({
-      id: SessionMessage.ID.create(),
       sessionID: chat.id,
       prompt: mkPrompt("persisted"),
     })
@@ -479,7 +477,6 @@ off.instance(
       const chat = yield* sessions.create({ title: "Steer crash window" })
 
       const admitted = yield* steer.admit({
-        id: SessionMessage.ID.create(),
         sessionID: chat.id,
         prompt: mkPrompt("DONT-LOSE-ME"),
       })
@@ -548,7 +545,6 @@ on.instance(
 
       // Admit the steer while the first model request is in flight.
       const admitted = yield* steer.admit({
-        id: SessionMessage.ID.create(),
         sessionID: chat.id,
         prompt: mkPrompt("STEERED-MESSAGE"),
       })
@@ -613,7 +609,7 @@ on.instance(
         .prompt({ sessionID: chat.id, agent: "build", model: ref, parts: [{ type: "text", text: "initial" }] })
         .pipe(Effect.forkChild)
       yield* llm.wait(1)
-      yield* steer.admit({ id: SessionMessage.ID.create(), sessionID: chat.id, prompt: mkPrompt("STEER") })
+      yield* steer.admit({ sessionID: chat.id, prompt: mkPrompt("STEER") })
       yield* Deferred.succeed(gate, void 0)
       yield* Fiber.await(fiber)
 
@@ -660,7 +656,7 @@ off.instance(
       })
 
       // Pre-buffer a steer directly (bypassing ingress) so we can prove the loop ignores it when OFF.
-      yield* steer.admit({ id: SessionMessage.ID.create(), sessionID: chat.id, prompt: mkPrompt("IGNORED-STEER") })
+      yield* steer.admit({ sessionID: chat.id, prompt: mkPrompt("IGNORED-STEER") })
 
       yield* llm.text("done")
       const result = yield* prompt.prompt({
@@ -832,7 +828,6 @@ on.instance(
 
       // A steer lands in the isBusy→admit race window (buffered while the session is idle).
       const admitted = yield* steer.admit({
-        id: SessionMessage.ID.create(),
         sessionID: drained.id,
         prompt: mkPrompt("STEP0-STEER"),
       })
@@ -864,7 +859,7 @@ on.instance(
       yield* llm.text("first-answer-2")
       yield* prompt.prompt({ sessionID: normal.id, agent: "build", model: ref, parts: [{ type: "text", text: "initial" }] })
       const before = yield* llm.calls
-      yield* steer.admit({ id: SessionMessage.ID.create(), sessionID: normal.id, prompt: mkPrompt("NOT-DRAINED") })
+      yield* steer.admit({ sessionID: normal.id, prompt: mkPrompt("NOT-DRAINED") })
 
       // Default loop() → drainFirst=false. Step 0 does NOT drain; the loop breaks at the finish check.
       yield* prompt.loop({ sessionID: normal.id })

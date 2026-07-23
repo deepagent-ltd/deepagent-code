@@ -45,7 +45,7 @@ import { PromptProvider } from "@/context/prompt"
 import { ServerConnection, ServerProvider, serverName, useServer } from "@/context/server"
 import { SettingsProvider } from "@/context/settings"
 import { TerminalProvider } from "@/context/terminal"
-import { TabsProvider, useTabs } from "@/context/tabs"
+import { startupTab, TabsProvider, useTabs } from "@/context/tabs"
 import { WslServersProvider } from "@/wsl/context"
 import DirectoryLayout from "@/pages/directory-layout"
 import Layout from "@/pages/layout"
@@ -144,20 +144,22 @@ function SessionProviders(props: ParentProps) {
 
 function RouterRoot(props: ParentProps<{ appChildren?: JSX.Element }>) {
   const tabs = useTabs()
+  const server = useServer()
   const navigate = useNavigate()
   const location = useLocation()
 
-  // On startup: as soon as persisted tabs are loaded (local disk, no HTTP calls),
-  // navigate to the last visited project's session list. This matches opencode's approach —
-  // use local/cached data to drive the first frame, let the server data fill in asynchronously.
-  // We navigate to /:dir/session (no specific session ID) so autoselecting can handle
-  // the final session selection independently without conflicting navigation.
+  // Restore the explicitly persisted active tab. A cross-server directory is never
+  // navigated until the target server has become active.
   createEffect(() => {
     if (!tabs.ready()) return
     if (location.pathname !== "/") return
-    const first = tabs.store[0]
-    if (!first) return
-    navigate(`/${first.dirBase64}/session`, { replace: true })
+    const tab = startupTab(tabs.store, tabs.active.key, server.list)
+    if (!tab) return
+    if (server.key !== tab.server) {
+      server.setActive(tab.server)
+      return
+    }
+    navigate(`/${tab.dirBase64}/session`, { replace: true })
   })
 
   return (
