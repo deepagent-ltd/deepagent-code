@@ -3,7 +3,6 @@ import {
   createEffect,
   createMemo,
   createResource,
-  createSignal,
   For,
   on,
   onCleanup,
@@ -1925,10 +1924,6 @@ export default function Layout(props: ParentProps) {
 
   const loadedSessionDirs = new Set<string>()
 
-  // F2-splash: signal that the first session-list fetch has completed so the
-  // renderer knows the sidebar is populated and the splash can be dismissed.
-  const [firstSessionLoadDone, setFirstSessionLoadDone] = createSignal(false)
-
   createEffect(
     on(
       visibleSessionDirs,
@@ -1939,47 +1934,19 @@ export default function Layout(props: ParentProps) {
         }
 
         const next = new Set(dirs)
-        const loads: Promise<void>[] = []
         for (const directory of next) {
           if (loadedSessionDirs.has(directory)) continue
-          loads.push(serverSync.project.loadSessions(directory))
+          void serverSync.project.loadSessions(directory)
         }
 
         loadedSessionDirs.clear()
         for (const directory of next) {
           loadedSessionDirs.add(directory)
         }
-
-        if (loads.length > 0) {
-          void Promise.all(loads).then(() => setFirstSessionLoadDone(true))
-        } else {
-          // All visible directories were already loaded on a prior run.
-          setFirstSessionLoadDone(true)
-        }
       },
       { defer: true },
     ),
   )
-
-  // Fire `deepagent-code:app-ready` exactly once when every gate is satisfied:
-  //   1. server persist loaded (projects list populated — was missing, caused early fire)
-  //   2. layout persist loaded (project list available)
-  //   3. page persist loaded (last-session info available)
-  //   4. autoselecting resolved (router has navigated to the last project)
-  //   5. first sessions fetch done — OR no projects exist (nothing to wait for)
-  // The renderer's splash stays up until this event fires (5 s failsafe there).
-  let appReadyFired = false
-  createEffect(() => {
-    if (appReadyFired) return
-    if (!server.ready()) return   // server persist must be loaded (populates projects list)
-    if (!layoutReady()) return
-    if (!pageReady()) return
-    if (autoselecting.loading) return
-    const projects = layout.projects.list()
-    if (projects.length > 0 && !firstSessionLoadDone()) return
-    appReadyFired = true
-    window.dispatchEvent(new Event("deepagent-code:app-ready"))
-  })
 
   function handleDragStart(event: unknown) {
     const id = getDraggableId(event)
