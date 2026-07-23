@@ -1,6 +1,6 @@
 export * as GoalTickConsumer from "./goal-tick-consumer"
 
-import { Context, Effect, Layer, Option, Stream, Schedule, Duration, Cause } from "effect"
+import { Context, Deferred, Effect, Layer, Option, Stream, Schedule, Duration, Cause } from "effect"
 import { DeepAgentEventBus } from "@deepagent-code/core/deepagent/deepagent-event-bus"
 import { DeepAgentEvent } from "@deepagent-code/core/deepagent/deepagent-event"
 import { LMNEvents } from "@deepagent-code/core/deepagent/lmn-events"
@@ -321,9 +321,12 @@ export const layerWith = (options: LayerOptions) =>
         })
 
       if (runLoop) {
+        yield* bus.registerConsumerGroup(TICK_GROUP, LMNEvents.GOAL_TICK_REQUESTED)
+        const ready = yield* Deferred.make<void>()
         yield* bus
           .subscribe({ type: LMNEvents.GOAL_TICK_REQUESTED, group: TICK_GROUP })
           .pipe(
+            Stream.onStart(Deferred.succeed(ready, undefined)),
             Stream.runForEach((event) =>
               handle(event).pipe(
                 Effect.catchCause((cause) =>
@@ -333,6 +336,7 @@ export const layerWith = (options: LayerOptions) =>
             ),
             Effect.forkScoped,
           )
+        yield* Deferred.await(ready)
 
         yield* pumpRetries()
           .pipe(

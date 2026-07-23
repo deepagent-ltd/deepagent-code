@@ -1,13 +1,16 @@
 export * as RetentionSweeper from "./retention-sweeper"
 
 import { Cause, Context, Duration, Effect, Layer, Schedule } from "effect"
-import { and, eq, lt } from "drizzle-orm"
+import { and, eq, isNotNull, lt } from "drizzle-orm"
 import { Database } from "../database/database"
 import { DeepAgentEventBus } from "./deepagent-event-bus"
 import { DeepAgentEventTable } from "./deepagent-event-sql"
 import { ApprovalQueueTable } from "./approval-queue-sql"
 import { WorkspaceConfig } from "./workspace-config"
 import { AgentPushLogTable } from "../im/push-log-sql"
+import { EventSequenceTable } from "../event/sql"
+import { SessionTable } from "../session/sql"
+import type { WorkspaceV2 } from "../workspace"
 import * as Log from "../util/log"
 
 // V4.0 §A3 保留期 — the periodic RETENTION SWEEPER. For each workspace that has durable events it reads
@@ -34,6 +37,9 @@ export interface SweepSummary {
   readonly deletedEvents: number
   readonly deletedPushLogs: number
   readonly deletedApprovals: number
+  // PERF: EventV2 mirror events pruned for archived sessions. Reported separately because the
+  // accounting is by aggregate (session), not individual rows, so it has different semantics.
+  readonly deletedEventV2Sequences: number
 }
 
 export interface Interface {
@@ -81,6 +87,7 @@ export const layerWith = (options?: LayerOptions) =>
           let deletedEvents = 0
           let deletedPushLogs = 0
           let deletedApprovals = 0
+          let deletedEventV2Sequences = 0
 
           for (const { workspaceID } of workspaceRows) {
             const resolved = yield* config.get(workspaceID)
@@ -119,6 +126,40 @@ export const layerWith = (options?: LayerOptions) =>
               .all()
               .pipe(Effect.orDie)
             deletedApprovals += approvalDeleted.length
+
+            // PERF §EventV2-retention: prune EventV2 mirror events for sessions that have been
+            // archived for longer than retentionDays. The EventV2 `event` table records every
+            // streaming delta (message.part.updated, etc.) and has no built-in expiry — it grows
+            // unboundedly and can reach 500MB+ on long-running deployments. Once a session is
+            // archived its event history is cold and safe to discard: active sessions keep their
+            // full event log for live projector replay, but archived ones no longer need it.
+            //
+            // Implementation: delete rows from `event_sequence` where the corresponding session row
+            // (same workspace) has time_archived IS NOT NULL AND time_archived < olderThan.
+            // The EventTable has ON DELETE CASCADE from event_sequence, so this one DELETE removes
+            // both the sequence header and all its events in a single statement.
+            const archivedSessions = yield* db
+              .select({ id: SessionTable.id })
+              .from(SessionTable)
+              .where(
+                and(
+                  eq(SessionTable.workspace_id, workspaceID as WorkspaceV2.ID),
+                  isNotNull(SessionTable.time_archived),
+                  lt(SessionTable.time_archived, olderThan),
+                ),
+              )
+              .all()
+              .pipe(Effect.orDie)
+
+            for (const { id } of archivedSessions) {
+              const seqDeleted = yield* db
+                .delete(EventSequenceTable)
+                .where(eq(EventSequenceTable.aggregate_id, id))
+                .returning({ aggregate_id: EventSequenceTable.aggregate_id })
+                .all()
+                .pipe(Effect.orDie)
+              deletedEventV2Sequences += seqDeleted.length
+            }
           }
 
           return {
@@ -126,6 +167,7 @@ export const layerWith = (options?: LayerOptions) =>
             deletedEvents,
             deletedPushLogs,
             deletedApprovals,
+            deletedEventV2Sequences,
           }
         })
 
@@ -141,6 +183,7 @@ export const layerWith = (options?: LayerOptions) =>
                   deletedEvents: 0,
                   deletedPushLogs: 0,
                   deletedApprovals: 0,
+                  deletedEventV2Sequences: 0,
                 }),
               ),
             ),

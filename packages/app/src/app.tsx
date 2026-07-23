@@ -9,7 +9,7 @@ import { Font } from "@deepagent-code/ui/font"
 import { Splash } from "@deepagent-code/ui/logo"
 import { ThemeProvider } from "@deepagent-code/ui/theme/context"
 import { MetaProvider } from "@solidjs/meta"
-import { type BaseRouterProps, Navigate, Route, Router } from "@solidjs/router"
+import { type BaseRouterProps, Navigate, Route, Router, useLocation, useNavigate } from "@solidjs/router"
 import { QueryClient, QueryClientProvider } from "@tanstack/solid-query"
 import { Effect } from "effect"
 import {
@@ -45,7 +45,7 @@ import { PromptProvider } from "@/context/prompt"
 import { ServerConnection, ServerProvider, serverName, useServer } from "@/context/server"
 import { SettingsProvider } from "@/context/settings"
 import { TerminalProvider } from "@/context/terminal"
-import { TabsProvider } from "@/context/tabs"
+import { startupTab, TabsProvider, useTabs } from "@/context/tabs"
 import { WslServersProvider } from "@/wsl/context"
 import DirectoryLayout from "@/pages/directory-layout"
 import Layout from "@/pages/layout"
@@ -143,6 +143,25 @@ function SessionProviders(props: ParentProps) {
 }
 
 function RouterRoot(props: ParentProps<{ appChildren?: JSX.Element }>) {
+  const tabs = useTabs()
+  const server = useServer()
+  const navigate = useNavigate()
+  const location = useLocation()
+
+  // Restore the explicitly persisted active tab. A cross-server directory is never
+  // navigated until the target server has become active.
+  createEffect(() => {
+    if (!tabs.ready()) return
+    if (location.pathname !== "/") return
+    const tab = startupTab(tabs.store, tabs.active.key, server.list)
+    if (!tab) return
+    if (server.key !== tab.server) {
+      server.setActive(tab.server)
+      return
+    }
+    navigate(`/${tab.dirBase64}/session`, { replace: true })
+  })
+
   return (
     <AppShellProviders>
       {/*<Suspense fallback={<Loading />}>*/}
