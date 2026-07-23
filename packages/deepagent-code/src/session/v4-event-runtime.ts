@@ -461,16 +461,50 @@ const anyV4DaemonEnabled = (flags: RuntimeFlags.Info): boolean =>
 // Register the durable delivery policy before any V4 publisher can emit. `Layer.mergeAll` starts
 // components concurrently, so relying on each consumer's live subscribe stream loses first-start events.
 // Individual consumers repeat this idempotently for standalone use; this layer establishes the runtime
-// producer-after-registration boundary. Disabled groups are deliberately absent and accrue no backlog.
-const consumerRegistrationLayer = Layer.effectDiscard(
+// producer-after-registration boundary. The policy lists ONLY groups owned by this runtime, so reconciling
+// disabled flags and releasing this scope cannot remove a group owned by another feature or instance.
+type RuntimeConsumerGroup = {
+  readonly id: string
+  readonly typeFilter?: string
+  readonly enabled: (flags: RuntimeFlags.Info) => boolean
+}
+
+const runtimeConsumerGroups: ReadonlyArray<RuntimeConsumerGroup> = [
+  { id: DISPATCH_GROUP, enabled: anyV4DaemonEnabled },
+  {
+    id: TICK_GROUP,
+    typeFilter: LMNEvents.GOAL_TICK_REQUESTED,
+    enabled: (flags) => flags.v4MultiAgentRuntime,
+  },
+  { id: CONVENE_GROUP, enabled: (flags) => flags.v4PanelAutoConvene },
+  { id: ARCHIVE_GROUP, enabled: (flags) => flags.v4EventDrivenArchive || flags.v4MultiAgentRuntime },
+  { id: NOTIFY_GROUP, enabled: (flags) => flags.v4AgentPushEnabled },
+]
+
+// Exported for direct lifecycle testing. On startup this reconciles historical V4 groups left by an older
+// runtime: enabled groups are registered and disabled groups are removed. Scope release removes exactly
+// the enabled groups this runtime owned, stopping future publishes from accruing offline deliveries.
+export const consumerRegistrationLayer = Layer.effectDiscard(
   Effect.gen(function* () {
     const flags = yield* RuntimeFlags.Service
     const bus = yield* DeepAgentEventBus.Service
-    if (anyV4DaemonEnabled(flags)) yield* bus.registerConsumerGroup(DISPATCH_GROUP)
-    if (flags.v4MultiAgentRuntime) yield* bus.registerConsumerGroup(TICK_GROUP, LMNEvents.GOAL_TICK_REQUESTED)
-    if (flags.v4PanelAutoConvene) yield* bus.registerConsumerGroup(CONVENE_GROUP)
-    if (flags.v4EventDrivenArchive || flags.v4MultiAgentRuntime) yield* bus.registerConsumerGroup(ARCHIVE_GROUP)
-    if (flags.v4AgentPushEnabled) yield* bus.registerConsumerGroup(NOTIFY_GROUP)
+    const enabled = runtimeConsumerGroups.filter((group) => group.enabled(flags))
+    const disabled = runtimeConsumerGroups.filter((group) => !group.enabled(flags))
+
+    yield* Effect.forEach(enabled, (group) => bus.registerConsumerGroup(group.id, group.typeFilter), {
+      concurrency: "unbounded",
+      discard: true,
+    })
+    yield* Effect.forEach(disabled, (group) => bus.unregisterConsumerGroup(group.id), {
+      concurrency: "unbounded",
+      discard: true,
+    })
+    yield* Effect.addFinalizer(() =>
+      Effect.forEach(enabled, (group) => bus.unregisterConsumerGroup(group.id), {
+        concurrency: "unbounded",
+        discard: true,
+      }),
+    )
   }),
 )
 

@@ -1,5 +1,6 @@
 import { describe, expect } from "bun:test"
-import { Deferred, Effect, Exit, Fiber, Layer } from "effect"
+import { Context, Deferred, Effect, Exit, Fiber, Layer } from "effect"
+import * as Scope from "effect/Scope"
 import { V4EventRuntime } from "../../src/session/v4-event-runtime"
 import { DeepAgentEventBus } from "@deepagent-code/core/deepagent/deepagent-event-bus"
 import { DeepAgentEvent } from "@deepagent-code/core/deepagent/deepagent-event"
@@ -59,8 +60,85 @@ describe("V4EventRuntime.layer", () => {
   )
 })
 
-// P1.6 — the production schedule bootstrap. Proves the tick loop now has real rows: registration is
-// flag-gated, idempotent across restarts, and the "3× CI failure → repair" condition fires when seeded.
+// Durable group lifecycle: registration must be reconciled when flags change, and scope release must
+// unregister only the groups this runtime owns so later publishes cannot leave an offline backlog.
+describe("V4EventRuntime durable consumer-group lifecycle", () => {
+  const staleRuntimeGroups = ["event-dispatcher", "goal-tick-consumer", "panel-convener", "wiki-archiver", "supervisor-notifier"]
+  const externalGroup = "other-feature-consumer"
+
+  const registration = (flags: Partial<RuntimeFlags.Info>) =>
+    V4EventRuntime.consumerRegistrationLayer.pipe(Layer.provide(RuntimeFlags.layer(flags)))
+
+  const fullRuntimeFlagsOff: Partial<RuntimeFlags.Info> = {
+    v4MultiAgentRuntime: false,
+    v4EventDrivenIm: false,
+    v4PanelAutoConvene: false,
+    v4EventDrivenArchive: false,
+    v4AgentPushEnabled: false,
+  }
+
+  const publish = (key: string): DeepAgentEvent.PublishInput => ({
+    type: "monitor.alert",
+    source: "monitor",
+    workspaceID: "wrk_1",
+    idempotencyKey: key,
+    priority: "normal",
+    payload: {},
+  })
+
+  baseIt.effect("enabled runtime registers its groups; a subsequent disabled startup removes only those historical groups", () =>
+    Effect.gen(function* () {
+      const busScope = yield* Scope.make()
+      const busContext = yield* Layer.build(
+        DeepAgentEventBus.layer.pipe(Layer.provideMerge(Database.layerFromPath(":memory:"))),
+      ).pipe(Scope.provide(busScope))
+      const bus = Context.get(busContext, DeepAgentEventBus.Service)
+
+      const enabledScope = yield* Scope.make()
+      yield* Layer.build(registration({ v4MultiAgentRuntime: true })).pipe(
+        Scope.provide(enabledScope),
+        Effect.provide(busContext),
+      )
+      yield* bus.registerConsumerGroup(externalGroup)
+      yield* Scope.close(enabledScope, Exit.void)
+
+      const disabledScope = yield* Scope.make()
+      yield* Layer.build(registration(fullRuntimeFlagsOff)).pipe(
+        Scope.provide(disabledScope),
+        Effect.provide(busContext),
+      )
+      const event = yield* bus.publish(publish("flags-off"))
+      const due = yield* bus.dueRetries(Number.MAX_SAFE_INTEGER)
+
+      expect(due.some((delivery) => delivery.eventID === event.id && staleRuntimeGroups.includes(delivery.subscriptionGroup))).toBe(false)
+      expect(due.some((delivery) => delivery.eventID === event.id && delivery.subscriptionGroup === externalGroup)).toBe(true)
+      yield* Scope.close(disabledScope, Exit.void)
+      yield* Scope.close(busScope, Exit.void)
+    }),
+  )
+
+  baseIt.effect("scope release unregisters enabled groups, so later publishes create no V4 delivery", () =>
+    Effect.gen(function* () {
+      const busScope = yield* Scope.make()
+      const busContext = yield* Layer.build(
+        DeepAgentEventBus.layer.pipe(Layer.provideMerge(Database.layerFromPath(":memory:"))),
+      ).pipe(Scope.provide(busScope))
+      const bus = Context.get(busContext, DeepAgentEventBus.Service)
+      const registrationScope = yield* Scope.make()
+      yield* Layer.build(registration({ v4MultiAgentRuntime: true })).pipe(
+        Scope.provide(registrationScope),
+        Effect.provide(busContext),
+      )
+      yield* Scope.close(registrationScope, Exit.void)
+
+      const event = yield* bus.publish(publish("after-release"))
+      const due = yield* bus.dueRetries(Number.MAX_SAFE_INTEGER)
+      expect(due.some((delivery) => delivery.eventID === event.id && staleRuntimeGroups.includes(delivery.subscriptionGroup))).toBe(false)
+      yield* Scope.close(busScope, Exit.void)
+    }),
+  )
+})
+
 describe("V4EventRuntime schedule bootstrap", () => {
   const database = Database.layerFromPath(":memory:")
   const it = testEffect(Scheduler.defaultLayer.pipe(Layer.provideMerge(database)))
