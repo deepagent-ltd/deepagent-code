@@ -469,3 +469,73 @@ describe("structured-output.createStructuredOutputTool", () => {
   // The tool simply calls onSuccess when execute() is called with valid args
   // See prompt.ts loop() for actual retry logic
 })
+
+// P1: schema-aware system prompt — injects top-level field names so the model knows
+// the exact fields during extended-thinking (xhigh) reasoning, preventing the
+// infinite loop caused by the model guessing wrong field names (e.g. "summary" instead
+// of "module" for ResearchResult).
+describe("structured-output.buildStructuredOutputSystemPrompt", () => {
+  test("includes field names in the prompt", () => {
+    const result = SessionPrompt.buildStructuredOutputSystemPrompt({
+      type: "object",
+      properties: {
+        module: { type: "string" },
+        mechanism: { type: "string" },
+        keyFiles: { type: "array" },
+      },
+    })
+    expect(result).toContain("module")
+    expect(result).toContain("mechanism")
+    expect(result).toContain("keyFiles")
+    expect(result).toContain("StructuredOutput")
+  })
+
+  test("falls back gracefully when schema has no properties", () => {
+    const result = SessionPrompt.buildStructuredOutputSystemPrompt({ type: "object" })
+    expect(result).toContain("StructuredOutput")
+    // should not contain a field hint line
+    expect(result).not.toContain("Required fields:")
+  })
+
+  test("falls back gracefully for empty schema", () => {
+    const result = SessionPrompt.buildStructuredOutputSystemPrompt({})
+    expect(result).toContain("StructuredOutput")
+    expect(result).not.toContain("Required fields:")
+  })
+
+  test("uses ONLY exact field names, not descriptions or types", () => {
+    const result = SessionPrompt.buildStructuredOutputSystemPrompt({
+      type: "object",
+      properties: {
+        summary: { type: "string", description: "A long description here" },
+        findings: { type: "array" },
+      },
+    })
+    expect(result).toContain("summary")
+    expect(result).toContain("findings")
+    // should not leak the description text into the prompt
+    expect(result).not.toContain("A long description here")
+  })
+})
+
+// P0: extractSchemaTopLevelFields — utility that drives both the system-prompt injection
+// and the retry-cap corrective hint.
+describe("structured-output.extractSchemaTopLevelFields", () => {
+  test("returns top-level property names", () => {
+    const fields = SessionPrompt.extractSchemaTopLevelFields({
+      type: "object",
+      properties: { module: {}, mechanism: {}, keyFiles: {} },
+    })
+    expect(fields).toEqual(["module", "mechanism", "keyFiles"])
+  })
+
+  test("returns empty array when no properties", () => {
+    expect(SessionPrompt.extractSchemaTopLevelFields({ type: "object" })).toEqual([])
+    expect(SessionPrompt.extractSchemaTopLevelFields({})).toEqual([])
+  })
+
+  test("returns empty array for non-object/null schema", () => {
+    expect(SessionPrompt.extractSchemaTopLevelFields(null as any)).toEqual([])
+    expect(SessionPrompt.extractSchemaTopLevelFields(undefined as any)).toEqual([])
+  })
+})

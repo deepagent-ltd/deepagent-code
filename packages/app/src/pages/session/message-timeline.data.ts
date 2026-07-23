@@ -260,7 +260,9 @@ export namespace Timeline {
     }
 
     if (error) {
-      const data = error.data?.message
+      // Not every assistant error carries `data.message` (e.g. OutputDegenerationError has
+      // { chars, ratio, detectorVersion }). Read via loose-record probe.
+      const data = (error.data as Record<string, unknown> | undefined)?.message
       rows.push(
         new TimelineRow.Error({
           userMessageID: userMessage.id,

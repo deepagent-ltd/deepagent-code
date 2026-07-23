@@ -78,6 +78,9 @@ const takeoverOnce = testEffect(layer({ subagentTimeoutMs: 50, subagentTakeoverL
 const takeoverWorktree = testEffect(
   Layer.mergeAll(layer({ subagentTimeoutMs: 50, subagentTakeoverLimit: 1 }), worktreeMock),
 )
+const takeoverBackgroundWorktree = testEffect(
+  Layer.mergeAll(layer({ subagentTimeoutMs: 50, subagentTakeoverLimit: 2 }), worktreeMock),
+)
 const e2e = testEffect(
   Layer.mergeAll(
     layer({ subagentTimeoutMs: 50, subagentTakeoverLimit: 2, subagentOutputMaxChars: 10 }),
@@ -302,8 +305,9 @@ describe("tool.task takeover (v4.0.4 block1 1a+1b)", () => {
     }),
   )
 
-  takeover.instance("background tasks drive the timeout-takeover-inject chain end to end", () =>
+  takeoverBackgroundWorktree.instance("background tasks drive the timeout-takeover-inject chain end to end", () =>
     Effect.gen(function* () {
+      resetWorktreeLog()
       const jobs = yield* BackgroundJob.Service
       const { chat, assistant } = yield* seed()
       const tool = yield* TaskTool
@@ -327,6 +331,7 @@ describe("tool.task takeover (v4.0.4 block1 1a+1b)", () => {
           prompt: "look into the cache key path",
           subagent_type: "general",
           background: true,
+          isolation: "worktree",
         },
         execCtx(chat, assistant, promptOps),
       )
@@ -345,6 +350,9 @@ describe("tool.task takeover (v4.0.4 block1 1a+1b)", () => {
       expect(injected.length).toBeGreaterThan(0)
       expect(injected[0]).toContain("background recovered")
       expect(injected[0]).toContain("takeover")
+      expect(wt.created).toHaveLength(2)
+      expect(wt.removed).toEqual([wt.created[0]])
+      expect(wt.safeRemoved).toEqual([wt.created[1]])
     }),
   )
 

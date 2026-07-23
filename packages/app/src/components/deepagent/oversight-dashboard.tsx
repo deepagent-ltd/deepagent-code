@@ -55,7 +55,16 @@ function MetricCard(props: { label: string; value: string; tone?: "ok" | "warn" 
   )
 }
 
-export const OversightDashboard: Component = () => {
+// Phase 2: OversightDashboard now accepts a selected subagent session ID so takeover/rollback
+// automatically target the chosen session, and trace nodes can reverse-select a subagent.
+export type OversightDashboardProps = {
+  /** When provided, takeover and rollback default to this session ID. */
+  selectedSessionID?: string
+  /** Called when a trace node with a sessionID is clicked so the caller can select that subagent. */
+  onSessionSelect?: (sessionID: string) => void
+}
+
+export const OversightDashboard: Component<OversightDashboardProps> = (props) => {
   const sdk = useSDK()
   const language = useLanguage()
   const client = () => sdk.client as unknown as OversightClient
@@ -118,7 +127,9 @@ export const OversightDashboard: Component = () => {
     if (!reason) return
     setTakeoverBusy(true)
     setTakeoverNote(null)
-    const result = await recordHumanTakeover(client(), { reason })
+    // Phase 2: automatically pass the selected session ID when present.
+    const sessionID = props.selectedSessionID
+    const result = await recordHumanTakeover(client(), { reason, ...(sessionID ? { sessionID } : {}) })
     setTakeoverBusy(false)
     if (result.ok) {
       setTakeoverReason("")
@@ -133,13 +144,17 @@ export const OversightDashboard: Component = () => {
   }
 
   // ── §D2 rollback (P4.4) ─────────────────────────────────────────────────────────
-  const [rollbackSession, setRollbackSession] = createSignal("")
+  // Phase 2: rollback input is pre-seeded with the selected session ID. Users may override it.
   const [rollbackReason, setRollbackReason] = createSignal("")
   const [rollbackBusy, setRollbackBusy] = createSignal(false)
   const [rollbackNote, setRollbackNote] = createSignal<string | null>(null)
 
+  // The effective session ID for rollback: the input field overrides; falls back to selectedSessionID.
+  const [rollbackSessionOverride, setRollbackSessionOverride] = createSignal("")
+  const effectiveRollbackSession = () => rollbackSessionOverride() || props.selectedSessionID || ""
+
   const submitRollback = async () => {
-    const sessionID = rollbackSession().trim()
+    const sessionID = effectiveRollbackSession().trim()
     if (!sessionID) return
     const reason = rollbackReason().trim()
     setRollbackBusy(true)
@@ -147,7 +162,7 @@ export const OversightDashboard: Component = () => {
     const result = await recordRollback(client(), { sessionID, ...(reason ? { reason } : {}) })
     setRollbackBusy(false)
     if (result.ok) {
-      setRollbackSession("")
+      setRollbackSessionOverride("")
       setRollbackReason("")
       setRollbackNote(
         result.record?.outcome === "noop"
@@ -328,6 +343,17 @@ export const OversightDashboard: Component = () => {
                             </div>
                           </Show>
                           <div class="text-11-regular text-text-weaker">{fmtTime(node.createdAt)}</div>
+                          {/* Phase 2: if this node is tied to a specific subagent session, offer
+                              a reverse-select link so the user can jump to that subagent row. */}
+                          <Show when={node.sessionID && props.onSessionSelect}>
+                            <button
+                              type="button"
+                              class="mt-0.5 text-11-regular text-text-link hover:underline"
+                              onClick={() => props.onSessionSelect!(node.sessionID!)}
+                            >
+                              {language.t("oversight.trace.selectAgent")}
+                            </button>
+                          </Show>
                         </div>
                       </div>
                     )}
@@ -372,11 +398,13 @@ export const OversightDashboard: Component = () => {
         <section>
           <h3 class="mb-1 text-13-medium text-text-strong">{language.t("oversight.rollback.title")}</h3>
           <p class="mb-2 text-11-regular text-text-weak">{language.t("oversight.rollback.description")}</p>
+          {/* Phase 2: when a subagent is selected the placeholder is replaced by the session ID.
+              Typing in this field overrides the pre-selected session. */}
           <input
             class="w-full rounded-md border border-border-weak-base bg-surface-base px-2 py-1.5 text-12-regular text-text-strong outline-none focus:ring-2 focus:ring-accent-base font-mono"
-            placeholder={language.t("oversight.rollback.sessionPlaceholder")}
-            value={rollbackSession()}
-            onInput={(e) => setRollbackSession(e.currentTarget.value)}
+            placeholder={props.selectedSessionID || language.t("oversight.rollback.sessionPlaceholder")}
+            value={rollbackSessionOverride()}
+            onInput={(e) => setRollbackSessionOverride(e.currentTarget.value)}
           />
           <textarea
             class="mt-2 w-full rounded-md border border-border-weak-base bg-surface-base px-2 py-1.5 text-12-regular text-text-strong outline-none resize-none focus:ring-2 focus:ring-accent-base"
@@ -391,7 +419,7 @@ export const OversightDashboard: Component = () => {
               size="small"
               icon="reset"
               onClick={submitRollback}
-              disabled={rollbackBusy() || !rollbackSession().trim()}
+              disabled={rollbackBusy() || !effectiveRollbackSession().trim()}
             >
               <Show when={rollbackBusy()}>
                 <Spinner />

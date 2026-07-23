@@ -496,6 +496,7 @@ export const layerWith = (options?: LayerOptions) =>
       // subscribe stream actually registering the consumer group, so no event published immediately
       // after the layer builds can slip through the startup window unrecorded (#2).
       if (runLoops) {
+        yield* bus.registerConsumerGroup(DISPATCH_GROUP)
         const ready = yield* Deferred.make<void>()
         yield* bus
           .subscribe({ group: DISPATCH_GROUP })

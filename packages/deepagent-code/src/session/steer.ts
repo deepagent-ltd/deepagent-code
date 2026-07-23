@@ -1,5 +1,5 @@
 import { and, asc, eq, inArray, isNull } from "drizzle-orm"
-import { Context, DateTime, Effect, Layer, Schema } from "effect"
+import { Context, Data, DateTime, Effect, Layer, Schema } from "effect"
 import { Database } from "@deepagent-code/core/database/database"
 import { SessionInput } from "@deepagent-code/core/session/input"
 import { SessionMessage } from "@deepagent-code/core/session/message"
@@ -37,6 +37,14 @@ import { SessionID } from "./schema"
 
 export type Delivery = SessionInput.Delivery
 
+// Raised when the same correlationID is reused with a different payload, which
+// would silently overwrite or ignore the earlier steer. Callers should surface
+// this as a 409-style client error.
+export class CorrelationConflict extends Data.TaggedError("SessionSteer.CorrelationConflict")<{
+  readonly sessionID: SessionID
+  readonly correlationID: string
+}> {}
+
 export class Admitted extends Schema.Class<Admitted>("SessionSteer.Admitted")({
   seq: Schema.Int,
   id: SessionMessage.ID,
@@ -60,14 +68,15 @@ const fromRow = (row: typeof SessionSteerTable.$inferSelect): Admitted =>
   })
 
 export interface Interface {
-  // Buffer a user message for later absorption. Idempotent on `id` (a duplicate admit is a no-op and
-  // returns the already-stored record) so an at-least-once ingress (S1.2) never double-buffers.
+  // Buffer a user message for later absorption. `id` is always server-minted.
+  // `correlationID` is an optional client retry key: identical payload retries return the stored row;
+  // different payload for the same key returns a CorrelationConflict (never silently drops).
   readonly admit: (input: {
-    readonly id: SessionMessage.ID
     readonly sessionID: SessionID
     readonly prompt: Prompt
     readonly delivery?: Delivery
-  }) => Effect.Effect<Admitted>
+    readonly correlationID?: string
+  }) => Effect.Effect<Admitted, CorrelationConflict>
   // NON-consuming read of pending steers for the session, in send-order (ascending `seq`). Persist-first
   // step 1: the runLoop reads these, materializes each as a V1 history message keyed by the steer id
   // (idempotent), THEN calls markConsumed. Reading does NOT mark anything — a crash before markConsumed
@@ -98,11 +107,13 @@ export const layer = Layer.effect(
   Effect.gen(function* () {
     const { db } = yield* Database.Service
 
-    const find = (id: SessionMessage.ID) =>
+    const findByCorrelation = (sessionID: SessionID, correlationID: string) =>
       db
         .select()
         .from(SessionSteerTable)
-        .where(eq(SessionSteerTable.id, id))
+        .where(
+          and(eq(SessionSteerTable.session_id, sessionID), eq(SessionSteerTable.correlation_id, correlationID)),
+        )
         .get()
         .pipe(
           Effect.orDie,
@@ -112,25 +123,33 @@ export const layer = Layer.effect(
     const admit: Interface["admit"] = Effect.fn("SessionSteer.admit")(function* (input) {
       const delivery = input.delivery ?? "steer"
       const timeCreated = DateTime.toEpochMillis(yield* DateTime.now)
+      // Always server-minted: the canonical durable/V1 message ID is never client-supplied.
+      const id = SessionMessage.ID.create()
       const inserted = yield* db
         .insert(SessionSteerTable)
         .values({
-          id: input.id,
+          id,
           session_id: input.sessionID,
+          correlation_id: input.correlationID,
           prompt: encodePrompt(input.prompt),
           delivery,
           time_created: timeCreated,
         })
-        .onConflictDoNothing({ target: SessionSteerTable.id })
+        .onConflictDoNothing()
         .returning()
         .get()
         .pipe(Effect.orDie)
       if (inserted) return fromRow(inserted)
-      // Lost the insert race (id already admitted) — return the stored record. Consume-once means the
-      // caller must never re-buffer, so surfacing the existing row is the correct idempotent answer.
-      const existing = yield* find(input.id)
-      if (existing) return existing
-      return yield* Effect.die("SessionSteer.admit: conflicting row vanished")
+      // Correlation conflict path: another row with the same (session, correlationID) already exists.
+      if (input.correlationID === undefined)
+        return yield* Effect.die("SessionSteer.admit: server-generated id conflicted (impossible)")
+      const existing = yield* findByCorrelation(input.sessionID, input.correlationID)
+      if (!existing) return yield* Effect.die("SessionSteer.admit: conflicting correlation row vanished")
+      // Identical payload = idempotent retry; different payload = explicit conflict.
+      if (existing.delivery === delivery && Prompt.equivalence(existing.prompt, input.prompt)) return existing
+      return yield* Effect.fail(
+        new CorrelationConflict({ sessionID: input.sessionID, correlationID: input.correlationID }),
+      )
     })
 
     const pending: Interface["pending"] = Effect.fn("SessionSteer.pending")(function* (sessionID, delivery = "steer") {

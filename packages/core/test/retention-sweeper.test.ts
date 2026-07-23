@@ -8,6 +8,8 @@ import { Database } from "@deepagent-code/core/database/database"
 import { DeepAgentEventDeliveryTable } from "@deepagent-code/core/deepagent/deepagent-event-sql"
 import { ApprovalQueueTable } from "@deepagent-code/core/deepagent/approval-queue-sql"
 import { AgentPushLogTable } from "@deepagent-code/core/im/push-log-sql"
+import { EventSequenceTable, EventTable } from "@deepagent-code/core/event/sql"
+import { SessionTable } from "@deepagent-code/core/session/sql"
 import { testEffect } from "./lib/effect"
 
 // V4.0 §A3 保留期 — the retention sweep + sweeper daemon. Verifies age-based deletion, referential
@@ -299,6 +301,118 @@ describe("RetentionSweeper", () => {
       expect(summary.deletedPushLogs).toBe(1)
       const logs = yield* db.select().from(AgentPushLogTable).all().pipe(Effect.orDie)
       expect(logs.map((l) => l.id)).toEqual(["push_new"])
+    }),
+  )
+
+  // PERF §EventV2-retention: verify that EventV2 mirror events are pruned for archived sessions
+  // that exceeded retentionDays. The event table has no timestamp of its own; we use the session's
+  // time_archived as the retention anchor.
+
+  /** Insert a minimal project + session row so the event_sequence FK is satisfiable. */
+  const insertArchivedSession = (opts: { sessionID: string; workspaceID: string; timeArchived: number }) =>
+    Effect.gen(function* () {
+      const { db } = yield* Database.Service
+      yield* db
+        .run(
+          `INSERT OR IGNORE INTO project (id, worktree, sandboxes, time_created, time_updated)
+           VALUES ('proj_test', '/tmp', '[]', 0, 0)`,
+        )
+        .pipe(Effect.orDie)
+      yield* db
+        .run(
+          `INSERT OR IGNORE INTO session
+             (id, project_id, workspace_id, slug, directory, title, version, time_created, time_updated, time_archived)
+           VALUES ('${opts.sessionID}', 'proj_test', '${opts.workspaceID}', 'test',
+                   '/tmp', 'test', '1', 0, 0, ${opts.timeArchived})`,
+        )
+        .pipe(Effect.orDie)
+    })
+
+  /** Insert event_sequence + one event row for a session aggregate. */
+  const insertEventV2 = (opts: { sessionID: string; eventID: string }) =>
+    Effect.gen(function* () {
+      const { db } = yield* Database.Service
+      yield* db
+        .run(`INSERT OR IGNORE INTO event_sequence (aggregate_id, seq) VALUES ('${opts.sessionID}', 1)`)
+        .pipe(Effect.orDie)
+      yield* db
+        .run(
+          `INSERT OR IGNORE INTO event (id, aggregate_id, seq, type, data)
+           VALUES ('${opts.eventID}', '${opts.sessionID}', 1, 'message.part.updated.1', '{}')`,
+        )
+        .pipe(Effect.orDie)
+    })
+
+  it.effect("§EventV2-retention: prunes event_sequence + events for archived sessions past retentionDays", () =>
+    Effect.gen(function* () {
+      const { db } = yield* Database.Service
+      const b = yield* DeepAgentEventBus.Service
+      const c = yield* WorkspaceConfig.Service
+      const s = yield* RetentionSweeper.Service
+      yield* c.set("wrk_1", { retentionDays: 30 })
+      // Publish a DeepAgentEvent so the workspace is enumerated by the sweeper.
+      yield* publishAt(b, 1_000)
+
+      // An archived session whose time_archived is ancient (1 ms epoch = 1970).
+      yield* insertArchivedSession({ sessionID: "ses_old", workspaceID: "wrk_1", timeArchived: 1_000 })
+      yield* insertEventV2({ sessionID: "ses_old", eventID: "evt_old" })
+
+      setNow(100 * DAY)
+      const summary = yield* s.sweepOnce()
+      expect(summary.deletedEventV2Sequences).toBe(1)
+
+      // Both the event_sequence header and the event row (cascaded) must be gone.
+      const seqs = yield* db.select().from(EventSequenceTable).all().pipe(Effect.orDie)
+      expect(seqs.find((r) => r.aggregate_id === "ses_old")).toBeUndefined()
+      const evts = yield* db.select().from(EventTable).all().pipe(Effect.orDie)
+      expect(evts.find((r) => r.id === "evt_old")).toBeUndefined()
+    }),
+  )
+
+  it.effect("§EventV2-retention: spares event_sequence rows for recently-archived sessions", () =>
+    Effect.gen(function* () {
+      const { db } = yield* Database.Service
+      const b = yield* DeepAgentEventBus.Service
+      const c = yield* WorkspaceConfig.Service
+      const s = yield* RetentionSweeper.Service
+      yield* c.set("wrk_1", { retentionDays: 30 })
+      yield* publishAt(b, 100 * DAY)
+
+      // Archived just now — not yet past retentionDays.
+      yield* insertArchivedSession({ sessionID: "ses_new", workspaceID: "wrk_1", timeArchived: 100 * DAY })
+      yield* insertEventV2({ sessionID: "ses_new", eventID: "evt_new" })
+
+      setNow(100 * DAY)
+      const summary = yield* s.sweepOnce()
+      expect(summary.deletedEventV2Sequences).toBe(0)
+
+      const seqs = yield* db.select().from(EventSequenceTable).all().pipe(Effect.orDie)
+      expect(seqs.find((r) => r.aggregate_id === "ses_new")).toBeDefined()
+    }),
+  )
+
+  it.effect("§EventV2-retention: spares event_sequence rows for non-archived sessions", () =>
+    Effect.gen(function* () {
+      const { db } = yield* Database.Service
+      const b = yield* DeepAgentEventBus.Service
+      const c = yield* WorkspaceConfig.Service
+      const s = yield* RetentionSweeper.Service
+      yield* c.set("wrk_1", { retentionDays: 30 })
+      yield* publishAt(b, 1_000)
+
+      // Insert with a placeholder time_archived, then clear it to NULL → active session.
+      yield* insertArchivedSession({ sessionID: "ses_active", workspaceID: "wrk_1", timeArchived: 0 })
+      yield* db
+        .run(`UPDATE session SET time_archived = NULL WHERE id = 'ses_active'`)
+        .pipe(Effect.orDie)
+      yield* insertEventV2({ sessionID: "ses_active", eventID: "evt_active" })
+
+      setNow(100 * DAY)
+      const summary = yield* s.sweepOnce()
+      expect(summary.deletedEventV2Sequences).toBe(0)
+
+      const seqs = yield* db.select().from(EventSequenceTable).all().pipe(Effect.orDie)
+      expect(seqs.find((r) => r.aggregate_id === "ses_active")).toBeDefined()
     }),
   )
 })
