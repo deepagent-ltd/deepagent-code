@@ -1,6 +1,7 @@
 import { createStore } from "solid-js/store"
 import { createSimpleContext } from "@deepagent-code/ui/context"
-import { batch, createContext, createMemo, createSignal, onCleanup, onMount, useContext, type JSX, type ParentProps } from "solid-js"
+import { batch, createContext, createEffect, createMemo, createSignal, onCleanup, onMount, useContext, type JSX, type ParentProps } from "solid-js"
+import { useParams } from "@solidjs/router"
 import { useSDK } from "./sdk"
 import { usePlatform, type Platform } from "./platform"
 import { useServer } from "./server"
@@ -316,12 +317,98 @@ type TerminalSession = ReturnType<typeof createWorkspaceTerminalSession>
 const sessions = new Set<{ dir: string; scope: ServerScopeValue; value: TerminalSession }>()
 
 /** Per-directory PTY snapshot preserved across project switches so PTYs survive navigation. */
-interface TerminalPtySnapshot {
+export interface TerminalPtySnapshot {
   ptys: Array<Pick<LocalPTY, "id" | "ptyId" | "title" | "titleNumber">>
   root: PaneNode
   focusedPaneId: string
 }
-const directoryTerminalCache = new Map<string, { bottom: TerminalPtySnapshot | null; side: TerminalPtySnapshot | null }>()
+
+/** Entry for a single session's bottom + side PTY snapshots, with LRU metadata. */
+interface SessionTerminalEntry {
+  bottom: TerminalPtySnapshot | null
+  side: TerminalPtySnapshot | null
+  /** Monotonic counter used for LRU ordering — higher = more recently accessed. */
+  lruTick: number
+}
+
+/**
+ * Session-keyed terminal snapshot cache.
+ * Key: ScopedKey.from(scope, dir, sessionKey) — scope + directory + session ID (or draft UUID).
+ */
+const sessionTerminalCache = new Map<string, SessionTerminalEntry>()
+
+/**
+ * Per-workspace discard helper registered by the mounted TerminalProvider.
+ * Key: ScopedKey.from(scope, dir) — just scope + directory.
+ * Used by clearWorkspaceTerminals to remove cached PTYs when no provider is mounted.
+ */
+const workspaceDiscardFn = new Map<string, (ptyId: string) => void>()
+
+/** Max non-current session entries kept per {scope, directory} workspace. */
+const MAX_CACHED_SESSION_ENTRIES = 5
+
+let lruClock = 0
+function nextLruTick(): number {
+  return ++lruClock
+}
+
+/** Composite key for the whole workspace (scope + dir, no session). */
+function workspaceScopeKey(scope: ServerScopeValue, dir: string): string {
+  return ScopedKey.from(scope, dir)
+}
+
+/** Composite key for a specific session entry (scope + dir + sessionKey). */
+function sessionEntryKey(scope: ServerScopeValue, dir: string, sessionKey: string): string {
+  return ScopedKey.from(scope, dir, sessionKey)
+}
+
+/** Returns all cache entries whose key belongs to the given workspace. */
+function getWorkspaceCacheEntries(scope: ServerScopeValue, dir: string): Array<[string, SessionTerminalEntry]> {
+  const prefix = ScopedKey.prefix(scope, dir)
+  const result: Array<[string, SessionTerminalEntry]> = []
+  for (const [k, v] of sessionTerminalCache.entries()) {
+    if (k.startsWith(prefix)) result.push([k, v])
+  }
+  return result
+}
+
+/**
+ * Evict the least-recently-used non-current entries for a workspace so that at
+ * most MAX_CACHED_SESSION_ENTRIES non-current entries remain.
+ * Calls discardFn for each PTY ID of evicted entries.
+ */
+function evictLruEntries(
+  scope: ServerScopeValue,
+  dir: string,
+  currentKey: string,
+  discardFn: (ptyId: string) => void,
+): void {
+  const entries = getWorkspaceCacheEntries(scope, dir)
+  const nonCurrent = entries.filter(([k]) => k !== currentKey)
+  if (nonCurrent.length <= MAX_CACHED_SESSION_ENTRIES) return
+  // Sort ascending: oldest (smallest lruTick) first
+  nonCurrent.sort((a, b) => a[1].lruTick - b[1].lruTick)
+  const toEvict = nonCurrent.slice(0, nonCurrent.length - MAX_CACHED_SESSION_ENTRIES)
+  for (const [key, entry] of toEvict) {
+    const ptyIds = [
+      ...(entry.bottom?.ptys.map((p) => p.ptyId) ?? []),
+      ...(entry.side?.ptys.map((p) => p.ptyId) ?? []),
+    ]
+    for (const ptyId of ptyIds) discardFn(ptyId)
+    sessionTerminalCache.delete(key)
+  }
+}
+
+/**
+ * Invalidate all cached snapshots for the given server scope.
+ * Called when the server restarts (runtimeId changes) — old PTY IDs are invalid.
+ */
+function invalidateScopeSnapshots(scope: ServerScopeValue): void {
+  const prefix = scope + " "
+  for (const key of sessionTerminalCache.keys()) {
+    if (key.startsWith(prefix)) sessionTerminalCache.delete(key)
+  }
+}
 
 export function clearWorkspaceTerminals(
   dir: string,
@@ -329,9 +416,27 @@ export function clearWorkspaceTerminals(
   platform?: Platform,
   scope: ServerScopeValue = ServerScope.local,
 ) {
+  // 1. Clear mounted sessions (calls pty.remove for their live PTYs).
   for (const entry of sessions) {
     if (entry.dir === dir && entry.scope === scope) entry.value.clear()
   }
+
+  // 2. Clear cached session entries for this workspace.
+  //    Use the registered discard fn if a provider is currently mounted; if none
+  //    is mounted the server-side workspace teardown handles PTY cleanup.
+  const wsKey = workspaceScopeKey(scope, dir)
+  const discardFn = workspaceDiscardFn.get(wsKey)
+  for (const [key, entry] of getWorkspaceCacheEntries(scope, dir)) {
+    const ptyIds = [
+      ...(entry.bottom?.ptys.map((p) => p.ptyId) ?? []),
+      ...(entry.side?.ptys.map((p) => p.ptyId) ?? []),
+    ]
+    if (discardFn) {
+      for (const ptyId of ptyIds) discardFn(ptyId)
+    }
+    sessionTerminalCache.delete(key)
+  }
+
   if (platform) removeTerminalPersistence(dir, sessionIDs, platform, scope)
 }
 
@@ -341,6 +446,12 @@ function createWorkspaceTerminalSession(
 ) {
   const rootId = uuid()
   const [store, setStore] = createStore({ all: [] as LocalPTY[] })
+  // terminal.pty_create / terminal.websocket_ready telemetry:
+  // Records the timestamp (performance.now()) when PTY create returns, keyed by server ptyId.
+  // Consumed by setStatus when status transitions to "ready".
+  const ptyCreateTimestamps = new Map<string, number>()
+  // Distinguishes cold (first PTY in this session) from hot (subsequent) for telemetry.
+  let ptyCreatedCount = 0
   const [root, setRootSignal] = createSignal<PaneNode>({
     kind: "leaf",
     id: rootId,
@@ -444,10 +555,38 @@ function createWorkspaceTerminalSession(
     touchPending()
     if (!runtime.id()) void runtime.ensure().catch(() => undefined)
     const epoch = generation
+    // terminal.pty_create — start: about to call pty.create on the server
+    const cold = ptyCreatedCount === 0
+    const ptyCreateT0 = performance.now()
     try {
-      const result = await withServerAbortRetry(() => sdk.client.pty.create({ title: defaultTitle(number) }))
+      // Race pty.create against a 10-second deadline.  Without this, a hung
+      // server connection keeps pendingCreates non-empty forever and the UI
+      // shows "正在启动终端..." indefinitely.
+      const PTY_CREATE_TIMEOUT_MS = 10_000
+      const timeoutPromise = new Promise<never>((_, reject) =>
+        setTimeout(() => {
+          const err = new Error("Terminal creation timed out")
+          ;(err as unknown as { cause: object }).cause = { status: 408, message: "pty.create timeout" }
+          reject(err)
+        }, PTY_CREATE_TIMEOUT_MS),
+      )
+      const result = await Promise.race([
+        withServerAbortRetry(() => sdk.client.pty.create({ title: defaultTitle(number) })),
+        timeoutPromise,
+      ])
       const ptyId = result.data?.id
       if (!ptyId) throw new Error("Terminal creation returned no PTY id")
+      // terminal.pty_create — end: server returned a PTY id
+      const ptyCreateDurationMs = Math.round(performance.now() - ptyCreateT0)
+      ptyCreatedCount++
+      console.info("[startup] telemetry", {
+        event: "terminal.pty_create",
+        durationMs: ptyCreateDurationMs,
+        ptyId,
+        cold,
+      })
+      // Record the end of pty.create so setStatus can measure terminal.websocket_ready.
+      ptyCreateTimestamps.set(ptyId, performance.now())
       if (epoch !== generation) return false
       if (!canPlace()) {
         await discard(ptyId)
@@ -674,6 +813,18 @@ function createWorkspaceTerminalSession(
     setStatus(id: string, ptyId: string, status: TerminalStatus, error?: TerminalFailure) {
       const index = store.all.findIndex((pty) => pty.id === id && pty.ptyId === ptyId)
       if (index === -1) return
+      if (status === "ready") {
+        // terminal.websocket_ready — end: WebSocket attached and terminal is ready
+        const wsT0 = ptyCreateTimestamps.get(ptyId)
+        if (wsT0 !== undefined) {
+          console.info("[startup] telemetry", {
+            event: "terminal.websocket_ready",
+            durationMs: Math.round(performance.now() - wsT0),
+            ptyId,
+          })
+          ptyCreateTimestamps.delete(ptyId)
+        }
+      }
       setStore("all", index, { status, error: status === "ready" ? undefined : error, ...(status === "ready" ? { restored: false } : {}) })
     },
     update(input: Partial<LocalPTY> & { id: string }) {
@@ -766,11 +917,25 @@ function createWorkspaceTerminalSession(
   }
 }
 
-/** @internal */ export const TerminalTesting = { createWorkspaceTerminalSession }
+/** @internal */ export const TerminalTesting = {
+  createWorkspaceTerminalSession,
+  // Cache inspection helpers for unit tests
+  sessionTerminalCache,
+  sessionEntryKey,
+  evictLruEntries,
+  invalidateScopeSnapshots,
+  workspaceDiscardFn,
+  clearSessionCache() {
+    sessionTerminalCache.clear()
+    workspaceDiscardFn.clear()
+  },
+}
 
 export type TerminalHostID = "bottom" | "side"
 
 // Dual-host provider — creates independent bottom and side sessions sharing one PTY service.
+// Session-scoped: the active bottom/side pair is selected by the current session key (URL
+// params.id, or a stable per-tab draft UUID when no session has been created yet).
 const { use: useTerminalDual, provider: TerminalProvider } = createSimpleContext({
   name: "TerminalDual",
   gate: false,
@@ -778,11 +943,25 @@ const { use: useTerminalDual, provider: TerminalProvider } = createSimpleContext
     const sdk = useSDK()
     const server = useServer()
     const platform = usePlatform()
+    const params = useParams()
     const scope = server.scope()
+
+    // Stable draft key for this provider-mount (per browser tab / per SessionRoute mount).
+    // Used as the session key when the route has no session ID yet (/session without :id).
+    const draftKey = uuid()
+
+    // Reactive effective session key: real session ID when available, draft UUID otherwise.
+    const effectiveSessionKey = createMemo(() => params.id ?? draftKey)
+
     let runtimeId: string | undefined
     let runtimeRequest: Promise<void> | undefined
     let bottomSession: TerminalSession | undefined
     let sideSession: TerminalSession | undefined
+
+    // Shared PTY discard helper — used for LRU eviction and workspace clear.
+    const discardPty = (ptyId: string): void => {
+      void sdk.client.pty.remove({ ptyID: ptyId }, { throwOnError: false })
+    }
 
     const ensureRuntime = (): Promise<void> => {
       if (runtimeRequest) return runtimeRequest
@@ -797,6 +976,8 @@ const { use: useTerminalDual, provider: TerminalProvider } = createSimpleContext
           if (runtimeId === next) return
           console.info("[terminal] server runtime changed", { previousRuntimeId: runtimeId, runtimeId: next })
           runtimeId = next
+          // Invalidate all cached snapshots for this scope — old PTY IDs are dead.
+          invalidateScopeSnapshots(scope)
           bottomSession?.resetRuntime()
           sideSession?.resetRuntime()
         })
@@ -813,21 +994,87 @@ const { use: useTerminalDual, provider: TerminalProvider } = createSimpleContext
     bottomSession = createWorkspaceTerminalSession(sdk, runtime)
     sideSession = createWorkspaceTerminalSession(sdk, runtime)
 
-    // Restore previously-saved PTYs when returning to a directory.
-    // The cached snapshot was written by onCleanup — PTYs stayed alive on the
-    // server and just need to be re-registered in local reactive state.
-    const cached = directoryTerminalCache.get(sdk.directory)
-    if (cached) {
-      directoryTerminalCache.delete(sdk.directory)
-      if (cached.bottom) bottomSession.restore(cached.bottom)
-      if (cached.side) sideSession.restore(cached.side)
+    // Restore the snapshot for the initial session key, if one exists in the cache.
+    // This handles returning to a directory whose session terminals were saved on navigation.
+    const initKey = sessionEntryKey(scope, sdk.directory, effectiveSessionKey())
+    const initEntry = sessionTerminalCache.get(initKey)
+    if (initEntry) {
+      sessionTerminalCache.set(initKey, { ...initEntry, lruTick: nextLruTick() })
+      if (initEntry.bottom) bottomSession.restore(initEntry.bottom)
+      if (initEntry.side) sideSession.restore(initEntry.side)
     }
 
+    // Register sessions in the global set so clearWorkspaceTerminals can reach them.
     const bottomReg = { dir: sdk.directory, scope, value: bottomSession }
     const sideReg = { dir: sdk.directory, scope, value: sideSession }
     sessions.add(bottomReg)
     sessions.add(sideReg)
+
+    // Register the PTY discard helper so clearWorkspaceTerminals can evict cached PTYs.
+    const wsKey = workspaceScopeKey(scope, sdk.directory)
+    workspaceDiscardFn.set(wsKey, discardPty)
+
     removeTerminalPersistence(sdk.directory, undefined, platform, scope)
+
+    // Track the previous session key so we can save/restore on switches.
+    // Initialised to the current key so the first effect run is a no-op.
+    let prevSessionKey = effectiveSessionKey()
+
+    // Reactive session-switch: when the URL session key changes (session A → B, or
+    // draft → real), save the current bottom/side state to the cache and restore
+    // (or start fresh) for the new session key.
+    createEffect(() => {
+      const nextKey = effectiveSessionKey()
+      const prevKey = prevSessionKey
+      if (nextKey === prevKey) return
+
+      const prevEntryKey = sessionEntryKey(scope, sdk.directory, prevKey)
+      const nextEntryKey = sessionEntryKey(scope, sdk.directory, nextKey)
+
+      // Snapshot the current sessions before switching away.
+      const bottomSnap = bottomSession!.snapshot()
+      const sideSnap = sideSession!.snapshot()
+
+      // Draft → real-session migration: when the previous key was our draft UUID and
+      // the target slot is empty, move the terminal state to the real session key so
+      // the user keeps the same shell after the first message creates the session.
+      const isDraftMigration = prevKey === draftKey && !sessionTerminalCache.has(nextEntryKey)
+      if (isDraftMigration) {
+        sessionTerminalCache.set(nextEntryKey, {
+          bottom: bottomSnap,
+          side: sideSnap,
+          lruTick: nextLruTick(),
+        })
+        sessionTerminalCache.delete(prevEntryKey)
+      } else {
+        // Normal session switch: persist current state under the previous key.
+        if (bottomSnap || sideSnap) {
+          sessionTerminalCache.set(prevEntryKey, {
+            bottom: bottomSnap,
+            side: sideSnap,
+            lruTick: nextLruTick(),
+          })
+        }
+      }
+
+      prevSessionKey = nextKey
+
+      // Reset live sessions to empty state before restoring (or starting fresh).
+      bottomSession!.resetRuntime()
+      sideSession!.resetRuntime()
+
+      // Restore from cache if an entry exists for the target session.
+      const nextEntry = sessionTerminalCache.get(nextEntryKey)
+      if (nextEntry) {
+        // Touch LRU.
+        sessionTerminalCache.set(nextEntryKey, { ...nextEntry, lruTick: nextLruTick() })
+        if (nextEntry.bottom) bottomSession!.restore(nextEntry.bottom)
+        if (nextEntry.side) sideSession!.restore(nextEntry.side)
+      }
+
+      // Evict least-recently-used entries beyond the per-workspace cap.
+      evictLruEntries(scope, sdk.directory, nextEntryKey, discardPty)
+    })
 
     onMount(() => {
       void ensureRuntime()
@@ -836,15 +1083,27 @@ const { use: useTerminalDual, provider: TerminalProvider } = createSimpleContext
       }, RUNTIME_POLL_MS)
       onCleanup(() => clearInterval(timer))
     })
+
     onCleanup(() => {
-      // Save PTY state so terminals survive project navigation. Do NOT call
-      // clear() here — that would DELETE PTYs on the server. The PTYs keep
-      // running and are reconnected when the user returns to this directory.
+      // Save PTY state for the current session so terminals survive navigation.
+      // Do NOT call clear() here — that would DELETE PTYs on the server. PTYs keep
+      // running and are reconnected when the user returns to this session.
+      const currentKey = sessionEntryKey(scope, sdk.directory, effectiveSessionKey())
       const bottomSnap = bottomSession?.snapshot() ?? null
       const sideSnap = sideSession?.snapshot() ?? null
-      directoryTerminalCache.set(sdk.directory, { bottom: bottomSnap, side: sideSnap })
+      if (bottomSnap || sideSnap) {
+        sessionTerminalCache.set(currentKey, {
+          bottom: bottomSnap,
+          side: sideSnap,
+          lruTick: nextLruTick(),
+        })
+      } else {
+        // Remove a stale empty entry if nothing is alive.
+        sessionTerminalCache.delete(currentKey)
+      }
       sessions.delete(bottomReg)
       sessions.delete(sideReg)
+      workspaceDiscardFn.delete(wsKey)
     })
 
     return { bottom: bottomSession, side: sideSession }
