@@ -2171,6 +2171,11 @@ export const layer = Layer.effect(
         // default-safe: a construction defect (fs error) yields a no-op writer, never a turn crash.
         const logWriter = yield* ConversationLogWriter.make(sessionID)
 
+        // F1: one tracker per durable user activity; shared by every provider step (processor
+        // instance) created in this runLoop call so cross-message ABABAB/ABCABC/... patterns
+        // are detectable.  Reset implicitly on the next runLoop invocation (new variable).
+        const toolSequenceTracker = new SessionProcessor.ToolSequenceTracker()
+
         // V3.8 Phase 3 (v3.8.1 §B.3): fire ONE lightweight code-index pass for this workspace, the real
         // trigger that finally puts code_symbol nodes on the graph (indexFiles had zero prod callers).
         // Gated to once-per-session-per-process (indexedSessions) so re-prompts don't re-walk; forked
@@ -2421,6 +2426,7 @@ export const layer = Layer.effect(
               assistantMessage: msg,
               sessionID,
               model,
+              sequenceTracker: toolSequenceTracker,
             })
             .pipe(Effect.onInterrupt(() => finalizeInterruptedAssistant))
 

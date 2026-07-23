@@ -18,8 +18,12 @@ function SidePanelTerminalContent(props: { onClose: () => void }) {
   const terminal = useTerminal()
 
   // Lifecycle: auto-create first PTY when side panel opens; close panel when empty.
+  // Guard `active` on runtimeId being set — this confirms the server instance is
+  // ready to accept pty.create calls.  Without this guard the effect fires on the
+  // very first reactive pass while the server is still booting, producing an
+  // immediate non-retryable 503 failure and a "operation failed" error.
   useTerminalLifecycle({
-    active: () => true,
+    active: () => terminal.runtimeId() !== undefined || terminal.all().length > 0,
     close: props.onClose,
     rootEl: () => document.querySelector<HTMLElement>('[data-terminal-host="side"]') ?? undefined,
   })
