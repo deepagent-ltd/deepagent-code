@@ -19,6 +19,10 @@ globalThis.AI_SDK_LOG_WARNINGS = false
 
 const log = Log.create({ service: "server" })
 
+// Tracks whether this process has already completed a successful Server.listen.
+// First call is cold start; subsequent calls are hot restarts.
+let serverHasListened = false
+
 export type Listener = {
   hostname: string
   port: number
@@ -84,7 +88,17 @@ export async function listen(opts: ListenOptions): Promise<Listener> {
 
 const listenEffect: (opts: ListenOptions) => Effect.Effect<EffectListener, unknown> = Effect.fn("Server.listen")(
   function* (opts: ListenOptions) {
+    const cold = !serverHasListened
+    const layerBuildT0 = yield* Effect.sync(() => Date.now())
     const state = yield* startWithPortFallback(opts)
+    yield* Effect.sync(() => {
+      log.info("startup", {
+        event: "server.layer_build",
+        durationMs: Date.now() - layerBuildT0,
+        cold,
+      })
+      serverHasListened = true
+    })
     const address = yield* tcpAddress(state)
     const listenerUrl = makeURL(opts.hostname, address.port)
     url = listenerUrl

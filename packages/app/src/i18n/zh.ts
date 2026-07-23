@@ -896,6 +896,7 @@ export const dict = {
   "common.rename": "重命名",
   "common.reset": "重置",
   "common.archive": "归档",
+  "common.copyId": "复制 ID",
   "common.delete": "删除",
   "common.close": "关闭",
   "common.edit": "编辑",

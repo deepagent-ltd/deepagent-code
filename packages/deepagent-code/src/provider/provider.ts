@@ -48,6 +48,10 @@ import {
 } from "./compatibility"
 
 const log = Log.create({ service: "provider" })
+
+// Tracks whether InstanceState.make has been called at least once in this process.
+// First call is cold start (no cached state); subsequent calls (per-directory re-init) are hot.
+let providerStateInitialized = false
 const OPENAI_HEADER_TIMEOUT_DEFAULT = 10_000
 const THIRD_PARTY_PROVIDER_CONFLICT_MESSAGE =
   "Provider id conflicts with an official provider. Rename this third-party provider in your config."
@@ -1300,7 +1304,10 @@ export const layer = Layer.effect(
 
     const state = yield* InstanceState.make<State>(() =>
       Effect.gen(function* () {
-        using _ = log.time("state")
+        // provider.state_init — structured telemetry: first call per process is cold start.
+        const isFirstProviderInit = !providerStateInitialized
+        providerStateInitialized = true
+        using _ = log.time("provider.state_init", { cold: isFirstProviderInit })
         const bridge = yield* EffectBridge.make()
         const cfg = yield* config.get()
         // Official providers ignore config.provider.<id> entirely; their transport tuning
