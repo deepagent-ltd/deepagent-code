@@ -38,6 +38,13 @@ type Listener = {
 const parentPort = getParentPort()
 let listener: Listener | undefined
 
+// Eagerly start loading the server module the instant the sidecar process
+// starts — before the {type:"start"} message arrives from the main process.
+// Module loading (parsing + JIT) takes 1-2 s; starting it here lets that
+// work overlap with the main process's loadShellEnv + window creation, so
+// by the time start() is called the import is already done or nearly done.
+const serverModulePromise = import("virtual:deepagent-code-server")
+
 parentPort.on("message", (event) => {
   const command = parseCommand(event.data)
   if (!command) return
@@ -54,7 +61,8 @@ async function start(command: StartCommand) {
     ensureLoopbackNoProxy()
     useSystemCertificates()
     useEnvProxy()
-    const { Log, Server } = await import("virtual:deepagent-code-server")
+    // Await the eagerly-started import — usually already done by now.
+    const { Log, Server } = await serverModulePromise
     await Log.init({ level: "WARN" })
 
     listener = await Server.listen({

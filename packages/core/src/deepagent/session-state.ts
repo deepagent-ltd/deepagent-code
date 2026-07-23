@@ -522,14 +522,45 @@ export const pruneCompleted = (maxAge_ms = 24 * 60 * 60 * 1000): void => {
   saveToDisk()
 }
 
+// PERF: maximum bytes stored for the userRequest field. The field is used for display/context
+// heuristics only — a 10KB cap prevents one large paste from bloating sessions.json by ~800KB.
+const MAX_USER_REQUEST_BYTES = 10_000
+
+// PERF: debounce timer handle — collapses many back-to-back saveToDisk() calls (e.g. per streaming
+// delta) into one write at the end of the current JS task. setImmediate fires after I/O callbacks
+// so the write never races with in-progress DB operations.
+let _savePending = false
+
 function saveToDisk() {
+  if (!stateDir) return
+  if (_savePending) return
+  _savePending = true
+  // Schedule the actual write after the current synchronous work finishes. This collapses N
+  // rapid-fire calls (tool result ingestion, round-control advances, plan latch flips …) into a
+  // single atomic write per event-loop turn.
+  setImmediate(flushToDisk)
+}
+
+function flushToDisk() {
+  _savePending = false
   if (!stateDir) return
   // P2-G: atomic rewrite so a crash can't truncate sessions.json. P2-D: surface write failures to
   // stderr instead of silently dropping run state (a lost session-state write is a real data loss,
   // not something to swallow). Still non-throwing: persistence failure must not crash the turn.
   try {
-    const data = Object.fromEntries(sessions)
-    writeFileAtomic(path.join(stateDir, "sessions.json"), JSON.stringify(data, null, 2))
+    // Build a serialization-safe snapshot: truncate oversized fields so one large session
+    // (e.g. a user pasting a multi-hundred-KB document) does not inflate the whole file.
+    const data: Record<string, unknown> = {}
+    for (const [id, state] of sessions) {
+      const serialized: Record<string, unknown> = { ...state }
+      if (typeof serialized.userRequest === "string" && serialized.userRequest.length > MAX_USER_REQUEST_BYTES) {
+        serialized.userRequest = serialized.userRequest.slice(0, MAX_USER_REQUEST_BYTES)
+      }
+      data[id] = serialized
+    }
+    // Compact JSON (no pretty-print): sessions.json is machine-read only; the 2-space indent
+    // was adding ~25% bloat to a file that is synchronously read and written on every state change.
+    writeFileAtomic(path.join(stateDir, "sessions.json"), JSON.stringify(data))
   } catch (error) {
     console.error("deepagent session-state: failed to persist sessions.json", error)
   }

@@ -247,10 +247,8 @@ export const layerWith = (options?: LayerOptions) =>
       )
 
       // §A3 at-least-once — the set of consumer groups with a live `subscribe({group})` stream, and
-      // the type filter each declared. `publish` writes a durable `pending` delivery row for every
-      // group whose filter matches, so an event owed to a group survives a crash between receipt and
-      // ack (recoverable via `dueRetries`). Ref-counted: a group is registered while ≥1 of its streams
-      // is live and dropped when the last unsubscribes, so we never accrue deliveries no one consumes.
+      // the type filter each declared. Durable registration is independent of this live bookkeeping:
+      // a temporarily offline consumer must remain owed matching events until it restarts.
       const groups = new Map<string, { types: Map<string | null, number> }>()
       const registerGroup = (group: string, type: string | null) =>
         Effect.sync(() => {
@@ -480,9 +478,7 @@ export const layerWith = (options?: LayerOptions) =>
             ),
           ),
           Stream.ensuring(
-            Effect.all([unregisterGroup(group, type), touchLastSeen], { concurrency: "unbounded" }).pipe(
-              Effect.asVoid,
-            ),
+            Effect.all([unregisterGroup(group, type), touchLastSeen], { concurrency: "unbounded" }).pipe(Effect.asVoid),
           ),
         )
       }

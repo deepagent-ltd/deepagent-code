@@ -18,7 +18,7 @@ import { DOCK_PANEL_IDS, useLayout } from "@/context/layout"
 import { usePlatform } from "@/context/platform"
 import { useServer } from "@/context/server"
 import { useSync } from "@/context/sync"
-import { useTerminal } from "@/context/terminal"
+import { useTerminalHosts } from "@/context/terminal"
 import { focusTerminalById } from "@/pages/session/helpers"
 import { useSessionLayout } from "@/pages/session/session-layout"
 import { PANEL_VIEW_META } from "@/pages/session/panel-view-registry"
@@ -144,7 +144,7 @@ export function SessionHeader() {
   const platform = usePlatform()
   const language = useLanguage()
   const sync = useSync()
-  const terminal = useTerminal()
+  const terminalHosts = useTerminalHosts()
   const { params, view } = useSessionLayout()
 
   const projectDirectory = createMemo(() => decode64(params.dir) ?? "")
@@ -208,19 +208,18 @@ export function SessionHeader() {
     ]
   })
 
-  const terminalOpen = createMemo(() => {
-    const panel = view().panel
-    return panel.location("terminal") === "bottom"
-      ? panel.bottom.opened() && panel.bottom.activeView() === "terminal"
-      : view().rightPanel.mode() === "terminal"
-  })
+  // Phase 3: terminal toggle button in the header controls the **bottom** terminal only.
+  const terminalOpen = createMemo(() =>
+    view().panel.bottom.opened() && view().panel.bottom.activeView() === "terminal",
+  )
 
   const toggleTerminal = () => {
     view().panel.toggle("terminal")
-    const panel = view().panel
-    if (panel.location("terminal") === "side" && view().rightPanel.mode() !== "terminal") return
-    const id = terminal.active()
-    if (id) focusTerminalById(id)
+    // Focus the bottom terminal's active pane after opening.
+    if (terminalOpen()) {
+      const id = terminalHosts.bottom.active()
+      if (id) focusTerminalById(id)
+    }
   }
 
   const bottomPanelOpen = createMemo(() => view().panel.bottom.opened())
