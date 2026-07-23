@@ -52,6 +52,8 @@ export type LocalPTY = {
   titleNumber: number
   status: TerminalStatus
   error?: TerminalFailure
+  /** True when restored from cross-project navigation cache; cleared on first ready. */
+  restored?: boolean
 }
 
 export type TerminalStore = {
@@ -313,6 +315,14 @@ function removeTerminalPersistence(
 type TerminalSession = ReturnType<typeof createWorkspaceTerminalSession>
 const sessions = new Set<{ dir: string; scope: ServerScopeValue; value: TerminalSession }>()
 
+/** Per-directory PTY snapshot preserved across project switches so PTYs survive navigation. */
+interface TerminalPtySnapshot {
+  ptys: Array<Pick<LocalPTY, "id" | "ptyId" | "title" | "titleNumber">>
+  root: PaneNode
+  focusedPaneId: string
+}
+const directoryTerminalCache = new Map<string, { bottom: TerminalPtySnapshot | null; side: TerminalPtySnapshot | null }>()
+
 export function clearWorkspaceTerminals(
   dir: string,
   sessionIDs?: string[],
@@ -535,6 +545,37 @@ function createWorkspaceTerminalSession(
     resetRuntime() {
       reset()
     },
+    snapshot(): TerminalPtySnapshot | null {
+      if (store.all.length === 0) return null
+      return {
+        ptys: store.all.map((pty) => ({
+          id: pty.id,
+          ptyId: pty.ptyId,
+          title: pty.title,
+          titleNumber: pty.titleNumber,
+        })),
+        root: root(),
+        focusedPaneId: focusedPaneId(),
+      }
+    },
+    restore(snapshot: TerminalPtySnapshot) {
+      batch(() => {
+        setStore(
+          "all",
+          snapshot.ptys.map((p) => ({
+            id: p.id,
+            ptyId: p.ptyId,
+            title: p.title,
+            titleNumber: p.titleNumber,
+            status: "connecting" as TerminalStatus,
+            error: undefined,
+            restored: true,
+          })),
+        )
+        setRootSignal(clonePaneTree(snapshot.root))
+        setFocusedPaneId(snapshot.focusedPaneId)
+      })
+    },
     clear() {
       const ptyIds = store.all.map((pty) => pty.ptyId)
       reset()
@@ -633,7 +674,7 @@ function createWorkspaceTerminalSession(
     setStatus(id: string, ptyId: string, status: TerminalStatus, error?: TerminalFailure) {
       const index = store.all.findIndex((pty) => pty.id === id && pty.ptyId === ptyId)
       if (index === -1) return
-      setStore("all", index, { status, error: status === "ready" ? undefined : error })
+      setStore("all", index, { status, error: status === "ready" ? undefined : error, ...(status === "ready" ? { restored: false } : {}) })
     },
     update(input: Partial<LocalPTY> & { id: string }) {
       if (input.title === undefined) return
@@ -772,6 +813,16 @@ const { use: useTerminalDual, provider: TerminalProvider } = createSimpleContext
     bottomSession = createWorkspaceTerminalSession(sdk, runtime)
     sideSession = createWorkspaceTerminalSession(sdk, runtime)
 
+    // Restore previously-saved PTYs when returning to a directory.
+    // The cached snapshot was written by onCleanup — PTYs stayed alive on the
+    // server and just need to be re-registered in local reactive state.
+    const cached = directoryTerminalCache.get(sdk.directory)
+    if (cached) {
+      directoryTerminalCache.delete(sdk.directory)
+      if (cached.bottom) bottomSession.restore(cached.bottom)
+      if (cached.side) sideSession.restore(cached.side)
+    }
+
     const bottomReg = { dir: sdk.directory, scope, value: bottomSession }
     const sideReg = { dir: sdk.directory, scope, value: sideSession }
     sessions.add(bottomReg)
@@ -786,10 +837,14 @@ const { use: useTerminalDual, provider: TerminalProvider } = createSimpleContext
       onCleanup(() => clearInterval(timer))
     })
     onCleanup(() => {
+      // Save PTY state so terminals survive project navigation. Do NOT call
+      // clear() here — that would DELETE PTYs on the server. The PTYs keep
+      // running and are reconnected when the user returns to this directory.
+      const bottomSnap = bottomSession?.snapshot() ?? null
+      const sideSnap = sideSession?.snapshot() ?? null
+      directoryTerminalCache.set(sdk.directory, { bottom: bottomSnap, side: sideSnap })
       sessions.delete(bottomReg)
       sessions.delete(sideReg)
-      bottomSession?.clear()
-      sideSession?.clear()
     })
 
     return { bottom: bottomSession, side: sideSession }
