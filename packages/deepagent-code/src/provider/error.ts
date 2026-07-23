@@ -27,47 +27,60 @@ function isOpenAiErrorRetryable(e: APICallError) {
   return status === 404 || e.isRetryable
 }
 
+const RESPONSE_BODY_MAX_BYTES = 1000
+
+function truncateBody(text: string, maxBytes: number) {
+  if (text.length <= maxBytes) return text
+  let cut = maxBytes
+  while (cut > 0 && (text.charCodeAt(cut) & 0xfc00) === 0xdc00) cut--
+  return text.slice(0, cut) + "..."
+}
+
+function displayBody(e: APICallError) {
+  if (!e.responseBody) return undefined
+  const trimmed = e.responseBody.trim()
+  if (!trimmed) return undefined
+  try {
+    const parsed = JSON.parse(trimmed)
+    const errMsg = parsed?.error?.message
+    if (typeof errMsg === "string" && errMsg.trim()) return errMsg.trim()
+  } catch {}
+  return truncateBody(trimmed, RESPONSE_BODY_MAX_BYTES)
+}
+
 // Providers not reliably handled in this function:
 // - z.ai: can accept overflow silently (needs token-count/context-window checks)
 function message(providerID: ProviderV2.ID, e: APICallError) {
   return iife(() => {
-    const msg = e.message
-    if (msg === "") {
-      if (e.responseBody) return e.responseBody
-      if (e.statusCode) {
-        const err = STATUS_CODES[e.statusCode]
-        if (err) return err
-      }
-      return "Unknown error"
-    }
-
-    if (!e.responseBody || (e.statusCode && msg !== STATUS_CODES[e.statusCode])) {
-      return msg
-    }
-
-    try {
-      const body = JSON.parse(e.responseBody)
-      // try to extract common error message fields
-      const errMsg = body.message || body.error || body.error?.message
-      if (errMsg && typeof errMsg === "string") {
-        return `${msg}: ${errMsg}`
-      }
-    } catch {}
+    const statusText = e.statusCode ? STATUS_CODES[e.statusCode] : undefined
 
     // If responseBody is HTML (e.g. from a gateway or proxy error page),
     // provide a human-readable message instead of dumping raw markup
-    if (/^\s*<!doctype|^\s*<html/i.test(e.responseBody)) {
+    if (e.responseBody && /^\s*<!doctype|^\s*<html/i.test(e.responseBody)) {
       if (e.statusCode === 401) {
         return "Unauthorized: request was blocked by a gateway or proxy. Your authentication token may be missing or expired — try running `deepagent-code auth login <your provider URL>` to re-authenticate."
       }
       if (e.statusCode === 403) {
         return "Forbidden: request was blocked by a gateway or proxy. You may not have permission to access this resource — check your account and provider settings."
       }
-      return msg
     }
 
-    return `${msg}: ${e.responseBody}`
-  }).trim()
+    const body = displayBody(e)
+    const detail = body ?? e.message ?? statusText ?? "Unknown error"
+
+    let result: string
+    if (e.statusCode) {
+      result = statusText ? `unexpected status ${e.statusCode} ${statusText}: ${detail}` : `unexpected status ${e.statusCode}: ${detail}`
+    } else {
+      result = detail
+    }
+
+    if (e.url) result += `, url: ${e.url}`
+    const requestId = e.responseHeaders?.["x-request-id"]
+    if (requestId) result += `, request id: ${requestId}`
+
+    return result.trim()
+  })
 }
 
 function json(input: unknown) {
@@ -165,7 +178,8 @@ export type ParsedAPICallError =
 export function parseAPICallError(input: { providerID: ProviderV2.ID; error: APICallError }): ParsedAPICallError {
   const m = message(input.providerID, input.error)
   const body = json(input.error.responseBody)
-  if (isContextOverflow(m) || input.error.statusCode === 413 || body?.error?.code === "context_length_exceeded") {
+  const rawDetail = input.error.message || input.error.responseBody || ""
+  if (isContextOverflow(rawDetail) || input.error.statusCode === 413 || body?.error?.code === "context_length_exceeded") {
     return {
       type: "context_overflow",
       message: m,
