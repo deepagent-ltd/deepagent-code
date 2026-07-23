@@ -6,7 +6,7 @@ import { Log } from "@deepagent-code/core/util/log"
 import { Global } from "@deepagent-code/core/global"
 import { Context, Effect, Layer } from "effect"
 import * as Stream from "effect/Stream"
-import { streamText, wrapLanguageModel, type ModelMessage, type Tool, APICallError } from "ai"
+import { streamText, wrapLanguageModel, type ModelMessage, type Tool, APICallError, NoSuchToolError, InvalidToolInputError } from "ai"
 import { type LLMEvent } from "@deepagent-code/llm"
 import { AgentGateway } from "@deepagent-code/core/agent-gateway"
 import { LLMClient, RequestExecutor, WebSocketExecutor } from "@deepagent-code/llm/route"
@@ -39,6 +39,23 @@ const deepagentModelAuthProviderID = (model: Provider.Model) => {
   if (model.providerID !== "deepagent") return
   const value = model.options?.authProviderID
   return typeof value === "string" && value.length > 0 ? value : undefined
+}
+
+// Detect whether the resolved request options enable extended thinking / reasoning.
+// Providers reject `tool_choice: required/object` while thinking is active (e.g.
+// "The tool_choice parameter does not support being set to required or object in
+// thinking mode"), which broke structured-output subagent calls. When thinking is
+// on, the caller downgrades toolChoice to auto and relies on the schema-aware
+// system prompt (buildStructuredOutputSystemPrompt) to elicit the structured tool
+// call instead of forcing it.
+const thinkingActive = (options: Record<string, any> | undefined): boolean => {
+  if (!options || typeof options !== "object") return false
+  const effort = options.reasoningEffort ?? options.reasoning?.effort
+  if (typeof effort === "string" && effort !== "none") return true
+  const thinking = options.thinking
+  if (thinking && typeof thinking === "object" && thinking.type !== "disabled") return true
+  if (options.thinkingConfig && typeof options.thinkingConfig === "object") return true
+  return false
 }
 
 export type StreamInput = {
@@ -152,6 +169,11 @@ const live: Layer.Layer<
         },
       })
 
+      // Structured-output callers force toolChoice:"required", which providers reject
+      // while thinking is active. Downgrade to auto in that case so the call still
+      // succeeds; the schema-aware system prompt keeps the model on the structured path.
+      const effectiveToolChoice = thinkingActive(prepared.params.options) ? undefined : input.toolChoice
+
       // Wire up toolExecutor for DWS workflow models so that tool calls
       // from the workflow service are executed via deepagent-code's tool system
       // and results sent back over the WebSocket.
@@ -164,12 +186,38 @@ const live: Layer.Layer<
         workflowModel.sessionID = input.sessionID
         workflowModel.systemPrompt = prepared.system.join("\n")
         workflowModel.toolExecutor = async (toolName, argsJson, _requestID) => {
+          // (1) Unknown tool — classify before attempting parse or execute.
           const t = prepared.tools[toolName]
           if (!t || !t.execute) {
-            return { result: "", error: `Unknown tool: ${toolName}` }
+            l.warn("workflow tool call: unknown tool", { tool: toolName, errorType: "unknown_tool" })
+            return {
+              result: "",
+              error: `[unknown_tool] Tool "${toolName}" is not available. Resend the request using a valid tool name.`,
+            }
           }
+
+          // (2) JSON parse — separate from execution so we can classify invalid_json.
+          // Do NOT attempt to repair or fill in missing brackets/quotes.
+          let parsedArgs: unknown
           try {
-            const result = await t.execute!(JSON.parse(argsJson), {
+            parsedArgs = JSON.parse(argsJson)
+          } catch (parseErr: any) {
+            const inputPreview = argsJson.length > 200 ? argsJson.slice(0, 200) + "…[truncated]" : argsJson
+            l.warn("workflow tool call: invalid JSON", {
+              tool: toolName,
+              errorType: "invalid_json",
+              errorMessage: (parseErr?.message ?? "parse error").slice(0, 200),
+              inputPreview,
+            })
+            return {
+              result: "",
+              error: `[invalid_json] Arguments for tool "${toolName}" are not valid JSON (${(parseErr?.message ?? "parse error").slice(0, 200)}). Resend the request with complete, valid JSON arguments.`,
+            }
+          }
+
+          // (3) Execute — classify schema_mismatch vs other runtime errors.
+          try {
+            const result = await t.execute!(parsedArgs, {
               toolCallId: _requestID,
               messages: input.messages,
               abortSignal: input.abort,
@@ -181,7 +229,22 @@ const live: Layer.Layer<
               title: typeof result === "object" ? result?.title : undefined,
             }
           } catch (e: any) {
-            return { result: "", error: e.message ?? String(e) }
+            // Effect Schema parse errors expose ._tag === "ParseError"; Zod errors expose .issues.
+            const isSchemaError =
+              Array.isArray(e?.issues) || e?._tag === "ParseError" || e?.cause?._tag === "ParseError"
+            const errorType = isSchemaError ? "schema_mismatch" : "execution_error"
+            l.warn("workflow tool call: execution error", {
+              tool: toolName,
+              errorType,
+              errorMessage: (e?.message ?? String(e)).slice(0, 200),
+            })
+            if (isSchemaError) {
+              return {
+                result: "",
+                error: `[schema_mismatch] Arguments for tool "${toolName}" do not match the expected schema. Resend the request with correctly structured arguments.`,
+              }
+            }
+            return { result: "", error: (e?.message ?? String(e)).slice(0, 500) }
           }
         }
 
@@ -271,7 +334,7 @@ const live: Layer.Layer<
           llmClient,
           messages: prepared.messages,
           tools: prepared.tools,
-          toolChoice: input.toolChoice,
+          toolChoice: effectiveToolChoice,
           temperature: prepared.params.temperature,
           topP: prepared.params.topP,
           topK: prepared.params.topK,
@@ -343,9 +406,10 @@ const live: Layer.Layer<
             })
           },
           async experimental_repairToolCall(failed) {
+            // (a) Tool name case fix only — keep failed.toolCall.input exactly as-is.
             const lower = failed.toolCall.toolName.toLowerCase()
             if (lower !== failed.toolCall.toolName && prepared.tools[lower]) {
-              l.info("repairing tool call", {
+              l.info("tool call repair: name case fix", {
                 tool: failed.toolCall.toolName,
                 repaired: lower,
               })
@@ -354,14 +418,49 @@ const live: Layer.Layer<
                 toolName: lower,
               }
             }
-            return {
-              ...failed.toolCall,
-              input: JSON.stringify({
+
+            // Log bounded diagnostics — do NOT echo the full input (may contain file content).
+            const rawInput: string = failed.toolCall.input
+            const inputPreview = rawInput.length > 200 ? rawInput.slice(0, 200) + "…[truncated]" : rawInput
+
+            // (b/c) Classify by error type and return null.
+            // Returning null lets AI SDK propagate the original error as a tool result,
+            // giving the model actionable feedback to resend with correct parameters.
+            // We never attempt to repair JSON syntax (no bracket filling, no quote fixing,
+            // no control-char stripping) — write/edit content must stay intact.
+            if (NoSuchToolError.isInstance(failed.error)) {
+              l.warn("tool call repair skipped: unknown tool", {
                 tool: failed.toolCall.toolName,
-                error: failed.error.message,
-              }),
-              toolName: "invalid",
+                errorType: "unknown_tool",
+                errorMessage: failed.error.message.slice(0, 300),
+              })
+              return null
             }
+
+            if (InvalidToolInputError.isInstance(failed.error)) {
+              // SyntaxError cause → invalid JSON; otherwise → schema mismatch.
+              const isSyntaxError = failed.error.cause instanceof SyntaxError
+              const errorType = isSyntaxError ? "invalid_json" : "schema_mismatch"
+              l.warn("tool call repair skipped", {
+                tool: failed.toolCall.toolName,
+                errorType,
+                errorMessage: failed.error.message.slice(0, 300),
+                inputPreview,
+              })
+              return null
+            }
+
+            // Unrecognized error type — return null rather than guessing.
+            // Cast to unknown: TypeScript narrows failed.error to never after the two
+            // isInstance guards above (the union is exhausted), but we keep this block
+            // as a runtime safety net in case AI SDK adds new error subtypes.
+            const unknownErr = failed.error as unknown
+            l.warn("tool call repair skipped: unrecognized error", {
+              tool: failed.toolCall.toolName,
+              errorMessage: (unknownErr instanceof Error ? unknownErr.message : String(unknownErr)).slice(0, 300),
+              inputPreview,
+            })
+            return null
           },
           temperature: prepared.params.temperature,
           topP: prepared.params.topP,
@@ -369,7 +468,7 @@ const live: Layer.Layer<
           providerOptions: ProviderTransform.providerOptions(input.model, prepared.params.options),
           activeTools: Object.keys(prepared.tools).filter((x) => x !== "invalid"),
           tools: prepared.tools,
-          toolChoice: input.toolChoice,
+          toolChoice: effectiveToolChoice,
           maxOutputTokens: prepared.params.maxOutputTokens,
           abortSignal: input.abort,
           headers: prepared.headers,

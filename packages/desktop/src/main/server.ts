@@ -7,6 +7,10 @@ import { getUserShell, loadShellEnv } from "./shell-env"
 import { getStore } from "./store"
 import { DEFAULT_SERVER_URL_KEY } from "./store-keys"
 
+// Counts how many times a local sidecar has been spawned in this process.
+// spawnIndex === 1 means cold start; > 1 means a hot restart.
+let sidecarSpawnCount = 0
+
 export type HealthCheck = { wait: Promise<void> }
 
 type SidecarMessage =
@@ -58,7 +62,13 @@ export async function spawnLocalServer(
   password: string,
   options: SpawnLocalServerOptions,
 ) {
+  const spawnIndex = ++sidecarSpawnCount
+  const cold = spawnIndex === 1
+  const logger = getLogger()
+
   const sidecar = join(dirname(fileURLToPath(import.meta.url)), "sidecar.js")
+  // desktop.sidecar_spawn — start: utility process fork
+  const sidecarSpawnT0 = Date.now()
   const child = utilityProcess.fork(sidecar, [], {
     cwd: process.cwd(),
     env: createSidecarEnv(),
@@ -108,6 +118,13 @@ export async function spawnLocalServer(
         if (done) return
         done = true
         cleanup()
+        // desktop.sidecar_spawn — end: sidecar ready message received
+        const sidecarSpawnDuration = Date.now() - sidecarSpawnT0
+        logger?.scope("startup").info("telemetry", {
+          event: "desktop.sidecar_spawn",
+          durationMs: sidecarSpawnDuration,
+          cold,
+        })
         resolve()
         return
       }
@@ -142,6 +159,8 @@ export async function spawnLocalServer(
   const wait = (async () => {
     const url = `http://${hostname}:${port}`
     let healthy = false
+    // desktop.health_wait — start: ready message received, now polling for API readiness
+    const healthWaitT0 = Date.now()
     const gone = exit.promise.then((code) => {
       if (healthy) return
       throw new Error(`Sidecar exited before health check passed with code ${code}`)
@@ -149,11 +168,19 @@ export async function spawnLocalServer(
 
     const ready = async () => {
       while (true) {
-        await new Promise((resolve) => setTimeout(resolve, 100))
+        // Try immediately first; sleep only after a failed attempt.
+        // This removes the previous unconditional 100ms pre-sleep before the first request.
         if (await checkHealth(url, password)) {
           healthy = true
+          // desktop.health_wait — end: health first success
+          logger?.scope("startup").info("telemetry", {
+            event: "desktop.health_wait",
+            durationMs: Date.now() - healthWaitT0,
+            cold,
+          })
           return
         }
+        await new Promise((resolve) => setTimeout(resolve, 100))
       }
     }
 
