@@ -35,6 +35,10 @@ export interface TerminalProps extends ComponentProps<"div"> {
   runtimeId?: string
   onSubmit?: () => void
   onStatusChange?: (status: TerminalStatus, error?: TerminalFailure) => void
+  /** When true (restored PTY), show the terminal immediately after xterm initialises
+   *  instead of waiting for the WebSocket handshake. The WebSocket still connects in
+   *  the background; input typed before it's ready is buffered. */
+  optimisticReady?: boolean
 }
 
 let shared: Promise<{ mod: typeof import("ghostty-web"); ghostty: Ghostty }> | undefined
@@ -159,6 +163,7 @@ export const Terminal = (props: TerminalProps) => {
     "runtimeId",
     "onSubmit",
     "onStatusChange",
+    "optimisticReady",
   ])
   const id = local.pty.ptyId
   let ws: WebSocket | undefined
@@ -435,6 +440,8 @@ export const Terminal = (props: TerminalProps) => {
       })
       cleanups.push(() => disposeIfDisposable(onResize))
       const onData = t.onData((data) => {
+        // When optimisticReady is active the buffering handler below takes over.
+        if (local.optimisticReady) return
         if (ws?.readyState === WebSocket.OPEN) ws.send(data)
       })
       cleanups.push(() => disposeIfDisposable(onData))
@@ -455,6 +462,28 @@ export const Terminal = (props: TerminalProps) => {
       fit.fit()
       scheduleSize(t.cols, t.rows)
       startResize()
+
+      // For restored PTYs: show the terminal surface immediately after xterm is
+      // initialised instead of waiting for the full WebSocket handshake (which can
+      // take 2-4 s). Input typed before the socket opens is buffered and flushed
+      // once the connection is established.
+      let inputBuffer = local.optimisticReady ? "" : undefined
+      if (local.optimisticReady) {
+        markReady()
+        // Intercept onData to buffer keystrokes until the WebSocket is open.
+        const onDataOpt = t.onData((data) => {
+          if (ws?.readyState === WebSocket.OPEN) {
+            if (inputBuffer) {
+              ws.send(inputBuffer)
+              inputBuffer = undefined
+            }
+            ws.send(data)
+          } else {
+            inputBuffer = (inputBuffer ?? "") + data
+          }
+        })
+        cleanups.push(() => disposeIfDisposable(onDataOpt))
+      }
 
       const once = { value: false }
       const decoder = new TextDecoder()
