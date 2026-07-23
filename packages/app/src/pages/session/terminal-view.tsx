@@ -309,6 +309,7 @@ function TerminalSessionView(props: { pty: LocalPTY; focused: boolean }) {
               autoFocus={props.focused}
               runtimeId={terminal.runtimeId()}
               onStatusChange={(next, error) => terminal.setStatus(props.pty.id, ptyId, next, error)}
+              optimisticReady={props.pty.restored}
             />
           )}
         </Show>
