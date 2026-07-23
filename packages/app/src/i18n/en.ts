@@ -1023,6 +1023,7 @@ export const dict = {
   "common.rename": "Rename",
   "common.reset": "Reset",
   "common.archive": "Archive",
+  "common.copyId": "Copy ID",
   "common.delete": "Delete",
   "common.close": "Close",
   "common.edit": "Edit",
