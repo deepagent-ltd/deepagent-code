@@ -938,6 +938,11 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
           const session = key()
           const current = store.sessionView[session]
           const bottom = next.bottomPanel
+          // Keep the project-level terminal flag in sync so that switching to a
+          // session that has never explicitly opened the panel doesn't close it.
+          // `bottomPanel` memo falls back to `store.terminal?.opened` for new
+          // sessions — this makes that fallback reflect the current user intent.
+          setTerminalOpened(bottom?.opened === true && bottom?.activeView === "terminal")
           if (!current) {
             setStore("sessionView", session, { scroll: {}, bottomPanel: bottom, rightPanelMode: next.rightPanelMode })
             return
