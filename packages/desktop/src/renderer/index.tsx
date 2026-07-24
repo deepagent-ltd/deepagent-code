@@ -17,8 +17,7 @@ import {
 import type { UpdaterState } from "@deepagent-code/app/updater"
 import * as Sentry from "@sentry/solid"
 import type { AsyncStorage } from "@solid-primitives/storage"
-import { MemoryRouter, createMemoryHistory } from "@solidjs/router"
-import type { BaseRouterProps } from "@solidjs/router"
+import { type BaseRouterProps, MemoryRouter, createMemoryHistory } from "@solidjs/router"
 import { createEffect, createMemo, createResource, createSignal, onCleanup, onMount, Show } from "solid-js"
 import { render } from "solid-js/web"
 import pkg from "../../package.json"
@@ -30,31 +29,8 @@ import "./styles.css"
 import { Splash } from "@deepagent-code/ui/logo"
 import { useTheme } from "@deepagent-code/ui/theme/context"
 
-// Inline startup-intent reader — mirrors packages/app/src/utils/startup-intent.ts.
-// Inlined here to avoid cross-package compiled-artifact resolution issues.
-const STARTUP_INTENT_KEY = "deepagent:startup-intent"
-const INTENT_NAVIGATE_WINDOW_MS = 30_000
-
-function readLocalStartupIntent() {
-  try {
-    const raw = localStorage.getItem(STARTUP_INTENT_KEY)
-    if (!raw) return null
-    const p = JSON.parse(raw) as Record<string, unknown>
-    if (
-      typeof p.server !== "string" ||
-      typeof p.directory !== "string" ||
-      typeof p.sessionId !== "string" ||
-      typeof p.at !== "number"
-    ) return null
-    if (Date.now() - p.at > INTENT_NAVIGATE_WINDOW_MS) return null
-    return p as { server: string; directory: string; sessionId: string; at: number }
-  } catch { return null }
-}
-
-/** URL-safe base64 encode (matches base64Encode from @deepagent-code/core/util/encode). */
-function encodeBase64Url(value: string): string {
-  return btoa(value).replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "")
-}
+const STARTUP_SLOW_MS = 15_000
+const STARTUP_HARD_TIMEOUT_MS = 120_000
 
 // renderer.initialization — start: renderer module begins executing.
 // Captured at module level so it includes all synchronous setup before render().
@@ -405,34 +381,81 @@ render(() => {
       ServerConnection.Key.make(availableStartupServer(defaultServer.latest, wslServers.data)),
     )
 
+    function RoutedApp(props: { serverKey: ServerConnection.Key }) {
+      const history = createMemoryHistory()
+      const startupRouter = (props: BaseRouterProps) => <MemoryRouter history={history} {...props} />
+      const [startupState, setStartupState] = createSignal<"waiting" | "ready" | "timeout">("waiting")
+      const startupStartedAt = performance.now()
+      let slowTimeout: number | undefined
+      let hardTimeout: number | undefined
+
+      const finishStartup = (result: "ready" | "timeout") => {
+        if (startupState() !== "waiting") return
+        if (slowTimeout !== undefined) window.clearTimeout(slowTimeout)
+        if (hardTimeout !== undefined) window.clearTimeout(hardTimeout)
+        slowTimeout = undefined
+        hardTimeout = undefined
+        const payload = {
+          event: "startup.app_reveal",
+          result,
+          durationMs: Math.round(performance.now() - startupStartedAt),
+        }
+        if (result === "timeout") console.warn("[startup] telemetry", JSON.stringify(payload))
+        if (result === "ready") console.info("[startup] telemetry", JSON.stringify(payload))
+        setStartupState(result)
+      }
+
+      onMount(() => {
+        slowTimeout = window.setTimeout(() => {
+          if (startupState() !== "waiting") return
+          console.warn(
+            "[startup] telemetry",
+            JSON.stringify({
+              event: "startup.app_reveal",
+              result: "slow",
+              durationMs: Math.round(performance.now() - startupStartedAt),
+            }),
+          )
+        }, STARTUP_SLOW_MS)
+        hardTimeout = window.setTimeout(() => finishStartup("timeout"), STARTUP_HARD_TIMEOUT_MS)
+        onCleanup(() => {
+          if (slowTimeout !== undefined) window.clearTimeout(slowTimeout)
+          if (hardTimeout !== undefined) window.clearTimeout(hardTimeout)
+        })
+      })
+
+      const waiting = () => startupState() === "waiting"
+
+      return (
+        <>
+          <div
+            class="flex flex-col h-dvh min-h-0"
+            style={{ visibility: waiting() ? "hidden" : "visible" }}
+            inert={waiting()}
+            aria-hidden={waiting() ? "true" : undefined}
+          >
+            <AppInterface
+              defaultServer={props.serverKey}
+              servers={servers()}
+              router={startupRouter}
+              onStartupReady={() => finishStartup("ready")}
+            >
+              <Inner />
+            </AppInterface>
+          </div>
+          <Show when={waiting()}>
+            <div class="fixed inset-0 z-[9999] h-dvh w-screen flex flex-col items-center justify-center bg-background-base">
+              <Splash class="w-16 h-20 opacity-50 animate-pulse" />
+            </div>
+          </Show>
+        </>
+      )
+    }
+
     return (
       <Show when={ready()} fallback={splash}>
         <Show when={effectiveDefaultServer()} keyed>
-          {(key) => {
-            // Read the startup intent synchronously at the moment ready() first becomes
-            // true. If it is fresh (< INTENT_NAVIGATE_WINDOW_MS) and the server matches,
-            // prime MemoryHistory to start at the session URL so AppInterface never
-            // renders the home route — eliminating the visible home-page flash.
-            const intent = readLocalStartupIntent()
-            const history = createMemoryHistory()
-            if (intent && intent.server === key) {
-              const dirBase64 = encodeBase64Url(intent.directory)
-              history.set({
-                value: `/${dirBase64}/session/${intent.sessionId}`,
-                replace: true,
-              })
-            }
-
-            const startupRouter = (props: BaseRouterProps) => (
-              <MemoryRouter history={history} {...props} />
-            )
-
-            return (
-              <AppInterface defaultServer={key} servers={servers()} router={startupRouter}>
-                <Inner />
-              </AppInterface>
-            )
-          }}
+          {(key) => <RoutedApp serverKey={key} />}
         </Show>
       </Show>
     )
