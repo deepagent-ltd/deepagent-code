@@ -94,7 +94,6 @@ import {
 } from "./layout/sidebar-workspace"
 import { ProjectDragOverlay, SortableProject, type ProjectSidebarContext } from "./layout/sidebar-project"
 import { SidebarContent } from "./layout/sidebar-shell"
-import { SessionSkeleton } from "./layout/sidebar-items"
 
 export default function Layout(props: ParentProps) {
   const serverSDK = useServerSDK()
@@ -2192,18 +2191,7 @@ export default function Layout(props: ParentProps) {
         <Show
           when={project()}
           fallback={
-            <Show
-              when={empty()}
-              fallback={
-                // Projects exist but the router hasn't navigated to one yet
-                // (async persist still loading). Show a skeleton instead of a blank panel.
-                <Show when={layout.ready()}>
-                  <div class="flex flex-col gap-1 px-3 pt-4">
-                    <SessionSkeleton count={6} />
-                  </div>
-                </Show>
-              }
-            >
+            <Show when={empty()}>
               <div class="flex-1 min-h-0 -mt-4 flex items-center justify-center px-6 pb-64 text-center">
                 <div class="mt-8 flex max-w-60 flex-col items-center gap-6 text-center">
                   <div class="flex flex-col gap-3">
@@ -2583,11 +2571,8 @@ export default function Layout(props: ParentProps) {
                 "absolute inset-0": true,
                 "xl:inset-y-0 xl:right-0 xl:left-[var(--main-left)]": true,
                 "z-20": true,
-                // Suppress the left-slide transition until the layout persist store
-                // has loaded so the initial open→close (or closed→open) snap from
-                // async storage doesn't animate visibly.
                 "transition-[left] duration-200 ease-[cubic-bezier(0.22,1,0.36,1)] will-change-[left] motion-reduce:transition-none":
-                  !state.sizing && layoutReady(),
+                  !state.sizing,
               }}
               style={{
                 "--main-left": layout.sidebar.opened() ? `${side()}px` : "4rem",
