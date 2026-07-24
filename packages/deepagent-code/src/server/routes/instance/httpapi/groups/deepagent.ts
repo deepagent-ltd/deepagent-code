@@ -136,6 +136,8 @@ export const DeepAgentKnowledgeItem = Schema.Struct({
 
 export const DeepAgentKnowledgeList = Schema.Struct({ items: Schema.Array(DeepAgentKnowledgeItem) })
 
+export const DeepAgentKnowledgeReviewSummary = Schema.Struct({ pendingCount: Schema.Number })
+
 export const DeepAgentKnowledgeStatusInput = Schema.Struct({ ids: Schema.Array(Schema.String) })
 
 export const DeepAgentKnowledgeStatusResult = Schema.Struct({ updated: Schema.Array(Schema.String) })
@@ -508,6 +510,19 @@ export const DeepAgentApi = HttpApi.make("deepagent").add(
       ),
     )
     .add(
+      HttpApiEndpoint.get("knowledgeReviewSummary", `${root}/knowledge/review-summary`, {
+        query: WorkspaceRoutingQuery,
+        success: described(DeepAgentKnowledgeReviewSummary, "Pending durable knowledge count for the Review badge"),
+        error: DeepAgentPromotionError,
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "deepagent.knowledge.reviewSummary",
+          summary: "Get the DeepAgent knowledge review summary",
+          description: "Return the pending review count without projecting the complete knowledge review list.",
+        }),
+      ),
+    )
+    .add(
       HttpApiEndpoint.post("knowledgeApprove", `${root}/knowledge/approve`, {
         query: WorkspaceRoutingQuery,
         payload: DeepAgentKnowledgeStatusInput,
@@ -656,7 +671,10 @@ export const DeepAgentApi = HttpApi.make("deepagent").add(
     .add(
       HttpApiEndpoint.get("panelStatus", `${root}/panel/status`, {
         query: Schema.Struct({ ...WorkspaceRoutingQueryFields, sessionID: Schema.String }),
-        success: described(DeepAgentPanelStatusResult, "Effective panel armed state (explicit toggle or global default)"),
+        success: described(
+          DeepAgentPanelStatusResult,
+          "Effective panel armed state (explicit toggle or global default)",
+        ),
         error: DeepAgentPromotionError,
       }).annotateMerge(
         OpenApi.annotations({
