@@ -1,7 +1,7 @@
 import { describe, expect } from "bun:test"
 import { Effect } from "effect"
 import { HttpClientRequest } from "effect/unstable/http"
-import { CacheHint, LLM, LLMError, Message, ToolCallPart, Usage } from "../../src"
+import { CacheHint, LLM, LLMError, Message, ToolCallPart, ToolDefinition, Usage } from "../../src"
 import { Auth, LLMClient } from "../../src/route"
 import * as AnthropicMessages from "../../src/protocols/anthropic-messages"
 import { continuationRequest, nativeAnthropicMessagesContinuation } from "../continuation-scenarios"
@@ -215,6 +215,24 @@ describe("Anthropic Messages route", () => {
         stream: true,
         max_tokens: 4096,
       })
+    }),
+  )
+
+  it.effect("rejects raw custom tools before sending Anthropic requests", () =>
+    Effect.gen(function* () {
+      const error = yield* LLMClient.prepare(
+        LLM.updateRequest(request, {
+          tools: [
+            ToolDefinition.custom({
+              name: "apply_patch",
+              description: "Apply a patch",
+              format: { type: "text" },
+            }),
+          ],
+        }),
+      ).pipe(Effect.flip)
+
+      expect(error.message).toContain("Anthropic Messages does not support custom text tools")
     }),
   )
 
@@ -460,6 +478,24 @@ describe("Anthropic Messages route", () => {
           usage,
         },
       ])
+    }),
+  )
+
+  it.effect("does not emit a tool call when an Anthropic input block is truncated", () =>
+    Effect.gen(function* () {
+      const body = sseEvents(
+        { type: "message_start", message: { usage: { input_tokens: 5 } } },
+        { type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "call_1", name: "write" } },
+        { type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: '{"filePath":"x"' } },
+      )
+      const response = yield* LLMClient.generate(
+        LLM.updateRequest(request, {
+          tools: [{ name: "write", description: "Write file", inputSchema: { type: "object" } }],
+        }),
+      ).pipe(Effect.provide(fixedResponse(body)))
+
+      expect(response.toolCalls).toEqual([])
+      expect(response.events.some((event) => event.type === "tool-call")).toBe(false)
     }),
   )
 
