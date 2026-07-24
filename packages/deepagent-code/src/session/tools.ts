@@ -15,7 +15,8 @@ import { Plugin } from "@/plugin"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import type { TaskPromptOps } from "@/tool/task"
 import { type Tool as AITool, tool, jsonSchema, type ToolExecutionOptions, asSchema } from "ai"
-import { Effect } from "effect"
+import type { JSONSchema7 } from "@ai-sdk/provider"
+import { Effect, Result, Schema } from "effect"
 import { MessageV2 } from "./message-v2"
 import { Session } from "./session"
 import { SessionProcessor } from "./processor"
@@ -28,6 +29,21 @@ import { AgentGateway } from "@deepagent-code/core/agent-gateway"
 import { ToolSemanticFingerprint } from "@/tool/semantic-fingerprint"
 
 const log = Log.create({ service: "session.tools" })
+
+export function validatedToolInputSchema(parameters: Schema.Decoder<unknown>, wireSchema: JSONSchema7) {
+  const decode = Schema.decodeUnknownResult(parameters)
+  return jsonSchema<Record<string, unknown>>(wireSchema, {
+    validate(input) {
+      const result = decode(input)
+      if (Result.isFailure(result)) {
+        return { success: false, error: new Error(result.failure.toString(), { cause: result.failure }) }
+      }
+      // Tool.define owns the canonical decode at execution time. Returning its decoded value here
+      // would apply Effect Schema transformations twice (for example NumberFromString).
+      return { success: true, value: input as Record<string, unknown> }
+    },
+  })
+}
 
 // Plan-gate WARN reminder placement. Prepending "⚠️ Plan gate: …" AHEAD of a tool's own output was
 // actively harmful: the plan gate is a soft nudge — the tool ALREADY RAN and the output below the
@@ -196,7 +212,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
     const schema = ProviderTransform.schema(input.model, ToolJsonSchema.fromTool(item))
     const aiToolDef: AITool = tool({
       description: item.description,
-      inputSchema: jsonSchema(schema),
+      inputSchema: validatedToolInputSchema(item.parameters, schema),
       execute(args, options) {
         return run.promise(
           Effect.gen(function* () {
