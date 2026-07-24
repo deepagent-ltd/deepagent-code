@@ -164,11 +164,13 @@ function SessionProviders(props: ParentProps) {
 function StartupSplashGate(props: ParentProps) {
   const server = useServer()
   const navigate = useNavigate()
+  const location = useLocation()
 
   const intent = readStartupIntent()
 
-  // No usable intent → skip the gate entirely (zero overhead).
-  if (!intent || intent.server !== server.key) {
+  // No usable intent, server mismatch, or router already at the session URL
+  // (index.tsx set MemoryRouter's initialEntries to the session path) → pass through.
+  if (!intent || intent.server !== server.key || location.pathname !== "/") {
     return <>{props.children}</>
   }
 
