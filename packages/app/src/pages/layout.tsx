@@ -3,6 +3,7 @@ import {
   createEffect,
   createMemo,
   createResource,
+  createSignal,
   For,
   on,
   onCleanup,
@@ -1924,6 +1925,9 @@ export default function Layout(props: ParentProps) {
 
   const loadedSessionDirs = new Set<string>()
 
+  // Track when the first (current project) session list has finished loading.
+  const [firstSessionLoadDone, setFirstSessionLoadDone] = createSignal(false)
+
   createEffect(
     on(
       visibleSessionDirs,
@@ -1934,19 +1938,50 @@ export default function Layout(props: ParentProps) {
         }
 
         const next = new Set(dirs)
+        const loads: Promise<void>[] = []
         for (const directory of next) {
           if (loadedSessionDirs.has(directory)) continue
-          void serverSync.project.loadSessions(directory)
+          loads.push(serverSync.project.loadSessions(directory))
         }
 
         loadedSessionDirs.clear()
         for (const directory of next) {
           loadedSessionDirs.add(directory)
         }
+
+        if (loads.length > 0) {
+          void Promise.all(loads).then(() => setFirstSessionLoadDone(true))
+        } else {
+          setFirstSessionLoadDone(true)
+        }
       },
       { defer: true },
     ),
   )
+
+  // Signal to renderer that the app is fully ready: projects loaded, last session
+  // navigated to, and the current session list fetched. Renderer keeps splash visible
+  // (with app hidden via visibility:hidden) until this fires.
+  // Gates:
+  //   1. server persist loaded → projects list populated
+  //   2. layout/page persist loaded → last-session info available
+  //   3. autoselecting resolved → router has navigated to the last project
+  //   4. firstSessionLoadDone → current project sessions listed in sidebar
+  // 8-second failsafe in the renderer prevents a permanent hang.
+  let appReadyFired = false
+  createEffect(() => {
+    if (appReadyFired) return
+    if (!server.ready()) return
+    if (!layoutReady()) return
+    if (!pageReady()) return
+    if (autoselecting.loading) return
+    const projects = layout.projects.list()
+    // If there are projects, wait until the first session list load completes
+    // so the sidebar shows real sessions rather than skeletons.
+    if (projects.length > 0 && !firstSessionLoadDone()) return
+    appReadyFired = true
+    window.dispatchEvent(new Event("deepagent-code:app-ready"))
+  })
 
   function handleDragStart(event: unknown) {
     const id = getDraggableId(event)
