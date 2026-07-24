@@ -31,6 +31,8 @@ jobs:
             host: blacksmith-4vcpu-ubuntu-2404
           - name: windows
             host: blacksmith-4vcpu-windows-2025
+          - name: macos
+            host: macos-14
     runs-on: ${{ matrix.settings.host }}
     defaults:
       run:

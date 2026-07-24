@@ -31,6 +31,7 @@ import { CommandProvider } from "@/context/command"
 import { CommentsProvider } from "@/context/comments"
 import { DebugProvider } from "@/context/debug"
 import { FileProvider } from "@/context/file"
+import type { DesktopApi } from "@/utils/desktop-api"
 import { GatewayProvider } from "@/context/gateway"
 import { ServerSDKProvider } from "@/context/server-sdk"
 import { ServerSyncProvider } from "@/context/server-sync"
@@ -76,10 +77,7 @@ declare global {
     __DEEPAGENT_CODE__?: {
       deepLinks?: string[]
     }
-    api?: {
-      setTitlebar?: (theme: { mode: "light" | "dark" }) => Promise<void>
-      exportDebugLogs?: (options?: { windowMs?: number; pick?: boolean }) => Promise<string | null>
-    }
+    api?: DesktopApi
   }
 }
 

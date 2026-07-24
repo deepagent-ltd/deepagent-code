@@ -1,11 +1,20 @@
 import { useFile } from "@/context/file"
 import { encodeFilePath } from "@/context/file/path"
 import { Collapsible } from "@deepagent-code/ui/collapsible"
+import { ContextMenu } from "@deepagent-code/ui/context-menu"
 import { FileIcon } from "@deepagent-code/ui/file-icon"
 import { Icon } from "@deepagent-code/ui/icon"
+import { InlineInput } from "@deepagent-code/ui/inline-input"
+import { useDialog } from "@deepagent-code/ui/context/dialog"
+import { FileTreeMenuContent } from "./file-tree-context-menu"
+import { GitTimelineDialog } from "./git-timeline-dialog"
+import { useLanguage } from "@/context/language"
+import { showToast } from "@/utils/toast"
+import { desktopApi, isLocalFilesystemOp } from "@/utils/desktop-api"
 import {
   createEffect,
   createMemo,
+  createSignal,
   For,
   Match,
   on,
@@ -16,7 +25,6 @@ import {
   type ComponentProps,
   type ParentProps,
 } from "solid-js"
-import { Dynamic } from "solid-js/web"
 import type { FileNode } from "@deepagent-code/sdk/v2"
 
 const MAX_DEPTH = 128
@@ -119,6 +127,9 @@ const FileTreeNode = (
       kinds?: ReadonlyMap<string, Kind>
       marks?: Set<string>
       as?: "div" | "button"
+      renaming?: () => string | null
+      setRenaming?: (path: string | null) => void
+      onOpenTimeline?: (node: FileNode) => void
     },
 ) => {
   const [local, rest] = splitProps(p, [
@@ -133,7 +144,12 @@ const FileTreeNode = (
     "children",
     "class",
     "classList",
+    "renaming",
+    "setRenaming",
+    "onOpenTimeline",
   ])
+  const language = useLanguage()
+  const file = useFile()
   const kind = () => visibleKind(local.node, local.kinds, local.marks)
   const active = () => !!kind() && !local.node.ignored
   const color = () => {
@@ -142,51 +158,124 @@ const FileTreeNode = (
     return kindTextColor(value)
   }
 
+  const editing = () => !!local.renaming && local.renaming() === local.node.path
+  const [draft, setDraft] = createSignal(local.node.name)
+  createEffect(() => {
+    if (editing()) setDraft(local.node.name)
+  })
+
+  const commitRename = async (next: string) => {
+    const name = next.trim()
+    local.setRenaming?.(null)
+    if (!name || name === local.node.name) return
+    const res = await desktopApi()?.fileOps?.rename(file.directory(), local.node.absolute, name)
+    if (!res) return
+    if (res.ok) {
+      showToast({ variant: "success", title: language.t("fileTree.renamed") })
+      const idx = local.node.path.lastIndexOf("/")
+      void file.tree.refresh(idx === -1 ? "" : local.node.path.slice(0, idx))
+      return
+    }
+    showToast({ variant: "error", title: language.t("fileTree.renameFailed"), description: res.error })
+  }
+
+  // Defer rename until the context menu has finished closing so its focus-return doesn't yank focus
+  // back from the inline editor.
+  let pendingRename = false
+
   return (
-    <Dynamic
-      component={local.as ?? "div"}
-      classList={{
-        "w-full min-w-0 h-6 flex items-center justify-start gap-x-1.5 rounded-md px-1.5 py-0 text-left hover:bg-surface-raised-base-hover active:bg-surface-base-active transition-colors cursor-pointer": true,
-        "bg-surface-base-active": local.node.path === local.active,
-        ...local.classList,
-        [local.class ?? ""]: !!local.class,
-        [local.nodeClass ?? ""]: !!local.nodeClass,
-      }}
-      style={`padding-left: ${Math.max(0, 8 + local.level * 12 - (local.node.type === "file" ? 24 : 4))}px`}
-      draggable={local.draggable}
-      onDragStart={(event: DragEvent) => {
-        if (!local.draggable) return
-        event.dataTransfer?.setData("text/plain", `file:${local.node.path}`)
-        event.dataTransfer?.setData("text/uri-list", pathToFileUrl(local.node.path))
-        if (event.dataTransfer) event.dataTransfer.effectAllowed = "copy"
-        withFileDragImage(event)
-      }}
-      {...rest}
-    >
-      {local.children}
-      <span
-        classList={{
-          "flex-1 min-w-0 text-12-medium whitespace-nowrap truncate": true,
-          "text-text-weaker": local.node.ignored,
-          "text-text-weak": !local.node.ignored && !active(),
-        }}
-        style={active() ? color() : undefined}
-      >
-        {local.node.name}
-      </span>
-      {(() => {
-        const value = kind()
-        if (!value) return null
-        if (local.node.type === "file") {
-          return (
-            <span class="shrink-0 w-4 text-center text-12-medium" style={kindTextColor(value)}>
-              {kindLabel(value)}
-            </span>
-          )
+    <ContextMenu
+      onOpenChange={(open) => {
+        if (!open && pendingRename) {
+          pendingRename = false
+          requestAnimationFrame(() => local.setRenaming?.(local.node.path))
         }
-        return <div class="shrink-0 size-1.5 mr-1.5 rounded-full" style={kindDotColor(value)} />
-      })()}
-    </Dynamic>
+      }}
+    >
+      <ContextMenu.Trigger
+        as={local.as ?? "div"}
+        classList={{
+          "w-full min-w-0 h-6 flex items-center justify-start gap-x-1.5 rounded-md px-1.5 py-0 text-left hover:bg-surface-raised-base-hover active:bg-surface-base-active transition-colors cursor-pointer": true,
+          "bg-surface-base-active": local.node.path === local.active,
+          ...local.classList,
+          [local.class ?? ""]: !!local.class,
+          [local.nodeClass ?? ""]: !!local.nodeClass,
+        }}
+        style={`padding-left: ${Math.max(0, 8 + local.level * 12 - (local.node.type === "file" ? 24 : 4))}px`}
+        draggable={local.draggable}
+        onDragStart={(event: DragEvent) => {
+          if (!local.draggable) return
+          event.dataTransfer?.setData("text/plain", `file:${local.node.path}`)
+          event.dataTransfer?.setData("text/uri-list", pathToFileUrl(local.node.path))
+          if (event.dataTransfer) event.dataTransfer.effectAllowed = "copy"
+          withFileDragImage(event)
+        }}
+        {...(rest as Omit<ComponentProps<"div">, "onContextMenu">)}
+      >
+        {local.children}
+        <Show
+          when={!editing()}
+          fallback={
+            <InlineInput
+              ref={(el) => {
+                requestAnimationFrame(() => {
+                  el?.focus()
+                  el?.select()
+                })
+              }}
+              value={draft()}
+              class="flex-1 min-w-0 text-12-medium bg-surface-base-active rounded px-1 -mx-1 outline-none border border-border-weak-base"
+              onClick={(event) => event.preventDefault()}
+              onPointerDown={(event) => event.stopPropagation()}
+              onMouseDown={(event) => event.stopPropagation()}
+              onInput={(event) => setDraft(event.currentTarget.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault()
+                  void commitRename(draft())
+                }
+                if (event.key === "Escape") local.setRenaming?.(null)
+              }}
+              onBlur={() => void commitRename(draft())}
+            />
+          }
+        >
+          <span
+            classList={{
+              "flex-1 min-w-0 text-12-medium whitespace-nowrap truncate": true,
+              "text-text-weaker": local.node.ignored,
+              "text-text-weak": !local.node.ignored && !active(),
+            }}
+            style={active() ? color() : undefined}
+          >
+            {local.node.name}
+          </span>
+        </Show>
+        {(() => {
+          const value = kind()
+          if (!value) return null
+          if (local.node.type === "file") {
+            return (
+              <span class="shrink-0 w-4 text-center text-12-medium" style={kindTextColor(value)}>
+                {kindLabel(value)}
+              </span>
+            )
+          }
+          return <div class="shrink-0 size-1.5 mr-1.5 rounded-full" style={kindDotColor(value)} />
+        })()}
+      </ContextMenu.Trigger>
+      <ContextMenu.Portal>
+        <ContextMenu.Content>
+          <FileTreeMenuContent
+            node={local.node}
+            onRename={() => {
+              pendingRename = true
+            }}
+            onOpenTimeline={(node) => local.onOpenTimeline?.(node)}
+          />
+        </ContextMenu.Content>
+      </ContextMenu.Portal>
+    </ContextMenu>
   )
 }
 
@@ -207,10 +296,32 @@ export default function FileTree(props: {
   _deeps?: Map<string, number>
   _kinds?: ReadonlyMap<string, Kind>
   _chain?: readonly string[]
+  _renaming?: () => string | null
+  _setRenaming?: (path: string | null) => void
 }) {
   const file = useFile()
+  const dialog = useDialog()
   const level = props.level ?? 0
   const draggable = () => props.draggable ?? true
+
+  // Shared rename state across the recursive tree: the top-level call creates the signal, children
+  // receive it via _renaming/_setRenaming so only one node is edited at a time.
+  const [ownRenaming, ownSetRenaming] = createSignal<string | null>(null)
+  const renaming = props._renaming ?? ownRenaming
+  const setRenaming = props._setRenaming ?? ownSetRenaming
+
+  const onOpenTimeline = (node: FileNode) => {
+    void dialog.show(
+      () => (
+        <GitTimelineDialog
+          workDir={file.directory()}
+          relPath={node.path}
+          name={node.name}
+          local={isLocalFilesystemOp({ desktop: Boolean(desktopApi()), localSidecar: file.isLocalSidecar() })}
+        />
+      ),
+    )
+  }
 
   const key = (p: string) =>
     file
@@ -412,6 +523,9 @@ export default function FileTree(props: {
                       draggable={draggable()}
                       kinds={kinds()}
                       marks={marks()}
+                      renaming={renaming}
+                      setRenaming={setRenaming}
+                      onOpenTimeline={onOpenTimeline}
                     >
                       <div class="size-4 flex items-center justify-center text-icon-weak">
                         <Icon name={expanded() ? "chevron-down" : "chevron-right"} size="small" />
@@ -445,6 +559,8 @@ export default function FileTree(props: {
                         _deeps={deeps()}
                         _kinds={kinds()}
                         _chain={chain}
+                        _renaming={renaming}
+                        _setRenaming={setRenaming}
                       />
                     </Show>
                   </Collapsible.Content>
@@ -459,6 +575,9 @@ export default function FileTree(props: {
                   draggable={draggable()}
                   kinds={kinds()}
                   marks={marks()}
+                  renaming={renaming}
+                  setRenaming={setRenaming}
+                  onOpenTimeline={onOpenTimeline}
                   as="button"
                   type="button"
                   onClick={() => props.onFileClick?.(node)}
