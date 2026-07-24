@@ -33,11 +33,15 @@ import {
   setRelaunchHandler,
   setBackgroundColor,
   setDockIcon,
+  setCloseToTrayEnabled,
+  setIsQuitting,
 } from "./windows"
 import { createWslServersController } from "./wsl/servers"
 import { registerWslIpcHandlers } from "./wsl/ipc"
 import { spawnWslSidecar } from "./wsl/sidecar"
 import { migrate } from "./migrate"
+import { startPowerSaveBlocker, stopPowerSaveBlocker } from "./power"
+import { createTray, destroyTray } from "./tray"
 
 const APP_NAMES: Record<string, string> = {
   dev: "DeepAgent Code Dev",
@@ -207,11 +211,14 @@ const main = Effect.gen(function* () {
   })
 
   app.on("before-quit", () => {
+    setIsQuitting(true)
     void stopSidecars()
   })
 
   app.on("will-quit", () => {
     void stopSidecars()
+    stopPowerSaveBlocker()
+    destroyTray()
   })
 
   app.on("child-process-gone", (_event, details) => {
@@ -220,6 +227,15 @@ const main = Effect.gen(function* () {
 
   app.on("render-process-gone", (_event, webContents, details) => {
     writeLog("window", "app render process gone", { url: webContents.getURL(), details }, "error")
+  })
+
+  // macOS: re-show the window when the user clicks the Dock icon after it was hidden to the tray.
+  // Also serves as a recovery path on any platform if the window is hidden without a visible tray.
+  app.on("activate", () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      if (!mainWindow.isVisible()) mainWindow.show()
+      mainWindow.focus()
+    }
   })
 
   setRelaunchHandler(() => {
@@ -284,6 +300,14 @@ const main = Effect.gen(function* () {
       },
     })
   }
+
+  // Keep the app running (prevent idle sleep/hibernate) while it is active. The tray icon enables
+  // close-to-tray: closing the window hides it to the tray with a right-click “Quit” to fully exit.
+  // On platforms without tray support (e.g. Linux GNOME default), tray creation fails silently and
+  // close-to-tray stays disabled so closing the window quits normally — avoiding a stranded window.
+  startPowerSaveBlocker()
+  const trayCreated = createTray(() => mainWindow)
+  setCloseToTrayEnabled(trayCreated)
 
   void updater.start()
   const updateTimer = setInterval(() => void updater.check(), 10 * 60 * 1000)

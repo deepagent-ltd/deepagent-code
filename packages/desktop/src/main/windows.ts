@@ -10,6 +10,7 @@ import type { TitlebarTheme } from "../preload/types"
 import { exportDebugLogs, write as writeLog } from "./logging"
 import { getStore } from "./store"
 import { PINCH_ZOOM_ENABLED_KEY } from "./store-keys"
+import { shouldHideOnClose } from "./close-to-tray"
 import { createUnresponsiveSampler } from "./unresponsive"
 
 const root = dirname(fileURLToPath(import.meta.url))
@@ -43,6 +44,24 @@ let relaunchHandler = () => {
   app.relaunch()
   app.exit(0)
 }
+// When false, closing the main window hides it to the tray instead of quitting.
+let isQuitting = false
+// Close-to-tray is only armed when a system tray was successfully created. On platforms without tray
+// support (e.g. GNOME), closing the window must quit normally or the window would be hidden with no
+// way to recover it.
+let closeToTrayEnabled = false
+
+export function getIsQuitting() {
+  return isQuitting
+}
+
+export function setIsQuitting(value: boolean) {
+  isQuitting = value
+}
+
+export function setCloseToTrayEnabled(value: boolean) {
+  closeToTrayEnabled = value
+}
 const titlebarThemes = new WeakMap<BrowserWindow, Partial<TitlebarTheme>>()
 const pinchZoomEnabled = new WeakMap<BrowserWindow, boolean>()
 const titlebarHeight = 40
@@ -60,7 +79,7 @@ export function getBackgroundColor(): string | undefined {
   return backgroundColor
 }
 
-function iconsDir() {
+export function iconsDir() {
   return app.isPackaged ? join(process.resourcesPath, "icons") : join(root, "../../resources/icons")
 }
 
@@ -172,6 +191,16 @@ export function createMainWindow() {
   state.manage(win)
   loadWindow(win, "index.html")
   wireZoom(win)
+
+  win.on("close", (event) => {
+    // Close-to-tray: hide instead of quitting, but only when a tray is available to recover the
+    // window. Without a tray (e.g. Linux GNOME), closing must quit normally or the window would be
+    // stranded. An explicit quit (tray Quit / Cmd+Q / before-quit) sets isQuitting to bypass this.
+    if (shouldHideOnClose({ isQuitting: getIsQuitting(), trayAvailable: closeToTrayEnabled })) {
+      event.preventDefault()
+      win.hide()
+    }
+  })
 
   win.once("ready-to-show", () => {
     win.show()
