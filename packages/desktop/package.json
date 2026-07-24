@@ -16,6 +16,8 @@
     "prebuild": "bun ./scripts/prebuild.ts",
     "build": "electron-vite build",
     "preview": "electron-vite preview",
+    "test": "bun test ./src",
+    "test:ci": "mkdir -p .artifacts/unit && bun test ./src --reporter=junit --reporter-outfile=.artifacts/unit/junit.xml",
     "package": "bun ./scripts/package.ts",
     "package:mac": "bun ./scripts/package.ts --mac",
     "package:win": "electron-builder --win --config electron-builder.config.ts",
