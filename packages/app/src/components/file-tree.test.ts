@@ -29,6 +29,23 @@ beforeAll(async () => {
   mock.module("@deepagent-code/ui/file-icon", () => ({ FileIcon: () => null }))
   mock.module("@deepagent-code/ui/icon", () => ({ Icon: () => null }))
   mock.module("@deepagent-code/ui/tooltip", () => ({ Tooltip: (props: { children?: unknown }) => props.children }))
+  // The desktop file-management branch added ContextMenu, InlineInput, GitTimelineDialog, and
+  // toast/language helpers to this module. Their Kobalte-backed UI leaves call solid-js/web
+  // `template()` at module top level; under bun:test solid-js resolves to its server build and
+  // those calls throw notSup(), so stub the leaves the way collapsible/tooltip are stubbed above.
+  mock.module("@deepagent-code/ui/context-menu", () => ({
+    ContextMenu: Object.assign(() => null, {
+      Trigger: (props: { children?: unknown }) => props.children,
+      Portal: (props: { children?: unknown }) => props.children,
+      Content: (props: { children?: unknown }) => props.children,
+    }),
+  }))
+  mock.module("@deepagent-code/ui/dialog", () => ({
+    Dialog: Object.assign(() => null, { Content: (props: { children?: unknown }) => props.children }),
+  }))
+  mock.module("@deepagent-code/ui/inline-input", () => ({ InlineInput: () => null }))
+  mock.module("@deepagent-code/ui/toast", () => ({ showToast: () => undefined, Toast: () => null }))
+  mock.module("@deepagent-code/ui/v2/toast-v2", () => ({ showToastV2: () => undefined, ToastV2: () => null }))
   const mod = await import("./file-tree")
   shouldListRoot = mod.shouldListRoot
   shouldListExpanded = mod.shouldListExpanded
