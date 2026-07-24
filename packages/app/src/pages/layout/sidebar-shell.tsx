@@ -1,11 +1,5 @@
 import { createEffect, createMemo, For, Show, type Accessor, type JSX } from "solid-js"
-import {
-  DragDropProvider,
-  DragOverlay,
-  SortableProvider,
-  closestCenter,
-  type DragEvent,
-} from "@thisbeyond/solid-dnd"
+import { DragDropProvider, DragOverlay, SortableProvider, closestCenter, type DragEvent } from "@thisbeyond/solid-dnd"
 import { ConstrainDragXAxis, FixedDragDropSensors } from "@/utils/solid-dnd"
 import { IconButton } from "@deepagent-code/ui/icon-button"
 import { Tooltip, TooltipKeybind } from "@deepagent-code/ui/tooltip"
@@ -16,7 +10,7 @@ export const SidebarContent = (props: {
   opened: Accessor<boolean>
   aimMove: (event: MouseEvent) => void
   projects: Accessor<LocalProject[]>
-  renderProject: (project: LocalProject) => JSX.Element
+  renderProject: (project: Accessor<LocalProject>) => JSX.Element
   handleDragStart: (event: unknown) => void
   handleDragEnd: () => void
   handleDragOver: (event: DragEvent) => void
@@ -75,30 +69,12 @@ export const SidebarContent = (props: {
             <ConstrainDragXAxis />
             <div class="h-full w-full flex flex-col items-center gap-3 px-3 py-3 overflow-y-auto no-scrollbar">
               <SortableProvider ids={props.projects().map((p) => p.worktree)}>
-                {/*
-                 * Iterate over stable worktree STRINGS, not project objects.
-                 *
-                 * layout.projects.list() creates new object references on every
-                 * memo run (via .map({ ...project, icon })). Using those objects
-                 * as For keys causes SolidJS to destroy+recreate EVERY SortableProject
-                 * on each icon-color update or navigation, which:
-                 *   1. Mass-fires DnD cleanup before DragDropProvider is gone → errors
-                 *   2. Triggers every SortableWorkspace's bootstrap API call at once → 3s lag
-                 *
-                 * Worktree strings are stable primitives (same path === same identity).
-                 * The project data updates reactively inside each component via the
-                 * `projectFor` accessor below.
-                 */}
+                {/* Keep component identity on worktree; project objects are rebuilt by list(). */}
                 <For each={props.projects().map((p) => p.worktree)}>
                   {(worktree) => {
-                    const project = createMemo(
-                      () => props.projects().find((p) => p.worktree === worktree),
-                    )
-                    return (
-                      <Show when={project()} keyed>
-                        {(p) => props.renderProject(p)}
-                      </Show>
-                    )
+                    const initial = props.projects().find((p) => p.worktree === worktree)!
+                    const project = createMemo(() => props.projects().find((p) => p.worktree === worktree) ?? initial)
+                    return props.renderProject(project)
                   }}
                 </For>
               </SortableProvider>
