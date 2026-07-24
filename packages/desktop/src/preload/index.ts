@@ -1,7 +1,6 @@
 import { contextBridge, ipcRenderer } from "electron"
 import type { ElectronAPI, WslServersEvent, BrowserState } from "./types"
 import type { UpdaterState } from "@deepagent-code/app/updater"
-
 const updaterCallbacks = new Set<(state: UpdaterState) => void>()
 let updaterState: UpdaterState | undefined
 let updaterSubscription: Promise<void> | undefined
@@ -134,6 +133,21 @@ const api: ElectronAPI = {
   exportDebugLogs: (options?: { windowMs?: number; pick?: boolean }) =>
     ipcRenderer.invoke("export-debug-logs", options),
   recordFatalRendererError: (error) => ipcRenderer.invoke("record-fatal-renderer-error", error),
+  fileOps: {
+    copy: (root: string, source: string, destDir: string) =>
+      ipcRenderer.invoke("file-ops-copy", root, source, destDir),
+    move: (root: string, source: string, destDir: string) =>
+      ipcRenderer.invoke("file-ops-move", root, source, destDir),
+    remove: (root: string, target: string) => ipcRenderer.invoke("file-ops-remove", root, target),
+    rename: (root: string, target: string, nextName: string) =>
+      ipcRenderer.invoke("file-ops-rename", root, target, nextName),
+    archive: (root: string, target: string) => ipcRenderer.invoke("file-ops-archive", root, target),
+    extract: (root: string, zipPath: string) => ipcRenderer.invoke("file-ops-extract", root, zipPath),
+  },
+  git: {
+    isTracked: (workDir, relPath) => ipcRenderer.invoke("git-is-tracked", workDir, relPath),
+    fileLog: (workDir, relPath) => ipcRenderer.invoke("git-file-log", workDir, relPath),
+  },
 }
 
 contextBridge.exposeInMainWorld("api", api)
