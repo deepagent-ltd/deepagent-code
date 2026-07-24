@@ -75,7 +75,32 @@ export const SidebarContent = (props: {
             <ConstrainDragXAxis />
             <div class="h-full w-full flex flex-col items-center gap-3 px-3 py-3 overflow-y-auto no-scrollbar">
               <SortableProvider ids={props.projects().map((p) => p.worktree)}>
-                <For each={props.projects()}>{(project) => props.renderProject(project)}</For>
+                {/*
+                 * Iterate over stable worktree STRINGS, not project objects.
+                 *
+                 * layout.projects.list() creates new object references on every
+                 * memo run (via .map({ ...project, icon })). Using those objects
+                 * as For keys causes SolidJS to destroy+recreate EVERY SortableProject
+                 * on each icon-color update or navigation, which:
+                 *   1. Mass-fires DnD cleanup before DragDropProvider is gone → errors
+                 *   2. Triggers every SortableWorkspace's bootstrap API call at once → 3s lag
+                 *
+                 * Worktree strings are stable primitives (same path === same identity).
+                 * The project data updates reactively inside each component via the
+                 * `projectFor` accessor below.
+                 */}
+                <For each={props.projects().map((p) => p.worktree)}>
+                  {(worktree) => {
+                    const project = createMemo(
+                      () => props.projects().find((p) => p.worktree === worktree),
+                    )
+                    return (
+                      <Show when={project()} keyed>
+                        {(p) => props.renderProject(p)}
+                      </Show>
+                    )
+                  }}
+                </For>
               </SortableProvider>
               <Tooltip
                 placement={placement()}
