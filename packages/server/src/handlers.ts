@@ -16,7 +16,6 @@ import { EventHandler } from "./handlers/event"
 import { AgentHandler } from "./handlers/agent"
 import { HealthHandler } from "./handlers/health"
 import { QuestionHandler } from "./handlers/question"
-import * as SessionExecutionLocal from "@deepagent-code/core/session/execution/local"
 
 export const handlers = Layer.mergeAll(
   HealthHandler,
@@ -35,7 +34,6 @@ export const handlers = Layer.mergeAll(
   Layer.provide(sessionLocationLayer),
   Layer.provide(locationLayer),
   Layer.provide(SessionV2.defaultLayer),
-  Layer.provide(SessionExecutionLocal.defaultLayer),
   Layer.provide(PermissionSaved.defaultLayer),
   Layer.provide(LocationServiceMap.layer),
 )

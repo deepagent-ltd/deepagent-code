@@ -606,7 +606,7 @@ describe("session HttpApi", () => {
           request(`/api/session/${session.id}/prompt`, {
             method: "POST",
             headers: { ...headers, "content-type": "application/json" },
-            body: JSON.stringify({ id: "msg_http_prompt", prompt: { text: "hello" } }),
+            body: JSON.stringify({ id: "msg_http_prompt", prompt: { text: "hello" }, resume: false }),
           })
         const first = yield* recordPrompt()
         const retried = yield* recordPrompt()
@@ -641,7 +641,7 @@ describe("session HttpApi", () => {
         const conflict = yield* request(`/api/session/${session.id}/prompt`, {
           method: "POST",
           headers: { ...headers, "content-type": "application/json" },
-          body: JSON.stringify({ id: "msg_http_prompt", prompt: { text: "goodbye" } }),
+          body: JSON.stringify({ id: "msg_http_prompt", prompt: { text: "goodbye" }, resume: false }),
         })
         expect(conflict.status).toBe(409)
         expect(yield* responseJson(conflict)).toEqual({
@@ -676,6 +676,27 @@ describe("session HttpApi", () => {
           message: "Session wait is not available yet",
           service: "session.wait",
         })
+
+        const prompt = yield* request(`/api/session/${session.id}/prompt`, {
+          method: "POST",
+          headers: { ...headers, "content-type": "application/json" },
+          body: JSON.stringify({ id: "msg_execution_unavailable", prompt: { text: "hello" } }),
+        })
+        expect(prompt.status).toBe(503)
+        expect(yield* responseJson(prompt)).toEqual({
+          _tag: "ServiceUnavailableError",
+          message: "Session execution is not available on this endpoint",
+          service: "session.prompt",
+        })
+        const admitted = yield* Database.Service.use(({ db }) =>
+          db
+            .select()
+            .from(SessionInputTable)
+            .where(eq(SessionInputTable.id, SessionMessage.ID.make("msg_execution_unavailable")))
+            .get()
+            .pipe(Effect.orDie),
+        )
+        expect(admitted).toBeUndefined()
       }),
     { git: true, config: { formatter: false, lsp: false } },
   )
