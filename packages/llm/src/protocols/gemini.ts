@@ -6,14 +6,15 @@ import { Framing } from "../route/framing"
 import { Protocol } from "../route/protocol"
 import {
   LLMEvent,
+  ToolDefinition,
   Usage,
+  type FunctionToolDefinition,
   type FinishReason,
   type LLMRequest,
   type MediaPart,
   type ProviderMetadata,
   type TextPart,
   type ToolCallPart,
-  type ToolDefinition,
   type ToolResultContentPart,
 } from "../schema"
 import { JsonObject, optionalArray, ProviderShared } from "./shared"
@@ -166,7 +167,7 @@ interface ParserState {
 // =============================================================================
 // Request Lowering
 // =============================================================================
-const lowerTool = (tool: ToolDefinition) => ({
+const lowerTool = (tool: FunctionToolDefinition) => ({
   name: tool.name,
   description: tool.description,
   parameters: GeminiToolSchema.convert(tool.inputSchema),
@@ -298,6 +299,8 @@ const thinkingConfig = (request: LLMRequest) => {
 }
 
 const fromRequest = Effect.fn("Gemini.fromRequest")(function* (request: LLMRequest) {
+  if (!request.tools.every(ToolDefinition.isFunction))
+    return yield* ProviderShared.invalidRequest("Gemini does not support custom text tools")
   const toolsEnabled = request.tools.length > 0 && request.toolChoice?.type !== "none"
   const generation = request.generation
   const generationConfig = {

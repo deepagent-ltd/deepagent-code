@@ -1,10 +1,11 @@
 import { describe, expect, test } from "bun:test"
-import { LLMEvent, ToolFailure } from "@deepagent-code/llm"
+import { LLMEvent, ToolFailure, toDefinitions } from "@deepagent-code/llm"
 import { LLMClient, RequestExecutor, WebSocketExecutor, type LLMClientShape } from "@deepagent-code/llm/route"
 import { jsonSchema, tool, type ModelMessage, type Tool } from "ai"
 import { Effect, Fiber, Layer, Stream } from "effect"
 import { LLMNative } from "@/session/llm/native-request"
 import { LLMNativeRuntime } from "@/session/llm/native-runtime"
+import { FreeformTools } from "@/session/llm/freeform-tools"
 import type { Provider } from "@/provider/provider"
 
 import { OAUTH_DUMMY_KEY } from "@/auth"
@@ -517,6 +518,81 @@ describe("session.llm-native.request", () => {
       const failure = yield* Effect.flip(wrapped.explode.execute({}, { id: "call-1", name: "explode" }))
       expect(failure).toBeInstanceOf(ToolFailure)
       expect(failure.message).toBe("boom")
+    }),
+  )
+
+  it.effect("adapts apply_patch to a raw custom tool while preserving its executor", () =>
+    Effect.gen(function* () {
+      const calls: unknown[] = []
+      const source = FreeformTools.tools(
+        { provider: "openai.responses" },
+        {
+          apply_patch: tool({
+            description: "Apply a patch",
+            inputSchema: jsonSchema({
+              type: "object",
+              properties: { patchText: { type: "string" } },
+              required: ["patchText"],
+            }),
+            execute: async (value) => {
+              calls.push(value)
+              return { output: "done" }
+            },
+          }),
+          apply_patch_chunk: tool({
+            description: "Chunk fallback",
+            inputSchema: jsonSchema({ type: "object" }),
+          }),
+        },
+      )
+
+      expect(source.apply_patch.type).toBe("provider")
+      expect(source.apply_patch_chunk).toBeDefined()
+      const wrapped = LLMNativeRuntime.nativeTools(source, {
+        messages: [],
+        abort: new AbortController().signal,
+      })
+      expect(toDefinitions(wrapped)[0]).toMatchObject({
+        name: "apply_patch",
+        type: "custom",
+        format: { type: "grammar", syntax: "lark" },
+      })
+
+      yield* wrapped.apply_patch.execute("*** Begin Patch\n*** End Patch", {
+        id: "call_patch",
+        name: "apply_patch",
+      })
+      expect(calls).toEqual([{ patchText: "*** Begin Patch\n*** End Patch" }])
+    }),
+  )
+
+  it.effect("keeps JSON file tools for Chat and Anthropic while removing raw apply_patch", () =>
+    Effect.gen(function* () {
+      const source = {
+        read: tool({ description: "Read", inputSchema: jsonSchema({ type: "object" }) }),
+        edit: tool({ description: "Edit", inputSchema: jsonSchema({ type: "object" }) }),
+        write: tool({ description: "Write", inputSchema: jsonSchema({ type: "object" }) }),
+        apply_patch: tool({
+          description: "Patch",
+          inputSchema: jsonSchema({ type: "object" }),
+          execute: async () => ({ output: "patched" }),
+        }),
+        apply_patch_chunk: tool({ description: "Chunk", inputSchema: jsonSchema({ type: "object" }) }),
+      }
+
+      expect(Object.keys(FreeformTools.tools({ provider: "openai.chat" }, source))).toEqual([
+        "read",
+        "edit",
+        "write",
+        "apply_patch_chunk",
+      ])
+      expect(Object.keys(FreeformTools.tools({ provider: "anthropic.messages" }, source))).toEqual([
+        "read",
+        "edit",
+        "write",
+        "apply_patch_chunk",
+      ])
+      expect(FreeformTools.tools({ provider: "openai.responses" }, source).apply_patch.type).toBe("provider")
     }),
   )
 

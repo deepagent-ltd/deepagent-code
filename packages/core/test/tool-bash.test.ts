@@ -156,7 +156,10 @@ describe("BashTool", () => {
           Effect.gen(function* () {
             const definitions = yield* toolDefinitions(registry)
             expect(definitions.map((tool) => tool.name)).toEqual(["bash"])
-            expect(definitions[0]?.inputSchema).not.toHaveProperty("properties.background")
+            const definition = definitions[0]
+            expect(definition?.type).toBe("function")
+            if (!definition || definition.type !== "function") throw new Error("bash must register as a function tool")
+            expect(definition.inputSchema).not.toHaveProperty("properties.background")
             expect(yield* toolDefinitions(registry, [{ action: "bash", resource: "*", effect: "deny" }])).toEqual([])
             expect(
               yield* settleTool(registry, call({ command: "pwd", description: "Print working directory" })),
