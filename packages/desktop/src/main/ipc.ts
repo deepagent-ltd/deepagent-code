@@ -8,6 +8,8 @@ import type { DesktopMenuAction } from "@deepagent-code/app/desktop-menu"
 import type { FatalRendererError, ServerReadyData, TitlebarTheme } from "../preload/types"
 import { runDesktopMenuAction } from "./desktop-menu-actions"
 import { assertAttachmentBudget, createPickedFileAuthorizations } from "./attachment-picker"
+import { archivePath, copyPath, extractPath, guardFileOpCall, movePath, removePath, renamePath, type FileOpResult } from "./file-ops"
+import { fileLog, isTracked } from "./git"
 import { getStore } from "./store"
 import { getPinchZoomEnabled, setPinchZoomEnabled, setTitlebar, updateTitlebar } from "./windows"
 import { browserView } from "./browser-view"
@@ -255,6 +257,43 @@ export function registerIpcHandlers(deps: Deps) {
       relaunch: deps.relaunch,
     })
   })
+
+  // ── File-tree context-menu operations ───────────────────────────────────
+  // These act directly on the local filesystem (workspace files) and do not route through the
+  // sidecar server. The renderer passes the workspace root as the first argument; every path is
+  // checked to stay inside it so the bridge cannot touch files outside the workspace.
+  const fileOp =
+    <Args extends unknown[]>(run: (root: string, ...args: Args) => Promise<FileOpResult>) =>
+    (_event: IpcMainInvokeEvent, root: string, ...args: Args): Promise<FileOpResult> => {
+      const guard = guardFileOpCall(root, args.filter((a): a is string => typeof a === "string"))
+      return guard ? Promise.resolve(guard) : run(root, ...args)
+    }
+
+  ipcMain.handle("file-ops-copy", fileOp((root, source: string, destDir: string) => copyPath(source, destDir)))
+  ipcMain.handle("file-ops-move", fileOp((root, source: string, destDir: string) => movePath(source, destDir)))
+  ipcMain.handle("file-ops-remove", fileOp((root, target: string) => removePath(target)))
+  // rename's nextName is a bare filename, not a workspace path — it must NOT be passed to
+  // guardFileOpCall (which resolves it against cwd, not root). The desktop main process sets
+  // cwd to homedir, so a bare name would always resolve outside root and be wrongly rejected.
+  // Only `target` is guarded; renamePath itself validates the name (empty, separators, illegal
+  // chars, collisions). See file-ops.test.ts "rename IPC guard" for the locked-in contract.
+  ipcMain.handle(
+    "file-ops-rename",
+    (_event: IpcMainInvokeEvent, root: string, target: string, nextName: string) => {
+      const guard = guardFileOpCall(root, [target])
+      return guard ? Promise.resolve(guard) : renamePath(target, nextName)
+    },
+  )
+  ipcMain.handle("file-ops-archive", fileOp((root, target: string) => archivePath(target)))
+  ipcMain.handle("file-ops-extract", fileOp((root, zipPath: string) => extractPath(zipPath)))
+
+  // ── Git file timeline ───────────────────────────────────────────────────
+  ipcMain.handle("git-is-tracked", (_event: IpcMainInvokeEvent, workDir: string, relPath: string) =>
+    isTracked(workDir, relPath),
+  )
+  ipcMain.handle("git-file-log", (_event: IpcMainInvokeEvent, workDir: string, relPath: string) =>
+    fileLog(workDir, relPath),
+  )
 }
 
 export function sendMenuCommand(win: BrowserWindow, id: string) {

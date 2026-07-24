@@ -39,6 +39,13 @@
       "dependsOn": ["^build"],
       "outputs": [".artifacts/unit/junit.xml"],
       "passThroughEnv": ["*"]
+    },
+    "@deepagent-code/desktop#test": {
+      "outputs": []
+    },
+    "@deepagent-code/desktop#test:ci": {
+      "outputs": [".artifacts/unit/junit.xml"],
+      "passThroughEnv": ["*"]
     }
   }
 }
