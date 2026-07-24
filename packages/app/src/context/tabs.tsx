@@ -1,12 +1,13 @@
 import type { Session } from "@deepagent-code/sdk/v2/client"
 import { createSimpleContext } from "@deepagent-code/ui/context"
-import { base64Encode } from "@deepagent-code/core/util/encode"
+import { base64Encode, base64Decode } from "@deepagent-code/core/util/encode"
 import { createStore, produce } from "solid-js/store"
 import { Persist, persisted } from "@/utils/persist"
 import { ServerConnection, useServer } from "./server"
 import { createEffect, startTransition } from "solid-js"
 import { useNavigate, useParams } from "@solidjs/router"
 import { SessionTabsRemovedDetail } from "@/components/titlebar-session-events"
+import { writeStartupIntent } from "@/utils/startup-intent"
 
 export type SessionTab = {
   type: "session"
@@ -75,6 +76,14 @@ export const { use: useTabs, provider: TabsProvider } = createSimpleContext({
     })
 
     const navigateTab = (tab: Tab) => {
+      // Persist intent so the next launch can pre-warm this session before
+      // showing the UI (StartupSplashGate reads this synchronously on mount).
+      writeStartupIntent({
+        server: tab.server,
+        directory: base64Decode(tab.dirBase64),
+        sessionId: tab.sessionId,
+        at: Date.now(),
+      })
       setActive("key", tabKey(tab))
       const href = tabHref(tab)
       if (tab.server === server.key) {

@@ -23,6 +23,7 @@ import {
   type JSX,
   lazy,
   onCleanup,
+  onMount,
   type ParentProps,
   Show,
 } from "solid-js"
@@ -52,6 +53,8 @@ import DirectoryLayout from "@/pages/directory-layout"
 import Layout from "@/pages/layout"
 import { ErrorPage } from "./pages/error"
 import { useCheckServerHealth } from "./utils/server-health"
+import { readStartupIntent, INTENT_NAVIGATE_WINDOW_MS } from "@/utils/startup-intent"
+import { base64Encode } from "@deepagent-code/core/util/encode"
 
 const HomeRoute = lazy(() => import("@/pages/home"))
 const Session = lazy(() => import("@/pages/session"))
@@ -140,6 +143,65 @@ function SessionProviders(props: ParentProps) {
   )
 }
 
+/**
+ * StartupSplashGate — keeps the D splash visible after ConnectionGate passes and
+ * navigates directly to the last session before revealing the app shell.
+ *
+ * Must be rendered inside a router root (needs useNavigate) and useServer.
+ * Reads the startup-intent snapshot written synchronously by navigateTab (tabs.tsx).
+ *
+ * Gate logic:
+ *  • No intent / server mismatch → pass-through immediately (new install, cleared state).
+ *  • Fresh intent (< INTENT_NAVIGATE_WINDOW_MS) → navigate to last session, release.
+ *  • Stale intent (≥ window but < 24 h) → release immediately; the existing
+ *    tabs.ready() effect in RouterRoot handles navigation as before.
+ *
+ * NOTE: The gate does NOT attempt to pre-warm the session query cache because the
+ * session SDK responses are keyed inside ServerSyncProvider (query key: [scope, dir,
+ * 'loadSessions']) which is not yet mounted when StartupSplashGate's onMount fires.
+ * The value of the gate is eliminating the visible home-page flash, not pre-fetching.
+ */
+function StartupSplashGate(props: ParentProps) {
+  const server = useServer()
+  const navigate = useNavigate()
+
+  const intent = readStartupIntent()
+
+  // No usable intent → skip the gate entirely (zero overhead).
+  if (!intent || intent.server !== server.key) {
+    return <>{props.children}</>
+  }
+
+  const [warmupDone, setWarmupDone] = createSignal(false)
+
+  onMount(() => {
+    try {
+      // Navigate immediately when the intent is fresh (process crash / hot restart).
+      // Stale intents delegate to the tabs.ready() effect so a long-idle cold-start
+      // doesn't force navigation to a session the user may no longer want.
+      if (Date.now() - intent.at < INTENT_NAVIGATE_WINDOW_MS) {
+        const dirBase64 = base64Encode(intent.directory)
+        navigate(`/${dirBase64}/session/${intent.sessionId}`, { replace: true })
+      }
+    } finally {
+      setWarmupDone(true)
+    }
+  })
+
+  return (
+    <Show
+      when={warmupDone()}
+      fallback={
+        <div class="h-dvh w-screen flex flex-col items-center justify-center bg-background-base">
+          <Splash class="w-16 h-20 opacity-50 animate-pulse" />
+        </div>
+      }
+    >
+      {props.children}
+    </Show>
+  )
+}
+
 function RouterRoot(props: ParentProps<{ appChildren?: JSX.Element }>) {
   const tabs = useTabs()
   const server = useServer()
@@ -148,9 +210,13 @@ function RouterRoot(props: ParentProps<{ appChildren?: JSX.Element }>) {
 
   // Restore the explicitly persisted active tab. A cross-server directory is never
   // navigated until the target server has become active.
+  // Skip when StartupSplashGate has a fresh intent — it navigates directly and this
+  // effect would race/conflict with it during the warmup window.
   createEffect(() => {
     if (!tabs.ready()) return
     if (location.pathname !== "/") return
+    const intent = readStartupIntent()
+    if (intent && intent.server === server.key && Date.now() - intent.at < INTENT_NAVIGATE_WINDOW_MS) return
     const tab = startupTab(tabs.store, tabs.active.key, server.list)
     if (!tab) return
     if (server.key !== tab.server) {
@@ -161,12 +227,14 @@ function RouterRoot(props: ParentProps<{ appChildren?: JSX.Element }>) {
   })
 
   return (
-    <AppShellProviders>
-      {/*<Suspense fallback={<Loading />}>*/}
-      {props.appChildren}
-      {props.children}
-      {/*</Suspense>*/}
-    </AppShellProviders>
+    <StartupSplashGate>
+      <AppShellProviders>
+        {/*<Suspense fallback={<Loading />}>*/}
+        {props.appChildren}
+        {props.children}
+        {/*</Suspense>*/}
+      </AppShellProviders>
+    </StartupSplashGate>
   )
 }
 
