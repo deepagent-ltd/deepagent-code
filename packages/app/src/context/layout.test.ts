@@ -11,9 +11,42 @@ import {
   toggleBottomPanel,
   togglePanel,
   toggledPanelMode,
+  migrateRightPanelSessionView,
   type PanelSessionState,
   type PanelTransitionInput,
 } from "./layout-helpers"
+
+describe("right panel persisted-state quarantine", () => {
+  test("migrates oversight and removes unknown modes", () => {
+    expect(
+      migrateRightPanelSessionView(
+        {
+          old: { scroll: {}, rightPanelMode: "oversight" },
+          invalid: { scroll: {}, rightPanelMode: "removed-mode" },
+        },
+        "1.0.0",
+      ),
+    ).toEqual({
+      old: { scroll: {}, rightPanelMode: "subagents" },
+      invalid: { scroll: {}, rightPanelMode: undefined },
+    })
+  })
+
+  test("closes a panel after two failures in the same build", () => {
+    const failed = (count: number, build = "1.0.0") => ({
+      session: {
+        scroll: {},
+        rightPanelMode: "subagents",
+        rightPanelFailure: { mode: "subagents", build, count },
+      },
+    })
+    expect(migrateRightPanelSessionView(failed(1), "1.0.0")).toEqual(failed(1))
+    expect(migrateRightPanelSessionView(failed(2), "1.0.0")).toEqual({
+      session: { ...failed(2).session, rightPanelMode: undefined },
+    })
+    expect(migrateRightPanelSessionView(failed(2, "0.9.0"), "1.0.0")).toEqual(failed(2, "0.9.0"))
+  })
+})
 
 describe("right-side-panel mode reducer", () => {
   // Regression guard for the IM panel "进去出不来" bug: opening a panel must be
@@ -82,7 +115,12 @@ describe("movable panel state machine", () => {
   test("bottom toggle replaces a stale active view with a valid fallback", () => {
     const locationsWithTerminalSide = { terminal: "side", "debug-console": "bottom", problems: "bottom" } as const
     expect(
-      toggleBottomPanel(input({ locations: locationsWithTerminalSide, state: { bottomPanel: { opened: false, activeView: "terminal" } } })),
+      toggleBottomPanel(
+        input({
+          locations: locationsWithTerminalSide,
+          state: { bottomPanel: { opened: false, activeView: "terminal" } },
+        }),
+      ),
     ).toEqual({ bottomPanel: { opened: true, activeView: "debug-console" } })
   })
 
@@ -90,7 +128,10 @@ describe("movable panel state machine", () => {
     const opened = revealPanel(input(), "terminal")
     const moved = movePanel(input({ state: opened }), "terminal", "side")
     expect(moved.locations.terminal).toBe("side")
-    expect(moved.state).toEqual({ bottomPanel: { opened: true, activeView: "debug-console" }, rightPanelMode: "terminal" })
+    expect(moved.state).toEqual({
+      bottomPanel: { opened: true, activeView: "debug-console" },
+      rightPanelMode: "terminal",
+    })
   })
 
   test("moving the final bottom view closes the bottom panel", () => {
@@ -118,7 +159,9 @@ describe("movable panel state machine", () => {
   test("mobile refuses a side move and reveals an old side preference in bottom", () => {
     const mobile = input({ sideAvailable: false })
     expect(movePanel(mobile, "terminal", "side")).toEqual({ locations, state })
-    expect(revealPanel(input({ sideAvailable: false, locations: { ...locations, terminal: "side" } }), "terminal")).toEqual({
+    expect(
+      revealPanel(input({ sideAvailable: false, locations: { ...locations, terminal: "side" } }), "terminal"),
+    ).toEqual({
       bottomPanel: { opened: true, activeView: "terminal" },
     })
   })

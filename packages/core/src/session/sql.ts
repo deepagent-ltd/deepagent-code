@@ -13,6 +13,7 @@ import { WorkspaceV2 } from "../workspace"
 import { Timestamps } from "../database/schema.sql"
 import type { SystemContext } from "../system-context/index"
 import { AgentV2 } from "../agent"
+import { sql } from "drizzle-orm"
 
 type SessionMessageData = Omit<(typeof SessionMessage.Message)["Encoded"], "type" | "id">
 type V1MessageData = Omit<SessionV1.Info, "id" | "sessionID">
@@ -219,3 +220,100 @@ export const SessionContextEpochTable = sqliteTable("session_context_epoch", {
   replacement_seq: integer(),
   revision: integer().notNull().default(0),
 })
+
+export const TaskRunTable = sqliteTable(
+  "task_run",
+  {
+    run_id: text().primaryKey(),
+    root_run_id: text(),
+    request_hash: text().notNull(),
+    parent_session_id: text()
+      .$type<SessionSchema.ID>()
+      .notNull()
+      .references(() => SessionTable.id, { onDelete: "cascade" }),
+    parent_message_id: text().$type<MessageID>().notNull(),
+    tool_call_id: text().notNull(),
+    child_session_id: text().$type<SessionSchema.ID>().notNull(),
+    generation: integer().notNull(),
+    delivery_mode: text().$type<"foreground" | "background">().notNull(),
+    phase: text().$type<"admission" | "research" | "finalize" | "settled">().notNull(),
+    state: text()
+      .$type<
+        "admitted" | "provisioning" | "researching" | "finalizing" | "completed" | "error" | "cancelled" | "interrupted"
+      >()
+      .notNull(),
+    reason: text(),
+    attempts: integer().notNull().default(0),
+    execution_owner: text(),
+    lease_expires_at: integer(),
+    raw_result_message_id: text().$type<MessageID>(),
+    structured_result_message_id: text().$type<MessageID>(),
+    output: text(),
+    error: text({ mode: "json" }).$type<{ code: string; message: string; data?: Record<string, unknown> }>(),
+    time_created: integer().notNull(),
+    time_updated: integer().notNull(),
+    time_settled: integer(),
+  },
+  (table) => [
+    uniqueIndex("task_run_child_generation_idx").on(table.child_session_id, table.generation),
+    uniqueIndex("task_run_child_active_idx")
+      .on(table.child_session_id)
+      .where(sql`${table.state} IN ('admitted', 'provisioning', 'researching', 'finalizing')`),
+    index("task_run_parent_state_idx").on(table.parent_session_id, table.state, table.time_updated),
+    index("task_run_root_idx").on(table.root_run_id),
+  ],
+)
+
+export const TaskAdmissionTable = sqliteTable(
+  "task_admission",
+  {
+    admission_key: text().primaryKey(),
+    request_hash: text().notNull(),
+    run_id: text()
+      .notNull()
+      .references(() => TaskRunTable.run_id, { onDelete: "cascade" }),
+    parent_session_id: text()
+      .$type<SessionSchema.ID>()
+      .notNull()
+      .references(() => SessionTable.id, { onDelete: "cascade" }),
+    parent_message_id: text().$type<MessageID>().notNull(),
+    tool_call_id: text().notNull(),
+    delivery_mode: text().$type<"foreground" | "background">().notNull(),
+    time_created: integer().notNull(),
+  },
+  (table) => [index("task_admission_run_idx").on(table.run_id)],
+)
+
+export const TaskNotificationOutboxTable = sqliteTable(
+  "task_notification_outbox",
+  {
+    id: text().primaryKey(),
+    run_id: text()
+      .notNull()
+      .unique()
+      .references(() => TaskRunTable.run_id, { onDelete: "cascade" }),
+    message_id: text().$type<MessageID>().notNull().unique(),
+    parent_session_id: text()
+      .$type<SessionSchema.ID>()
+      .notNull()
+      .references(() => SessionTable.id, { onDelete: "cascade" }),
+    directory: DatabasePath.directoryColumn().notNull(),
+    payload: text({ mode: "json" })
+      .$type<{
+        agent: string
+        variant?: string
+        text: string
+      }>()
+      .notNull(),
+    status: text().$type<"pending" | "delivering" | "delivered" | "dead">().notNull(),
+    attempts: integer().notNull().default(0),
+    available_at: integer().notNull(),
+    lease_owner: text(),
+    lease_expires_at: integer(),
+    last_error: text(),
+    time_created: integer().notNull(),
+    time_updated: integer().notNull(),
+    time_delivered: integer(),
+  },
+  (table) => [index("task_notification_outbox_due_idx").on(table.status, table.available_at, table.lease_expires_at)],
+)

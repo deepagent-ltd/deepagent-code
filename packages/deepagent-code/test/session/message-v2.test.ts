@@ -684,6 +684,55 @@ describe("session.message-v2.toModelMessage", () => {
     ])
   })
 
+  test("preserves the custom tool marker across a model switch", async () => {
+    const assistantID = "m-assistant-custom"
+    const input: SessionV1.WithParts[] = [
+      {
+        info: assistantInfo(assistantID, "m-user-custom", undefined, { providerID: "other", modelID: "other" }),
+        parts: [
+          {
+            ...basePart(assistantID, "a-custom"),
+            type: "tool",
+            callID: "call-custom",
+            tool: "apply_patch",
+            state: {
+              status: "completed",
+              input: { patchText: "*** Begin Patch\n*** End Patch" },
+              output: "Done",
+              title: "Apply patch",
+              metadata: {},
+              time: { start: 0, end: 1 },
+            },
+            metadata: { deepagent: { toolType: "custom" } },
+          },
+        ] as SessionV1.Part[],
+      },
+    ]
+
+    expect(await MessageV2.toModelMessages(input, model)).toMatchObject([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool-call",
+            toolCallId: "call-custom",
+            providerOptions: { deepagent: { toolType: "custom" } },
+          },
+        ],
+      },
+      {
+        role: "tool",
+        content: [
+          {
+            type: "tool-result",
+            toolCallId: "call-custom",
+            providerOptions: { deepagent: { toolType: "custom" } },
+          },
+        ],
+      },
+    ])
+  })
+
   test("replaces compacted tool output with placeholder", async () => {
     const userID = "m-user"
     const assistantID = "m-assistant"

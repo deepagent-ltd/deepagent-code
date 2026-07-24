@@ -118,12 +118,12 @@ const main = Effect.gen(function* () {
   const onboardingTestRoot = ((): string | undefined => {
     if (!TEST_ONBOARDING) return
 
-    const root = join(tmpdir(), `deepagent-code-onboarding-${randomUUID()}`)
-    rmSync(root, { recursive: true, force: true })
+    const root = process.env.DEEPAGENT_CODE_TEST_ROOT ?? join(tmpdir(), `deepagent-code-onboarding-${randomUUID()}`)
+    if (!process.env.DEEPAGENT_CODE_TEST_ROOT) rmSync(root, { recursive: true, force: true })
     ;["data", "config", "cache", "state", "desktop", "session"].forEach((dir) =>
       mkdirSync(join(root, dir), { recursive: true }),
     )
-    process.env.DEEPAGENT_CODE_DB = ":memory:"
+    process.env.DEEPAGENT_CODE_DB ??= ":memory:"
     process.env.XDG_DATA_HOME = join(root, "data")
     process.env.XDG_CONFIG_HOME = join(root, "config")
     process.env.XDG_CACHE_HOME = join(root, "cache")
@@ -183,7 +183,9 @@ const main = Effect.gen(function* () {
   app.commandLine.appendSwitch("proxy-bypass-list", "<-loopback>")
   const features = app.commandLine.getSwitchValue("enable-features")
   app.commandLine.appendSwitch("enable-features", features ? `${jsCallStackFeature},${features}` : jsCallStackFeature)
-  if (!app.isPackaged) app.commandLine.appendSwitch("remote-debugging-port", "9222")
+  if (!app.isPackaged && !app.commandLine.hasSwitch("remote-debugging-port")) {
+    app.commandLine.appendSwitch("remote-debugging-port", "9222")
+  }
 
   if (!app.requestSingleInstanceLock()) {
     app.quit()
