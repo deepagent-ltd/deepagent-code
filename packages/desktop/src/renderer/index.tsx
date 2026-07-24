@@ -17,7 +17,8 @@ import {
 import type { UpdaterState } from "@deepagent-code/app/updater"
 import * as Sentry from "@sentry/solid"
 import type { AsyncStorage } from "@solid-primitives/storage"
-import { MemoryRouter } from "@solidjs/router"
+import { MemoryRouter, createMemoryHistory } from "@solidjs/router"
+import type { BaseRouterProps } from "@solidjs/router"
 import { createEffect, createMemo, createResource, createSignal, onCleanup, onMount, Show } from "solid-js"
 import { render } from "solid-js/web"
 import pkg from "../../package.json"
@@ -28,6 +29,32 @@ import { availableStartupServer, readyWslConnections } from "./wsl/connections"
 import "./styles.css"
 import { Splash } from "@deepagent-code/ui/logo"
 import { useTheme } from "@deepagent-code/ui/theme/context"
+
+// Inline startup-intent reader — mirrors packages/app/src/utils/startup-intent.ts.
+// Inlined here to avoid cross-package compiled-artifact resolution issues.
+const STARTUP_INTENT_KEY = "deepagent:startup-intent"
+const INTENT_NAVIGATE_WINDOW_MS = 30_000
+
+function readLocalStartupIntent() {
+  try {
+    const raw = localStorage.getItem(STARTUP_INTENT_KEY)
+    if (!raw) return null
+    const p = JSON.parse(raw) as Record<string, unknown>
+    if (
+      typeof p.server !== "string" ||
+      typeof p.directory !== "string" ||
+      typeof p.sessionId !== "string" ||
+      typeof p.at !== "number"
+    ) return null
+    if (Date.now() - p.at > INTENT_NAVIGATE_WINDOW_MS) return null
+    return p as { server: string; directory: string; sessionId: string; at: number }
+  } catch { return null }
+}
+
+/** URL-safe base64 encode (matches base64Encode from @deepagent-code/core/util/encode). */
+function encodeBase64Url(value: string): string {
+  return btoa(value).replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "")
+}
 
 // renderer.initialization — start: renderer module begins executing.
 // Captured at module level so it includes all synchronous setup before render().
@@ -381,11 +408,31 @@ render(() => {
     return (
       <Show when={ready()} fallback={splash}>
         <Show when={effectiveDefaultServer()} keyed>
-          {(key) => (
-            <AppInterface defaultServer={key} servers={servers()} router={MemoryRouter}>
-              <Inner />
-            </AppInterface>
-          )}
+          {(key) => {
+            // Read the startup intent synchronously at the moment ready() first becomes
+            // true. If it is fresh (< INTENT_NAVIGATE_WINDOW_MS) and the server matches,
+            // prime MemoryHistory to start at the session URL so AppInterface never
+            // renders the home route — eliminating the visible home-page flash.
+            const intent = readLocalStartupIntent()
+            const history = createMemoryHistory()
+            if (intent && intent.server === key) {
+              const dirBase64 = encodeBase64Url(intent.directory)
+              history.set({
+                value: `/${dirBase64}/session/${intent.sessionId}`,
+                replace: true,
+              })
+            }
+
+            const startupRouter = (props: BaseRouterProps) => (
+              <MemoryRouter history={history} {...props} />
+            )
+
+            return (
+              <AppInterface defaultServer={key} servers={servers()} router={startupRouter}>
+                <Inner />
+              </AppInterface>
+            )
+          }}
         </Show>
       </Show>
     )
