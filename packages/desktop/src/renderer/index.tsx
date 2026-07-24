@@ -335,11 +335,25 @@ render(() => {
 
   function App() {
     const wslServers = useWslServers()
-    const splash = (
-      <div class="h-dvh w-screen flex flex-col items-center justify-center bg-background-base">
-        <Splash class="w-16 h-20 opacity-50 animate-pulse" />
-      </div>
-    )
+
+    // App-data gate: Layout fires "deepagent-code:app-ready" once the session UI
+    // is fully prepared (projects loaded, last session navigated to, sessions
+    // listed).  Until then the app renders in the background but is completely
+    // invisible via `visibility:hidden` — no pointer events, no visual flash.
+    // An 8-second failsafe prevents a permanent hang on slow networks.
+    const [appReady, setAppReady] = createSignal(false)
+    onMount(() => {
+      const fallback = window.setTimeout(() => setAppReady(true), 8_000)
+      window.addEventListener(
+        "deepagent-code:app-ready",
+        () => {
+          clearTimeout(fallback)
+          setAppReady(true)
+        },
+        { once: true },
+      )
+      onCleanup(() => clearTimeout(fallback))
+    })
 
     const ready = createMemo(
       () => !defaultServer.loading && !sidecar.loading && !windowCount.loading && !locale.loading,
@@ -379,15 +393,28 @@ render(() => {
     )
 
     return (
-      <Show when={ready()} fallback={splash}>
-        <Show when={effectiveDefaultServer()} keyed>
-          {(key) => (
-            <AppInterface defaultServer={key} servers={servers()} router={MemoryRouter}>
-              <Inner />
-            </AppInterface>
-          )}
+      <>
+        {/* Splash: shows while server resources load OR while app data preloads.
+            Uses a fixed overlay so the hidden app can render in the background. */}
+        <Show when={!ready() || !appReady()}>
+          <div class="fixed inset-0 z-[9999] h-dvh w-screen flex flex-col items-center justify-center bg-background-base">
+            <Splash class="w-16 h-20 opacity-50 animate-pulse" />
+          </div>
         </Show>
-      </Show>
+        {/* App: renders as soon as server is ready, but hidden until data is preloaded.
+            visibility:hidden means no rendering artifacts, no pointer events, no flash. */}
+        <Show when={ready()}>
+          <div style={{ visibility: appReady() ? "visible" : "hidden" }}>
+            <Show when={effectiveDefaultServer()} keyed>
+              {(key) => (
+                <AppInterface defaultServer={key} servers={servers()} router={MemoryRouter}>
+                  <Inner />
+                </AppInterface>
+              )}
+            </Show>
+          </div>
+        </Show>
+      </>
     )
   }
 
