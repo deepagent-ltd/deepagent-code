@@ -95,7 +95,7 @@ import {
 import { ProjectDragOverlay, SortableProject, type ProjectSidebarContext } from "./layout/sidebar-project"
 import { SidebarContent } from "./layout/sidebar-shell"
 
-export default function Layout(props: ParentProps) {
+export default function Layout(props: ParentProps<{ onStartupRestoreSettled?: () => void }>) {
   const serverSDK = useServerSDK()
   const [store, setStore, , ready] = persisted(
     Persist.serverGlobal(serverSDK.scope, "layout.page", ["layout.page.v1"]),
@@ -599,6 +599,11 @@ export default function Layout(props: ParentProps) {
       if (!next) return
       await openProject(next.worktree, true)
     }
+  })
+
+  createEffect(() => {
+    if (autoselecting.loading) return
+    props.onStartupRestoreSettled?.()
   })
 
   const workspaceName = (directory: string, projectId?: string, branch?: string) => {
