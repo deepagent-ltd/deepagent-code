@@ -1,13 +1,12 @@
 import { createEffect, createMemo, For, Show, type Accessor, type JSX } from "solid-js"
 import {
   DragDropProvider,
-  DragDropSensors,
   DragOverlay,
   SortableProvider,
   closestCenter,
   type DragEvent,
 } from "@thisbeyond/solid-dnd"
-import { ConstrainDragXAxis } from "@/utils/solid-dnd"
+import { ConstrainDragXAxis, FixedDragDropSensors } from "@/utils/solid-dnd"
 import { IconButton } from "@deepagent-code/ui/icon-button"
 import { Tooltip, TooltipKeybind } from "@deepagent-code/ui/tooltip"
 import { type LocalProject } from "@/context/layout"
@@ -72,7 +71,7 @@ export const SidebarContent = (props: {
             onDragOver={props.handleDragOver}
             collisionDetector={closestCenter}
           >
-            <DragDropSensors />
+            <FixedDragDropSensors />
             <ConstrainDragXAxis />
             <div class="h-full w-full flex flex-col items-center gap-3 px-3 py-3 overflow-y-auto no-scrollbar">
               <SortableProvider ids={props.projects().map((p) => p.worktree)}>

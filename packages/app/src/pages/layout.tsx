@@ -30,7 +30,7 @@ import { Session, type Message } from "@deepagent-code/sdk/v2/client"
 import { usePlatform } from "@/context/platform"
 import { useSettings } from "@/context/settings"
 import { createStore, produce, reconcile } from "solid-js/store"
-import { DragDropProvider, DragDropSensors, DragOverlay, SortableProvider, closestCenter } from "@thisbeyond/solid-dnd"
+import { DragDropProvider, DragOverlay, SortableProvider, closestCenter } from "@thisbeyond/solid-dnd"
 import type { DragEvent } from "@thisbeyond/solid-dnd"
 import { useProviders } from "@/hooks/use-providers"
 import { toaster } from "@deepagent-code/ui/toast"
@@ -61,7 +61,7 @@ import { SessionRouteKey, SessionStateKey } from "@/utils/server-scope"
 import { useDialog } from "@deepagent-code/ui/context/dialog"
 import { useTheme, type ColorScheme } from "@deepagent-code/ui/theme/context"
 import { useCommand, type CommandOption } from "@/context/command"
-import { ConstrainDragXAxis, getDraggableId } from "@/utils/solid-dnd"
+import { ConstrainDragXAxis, getDraggableId, FixedDragDropSensors } from "@/utils/solid-dnd"
 import { DebugBar } from "@/components/debug-bar"
 import { listPending } from "@/components/review/dialog-review.api"
 import { fetchCapabilities } from "@/components/deepagent/panel-goal.api"
@@ -2369,7 +2369,7 @@ export default function Layout(props: ParentProps) {
                         onDragOver={handleWorkspaceDragOver}
                         collisionDetector={closestCenter}
                       >
-                        <DragDropSensors />
+                        <FixedDragDropSensors />
                         <ConstrainDragXAxis />
                         <div
                           ref={(el) => {

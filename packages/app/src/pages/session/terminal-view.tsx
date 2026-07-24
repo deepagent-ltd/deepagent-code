@@ -4,9 +4,9 @@ import { ResizeHandle } from "@deepagent-code/ui/resize-handle"
 import { IconButton } from "@deepagent-code/ui/icon-button"
 import { Button } from "@deepagent-code/ui/button"
 import { TooltipKeybind, Tooltip } from "@deepagent-code/ui/tooltip"
-import { DragDropProvider, DragDropSensors, SortableProvider, closestCenter } from "@thisbeyond/solid-dnd"
+import { DragDropProvider, SortableProvider, closestCenter } from "@thisbeyond/solid-dnd"
 import type { DragEvent } from "@thisbeyond/solid-dnd"
-import { ConstrainDragYAxis } from "@/utils/solid-dnd"
+import { ConstrainDragYAxis, FixedDragDropSensors } from "@/utils/solid-dnd"
 
 import { SortableTerminalTab } from "@/components/session"
 import { Terminal } from "@/components/terminal"
@@ -221,7 +221,7 @@ function LeafPane(props: { node: PaneLeaf }) {
       onFocusIn={() => terminal.setFocusedPane(props.node.id)}
     >
       <DragDropProvider onDragOver={handleDragOver} collisionDetector={closestCenter}>
-        <DragDropSensors />
+        <FixedDragDropSensors />
         <ConstrainDragYAxis />
         <Tabs variant="alt" value={activeId()} class="!h-auto !flex-none">
           <div class="flex items-stretch h-10 border-b border-border-weak-base bg-background-base">
