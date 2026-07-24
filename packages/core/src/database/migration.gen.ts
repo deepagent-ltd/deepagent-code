@@ -54,5 +54,6 @@ export const migrations = (
     import("./migration/20260712050000_session_steer_queue"),
     import("./migration/20260719000000_deepagent_consumer_group"),
     import("./migration/20260722000000_session_steer_correlation"),
+    import("./migration/20260724134000_task_run_delivery"),
   ])
 ).map((module) => module.default) satisfies DatabaseMigration.Migration[]

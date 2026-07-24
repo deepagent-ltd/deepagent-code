@@ -57,6 +57,10 @@ export class Service extends ConfigService.Service<Service>()("@deepagent-code/R
   // v4.0.4 块1 (I33-4): 子 Agent 结果注入父会话的有界长度(字符数)。超过则父只收截断摘要 + 指向子
   // session 的引用(全量 text 不丢,仍在子 session 可查)。默认 undefined = 全量注入(逐字节等价现状)。
   subagentOutputMaxChars: positiveInteger("DEEPAGENT_CODE_SUBAGENT_OUTPUT_MAX_CHARS"),
+  subagentResearchStepLimit: positiveInteger("DEEPAGENT_CODE_SUBAGENT_RESEARCH_STEP_LIMIT"),
+  subagentResearchTokenLimit: positiveInteger("DEEPAGENT_CODE_SUBAGENT_RESEARCH_TOKEN_LIMIT"),
+  subagentResearchWallMs: positiveInteger("DEEPAGENT_CODE_SUBAGENT_RESEARCH_WALL_MS"),
+  subagentNoProgressLimit: positiveInteger("DEEPAGENT_CODE_SUBAGENT_NO_PROGRESS_LIMIT"),
   experimentalLspTy: bool("DEEPAGENT_CODE_EXPERIMENTAL_LSP_TY"),
   experimentalLspTool: enabledByExperimental("DEEPAGENT_CODE_EXPERIMENTAL_LSP_TOOL"),
   // V3.8 App-A C2.5 (Stage 5): query_log tool — lets the agent retrieve slices of the append-only

@@ -2,7 +2,7 @@ import { GlobalBus } from "@/bus/global"
 import { serviceUse } from "@deepagent-code/core/effect/service-use"
 import { WorkspaceContext } from "@/control-plane/workspace-context"
 import { InstanceRef } from "@/effect/instance-ref"
-import { disposeInstance as runDisposers } from "@/effect/instance-registry"
+import { disposeInstance as runDisposers, initializeInstance } from "@/effect/instance-registry"
 import { FSUtil } from "@deepagent-code/core/fs-util"
 import { Context, Deferred, Duration, Effect, Exit, Layer, Scope } from "effect"
 import { assertSafeInstanceRoot, type InstanceContext } from "./instance-context"
@@ -63,6 +63,13 @@ export const layer: Layer.Layer<Service, never, Project.Service | InstanceBootst
                 })),
               )
         yield* bootstrap.run.pipe(Effect.provideService(InstanceRef, ctx))
+        yield* Effect.promise(() => initializeInstance(ctx)).pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("instance initializer failed").pipe(
+              Effect.annotateLogs({ directory: ctx.directory, cause }),
+            ),
+          ),
+        )
         return ctx
       }).pipe(Effect.withSpan("InstanceStore.boot"))
 
