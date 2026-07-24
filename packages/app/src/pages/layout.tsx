@@ -63,7 +63,7 @@ import { useTheme, type ColorScheme } from "@deepagent-code/ui/theme/context"
 import { useCommand, type CommandOption } from "@/context/command"
 import { ConstrainDragXAxis, getDraggableId, FixedDragDropSensors } from "@/utils/solid-dnd"
 import { DebugBar } from "@/components/debug-bar"
-import { listPending } from "@/components/review/dialog-review.api"
+import { reviewSummary } from "@/components/review/dialog-review.api"
 import { fetchCapabilities } from "@/components/deepagent/panel-goal.api"
 import { Titlebar, type TitlebarUpdate } from "@/components/titlebar"
 import { useDirectoryPicker } from "@/components/directory-picker"
@@ -167,8 +167,7 @@ export default function Layout(props: ParentProps<{ onStartupRestoreSettled?: ()
     if (!dir) return false
     try {
       const sdk = serverSDK.createDirSdkContext(dir)
-      const items = await listPending(sdk.client as never)
-      return items.some((item) => item.approval_status === "pending")
+      return (await reviewSummary(sdk.client as never)).pendingCount > 0
     } catch {
       return false
     }
