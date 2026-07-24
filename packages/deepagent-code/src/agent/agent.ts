@@ -173,7 +173,8 @@ export const layer = Layer.effect(
           // autonomously sets the objective, produces design/plan as needed, and executes it end-to-end.
           auto: {
             name: "auto",
-            description: "Autonomous mode. The agent sets the objective, designs and plans as needed, then executes to completion.",
+            description:
+              "Autonomous mode. The agent sets the objective, designs and plans as needed, then executes to completion.",
             options: {},
             permission: Permission.merge(
               defaults,
@@ -313,6 +314,7 @@ export const layer = Layer.effect(
                 external_directory: readonlyExternalDirectory,
               }),
               user,
+              Permission.fromConfig({ doom_loop: "ask" }),
             ),
             description: `Deep sub-module research agent. Use this when you need a decidable explanation of HOW a specific sub-module or subsystem works (not just where it is): its mechanism, key files, outward interfaces, risks, and open questions. Prefer this over "explore" when the task is to understand and report on one module in depth so you can synthesize a plan; prefer "explore" for quick file/keyword location. Returns a structured research result.`,
             prompt: PROMPT_RESEARCHER,
@@ -335,6 +337,7 @@ export const layer = Layer.effect(
                 external_directory: readonlyExternalDirectory,
               }),
               user,
+              Permission.fromConfig({ doom_loop: "ask" }),
             ),
             description: `Independent, adversarial review agent. Use this to critique a plan or a set of changes from a skeptical, outside perspective — its default stance is that the change has problems. It hunts for correctness bugs, security issues, edge cases, convention conflicts, and missing tests, and reports reproducible failure scenarios. Read-only. Returns structured findings with an overall verdict.`,
             prompt: PROMPT_REVIEWER,
@@ -498,14 +501,7 @@ export const layer = Layer.effect(
         const list = Effect.fnUntraced(function* () {
           const cfg = yield* config.get()
           const preferred = cfg.default_agent ? canonicalAgentName(cfg.default_agent) : "auto"
-          return pipe(
-            agents,
-            values(),
-            sortBy(
-              [(x) => x.name === preferred, "desc"],
-              [(x) => x.name, "asc"],
-            ),
-          )
+          return pipe(agents, values(), sortBy([(x) => x.name === preferred, "desc"], [(x) => x.name, "asc"]))
         })
 
         const defaultInfo = Effect.fnUntraced(function* () {

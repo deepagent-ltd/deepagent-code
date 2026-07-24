@@ -7,4 +7,12 @@ describe("isSubagentInterrupted", () => {
     expect(isSubagentInterrupted({ deepagent: { subagent: { interrupted: true } } })).toBe(true)
     expect(isSubagentInterrupted({ deepagent: { subagent: { state: "finished" } } })).toBe(false)
   })
+
+  test("reads metadata from a real session-shaped object", () => {
+    expect(
+      isSubagentInterrupted({
+        metadata: { deepagent: { subagent: { state: "interrupted", reason: "human" } } },
+      }),
+    ).toBe(true)
+  })
 })

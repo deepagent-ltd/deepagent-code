@@ -33,6 +33,7 @@ import * as DateTime from "effect/DateTime"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { toolFileSourceFromUri, Usage, type LLMEvent } from "@deepagent-code/llm"
 import { ToolOutput } from "@deepagent-code/core/tool-output"
+import { AgentGateway } from "@deepagent-code/core/agent-gateway"
 
 const DOOM_LOOP_THRESHOLD = 3
 const DOOM_LOOP_SEQUENCE_WINDOW = 12
@@ -80,6 +81,23 @@ export class ToolSequenceTracker {
   private readonly calls: { fingerprint: string; done: boolean }[] = []
   private readonly callIdToIndex = new Map<string, number>()
   private readonly triggeredSequences = new Set<string>()
+  private fingerprintResolver: ((toolName: string, input: unknown) => unknown) | undefined
+  private resultFingerprintResolver: ((toolName: string, result: unknown) => unknown) | undefined
+  private previousResultSignature: string | undefined
+  private previousProgressSignature: string | undefined
+  private equivalentResultCount = 0
+
+  setFingerprintResolver(resolver: (toolName: string, input: unknown) => unknown): void {
+    this.fingerprintResolver = resolver
+  }
+
+  setResultFingerprintResolver(resolver: (toolName: string, result: unknown) => unknown): void {
+    this.resultFingerprintResolver = resolver
+  }
+
+  fingerprint(toolName: string, input: unknown): string {
+    return toolFingerprint(toolName, this.fingerprintResolver ? this.fingerprintResolver(toolName, input) : input)
+  }
 
   /** Record a newly started (running) tool call. */
   push(callId: string, fingerprint: string): void {
@@ -101,12 +119,33 @@ export class ToolSequenceTracker {
    * settleToolCall so that the "prior calls must be done" invariant holds
    * before the next tool starts.
    */
-  markDone(callId: string): void {
+  markDone(
+    callId: string,
+    toolName?: string,
+    result?: unknown,
+    progress?: { snapshot: string | undefined; plan: unknown },
+  ): { count: number } | undefined {
     const idx = this.callIdToIndex.get(callId)
     if (idx !== undefined && idx >= 0 && idx < this.calls.length) {
       this.calls[idx].done = true
     }
     this.callIdToIndex.delete(callId)
+    const resolved = toolName && this.resultFingerprintResolver?.(toolName, result)
+    if (idx === undefined || resolved === undefined) {
+      this.previousResultSignature = undefined
+      this.previousProgressSignature = undefined
+      this.equivalentResultCount = 0
+      return undefined
+    }
+    const resultSignature = `${toolName}:${canonicalJson(resolved)}`
+    const progressSignature = canonicalJson(progress)
+    this.equivalentResultCount =
+      resultSignature === this.previousResultSignature && progressSignature === this.previousProgressSignature
+        ? this.equivalentResultCount + 1
+        : 1
+    this.previousResultSignature = resultSignature
+    this.previousProgressSignature = progressSignature
+    return { count: this.equivalentResultCount }
   }
 
   /**
@@ -173,13 +212,13 @@ export class ToolSequenceTracker {
 // Detects repetitive/stuck output before it grows unbounded; configurable via
 // RuntimeFlags.degenerationDetectorMode ("off" | "shadow" | "enforce").
 const DEGENERATION_DETECTOR_VERSION = "1.0"
-const DEGENERATION_ENABLE_THRESHOLD = 20_000  // chars before detection starts
-const DEGENERATION_WINDOW_SIZE = 4_000        // sliding window width in chars
-const DEGENERATION_SAMPLE_INTERVAL = 500      // chars between samples
-const DEGENERATION_N = 4                       // N-gram size
-const DEGENERATION_RATIO_THRESHOLD = 0.70     // repeated N-gram fraction
+const DEGENERATION_ENABLE_THRESHOLD = 20_000 // chars before detection starts
+const DEGENERATION_WINDOW_SIZE = 4_000 // sliding window width in chars
+const DEGENERATION_SAMPLE_INTERVAL = 500 // chars between samples
+const DEGENERATION_N = 4 // N-gram size
+const DEGENERATION_RATIO_THRESHOLD = 0.7 // repeated N-gram fraction
 const DEGENERATION_SIMILARITY_THRESHOLD = 0.85 // Jaccard threshold between windows
-const DEGENERATION_K = 3                       // consecutive samples required
+const DEGENERATION_K = 3 // consecutive samples required
 
 class DegenerationDetector {
   private totalChars = 0
@@ -227,9 +266,7 @@ class DegenerationDetector {
     // Maintain sliding window: keep only the last WINDOW_SIZE chars
     const combined = this.windowText + delta
     this.windowText =
-      combined.length > DEGENERATION_WINDOW_SIZE
-        ? combined.slice(combined.length - DEGENERATION_WINDOW_SIZE)
-        : combined
+      combined.length > DEGENERATION_WINDOW_SIZE ? combined.slice(combined.length - DEGENERATION_WINDOW_SIZE) : combined
 
     if (this.totalChars < DEGENERATION_ENABLE_THRESHOLD) return { triggered: false }
     if (this.charsSinceLastSample < DEGENERATION_SAMPLE_INTERVAL) return { triggered: false }
@@ -268,7 +305,7 @@ export interface Handle {
       output: string
       attachments?: SessionV1.FilePart[]
     },
-  ) => Effect.Effect<void>
+  ) => Effect.Effect<void, unknown>
   readonly process: (streamInput: LLM.StreamInput) => Effect.Effect<Result>
 }
 
@@ -283,6 +320,8 @@ type Input = {
    * Absent only in legacy callers that have not been updated yet.
    */
   sequenceTracker?: ToolSequenceTracker
+  loopPolicy?: "ask" | "error"
+  noProgressLimit?: number
 }
 
 export interface Interface {
@@ -365,13 +404,19 @@ export const layer = Layer.effect(
           aborted,
         })
 
-      const settleToolCall = Effect.fn("SessionProcessor.settleToolCall")(function* (toolCallID: string) {
+      const settleToolCall = Effect.fn("SessionProcessor.settleToolCall")(function* (
+        toolCallID: string,
+        toolName?: string,
+        result?: unknown,
+        progress?: { snapshot: string | undefined; plan: unknown },
+      ) {
         // Notify the activity-level tracker that this call has finished so it
         // satisfies the "prior calls must be done" precondition for detection.
-        ctx.sequenceTracker?.markDone(toolCallID)
+        const noProgress = ctx.sequenceTracker?.markDone(toolCallID, toolName, result, progress)
         const done = ctx.toolcalls[toolCallID]?.done
         delete ctx.toolcalls[toolCallID]
         if (done) yield* Deferred.succeed(done, undefined).pipe(Effect.ignore)
+        return noProgress
       })
 
       const ensureV2AssistantMessage = Effect.fn("SessionProcessor.ensureV2AssistantMessage")(function* () {
@@ -456,7 +501,33 @@ export const layer = Layer.effect(
             attachments: output.attachments,
           },
         })
-        yield* settleToolCall(toolCallID)
+        const noProgress = yield* settleToolCall(
+          toolCallID,
+          match.part.tool,
+          output,
+          input.noProgressLimit
+            ? {
+                snapshot: yield* snapshot.track(),
+                plan: AgentGateway.DeepAgentSessionState.getPlan(ctx.sessionID),
+              }
+            : undefined,
+        )
+        if (input.noProgressLimit && noProgress && noProgress.count >= input.noProgressLimit) {
+          slog.warn("subagent.loop.detected", {
+            fingerprint_kind: "tool_result",
+            period: 1,
+            count: noProgress.count,
+            tool: match.part.tool,
+          })
+          yield* Effect.fail(
+            new SessionV1.TaskBudgetExceededError({
+              message: `Non-interactive activity stopped after ${noProgress.count} equivalent ${match.part.tool} results without observable progress.`,
+              budget: "no_progress",
+              limit: input.noProgressLimit,
+              used: noProgress.count,
+            }),
+          )
+        }
       })
 
       const failToolCall = Effect.fn("SessionProcessor.failToolCall")(function* (toolCallID: string, error: unknown) {
@@ -628,9 +699,7 @@ export const layer = Layer.effect(
             // Summary (compaction) processors are excluded — they are short-lived
             // and use a distinct reasoning style that should never be circuit-broken.
             if (!ctx.assistantMessage.summary) {
-              ctx.degenerationDetectors[value.id] = new DegenerationDetector(
-                flags.degenerationDetectorMode,
-              )
+              ctx.degenerationDetectors[value.id] = new DegenerationDetector(flags.degenerationDetectorMode)
             }
             yield* session.updatePart(ctx.reasoningMap[value.id])
             return
@@ -785,10 +854,26 @@ export const layer = Layer.effect(
             // F1: Activity-level cross-message loop detection (primary path)
             // ---------------------------------------------------------------
             if (ctx.sequenceTracker) {
-              const fp = toolFingerprint(value.name, input)
+              const fp = ctx.sequenceTracker.fingerprint(value.name, input)
               ctx.sequenceTracker.push(value.id, fp)
               const detected = ctx.sequenceTracker.detect()
               if (detected && !ctx.sequenceTracker.hasTriggered(detected.sequenceKey)) {
+                slog.warn("subagent.loop.detected", {
+                  fingerprint_kind: "tool_input_sequence",
+                  period: detected.period,
+                  count: detected.count,
+                  tool: value.name,
+                })
+                if (ctx.loopPolicy === "error") {
+                  return yield* Effect.fail(
+                    new SessionV1.DoomLoopError({
+                      message: `Non-interactive activity stopped after a repeated ${value.name} tool sequence was detected.`,
+                      tool: value.name,
+                      period: detected.period,
+                      count: detected.count,
+                    }),
+                  )
+                }
                 const agent = yield* agents.get(ctx.assistantMessage.agent)
                 yield* permission.ask({
                   permission: "doom_loop",
@@ -831,14 +916,22 @@ export const layer = Layer.effect(
               !singleRepeat &&
               detectRepeatingSequence(
                 parts
-                  .filter(
-                    (part): part is SessionV1.ToolPart =>
-                      part.type === "tool" && part.state.status !== "pending",
-                  )
+                  .filter((part): part is SessionV1.ToolPart => part.type === "tool" && part.state.status !== "pending")
                   .map((part) => `${part.tool}:${JSON.stringify(part.state.input)}`),
               )
 
             if (!singleRepeat && !sequenceRepeat) return
+
+            if (ctx.loopPolicy === "error") {
+              return yield* Effect.fail(
+                new SessionV1.DoomLoopError({
+                  message: `Non-interactive activity stopped after a repeated ${value.name} tool sequence was detected.`,
+                  tool: value.name,
+                  period: sequenceRepeat ? 2 : 1,
+                  count: DOOM_LOOP_MIN_REPEATS,
+                }),
+              )
+            }
 
             const agent = yield* agents.get(ctx.assistantMessage.agent)
             yield* permission.ask({
@@ -1006,9 +1099,9 @@ export const layer = Layer.effect(
             // Response-side prompt-cache monitor: compare this step's real cache-read ratio to the
             // previous step and warn if it collapsed while the prompt didn't shrink (suspected cache
             // break the static system-hash tripwire can't see). Diagnostic only; never throws.
-            yield* Effect.sync(() =>
-              LLMRequestPrep.recordCacheHitOutcome(ctx.sessionID, usage.tokens),
-            ).pipe(Effect.ignore)
+            yield* Effect.sync(() => LLMRequestPrep.recordCacheHitOutcome(ctx.sessionID, usage.tokens)).pipe(
+              Effect.ignore,
+            )
             if (!ctx.assistantMessage.summary) {
               // TODO(v2): Temporary dual-write while migrating session messages to v2 events.
               if (mirrorAssistant) {
@@ -1197,12 +1290,16 @@ export const layer = Layer.effect(
           const match = yield* readToolCall(toolCallID)
           if (!match) continue
           const part = match.part
+          const incompleteInput = part.state.status === "pending"
+          const toolError = incompleteInput
+            ? "Tool input was incomplete and was not executed"
+            : "Tool execution aborted"
           if (mirrorAssistant && match.call.assistantMessageID) {
             yield* events.publish(SessionEvent.Tool.Failed, {
               sessionID: ctx.sessionID,
               assistantMessageID: match.call.assistantMessageID,
               callID: toolCallID,
-              error: { type: "unknown", message: "Tool execution aborted" },
+              error: { type: "unknown", message: toolError },
               provider: { executed: part.metadata?.providerExecuted === true },
               timestamp: DateTime.makeUnsafe(Date.now()),
             })
@@ -1214,8 +1311,8 @@ export const layer = Layer.effect(
             state: {
               ...part.state,
               status: "error",
-              error: "Tool execution aborted",
-              metadata: { ...metadata, interrupted: true },
+              error: toolError,
+              metadata: { ...metadata, interrupted: true, incompleteInput },
               time: { start: "time" in part.state ? part.state.time.start : end, end },
             },
           })
