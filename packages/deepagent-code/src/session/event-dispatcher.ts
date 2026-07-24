@@ -513,7 +513,10 @@ export const layerWith = (options?: LayerOptions) =>
             Effect.forkScoped,
           )
         // wait until the group is registered before the layer is considered ready.
-        yield* Deferred.await(ready)
+        // Timeout guards against DB-stall (busy WAL/retention sweep): durable registration already
+        // happened via registerConsumerGroup above, so a brief live-stream miss is recoverable via
+        // the retry pump. 500ms is well above normal fiber-schedule latency (<1ms).
+        yield* Deferred.await(ready).pipe(Effect.timeout(Duration.millis(500)), Effect.ignore)
 
         yield* tick()
           .pipe(
