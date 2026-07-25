@@ -129,7 +129,7 @@
     },
     "packages/core": {
       "name": "@deepagent-code/core",
-      "version": "1.0.0-beta",
+      "version": "4.0.4-r8",
       "bin": {
         "deepagent-code": "./bin/deepagent-code",
       },

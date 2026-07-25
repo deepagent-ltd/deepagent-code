@@ -165,4 +165,3 @@ export const FixedDragDropSensors = (props: { children?: JSXElement }): JSXEleme
   createFixedPointerSensor()
   return props.children as JSXElement
 }
-
