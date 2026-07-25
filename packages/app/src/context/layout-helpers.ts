@@ -5,6 +5,50 @@ export type PanelLocation = "bottom" | "side"
 
 export const PANEL_VIEWS: readonly PanelView[] = ["terminal", "debug-console", "problems"]
 
+const RIGHT_PANEL_MODES = new Set([
+  "review",
+  "files",
+  "worktree",
+  "subagents",
+  "browser",
+  "mcp",
+  "plugins",
+  "profile",
+  "debug",
+  "im",
+  "terminal",
+  "debug-console",
+  "problems",
+])
+const RIGHT_PANEL_FAILURE_THRESHOLD = 2
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value)
+
+export function migrateRightPanelSessionView(sessionView: unknown, build: string) {
+  if (!isRecord(sessionView)) return sessionView
+  let changed = false
+  const next = Object.fromEntries(
+    Object.entries(sessionView).map(([key, raw]) => {
+      if (!isRecord(raw)) return [key, raw]
+      const storedMode = raw.rightPanelMode
+      const mode = storedMode === "oversight" ? "subagents" : storedMode
+      const validMode = typeof mode === "string" && RIGHT_PANEL_MODES.has(mode) ? mode : undefined
+      const failure = isRecord(raw.rightPanelFailure) ? raw.rightPanelFailure : undefined
+      const quarantined =
+        validMode !== undefined &&
+        failure?.mode === validMode &&
+        failure.build === build &&
+        typeof failure.count === "number" &&
+        failure.count >= RIGHT_PANEL_FAILURE_THRESHOLD
+      if (storedMode === validMode && !quarantined) return [key, raw]
+      changed = true
+      return [key, { ...raw, rightPanelMode: quarantined ? undefined : validMode }]
+    }),
+  )
+  return changed ? next : sessionView
+}
+
 export type BottomPanelState = {
   opened: boolean
   activeView?: PanelView
@@ -77,9 +121,7 @@ export const togglePanel = <Mode extends string>(
   return state
 }
 
-export const toggleBottomPanel = <Mode extends string>(
-  input: PanelTransitionInput<Mode>,
-): PanelSessionState<Mode> => {
+export const toggleBottomPanel = <Mode extends string>(input: PanelTransitionInput<Mode>): PanelSessionState<Mode> => {
   const state = clonePanelState(input.state)
   if (state.bottomPanel.opened) {
     state.bottomPanel.opened = false
@@ -90,7 +132,8 @@ export const toggleBottomPanel = <Mode extends string>(
   state.bottomPanel = {
     opened: true,
     activeView:
-      state.bottomPanel.activeView && panelHost(input.locations[state.bottomPanel.activeView], input.sideAvailable) === "bottom"
+      state.bottomPanel.activeView &&
+      panelHost(input.locations[state.bottomPanel.activeView], input.sideAvailable) === "bottom"
         ? state.bottomPanel.activeView
         : fallback,
   }

@@ -14,7 +14,7 @@
   <a href="https://github.com/deepagent-ltd/deepagent-code-enterprise">Enterprise</a>
 </p>
 
-<p align="center"><sub>Desktop 1.4.2 · DeepAgent Core V4.0.4</sub></p>
+<p align="center"><sub>Desktop 1.4.3 · DeepAgent Core V4.0.4_r8</sub></p>
 
 ---
 
@@ -91,16 +91,18 @@ For high-risk decisions, convene an **Expert Panel**. Correctness, security, per
 
 Project IM brings people and agents into the same thread. Mention an agent to start a scoped run with project context, stream its progress, inspect its artifacts, and keep the answer attached to the conversation that requested it.
 
-## DeepAgent Core V4.0.4
+## DeepAgent Core V4.0.4_r8
 
-V4.0.4 closes production contract gaps while keeping the current turn engine stable:
+Desktop 1.4.3 ships the eighth reliability revision of the V4.0.4 contract. This release hardens the boundaries where long-running and delegated work previously risked duplicate execution, ambiguous completion, or renderer-wide failure:
 
-- **Single durable truth:** DocumentStore uses atomic, recoverable writes for documents, plans, learning candidates, governance state, and version conflicts.
-- **Isolated subagents:** write-capable subagents use dedicated worktrees by default and return their changes to the parent workspace through a bounded, conflict-aware path.
-- **Reliable event delivery:** the Event Bus has a transport seam, durable consumer offsets, offline catch-up, real priority ordering, and observable queue depth.
-- **Governed learning and goals:** knowledge promotion is tied to review evidence and ship-gate snapshots; event-driven goal ticks remain idempotent and respect quiet hours.
-- **Secure integrations:** MCP credentials use environment references or native OS secret storage on macOS, Linux, and Windows; capability and source checks fail closed.
-- **Publishing truth:** installation, CLI examples, release metadata, public domains, and supported-version documentation match the product that is actually shipped.
+- **Durable subagent execution:** TaskRun admission, generation, ownership, leases, settlement, and parent delivery are persisted. Exact retries reconcile to the original run, terminal state uses transactional compare-and-set, and a leased outbox makes completion delivery recoverable without re-running provider work.
+- **Two-stage structured finalization:** research and structured output are separate phases. The finalizer is a bounded single turn with thinking disabled when supported, only the `StructuredOutput` tool visible, no historical task or compaction payload, and no empty-success path.
+- **Fail-closed model and tool boundaries:** provider capability decisions no longer silently relax required tool choice, invalid tool input is rejected before execution, and provider, schema, permission, interruption, timeout, and doom-loop failures keep distinct recoverable terminal reasons.
+- **Semantic no-progress protection:** shell activity uses semantic fingerprints, while the no-progress budget compares bounded results, workspace state, and plan progress so cosmetic command changes cannot evade loop detection.
+- **Contained supervision UI:** subagent controls use valid sibling interactions, display real terminal state, and run behind a local ErrorBoundary with retry, close, persisted-mode validation, same-build quarantine, and recovery after build changes.
+- **Release-grade verification:** the affected Core, runtime, app, and desktop paths are covered by exact-retry, failure-injection, production Chromium, Electron cold-start, and source-map smoke tests.
+
+V4.0.4_r8 retains the durable documents, event delivery, governed learning, isolated worktrees, and secure credential boundaries introduced across the earlier V4.0.4 revisions.
 
 ## Installation
 

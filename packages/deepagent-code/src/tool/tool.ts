@@ -84,6 +84,8 @@ export interface Def<
   parameters: Parameters
   jsonSchema?: JSONSchema7
   provenance?: Provenance
+  semanticFingerprint?(input: Schema.Schema.Type<Parameters>): unknown
+  resultFingerprint?(result: ExecuteResult<M>): unknown
   execute(args: Schema.Schema.Type<Parameters>, ctx: Context): Effect.Effect<ExecuteResult<M>>
   formatValidationError?(error: unknown): string
 }
