@@ -1,13 +1,6 @@
 import { createEffect, createMemo, For, Show, type Accessor, type JSX } from "solid-js"
-import {
-  DragDropProvider,
-  DragDropSensors,
-  DragOverlay,
-  SortableProvider,
-  closestCenter,
-  type DragEvent,
-} from "@thisbeyond/solid-dnd"
-import { ConstrainDragXAxis } from "@/utils/solid-dnd"
+import { DragDropProvider, DragOverlay, SortableProvider, closestCenter, type DragEvent } from "@thisbeyond/solid-dnd"
+import { ConstrainDragXAxis, FixedDragDropSensors } from "@/utils/solid-dnd"
 import { IconButton } from "@deepagent-code/ui/icon-button"
 import { Tooltip, TooltipKeybind } from "@deepagent-code/ui/tooltip"
 import { type LocalProject } from "@/context/layout"
@@ -17,7 +10,7 @@ export const SidebarContent = (props: {
   opened: Accessor<boolean>
   aimMove: (event: MouseEvent) => void
   projects: Accessor<LocalProject[]>
-  renderProject: (project: LocalProject) => JSX.Element
+  renderProject: (project: Accessor<LocalProject>) => JSX.Element
   handleDragStart: (event: unknown) => void
   handleDragEnd: () => void
   handleDragOver: (event: DragEvent) => void
@@ -72,11 +65,18 @@ export const SidebarContent = (props: {
             onDragOver={props.handleDragOver}
             collisionDetector={closestCenter}
           >
-            <DragDropSensors />
+            <FixedDragDropSensors />
             <ConstrainDragXAxis />
             <div class="h-full w-full flex flex-col items-center gap-3 px-3 py-3 overflow-y-auto no-scrollbar">
               <SortableProvider ids={props.projects().map((p) => p.worktree)}>
-                <For each={props.projects()}>{(project) => props.renderProject(project)}</For>
+                {/* Keep component identity on worktree; project objects are rebuilt by list(). */}
+                <For each={props.projects().map((p) => p.worktree)}>
+                  {(worktree) => {
+                    const initial = props.projects().find((p) => p.worktree === worktree)!
+                    const project = createMemo(() => props.projects().find((p) => p.worktree === worktree) ?? initial)
+                    return props.renderProject(project)
+                  }}
+                </For>
               </SortableProvider>
               <Tooltip
                 placement={placement()}

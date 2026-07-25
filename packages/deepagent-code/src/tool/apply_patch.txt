@@ -31,3 +31,4 @@ It is important to remember:
 
 - You must include a header with your intended action (Add/Delete/Update)
 - You must prefix new lines with `+` even when creating a new file
+- If the patch would exceed 12000 UTF-8 bytes (roughly 4000 Chinese characters), use `apply_patch_chunk` instead. Begin at offset 0, then use each result's nextOffset for every append and the final commit. Do not embed a large patch in one JSON tool call.

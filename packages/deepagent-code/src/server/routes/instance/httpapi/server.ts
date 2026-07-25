@@ -10,6 +10,7 @@ import {
 } from "effect/unstable/http"
 import * as Socket from "effect/unstable/socket/Socket"
 import { FSUtil } from "@deepagent-code/core/fs-util"
+import { EffectFlock } from "@deepagent-code/core/util/effect-flock"
 import { FileLock } from "@deepagent-code/core/file-lock"
 import { Account } from "@/account/account"
 import { Agent } from "@/agent/agent"
@@ -17,6 +18,7 @@ import { Auth } from "@/auth"
 import { BackgroundJob } from "@/background/job"
 import { Config } from "@/config/config"
 import { Command } from "@/command"
+import { Env } from "@/env"
 import * as Observability from "@deepagent-code/core/effect/observability"
 import { Ripgrep } from "@deepagent-code/core/filesystem/ripgrep"
 import { Format } from "@/format"
@@ -330,6 +332,7 @@ export function createRoutes(
       BackgroundJob.defaultLayer,
       Command.defaultLayer,
       Config.defaultLayer,
+      Env.defaultLayer,
       Format.defaultLayer,
       LSP.defaultLayer,
       LLM.defaultLayer,
@@ -373,6 +376,7 @@ export function createRoutes(
       Workspace.defaultLayer,
       Worktree.appLayer,
       FSUtil.defaultLayer,
+      EffectFlock.defaultLayer,
       FileLock.layer,
       FetchHttpClient.layer,
       HttpServer.layerServices,

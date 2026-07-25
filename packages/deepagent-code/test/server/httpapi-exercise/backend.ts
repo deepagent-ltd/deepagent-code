@@ -118,7 +118,17 @@ function authProbePath(path: string) {
 }
 
 async function capture(response: Response, mode: CaptureMode): Promise<CallResult> {
-  const text = mode === "stream" ? await captureStream(response) : await response.text()
+  const text =
+    mode === "stream"
+      ? await captureStream(response)
+      : mode === "headers"
+        ? response.body
+          ? await response.body.cancel().then(
+              () => "",
+              () => "",
+            )
+          : ""
+        : await response.text()
   return {
     status: response.status,
     contentType: response.headers.get("content-type") ?? "",

@@ -115,14 +115,15 @@ export const SessionGroup = HttpApiGroup.make("server.session")
         resume: Schema.Boolean.pipe(Schema.optional),
       }),
       success: Schema.Struct({ data: SessionInput.Admitted }),
-      error: [ConflictError, SessionNotFoundError],
+      error: [ConflictError, ServiceUnavailableError, SessionNotFoundError],
     })
       .middleware(SessionLocationMiddleware)
       .annotateMerge(
         OpenApi.annotations({
           identifier: "v2.session.prompt",
           summary: "Send message",
-          description: "Durably admit one session input and schedule agent-loop execution unless resume is false.",
+          description:
+            "Durably admit one session input when resume is false. This endpoint does not execute the production SessionPrompt engine.",
         }),
       ),
   )
