@@ -240,6 +240,110 @@ describe("session.llm.hasToolCalls", () => {
   })
 })
 
+describe("session.llm.decideToolChoice", () => {
+  const model = (npm: string, id = "test-model", options: { toolcall?: boolean; reasoning?: boolean } = {}) =>
+    ({
+      id: ModelV2.ID.make(id),
+      providerID: ProviderV2.ID.make("test"),
+      api: { id, url: "https://example.test", npm },
+      name: id,
+      capabilities: {
+        toolcall: options.toolcall ?? true,
+        reasoning: options.reasoning ?? false,
+        attachment: false,
+        temperature: true,
+        input: { text: true, audio: false, image: false, video: false, pdf: false },
+        output: { text: true, audio: false, image: false, video: false, pdf: false },
+        interleaved: false,
+      },
+      cost: { input: 0, output: 0, cache: { read: 0, write: 0 } },
+      limit: { context: 100_000, input: 100_000, output: 10_000 },
+      status: "active",
+      options: {},
+      headers: {},
+      release_date: "2026-01-01",
+    }) satisfies Provider.Model
+
+  test("fails closed instead of silently relaxing required under thinking", () => {
+    expect(LLM.decideToolChoice("required", { reasoningEffort: "high" })).toEqual({
+      capability: "unsupported_thinking_with_forced_tool",
+    })
+  })
+
+  test("allows required after the caller disables thinking", () => {
+    expect(LLM.decideToolChoice("required", {})).toEqual({
+      capability: "forced_tool",
+      toolChoice: "required",
+    })
+  })
+
+  test("declares the bounded auto-only fallback", () => {
+    expect(LLM.decideToolChoice("auto", { reasoningEffort: "high" })).toEqual({
+      capability: "auto_only",
+      toolChoice: "auto",
+    })
+  })
+
+  test.each([
+    ["@ai-sdk/openai", "openai_responses"],
+    ["@ai-sdk/openai-compatible", "openai_chat"],
+    ["@ai-sdk/anthropic", "anthropic_messages"],
+    ["@ai-sdk/google", "gemini"],
+    ["@ai-sdk/amazon-bedrock", "bedrock_converse"],
+  ] as const)("uses forced finalization for verified %s protocol", (npm, protocol) => {
+    expect(LLM.finalizerCapability(model(npm))).toEqual({
+      capability: "forced_tool",
+      protocol,
+      reasoning: "disabled",
+      toolChoice: "required",
+    })
+  })
+
+  test("reasoning-only models use bounded auto without an unsupported forced combination", () => {
+    expect(LLM.finalizerCapability(model("@ai-sdk/openai", "o3", { reasoning: true }))).toEqual({
+      capability: "auto_only",
+      protocol: "openai_responses",
+      reasoning: "inherit",
+      toolChoice: "auto",
+      reason: "reasoning_cannot_be_disabled",
+    })
+  })
+
+  test("unknown protocols use bounded auto and ordinary required callers fail closed", () => {
+    const custom = model("file:///custom-provider.ts")
+    expect(LLM.finalizerCapability(custom)).toMatchObject({
+      capability: "auto_only",
+      protocol: "unknown",
+      reason: "protocol_forced_tool_unverified",
+    })
+    expect(LLM.decideToolChoice("required", {}, custom)).toEqual({ capability: "unsupported_forced_tool" })
+  })
+
+  test("models without tool calls reject structured finalization before provider execution", () => {
+    expect(LLM.finalizerCapability(model("@ai-sdk/openai", "text-only", { toolcall: false }))).toMatchObject({
+      capability: "unsupported",
+      reason: "model_has_no_tool_call_capability",
+    })
+  })
+
+  test("per-turn disable removes merged reasoning options without mutating defaults", () => {
+    const options = {
+      reasoningEffort: "high",
+      thinking: { type: "enabled" },
+      thinkingConfig: { thinkingBudget: 16_000 },
+      enable_thinking: true,
+      chat_template_args: { enable_thinking: true, other: "kept" },
+      modelParams: { reasoning: { effort: "high" }, temperature: 0 },
+    }
+    expect(LLM.disableThinking(options)).toEqual({
+      enable_thinking: false,
+      chat_template_args: { enable_thinking: false, other: "kept" },
+      modelParams: { temperature: 0 },
+    })
+    expect(options.reasoningEffort).toBe("high")
+  })
+})
+
 describe("session.llm.ai-sdk adapter", () => {
   type AISDKAdapterEvent = Parameters<typeof LLMAISDK.toLLMEvents>[1]
 
@@ -385,6 +489,28 @@ describe("session.llm.ai-sdk adapter", () => {
       { type: "text-end", id: "text-0" },
       { type: "reasoning-delta", id: "reasoning-0", text: "implicit reasoning" },
       { type: "reasoning-end", id: "reasoning-0" },
+    ])
+  })
+
+  test("maps raw apply_patch input to the canonical executor shape", async () => {
+    const patch = "*** Begin Patch\n*** End Patch"
+    const events = await adapt([
+      uncheckedAdapterEvent({
+        type: "tool-call",
+        toolCallId: "call-patch",
+        toolName: "apply_patch",
+        input: patch,
+      }),
+    ])
+
+    expect(events).toEqual([
+      {
+        type: "tool-call",
+        id: "call-patch",
+        name: "apply_patch",
+        input: { patchText: patch },
+        providerMetadata: { deepagent: { toolType: "custom" } },
+      },
     ])
   })
 
@@ -1333,9 +1459,7 @@ describe("session.llm.stream", () => {
               }),
           }),
         )
-        const injectedClient = LLMClient.layer.pipe(
-          Layer.provide(Layer.mergeAll(executor, WebSocketExecutor.layer)),
-        )
+        const injectedClient = LLMClient.layer.pipe(Layer.provide(Layer.mergeAll(executor, WebSocketExecutor.layer)))
         const sessionID = SessionID.make("session-test-native-injected-tool")
         const agent = {
           name: "test",

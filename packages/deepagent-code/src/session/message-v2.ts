@@ -9,12 +9,14 @@ import {
   AuthError,
   CompactionPart,
   ContextOverflowError,
+  DoomLoopError,
   Info,
   OutputDegenerationError,
   OutputLengthError,
   Part,
   StructuredOutputError,
   SubtaskPart,
+  TaskBudgetExceededError,
   User,
   WithParts,
   type ToolPart,
@@ -160,6 +162,13 @@ function providerMeta(metadata: Record<string, any> | undefined) {
   if (!metadata) return undefined
   const { providerExecuted: _, ...rest } = metadata
   return Object.keys(rest).length > 0 ? rest : undefined
+}
+
+function toolCallProviderMeta(metadata: Record<string, any> | undefined, differentModel: boolean) {
+  const type = metadata?.deepagent?.toolType
+  if (type !== "custom" && type !== "function") return differentModel ? undefined : providerMeta(metadata)
+  if (!differentModel) return providerMeta(metadata)
+  return { deepagent: { toolType: type } }
 }
 
 export const toModelMessagesEffect = Effect.fnUntraced(function* (
@@ -353,7 +362,9 @@ export const toModelMessagesEffect = Effect.fnUntraced(function* (
               input: part.state.input,
               output,
               ...(part.metadata?.providerExecuted ? { providerExecuted: true } : {}),
-              ...(differentModel ? {} : { callProviderMetadata: providerMeta(part.metadata) }),
+              ...(toolCallProviderMeta(part.metadata, differentModel)
+                ? { callProviderMetadata: toolCallProviderMeta(part.metadata, differentModel) }
+                : {}),
             })
           }
           if (part.state.status === "error") {
@@ -366,7 +377,9 @@ export const toModelMessagesEffect = Effect.fnUntraced(function* (
                 input: part.state.input,
                 output,
                 ...(part.metadata?.providerExecuted ? { providerExecuted: true } : {}),
-                ...(differentModel ? {} : { callProviderMetadata: providerMeta(part.metadata) }),
+                ...(toolCallProviderMeta(part.metadata, differentModel)
+                  ? { callProviderMetadata: toolCallProviderMeta(part.metadata, differentModel) }
+                  : {}),
               })
             } else {
               assistantMessage.parts.push({
@@ -376,7 +389,9 @@ export const toModelMessagesEffect = Effect.fnUntraced(function* (
                 input: part.state.input,
                 errorText: part.state.error,
                 ...(part.metadata?.providerExecuted ? { providerExecuted: true } : {}),
-                ...(differentModel ? {} : { callProviderMetadata: providerMeta(part.metadata) }),
+                ...(toolCallProviderMeta(part.metadata, differentModel)
+                  ? { callProviderMetadata: toolCallProviderMeta(part.metadata, differentModel) }
+                  : {}),
               })
             }
           }
@@ -390,7 +405,9 @@ export const toModelMessagesEffect = Effect.fnUntraced(function* (
               input: part.state.input,
               errorText: "[Tool execution was interrupted]",
               ...(part.metadata?.providerExecuted ? { providerExecuted: true } : {}),
-              ...(differentModel ? {} : { callProviderMetadata: providerMeta(part.metadata) }),
+              ...(toolCallProviderMeta(part.metadata, differentModel)
+                ? { callProviderMetadata: toolCallProviderMeta(part.metadata, differentModel) }
+                : {}),
             })
         }
         if (part.type === "reasoning") {
@@ -655,6 +672,10 @@ export function fromError(
     case OutputLengthError.isInstance(e):
       return e
     case OutputDegenerationError.isInstance(e):
+      return e
+    case DoomLoopError.isInstance(e):
+      return e
+    case TaskBudgetExceededError.isInstance(e):
       return e
     case LoadAPIKeyError.isInstance(e):
       return new AuthError(

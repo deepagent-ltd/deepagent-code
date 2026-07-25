@@ -39,6 +39,18 @@ export const StructuredOutputError = NamedError.create("StructuredOutputError", 
   message: Schema.String,
   retries: NonNegativeInt,
 })
+export const DoomLoopError = NamedError.create("DoomLoopError", {
+  message: Schema.String,
+  tool: Schema.String,
+  period: NonNegativeInt,
+  count: NonNegativeInt,
+})
+export const TaskBudgetExceededError = NamedError.create("TaskBudgetExceededError", {
+  message: Schema.String,
+  budget: Schema.Literals(["steps", "tokens", "wall_time", "no_progress"]),
+  limit: NonNegativeInt,
+  used: NonNegativeInt,
+})
 export const APIError = NamedError.create("APIError", {
   message: Schema.String,
   statusCode: Schema.optional(NonNegativeInt),
@@ -394,6 +406,8 @@ const AssistantErrorSchema = Schema.Union([
   OutputLengthError.EffectSchema,
   AbortedError.EffectSchema,
   StructuredOutputError.EffectSchema,
+  DoomLoopError.EffectSchema,
+  TaskBudgetExceededError.EffectSchema,
   ContextOverflowError.EffectSchema,
   APIError.EffectSchema,
   OutputDegenerationError.EffectSchema,

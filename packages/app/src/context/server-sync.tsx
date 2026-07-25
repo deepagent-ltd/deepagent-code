@@ -50,6 +50,8 @@ import type { SessionPlan, SessionPlanStep, SessionGoal } from "./global-sync/ty
 
 export type { SessionPlan, SessionPlanStep, SessionGoal }
 
+const PROVIDER_MODEL_REFRESH_INTERVAL_MS = 24 * 60 * 60 * 1000
+
 type GlobalStore = {
   ready: boolean
   error?: InitError
@@ -546,6 +548,9 @@ export function createServerSyncContextInner(_serverSDK?: ServerSDK) {
       predicate: (query) => query.queryKey[0] === serverSDK.scope && query.queryKey[2] === "providers",
     })
   }
+
+  const providerRefreshTimer = setInterval(refreshProviders, PROVIDER_MODEL_REFRESH_INTERVAL_MS)
+  onCleanup(() => clearInterval(providerRefreshTimer))
 
   const updateConfigMutation = useMutation(() => ({
     mutationFn: (config: Config) => serverSDK.client.global.config.update({ config }),

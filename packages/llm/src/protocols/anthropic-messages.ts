@@ -6,14 +6,15 @@ import { Framing } from "../route/framing"
 import { Protocol } from "../route/protocol"
 import {
   LLMEvent,
+  ToolDefinition,
   Usage,
+  type FunctionToolDefinition,
   type CacheHint,
   type FinishReason,
   type LLMRequest,
   type MediaPart,
   type ProviderMetadata,
   type ToolCallPart,
-  type ToolDefinition,
   type ToolResultContentPart,
   type ToolResultPart,
 } from "../schema"
@@ -220,6 +221,7 @@ type AnthropicEvent = Schema.Schema.Type<typeof AnthropicEvent>
 
 interface ParserState {
   readonly tools: ToolStream.State<number>
+  readonly pendingToolEvents: ReadonlyArray<LLMEvent>
   readonly usage?: Usage
   readonly lifecycle: Lifecycle.State
 }
@@ -256,7 +258,7 @@ const signatureFromMetadata = (metadata: ProviderMetadata | undefined): string |
   return typeof anthropic.signature === "string" ? anthropic.signature : undefined
 }
 
-const lowerTool = (breakpoints: Cache.Breakpoints, tool: ToolDefinition): AnthropicTool => ({
+const lowerTool = (breakpoints: Cache.Breakpoints, tool: FunctionToolDefinition): AnthropicTool => ({
   name: tool.name,
   description: tool.description,
   input_schema: tool.inputSchema,
@@ -502,6 +504,8 @@ const lowerThinking = Effect.fn("AnthropicMessages.lowerThinking")(function* (re
 })
 
 const fromRequest = Effect.fn("AnthropicMessages.fromRequest")(function* (request: LLMRequest) {
+  if (!request.tools.every(ToolDefinition.isFunction))
+    return yield* invalid("Anthropic Messages does not support custom text tools")
   const toolChoice = request.toolChoice ? yield* lowerToolChoice(request.toolChoice) : undefined
   const generation = request.generation
   // Allocate the 4-breakpoint budget in invalidation order: tools → system →
@@ -756,30 +760,43 @@ const onContentBlockStop = Effect.fn("AnthropicMessages.onContentBlockStop")(fun
 ) {
   if (event.index === undefined) return [state, NO_EVENTS] satisfies StepResult
   const result = yield* ToolStream.finish(ADAPTER, state.tools, event.index)
-  const events: LLMEvent[] = []
   const resultEvents = result.events ?? []
-  const lifecycle = resultEvents.length
-    ? Lifecycle.stepStart(state.lifecycle, events)
-    : Lifecycle.reasoningEnd(
-        Lifecycle.textEnd(state.lifecycle, events, `text-${event.index}`),
-        events,
-        `reasoning-${event.index}`,
-      )
-  events.push(...resultEvents)
+  if (resultEvents.some((item) => item.type === "tool-call" && item.providerExecuted === true)) {
+    const events: LLMEvent[] = []
+    const lifecycle = Lifecycle.stepStart(state.lifecycle, events)
+    events.push(...resultEvents)
+    return [{ ...state, lifecycle, tools: result.tools }, events] satisfies StepResult
+  }
+  if (resultEvents.length)
+    return [
+      { ...state, tools: result.tools, pendingToolEvents: [...state.pendingToolEvents, ...resultEvents] },
+      NO_EVENTS,
+    ] satisfies StepResult
+  const events: LLMEvent[] = []
+  const lifecycle = Lifecycle.reasoningEnd(
+    Lifecycle.textEnd(state.lifecycle, events, `text-${event.index}`),
+    events,
+    `reasoning-${event.index}`,
+  )
   return [{ ...state, lifecycle, tools: result.tools }, events] satisfies StepResult
 })
 
 const onMessageDelta = (state: ParserState, event: AnthropicEvent): StepResult => {
   const usage = mergeUsage(state.usage, mapUsage(event.usage))
-  const events: LLMEvent[] = []
+  const reason = mapFinishReason(event.delta?.stop_reason)
+  const releaseTools = reason === "stop" || reason === "tool-calls"
+  const events: LLMEvent[] = releaseTools ? [...state.pendingToolEvents] : []
+  const hasLocalToolCall = state.pendingToolEvents.some(
+    (item) => item.type === "tool-call" && item.providerExecuted !== true,
+  )
   const lifecycle = Lifecycle.finish(state.lifecycle, events, {
-    reason: mapFinishReason(event.delta?.stop_reason),
+    reason: releaseTools && hasLocalToolCall ? "tool-calls" : reason,
     usage,
     providerMetadata: event.delta?.stop_sequence
       ? anthropicMetadata({ stopSequence: event.delta.stop_sequence })
       : undefined,
   })
-  return [{ ...state, lifecycle, usage }, events]
+  return [{ ...state, lifecycle, pendingToolEvents: [], usage }, events]
 }
 
 // Prefix `error.type` so overloads, rate limits, and quota errors are visible
@@ -827,7 +844,7 @@ export const protocol = Protocol.make({
   },
   stream: {
     event: Protocol.jsonEvent(AnthropicEvent),
-    initial: () => ({ tools: ToolStream.empty<number>(), lifecycle: Lifecycle.initial() }),
+    initial: () => ({ tools: ToolStream.empty<number>(), pendingToolEvents: [], lifecycle: Lifecycle.initial() }),
     step,
   },
 })
