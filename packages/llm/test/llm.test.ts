@@ -2,7 +2,16 @@ import { describe, expect, test } from "bun:test"
 import { CacheHint, LLM, LLMResponse } from "../src"
 import * as OpenAIChat from "../src/protocols/openai-chat"
 import * as OpenAIResponses from "../src/protocols/openai-responses"
-import { LLMRequest, Message, Model, ToolCallPart, ToolChoice, ToolDefinition, ToolResultPart } from "../src/schema"
+import {
+  FunctionToolDefinition,
+  LLMRequest,
+  Message,
+  Model,
+  ToolCallPart,
+  ToolChoice,
+  ToolDefinition,
+  ToolResultPart,
+} from "../src/schema"
 
 const chatRoute = OpenAIChat.route
 const responsesRoute = OpenAIResponses.route
@@ -102,7 +111,7 @@ describe("llm constructors", () => {
   test("builds tool choices from names and tools", () => {
     const tool = ToolDefinition.make({ name: "lookup", description: "Lookup data", inputSchema: { type: "object" } })
 
-    expect(tool).toBeInstanceOf(ToolDefinition)
+    expect(tool).toBeInstanceOf(FunctionToolDefinition)
     expect(ToolChoice.make("lookup")).toEqual(new ToolChoice({ type: "tool", name: "lookup" }))
     expect(ToolChoice.named("required")).toEqual(new ToolChoice({ type: "tool", name: "required" }))
     expect(ToolChoice.make(tool)).toEqual(new ToolChoice({ type: "tool", name: "lookup" }))

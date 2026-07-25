@@ -1,6 +1,6 @@
 {
   "$schema": "https://json.schemastore.org/package.json",
-  "version": "1.0.0-beta",
+  "version": "4.0.4-r8",
   "name": "@deepagent-code/core",
   "type": "module",
   "license": "AGPL-3.0-or-later",

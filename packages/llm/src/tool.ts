@@ -1,5 +1,6 @@
 import { Effect, JsonSchema, Schema } from "effect"
 import type {
+  CustomToolFormat,
   ToolCallPart,
   ToolContent,
   ToolDefinition as ToolDefinitionClass,
@@ -93,6 +94,7 @@ type TypedToolConfig = {
 type DynamicToolConfig = {
   readonly description: string
   readonly jsonSchema: JsonSchema.JsonSchema
+  readonly format?: CustomToolFormat
   readonly outputSchema?: JsonSchema.JsonSchema
   readonly execute?: (params: unknown, context?: ToolExecuteContext) => Effect.Effect<unknown, ToolFailure>
   readonly toModelOutput?: (input: ToolModelOutputInput<unknown, unknown>) => ReadonlyArray<ToolContent>
@@ -149,6 +151,7 @@ export function make<Parameters extends ToolSchema<any>, Success extends ToolSch
 export function make(config: {
   readonly description: string
   readonly jsonSchema: JsonSchema.JsonSchema
+  readonly format?: CustomToolFormat
   readonly outputSchema?: JsonSchema.JsonSchema
   readonly execute: (params: unknown, context?: ToolExecuteContext) => Effect.Effect<unknown, ToolFailure>
   readonly toModelOutput?: (input: ToolModelOutputInput<unknown, unknown>) => ReadonlyArray<ToolContent>
@@ -157,6 +160,7 @@ export function make(config: {
 export function make(config: {
   readonly description: string
   readonly jsonSchema: JsonSchema.JsonSchema
+  readonly format?: CustomToolFormat
   readonly outputSchema?: JsonSchema.JsonSchema
   readonly execute?: undefined
   readonly toModelOutput?: (input: ToolModelOutputInput<unknown, unknown>) => ReadonlyArray<ToolContent>
@@ -176,12 +180,19 @@ export function make(config: TypedToolConfig | DynamicToolConfig): AnyTool {
       _project: (parameters, callID, output) =>
         project(config.toModelOutput, config.toStructuredOutput, parameters, callID, output),
       _legacyResult: config.toModelOutput === undefined && config.toStructuredOutput === undefined,
-      _definition: new ToolDefinition({
-        name: "",
-        description: config.description,
-        inputSchema: config.jsonSchema,
-        outputSchema: config.outputSchema,
-      }),
+      _definition: config.format
+        ? ToolDefinition.custom({
+            name: "",
+            description: config.description,
+            format: config.format,
+            outputSchema: config.outputSchema,
+          })
+        : ToolDefinition.make({
+            name: "",
+            description: config.description,
+            inputSchema: config.jsonSchema,
+            outputSchema: config.outputSchema,
+          }),
     }
   }
   return {
@@ -196,7 +207,7 @@ export function make(config: TypedToolConfig | DynamicToolConfig): AnyTool {
     _project: (parameters, callID, output) =>
       project(config.toModelOutput, config.toStructuredOutput, parameters, callID, output),
     _legacyResult: false,
-    _definition: new ToolDefinition({
+    _definition: ToolDefinition.make({
       name: "",
       description: config.description,
       inputSchema: toJsonSchema(config.parameters),
@@ -219,14 +230,20 @@ export type Tools = Record<string, AnyTool>
  * is reused.
  */
 export const toDefinitions = (tools: Tools): ReadonlyArray<ToolDefinitionClass> =>
-  Object.entries(tools).map(
-    ([name, item]) =>
-      new ToolDefinition({
-        name,
-        description: item._definition.description,
-        inputSchema: item._definition.inputSchema,
-        outputSchema: item._definition.outputSchema,
-      }),
+  Object.entries(tools).map(([name, item]) =>
+    ToolDefinition.isCustom(item._definition)
+      ? ToolDefinition.custom({
+          name,
+          description: item._definition.description,
+          format: item._definition.format,
+          outputSchema: item._definition.outputSchema,
+        })
+      : ToolDefinition.make({
+          name,
+          description: item._definition.description,
+          inputSchema: item._definition.inputSchema,
+          outputSchema: item._definition.outputSchema,
+        }),
   )
 
 const toJsonSchema = (schema: Schema.Top): JsonSchema.JsonSchema => {
