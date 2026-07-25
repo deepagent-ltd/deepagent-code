@@ -42,11 +42,22 @@ export async function mockDeepAgentCodeServer(page: Page, config: MockServerConf
 
   await page.route("**/*", async (route) => {
     const url = new URL(route.request().url())
-    const targetPort = process.env.PLAYWRIGHT_SERVER_PORT ?? "4096"
+    const targetPort =
+      process.env.PLAYWRIGHT_SERVER_PORT ??
+      (process.env.PLAYWRIGHT_PRODUCTION ? (process.env.PLAYWRIGHT_PORT ?? "3000") : "4096")
     if (url.port !== targetPort) return route.fallback()
+    if (
+      route.request().resourceType() === "document" ||
+      url.pathname.startsWith("/assets/") ||
+      /\.(?:css|html|ico|js|json|map|png|svg|wasm|woff2?)$/.test(url.pathname)
+    ) {
+      return route.fallback()
+    }
 
     const path = url.pathname
-    if (path === "/global/event" || path === "/event") return sse(route, config.events?.())
+    if (path === "/global/event" || path === "/event" || path === "/api/event" || path === "/debug/events") {
+      return sse(route, config.events?.())
+    }
     if (path === "/global/health") return json(route, { healthy: true, version: "test", runtimeId: "runtime-test" })
     if (path === "/pty" && route.request().method() === "GET") return json(route, [...ptys.values()])
     if (path === "/pty" && route.request().method() === "POST") {

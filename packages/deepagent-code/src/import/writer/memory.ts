@@ -4,8 +4,9 @@ import {
   type DurableKnowledgeStore,
   openProjectStore,
   openUserGlobalStore,
+  projectIdForWorkspace,
 } from "@deepagent-code/core/deepagent/durable-knowledge-store"
-import * as KnowledgeSource from "@deepagent-code/core/deepagent/knowledge-source"
+import { isConfiguredFor, projectStoreFor, userGlobalStoreFor } from "@deepagent-code/core/deepagent/knowledge-source"
 import { classifyReview, DEFAULT_CONFIG } from "@deepagent-code/core/deepagent/auto-reviewer"
 import { looksSensitive } from "@deepagent-code/core/deepagent/memory-governance"
 import type { Doc } from "@deepagent-code/core/deepagent/document-store"
@@ -35,7 +36,13 @@ export function stageAndReviewMemories(memories: MemoryItem[], baseDir: string):
   let staged = 0
 
   for (const item of memories) {
-    const store = item.cwd ? openProjectStore(baseDir, item.cwd) : openUserGlobalStore(baseDir)
+    const store = isConfiguredFor(baseDir)
+      ? item.cwd
+        ? projectStoreFor(item.cwd)
+        : userGlobalStoreFor()
+      : item.cwd
+        ? openProjectStore(baseDir, item.cwd)
+        : openUserGlobalStore(baseDir)
     // Dedup store instances so the review pass walks each store once even when
     // many memories share the same root (cwd or user-global).
     const storeKey = item.cwd ?? "__global__"
@@ -49,6 +56,7 @@ export function stageAndReviewMemories(memories: MemoryItem[], baseDir: string):
       body: item.body,
       domain: null,
       scope: item.cwd ? "project-shared" : "user-global",
+      ...(item.cwd ? { projectId: projectIdForWorkspace(item.cwd) } : {}),
       sensitivity: "public",
       risk: "low",
       confidence: { evidence_strength: "weak", support_count: 1 },
@@ -60,7 +68,6 @@ export function stageAndReviewMemories(memories: MemoryItem[], baseDir: string):
   }
 
   const { approved, pending } = autoReviewMemories(stores)
-  invalidateKnowledgeCache()
   return { staged, writtenToInstructions: false, approved, pending }
 }
 
@@ -118,14 +125,6 @@ function shouldAutoApprove(doc: Doc): boolean {
   if (looksLikeSecret(doc.body)) return false
   if (!doc.body || doc.body.trim().length < 10) return false
   return true
-}
-
-function invalidateKnowledgeCache(): void {
-  try {
-    KnowledgeSource.invalidateCache()
-  } catch {
-    /* knowledge-source not configured in this process (e.g. CLI) — safe to skip */
-  }
 }
 
 /**
