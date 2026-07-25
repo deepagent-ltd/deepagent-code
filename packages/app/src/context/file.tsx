@@ -64,6 +64,17 @@ export const { use: useFile, provider: FileProvider } = createSimpleContext({
 
     const scope = createMemo(() => sdk.directory)
     const path = createPathHelpers(scope)
+    // The desktop file-ops/git bridge runs in the local main process, so it is only valid when the
+    // connected sidecar is on the loopback (a remote Server Edition connection must not let the
+    // local bridge touch paths that only exist on the remote host).
+    const isLocalSidecar = createMemo(() => {
+      try {
+        const url = new URL(serverSDK.url)
+        return url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "::1"
+      } catch {
+        return false
+      }
+    })
     const tabs = layout.tabs(() =>
       SessionStateKey.from(serverSDK.scope, SessionRouteKey.fromRoute(params.dir, params.id)),
     )
@@ -252,6 +263,8 @@ export const { use: useFile, provider: FileProvider } = createSimpleContext({
 
     return {
       ready: () => view().ready(),
+      directory: () => scope(),
+      isLocalSidecar,
       normalize: path.normalize,
       tab: path.tab,
       pathFromTab: path.pathFromTab,

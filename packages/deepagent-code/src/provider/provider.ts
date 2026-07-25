@@ -59,6 +59,7 @@ const LEGACY_AUTH_KEY_MESSAGE =
   "Saved API key is no longer used. Only official providers read keys from the key store. Re-add this as a third-party provider in your config and set the key under options.apiKey."
 const DISCOVERY_EMPTY_MESSAGE =
   "Runtime model discovery returned no models. Check the base URL, API key, and that the endpoint implements GET /models, or list models explicitly under provider.<id>.models."
+const MODEL_LIST_REFRESH_INTERVAL_MS = 24 * 60 * 60 * 1000
 
 function providerEnvKey(configuredEnv: string[], envs: Record<string, string | undefined>) {
   const configured = configuredEnv.find((item) => envs[item])
@@ -1109,6 +1110,7 @@ export type Error = ModelNotFoundError | InitError | NoProvidersError | NoModels
 export interface Interface {
   readonly list: () => Effect.Effect<Record<ProviderV2.ID, Info>>
   readonly errors: () => Effect.Effect<ConfigError[]>
+  readonly reload: () => Effect.Effect<void>
   readonly getProvider: (providerID: ProviderV2.ID) => Effect.Effect<Info>
   readonly getModel: (providerID: ProviderV2.ID, modelID: ModelV2.ID) => Effect.Effect<Model, ModelNotFoundError>
   readonly getLanguage: (model: Model) => Effect.Effect<LanguageModelV3, ModelNotFoundError>
@@ -1121,6 +1123,7 @@ export interface Interface {
 }
 
 interface State {
+  loadedAt: number
   models: Map<string, LanguageModelV3>
   providers: Record<ProviderV2.ID, Info>
   catalog: Record<ProviderV2.ID, Info>
@@ -1444,10 +1447,18 @@ export const layer = Layer.effect(
         // Track providers that opted into discovery so the zero-model deletion below can tell a
         // discovery provider that came up empty (worth an error) apart from a normal empty provider.
         const discoveryProviders = new Set<string>()
+        // Older connect flows persisted the first /models response as an untagged static snapshot.
+        // A catalog provider with no explicit npm is the stable signature of that flow; treat it as
+        // discovery-enabled so existing users gain refresh without rewriting or losing config.
+        const legacyDiscoveryProviders = new Set<string>()
         yield* Effect.forEach(
           configProviders.filter(
             ([providerID, provider]) =>
-              provider.discovery === true &&
+              (provider.discovery === true ||
+                (provider.npm === undefined &&
+                  typeof provider.options?.baseURL === "string" &&
+                  Object.keys(provider.models ?? {}).length > 0 &&
+                  modelsDev[providerID] !== undefined)) &&
               // Both reserved hosted ids (the product gateway "deepagent-code" and the routed
               // "deepagent") own their catalog identity — never run third-party discovery against them.
               providerID !== "deepagent-code" &&
@@ -1458,6 +1469,7 @@ export const layer = Layer.effect(
           ([providerID, provider]) =>
             Effect.gen(function* () {
               discoveryProviders.add(providerID)
+              if (provider.discovery !== true) legacyDiscoveryProviders.add(providerID)
               const baseURL = provider.options?.baseURL
               if (!baseURL) return
               const envKey = provider.env ? providerEnvKey(provider.env, envs) : undefined
@@ -1465,7 +1477,8 @@ export const layer = Layer.effect(
               const headers = provider.options?.headers as Record<string, string> | undefined
               // A key OR custom auth headers must be present; a bare baseURL can't authenticate.
               if (!apiKey && !headers) return
-              const kind: ProviderDiscoveryKind = provider.npm === "@ai-sdk/anthropic" ? "anthropic" : "openai-compatible"
+              const kind: ProviderDiscoveryKind =
+                (provider.npm ?? modelsDev[providerID]?.npm) === "@ai-sdk/anthropic" ? "anthropic" : "openai-compatible"
               const models = yield* discoverModelsCached(fs, flock, { providerID, baseURL, apiKey, kind, headers })
               if (!models.length) return
               discoveredModels[providerID] = Object.fromEntries(
@@ -1480,7 +1493,8 @@ export const layer = Layer.effect(
                 const gApiKey = group.options?.apiKey ?? apiKey
                 const gHeaders = { ...headers, ...(group.options?.headers as Record<string, string> | undefined) }
                 if (!gBaseURL || (!gApiKey && !Object.keys(gHeaders).length)) continue
-                const gKind: ProviderDiscoveryKind = group.npm === "@ai-sdk/anthropic" ? "anthropic" : "openai-compatible"
+                const gKind: ProviderDiscoveryKind =
+                  group.npm === "@ai-sdk/anthropic" ? "anthropic" : "openai-compatible"
                 const groupCacheKey = `${providerID}:${groupId}`
                 const gModels = yield* discoverModelsCached(fs, flock, {
                   providerID: groupCacheKey,
@@ -1534,7 +1548,10 @@ export const layer = Layer.effect(
 
           // Discovered models seed the source map; hand-listed `provider.models` override them so an
           // explicit config entry always wins over the runtime-discovered version of the same id.
-          const modelSource = { ...(discoveredModels[providerID] ?? {}), ...(provider.models ?? {}) }
+          const modelSource =
+            legacyDiscoveryProviders.has(providerID) && discoveredModels[providerID]
+              ? discoveredModels[providerID]
+              : { ...(discoveredModels[providerID] ?? {}), ...(provider.models ?? {}) }
           for (const [modelID, model] of Object.entries(modelSource)) {
             const existingModel = parsed.models[model.id ?? modelID]
             const apiID = model.id ?? existingModel?.api.id ?? modelID
@@ -1958,6 +1975,7 @@ export const layer = Layer.effect(
         }
 
         return {
+          loadedAt: Date.now(),
           models: languages,
           providers,
           catalog,
@@ -1969,8 +1987,20 @@ export const layer = Layer.effect(
       }),
     )
 
-    const list = Effect.fn("Provider.list")(() => InstanceState.use(state, (s) => s.providers))
-    const errors = Effect.fn("Provider.errors")(() => InstanceState.use(state, (s) => s.errors))
+    const getState = Effect.fnUntraced(function* () {
+      const current = yield* InstanceState.get(state)
+      if (Date.now() - current.loadedAt < MODEL_LIST_REFRESH_INTERVAL_MS) return current
+      yield* InstanceState.invalidate(state)
+      return yield* InstanceState.get(state)
+    })
+
+    const list = Effect.fn("Provider.list")(function* () {
+      return (yield* getState()).providers
+    })
+    const errors = Effect.fn("Provider.errors")(function* () {
+      return (yield* getState()).errors
+    })
+    const reload = Effect.fn("Provider.reload")(() => InstanceState.invalidate(state))
 
     function deepagentModelAuthProviderID(model: Model) {
       if (model.providerID !== "deepagent") return
@@ -2126,12 +2156,12 @@ export const layer = Layer.effect(
       }
     }
 
-    const getProvider = Effect.fn("Provider.getProvider")((providerID: ProviderV2.ID) =>
-      InstanceState.use(state, (s) => s.providers[providerID]),
-    )
+    const getProvider = Effect.fn("Provider.getProvider")(function* (providerID: ProviderV2.ID) {
+      return (yield* getState()).providers[providerID]
+    })
 
     const getModel = Effect.fn("Provider.getModel")(function* (providerID: ProviderV2.ID, modelID: ModelV2.ID) {
-      const s = yield* InstanceState.get(state)
+      const s = yield* getState()
       const provider = s.providers[providerID]
       if (!provider) {
         const catalogProvider = s.catalog[providerID]
@@ -2155,7 +2185,7 @@ export const layer = Layer.effect(
     })
 
     const getLanguage = Effect.fn("Provider.getLanguage")(function* (model: Model) {
-      const s = yield* InstanceState.get(state)
+      const s = yield* getState()
       const envs = yield* env.all()
       const key = `${model.providerID}/${model.id}`
       if (s.models.has(key)) return s.models.get(key)!
@@ -2188,7 +2218,7 @@ export const layer = Layer.effect(
     })
 
     const closest = Effect.fn("Provider.closest")(function* (providerID: ProviderV2.ID, query: string[]) {
-      const s = yield* InstanceState.get(state)
+      const s = yield* getState()
       const provider = s.providers[providerID]
       if (!provider) return undefined
       for (const item of query) {
@@ -2209,7 +2239,7 @@ export const layer = Layer.effect(
         )
       }
 
-      const s = yield* InstanceState.get(state)
+      const s = yield* getState()
       const provider = s.providers[providerID]
       if (!provider) return undefined
 
@@ -2273,7 +2303,7 @@ export const layer = Layer.effect(
       const cfg = yield* config.get()
       if (cfg.model) return parseModel(cfg.model)
 
-      const s = yield* InstanceState.get(state)
+      const s = yield* getState()
       const recent = yield* fs.readJson(path.join(Global.Path.state, "model.json")).pipe(
         Effect.map((x): { providerID: ProviderV2.ID; modelID: ModelV2.ID }[] => {
           if (!isRecord(x) || !Array.isArray(x.recent)) return []
@@ -2303,7 +2333,17 @@ export const layer = Layer.effect(
       }
     })
 
-    return Service.of({ list, errors, getProvider, getModel, getLanguage, closest, getSmallModel, defaultModel })
+    return Service.of({
+      list,
+      errors,
+      reload,
+      getProvider,
+      getModel,
+      getLanguage,
+      closest,
+      getSmallModel,
+      defaultModel,
+    })
   }),
 )
 

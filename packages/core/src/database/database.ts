@@ -29,8 +29,11 @@ export const layer = Layer.effect(
     yield* db.run("PRAGMA busy_timeout = 5000")
     yield* db.run("PRAGMA cache_size = -64000")
     yield* db.run("PRAGMA foreign_keys = ON")
-    // wal_checkpoint removed from startup: it blocked the "ready" signal by 1-3 s
-    // on large databases. SQLite auto-checkpoints at wal_autocheckpoint = 1000 pages.
+    // Tune WAL autocheckpoint: default 1000 pages (~4MB) causes large infrequent merges that spike
+    // write-lock hold time. 200 pages (~800KB) keeps each merge cheap while still amortizing I/O.
+    // Removed the blocking wal_checkpoint(PASSIVE) call (was 1-3s on large DBs); frequent small
+    // autocheckpoints are a better long-term strategy.
+    yield* db.run("PRAGMA wal_autocheckpoint = 200")
     yield* DatabaseMigration.apply(db)
 
     return { db }

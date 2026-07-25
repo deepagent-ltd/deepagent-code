@@ -5,6 +5,7 @@ import { Tag } from "@deepagent-code/ui/tag"
 import { showToast } from "@/utils/toast"
 import { popularProviders, useProviders } from "@/hooks/use-providers"
 import { createMemo, type Component, For, Show } from "solid-js"
+import { createStore } from "solid-js/store"
 import { useLanguage } from "@/context/language"
 import { useServerSDK } from "@/context/server-sdk"
 import { useServerSync } from "@/context/server-sync"
@@ -13,6 +14,7 @@ import { DialogSelectProvider } from "./dialog-select-provider"
 import { DialogCustomProvider } from "./dialog-custom-provider"
 import { SettingsList } from "./settings-list"
 import { SettingsServerPicker, SettingsServerScope } from "./settings-server-picker"
+import { canRefreshProviderModels } from "./provider-model-refresh"
 
 type ProviderSource = "env" | "api" | "config" | "custom"
 type ProviderItem = ReturnType<ReturnType<typeof useProviders>["connected"]>[number]
@@ -46,6 +48,7 @@ const SettingsProvidersContent: Component = () => {
   const serverSDK = useServerSDK()
   const serverSync = useServerSync()
   const providers = useProviders()
+  const [refreshing, setRefreshing] = createStore<Record<string, boolean>>({})
 
   const isConfigCustom = (providerID: string) => {
     const provider = serverSync.data.config.provider?.[providerID]
@@ -91,6 +94,32 @@ const SettingsProvidersContent: Component = () => {
   const canDisconnect = (item: ProviderItem) => source(item) !== "env"
 
   const note = (id: string) => PROVIDER_NOTES.find((item) => item.match(id))?.key
+
+  const canRefresh = (providerID: string) =>
+    canRefreshProviderModels(providerID, serverSync.data.config.provider?.[providerID])
+
+  const refreshModels = async (providerID: string, name: string) => {
+    if (refreshing[providerID]) return
+    setRefreshing(providerID, true)
+    await serverSDK.client.provider.models
+      .refresh({ providerID }, { throwOnError: true })
+      .then((result) => {
+        serverSync.refreshProviders()
+        showToast({
+          variant: "success",
+          icon: "circle-check",
+          title: language.t("provider.models.refresh.toast.title", { provider: name }),
+          description: language.t("provider.models.refresh.toast.description", {
+            count: Object.keys(result.data?.models ?? {}).length,
+          }),
+        })
+      })
+      .catch((err: unknown) => {
+        const message = err instanceof Error ? err.message : String(err)
+        showToast({ title: language.t("common.requestFailed"), description: message })
+      })
+      .finally(() => setRefreshing(providerID, false))
+  }
 
   const disableProvider = async (providerID: string, name: string) => {
     const before = serverSync.data.config.disabled_providers ?? []
@@ -180,25 +209,42 @@ const SettingsProvidersContent: Component = () => {
                       <span class="text-14-medium text-text-strong truncate">{item.name}</span>
                       <Tag>{type(item)}</Tag>
                     </div>
-                    <Show
-                      when={canDisconnect(item)}
-                      fallback={
-                        <span class="text-14-regular text-text-base opacity-0 group-hover:opacity-100 transition-opacity duration-200 pr-3 cursor-default">
-                          {language.t("settings.providers.connected.environmentDescription")}
-                        </span>
-                      }
-                    >
-                      <Button
-                        size="large"
-                        variant="ghost"
-                        onClick={(event: MouseEvent) => {
-                          event.stopPropagation()
-                          void disconnect(item.id, item.name)
-                        }}
+                    <div class="flex items-center gap-1">
+                      <Show when={canRefresh(item.id)}>
+                        <Button
+                          size="large"
+                          variant="ghost"
+                          disabled={refreshing[item.id]}
+                          onClick={(event: MouseEvent) => {
+                            event.stopPropagation()
+                            void refreshModels(item.id, item.name)
+                          }}
+                        >
+                          {refreshing[item.id]
+                            ? language.t("provider.models.refresh.refreshing")
+                            : language.t("common.refresh")}
+                        </Button>
+                      </Show>
+                      <Show
+                        when={canDisconnect(item)}
+                        fallback={
+                          <span class="text-14-regular text-text-base opacity-0 group-hover:opacity-100 transition-opacity duration-200 pr-3 cursor-default">
+                            {language.t("settings.providers.connected.environmentDescription")}
+                          </span>
+                        }
                       >
-                        {language.t("common.disconnect")}
-                      </Button>
-                    </Show>
+                        <Button
+                          size="large"
+                          variant="ghost"
+                          onClick={(event: MouseEvent) => {
+                            event.stopPropagation()
+                            void disconnect(item.id, item.name)
+                          }}
+                        >
+                          {language.t("common.disconnect")}
+                        </Button>
+                      </Show>
+                    </div>
                   </div>
                 )}
               </For>

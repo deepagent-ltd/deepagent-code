@@ -6,7 +6,15 @@ import { Log } from "@deepagent-code/core/util/log"
 import { Global } from "@deepagent-code/core/global"
 import { Context, Effect, Layer } from "effect"
 import * as Stream from "effect/Stream"
-import { streamText, wrapLanguageModel, type ModelMessage, type Tool, APICallError, NoSuchToolError, InvalidToolInputError } from "ai"
+import {
+  streamText,
+  wrapLanguageModel,
+  type ModelMessage,
+  type Tool,
+  APICallError,
+  NoSuchToolError,
+  InvalidToolInputError,
+} from "ai"
 import { type LLMEvent } from "@deepagent-code/llm"
 import { AgentGateway } from "@deepagent-code/core/agent-gateway"
 import { LLMClient, RequestExecutor, WebSocketExecutor } from "@deepagent-code/llm/route"
@@ -30,6 +38,7 @@ import * as OtelTracer from "@effect/opentelemetry/Tracer"
 import { LLMAISDK } from "./llm/ai-sdk"
 import { LLMNativeRuntime } from "./llm/native-runtime"
 import { LLMRequestPrep } from "./llm/request"
+import { FreeformTools } from "./llm/freeform-tools"
 import { configureGateway } from "@/deepagent/config"
 
 const log = Log.create({ service: "llm" })
@@ -41,21 +50,135 @@ const deepagentModelAuthProviderID = (model: Provider.Model) => {
   return typeof value === "string" && value.length > 0 ? value : undefined
 }
 
-// Detect whether the resolved request options enable extended thinking / reasoning.
-// Providers reject `tool_choice: required/object` while thinking is active (e.g.
-// "The tool_choice parameter does not support being set to required or object in
-// thinking mode"), which broke structured-output subagent calls. When thinking is
-// on, the caller downgrades toolChoice to auto and relies on the schema-aware
-// system prompt (buildStructuredOutputSystemPrompt) to elicit the structured tool
-// call instead of forcing it.
-const thinkingActive = (options: Record<string, any> | undefined): boolean => {
-  if (!options || typeof options !== "object") return false
-  const effort = options.reasoningEffort ?? options.reasoning?.effort
+// Decide from the fully merged per-request options. Some providers reject
+// `tool_choice: required/object` while thinking is active. Callers that need a
+// hard guarantee must either disable thinking for this turn or use an explicitly
+// bounded auto-only controller; this layer never silently weakens `required`.
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value)
+
+const thinkingActive = (options: Record<string, unknown> | undefined): boolean => {
+  if (!options) return false
+  const effort = options.reasoningEffort ?? (isRecord(options.reasoning) ? options.reasoning.effort : undefined)
   if (typeof effort === "string" && effort !== "none") return true
   const thinking = options.thinking
-  if (thinking && typeof thinking === "object" && thinking.type !== "disabled") return true
-  if (options.thinkingConfig && typeof options.thinkingConfig === "object") return true
+  if (isRecord(thinking) && thinking.type !== "disabled") return true
+  if (isRecord(options.thinkingConfig)) return true
   return false
+}
+
+export type ToolChoiceProtocol =
+  | "openai_responses"
+  | "openai_chat"
+  | "anthropic_messages"
+  | "gemini"
+  | "bedrock_converse"
+  | "unknown"
+
+const OPENAI_RESPONSES_PACKAGES = new Set([
+  "@ai-sdk/openai",
+  "@ai-sdk/azure",
+  "@ai-sdk/amazon-bedrock/mantle",
+  "@ai-sdk/xai",
+])
+const OPENAI_CHAT_PACKAGES = new Set([
+  "@ai-sdk/openai-compatible",
+  "@openrouter/ai-sdk-provider",
+  "@ai-sdk/groq",
+  "@ai-sdk/deepinfra",
+  "@ai-sdk/cerebras",
+  "@ai-sdk/togetherai",
+  "@ai-sdk/perplexity",
+  "@ai-sdk/vercel",
+  "@ai-sdk/alibaba",
+  "@ai-sdk/github-copilot",
+  "venice-ai-sdk-provider",
+])
+
+export function toolChoiceProtocol(model: Provider.Model): ToolChoiceProtocol {
+  if (OPENAI_RESPONSES_PACKAGES.has(model.api.npm)) return "openai_responses"
+  if (OPENAI_CHAT_PACKAGES.has(model.api.npm)) return "openai_chat"
+  if (model.api.npm === "@ai-sdk/anthropic" || model.api.npm === "@ai-sdk/google-vertex/anthropic")
+    return "anthropic_messages"
+  if (model.api.npm === "@ai-sdk/google" || model.api.npm === "@ai-sdk/google-vertex") return "gemini"
+  if (model.api.npm === "@ai-sdk/amazon-bedrock") return "bedrock_converse"
+  return "unknown"
+}
+
+function reasoningOnly(model: Provider.Model) {
+  if (model.options?.reasoningOnly === true) return true
+  if (!model.capabilities.reasoning) return false
+  const id = `${model.id} ${model.api.id}`.toLowerCase()
+  return (
+    /\bo(?:1|3|4)(?:\b|[._-])/.test(id) ||
+    id.includes("gpt-5-pro") ||
+    id.includes("deepseek-r1") ||
+    id.includes("deepseek-reasoner")
+  )
+}
+
+export function finalizerCapability(model: Provider.Model) {
+  const protocol = toolChoiceProtocol(model)
+  if (!model.capabilities.toolcall)
+    return {
+      capability: "unsupported" as const,
+      protocol,
+      reasoning: "inherit" as const,
+      reason: "model_has_no_tool_call_capability" as const,
+    }
+  if (reasoningOnly(model))
+    return {
+      capability: "auto_only" as const,
+      protocol,
+      reasoning: "inherit" as const,
+      toolChoice: "auto" as const,
+      reason: "reasoning_cannot_be_disabled" as const,
+    }
+  if (protocol === "unknown")
+    return {
+      capability: "auto_only" as const,
+      protocol,
+      reasoning: "inherit" as const,
+      toolChoice: "auto" as const,
+      reason: "protocol_forced_tool_unverified" as const,
+    }
+  return {
+    capability: "forced_tool" as const,
+    protocol,
+    reasoning: "disabled" as const,
+    toolChoice: "required" as const,
+  }
+}
+
+export const disableThinking = (options: Record<string, unknown> | undefined): Record<string, unknown> | undefined => {
+  if (!options) return options
+  const result = { ...options }
+  delete result.reasoningEffort
+  delete result.reasoning
+  delete result.thinking
+  delete result.thinkingConfig
+  if ("enable_thinking" in result) result.enable_thinking = false
+  if (isRecord(result.chat_template_args)) {
+    result.chat_template_args = { ...result.chat_template_args, enable_thinking: false }
+  }
+  if (isRecord(result.modelParams)) {
+    result.modelParams = disableThinking(result.modelParams)
+  }
+  return result
+}
+
+export function decideToolChoice(
+  toolChoice: StreamInput["toolChoice"],
+  options: Record<string, unknown> | undefined,
+  model?: Provider.Model,
+):
+  | { capability: "forced_tool" | "auto_only"; toolChoice: StreamInput["toolChoice"] }
+  | { capability: "unsupported_thinking_with_forced_tool" }
+  | { capability: "unsupported_forced_tool" } {
+  if (toolChoice !== "required") return { capability: "auto_only", toolChoice }
+  if (model && toolChoiceProtocol(model) === "unknown") return { capability: "unsupported_forced_tool" }
+  if (!thinkingActive(options)) return { capability: "forced_tool", toolChoice }
+  return { capability: "unsupported_thinking_with_forced_tool" }
 }
 
 export type StreamInput = {
@@ -71,6 +194,7 @@ export type StreamInput = {
   tools: Record<string, Tool>
   retries?: number
   toolChoice?: "auto" | "required" | "none"
+  reasoning?: "inherit" | "disabled"
 }
 
 export type StreamRequest = StreamInput & {
@@ -153,8 +277,10 @@ const live: Layer.Layer<
       const providerMaxRetries = typeof item.options?.maxRetries === "number" ? item.options.maxRetries : undefined
 
       const isWorkflow = language instanceof GitLabWorkflowLanguageModel
+      const protocolTools = isWorkflow ? input.tools : FreeformTools.tools(language, input.tools)
       const prepared = yield* LLMRequestPrep.prepare({
         ...input,
+        tools: protocolTools,
         provider: item,
         auth: info,
         plugin,
@@ -169,10 +295,24 @@ const live: Layer.Layer<
         },
       })
 
-      // Structured-output callers force toolChoice:"required", which providers reject
-      // while thinking is active. Downgrade to auto in that case so the call still
-      // succeeds; the schema-aware system prompt keeps the model on the structured path.
-      const effectiveToolChoice = thinkingActive(prepared.params.options) ? undefined : input.toolChoice
+      const effectiveOptions =
+        input.reasoning === "disabled" ? disableThinking(prepared.params.options) : prepared.params.options
+      const toolChoiceDecision = decideToolChoice(input.toolChoice, effectiveOptions, input.model)
+      if (toolChoiceDecision.capability === "unsupported_forced_tool") {
+        return yield* Effect.fail(
+          new Error(
+            `[unsupported_forced_tool] Required tool choice is not verified for provider protocol ${toolChoiceProtocol(input.model)}. Use an explicitly bounded auto-only controller.`,
+          ),
+        )
+      }
+      if (toolChoiceDecision.capability === "unsupported_thinking_with_forced_tool") {
+        return yield* Effect.fail(
+          new Error(
+            "[unsupported_thinking_with_forced_tool] Required tool choice cannot be used while reasoning is active. Disable reasoning for this turn or use an explicitly bounded auto-only controller.",
+          ),
+        )
+      }
+      const effectiveToolChoice = toolChoiceDecision.toolChoice
 
       // Wire up toolExecutor for DWS workflow models so that tool calls
       // from the workflow service are executed via deepagent-code's tool system
@@ -308,6 +448,8 @@ const live: Layer.Layer<
         })
       }
 
+      const runtimeTools = prepared.tools
+
       const tracer = cfg.experimental?.openTelemetry
         ? Option.getOrUndefined(yield* Effect.serviceOption(OtelTracer.OtelTracer))
         : undefined
@@ -333,13 +475,13 @@ const live: Layer.Layer<
           auth: info,
           llmClient,
           messages: prepared.messages,
-          tools: prepared.tools,
+          tools: runtimeTools,
           toolChoice: effectiveToolChoice,
           temperature: prepared.params.temperature,
           topP: prepared.params.topP,
           topK: prepared.params.topK,
           maxOutputTokens: prepared.params.maxOutputTokens,
-          providerOptions: prepared.params.options,
+          providerOptions: effectiveOptions,
           headers: prepared.headers,
           abort: input.abort,
           metadata: prepared.metadata,
@@ -408,7 +550,7 @@ const live: Layer.Layer<
           async experimental_repairToolCall(failed) {
             // (a) Tool name case fix only — keep failed.toolCall.input exactly as-is.
             const lower = failed.toolCall.toolName.toLowerCase()
-            if (lower !== failed.toolCall.toolName && prepared.tools[lower]) {
+            if (lower !== failed.toolCall.toolName && runtimeTools[lower]) {
               l.info("tool call repair: name case fix", {
                 tool: failed.toolCall.toolName,
                 repaired: lower,
@@ -465,9 +607,9 @@ const live: Layer.Layer<
           temperature: prepared.params.temperature,
           topP: prepared.params.topP,
           topK: prepared.params.topK,
-          providerOptions: ProviderTransform.providerOptions(input.model, prepared.params.options),
-          activeTools: Object.keys(prepared.tools).filter((x) => x !== "invalid"),
-          tools: prepared.tools,
+          providerOptions: ProviderTransform.providerOptions(input.model, effectiveOptions ?? {}),
+          activeTools: Object.keys(runtimeTools).filter((x) => x !== "invalid"),
+          tools: runtimeTools,
           toolChoice: effectiveToolChoice,
           maxOutputTokens: prepared.params.maxOutputTokens,
           abortSignal: input.abort,

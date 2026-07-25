@@ -40,6 +40,15 @@ export class ProviderModelDiscoverError extends Schema.ErrorClass<ProviderModelD
   { httpApiStatus: 400 },
 ) {}
 
+export class ProviderModelRefreshError extends Schema.ErrorClass<ProviderModelRefreshError>(
+  "ProviderModelRefreshError",
+)(
+  {
+    message: Schema.String,
+  },
+  { httpApiStatus: 400 },
+) {}
+
 export const ProviderModelDiscoverInput = Schema.Struct({
   providerID: Schema.String,
   baseURL: Schema.String,
@@ -113,6 +122,19 @@ export const ProviderApi = HttpApi.make("provider")
             identifier: "provider.models.discover",
             summary: "Discover provider models",
             description: "Probe a provider /models endpoint and return discovered chat models.",
+          }),
+        ),
+        HttpApiEndpoint.post("refreshModels", `${root}/:providerID/models/refresh`, {
+          params: { providerID: ProviderV2.ID },
+          query: WorkspaceRoutingQuery,
+          success: described(Provider.Info, "Provider with refreshed models"),
+          error: ProviderModelRefreshError,
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "provider.models.refresh",
+            summary: "Refresh provider models",
+            description:
+              "Force-refresh one provider's supported model list and rebuild the provider registry for this instance.",
           }),
         ),
         HttpApiEndpoint.post("authorize", `${root}/:providerID/oauth/authorize`, {

@@ -4,5 +4,6 @@ Usage:
 - This tool will overwrite the existing file if there is one at the provided path.
 - If this is an existing file, you MUST use the Read tool first to read the file's contents. This tool will fail if you did not read the file first.
 - ALWAYS prefer editing existing files in the codebase. NEVER write new files unless explicitly required.
+- If the file content would make this tool call large, use `apply_patch_chunk` instead. Begin at offset 0, use each result's nextOffset for every append and the final commit, and keep each chunk at most 12000 UTF-8 bytes. Do not embed a large file or patch in one JSON tool call.
 - NEVER proactively create documentation files (*.md) or README files. Only create documentation files if explicitly requested by the User.
 - Only use emojis if the user explicitly requests it. Avoid writing emojis to files unless asked.

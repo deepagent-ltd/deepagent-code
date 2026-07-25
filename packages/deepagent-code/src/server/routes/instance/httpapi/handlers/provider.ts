@@ -1,18 +1,22 @@
 import { ProviderAuth } from "@/provider/auth"
 import { Auth } from "@/auth"
 import { Config } from "@/config/config"
+import { Env } from "@/env"
 import { ModelsDev } from "@deepagent-code/core/models-dev"
 import { Provider } from "@/provider/provider"
-import { discoverWithProtocol, isChatModel, normalizeBaseURL } from "@/provider/model-discovery"
+import { discoverProviderModels, discoverWithProtocol, isChatModel, normalizeBaseURL } from "@/provider/model-discovery"
+import { discoverModelsCached } from "@/provider/discovery-cache"
 import { buildCatalogIndex, projectSpec, specMatchFor } from "@/provider/catalog-spec"
+import { FSUtil } from "@deepagent-code/core/fs-util"
+import { EffectFlock } from "@deepagent-code/core/util/effect-flock"
 
 import { mapValues } from "remeda"
 import { Effect, Schema } from "effect"
 import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { InstanceHttpApi } from "../api"
-import { ProviderAuthApiError, ProviderModelDiscoverError } from "../groups/provider"
-import { ProviderV2 } from "@deepagent-code/core/provider"
+import { ProviderAuthApiError, ProviderModelDiscoverError, ProviderModelRefreshError } from "../groups/provider"
+import { OFFICIAL_PROVIDER_ID_SET, ProviderV2 } from "@deepagent-code/core/provider"
 
 function mapProviderAuthError<A, R>(self: Effect.Effect<A, ProviderAuth.Error, R>) {
   return self.pipe(
@@ -40,6 +44,10 @@ export const providerHandlers = HttpApiBuilder.group(InstanceHttpApi, "provider"
     const provider = yield* Provider.Service
     const svc = yield* ProviderAuth.Service
     const authSvc = yield* Auth.Service
+    const env = yield* Env.Service
+    const modelsDev = yield* ModelsDev.Service
+    const fs = yield* FSUtil.Service
+    const flock = yield* EffectFlock.Service
 
     const list = Effect.fn("ProviderHttpApi.list")(function* () {
       const config = yield* cfg.get()
@@ -124,6 +132,73 @@ export const providerHandlers = HttpApiBuilder.group(InstanceHttpApi, "provider"
       return { providerID, baseURL, kind: result.kind, models: selectable, selected }
     })
 
+    const refreshModels = Effect.fn("ProviderHttpApi.refreshModels")(function* (ctx: {
+      params: { providerID: ProviderV2.ID }
+    }) {
+      const providerID = ctx.params.providerID
+      if (OFFICIAL_PROVIDER_ID_SET.has(providerID)) {
+        yield* modelsDev.refresh(true)
+        yield* provider.reload()
+        const refreshed = yield* provider.getProvider(providerID)
+        if (refreshed) return Provider.toPublicInfo(refreshed)
+        return yield* new ProviderModelRefreshError({ message: `Provider not found: ${providerID}` })
+      }
+
+      const item = (yield* cfg.get()).provider?.[providerID]
+      const catalog = yield* modelsDev.get()
+      const legacyDiscovery =
+        item?.npm === undefined &&
+        typeof item?.options?.baseURL === "string" &&
+        Object.keys(item.models ?? {}).length > 0 &&
+        catalog[providerID] !== undefined
+      if (!item || (!item.discovery && !legacyDiscovery)) {
+        return yield* new ProviderModelRefreshError({
+          message: `Provider ${providerID} does not have runtime model discovery enabled`,
+        })
+      }
+
+      const baseURL = item.options?.baseURL
+      if (typeof baseURL !== "string" || !baseURL.trim()) {
+        return yield* new ProviderModelRefreshError({ message: `Provider ${providerID} is missing a base URL` })
+      }
+
+      const envs = yield* env.all()
+      const apiKey =
+        typeof item.options?.apiKey === "string"
+          ? item.options.apiKey
+          : item.env?.map((key) => envs[key]).find((value): value is string => typeof value === "string" && !!value)
+      const headers =
+        item.options?.headers && typeof item.options.headers === "object"
+          ? Object.fromEntries(
+              Object.entries(item.options.headers).filter(
+                (entry): entry is [string, string] => typeof entry[1] === "string",
+              ),
+            )
+          : undefined
+      if (!apiKey && !headers) {
+        return yield* new ProviderModelRefreshError({
+          message: `Provider ${providerID} is missing discovery credentials`,
+        })
+      }
+
+      const kind = (item.npm ?? catalog[providerID]?.npm) === "@ai-sdk/anthropic" ? "anthropic" : "openai-compatible"
+      const input = { providerID, baseURL, apiKey, kind, headers } as const
+      const discovered = yield* Effect.tryPromise({
+        try: () => discoverProviderModels(input),
+        catch: (error) =>
+          new ProviderModelRefreshError({ message: error instanceof Error ? error.message : String(error) }),
+      })
+      const models = yield* discoverModelsCached(fs, flock, input, () => Promise.resolve(discovered), true)
+      if (!models.length) {
+        return yield* new ProviderModelRefreshError({ message: `Provider ${providerID} returned no chat models` })
+      }
+
+      yield* provider.reload()
+      const refreshed = yield* provider.getProvider(providerID)
+      if (refreshed) return Provider.toPublicInfo(refreshed)
+      return yield* new ProviderModelRefreshError({ message: `Provider not found after refresh: ${providerID}` })
+    })
+
     const authorize = Effect.fn("ProviderHttpApi.authorize")(function* (ctx: {
       params: { providerID: ProviderV2.ID }
       payload: ProviderAuth.AuthorizeInput
@@ -170,6 +245,7 @@ export const providerHandlers = HttpApiBuilder.group(InstanceHttpApi, "provider"
       .handle("list", list)
       .handle("auth", auth)
       .handle("discover", discover)
+      .handle("refreshModels", refreshModels)
       .handleRaw("authorize", authorizeRaw)
       .handle("callback", callback)
   }),

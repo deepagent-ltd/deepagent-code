@@ -68,7 +68,7 @@ export function make<Input extends SchemaType<any>, Output extends SchemaType<an
     definition: (name) => {
       const cached = definitions.get(name)
       if (cached) return cached
-      const definition = new ToolDefinition({
+      const definition = ToolDefinition.make({
         name,
         description: config.description,
         inputSchema: toJsonSchema(config.input),

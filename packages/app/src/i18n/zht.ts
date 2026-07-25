@@ -3,6 +3,13 @@ import { dict as en } from "./en"
 type Keys = keyof typeof en
 
 export const dict = {
+  "session.subagents.error": "失敗",
+  "session.subagents.interrupted": "已中斷",
+  "session.subagents.cancelled": "已取消",
+  "session.subagents.select": "選擇子 Agent",
+  "session.subagents.open": "開啟",
+  "session.subagents.panelError": "子 Agent 面板無法顯示。",
+  "session.subagents.retry": "重試面板",
   "command.category.suggested": "建議",
   "command.category.view": "檢視",
   "command.category.project": "專案",
@@ -630,7 +637,8 @@ export const dict = {
   "oversight.takeover.unsupported": "接管記錄將在後端端點（P3.10）可用後啟用。",
   "oversight.takeover.failed": "失敗：{{error}}",
   "oversight.rollback.title": "回滾",
-  "oversight.rollback.description": "回滾某個工作階段中 Agent 產生的變更（透過 SessionRevert）。僅影響本工作區內的工作階段。此操作會回滾真實變更——請謹慎使用。",
+  "oversight.rollback.description":
+    "回滾某個工作階段中 Agent 產生的變更（透過 SessionRevert）。僅影響本工作區內的工作階段。此操作會回滾真實變更——請謹慎使用。",
   "oversight.rollback.sessionPlaceholder": "工作階段 ID（ses_…）",
   "oversight.rollback.reasonPlaceholder": "回滾原因…（可選）",
   "oversight.rollback.action": "回滾",
@@ -741,10 +749,10 @@ export const dict = {
   "wiki.version": "v{{version}}",
   "wiki.links": "關聯程式碼與文件",
   "wiki.stale": "已失效",
-  "wiki.type.knowledge": "知識",
-  "wiki.type.memory": "記憶",
-  "wiki.type.document": "文件",
-  "wiki.type.code": "程式碼",
+  "wiki.type.knowledge": "知識圖",
+  "wiki.type.memory": "記憶圖",
+  "wiki.type.document": "文件圖",
+  "wiki.type.code": "程式碼圖",
   "wiki.edit.button": "編輯",
   "wiki.edit.save": "儲存",
   "wiki.edit.saved": "知識頁已更新",

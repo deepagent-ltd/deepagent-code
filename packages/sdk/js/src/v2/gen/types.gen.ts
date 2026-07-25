@@ -308,6 +308,26 @@ export type StructuredOutputError = {
   }
 }
 
+export type DoomLoopError = {
+  name: "DoomLoopError"
+  data: {
+    message: string
+    tool: string
+    period: number
+    count: number
+  }
+}
+
+export type TaskBudgetExceededError = {
+  name: "TaskBudgetExceededError"
+  data: {
+    message: string
+    budget: "steps" | "tokens" | "wall_time" | "no_progress"
+    limit: number
+    used: number
+  }
+}
+
 export type ContextOverflowError = {
   name: "ContextOverflowError"
   data: {
@@ -355,6 +375,8 @@ export type AssistantMessage = {
     | MessageOutputLengthError
     | MessageAbortedError
     | StructuredOutputError
+    | DoomLoopError
+    | TaskBudgetExceededError
     | ContextOverflowError
     | ApiError
     | OutputDegenerationError
@@ -1420,6 +1442,8 @@ export type GlobalEvent = {
             | MessageOutputLengthError
             | MessageAbortedError
             | StructuredOutputError
+            | DoomLoopError
+            | TaskBudgetExceededError
             | ContextOverflowError
             | ApiError
             | OutputDegenerationError
@@ -3160,6 +3184,10 @@ export type ProviderModelDiscoverError = {
   message: string
 }
 
+export type ProviderModelRefreshError = {
+  message: string
+}
+
 export type ProviderAuthAuthorization = {
   url: string
   method: "auto" | "code"
@@ -3370,16 +3398,16 @@ export type ConflictError = {
   resource?: string
 }
 
-export type SessionNotFoundError = {
-  _tag: "SessionNotFoundError"
-  sessionID: string
-  message: string
-}
-
 export type ServiceUnavailableError = {
   _tag: "ServiceUnavailableError"
   message: string
   service?: string
+}
+
+export type SessionNotFoundError = {
+  _tag: "SessionNotFoundError"
+  sessionID: string
+  message: string
 }
 
 export type UnknownError1 = {
@@ -5596,6 +5624,8 @@ export type EventSessionError = {
       | MessageOutputLengthError
       | MessageAbortedError
       | StructuredOutputError
+      | DoomLoopError
+      | TaskBudgetExceededError
       | ContextOverflowError
       | ApiError
       | OutputDegenerationError1
@@ -6118,6 +6148,7 @@ export type GlobalCapabilitiesResponses = {
   200: {
     protocolVersion: string
     version: string
+    commit?: string
     features: {
       im: boolean
       sessions: boolean
@@ -7076,6 +7107,38 @@ export type DeepagentKnowledgePendingResponses = {
 
 export type DeepagentKnowledgePendingResponse =
   DeepagentKnowledgePendingResponses[keyof DeepagentKnowledgePendingResponses]
+
+export type DeepagentKnowledgeReviewSummaryData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/deepagent/knowledge/review-summary"
+}
+
+export type DeepagentKnowledgeReviewSummaryErrors = {
+  /**
+   * DeepAgentPromotionError | InvalidRequestError
+   */
+  400: DeepAgentPromotionError | InvalidRequestError
+}
+
+export type DeepagentKnowledgeReviewSummaryError =
+  DeepagentKnowledgeReviewSummaryErrors[keyof DeepagentKnowledgeReviewSummaryErrors]
+
+export type DeepagentKnowledgeReviewSummaryResponses = {
+  /**
+   * Pending durable knowledge count for the Review badge
+   */
+  200: {
+    pendingCount: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  }
+}
+
+export type DeepagentKnowledgeReviewSummaryResponse =
+  DeepagentKnowledgeReviewSummaryResponses[keyof DeepagentKnowledgeReviewSummaryResponses]
 
 export type DeepagentKnowledgeApproveData = {
   body?: {
@@ -11822,6 +11885,36 @@ export type ProviderModelsDiscoverResponses = {
 
 export type ProviderModelsDiscoverResponse = ProviderModelsDiscoverResponses[keyof ProviderModelsDiscoverResponses]
 
+export type ProviderModelsRefreshData = {
+  body?: never
+  path: {
+    providerID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/provider/{providerID}/models/refresh"
+}
+
+export type ProviderModelsRefreshErrors = {
+  /**
+   * ProviderModelRefreshError | InvalidRequestError
+   */
+  400: ProviderModelRefreshError | InvalidRequestError
+}
+
+export type ProviderModelsRefreshError = ProviderModelsRefreshErrors[keyof ProviderModelsRefreshErrors]
+
+export type ProviderModelsRefreshResponses = {
+  /**
+   * Provider with refreshed models
+   */
+  200: Provider
+}
+
+export type ProviderModelsRefreshResponse = ProviderModelsRefreshResponses[keyof ProviderModelsRefreshResponses]
+
 export type ProviderOauthAuthorizeData = {
   body?: {
     /**
@@ -14073,6 +14166,10 @@ export type V2SessionPromptErrors = {
    * ConflictError
    */
   409: ConflictError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
 }
 
 export type V2SessionPromptError = V2SessionPromptErrors[keyof V2SessionPromptErrors]

@@ -26,6 +26,7 @@ import {
   toggleBottomPanel,
   togglePanel,
   toggledPanelMode,
+  migrateRightPanelSessionView,
   type PanelLocation,
   type PanelSessionState,
   type PanelTransitionInput,
@@ -123,6 +124,11 @@ type SessionView = {
     | "terminal"
     | "debug-console"
     | "problems"
+  rightPanelFailure?: {
+    mode: string
+    build: string
+    count: number
+  }
   bottomPanel?: {
     opened: boolean
     activeView?: DockPanelID
@@ -131,6 +137,9 @@ type SessionView = {
   pendingMessageAt?: number
   todoCollapsed?: boolean
 }
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value)
 
 type TabHandoff = {
   scope: ServerScope
@@ -220,9 +229,6 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
       return { ...value, server: server.key }
     })
 
-    const isRecord = (value: unknown): value is Record<string, unknown> =>
-      typeof value === "object" && value !== null && !Array.isArray(value)
-
     const migrate = (value: unknown) => {
       if (!isRecord(value)) return value
 
@@ -265,6 +271,7 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
 
       const sessionTabs = migrateLegacySessionStateKeys(value.sessionTabs)
       const sessionView = migrateLegacySessionStateKeys(value.sessionView)
+      const migratedSessionView = migrateRightPanelSessionView(sessionView, platform.version ?? "dev")
       const migratedSessionTabs = (() => {
         if (!isRecord(sessionTabs)) return sessionTabs
 
@@ -307,7 +314,7 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
         migratedFileTree === fileTree &&
         migratedSessionTabs === value.sessionTabs &&
         migratedRightPanel === rightPanel &&
-        sessionView === value.sessionView
+        migratedSessionView === value.sessionView
       ) {
         return value
       }
@@ -319,7 +326,7 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
         fileTree: migratedFileTree,
         sessionTabs: migratedSessionTabs,
         rightPanel: migratedRightPanel,
-        sessionView,
+        sessionView: migratedSessionView,
       }
     }
 
@@ -328,7 +335,7 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
       { ...target, migrate },
       createStore({
         sidebar: {
-          opened: false,
+          opened: true,
           width: DEFAULT_SIDEBAR_WIDTH,
           workspaces: {} as Record<string, boolean>,
           workspacesDefault: false,
@@ -760,7 +767,10 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
           setStore("dock", "location", id, next)
         },
         bottomCount: createMemo(
-          () => DOCK_PANEL_IDS.filter((id) => (id === "terminal" ? true : (store.dock?.location?.[id] ?? DOCK_DEFAULT_LOCATION[id]) === "bottom")).length,
+          () =>
+            DOCK_PANEL_IDS.filter((id) =>
+              id === "terminal" ? true : (store.dock?.location?.[id] ?? DOCK_DEFAULT_LOCATION[id]) === "bottom",
+            ).length,
         ),
       },
       review: {
@@ -828,8 +838,8 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
         width: (bucket: RightPanelWidthBucket = "wide") => {
           const ratio =
             bucket === "narrow"
-              ? store.rightPanel?.narrowRatio ?? DEFAULT_RIGHT_PANEL_NARROW_RATIO
-              : store.rightPanel?.ratio ?? DEFAULT_RIGHT_PANEL_RATIO
+              ? (store.rightPanel?.narrowRatio ?? DEFAULT_RIGHT_PANEL_NARROW_RATIO)
+              : (store.rightPanel?.ratio ?? DEFAULT_RIGHT_PANEL_RATIO)
           const max = Math.max(MIN_RIGHT_PANEL_PX, Math.round(windowWidth() * MAX_RIGHT_PANEL_RATIO))
           return Math.min(max, Math.max(MIN_RIGHT_PANEL_PX, Math.round(windowWidth() * ratio)))
         },
@@ -1090,6 +1100,33 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
             },
             toggle(mode: NonNullable<SessionView["rightPanelMode"]>) {
               setRightPanelMode(toggledPanelMode(rightPanelMode(), mode))
+            },
+            reportFailure(mode: string, build: string) {
+              const session = key()
+              const current = store.sessionView[session]
+              const previous = current?.rightPanelFailure
+              const count = previous?.mode === mode && previous.build === build ? previous.count + 1 : 1
+              if (!current) {
+                setStore("sessionView", session, {
+                  scroll: {},
+                  rightPanelFailure: { mode, build, count },
+                })
+                return
+              }
+              setStore("sessionView", session, "rightPanelFailure", { mode, build, count })
+            },
+            clearFailure(mode: string, build: string) {
+              const session = key()
+              const current = store.sessionView[session]
+              if (!current?.rightPanelFailure) return
+              if (current.rightPanelFailure.mode !== mode || current.rightPanelFailure.build !== build) return
+              setStore(
+                "sessionView",
+                session,
+                produce((draft) => {
+                  delete draft.rightPanelFailure
+                }),
+              )
             },
           },
           review: {

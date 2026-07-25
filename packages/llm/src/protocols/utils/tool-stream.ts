@@ -10,6 +10,7 @@ type StreamKey = string | number
  * so far, not the parsed object.
  */
 export interface PendingTool extends ToolAccumulator {
+  readonly inputType?: "json" | "text"
   readonly providerExecuted?: boolean
   readonly providerMetadata?: ProviderMetadata
 }
@@ -64,7 +65,10 @@ const inputDelta = (tool: PendingTool, text: string) =>
   })
 
 const toolCall = (route: string, tool: PendingTool, inputOverride?: string) =>
-  parseToolInput(route, tool.name, inputOverride ?? tool.input).pipe(
+  (tool.inputType === "text"
+    ? Effect.succeed(inputOverride ?? tool.input)
+    : parseToolInput(route, tool.name, inputOverride ?? tool.input)
+  ).pipe(
     Effect.map(
       (input): ToolCall =>
         LLMEvent.toolCall({

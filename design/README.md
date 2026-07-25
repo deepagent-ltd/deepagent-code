@@ -1,6 +1,6 @@
 # DeepAgent Code Architecture & Design
 
-> **Public design overview for DeepAgent Core V4.0.4 / Desktop 1.4.2.** Internal implementation details and roadmap documents live in the private `docs/` tree and are intentionally not version-controlled.
+> **Public design overview for DeepAgent Core V4.0.4_r8 / Desktop 1.4.3.** Internal implementation details and roadmap documents live in the private `docs/` tree and are intentionally not version-controlled.
 
 DeepAgent Code is a document-centered, event-driven AI coding system. It combines a coding-agent runtime with a durable control plane that owns context, planning, learning, collaboration, safety, and human oversight.
 
@@ -22,7 +22,13 @@ Sessions, inputs, plans, documents, goals, events, approvals, and learning decis
 
 A user instruction is durably admitted before execution is scheduled. A successful API response therefore means the instruction is recorded, not merely present in a process-local queue.
 
-DeepAgent is built **on top of** the opencode agent/runtime/session/tool/MCP stack. V4.0.4 strengthens the control plane without replacing the current turn engine, tool system, or provider layer.
+DeepAgent is built **on top of** the opencode agent/runtime/session/tool/MCP stack. V4.0.4_r8 strengthens the control plane without replacing the current turn engine, tool system, or provider layer.
+
+### Durable delegated execution
+
+A delegated task is admitted before provider work begins and is identified independently from the tool-call attempt that submitted it. Exact retries reconcile to the same TaskRun; conflicting reuse fails closed. Generation, execution owner, lease, phase, terminal state, result reference, and parent-notification delivery are durable records. Active mutations and terminal settlement require the expected generation, owner, and live lease, while notification delivery uses an attempt-fenced outbox so crash recovery cannot repeat provider work or acknowledge another claimant's delivery.
+
+Structured work uses two explicit stages. The research stage retains the child Agent's normal tools and transcript. The finalizer is a bounded, single provider turn with a narrow ephemeral tool registry, no task or compaction history, no ordinary steering, and a per-turn reasoning/tool-choice decision derived from provider capability. Completion is valid only after schema-validated structured output is persisted; provider, schema, permission, timeout, interruption, and no-progress failures remain distinct recoverable states.
 
 ### 2. One durable authority per concern
 

@@ -39,6 +39,7 @@ import { InstanceStore } from "@/project/instance-store"
 import { InstanceBootstrap } from "@/project/bootstrap-service"
 import * as Truncate from "./truncate"
 import { ApplyPatchTool } from "./apply_patch"
+import { ApplyPatchChunkTool } from "./apply_patch_chunk"
 import { Glob } from "@deepagent-code/core/util/glob"
 import path from "path"
 import { pathToFileURL } from "url"
@@ -145,6 +146,7 @@ export const layer: Layer.Layer<
     const edit = yield* EditTool
     const greptool = yield* GrepTool
     const patchtool = yield* ApplyPatchTool
+    const patchchunk = yield* ApplyPatchChunkTool
     const skilltool = yield* SkillTool
     const codeintel = yield* CodeIntelTool
     const profiletool = yield* ProfileTool
@@ -267,6 +269,7 @@ export const layer: Layer.Layer<
           search: Tool.init(websearch),
           skill: Tool.init(skilltool),
           patch: Tool.init(patchtool),
+          patch_chunk: Tool.init(patchchunk),
           question: Tool.init(question),
           lsp: Tool.init(lsptool),
           code_intel: Tool.init(codeintel),
@@ -296,6 +299,7 @@ export const layer: Layer.Layer<
             tool.search,
             tool.skill,
             tool.patch,
+            tool.patch_chunk,
             tool.planwrite,
             ...(flags.experimentalLspTool ? [tool.lsp] : []),
             ...(flags.codeIntelTool ? [tool.code_intel] : []),
@@ -339,11 +343,6 @@ export const layer: Layer.Layer<
         if (tool.id === WebSearchTool.id) {
           return webSearchEnabled(input.providerID, { exa: flags.enableExa, parallel: flags.enableParallel })
         }
-
-        const usePatch =
-          input.modelID.includes("gpt-") && !input.modelID.includes("oss") && !input.modelID.includes("gpt-4")
-        if (tool.id === ApplyPatchTool.id) return usePatch
-        if (tool.id === EditTool.id || tool.id === WriteTool.id) return !usePatch
 
         return true
       })

@@ -127,22 +127,28 @@ export async function bootstrapGlobal(input: {
   setGlobalStore: SetStoreFunction<GlobalStore>
   queryClient: QueryClient
 }) {
-  const slow = [
+  // FAST PATH — minimum data needed before the first session renders.
+  // config: gates feature flags; project list: gates sidebar + project routing.
+  // Both are awaited so the UI is never shown with a structurally incomplete store.
+  const fast = [
     () => input.queryClient.fetchQuery(loadGlobalConfigQuery(input.scope, input.serverSDK)),
-    () => input.queryClient.fetchQuery(loadProvidersQuery(input.scope, null, input.serverSDK)),
-    () => input.queryClient.fetchQuery(loadPathQuery(input.scope, null, input.serverSDK)),
     () =>
       input.queryClient
         .fetchQuery(loadProjectsQuery(input.scope, input.serverSDK))
         .then((data) => input.setGlobalStore("project", data)),
   ]
-  await runAll(slow)
-  // showErrors({
-  //   errors: errors(),
-  //   title: input.requestFailedTitle,
-  //   translate: input.translate,
-  //   formatMoreCount: input.formatMoreCount,
-  // })
+  await runAll(fast)
+
+  // SLOW PATH — secondary data that enriches the UI but does not block rendering.
+  // Providers and path are not needed for the session list or initial navigation;
+  // load them in the background so they become available shortly after first paint.
+  void runAll([
+    () => input.queryClient.fetchQuery(loadProvidersQuery(input.scope, null, input.serverSDK)),
+    () => input.queryClient.fetchQuery(loadPathQuery(input.scope, null, input.serverSDK)),
+  ]).then((results) => {
+    const errs = errors(results).filter((e) => !isCancellation(e))
+    if (errs.length > 0) console.error("[bootstrapGlobal] slow-path failed:", errs[0])
+  })
 }
 
 function groupBySession<T extends { id: string; sessionID: string }>(input: T[]) {

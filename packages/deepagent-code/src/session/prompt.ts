@@ -61,10 +61,25 @@ import { Truncate } from "@/tool/truncate"
 import { Image } from "@/image/image"
 import { decodeDataUrl } from "@/util/data-url"
 import { Process } from "@/util/process"
-import { Cause, Data, Effect, Exit, Latch, Layer, Option, Scope, Context, Schema, Types } from "effect"
+import {
+  Cause,
+  Context,
+  Data,
+  Duration,
+  Effect,
+  Exit,
+  Fiber,
+  Latch,
+  Layer,
+  Option,
+  Schedule,
+  Schema,
+  Scope,
+  Types,
+} from "effect"
 import * as EffectLogger from "@deepagent-code/core/effect/logger"
 import { InstanceState } from "@/effect/instance-state"
-import { TaskTool, type TaskPromptOps } from "@/tool/task"
+import { projectRecoveredSubagentRun, TaskTool, type TaskPromptOps } from "@/tool/task"
 import { SessionRunState } from "./run-state"
 import { SessionSteer } from "./steer"
 import { writeGovernanceAudit } from "./goal-governance-audit"
@@ -94,6 +109,10 @@ import { LLMEvent } from "@deepagent-code/llm"
 import { ConversationLogWriter } from "./conversation-log-writer"
 import { collectVolatileFacts, refreshWorldState } from "./context-ledger"
 import { CodeIndexTrigger } from "./code-index-trigger"
+import { ToolSemanticFingerprint } from "@/tool/semantic-fingerprint"
+import { deliverTaskNotifications, recoverExpiredTaskRuns } from "@/tool/task-run"
+import { registerDisposer, registerInitializer } from "@/effect/instance-registry"
+import { InstanceRef } from "@/effect/instance-ref"
 
 // @ts-ignore
 globalThis.AI_SDK_LOG_WARNINGS = false
@@ -139,6 +158,41 @@ function isOrphanedInterruptedTool(part: SessionV1.ToolPart) {
   return part.state.status === "error" && part.state.metadata?.interrupted === true
 }
 
+function isStructuredFinalizer(metadata: unknown) {
+  if (!isRecord(metadata)) return false
+  if (!isRecord(metadata.deepagent)) return false
+  return isRecord(metadata.deepagent.structured_finalizer)
+}
+
+function noninteractiveTaskActivity(metadata: unknown) {
+  if (!isRecord(metadata)) return false
+  if (!isRecord(metadata.deepagent)) return undefined
+  if (!isRecord(metadata.deepagent.task_activity)) return undefined
+  const activity = metadata.deepagent.task_activity
+  if (activity.interactive !== false) return undefined
+  if (!isRecord(activity.budget)) return { interactive: false as const }
+  const positive = (value: unknown) =>
+    typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined
+  return {
+    interactive: false as const,
+    startedAt: positive(activity.started_at),
+    maxSteps: positive(activity.budget.max_steps),
+    maxTokens: positive(activity.budget.max_tokens),
+    maxWallMs: positive(activity.budget.max_wall_ms),
+    maxNoProgress: positive(activity.budget.max_no_progress),
+  }
+}
+
+function taskNotification(metadata: unknown) {
+  if (!isRecord(metadata)) return undefined
+  if (!isRecord(metadata.deepagent)) return undefined
+  if (!isRecord(metadata.deepagent.task_notification)) return undefined
+  const runID = metadata.deepagent.task_notification.run_id
+  const outboxID = metadata.deepagent.task_notification.outbox_id
+  if (typeof runID !== "string" || typeof outboxID !== "string") return undefined
+  return { runID, outboxID }
+}
+
 // §S1.2 — a goal in one of these phases is no longer ticking, so a "goal_steer" would never be drained.
 // promptOrSteer routes to the plain "steer" channel (or a fresh turn) instead. Mirrors goal-manager's
 // isTerminalGoalPhase (kept as a local const to avoid a circular import: goal-manager imports this file).
@@ -149,13 +203,9 @@ class InvalidInput extends Data.TaggedError("SessionPrompt.InvalidInput")<{ read
 // §S1.2 — convert PromptInput parts to the durable Prompt model used by the steer buffer.
 // All part types that have a Prompt equivalent are preserved; subtask parts are explicitly rejected
 // so they never produce a silent empty steer. The steer caller should surface this as a client error.
-const promptInputToPrompt = (
-  parts: PromptInput["parts"],
-): Effect.Effect<Prompt, InvalidInput> => {
+const promptInputToPrompt = (parts: PromptInput["parts"]): Effect.Effect<Prompt, InvalidInput> => {
   if (parts.some((p) => p.type === "subtask"))
-    return Effect.fail(
-      new InvalidInput({ message: "Subtask prompt parts cannot be steered while a session is busy" }),
-    )
+    return Effect.fail(new InvalidInput({ message: "Subtask prompt parts cannot be steered while a session is busy" }))
   const text = parts
     .filter((p): p is Extract<PromptInput["parts"][number], { type: "text" }> => p.type === "text")
     .map((p) => p.text)
@@ -175,9 +225,7 @@ const promptInputToPrompt = (
     .filter((p): p is Extract<PromptInput["parts"][number], { type: "agent" }> => p.type === "agent")
     .map((p) => new AgentAttachment({ name: p.name }))
   if (text.length === 0 && files.length === 0 && agents.length === 0)
-    return Effect.fail(
-      new InvalidInput({ message: "Steer prompt must contain at least one supported part" }),
-    )
+    return Effect.fail(new InvalidInput({ message: "Steer prompt must contain at least one supported part" }))
   return Effect.succeed(
     Prompt.fromUserMessage({
       text,
@@ -1695,6 +1743,25 @@ export const layer = Layer.effect(
     const prompt: (input: PromptInput) => Effect.Effect<SessionV1.WithParts, Image.Error> = Effect.fn(
       "SessionPrompt.prompt",
     )(function* (input: PromptInput) {
+      const notification = taskNotification(input.metadata)
+      if (notification && input.messageID) {
+        const existing = yield* MessageV2.get({ sessionID: input.sessionID, messageID: input.messageID }).pipe(
+          Effect.provideService(Database.Service, database),
+          Effect.catchCause(() => Effect.succeed(undefined)),
+        )
+        if (existing) {
+          const persisted = existing.info.role === "user" ? taskNotification(existing.info.metadata) : undefined
+          if (
+            existing.info.role !== "user" ||
+            persisted?.runID !== notification.runID ||
+            persisted.outboxID !== notification.outboxID
+          )
+            return yield* Effect.die(
+              new Error(`Task notification message ID ${input.messageID} conflicts with persisted content`),
+            )
+          return existing
+        }
+      }
       const session = yield* sessions.get(input.sessionID).pipe(Effect.orDie)
       yield* revert.cleanup(session)
       const pipeline = yield* buildPromptPipelineSubmission(input)
@@ -1722,6 +1789,7 @@ export const layer = Layer.effect(
 
       if (input.noReply === true) return message
       const first = yield* loop({ sessionID: input.sessionID })
+      if (isStructuredFinalizer(input.metadata)) return first
       // V3 Plan A: mode-driven multi-round autonomous loop for high/max/ultra. It remains
       // fail-closed (any error -> the single-turn result). Real validation (A3),
       // git rollback (A5), revise turn, and the A3 macro-round suggestion are wired.
@@ -1969,8 +2037,7 @@ export const layer = Layer.effect(
         ? {
             providerID: ProviderV2.ID.make(current.model.providerID),
             modelID: ModelV2.ID.make(current.model.id),
-            variant:
-              current.model.variant && current.model.variant !== "default" ? current.model.variant : undefined,
+            variant: current.model.variant && current.model.variant !== "default" ? current.model.variant : undefined,
           }
         : yield* currentModel(sessionID)
       const variant = "variant" in resolved ? resolved.variant : undefined
@@ -2042,15 +2109,13 @@ export const layer = Layer.effect(
       return Option.getOrElse(decodeSoftLanding(raw), () => initialSoftLandingState)
     })
 
-    const writeSoftLandingState: (
-      sessionID: SessionID,
-      state: CompactionSoftLandingState,
-    ) => Effect.Effect<void> = Effect.fn("SessionPrompt.writeSoftLandingState")(function* (sessionID, state) {
-      const session = yield* sessions.get(sessionID).pipe(Effect.orElseSucceed(() => undefined))
-      // Merge into existing metadata so we never clobber a co-tenant key.
-      const metadata = { ...(session?.metadata ?? {}), [SOFT_LANDING_METADATA_KEY]: state }
-      yield* sessions.setMetadata({ sessionID, metadata }).pipe(Effect.ignore)
-    })
+    const writeSoftLandingState: (sessionID: SessionID, state: CompactionSoftLandingState) => Effect.Effect<void> =
+      Effect.fn("SessionPrompt.writeSoftLandingState")(function* (sessionID, state) {
+        const session = yield* sessions.get(sessionID).pipe(Effect.orElseSucceed(() => undefined))
+        // Merge into existing metadata so we never clobber a co-tenant key.
+        const metadata = { ...(session?.metadata ?? {}), [SOFT_LANDING_METADATA_KEY]: state }
+        yield* sessions.setMetadata({ sessionID, metadata }).pipe(Effect.ignore)
+      })
 
     // reminder (soft line): a lightweight, non-compacting tail nudge asking the model to persist key
     // decisions/findings into the plan's evidence/worklog. Reuses the SAME tail-user-message channel as
@@ -2068,29 +2133,26 @@ export const layer = Layer.effect(
       text: string,
       model: { providerID: ProviderV2.ID; modelID: ModelV2.ID },
       agentName: string,
-    ) => Effect.Effect<void> = Effect.fn("SessionPrompt.injectTailReminder")(function* (
-      sessionID,
-      text,
-      model,
-      agentName,
-    ) {
-      const msg = yield* sessions.updateMessage({
-        id: MessageID.ascending(),
-        role: "user",
-        sessionID,
-        agent: agentName,
-        model,
-        time: { created: Date.now() },
-      })
-      yield* sessions.updatePart({
-        id: PartID.ascending(),
-        messageID: msg.id,
-        sessionID,
-        type: "text",
-        synthetic: true,
-        text,
-      })
-    })
+    ) => Effect.Effect<void> = Effect.fn("SessionPrompt.injectTailReminder")(
+      function* (sessionID, text, model, agentName) {
+        const msg = yield* sessions.updateMessage({
+          id: MessageID.ascending(),
+          role: "user",
+          sessionID,
+          agent: agentName,
+          model,
+          time: { created: Date.now() },
+        })
+        yield* sessions.updatePart({
+          id: PartID.ascending(),
+          messageID: msg.id,
+          sessionID,
+          type: "text",
+          synthetic: true,
+          text,
+        })
+      },
+    )
 
     // fallback ("临终笔记" line): the last chance before a hard compaction. All tools stay available so
     // the model can call the plan-edit tool to固化 un-persisted state. Under a goal (loop/design) mode we
@@ -2123,6 +2185,14 @@ export const layer = Layer.effect(
       "</system-reminder>",
     ].join("\n")
 
+    const TOOL_INPUT_CONTINUE_TAIL_TEXT = [
+      "<system-reminder>",
+      "你上一轮的工具输入因达到输出长度上限而被截断，系统没有执行该工具，也没有应用其中的文件修改。",
+      "不要原样重发同一个大型 JSON 工具调用。将修改拆小；对于大型 write/edit/apply_patch，改用 `apply_patch_chunk`，",
+      "每个 patchText 块不超过 12000 UTF-8 字节（中文建议不超过约 4000 字）。begin 使用 offset 0；之后每次 append 和最终 commit 都使用上一结果返回的 nextOffset。",
+      "</system-reminder>",
+    ].join("\n")
+
     // V4.0.1 P1 (§3.3) — post-hard-compaction World State re-injection. After a hard compaction the
     // (now-narrowed) summary deliberately dropped file/env/diagnostics; this re-injects their LATEST
     // values as a TAIL user block (reuses the SAME injectTailReminder primitive — never the static system
@@ -2134,17 +2204,14 @@ export const layer = Layer.effect(
       workspacePath: string | undefined,
       model: { providerID: ProviderV2.ID; modelID: ModelV2.ID },
       agentName: string,
-    ) => Effect.Effect<void> = Effect.fn("SessionPrompt.injectWorldStateTail")(function* (
-      sessionID,
-      workspacePath,
-      model,
-      agentName,
-    ) {
-      if (!workspacePath) return
-      const facts = yield* collectVolatileFacts(workspacePath)
-      const rendered = yield* refreshWorldState({ workspacePath, facts })
-      if (rendered.trim().length > 0) yield* injectTailReminder(sessionID, rendered, model, agentName)
-    })
+    ) => Effect.Effect<void> = Effect.fn("SessionPrompt.injectWorldStateTail")(
+      function* (sessionID, workspacePath, model, agentName) {
+        if (!workspacePath) return
+        const facts = yield* collectVolatileFacts(workspacePath)
+        const rendered = yield* refreshWorldState({ workspacePath, facts })
+        if (rendered.trim().length > 0) yield* injectTailReminder(sessionID, rendered, model, agentName)
+      },
+    )
 
     const runLoop: (sessionID: SessionID, drainFirst?: boolean) => Effect.Effect<SessionV1.WithParts> = Effect.fn(
       "SessionPrompt.run",
@@ -2183,7 +2250,30 @@ export const layer = Layer.effect(
         // V3.9 §A: `lsp` enables the AST symbol pass (symbol nodes + imports/calls edges) over the
         // content-sha-changed files; a language with no LSP client degrades to the file-level view.
         // SEAM: incremental mtime-gated fs-walking is the remaining follow-up (see code-index-trigger.ts).
-        if (!indexedSessions.has(sessionID)) {
+        const initialMessages = yield* MessageV2.filterCompactedEffect(sessionID).pipe(
+          Effect.provideService(Database.Service, database),
+        )
+        const initialUser = MessageV2.latest(initialMessages).user
+        const initialFinalizer = isStructuredFinalizer(initialUser?.metadata)
+        const taskActivity = noninteractiveTaskActivity(initialUser?.metadata) || undefined
+        const failTaskBudget = Effect.fn("SessionPrompt.failTaskBudget")(function* (
+          assistant: SessionV1.Assistant,
+          budget: "steps" | "tokens" | "wall_time",
+          limit: number,
+          used: number,
+        ) {
+          assistant.error = new SessionV1.TaskBudgetExceededError({
+            message: `Subagent research ${budget} budget exhausted (${used}/${limit}).`,
+            budget,
+            limit,
+            used,
+          }).toObject()
+          assistant.finish = "error"
+          assistant.time.completed = Date.now()
+          yield* sessions.updateMessage(assistant)
+          yield* slog.warn("subagent.research.failed", { reason: "budget_exhausted", budget, limit, used })
+        })
+        if (!initialFinalizer && !indexedSessions.has(sessionID)) {
           indexedSessions.add(sessionID)
           yield* CodeIndexTrigger.indexWorkspace({ workspacePath: ctx.directory, fsys, lsp }).pipe(
             Effect.asVoid,
@@ -2218,10 +2308,31 @@ export const layer = Layer.effect(
           const { user: lastUser, assistant: lastAssistant, finished: lastFinished, tasks } = MessageV2.latest(msgs)
 
           if (!lastUser) throw new Error("No user message found in stream. This should never happen.")
+          const finalizerMode = isStructuredFinalizer(lastUser.metadata)
 
           const lastAssistantMsg = msgs.findLast(
             (msg) => msg.info.role === "assistant" && msg.info.id === lastAssistant?.id,
           )
+          const tokenUsage = taskActivity
+            ? msgs
+                .filter(
+                  (item): item is SessionV1.WithParts & { info: SessionV1.Assistant } =>
+                    item.info.role === "assistant" && (!initialUser || item.info.id > initialUser.id),
+                )
+                .reduce(
+                  (sum, item) => sum + item.info.tokens.input + item.info.tokens.output + item.info.tokens.reasoning,
+                  0,
+                )
+            : 0
+          const elapsed = taskActivity?.startedAt ? Math.max(0, Date.now() - taskActivity.startedAt) : 0
+          if (lastAssistant && taskActivity?.maxTokens && tokenUsage >= taskActivity.maxTokens) {
+            yield* failTaskBudget(lastAssistant, "tokens", taskActivity.maxTokens, tokenUsage)
+            break
+          }
+          if (lastAssistant && taskActivity?.maxWallMs && elapsed >= taskActivity.maxWallMs) {
+            yield* failTaskBudget(lastAssistant, "wall_time", taskActivity.maxWallMs, elapsed)
+            break
+          }
           // Some providers return "stop" even when the assistant message contains
           // tool calls. Keep the loop running so tool results can be sent back to
           // the model, but ignore cleanup-marked interrupted orphans.
@@ -2229,6 +2340,9 @@ export const layer = Layer.effect(
             lastAssistantMsg?.parts.some(
               (part) => part.type === "tool" && !part.metadata?.providerExecuted && !isOrphanedInterruptedTool(part),
             ) ?? false
+          const orphan = lastAssistantMsg?.parts.find(
+            (part): part is SessionV1.ToolPart => part.type === "tool" && isOrphanedInterruptedTool(part),
+          )
 
           if (
             lastAssistant?.finish &&
@@ -2248,18 +2362,24 @@ export const layer = Layer.effect(
               const done = sls.outputContinuationCount ?? 0
               if (done < outputContinuationMax()) {
                 yield* writeSoftLandingState(sessionID, { ...sls, outputContinuationCount: done + 1 })
-                yield* injectTailReminder(sessionID, OUTPUT_CONTINUE_TAIL_TEXT, lastUser.model, lastUser.agent)
+                yield* injectTailReminder(
+                  sessionID,
+                  orphan?.state.status === "error" && orphan.state.metadata?.incompleteInput === true
+                    ? TOOL_INPUT_CONTINUE_TAIL_TEXT
+                    : OUTPUT_CONTINUE_TAIL_TEXT,
+                  lastUser.model,
+                  lastUser.agent,
+                )
                 yield* slog.info("output soft-landing: continuing after length cutoff", {
                   continuation: done + 1,
                   max: outputContinuationMax(),
                 })
                 continue
               }
-              yield* slog.warn("output soft-landing: continuation cap reached, ending turn", { max: outputContinuationMax() })
+              yield* slog.warn("output soft-landing: continuation cap reached, ending turn", {
+                max: outputContinuationMax(),
+              })
             }
-            const orphan = lastAssistantMsg?.parts.find(
-              (part): part is SessionV1.ToolPart => part.type === "tool" && isOrphanedInterruptedTool(part),
-            )
             if (orphan) {
               yield* slog.warn("loop exit with orphaned interrupted tool", {
                 messageID: lastAssistant.id,
@@ -2272,14 +2392,18 @@ export const layer = Layer.effect(
           }
           // Output soft-landing: a natural stop (or any non-length finish that keeps looping via tool
           // calls) resets the consecutive-continuation run so a later length cutoff gets the full budget.
-          if (flags.outputSoftLanding && lastAssistant?.finish && lastAssistant.finish !== "length") {
+          if (!finalizerMode && flags.outputSoftLanding && lastAssistant?.finish && lastAssistant.finish !== "length") {
             const sls = yield* readSoftLandingState(sessionID)
             if ((sls.outputContinuationCount ?? 0) !== 0)
               yield* writeSoftLandingState(sessionID, { ...sls, outputContinuationCount: 0 })
           }
 
           step++
-          if (step === 1) {
+          if (lastAssistant && taskActivity?.maxSteps && step > taskActivity.maxSteps) {
+            yield* failTaskBudget(lastAssistant, "steps", taskActivity.maxSteps, step - 1)
+            break
+          }
+          if (step === 1 && !finalizerMode) {
             yield* title({
               session,
               modelID: lastUser.model.modelID,
@@ -2290,7 +2414,8 @@ export const layer = Layer.effect(
           }
 
           const model = yield* getModel(lastUser.model.providerID, lastUser.model.modelID, sessionID)
-          const task = tasks.pop()
+          const finalizerDecision = finalizerMode ? LLM.finalizerCapability(model) : undefined
+          const task = finalizerMode ? undefined : tasks.pop()
 
           if (task?.type === "subtask") {
             yield* handleSubtask({ task, model, lastUser, sessionID, session, msgs })
@@ -2315,7 +2440,7 @@ export const layer = Layer.effect(
           // "临终笔记" fallback (all tools retained), then the SAME hard compaction. `phase === "hard"` is
           // exactly `isOverflow`, and the reminder/fallback layers never move the hard line, so the
           // compaction trigger is unchanged.
-          if (lastFinished && lastFinished.summary !== true) {
+          if (!finalizerMode && lastFinished && lastFinished.summary !== true) {
             if (!flags.softLandingCompaction) {
               if (yield* compaction.isOverflow({ tokens: lastFinished.tokens, model })) {
                 yield* compaction.create({ sessionID, agent: lastUser.agent, model: lastUser.model, auto: true })
@@ -2386,13 +2511,15 @@ export const layer = Layer.effect(
             yield* events.publish(Session.Event.Error, { sessionID, error: error.toObject() })
             throw error
           }
-          const maxSteps = agent.steps ?? Infinity
+          const maxSteps = Math.min(agent.steps ?? Infinity, taskActivity?.maxSteps ?? Infinity)
           const isLastStep = step >= maxSteps
-          msgs = yield* SessionReminders.apply({ messages: msgs, agent, session }).pipe(
-            Effect.provideService(RuntimeFlags.Service, flags),
-            Effect.provideService(FSUtil.Service, fsys),
-            Effect.provideService(Session.Service, sessions),
-          )
+          if (!finalizerMode) {
+            msgs = yield* SessionReminders.apply({ messages: msgs, agent, session }).pipe(
+              Effect.provideService(RuntimeFlags.Service, flags),
+              Effect.provideService(FSUtil.Service, fsys),
+              Effect.provideService(Session.Service, sessions),
+            )
+          }
 
           const msg: SessionV1.Assistant = {
             id: MessageID.ascending(),
@@ -2411,6 +2538,20 @@ export const layer = Layer.effect(
           }
           yield* sessions.updateMessage(msg)
 
+          if (finalizerDecision?.capability === "unsupported") {
+            msg.error = new NamedError.Unknown({
+              message: `[${finalizerDecision.reason}] Structured finalization requires tool-call capability.`,
+            }).toObject()
+            msg.finish = "error"
+            msg.time.completed = Date.now()
+            yield* sessions.updateMessage(msg)
+            yield* slog.warn("subagent.finalize.failed", {
+              reason: finalizerDecision.reason,
+              protocol: finalizerDecision.protocol,
+            })
+            break
+          }
+
           const finalizeInterruptedAssistant = Effect.gen(function* () {
             if (msg.time.completed) return
             msg.error ??= MessageV2.fromError(new DOMException("Aborted", "AbortError"), {
@@ -2427,6 +2568,8 @@ export const layer = Layer.effect(
               sessionID,
               model,
               sequenceTracker: toolSequenceTracker,
+              loopPolicy: finalizerMode || taskActivity ? "error" : "ask",
+              noProgressLimit: taskActivity?.maxNoProgress,
             })
             .pipe(Effect.onInterrupt(() => finalizeInterruptedAssistant))
 
@@ -2435,22 +2578,24 @@ export const layer = Layer.effect(
             const bypassAgentCheck = lastUserMsg?.parts.some((p) => p.type === "agent") ?? false
             const promptOps = yield* ops()
 
-            const tools = yield* SessionTools.resolve({
-              agent,
-              session,
-              model,
-              processor: handle,
-              bypassAgentCheck,
-              messages: msgs,
-              promptOps,
-            }).pipe(
-              Effect.provideService(Plugin.Service, plugin),
-              Effect.provideService(Permission.Service, permission),
-              Effect.provideService(ToolRegistry.Service, registry),
-              Effect.provideService(MCP.Service, mcp),
-              Effect.provideService(Truncate.Service, truncate),
-              Effect.provideService(RuntimeFlags.Service, flags),
-            )
+            const tools: Record<string, AITool> = finalizerMode
+              ? {}
+              : yield* SessionTools.resolve({
+                  agent,
+                  session,
+                  model,
+                  processor: handle,
+                  bypassAgentCheck,
+                  messages: msgs,
+                  promptOps,
+                }).pipe(
+                  Effect.provideService(Plugin.Service, plugin),
+                  Effect.provideService(Permission.Service, permission),
+                  Effect.provideService(ToolRegistry.Service, registry),
+                  Effect.provideService(MCP.Service, mcp),
+                  Effect.provideService(Truncate.Service, truncate),
+                  Effect.provideService(RuntimeFlags.Service, flags),
+                )
 
             if (lastUser.format?.type === "json_schema") {
               tools["StructuredOutput"] = createStructuredOutputTool({
@@ -2460,8 +2605,14 @@ export const layer = Layer.effect(
                 },
               })
             }
+            toolSequenceTracker.setFingerprintResolver((toolName, args) =>
+              ToolSemanticFingerprint.resolve(tools[toolName], args),
+            )
+            toolSequenceTracker.setResultFingerprintResolver((toolName, result) =>
+              ToolSemanticFingerprint.resolveResult(tools[toolName], result),
+            )
 
-            if (step === 1)
+            if (step === 1 && !finalizerMode)
               yield* summary.summarize({ sessionID, messageID: lastUser.id }).pipe(Effect.ignore, Effect.forkIn(scope))
 
             if (step > 1 && lastFinished) {
@@ -2482,7 +2633,7 @@ export const layer = Layer.effect(
               }
             }
 
-            yield* plugin.trigger("experimental.chat.messages.transform", {}, { messages: msgs })
+            if (!finalizerMode) yield* plugin.trigger("experimental.chat.messages.transform", {}, { messages: msgs })
 
             // PR-1: Compute terminal boundary for reasoning model-view projection.
             // The most recent settled assistant message (has finish, no pending tool calls)
@@ -2503,18 +2654,29 @@ export const layer = Layer.effect(
               }
             }
 
-            const [skills, env, instructions, modelMsgs] = yield* Effect.all([
-              sys.skills(agent),
-              sys.environment(model),
-              instruction.system().pipe(Effect.orDie),
-              MessageV2.toModelMessagesEffect(msgs, model, { terminalBoundaryID }),
-            ])
-            const system = [...env, ...instructions, ...(skills ? [skills] : [])]
             const format = lastUser.format ?? { type: "text" as const }
+            const modelMsgs = yield* MessageV2.toModelMessagesEffect(
+              finalizerMode ? msgs.filter((item) => item.info.id === lastUser.id) : msgs,
+              model,
+              { terminalBoundaryID },
+            )
+            const system = finalizerMode
+              ? [
+                  buildStructuredOutputSystemPrompt(format.type === "json_schema" ? format.schema : {}),
+                  "This is a bounded finalizer turn. Read the supplied research result and call StructuredOutput once. No research or other work is permitted.",
+                ]
+              : yield* Effect.all([
+                  sys.skills(agent),
+                  sys.environment(model),
+                  instruction.system().pipe(Effect.orDie),
+                ]).pipe(
+                  Effect.map(([skills, env, instructions]) => [...env, ...instructions, ...(skills ? [skills] : [])]),
+                )
             // P1: inject schema-aware prompt so the model knows the exact field names even
             // during extended-thinking (xhigh) reasoning where the tool definition may not
             // be immediately visible when the model starts generating its thinking tokens.
-            if (format.type === "json_schema") system.push(buildStructuredOutputSystemPrompt(format.schema))
+            if (!finalizerMode && format.type === "json_schema")
+              system.push(buildStructuredOutputSystemPrompt(format.schema))
             const result = yield* handle.process({
               user: lastUser,
               agent,
@@ -2525,13 +2687,25 @@ export const layer = Layer.effect(
               messages: [...modelMsgs, ...(isLastStep ? [{ role: "assistant" as const, content: MAX_STEPS }] : [])],
               tools,
               model,
-              toolChoice: format.type === "json_schema" ? "required" : undefined,
+              toolChoice: finalizerDecision?.toolChoice ?? (format.type === "json_schema" ? "required" : undefined),
+              reasoning: finalizerDecision?.reasoning,
             })
 
             if (structured !== undefined) {
               handle.message.structured = structured
               handle.message.finish = handle.message.finish ?? "stop"
               yield* sessions.updateMessage(handle.message)
+              return "break" as const
+            }
+
+            if (finalizerMode) {
+              if (!handle.message.error) {
+                handle.message.error = new SessionV1.StructuredOutputError({
+                  message: "Finalizer did not produce valid structured output",
+                  retries: 1,
+                }).toObject()
+                yield* sessions.updateMessage(handle.message)
+              }
               return "break" as const
             }
 
@@ -2567,9 +2741,8 @@ export const layer = Layer.effect(
               const currentAssistantMsg = latestMsgs.findLast(
                 (m) => m.info.role === "assistant" && m.info.id === handle.message.id,
               )
-              const hadStructuredOutputCall = currentAssistantMsg?.parts.some(
-                (p) => p.type === "tool" && p.tool === "StructuredOutput",
-              ) ?? false
+              const hadStructuredOutputCall =
+                currentAssistantMsg?.parts.some((p) => p.type === "tool" && p.tool === "StructuredOutput") ?? false
 
               if (hadStructuredOutputCall) {
                 const retryMax = format.retryCount ?? 2
@@ -2637,7 +2810,7 @@ export const layer = Layer.effect(
           // it (codex: needsFollowUp = modelSaidContinue || pendingInput-nonempty). A non-consuming peek;
           // the actual drain (consume-once) happens at the next iteration's top. Gated by the flag.
           if (outcome === "break") {
-            if (flags.v4Steering && (yield* steerBuffer.hasPending(sessionID))) {
+            if (!finalizerMode && flags.v4Steering && (yield* steerBuffer.hasPending(sessionID))) {
               yield* slog.info("steer pending at model boundary, continuing to absorb")
               continue
             }
@@ -2668,22 +2841,22 @@ export const layer = Layer.effect(
       prompt: Prompt
       delivery?: SessionSteer.Delivery
       messageID?: SessionMessage.ID
-    }) => Effect.Effect<SessionSteer.Admitted> = Effect.fn(
-      "SessionPrompt.steer",
-    )(function* (input) {
+    }) => Effect.Effect<SessionSteer.Admitted> = Effect.fn("SessionPrompt.steer")(function* (input) {
       if (!flags.v4Steering)
         return yield* Effect.die(new NamedError.Unknown({ message: "Steering is disabled (v4Steering=false)" }))
       const delivery = input.delivery ?? "steer"
-      const admitted = yield* steerBuffer.admit({
-        sessionID: input.sessionID,
-        prompt: input.prompt,
-        delivery,
-        correlationID: input.messageID,
-      }).pipe(
-        Effect.catchTag("SessionSteer.CorrelationConflict", () =>
-          Effect.die(new NamedError.Unknown({ message: "Steer correlation conflict: duplicate follow-up" })),
-        ),
-      )
+      const admitted = yield* steerBuffer
+        .admit({
+          sessionID: input.sessionID,
+          prompt: input.prompt,
+          delivery,
+          correlationID: input.messageID,
+        })
+        .pipe(
+          Effect.catchTag("SessionSteer.CorrelationConflict", () =>
+            Effect.die(new NamedError.Unknown({ message: "Steer correlation conflict: duplicate follow-up" })),
+          ),
+        )
       yield* elog.info("steer admitted", {
         sessionID: input.sessionID,
         messageID: admitted.id,
@@ -2721,9 +2894,7 @@ export const layer = Layer.effect(
       const goalActive = goal != null && !TERMINAL_GOAL_PHASES.has(goal.phase)
       if (goalActive) {
         const steerPrompt = yield* promptInputToPrompt(input.parts).pipe(
-          Effect.catchTag("SessionPrompt.InvalidInput", (e) =>
-            Effect.die(e),
-          ),
+          Effect.catchTag("SessionPrompt.InvalidInput", (e) => Effect.die(e)),
         )
         const admitted = yield* steer({
           sessionID: input.sessionID,
@@ -2746,9 +2917,7 @@ export const layer = Layer.effect(
         return { kind: "turn" as const, message }
       }
       const steerPrompt = yield* promptInputToPrompt(input.parts).pipe(
-        Effect.catchTag("SessionPrompt.InvalidInput", (e) =>
-          Effect.die(e),
-        ),
+        Effect.catchTag("SessionPrompt.InvalidInput", (e) => Effect.die(e)),
       )
       const admitted = yield* steer({
         sessionID: input.sessionID,
@@ -2894,6 +3063,71 @@ export const layer = Layer.effect(
       })
       return result
     })
+
+    const notificationWorkers = new Map<string, Fiber.Fiber<void, never>>()
+    const startNotificationWorker = registerInitializer((ctx) =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          if (notificationWorkers.has(ctx.directory)) return
+          const owner = `task-notification:${process.pid}:${randomUUID()}`
+          const pump = recoverExpiredTaskRuns({ directory: ctx.directory }).pipe(
+            Effect.tap((runs) =>
+              Effect.forEach(
+                runs,
+                (run) => projectRecoveredSubagentRun(sessions, run).pipe(Effect.provideService(InstanceRef, ctx)),
+                { discard: true },
+              ),
+            ),
+            Effect.flatMap(() =>
+              deliverTaskNotifications({
+                owner,
+                directory: ctx.directory,
+                limit: 1,
+                deliver: (item) =>
+                  prompt({
+                    messageID: item.messageID,
+                    sessionID: item.parentSessionID,
+                    agent: item.payload.agent,
+                    variant: item.payload.variant,
+                    metadata: {
+                      deepagent: {
+                        task_notification: { run_id: item.runID, outbox_id: item.id },
+                      },
+                    },
+                    parts: [{ type: "text", synthetic: true, text: item.payload.text }],
+                  }).pipe(Effect.provideService(InstanceRef, ctx), Effect.asVoid),
+              }),
+            ),
+            Effect.provideService(Database.Service, database),
+            Effect.catchCause((cause) =>
+              Effect.sync(() =>
+                log.error("task notification pump failed", { directory: ctx.directory, cause: Cause.pretty(cause) }),
+              ).pipe(Effect.as([])),
+            ),
+          )
+          const worker = yield* pump.pipe(
+            Effect.repeat(Schedule.spaced(Duration.seconds(2))),
+            Effect.asVoid,
+            Effect.forkIn(scope),
+          )
+          notificationWorkers.set(ctx.directory, worker)
+        }),
+      ),
+    )
+    const stopNotificationWorker = registerDisposer((directory) => {
+      const worker = notificationWorkers.get(directory)
+      if (!worker) return Promise.resolve()
+      notificationWorkers.delete(directory)
+      return Effect.runPromise(Fiber.interrupt(worker).pipe(Effect.asVoid))
+    })
+    yield* Effect.addFinalizer(() =>
+      Effect.gen(function* () {
+        startNotificationWorker()
+        stopNotificationWorker()
+        yield* Effect.forEach(notificationWorkers.values(), Fiber.interrupt, { discard: true })
+        notificationWorkers.clear()
+      }),
+    )
 
     return Service.of({
       cancel,

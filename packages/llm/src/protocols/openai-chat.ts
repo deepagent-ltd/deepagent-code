@@ -6,14 +6,15 @@ import { HttpTransport } from "../route/transport"
 import { Protocol } from "../route/protocol"
 import {
   LLMEvent,
+  ToolDefinition,
   Usage,
+  type FunctionToolDefinition,
   type FinishReason,
   type LLMRequest,
   type MediaPart,
   type ReasoningPart,
   type TextPart,
   type ToolCallPart,
-  type ToolDefinition,
   type ToolResultContentPart,
 } from "../schema"
 import { isRecord, JsonObject, optionalArray, optionalNull, ProviderShared } from "./shared"
@@ -174,7 +175,7 @@ const invalid = ProviderShared.invalidRequest
 // Lowering is the only place that knows how common LLM messages map onto the
 // OpenAI Chat wire format. Keep provider quirks here instead of leaking native
 // fields into `LLMRequest`.
-const lowerTool = (tool: ToolDefinition): OpenAIChatTool => ({
+const lowerTool = (tool: FunctionToolDefinition): OpenAIChatTool => ({
   type: "function",
   function: {
     name: tool.name,
@@ -340,6 +341,8 @@ const lowerOptions = Effect.fn("OpenAIChat.lowerOptions")(function* (request: LL
 })
 
 const fromRequest = Effect.fn("OpenAIChat.fromRequest")(function* (request: LLMRequest) {
+  if (!request.tools.every(ToolDefinition.isFunction))
+    return yield* invalid("OpenAI Chat does not support custom text tools")
   // `fromRequest` returns the provider body only. Endpoint, auth, framing,
   // validation, and HTTP execution are composed by `Route.make`.
   const generation = request.generation
@@ -430,7 +433,9 @@ const step = (state: ParserState, event: OpenAIChatEvent) =>
     // Finalize accumulated tool inputs eagerly when finish_reason arrives so
     // JSON parse failures fail the stream at the boundary rather than at halt.
     const finished =
-      finishReason !== undefined && state.finishReason === undefined && Object.keys(tools).length > 0
+      (finishReason === "stop" || finishReason === "tool-calls") &&
+      state.finishReason === undefined &&
+      Object.keys(tools).length > 0
         ? yield* ToolStream.finishAll(ADAPTER, tools)
         : undefined
 

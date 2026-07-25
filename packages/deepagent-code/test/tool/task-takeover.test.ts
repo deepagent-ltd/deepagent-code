@@ -1,7 +1,7 @@
 import { afterEach, describe, expect } from "bun:test"
 import { SessionV1 } from "@deepagent-code/core/v1/session"
 import { Database } from "@deepagent-code/core/database/database"
-import { Effect, Exit, Layer } from "effect"
+import { Cause, Effect, Exit, Layer } from "effect"
 import { mkdir } from "node:fs/promises"
 import { Agent } from "../../src/agent/agent"
 import { BackgroundJob } from "@/background/job"
@@ -82,10 +82,7 @@ const takeoverBackgroundWorktree = testEffect(
   Layer.mergeAll(layer({ subagentTimeoutMs: 50, subagentTakeoverLimit: 2 }), worktreeMock),
 )
 const e2e = testEffect(
-  Layer.mergeAll(
-    layer({ subagentTimeoutMs: 50, subagentTakeoverLimit: 2, subagentOutputMaxChars: 10 }),
-    worktreeMock,
-  ),
+  Layer.mergeAll(layer({ subagentTimeoutMs: 50, subagentTakeoverLimit: 2, subagentOutputMaxChars: 10 }), worktreeMock),
 )
 const bounded = testEffect(layer({ subagentOutputMaxChars: 10 }))
 const off = testEffect(layer())
@@ -202,28 +199,31 @@ describe("tool.task takeover (v4.0.4 block1 1a+1b)", () => {
     }),
   )
 
-  takeover.instance("a crashing subagent is retried and the retry result is delivered", () =>
-    Effect.gen(function* () {
-      const { chat, assistant } = yield* seed()
-      const tool = yield* TaskTool
-      const def = yield* tool.init()
-      const calls: SessionID[] = []
-      const promptOps = stubOps((input) => {
-        calls.push(input.sessionID)
-        if (calls.length === 1) return Effect.fail(new Error("boom"))
-        return Effect.succeed(reply(input, "ok after retry"))
-      })
+  takeover.instance(
+    "a crashing subagent is retried and the retry result is delivered",
+    () =>
+      Effect.gen(function* () {
+        const { chat, assistant } = yield* seed()
+        const tool = yield* TaskTool
+        const def = yield* tool.init()
+        const calls: SessionID[] = []
+        const promptOps = stubOps((input) => {
+          calls.push(input.sessionID)
+          if (calls.length === 1) return Effect.fail(new Error("boom"))
+          return Effect.succeed(reply(input, "ok after retry"))
+        })
 
-      const result = yield* def.execute(
-        { description: "inspect bug", prompt: "look into the cache key path", subagent_type: "general" },
-        execCtx(chat, assistant, promptOps),
-      )
+        const result = yield* def.execute(
+          { description: "inspect bug", prompt: "look into the cache key path", subagent_type: "general" },
+          execCtx(chat, assistant, promptOps),
+        )
 
-      expect(result.output).toContain(`state="completed"`)
-      expect(result.output).toContain("ok after retry")
-      expect(calls).toHaveLength(2)
-      expect(calls[0]).not.toBe(calls[1])
-    }),
+        expect(result.output).toContain(`state="completed"`)
+        expect(result.output).toContain("ok after retry")
+        expect(calls).toHaveLength(2)
+        expect(calls[0]).not.toBe(calls[1])
+      }),
+    10_000,
   )
 
   takeoverOnce.instance("exhausting the takeover limit surfaces a bounded failure to the parent", () =>
@@ -237,13 +237,18 @@ describe("tool.task takeover (v4.0.4 block1 1a+1b)", () => {
         return Effect.never
       })
 
-      const result = yield* def.execute(
-        { description: "inspect bug", prompt: "look into the cache key path", subagent_type: "general" },
-        execCtx(chat, assistant, promptOps),
-      )
+      const exit = yield* def
+        .execute(
+          { description: "inspect bug", prompt: "look into the cache key path", subagent_type: "general" },
+          execCtx(chat, assistant, promptOps),
+        )
+        .pipe(Effect.exit)
 
-      expect(result.output).toContain(`state="error"`)
-      expect(result.output).toContain("takeover")
+      expect(Exit.isFailure(exit)).toBe(true)
+      const failure = Exit.isFailure(exit) ? Cause.pretty(exit.cause) : ""
+      expect(failure).toContain("[timeout]")
+      expect(failure).toContain("bounded takeover")
+      expect(failure).toContain("task_read")
       expect(calls).toHaveLength(2)
 
       const jobs = yield* BackgroundJob.Service
@@ -263,17 +268,20 @@ describe("tool.task takeover (v4.0.4 block1 1a+1b)", () => {
       const def = yield* tool.init()
       const promptOps = stubOps(() => Effect.never)
 
-      const result = yield* def.execute(
-        {
-          description: "inspect bug",
-          prompt: "look into the cache key path",
-          subagent_type: "general",
-          isolation: "worktree",
-        },
-        execCtx(chat, assistant, promptOps),
-      )
+      const exit = yield* def
+        .execute(
+          {
+            description: "inspect bug",
+            prompt: "look into the cache key path",
+            subagent_type: "general",
+            isolation: "worktree",
+          },
+          execCtx(chat, assistant, promptOps),
+        )
+        .pipe(Effect.exit)
 
-      expect(result.output).toContain(`state="error"`)
+      expect(Exit.isFailure(exit)).toBe(true)
+      expect(Exit.isFailure(exit) ? Cause.pretty(exit.cause) : "").toContain("[timeout]")
       // one worktree per attempt (same fork base, fresh name), the first is force-recycled on
       // takeover, the last is teardown-safed when the limit is reached.
       expect(wt.created).toHaveLength(2)

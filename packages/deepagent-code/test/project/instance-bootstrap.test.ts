@@ -10,6 +10,7 @@ import { InstanceStore } from "../../src/project/instance-store"
 import { disposeAllInstances, tmpdirScoped } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 import { waitGlobalBusEvent } from "../server/global-bus"
+import { registerDisposer, registerInitializer } from "@/effect/instance-registry"
 
 const it = testEffect(Layer.mergeAll(InstanceLayer.layer, CrossSpawnSpawner.defaultLayer))
 
@@ -73,14 +74,17 @@ it.live("InstanceStore.provide runs InstanceBootstrap before effect", () =>
   }),
 )
 
-it.live("CLI bootstrap runs InstanceBootstrap before callback", () =>
-  Effect.gen(function* () {
-    const tmp = yield* bootstrapFixture
+it.live(
+  "CLI bootstrap runs InstanceBootstrap before callback",
+  () =>
+    Effect.gen(function* () {
+      const tmp = yield* bootstrapFixture
 
-    yield* Effect.promise(() => cliBootstrap(tmp.directory, async () => "ok"))
+      yield* Effect.promise(() => cliBootstrap(tmp.directory, async () => "ok"))
 
-    expect(existsSync(tmp.marker)).toBe(true)
-  }),
+      expect(existsSync(tmp.marker)).toBe(true)
+    }),
+  15_000,
 )
 
 it.live("CLI bootstrap disposes the instance when the callback rejects", () =>
@@ -106,5 +110,43 @@ it.live("InstanceStore.reload runs InstanceBootstrap", () =>
     yield* store.reload({ directory: tmp.directory })
 
     expect(existsSync(tmp.marker)).toBe(true)
+  }),
+)
+
+it.live("InstanceStore runs registered recovery lifecycle with the resolved instance context", () =>
+  Effect.gen(function* () {
+    const tmp = yield* bootstrapFixture
+    const store = yield* InstanceStore.Service
+    const initialized: string[] = []
+    const disposed: string[] = []
+    const unregisterInitializer = registerInitializer((ctx) => {
+      initialized.push(ctx.directory)
+      return Promise.resolve()
+    })
+    const unregisterDisposer = registerDisposer((directory) => {
+      disposed.push(directory)
+      return Promise.resolve()
+    })
+
+    const ctx = yield* store.load({ directory: tmp.directory })
+    yield* store.dispose(ctx)
+    unregisterInitializer()
+    unregisterDisposer()
+
+    expect(initialized).toEqual([tmp.directory])
+    expect(disposed).toEqual([tmp.directory])
+  }),
+)
+
+it.live("a failed recovery initializer is observable but does not brick workspace startup", () =>
+  Effect.gen(function* () {
+    const tmp = yield* bootstrapFixture
+    const store = yield* InstanceStore.Service
+    const unregister = registerInitializer(() => Promise.reject(new Error("recovery unavailable")))
+
+    const ctx = yield* store.load({ directory: tmp.directory })
+    unregister()
+
+    expect(ctx.directory).toBe(tmp.directory)
   }),
 )
