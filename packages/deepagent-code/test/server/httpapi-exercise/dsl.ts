@@ -66,6 +66,10 @@ class ScenarioBuilder<S = undefined> {
     return this.clone({ capture: "stream" })
   }
 
+  headersOnly() {
+    return this.clone({ capture: "headers" })
+  }
+
   protected() {
     return this.auth("protected")
   }

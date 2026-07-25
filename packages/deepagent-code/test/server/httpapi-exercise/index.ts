@@ -37,6 +37,12 @@ import { runScenario } from "./runner"
 import { disposeApps } from "./backend"
 import { runtime } from "./runtime"
 import { type Scenario } from "./types"
+import { platformScenarios } from "./scenarios/platform"
+import { fileScenarios } from "./scenarios/file"
+import { imScenarios } from "./scenarios/im"
+import { runtimeScenarios } from "./scenarios/runtime"
+import { deepagentScenarios } from "./scenarios/deepagent"
+import { oversightScenarios } from "./scenarios/oversight"
 
 void (await import("@deepagent-code/core/util/log")).init({ print: false })
 
@@ -75,6 +81,12 @@ const deepagentCandidate = (id: string) => ({
 })
 
 const scenarios: Scenario[] = [
+  ...platformScenarios,
+  ...fileScenarios,
+  ...imScenarios,
+  ...runtimeScenarios,
+  ...deepagentScenarios,
+  ...oversightScenarios,
   http.protected
     .get("/global/health", "global.health")
     .global()
