@@ -176,6 +176,9 @@ export const dict = {
   "provider.connect.oauth.auto.confirmationCode": "Confirmation code",
   "provider.connect.toast.connected.title": "{{provider}} connected",
   "provider.connect.toast.connected.description": "{{provider}} models are now available to use.",
+  "provider.models.refresh.refreshing": "Refreshing...",
+  "provider.models.refresh.toast.title": "{{provider}} models refreshed",
+  "provider.models.refresh.toast.description": "{{count}} models are now available.",
 
   "provider.connect.transport.title": "Advanced: request timeouts & retries",
   "provider.connect.transport.description":

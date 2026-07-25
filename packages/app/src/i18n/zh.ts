@@ -201,6 +201,9 @@ export const dict = {
   "provider.connect.oauth.auto.confirmationCode": "确认码",
   "provider.connect.toast.connected.title": "{{provider}} 已连接",
   "provider.connect.toast.connected.description": "现在可以使用 {{provider}} 模型了。",
+  "provider.models.refresh.refreshing": "刷新中...",
+  "provider.models.refresh.toast.title": "{{provider}} 模型已刷新",
+  "provider.models.refresh.toast.description": "当前共有 {{count}} 个可用模型。",
 
   "provider.connect.transport.title": "高级：请求超时与重试",
   "provider.connect.transport.description": "官方 provider 的传输设置独立于配置文件保存。留空则使用默认值。",

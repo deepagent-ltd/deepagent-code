@@ -339,6 +339,8 @@ import type {
   ProviderListResponses,
   ProviderModelsDiscoverErrors,
   ProviderModelsDiscoverResponses,
+  ProviderModelsRefreshErrors,
+  ProviderModelsRefreshResponses,
   ProviderOauthAuthorizeErrors,
   ProviderOauthAuthorizeResponses,
   ProviderOauthCallbackErrors,
@@ -6764,6 +6766,42 @@ export class Models extends HeyApiClient {
         ...options?.headers,
         ...params.headers,
       },
+    })
+  }
+
+  /**
+   * Refresh provider models
+   *
+   * Force-refresh one provider's supported model list and rebuild the provider registry for this instance.
+   */
+  public refresh<ThrowOnError extends boolean = false>(
+    parameters: {
+      providerID: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "providerID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      ProviderModelsRefreshResponses,
+      ProviderModelsRefreshErrors,
+      ThrowOnError
+    >({
+      url: "/provider/{providerID}/models/refresh",
+      ...options,
+      ...params,
     })
   }
 }

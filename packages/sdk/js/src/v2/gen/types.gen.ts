@@ -3184,6 +3184,10 @@ export type ProviderModelDiscoverError = {
   message: string
 }
 
+export type ProviderModelRefreshError = {
+  message: string
+}
+
 export type ProviderAuthAuthorization = {
   url: string
   method: "auto" | "code"
@@ -11880,6 +11884,36 @@ export type ProviderModelsDiscoverResponses = {
 }
 
 export type ProviderModelsDiscoverResponse = ProviderModelsDiscoverResponses[keyof ProviderModelsDiscoverResponses]
+
+export type ProviderModelsRefreshData = {
+  body?: never
+  path: {
+    providerID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/provider/{providerID}/models/refresh"
+}
+
+export type ProviderModelsRefreshErrors = {
+  /**
+   * ProviderModelRefreshError | InvalidRequestError
+   */
+  400: ProviderModelRefreshError | InvalidRequestError
+}
+
+export type ProviderModelsRefreshError = ProviderModelsRefreshErrors[keyof ProviderModelsRefreshErrors]
+
+export type ProviderModelsRefreshResponses = {
+  /**
+   * Provider with refreshed models
+   */
+  200: Provider
+}
+
+export type ProviderModelsRefreshResponse = ProviderModelsRefreshResponses[keyof ProviderModelsRefreshResponses]
 
 export type ProviderOauthAuthorizeData = {
   body?: {
