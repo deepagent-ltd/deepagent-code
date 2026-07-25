@@ -791,6 +791,46 @@ it.instance("loop continues (not exits) when finish is length: injects a continu
   }),
 )
 
+it.instance("loop retries truncated tool input with the bounded patch transaction guidance", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(providerCfg)
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const session = yield* sessions.create({
+      title: "Pinned",
+      permission: [{ permission: "*", pattern: "*", action: "allow" }],
+    })
+    const seeded = yield* seed(session.id, { finish: "length" })
+    yield* sessions.updatePart({
+      id: PartID.ascending(),
+      messageID: seeded.assistant.id,
+      sessionID: session.id,
+      type: "tool",
+      callID: "truncated-call",
+      tool: "apply_patch",
+      state: {
+        status: "error",
+        input: {},
+        error: "Tool input was incomplete and was not executed",
+        metadata: { interrupted: true, incompleteInput: true },
+        time: { start: 1, end: 2 },
+      },
+    })
+    yield* llm.text("completed with chunked patch")
+
+    yield* prompt.loop({ sessionID: session.id })
+
+    const messages = yield* sessions.messages({ sessionID: session.id })
+    expect(
+      messages.some((message) =>
+        message.parts.some(
+          (part) => part.type === "text" && part.synthetic === true && part.text.includes("apply_patch_chunk"),
+        ),
+      ),
+    ).toBe(true)
+  }),
+)
+
 it.instance("glob tool keeps instance context during prompt runs", () =>
   Effect.gen(function* () {
     const { dir, llm } = yield* useServerConfig(providerCfg)
@@ -855,6 +895,69 @@ it.instance("loop continues when finish is stop but assistant has tool parts", (
       expect(result.parts.some((part) => part.type === "text" && part.text === "second")).toBe(true)
       expect(result.info.finish).toBe("stop")
     }
+  }),
+)
+
+it.instance("non-interactive task token budget fails even when the provider stops naturally", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(providerCfg)
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const session = yield* sessions.create({ title: "Pinned" })
+    yield* prompt.prompt({
+      sessionID: session.id,
+      agent: "build",
+      noReply: true,
+      metadata: {
+        deepagent: {
+          task_activity: {
+            interactive: false,
+            started_at: Date.now(),
+            budget: { max_steps: 4, max_tokens: 1, max_wall_ms: 60_000, max_no_progress: 2 },
+          },
+        },
+      },
+      parts: [{ type: "text", text: "bounded research" }],
+    })
+    yield* llm.text("looks complete", { usage: { input: 2, output: 2 } })
+
+    const result = yield* prompt.loop({ sessionID: session.id })
+    expect(result.info.role).toBe("assistant")
+    if (result.info.role === "assistant") expect(result.info.error?.name).toBe("TaskBudgetExceededError")
+    expect(yield* llm.calls).toBe(1)
+  }),
+)
+
+it.instance("non-interactive task step budget prevents another provider turn", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(providerCfg)
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const session = yield* sessions.create({
+      title: "Pinned",
+      permission: [{ permission: "*", pattern: "*", action: "allow" }],
+    })
+    yield* prompt.prompt({
+      sessionID: session.id,
+      agent: "build",
+      noReply: true,
+      metadata: {
+        deepagent: {
+          task_activity: {
+            interactive: false,
+            started_at: Date.now(),
+            budget: { max_steps: 1, max_tokens: 10_000, max_wall_ms: 60_000, max_no_progress: 2 },
+          },
+        },
+      },
+      parts: [{ type: "text", text: "bounded research" }],
+    })
+    yield* llm.tool("first", { value: "first" })
+
+    const result = yield* prompt.loop({ sessionID: session.id })
+    expect(result.info.role).toBe("assistant")
+    if (result.info.role === "assistant") expect(result.info.error?.name).toBe("TaskBudgetExceededError")
+    expect(yield* llm.calls).toBe(1)
   }),
 )
 
@@ -1998,6 +2101,62 @@ noLLMServer.instance(
 )
 
 // Missing file handling
+
+noLLMServer.instance(
+  "task notification prompt retries reuse the persisted user message",
+  () =>
+    Effect.gen(function* () {
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const session = yield* sessions.create({})
+      const messageID = MessageID.ascending()
+      const metadata = {
+        deepagent: {
+          task_notification: { run_id: "job_exact", outbox_id: "task-notify:job_exact" },
+        },
+      }
+
+      const first = yield* prompt.prompt({
+        sessionID: session.id,
+        messageID,
+        agent: "build",
+        noReply: true,
+        metadata,
+        parts: [{ type: "text", text: "task completed" }],
+      })
+      const retry = yield* prompt.prompt({
+        sessionID: session.id,
+        messageID,
+        agent: "build",
+        noReply: true,
+        metadata,
+        parts: [{ type: "text", text: "this payload must not be persisted twice" }],
+      })
+      const conflict = yield* Effect.exit(
+        prompt.prompt({
+          sessionID: session.id,
+          messageID,
+          agent: "build",
+          noReply: true,
+          metadata: {
+            deepagent: {
+              task_notification: { run_id: "job_other", outbox_id: "task-notify:job_other" },
+            },
+          },
+          parts: [{ type: "text", text: "conflicting retry" }],
+        }),
+      )
+      const stored = yield* MessageV2.get({ sessionID: session.id, messageID })
+
+      expect(first.info.id).toBe(messageID)
+      expect(retry).toEqual(first)
+      expect(stored.parts.filter((part) => part.type === "text").map((part) => part.text)).toEqual(["task completed"])
+      expect(Exit.isFailure(conflict)).toBe(true)
+
+      yield* sessions.remove(session.id)
+    }),
+  { config: cfg },
+)
 
 noLLMServer.instance(
   "does not fail the prompt when a file part is missing",

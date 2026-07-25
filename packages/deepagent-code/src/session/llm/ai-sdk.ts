@@ -2,6 +2,7 @@ import { FinishReason, LLMEvent, ProviderMetadata, ToolResultValue } from "@deep
 import { Effect, Schema } from "effect"
 import { type streamText } from "ai"
 import { errorMessage } from "@/util/error"
+import { FreeformTools } from "./freeform-tools"
 
 type Result = Awaited<ReturnType<typeof streamText>>
 type AISDKEvent = Result["fullStream"] extends AsyncIterable<infer T> ? T : never
@@ -25,6 +26,14 @@ function finishReason(value: string | undefined): FinishReason {
 function providerMetadata(value: unknown): ProviderMetadata | undefined {
   if (value == null) return undefined
   return Schema.is(ProviderMetadata)(value) ? value : undefined
+}
+
+function toolProviderMetadata(value: unknown, type: "custom" | "function"): ProviderMetadata {
+  const existing = providerMetadata(value)
+  return {
+    ...(existing ?? {}),
+    deepagent: { ...(existing?.deepagent ?? {}), toolType: type },
+  }
 }
 
 // Temporary AI SDK bridge: Copilot billing survives only in raw provider chunks here.
@@ -220,13 +229,17 @@ export function toLLMEvents(
     case "tool-call":
       return Effect.sync(() => {
         state.toolNames[event.toolCallId] = event.toolName
+        const custom = event.toolName === "apply_patch" && typeof event.input === "string"
         return [
           LLMEvent.toolCall({
             id: event.toolCallId,
             name: event.toolName,
-            input: event.input,
+            input: custom ? FreeformTools.input(event.input as string) : event.input,
             providerExecuted: "providerExecuted" in event ? event.providerExecuted : undefined,
-            providerMetadata: providerMetadata(event.providerMetadata),
+            providerMetadata:
+              custom || event.toolName === "apply_patch"
+                ? toolProviderMetadata(event.providerMetadata, custom ? "custom" : "function")
+                : providerMetadata(event.providerMetadata),
           }),
         ]
       })

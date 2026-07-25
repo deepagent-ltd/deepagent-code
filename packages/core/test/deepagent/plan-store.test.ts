@@ -1,5 +1,5 @@
 import { describe, expect, test, beforeEach, afterEach } from "bun:test"
-import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from "node:fs"
+import { mkdtempSync, readFileSync, writeFileSync, mkdirSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import * as PlanStore from "../../src/deepagent/plan-store"
@@ -65,17 +65,20 @@ describe("I33-1 plan-store single authority", () => {
     expect(PlanStore.getPlanDoc("s2")?.steps[0].status).toBe("done")
   })
 
-  test("session-state.setPlan/getPlan delegate to the store (body NOT on session state)", () => {
+  test("session-state.setPlan/getPlan delegate to the store (body NOT on session state)", async () => {
     SessionState.getOrCreate("s3", "high")
     const p = plan("s3", [step("step_1")])
     SessionState.setPlan("s3", p)
+    // saveToDisk() is debounced via setImmediate (PERF, c0b79979): yield one event-loop turn so
+    // flushToDisk lands sessions.json before the synchronous read below.
+    await new Promise((resolve) => setImmediate(resolve))
     // readable via session-state (delegates to plan-store) AND directly from plan-store (same doc)
     expect(SessionState.getPlan("s3")?.goal).toBe("goal s3")
     expect(PlanStore.getPlanDoc("s3")?.goal).toBe("goal s3")
     // the latch pointer is bound to the plan id (the hot-path value object that STAYS on session state)
     expect(SessionState.planLatch("s3")?.plan_id).toBe(p.plan_id)
     // the persisted sessions.json must NOT carry the plan body (authority moved to the store)
-    const raw = require("node:fs").readFileSync(path.join(stateDir, "sessions.json"), "utf8")
+    const raw = readFileSync(path.join(stateDir, "sessions.json"), "utf8")
     expect(JSON.parse(raw)["s3"].plan).toBeUndefined()
   })
 

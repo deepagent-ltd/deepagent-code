@@ -9,15 +9,16 @@ import {
 import type { DocType, DocumentStore } from "./document-store"
 import { DeepAgentCodeHome } from "./workspace"
 import { EnvironmentFactAdoption } from "./environment-fact-adoption"
+import path from "node:path"
 
 // V3.2.1 decision B (docs/34 §8): the read-side adapter between the knowledge retriever and the
 // durable DocumentStore. Durable knowledge lives in TWO roots under the single injected base
 // (Global.Path.agent.data): user-global (public/knowledge, visible everywhere) and per-project
 // (project/<pid>/knowledge, project-shared isolation). A retrieval for a workspace UNIONS both.
 //
-// Mirrors the old memory-store module pattern: a single configured base + a clearable cache, so the
-// retriever stays a pure-ish function (retrieve(input)) and approve/reject is reflected after
-// invalidateCache(). This module is the ONLY durable read path the retriever uses.
+// The configured stores are process-long-lived. All in-process writers use these same handles, so
+// changes are immediately visible without rebuilding the disk index. invalidateCache() is reserved
+// for explicit cold-reload/testing paths. This module is the ONLY durable read path the retriever uses.
 
 let baseDir: string | null = null
 let userGlobalCache: DurableKnowledgeStore | null = null
@@ -31,13 +32,18 @@ let sharedDocumentStore: DocumentStore | null = null
 // configure, from the injected baseDir — never a self-resolved home).
 // H32-1: optional sharedStore accepted; passed through to openUserGlobalStore/openProjectStore.
 export const configure = (dir: string, sharedStore?: DocumentStore): void => {
-  baseDir = dir
-  sharedDocumentStore = sharedStore ?? null
+  const nextBaseDir = path.resolve(dir)
+  const nextSharedDocumentStore = sharedStore ?? null
+  if (baseDir === nextBaseDir && sharedDocumentStore === nextSharedDocumentStore) return
+  baseDir = nextBaseDir
+  sharedDocumentStore = nextSharedDocumentStore
   userGlobalCache = null
   projectCache.clear()
 }
 
 export const isConfigured = (): boolean => baseDir !== null
+
+export const isConfiguredFor = (dir: string): boolean => baseDir === path.resolve(dir)
 
 // Reset to the unconfigured state (baseDir=null + caches cleared). `configure` is a process-global
 // setter with no other way back to null; tests that assert the UNCONFIGURED path (isConfigured()===false
@@ -51,7 +57,8 @@ export const reset = (): void => {
   projectCache.clear()
 }
 
-// Clear cached stores so a subsequent query re-reads from disk (after approve/reject/seed).
+// Clear cached stores so a subsequent query re-reads from disk. Normal in-process writes must use
+// the cached handles instead; this cold path is only for explicit external-change recovery/tests.
 export const invalidateCache = (): void => {
   userGlobalCache = null
   projectCache.clear()
@@ -152,7 +159,10 @@ export const environmentFactAdoptionFor = (workspacePath: string): EnvironmentFa
   const base = ensureBase()
   const home = new DeepAgentCodeHome(base)
   const paths = home.ensureProject(projectIdForWorkspace(workspacePath), workspacePath)
-  return new EnvironmentFactAdoption(base, paths, workspacePath)
+  return new EnvironmentFactAdoption(base, paths, workspacePath, {
+    userGlobal: userGlobalStore(),
+    project: projectStore(workspacePath),
+  })
 }
 
 // Open the project store for a workspace path. Throws if not configured.
@@ -184,6 +194,10 @@ export const listAllForWorkspace = (workspacePath: string): readonly ReviewItem[
   }
   return out
 }
+
+export const reviewSummaryForWorkspace = (workspacePath: string): { readonly pendingCount: number } => ({
+  pendingCount: listByStatusForWorkspace(workspacePath, "candidate").filter((item) => item.type !== "skill").length,
+})
 export type ReviewItem = {
   readonly id: string
   readonly type: import("./document-store").DocType
