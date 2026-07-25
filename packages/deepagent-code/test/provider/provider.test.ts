@@ -57,6 +57,7 @@ const remove = (k: string) =>
   })
 
 afterEach(async () => {
+  discoveryGeneration = 1
   for (const [key, value] of originalEnv) {
     if (value === undefined) delete process.env[key]
     else process.env[key] = value
@@ -115,6 +116,7 @@ const connect = (providerID: ProviderV2.ID, key: string) =>
 let discoveryServer: ReturnType<typeof Bun.serve> | undefined
 let discoveryServerURL = ""
 let discoveryEmptyURL = ""
+let discoveryGeneration = 1
 
 beforeAll(() => {
   discoveryServer = Bun.serve({
@@ -125,6 +127,11 @@ beforeAll(() => {
         // `/empty/models` returns a 200 with no models (provisioning / not-implemented shape); every
         // other path returns two chat models plus one embedding model that runtime filtering must drop.
         if (url.pathname.startsWith("/empty")) return Response.json({ data: [] })
+        if (url.pathname.startsWith("/refresh")) {
+          return Response.json({
+            data: [{ id: `runtime-${discoveryGeneration}`, display_name: `Runtime ${discoveryGeneration}` }],
+          })
+        }
         return Response.json({
           data: [
             { id: "runtime-a", display_name: "Runtime A" },
@@ -233,6 +240,45 @@ it.instance(
           npm: "@ai-sdk/openai-compatible",
           discovery: true,
           options: { apiKey: "k", baseURL: discoveryServerURL },
+        },
+      },
+    }),
+  },
+)
+
+it.instance(
+  "legacy imported provider snapshots refresh automatically after one day",
+  Effect.gen(function* () {
+    const providerID = ProviderV2.ID.openrouter
+    const first = (yield* list)[providerID]
+    expect(first.models["runtime-1"]).toBeDefined()
+    expect(first.models["legacy-snapshot"]).toBeUndefined()
+
+    discoveryGeneration = 2
+    const now = Date.now
+    yield* Effect.acquireUseRelease(
+      Effect.sync(() => {
+        Date.now = () => now() + 25 * 60 * 60 * 1000
+      }),
+      () =>
+        Effect.gen(function* () {
+          const refreshed = (yield* list)[providerID]
+          expect(refreshed.models["runtime-1"]).toBeUndefined()
+          expect(refreshed.models["runtime-2"]).toBeDefined()
+        }),
+      () =>
+        Effect.sync(() => {
+          Date.now = now
+        }),
+    )
+  }),
+  {
+    config: () => ({
+      provider: {
+        openrouter: {
+          name: "OpenRouter",
+          options: { apiKey: "k", baseURL: `${discoveryServerURL}/../refresh` },
+          models: { "legacy-snapshot": { name: "Legacy Snapshot" } },
         },
       },
     }),

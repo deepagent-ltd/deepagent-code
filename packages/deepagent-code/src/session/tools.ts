@@ -15,7 +15,8 @@ import { Plugin } from "@/plugin"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import type { TaskPromptOps } from "@/tool/task"
 import { type Tool as AITool, tool, jsonSchema, type ToolExecutionOptions, asSchema } from "ai"
-import { Effect } from "effect"
+import type { JSONSchema7 } from "@ai-sdk/provider"
+import { Effect, Result, Schema } from "effect"
 import { MessageV2 } from "./message-v2"
 import { Session } from "./session"
 import { SessionProcessor } from "./processor"
@@ -25,8 +26,24 @@ import { EffectBridge } from "@/effect/bridge"
 import { ProviderV2 } from "@deepagent-code/core/provider"
 import { ModelV2 } from "@deepagent-code/core/model"
 import { AgentGateway } from "@deepagent-code/core/agent-gateway"
+import { ToolSemanticFingerprint } from "@/tool/semantic-fingerprint"
 
 const log = Log.create({ service: "session.tools" })
+
+export function validatedToolInputSchema(parameters: Schema.Decoder<unknown>, wireSchema: JSONSchema7) {
+  const decode = Schema.decodeUnknownResult(parameters)
+  return jsonSchema<Record<string, unknown>>(wireSchema, {
+    validate(input) {
+      const result = decode(input)
+      if (Result.isFailure(result)) {
+        return { success: false, error: new Error(result.failure.toString(), { cause: result.failure }) }
+      }
+      // Tool.define owns the canonical decode at execution time. Returning its decoded value here
+      // would apply Effect Schema transformations twice (for example NumberFromString).
+      return { success: true, value: input as Record<string, unknown> }
+    },
+  })
+}
 
 // Plan-gate WARN reminder placement. Prepending "⚠️ Plan gate: …" AHEAD of a tool's own output was
 // actively harmful: the plan gate is a soft nudge — the tool ALREADY RAN and the output below the
@@ -141,8 +158,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
   type GateDirective = { kind: "block"; output: string } | { kind: "warn"; reason: string } | { kind: "pass" }
   const evaluatePlanGate = (sessionID: string, isMutating: boolean): GateDirective => {
     const latch = AgentGateway.DeepAgentSessionState.planLatch(sessionID)
-    const planStale =
-      latch?.latch === "stale" && !AgentGateway.DeepAgentPlanController.shouldEscapeToHuman(latch)
+    const planStale = latch?.latch === "stale" && !AgentGateway.DeepAgentPlanController.shouldEscapeToHuman(latch)
     // Gate strength must key off THIS session's EFFECTIVE mode, not the process-global one. The global
     // `snapshot().agentMode` ignores the per-request `agent_mode_override` (a downgraded subagent, or a
     // session pinned below the global) — so it would over- or under-gate a turn, and disagree with
@@ -179,8 +195,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
           : `${gateDecision.blockReason}. Call the \`plan\` tool first.`
       return { kind: "block", output }
     }
-    const gateWarnReason =
-      gateDecision.decision === "warn" && !lightweight ? gateDecision.blockReason : undefined
+    const gateWarnReason = gateDecision.decision === "warn" && !lightweight ? gateDecision.blockReason : undefined
     // A mutating tool that actually executes is forward progress → reset the consecutive-block counter.
     if (isMutating) {
       AgentGateway.DeepAgentSessionState.recordMutation(sessionID)
@@ -197,7 +212,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
     const schema = ProviderTransform.schema(input.model, ToolJsonSchema.fromTool(item))
     const aiToolDef: AITool = tool({
       description: item.description,
-      inputSchema: jsonSchema(schema),
+      inputSchema: validatedToolInputSchema(item.parameters, schema),
       execute(args, options) {
         return run.promise(
           Effect.gen(function* () {
@@ -214,7 +229,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
             const command =
               (item.id === "bash" || item.id === "shell") &&
               typeof (args as { command?: unknown } | undefined)?.command === "string"
-                ? ((args as { command: string }).command)
+                ? (args as { command: string }).command
                 : null
             // Fail SAFE if the classifier ever throws (it is total today — pure regex/string ops — but a
             // future regex/refactor could introduce a throw): treat an unclassifiable command as mutating
@@ -236,9 +251,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
               // so this is a soft nudge: plan → stale but the next mutating tool still runs with a
               // reminder rather than being blocked.
               Effect.tapError(() =>
-                Effect.sync(() =>
-                  AgentGateway.DeepAgentSessionState.markPlanStale(ctx.sessionID, "tool_failed"),
-                ),
+                Effect.sync(() => AgentGateway.DeepAgentSessionState.markPlanStale(ctx.sessionID, "tool_failed")),
               ),
             )
             const withReminder =
@@ -270,6 +283,8 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
     // M2 (S1-v3.4): carry the registry's explicit provenance onto the freshly
     // built AI SDK tool so request.ts reads it instead of guessing from the name.
     if (item.provenance) ToolProvenance.set(aiToolDef, item.provenance)
+    if (item.semanticFingerprint) ToolSemanticFingerprint.set(aiToolDef, item.semanticFingerprint)
+    if (item.resultFingerprint) ToolSemanticFingerprint.setResult(aiToolDef, item.resultFingerprint)
     tools[item.id] = aiToolDef
   }
 

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { Effect, Schema } from "effect"
-import { LLM } from "../src"
+import { LLM, ToolDefinition } from "../src"
 import * as OpenAIChat from "../src/protocols/openai-chat"
 import { Auth } from "../src/route"
 import { Tool, toDefinitions } from "../src/tool"
@@ -39,6 +39,7 @@ describe("Tool.make (dynamic JSON Schema)", () => {
       execute: () => Effect.succeed({ ok: true }),
     })
     const [definition] = toDefinitions({ lookup })
+    if (!definition || !ToolDefinition.isFunction(definition)) throw new Error("lookup must be a function tool")
     expect(definition?.name).toBe("lookup")
     expect(definition?.description).toBe("Look up something")
     expect(definition?.inputSchema).toEqual(jsonSchema)

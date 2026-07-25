@@ -17,7 +17,7 @@ import {
 import type { UpdaterState } from "@deepagent-code/app/updater"
 import * as Sentry from "@sentry/solid"
 import type { AsyncStorage } from "@solid-primitives/storage"
-import { MemoryRouter } from "@solidjs/router"
+import { type BaseRouterProps, MemoryRouter, createMemoryHistory } from "@solidjs/router"
 import { createEffect, createMemo, createResource, createSignal, onCleanup, onMount, Show } from "solid-js"
 import { render } from "solid-js/web"
 import pkg from "../../package.json"
@@ -28,6 +28,9 @@ import { availableStartupServer, readyWslConnections } from "./wsl/connections"
 import "./styles.css"
 import { Splash } from "@deepagent-code/ui/logo"
 import { useTheme } from "@deepagent-code/ui/theme/context"
+
+const STARTUP_SLOW_MS = 15_000
+const STARTUP_HARD_TIMEOUT_MS = 120_000
 
 // renderer.initialization — start: renderer module begins executing.
 // Captured at module level so it includes all synchronous setup before render().
@@ -335,32 +338,17 @@ render(() => {
 
   function App() {
     const wslServers = useWslServers()
-
-    // App-ready gate: the app layer fires "deepagent-code:app-ready" once layout
-    // persist + routing + first sessions fetch are all done.  A 5-second failsafe
-    // prevents a permanent hang.  We use an OVERLAY approach: the app renders
-    // immediately (so Layout can mount and do its async work), and the splash sits
-    // on top until appReady fires.  This avoids the circular dependency where the
-    // app can never fire the event because it can't render until the event fires.
-    const [appReady, setAppReady] = createSignal(false)
-    onMount(() => {
-      const fallback = window.setTimeout(() => setAppReady(true), 5_000)
-      window.addEventListener(
-        "deepagent-code:app-ready",
-        () => {
-          clearTimeout(fallback)
-          setAppReady(true)
-        },
-        { once: true },
-      )
-      onCleanup(() => clearTimeout(fallback))
-    })
+    const splash = (
+      <div class="h-dvh w-screen flex flex-col items-center justify-center bg-background-base">
+        <Splash class="w-16 h-20 opacity-50 animate-pulse" />
+      </div>
+    )
 
     const ready = createMemo(
       () => !defaultServer.loading && !sidecar.loading && !windowCount.loading && !locale.loading,
     )
 
-    // renderer.initialization — end: basic resources resolved.
+    // renderer.initialization — end: basic resources resolved, app is about to mount.
     createEffect(() => {
       if (!ready() || rendererReadyLogged) return
       rendererReadyLogged = true
@@ -393,30 +381,83 @@ render(() => {
       ServerConnection.Key.make(availableStartupServer(defaultServer.latest, wslServers.data)),
     )
 
-    return (
-      <>
-        {/* App renders immediately so Layout can mount and do async startup work. */}
-        <Show when={ready()}>
-          <Show when={effectiveDefaultServer()} keyed>
-            {(key) => (
-              <AppInterface defaultServer={key} servers={servers()} router={MemoryRouter}>
-                <Inner />
-              </AppInterface>
-            )}
-          </Show>
-        </Show>
-        {/*
-         * Splash overlay: sits on top until both server resources are ready AND
-         * the app layer has signalled session-UI readiness (deepagent-code:app-ready).
-         * The 5-second failsafe in the onMount above ensures this never hangs
-         * permanently even if the async chain encounters an error.
-         */}
-        <Show when={!ready() || !appReady()}>
-          <div class="fixed inset-0 z-[9999] flex flex-col items-center justify-center bg-background-base">
-            <Splash class="w-16 h-20 opacity-50 animate-pulse" />
+    function RoutedApp(props: { serverKey: ServerConnection.Key }) {
+      const history = createMemoryHistory()
+      const startupRouter = (props: BaseRouterProps) => <MemoryRouter history={history} {...props} />
+      const [startupState, setStartupState] = createSignal<"waiting" | "ready" | "timeout">("waiting")
+      const startupStartedAt = performance.now()
+      let slowTimeout: number | undefined
+      let hardTimeout: number | undefined
+
+      const finishStartup = (result: "ready" | "timeout") => {
+        if (startupState() !== "waiting") return
+        if (slowTimeout !== undefined) window.clearTimeout(slowTimeout)
+        if (hardTimeout !== undefined) window.clearTimeout(hardTimeout)
+        slowTimeout = undefined
+        hardTimeout = undefined
+        const payload = {
+          event: "startup.app_reveal",
+          result,
+          durationMs: Math.round(performance.now() - startupStartedAt),
+        }
+        if (result === "timeout") console.warn("[startup] telemetry", JSON.stringify(payload))
+        if (result === "ready") console.info("[startup] telemetry", JSON.stringify(payload))
+        setStartupState(result)
+      }
+
+      onMount(() => {
+        slowTimeout = window.setTimeout(() => {
+          if (startupState() !== "waiting") return
+          console.warn(
+            "[startup] telemetry",
+            JSON.stringify({
+              event: "startup.app_reveal",
+              result: "slow",
+              durationMs: Math.round(performance.now() - startupStartedAt),
+            }),
+          )
+        }, STARTUP_SLOW_MS)
+        hardTimeout = window.setTimeout(() => finishStartup("timeout"), STARTUP_HARD_TIMEOUT_MS)
+        onCleanup(() => {
+          if (slowTimeout !== undefined) window.clearTimeout(slowTimeout)
+          if (hardTimeout !== undefined) window.clearTimeout(hardTimeout)
+        })
+      })
+
+      const waiting = () => startupState() === "waiting"
+
+      return (
+        <>
+          <div
+            class="flex flex-col h-dvh min-h-0"
+            style={{ visibility: waiting() ? "hidden" : "visible" }}
+            inert={waiting()}
+            aria-hidden={waiting() ? "true" : undefined}
+          >
+            <AppInterface
+              defaultServer={props.serverKey}
+              servers={servers()}
+              router={startupRouter}
+              onStartupReady={() => finishStartup("ready")}
+            >
+              <Inner />
+            </AppInterface>
           </div>
+          <Show when={waiting()}>
+            <div class="fixed inset-0 z-[9999] h-dvh w-screen flex flex-col items-center justify-center bg-background-base">
+              <Splash class="w-16 h-20 opacity-50 animate-pulse" />
+            </div>
+          </Show>
+        </>
+      )
+    }
+
+    return (
+      <Show when={ready()} fallback={splash}>
+        <Show when={effectiveDefaultServer()} keyed>
+          {(key) => <RoutedApp serverKey={key} />}
         </Show>
-      </>
+      </Show>
     )
   }
 

@@ -5,7 +5,12 @@ import { Hash } from "@deepagent-code/core/util/hash"
 import { Log } from "@deepagent-code/core/util/log"
 import type { FSUtil } from "@deepagent-code/core/fs-util"
 import type { EffectFlock } from "@deepagent-code/core/util/effect-flock"
-import { discoverProviderModels, isChatModel, type DiscoveredModel, type ProviderDiscoveryKind } from "./model-discovery"
+import {
+  discoverProviderModels,
+  isChatModel,
+  type DiscoveredModel,
+  type ProviderDiscoveryKind,
+} from "./model-discovery"
 
 const log = Log.create({ service: "provider-discovery-cache" })
 
@@ -76,6 +81,7 @@ export const discoverModelsCached = Effect.fn("ProviderDiscovery.cached")(functi
   flock: EffectFlock.Interface,
   input: DiscoverModelsCachedInput,
   fetch: (input: DiscoverModelsCachedInput) => Promise<DiscoveredModel[]> = discoverProviderModels,
+  force = false,
 ) {
   const ttl = input.ttl ?? DEFAULT_DISCOVERY_TTL
   const filepath = cacheFile(input)
@@ -94,7 +100,7 @@ export const discoverModelsCached = Effect.fn("ProviderDiscovery.cached")(functi
     return Date.now() - mtime < Duration.toMillis(ttl)
   })
 
-  if (yield* fresh) {
+  if (!force && (yield* fresh)) {
     const cached = yield* readDisk
     if (cached) return cached
   }
@@ -110,9 +116,7 @@ export const discoverModelsCached = Effect.fn("ProviderDiscovery.cached")(functi
     yield* fs.writeWithDirs(tempfile, JSON.stringify(models)).pipe(
       Effect.andThen(fs.rename(tempfile, filepath)),
       Effect.catch((error) =>
-        fs
-          .remove(tempfile, { force: true })
-          .pipe(Effect.ignore, Effect.andThen(Effect.fail(error))),
+        fs.remove(tempfile, { force: true }).pipe(Effect.ignore, Effect.andThen(Effect.fail(error))),
       ),
     )
     return models
@@ -123,7 +127,7 @@ export const discoverModelsCached = Effect.fn("ProviderDiscovery.cached")(functi
   return yield* flock
     .withLock(
       Effect.gen(function* () {
-        if (yield* fresh) {
+        if (!force && (yield* fresh)) {
           const cached = yield* readDisk
           if (cached) return cached
         }

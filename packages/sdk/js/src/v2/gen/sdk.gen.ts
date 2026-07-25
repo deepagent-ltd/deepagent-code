@@ -88,6 +88,8 @@ import type {
   DeepagentKnowledgeRejectIdsErrors,
   DeepagentKnowledgeRejectIdsResponses,
   DeepagentKnowledgeRejectResponses,
+  DeepagentKnowledgeReviewSummaryErrors,
+  DeepagentKnowledgeReviewSummaryResponses,
   DeepagentKnowledgeShipGateErrors,
   DeepagentKnowledgeShipGateResponses,
   DeepagentPacksActiveErrors,
@@ -337,6 +339,8 @@ import type {
   ProviderListResponses,
   ProviderModelsDiscoverErrors,
   ProviderModelsDiscoverResponses,
+  ProviderModelsRefreshErrors,
+  ProviderModelsRefreshResponses,
   ProviderOauthAuthorizeErrors,
   ProviderOauthAuthorizeResponses,
   ProviderOauthCallbackErrors,
@@ -2342,6 +2346,40 @@ export class Knowledge extends HeyApiClient {
       ThrowOnError
     >({
       url: "/deepagent/knowledge/pending",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Get the DeepAgent knowledge review summary
+   *
+   * Return the pending review count without projecting the complete knowledge review list.
+   */
+  public reviewSummary<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<
+      DeepagentKnowledgeReviewSummaryResponses,
+      DeepagentKnowledgeReviewSummaryErrors,
+      ThrowOnError
+    >({
+      url: "/deepagent/knowledge/review-summary",
       ...options,
       ...params,
     })
@@ -6730,6 +6768,42 @@ export class Models extends HeyApiClient {
       },
     })
   }
+
+  /**
+   * Refresh provider models
+   *
+   * Force-refresh one provider's supported model list and rebuild the provider registry for this instance.
+   */
+  public refresh<ThrowOnError extends boolean = false>(
+    parameters: {
+      providerID: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "providerID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      ProviderModelsRefreshResponses,
+      ProviderModelsRefreshErrors,
+      ThrowOnError
+    >({
+      url: "/provider/{providerID}/models/refresh",
+      ...options,
+      ...params,
+    })
+  }
 }
 
 export class Oauth extends HeyApiClient {
@@ -9059,7 +9133,7 @@ export class Session3 extends HeyApiClient {
   /**
    * Send message
    *
-   * Durably admit one session input and schedule agent-loop execution unless resume is false.
+   * Durably admit one session input when resume is false. This endpoint does not execute the production SessionPrompt engine.
    */
   public prompt<ThrowOnError extends boolean = false>(
     parameters: {
