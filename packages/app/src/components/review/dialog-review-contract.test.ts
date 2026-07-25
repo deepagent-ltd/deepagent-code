@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { listPending, setStatus, listEnvFacts, decideEnvFact, modifyEnvFact } from "./dialog-review.api"
+import { listPending, reviewSummary, setStatus, listEnvFacts, decideEnvFact, modifyEnvFact } from "./dialog-review.api"
 
 // P1-C route contract: the V3.1 self-learning Review dialog talks to the raw-request escape-hatch
 // routes (NOT the generated SDK). These assertions lock the exact method/url/body so a backend
@@ -41,6 +41,12 @@ describe("DeepAgent review dialog route contract", () => {
   test("listPending tolerates a missing items field", async () => {
     const calls: Recorded[] = []
     expect(await listPending(client(calls, {}))).toEqual([])
+  })
+
+  test("reviewSummary GETs the lightweight summary route", async () => {
+    const calls: Recorded[] = []
+    expect(await reviewSummary(client(calls, { pendingCount: 3 }))).toEqual({ pendingCount: 3 })
+    expect(calls).toEqual([{ method: "GET", url: "/deepagent/knowledge/review-summary" }])
   })
 
   test("approve POSTs /deepagent/knowledge/approve with { ids }", async () => {

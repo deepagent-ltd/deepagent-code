@@ -277,7 +277,10 @@ test("keeps the locked write schema, semantics docstring, and deferred UX TODOs 
   const definition = await Effect.runPromise(
     withTool(path.dirname(fileURLToPath(import.meta.url)), (registry) => toolDefinitions(registry)),
   )
-  const schema = definition[0]?.inputSchema as { readonly properties?: Record<string, unknown> }
+  const tool = definition[0]
+  expect(tool?.type).toBe("function")
+  if (!tool || tool.type !== "function") throw new Error("write must register as a function tool")
+  const schema = tool.inputSchema as { readonly properties?: Record<string, unknown> }
 
   expect(Object.keys(schema.properties ?? {}).sort()).toEqual(["content", "path"])
   expect(source).toContain(
