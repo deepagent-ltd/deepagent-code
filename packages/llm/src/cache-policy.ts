@@ -48,7 +48,7 @@ const markLastTool = (tools: ReadonlyArray<ToolDefinition>, hint: CacheHint): Re
   if (tools.length === 0) return tools
   const last = tools.length - 1
   if (tools[last]!.cache) return tools
-  return tools.map((tool, i) => (i === last ? new ToolDefinition({ ...tool, cache: hint }) : tool))
+  return tools.map((tool, i) => (i === last ? ToolDefinition.make({ ...tool, cache: hint }) : tool))
 }
 
 const markLastSystem = (system: LLMRequest["system"], hint: CacheHint): LLMRequest["system"] => {

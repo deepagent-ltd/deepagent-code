@@ -674,6 +674,12 @@ export class DocumentStore {
   }
   private findLogical(input: CreateDocInput): Doc | null {
     const domain = input.domain ?? null
+    if (input.idSlug) {
+      const slug = slugify(input.idSlug)
+      const id = domain ? `doc:${input.type}:${domain}:${slug}` : `doc:${input.type}:${slug}`
+      const direct = this.get(id)
+      if (direct?.domain === domain && direct.description === input.description) return direct
+    }
     for (const ref of this.list({ type: input.type, scope: input.scope })) {
       const doc = this.get(ref.id)
       if (!doc) continue

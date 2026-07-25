@@ -9,7 +9,7 @@ import { Font } from "@deepagent-code/ui/font"
 import { Splash } from "@deepagent-code/ui/logo"
 import { ThemeProvider } from "@deepagent-code/ui/theme/context"
 import { MetaProvider } from "@solidjs/meta"
-import { type BaseRouterProps, Navigate, Route, Router, useLocation, useNavigate } from "@solidjs/router"
+import { type BaseRouterProps, Navigate, Route, Router, useLocation, useParams } from "@solidjs/router"
 import { QueryClient, QueryClientProvider } from "@tanstack/solid-query"
 import { Effect } from "effect"
 import {
@@ -34,7 +34,7 @@ import { FileProvider } from "@/context/file"
 import type { DesktopApi } from "@/utils/desktop-api"
 import { GatewayProvider } from "@/context/gateway"
 import { ServerSDKProvider } from "@/context/server-sdk"
-import { ServerSyncProvider } from "@/context/server-sync"
+import { ServerSyncProvider, useServerSync } from "@/context/server-sync"
 import { GlobalProvider } from "@/context/global"
 import { HighlightsProvider } from "@/context/highlights"
 import { LanguageProvider, type Locale, useLanguage } from "@/context/language"
@@ -46,12 +46,13 @@ import { PromptProvider } from "@/context/prompt"
 import { ServerConnection, ServerProvider, serverName, useServer } from "@/context/server"
 import { SettingsProvider } from "@/context/settings"
 import { TerminalProvider } from "@/context/terminal"
-import { startupTab, TabsProvider, useTabs } from "@/context/tabs"
+import { TabsProvider } from "@/context/tabs"
 import { WslServersProvider } from "@/wsl/context"
-import DirectoryLayout from "@/pages/directory-layout"
+import DirectoryLayout, { decodeDirectory } from "@/pages/directory-layout"
 import Layout from "@/pages/layout"
 import { ErrorPage } from "./pages/error"
 import { useCheckServerHealth } from "./utils/server-health"
+import { startupViewReady } from "@/utils/startup-ready"
 
 const HomeRoute = lazy(() => import("@/pages/home"))
 const Session = lazy(() => import("@/pages/session"))
@@ -105,7 +106,9 @@ function BodyDesignClass() {
   return null
 }
 
-function AppShellProviders(props: ParentProps) {
+function AppShellProviders(props: ParentProps<{ onStartupReady?: () => void }>) {
+  const [startupRestoreSettled, setStartupRestoreSettled] = createSignal(false)
+
   return (
     <SettingsProvider>
       <BodyDesignClass />
@@ -115,7 +118,12 @@ function AppShellProviders(props: ParentProps) {
             <ModelsProvider>
               <CommandProvider>
                 <HighlightsProvider>
-                  <Layout>{props.children}</Layout>
+                  <Layout onStartupRestoreSettled={() => setStartupRestoreSettled(true)}>
+                    {props.onStartupReady ? (
+                      <StartupViewReady restoreSettled={startupRestoreSettled()} onReady={props.onStartupReady} />
+                    ) : null}
+                    {props.children}
+                  </Layout>
                 </HighlightsProvider>
               </CommandProvider>
             </ModelsProvider>
@@ -140,28 +148,69 @@ function SessionProviders(props: ParentProps) {
   )
 }
 
-function RouterRoot(props: ParentProps<{ appChildren?: JSX.Element }>) {
-  const tabs = useTabs()
+function StartupViewReady(props: { restoreSettled: boolean; onReady: () => void }) {
   const server = useServer()
-  const navigate = useNavigate()
+  const serverSync = useServerSync()
   const location = useLocation()
+  const params = useParams()
+  let complete = false
+  let signature = ""
 
-  // Restore the explicitly persisted active tab. A cross-server directory is never
-  // navigated until the target server has become active.
-  createEffect(() => {
-    if (!tabs.ready()) return
-    if (location.pathname !== "/") return
-    const tab = startupTab(tabs.store, tabs.active.key, server.list)
-    if (!tab) return
-    if (server.key !== tab.server) {
-      server.setActive(tab.server)
-      return
+  const state = () => {
+    const directory = params.dir ? decodeDirectory(params.dir) : undefined
+    const sessionId = params.id
+    const store = directory ? serverSync.peek(directory, { bootstrap: false })[0] : undefined
+    return {
+      pathname: location.pathname,
+      serverReady: server.ready(),
+      globalReady: serverSync.ready,
+      globalError: !!serverSync.error,
+      restoreSettled: props.restoreSettled,
+      lastProject: server.projects.last(),
+      directory,
+      directoryReady: !directory || (!!store && store.status !== "loading"),
+      sessionId,
+      hasSession: !!store?.session.some((session) => session.id === sessionId),
+      messagesReady: !!sessionId && store?.message[sessionId] !== undefined,
     }
-    navigate(`/${tab.dirBase64}/session`, { replace: true })
+  }
+
+  createEffect(() => {
+    const current = state()
+    const nextSignature = JSON.stringify({
+      route: current.pathname === "/" ? "home" : current.sessionId ? "session" : "directory",
+      serverReady: current.serverReady,
+      globalReady: current.globalReady,
+      globalError: current.globalError,
+      restoreSettled: current.restoreSettled,
+      hasLastProject: !!current.lastProject,
+      hasDirectory: !!current.directory,
+      directoryReady: current.directoryReady,
+      hasSessionId: !!current.sessionId,
+      hasSession: current.hasSession,
+      messagesReady: current.messagesReady,
+    })
+    if (signature !== nextSignature) {
+      signature = nextSignature
+      console.info("[startup] readiness", nextSignature)
+    }
+
+    if (complete || !startupViewReady(current)) return
+    complete = true
+    props.onReady()
   })
 
+  return null
+}
+
+function RouterRoot(
+  props: ParentProps<{
+    appChildren?: JSX.Element
+    onStartupReady?: () => void
+  }>,
+) {
   return (
-    <AppShellProviders>
+    <AppShellProviders onStartupReady={props.onStartupReady}>
       {/*<Suspense fallback={<Loading />}>*/}
       {props.appChildren}
       {props.children}
@@ -327,6 +376,7 @@ export function AppInterface(props: {
   servers?: Array<ServerConnection.Any>
   router?: Component<BaseRouterProps>
   disableHealthCheck?: boolean
+  onStartupReady?: () => void
 }) {
   return (
     <GatewayProvider>
@@ -345,7 +395,9 @@ export function AppInterface(props: {
                     <QueryProvider>
                       <ServerSDKProvider>
                         <ServerSyncProvider>
-                          <RouterRoot appChildren={props.children}>{routerProps.children}</RouterRoot>
+                          <RouterRoot appChildren={props.children} onStartupReady={props.onStartupReady}>
+                            {routerProps.children}
+                          </RouterRoot>
                         </ServerSyncProvider>
                       </ServerSDKProvider>
                     </QueryProvider>
@@ -355,10 +407,10 @@ export function AppInterface(props: {
             >
               <Route path="/" component={HomeRoute} />
               <Route path="/:dir" component={DirectoryLayout}>
-              <Route path="/" component={() => <Navigate href="session" />} />
-              <Route path="/agent" component={AgentSystemRoute} />
-              <Route path="/review" component={ReviewRoute} />
-              <Route path="/session/:id?" component={SessionRoute} />
+                <Route path="/" component={() => <Navigate href="session" />} />
+                <Route path="/agent" component={AgentSystemRoute} />
+                <Route path="/review" component={ReviewRoute} />
+                <Route path="/session/:id?" component={SessionRoute} />
               </Route>
             </Dynamic>
           </ConnectionGate>

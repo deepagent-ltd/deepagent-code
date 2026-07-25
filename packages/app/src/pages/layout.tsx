@@ -3,7 +3,6 @@ import {
   createEffect,
   createMemo,
   createResource,
-  createSignal,
   For,
   on,
   onCleanup,
@@ -31,7 +30,7 @@ import { Session, type Message } from "@deepagent-code/sdk/v2/client"
 import { usePlatform } from "@/context/platform"
 import { useSettings } from "@/context/settings"
 import { createStore, produce, reconcile } from "solid-js/store"
-import { DragDropProvider, DragDropSensors, DragOverlay, SortableProvider, closestCenter } from "@thisbeyond/solid-dnd"
+import { DragDropProvider, DragOverlay, SortableProvider, closestCenter } from "@thisbeyond/solid-dnd"
 import type { DragEvent } from "@thisbeyond/solid-dnd"
 import { useProviders } from "@/hooks/use-providers"
 import { toaster } from "@deepagent-code/ui/toast"
@@ -62,9 +61,9 @@ import { SessionRouteKey, SessionStateKey } from "@/utils/server-scope"
 import { useDialog } from "@deepagent-code/ui/context/dialog"
 import { useTheme, type ColorScheme } from "@deepagent-code/ui/theme/context"
 import { useCommand, type CommandOption } from "@/context/command"
-import { ConstrainDragXAxis, getDraggableId } from "@/utils/solid-dnd"
+import { ConstrainDragXAxis, getDraggableId, FixedDragDropSensors } from "@/utils/solid-dnd"
 import { DebugBar } from "@/components/debug-bar"
-import { listPending } from "@/components/review/dialog-review.api"
+import { reviewSummary } from "@/components/review/dialog-review.api"
 import { fetchCapabilities } from "@/components/deepagent/panel-goal.api"
 import { Titlebar, type TitlebarUpdate } from "@/components/titlebar"
 import { useDirectoryPicker } from "@/components/directory-picker"
@@ -95,9 +94,8 @@ import {
 } from "./layout/sidebar-workspace"
 import { ProjectDragOverlay, SortableProject, type ProjectSidebarContext } from "./layout/sidebar-project"
 import { SidebarContent } from "./layout/sidebar-shell"
-import { SessionSkeleton } from "./layout/sidebar-items"
 
-export default function Layout(props: ParentProps) {
+export default function Layout(props: ParentProps<{ onStartupRestoreSettled?: () => void }>) {
   const serverSDK = useServerSDK()
   const [store, setStore, , ready] = persisted(
     Persist.serverGlobal(serverSDK.scope, "layout.page", ["layout.page.v1"]),
@@ -169,8 +167,7 @@ export default function Layout(props: ParentProps) {
     if (!dir) return false
     try {
       const sdk = serverSDK.createDirSdkContext(dir)
-      const items = await listPending(sdk.client as never)
-      return items.some((item) => item.approval_status === "pending")
+      return (await reviewSummary(sdk.client as never)).pendingCount > 0
     } catch {
       return false
     }
@@ -601,6 +598,11 @@ export default function Layout(props: ParentProps) {
       if (!next) return
       await openProject(next.worktree, true)
     }
+  })
+
+  createEffect(() => {
+    if (autoselecting.loading) return
+    props.onStartupRestoreSettled?.()
   })
 
   const workspaceName = (directory: string, projectId?: string, branch?: string) => {
@@ -1925,10 +1927,6 @@ export default function Layout(props: ParentProps) {
 
   const loadedSessionDirs = new Set<string>()
 
-  // F2-splash: signal that the first session-list fetch has completed so the
-  // renderer knows the sidebar is populated and the splash can be dismissed.
-  const [firstSessionLoadDone, setFirstSessionLoadDone] = createSignal(false)
-
   createEffect(
     on(
       visibleSessionDirs,
@@ -1939,47 +1937,19 @@ export default function Layout(props: ParentProps) {
         }
 
         const next = new Set(dirs)
-        const loads: Promise<void>[] = []
         for (const directory of next) {
           if (loadedSessionDirs.has(directory)) continue
-          loads.push(serverSync.project.loadSessions(directory))
+          void serverSync.project.loadSessions(directory)
         }
 
         loadedSessionDirs.clear()
         for (const directory of next) {
           loadedSessionDirs.add(directory)
         }
-
-        if (loads.length > 0) {
-          void Promise.all(loads).then(() => setFirstSessionLoadDone(true))
-        } else {
-          // All visible directories were already loaded on a prior run.
-          setFirstSessionLoadDone(true)
-        }
       },
       { defer: true },
     ),
   )
-
-  // Fire `deepagent-code:app-ready` exactly once when every gate is satisfied:
-  //   1. server persist loaded (projects list populated — was missing, caused early fire)
-  //   2. layout persist loaded (project list available)
-  //   3. page persist loaded (last-session info available)
-  //   4. autoselecting resolved (router has navigated to the last project)
-  //   5. first sessions fetch done — OR no projects exist (nothing to wait for)
-  // The renderer's splash stays up until this event fires (5 s failsafe there).
-  let appReadyFired = false
-  createEffect(() => {
-    if (appReadyFired) return
-    if (!server.ready()) return   // server persist must be loaded (populates projects list)
-    if (!layoutReady()) return
-    if (!pageReady()) return
-    if (autoselecting.loading) return
-    const projects = layout.projects.list()
-    if (projects.length > 0 && !firstSessionLoadDone()) return
-    appReadyFired = true
-    window.dispatchEvent(new Event("deepagent-code:app-ready"))
-  })
 
   function handleDragStart(event: unknown) {
     const id = getDraggableId(event)
@@ -2225,18 +2195,7 @@ export default function Layout(props: ParentProps) {
         <Show
           when={project()}
           fallback={
-            <Show
-              when={empty()}
-              fallback={
-                // Projects exist but the router hasn't navigated to one yet
-                // (async persist still loading). Show a skeleton instead of a blank panel.
-                <Show when={layout.ready()}>
-                  <div class="flex flex-col gap-1 px-3 pt-4">
-                    <SessionSkeleton count={6} />
-                  </div>
-                </Show>
-              }
-            >
+            <Show when={empty()}>
               <div class="flex-1 min-h-0 -mt-4 flex items-center justify-center px-6 pb-64 text-center">
                 <div class="mt-8 flex max-w-60 flex-col items-center gap-6 text-center">
                   <div class="flex flex-col gap-3">
@@ -2414,7 +2373,7 @@ export default function Layout(props: ParentProps) {
                         onDragOver={handleWorkspaceDragOver}
                         collisionDetector={closestCenter}
                       >
-                        <DragDropSensors />
+                        <FixedDragDropSensors />
                         <ConstrainDragXAxis />
                         <div
                           ref={(el) => {
@@ -2616,11 +2575,8 @@ export default function Layout(props: ParentProps) {
                 "absolute inset-0": true,
                 "xl:inset-y-0 xl:right-0 xl:left-[var(--main-left)]": true,
                 "z-20": true,
-                // Suppress the left-slide transition until the layout persist store
-                // has loaded so the initial open→close (or closed→open) snap from
-                // async storage doesn't animate visibly.
                 "transition-[left] duration-200 ease-[cubic-bezier(0.22,1,0.36,1)] will-change-[left] motion-reduce:transition-none":
-                  !state.sizing && layoutReady(),
+                  !state.sizing,
               }}
               style={{
                 "--main-left": layout.sidebar.opened() ? `${side()}px` : "4rem",
