@@ -629,6 +629,20 @@ export const ShellTool = Tool.define(
         return {
           description: prompt.description,
           parameters: prompt.parameters,
+          semanticFingerprint: (params: Parameters) => ({
+            command: params.command,
+            workdir: params.workdir ?? null,
+            timeout: params.timeout ?? defaultTimeoutMs,
+          }),
+          resultFingerprint: (result) => ({
+            exit: result.metadata.exit,
+            output: new Bun.CryptoHasher("sha256").update(result.output).digest("hex"),
+            attachments: result.attachments?.map((attachment) => ({
+              mime: attachment.mime,
+              filename: attachment.filename,
+              url: attachment.url.startsWith("data:") ? "data" : attachment.url,
+            })),
+          }),
           execute: (params: Parameters, ctx: Tool.Context) =>
             Effect.gen(function* () {
               const instanceCtx = yield* InstanceState.context

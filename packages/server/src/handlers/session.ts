@@ -64,6 +64,22 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
       .handle(
         "session.prompt",
         Effect.fn(function* (ctx) {
+          if (ctx.payload.resume !== false) {
+            yield* session.get(ctx.params.sessionID).pipe(
+              Effect.catchTag("Session.NotFoundError", (error) =>
+                Effect.fail(
+                  new SessionNotFoundError({
+                    sessionID: error.sessionID,
+                    message: `Session not found: ${error.sessionID}`,
+                  }),
+                ),
+              ),
+            )
+            return yield* new ServiceUnavailableError({
+              message: "Session execution is not available on this endpoint",
+              service: "session.prompt",
+            })
+          }
           return {
             data: yield* session
               .prompt({
@@ -71,7 +87,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
                 id: ctx.payload.id,
                 prompt: ctx.payload.prompt,
                 delivery: ctx.payload.delivery,
-                resume: ctx.payload.resume,
+                resume: false,
               })
               .pipe(
                 Effect.catchTag("Session.NotFoundError", (error) =>

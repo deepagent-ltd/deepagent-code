@@ -1,6 +1,7 @@
-import { Component, createMemo, createResource, createSignal, For, Show } from "solid-js"
+import { Component, createEffect, createMemo, createResource, createSignal, For, Show } from "solid-js"
 import { Dialog } from "@deepagent-code/ui/v2/dialog-v2"
 import { Button } from "@deepagent-code/ui/button"
+import { Collapsible } from "@deepagent-code/ui/collapsible"
 import { Icon } from "@deepagent-code/ui/icon"
 import { Markdown } from "@deepagent-code/ui/markdown"
 import { useLanguage } from "@/context/language"
@@ -28,22 +29,30 @@ export {
 } from "./wiki.api"
 
 // §B.2 governance grouping: two governable (Knowledge/Memory), two monitor-only (Document/Code).
-const TYPE_GROUP: Record<string, string> = {
+export type WikiGroup = "knowledge" | "memory" | "code" | "document"
+
+const TYPE_GROUP: Record<string, WikiGroup> = {
   knowledge: "knowledge",
   strategy: "knowledge",
   methodology: "knowledge",
   memory: "memory",
   code_symbol: "code",
 }
-const groupOf = (type: string): "knowledge" | "memory" | "code" | "document" =>
-  (TYPE_GROUP[type] as "knowledge" | "memory" | "code") ?? "document"
+const groupOf = (type: string): WikiGroup => TYPE_GROUP[type] ?? "document"
 
-const GROUP_ORDER: ReadonlyArray<"knowledge" | "memory" | "document" | "code"> = [
-  "knowledge",
-  "memory",
-  "document",
-  "code",
-]
+const GROUP_ORDER: readonly WikiGroup[] = ["knowledge", "memory", "code", "document"]
+const GROUP_ICON = {
+  knowledge: "knowledge-check",
+  memory: "brain",
+  code: "code-lines",
+  document: "open-file",
+} as const
+
+export const resolveWikiExpandedGroup = (
+  groups: readonly { group: WikiGroup; items: readonly unknown[] }[],
+  expanded: WikiGroup | undefined,
+  searching: boolean,
+) => (searching ? groups.find((group) => group.items.length > 0)?.group : expanded)
 
 export const DialogWiki: Component<{ client: WikiClient }> = (props) => {
   const language = useLanguage()
@@ -83,7 +92,7 @@ export const DialogWiki: Component<{ client: WikiClient }> = (props) => {
       list.push(p)
       byGroup.set(g, list)
     }
-    return GROUP_ORDER.map((g) => ({ group: g, items: byGroup.get(g) ?? [] })).filter((x) => x.items.length > 0)
+    return GROUP_ORDER.map((group) => ({ group, items: byGroup.get(group) ?? [] }))
   })
 
   // The rendered detail page for the current selection.
@@ -157,10 +166,11 @@ export const DialogWiki: Component<{ client: WikiClient }> = (props) => {
             <WikiList
               groups={groups()}
               loading={pages.loading}
+              searchKey={query().trim()}
               empty={query().trim() ? language.t("wiki.searchEmpty") : language.t("wiki.empty")}
               selectedId={selectedId()?.docId}
               onSelect={select}
-              typeLabel={(t) => language.t(`wiki.type.${groupOf(t)}`)}
+              typeLabel={(group) => language.t(`wiki.type.${group}`)}
             />
             <WikiDetail
               page={page()}
@@ -182,50 +192,92 @@ export const DialogWiki: Component<{ client: WikiClient }> = (props) => {
 }
 
 const WikiList: Component<{
-  groups: { group: string; items: WikiPageSummary[] }[]
+  groups: { group: WikiGroup; items: WikiPageSummary[] }[]
   loading: boolean
+  searchKey: string
   empty: string
   selectedId: string | undefined
   onSelect: (p: WikiPageSummary) => void
-  typeLabel: (type: string) => string
+  typeLabel: (group: WikiGroup) => string
 }> = (props) => {
   const language = useLanguage()
+  const [expanded, setExpanded] = createSignal<WikiGroup>()
+  createEffect(() => {
+    const searchKey = props.searchKey
+    const groups = props.groups
+    if (!searchKey) return
+    setExpanded(resolveWikiExpandedGroup(groups, undefined, true))
+  })
   return (
-    <div class="deepagent-dialog-scroll flex w-64 shrink-0 flex-col gap-3 rounded-lg border border-v2-border-border-muted p-2">
+    <div class="flex min-h-0 w-64 shrink-0 flex-col overflow-hidden rounded-lg border border-v2-border-border-muted p-2">
       <Show
         when={!props.loading}
         fallback={<div class="p-2 text-13-regular text-v2-text-text-faint">{language.t("wiki.loading")}</div>}
       >
-        <Show
-          when={props.groups.length > 0}
-          fallback={<div class="p-2 text-13-regular text-v2-text-text-faint">{props.empty}</div>}
-        >
+        <div class="flex min-h-0 flex-1 flex-col overflow-hidden">
           <For each={props.groups}>
             {(group) => (
-              <div class="flex flex-col gap-1">
-                <span class="px-1 text-11-medium uppercase tracking-wide text-v2-text-text-faint">
-                  {props.typeLabel(group.items[0]!.type)}
-                </span>
-                <For each={group.items}>
-                  {(p) => (
-                    <button
-                      type="button"
-                      data-action="wiki-page-select"
-                      onClick={() => props.onSelect(p)}
-                      class="flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-13-regular outline-none hover:bg-v2-background-bg-hover"
-                      classList={{ "bg-v2-background-bg-hover": props.selectedId === p.docId }}
+              <Collapsible
+                open={expanded() === group.group}
+                onOpenChange={(open) => setExpanded(open ? group.group : undefined)}
+                class="flex flex-col border-b border-v2-border-border-muted last:border-b-0"
+                classList={{
+                  "min-h-0": expanded() === group.group,
+                  "flex-1": expanded() === group.group,
+                  "shrink-0": expanded() !== group.group,
+                }}
+              >
+                <Collapsible.Trigger
+                  data-action="wiki-graph-toggle"
+                  data-graph={group.group}
+                  class="rounded-md px-2 hover:bg-v2-background-bg-hover"
+                  classList={{ "bg-v2-background-bg-hover": expanded() === group.group }}
+                >
+                  <span class="flex w-full min-w-0 items-center justify-between gap-2">
+                    <span class="flex min-w-0 items-center gap-2">
+                      <Icon name={GROUP_ICON[group.group]} size="small" class="shrink-0 text-v2-text-text-faint" />
+                      <span class="truncate">{props.typeLabel(group.group)}</span>
+                    </span>
+                    <span class="flex shrink-0 items-center gap-2">
+                      <span class="text-11-regular text-v2-text-text-faint">{group.items.length}</span>
+                      <Icon
+                        name="chevron-down"
+                        size="small"
+                        class="text-v2-text-text-faint transition-transform"
+                        classList={{ "rotate-180": expanded() === group.group }}
+                      />
+                    </span>
+                  </span>
+                </Collapsible.Trigger>
+                <Collapsible.Content class="min-h-0 flex-1 overflow-y-auto">
+                  <div class="flex flex-col gap-1 p-1.5">
+                    <Show
+                      when={group.items.length > 0}
+                      fallback={<div class="px-2 py-1.5 text-12-regular text-v2-text-text-faint">{props.empty}</div>}
                     >
-                      <span class="min-w-0 flex-1 truncate text-v2-text-text-base">{p.title}</span>
-                      <Show when={p.editable}>
-                        <Icon name="pencil-line" size="small" class="shrink-0 text-v2-text-text-faint" />
-                      </Show>
-                    </button>
-                  )}
-                </For>
-              </div>
+                      <For each={group.items}>
+                        {(p) => (
+                          <button
+                            type="button"
+                            data-action="wiki-page-select"
+                            onClick={() => props.onSelect(p)}
+                            class="flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-13-regular outline-none hover:bg-v2-background-bg-hover"
+                            classList={{ "bg-v2-background-bg-hover": props.selectedId === p.docId }}
+                          >
+                            <span class="min-w-0 flex-1 truncate text-v2-text-text-base">{p.title}</span>
+                            <Show when={p.editable}>
+                              <Icon name="pencil-line" size="small" class="shrink-0 text-v2-text-text-faint" />
+                            </Show>
+                          </button>
+                        )}
+                      </For>
+                    </Show>
+                  </div>
+                </Collapsible.Content>
+              </Collapsible>
             )}
           </For>
-        </Show>
+        </div>
       </Show>
     </div>
   )
@@ -262,7 +314,12 @@ const WikiDetail: Component<{
                   {language.t("wiki.version", { version: pg().version })}
                 </span>
                 <Show when={pg().editable && !props.editing}>
-                  <Button variant="secondary" size="small" data-action="wiki-edit" onClick={() => props.onStartEdit(pg())}>
+                  <Button
+                    variant="secondary"
+                    size="small"
+                    data-action="wiki-edit"
+                    onClick={() => props.onStartEdit(pg())}
+                  >
                     {language.t("wiki.edit.button")}
                   </Button>
                 </Show>

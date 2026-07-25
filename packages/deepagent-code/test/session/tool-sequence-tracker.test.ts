@@ -346,6 +346,55 @@ describe("canonical JSON fingerprint (key order independence)", () => {
   })
 })
 
+describe("tool-defined semantic fingerprints", () => {
+  test("display-only shell descriptions cannot evade period-1 detection", () => {
+    const t = new ToolSequenceTracker()
+    t.setFingerprintResolver((_tool, input) => {
+      const value = input as { command: string; workdir?: string; timeout?: number }
+      return { command: value.command, workdir: value.workdir ?? null, timeout: value.timeout ?? 120_000 }
+    })
+    const inputs = ["prepare", "research complete", "submit next"].map((description) => ({
+      command: "true",
+      description,
+    }))
+    t.push("1", t.fingerprint("bash", inputs[0]))
+    t.markDone("1")
+    t.push("2", t.fingerprint("bash", inputs[1]))
+    t.markDone("2")
+    t.push("3", t.fingerprint("bash", inputs[2]))
+    expect(t.detect()?.period).toBe(1)
+  })
+
+  test("equivalent result fingerprints ignore input changes and reset on observable progress", () => {
+    const t = new ToolSequenceTracker()
+    t.setResultFingerprintResolver((_tool, result) => result)
+    const unchanged = { snapshot: "tree-a", plan: { active: "step-1" } }
+
+    t.push("1", t.fingerprint("bash", { command: "true" }))
+    expect(t.markDone("1", "bash", { exit: 0, output: "same" }, unchanged)?.count).toBe(1)
+    t.push("2", t.fingerprint("bash", { command: "printf ''" }))
+    expect(t.markDone("2", "bash", { exit: 0, output: "same" }, unchanged)?.count).toBe(2)
+    t.push("3", t.fingerprint("bash", { command: "touch artifact" }))
+    expect(
+      t.markDone("3", "bash", { exit: 0, output: "same" }, { snapshot: "tree-b", plan: unchanged.plan })?.count,
+    ).toBe(1)
+    t.push("4", t.fingerprint("bash", { command: "true" }))
+    expect(
+      t.markDone("4", "bash", { exit: 0, output: "same" }, { snapshot: "tree-b", plan: unchanged.plan })?.count,
+    ).toBe(2)
+    t.push("5", t.fingerprint("bash", { command: "true" }))
+    expect(t.markDone("5", "bash", { exit: 0, output: "changed" }, unchanged)?.count).toBe(1)
+  })
+
+  test("tools without a result hook do not claim no-progress evidence", () => {
+    const t = new ToolSequenceTracker()
+    t.push("1", t.fingerprint("read", { path: "/dynamic" }))
+    expect(t.markDone("1", "read", "first")).toBeUndefined()
+    t.push("2", t.fingerprint("read", { path: "/dynamic" }))
+    expect(t.markDone("2", "read", "first")).toBeUndefined()
+  })
+})
+
 // ---------------------------------------------------------------------------
 // "Prior calls must be done" invariant
 // ---------------------------------------------------------------------------

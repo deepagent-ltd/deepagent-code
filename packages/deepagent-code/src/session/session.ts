@@ -487,6 +487,7 @@ export interface Interface {
   readonly list: (input?: ListInput) => Effect.Effect<Info[]>
   readonly listGlobal: (input?: GlobalListInput) => Effect.Effect<GlobalInfo[]>
   readonly create: (input?: {
+    id?: SessionID
     parentID?: SessionID
     title?: string
     agent?: string
@@ -740,6 +741,7 @@ export const layer: Layer.Layer<
     })
 
     const create = Effect.fn("Session.create")(function* (input?: {
+      id?: SessionID
       parentID?: SessionID
       title?: string
       agent?: string
@@ -756,6 +758,7 @@ export const layer: Layer.Layer<
       const workspace = yield* InstanceState.workspaceID
       const directory = input?.directory ?? ctx.directory
       return yield* createNext({
+        id: input?.id,
         parentID: input?.parentID,
         directory,
         path: sessionPath(ctx.worktree, directory),
@@ -815,12 +818,10 @@ export const layer: Layer.Layer<
         input.isolate === "worktree" ? yield* Effect.serviceOption(Worktree.Service) : Option.none<Worktree.Interface>()
       const worktreeInfo =
         input.isolate === "worktree" && Option.isSome(worktreeOpt)
-          ? yield* worktreeOpt.value
-              .create({ name: `fork-${Identifier.ascending("session")}` })
-              .pipe(
-                Effect.catchTag("WorktreeNotGitError", () => Effect.succeed(undefined)),
-                Effect.orDie,
-              )
+          ? yield* worktreeOpt.value.create({ name: `fork-${Identifier.ascending("session")}` }).pipe(
+              Effect.catchTag("WorktreeNotGitError", () => Effect.succeed(undefined)),
+              Effect.orDie,
+            )
           : undefined
 
       // 附-D 阶段3: resolve the effective fork directory. Precedence: a fresh worktree (阶段4) >
