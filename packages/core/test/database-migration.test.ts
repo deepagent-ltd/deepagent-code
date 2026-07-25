@@ -74,6 +74,20 @@ describe("DatabaseMigration", () => {
             sql`SELECT name, dflt_value FROM pragma_table_info('session_context_epoch') WHERE name = 'agent'`,
           ),
         ).toEqual({ name: "agent", dflt_value: "'build'" })
+        expect(
+          yield* db.all(
+            sql`SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('task_run', 'task_admission', 'task_notification_outbox') ORDER BY name`,
+          ),
+        ).toEqual([{ name: "task_admission" }, { name: "task_notification_outbox" }, { name: "task_run" }])
+        expect(
+          yield* db.all(
+            sql`SELECT name FROM sqlite_master WHERE type = 'index' AND name IN ('task_run_child_generation_idx', 'task_run_child_active_idx', 'task_notification_outbox_due_idx') ORDER BY name`,
+          ),
+        ).toEqual([
+          { name: "task_notification_outbox_due_idx" },
+          { name: "task_run_child_active_idx" },
+          { name: "task_run_child_generation_idx" },
+        ])
         expect(yield* db.get(sql`SELECT count(*) as count FROM migration`)).toEqual({ count: migrations.length })
         expect(
           yield* db.all(

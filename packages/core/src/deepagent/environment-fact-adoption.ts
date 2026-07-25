@@ -3,11 +3,7 @@ import path from "node:path"
 import type { ProjectPaths } from "./workspace"
 import type { AdoptionRecord } from "./environment-fact"
 import { useGateAction, type EnvironmentFactBody } from "./environment-fact"
-import {
-  openUserGlobalStore,
-  openProjectStore,
-  type DurableKnowledgeStore,
-} from "./durable-knowledge-store"
+import { openUserGlobalStore, openProjectStore, type DurableKnowledgeStore } from "./durable-knowledge-store"
 import type { DocRef } from "./document-store"
 
 // V3.8.1 §G.5 use-gate persistence. A project's stance toward each user-global provisional
@@ -69,9 +65,10 @@ export class EnvironmentFactAdoption {
     private readonly baseDir: string,
     private readonly paths: ProjectPaths,
     private readonly workspacePath: string,
+    stores?: { readonly userGlobal: DurableKnowledgeStore; readonly project: DurableKnowledgeStore },
   ) {
-    this.userGlobal = openUserGlobalStore(baseDir)
-    this.project = openProjectStore(baseDir, workspacePath)
+    this.userGlobal = stores?.userGlobal ?? openUserGlobalStore(baseDir)
+    this.project = stores?.project ?? openProjectStore(baseDir, workspacePath)
   }
 
   private records(): AdoptionRecord[] {
@@ -172,7 +169,12 @@ export class EnvironmentFactAdoption {
       domain: input.domain ?? null,
       provenance: { source: "human" },
     })
-    this.writeRecord({ fact_id: updated.id, stance: "adopted", decided_at: input.now, adopted_version: updated.version })
+    this.writeRecord({
+      fact_id: updated.id,
+      stance: "adopted",
+      decided_at: input.now,
+      adopted_version: updated.version,
+    })
     return { updatedId: updated.id }
   }
 

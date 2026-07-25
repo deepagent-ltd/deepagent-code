@@ -262,6 +262,8 @@ export const selfLearningPolicy = (): SelfLearningPolicy => current.selfLearning
 // No disk writes — available only for diagnostics / budget tracking in-process.
 type GeneralAuditEntry = { turnCount: number; totalInputTokens: number; totalOutputTokens: number }
 const generalAuditState = new Map<string, GeneralAuditEntry>()
+const seededKnowledgeBases = new Set<string>()
+let configuredStorageBaseDir: string | null = null
 
 const recordGeneralAudit = (sessionID: string, inputTokens: number, outputTokens: number): void => {
   const existing = generalAuditState.get(sessionID)
@@ -286,23 +288,27 @@ export const configure = (config: Config = {}) => {
   // is still observed. This replaces the old path.dirname(runsDir) inference that made durable
   // knowledge/state diverge from project-memory whenever runsDir pointed outside <home>/runs.
   const baseDir = config.baseDir ?? resolveDeepAgentCodeHome()
-  DeepAgentSessionState.configure(path.join(baseDir, "state"))
-  // I33-1: the structural plan lives in the single DocumentStore under <baseDir>/state/goal/<sid>/graph
-  // (co-located with the goal/run graph so the `plan` tool and the goal path write the SAME doc). Root
-  // it from the SAME baseDir/state session-state uses, so the two paths converge (planStoreRoot ≡
-  // goalStoreRoot). Must be set before any plan read/write.
-  DeepAgentPlanStore.configureRoot(path.join(baseDir, "state"))
-  // docs/34 §7.2/§8: durable knowledge stores root under baseDir (public/knowledge + project/<id>/
-  // knowledge). The retriever's knowledge-source reads from here. Same injected baseDir, no self-resolve.
-  DeepAgentKnowledgeSource.configure(baseDir)
-  // docs/34 §9 DAP-11: seed core in-code knowledge (CORE_STRATEGIES/METHODOLOGY_REGISTRY/gpu pack)
-  // into the user-global DocumentStore on every configure() call. seedCoreKnowledge is idempotent
-  // (skips docs that already exist), so re-calling on restart is safe. After seeding, the retriever
-  // reads these from DocumentStore and the in-code constants are no longer in the retrieval path.
-  try {
-    DeepAgentKnowledgeSeed.seedCoreKnowledgeAt(baseDir)
-  } catch {
-    /* non-fatal: stale seed, retry next call */
+  const resolvedBaseDir = path.resolve(baseDir)
+  if (configuredStorageBaseDir !== resolvedBaseDir) {
+    DeepAgentSessionState.configure(path.join(resolvedBaseDir, "state"))
+    // I33-1: the structural plan lives under <baseDir>/state/goal/<sid>/graph. Root it from the SAME
+    // state directory before any plan read/write. SessionState.configure also applies this root; the
+    // explicit call documents the gateway ownership boundary.
+    DeepAgentPlanStore.configureRoot(path.join(resolvedBaseDir, "state"))
+    configuredStorageBaseDir = resolvedBaseDir
+  }
+  // configure() is identity-preserving for the same root, so request-time policy updates do not drop
+  // the live knowledge stores. It also restores the adapter if an explicit test reset it.
+  DeepAgentKnowledgeSource.configure(resolvedBaseDir)
+  // Seed each storage root once per process. Reconfiguration changes runtime policy frequently, but
+  // the built-in corpus only changes across process/app versions and must not rebuild its disk index.
+  if (!seededKnowledgeBases.has(resolvedBaseDir)) {
+    try {
+      DeepAgentKnowledgeSeed.seedCoreKnowledge(DeepAgentKnowledgeSource.userGlobalStoreFor())
+      seededKnowledgeBases.add(resolvedBaseDir)
+    } catch {
+      /* non-fatal: stale seed, retry next call */
+    }
   }
   // docs/34 §3: domain pack registry. Built-in packs (packages/domain-packs, bundled with the app)
   // are ALWAYS discovered automatically. A user/org pack dir can be layered on top via config.packDir
@@ -835,7 +841,6 @@ const markStaleEnvironmentFactsFromRun = (
   if (stale.length === 0) return
   const userGlobal = DeepAgentKnowledgeSource.userGlobalStoreFor()
   for (const id of stale) userGlobal.markEnvironmentFactStale(id)
-  DeepAgentKnowledgeSource.invalidateCache()
 }
 
 // Concatenate the output of every FAILED validation this run recorded — that's where a tool's

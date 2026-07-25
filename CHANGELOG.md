@@ -1,5 +1,14 @@
 # Changelog
 
+## Desktop 1.4.3 / DeepAgent Core V4.0.4_r8 - Production reliability release
+
+- Persist the complete TaskRun lifecycle, including exact-retry admission, generation, owner/lease fencing, phase changes, terminal compare-and-set, result references, and a leased notification outbox.
+- Split structured subagent work into a normal research phase and a bounded single-turn finalizer with an isolated tool surface, per-turn reasoning policy, strict schema validation, and no empty-success fallback.
+- Preserve distinct recoverable terminal reasons for provider, schema, permission, interruption, timeout, takeover, and doom-loop failures; reject invalid tool input before execution.
+- Detect semantic no-progress from tool results, workspace snapshots, and plan state instead of relying on identical command text.
+- Contain subagent supervision failures with valid sibling controls, real terminal-state rendering, a local ErrorBoundary, persisted-mode validation, same-build quarantine, Electron cold-start coverage, and production source-map verification.
+- Regenerate the JavaScript SDK for the durable task status and delivery contracts.
+
 ## V4.0.4 - Contract-gap closure (engine-decoupled)
 
 - Fix Plan Gate deadlock: stale-plan latch now warns (never hard-blocks) on tool execution, aligned with codex exec-policy philosophy. A mutating tool on a stale plan receives a reminder but always runs.

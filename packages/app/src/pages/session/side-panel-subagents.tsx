@@ -6,7 +6,7 @@ import { useNavigate, useParams } from "@solidjs/router"
 import { useSDK } from "@/context/sdk"
 import { fetchCapabilities } from "@/components/deepagent/panel-goal.api"
 import { OversightDashboard } from "@/components/deepagent/oversight-dashboard"
-import { isSubagentInterrupted } from "./subagent-state"
+import { isSubagentInterrupted, subagentMetadata } from "./subagent-state"
 
 // Phase 2 (§3): SidePanelSubagents is now the single "子Agent监督" entry for the right rail.
 // It holds a `selectedSessionID` to track which subagent is being inspected; that selection
@@ -41,12 +41,18 @@ export const SidePanelSubagents: Component<{ onClose: () => void }> = (props) =>
   const oversightEnabled = () => capabilities()?.v4MultiAgentRuntime ?? false
 
   // ── subagent list ───────────────────────────────────────────────────────────
+  const [persistedChildren] = createResource(
+    () => params.id,
+    async (sessionID) => (await sdk.client.session.children({ sessionID })).data ?? [],
+  )
   const children = createMemo(() => {
     const id = params.id
     if (!id) return []
-    return sync.data.session
-      .filter((s) => s.parentID === id)
-      .sort((a, b) => (b.time?.updated ?? 0) - (a.time?.updated ?? 0))
+    return [
+      ...new Map(
+        [...(persistedChildren() ?? []), ...sync.data.session.filter((s) => s.parentID === id)].map((s) => [s.id, s]),
+      ).values(),
+    ].sort((a, b) => (b.time?.updated ?? 0) - (a.time?.updated ?? 0))
   })
 
   // Three states. A subagent does one turn then finishes: the task tool persists a terminal marker
@@ -54,28 +60,31 @@ export const SidePanelSubagents: Component<{ onClose: () => void }> = (props) =>
   // "finished" (read-only) instead of "idle" (looks available). `session_working` is the live signal
   // for the brief window it's actually running; the persisted marker wins once set.
   // Phase 2 adds "interrupted" for subagents that were manually stopped.
-  const isFinished = (child: { metadata?: Record<string, unknown> }): boolean => {
-    const sub = (child.metadata?.["deepagent"] as { subagent?: { finished?: boolean } } | undefined)?.subagent
-    return sub?.finished === true
-  }
   const isInterrupted = isSubagentInterrupted
-  const statusOf = (
-    child: { id: string; metadata?: Record<string, unknown> },
-  ): "running" | "finished" | "interrupted" | "idle" => {
+  const statusOf = (child: {
+    id: string
+    metadata?: Record<string, unknown>
+  }): "running" | "completed" | "error" | "interrupted" | "cancelled" | "idle" => {
     if (sync.data.session_working(child.id)) return "running"
     if (isInterrupted(child)) return "interrupted"
-    if (isFinished(child)) return "finished"
+    const state = subagentMetadata(child)?.state
+    if (state === "completed" || state === "error" || state === "cancelled") return state
+    if (subagentMetadata(child)?.finished === true) return "completed"
     return "idle"
   }
-  const statusLabel = (state: "running" | "finished" | "interrupted" | "idle") =>
+  const statusLabel = (state: "running" | "completed" | "error" | "interrupted" | "cancelled" | "idle") =>
     language.t(
       state === "running"
         ? "session.subagents.running"
-        : state === "finished"
+        : state === "completed"
           ? "session.subagents.finished"
-          : state === "interrupted"
-            ? "session.subagents.interrupted"
-            : "session.subagents.idle",
+          : state === "error"
+            ? "session.subagents.error"
+            : state === "interrupted"
+              ? "session.subagents.interrupted"
+              : state === "cancelled"
+                ? "session.subagents.cancelled"
+                : "session.subagents.idle",
     )
 
   // ── selected session (監督対象) ───────────────────────────────────────────────
@@ -126,10 +135,11 @@ export const SidePanelSubagents: Component<{ onClose: () => void }> = (props) =>
           <For each={children()}>
             {(child) => {
               const status = () => statusOf(child)
+              const reason = () => subagentMetadata(child)?.reason
               const isSelected = () => selectedSessionID() === child.id
               return (
                 <div
-                  class="w-full rounded-md px-2 py-2 text-left"
+                  class="w-full rounded-md px-2 py-2 text-left flex items-center gap-2"
                   classList={{
                     "bg-surface-raised-base-active ring-1 ring-border-strong-base": isSelected(),
                     "hover:bg-background-stronger": !isSelected(),
@@ -138,14 +148,18 @@ export const SidePanelSubagents: Component<{ onClose: () => void }> = (props) =>
                   {/* §3.4.2: click the row body to select; [Open] navigates. */}
                   <button
                     type="button"
-                    class="w-full flex items-center justify-between gap-2 text-left"
+                    class="min-w-0 flex-1 flex items-center justify-between gap-2 text-left"
                     onClick={() => selectRow(child.id)}
+                    aria-label={`${language.t("session.subagents.select")} ${child.title || child.id}`}
                   >
                     <div class="flex flex-col gap-0.5 min-w-0">
                       <span class="truncate text-12-regular text-text">{child.title || child.id}</span>
-                      <span class="text-11-regular text-text-weaker">{statusLabel(status())}</span>
+                      <span class="text-11-regular text-text-weaker">
+                        {statusLabel(status())}
+                        <Show when={reason()}>{(value) => ` · ${value()}`}</Show>
+                      </span>
                     </div>
-                    <div class="flex items-center gap-1.5 shrink-0">
+                    <span class="flex items-center gap-1.5 shrink-0" aria-hidden="true">
                       <Show when={status() === "running"}>
                         <span
                           class="h-2 w-2 rounded-full bg-text-success"
@@ -155,22 +169,19 @@ export const SidePanelSubagents: Component<{ onClose: () => void }> = (props) =>
                       <Show when={status() === "interrupted"}>
                         <span class="h-2 w-2 rounded-full bg-text-warning" />
                       </Show>
-                      {/* §3.4.3: [Open] button navigates to the subagent's full session. */}
-                      <button
-                        type="button"
-                        class="text-11-regular text-text-link hover:underline px-1"
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          // The router nests every session route under a required `:dir` segment
-                          // (`/:dir/session/:id`). `params.dir` is the parent's dir and the
-                          // subagent lives in the same scope — matching every other session
-                          // navigation in the app (message-timeline, session-composer, etc.).
-                          navigate(`/${params.dir}/session/${child.id}`)
-                        }}
-                      >
-                        {language.t("session.subagents.open")}
-                      </button>
-                    </div>
+                      <Show when={status() === "error"}>
+                        <span class="h-2 w-2 rounded-full bg-icon-critical-base" />
+                      </Show>
+                    </span>
+                  </button>
+                  {/* §3.4.3: sibling interactive control — never nest a button inside the row button. */}
+                  <button
+                    type="button"
+                    class="shrink-0 text-11-regular text-text-link hover:underline px-1"
+                    aria-label={`${language.t("session.subagents.open")} ${child.title || child.id}`}
+                    onClick={() => navigate(`/${params.dir}/session/${child.id}`)}
+                  >
+                    {language.t("session.subagents.open")}
                   </button>
                 </div>
               )

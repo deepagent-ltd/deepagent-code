@@ -18,6 +18,7 @@ import {
 } from "@deepagent-code/llm"
 import type { LLMClientShape } from "@deepagent-code/llm/route"
 import { LLMNative } from "./native-request"
+import { FreeformTools } from "./freeform-tools"
 
 export type RuntimeStatus =
   | { readonly type: "supported"; readonly apiKey: string; readonly baseURL?: string }
@@ -127,7 +128,11 @@ export function stream(input: StreamInput): StreamResult {
             Stream.flatMap((event) =>
               event.type !== "tool-call" || event.providerExecuted
                 ? Stream.make(event)
-                : Stream.make(event).pipe(
+                : Stream.make(
+                    event.name === "apply_patch" && typeof event.input === "string"
+                      ? { ...event, input: FreeformTools.input(event.input) }
+                      : event,
+                  ).pipe(
                     Stream.concat(
                       Stream.fromEffectDrain(
                         ToolRuntime.dispatch(tools, event).pipe(
@@ -186,7 +191,12 @@ export function nativeTools(tools: Record<string, Tool>, input: Pick<StreamInput
       // the @deepagent-code/llm tool call back into the AI SDK Tool.execute shape.
       NativeTool.make({
         description: item.description ?? "",
-        jsonSchema: nativeSchema(item.inputSchema),
+        jsonSchema:
+          item.type === "provider" && item.id === "openai.custom" ? { type: "string" } : nativeSchema(item.inputSchema),
+        format:
+          item.type === "provider" && item.id === "openai.custom" && name === "apply_patch"
+            ? FreeformTools.format
+            : undefined,
         execute: (args: unknown, ctx) =>
           Effect.tryPromise({
             try: () => {

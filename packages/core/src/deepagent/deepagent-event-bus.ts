@@ -276,8 +276,26 @@ export const layerWith = (options?: LayerOptions) =>
       // K40-2: durable groups from DB (groups registered via registerConsumerGroup, survive restarts).
       // Returns the union of live + durable groups, deduped. An offline group that registered durably
       // will receive delivery rows even though it has no live stream right now.
-      const groupsFor = (eventType: string): Effect.Effect<ReadonlyArray<string>> =>
-        db
+      //
+      // PERF: cache the DB portion (durable groups) per eventType to avoid a DB round-trip on every
+      // publish. Consumer group membership changes only at startup (consumerRegistrationLayer) and on
+      // flag changes — both call registerConsumerGroup/unregisterConsumerGroup which invalidate the
+      // cache. Live groups (in-memory only) are always computed fresh; they change on subscribe/end.
+      const dbGroupsCache = new Map<string, string[]>()
+      const invalidateDbGroupsCache = () => dbGroupsCache.clear()
+
+      const groupsFor = (eventType: string): Effect.Effect<ReadonlyArray<string>> => {
+        const cached = dbGroupsCache.get(eventType)
+        if (cached !== undefined) {
+          // DB portion is cached; still merge with current live groups (always fresh, no DB).
+          const live = liveGroupsFor(eventType)
+          if (live.length === 0) return Effect.succeed(cached)
+          const seen = new Set<string>(cached)
+          const merged = [...cached]
+          for (const g of live) if (!seen.has(g)) merged.push(g)
+          return Effect.succeed(merged)
+        }
+        return db
           .select({ group_id: DeepAgentConsumerGroupTable.group_id })
           .from(DeepAgentConsumerGroupTable)
           .where(
@@ -288,6 +306,7 @@ export const layerWith = (options?: LayerOptions) =>
             Effect.orDie,
             Effect.map((rows) => {
               const dbGroups = rows.map((r) => r.group_id)
+              dbGroupsCache.set(eventType, dbGroups)
               const live = liveGroupsFor(eventType)
               // Union: db-registered + live-only (not yet durable-registered), deduplicated.
               const seen = new Set<string>(dbGroups)
@@ -296,6 +315,7 @@ export const layerWith = (options?: LayerOptions) =>
               return merged
             }),
           )
+      }
 
       const publish: Interface["publish"] = (input) =>
         Effect.gen(function* () {
@@ -855,6 +875,7 @@ export const layerWith = (options?: LayerOptions) =>
 
       // K40-2: durable consumer group registration — persists group identity so publish writes delivery
       // rows for offline groups too. Both methods are idempotent; registerConsumerGroup upserts.
+      // PERF: both methods invalidate dbGroupsCache so the next groupsFor re-reads from DB.
       const registerConsumerGroup: Interface["registerConsumerGroup"] = (groupId, typeFilter) => {
         const at = now()
         return db
@@ -865,7 +886,7 @@ export const layerWith = (options?: LayerOptions) =>
             set: { type_filter: typeFilter ?? null, last_seen_at: at },
           })
           .run()
-          .pipe(Effect.orDie, Effect.asVoid)
+          .pipe(Effect.orDie, Effect.asVoid, Effect.tap(() => Effect.sync(invalidateDbGroupsCache)))
       }
 
       const unregisterConsumerGroup: Interface["unregisterConsumerGroup"] = (groupId) =>
@@ -873,7 +894,7 @@ export const layerWith = (options?: LayerOptions) =>
           .delete(DeepAgentConsumerGroupTable)
           .where(eq(DeepAgentConsumerGroupTable.group_id, groupId))
           .run()
-          .pipe(Effect.orDie, Effect.asVoid)
+          .pipe(Effect.orDie, Effect.asVoid, Effect.tap(() => Effect.sync(invalidateDbGroupsCache)))
 
       return Service.of({
         publish,

@@ -80,6 +80,19 @@ describe("discoverModelsCached", () => {
     expect(calls).toBe(2)
   })
 
+  test("force refresh bypasses a fresh cache", async () => {
+    let calls = 0
+    const fetch = async () => [model(`forced-${++calls}`)]
+    const input = baseInput("forced")
+
+    const first = await run((fs, flock) => discoverModelsCached(fs, flock, input, fetch))
+    expect(first.map((m) => m.id)).toEqual(["forced-1"])
+
+    const second = await run((fs, flock) => discoverModelsCached(fs, flock, input, fetch, true))
+    expect(second.map((m) => m.id)).toEqual(["forced-2"])
+    expect(calls).toBe(2)
+  })
+
   test("falls back to the last good cache when a refetch fails", async () => {
     let calls = 0
     const fetch = async () => {

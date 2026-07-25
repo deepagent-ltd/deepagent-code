@@ -60,9 +60,11 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
           model: { providerID: model.providerID, modelID: model.modelID },
         })
         return (turnInput) =>
-          runTurn({ agentType: turnInput.agentType, prompt: turnInput.prompt, outputSchema: turnInput.outputSchema }).pipe(
-            Effect.map((r) => ({ structured: r.structured })),
-          )
+          runTurn({
+            agentType: turnInput.agentType,
+            prompt: turnInput.prompt,
+            outputSchema: turnInput.outputSchema,
+          }).pipe(Effect.map((r) => ({ structured: r.structured })))
       })
 
     const resolveReviewRunsDir = Effect.fn("DeepAgentHttpApi.resolveReviewRunsDir")(function* () {
@@ -147,7 +149,6 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
             record,
             AgentGateway.DeepAgentKnowledgeSource.userGlobalStoreFor(),
           )
-          AgentGateway.DeepAgentKnowledgeRetriever.invalidateCache()
           return record
         },
         catch: (error) =>
@@ -172,7 +173,6 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
             ctx.payload.candidate.candidate_id,
             "rejected",
           )
-          AgentGateway.DeepAgentKnowledgeRetriever.invalidateCache()
           return { candidateId: ctx.payload.candidate.candidate_id, fingerprint, reason: ctx.payload.reason }
         },
         catch: (error) =>
@@ -213,13 +213,21 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
       })
     })
 
+    const knowledgeReviewSummary = Effect.fn("DeepAgentHttpApi.knowledgeReviewSummary")(function* () {
+      const dir = yield* workspaceDir()
+      return yield* Effect.try({
+        try: () => AgentGateway.DeepAgentKnowledgeSource.reviewSummaryForWorkspace(dir),
+        catch: (error) =>
+          new DeepAgentPromotionError({ message: error instanceof Error ? error.message : String(error) }),
+      })
+    })
+
     const knowledgeApprove = Effect.fn("DeepAgentHttpApi.knowledgeApprove")(function* (ctx) {
       const dir = yield* workspaceDir()
       return yield* Effect.try({
         try: () => {
           for (const id of ctx.payload.ids)
             AgentGateway.DeepAgentKnowledgeSource.setApprovalForWorkspace(dir, id, "approved")
-          AgentGateway.DeepAgentKnowledgeRetriever.invalidateCache()
           return { updated: ctx.payload.ids }
         },
         catch: (error) =>
@@ -233,7 +241,6 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
         try: () => {
           for (const id of ctx.payload.ids)
             AgentGateway.DeepAgentKnowledgeSource.setApprovalForWorkspace(dir, id, "rejected")
-          AgentGateway.DeepAgentKnowledgeRetriever.invalidateCache()
           return { updated: ctx.payload.ids }
         },
         catch: (error) =>
@@ -273,7 +280,6 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
               if (AgentGateway.DeepAgentKnowledgeSource.setApprovalForWorkspace(dir, ref, "rejected")) demoted.push(ref)
               else notInStore.push(ref)
             }
-            AgentGateway.DeepAgentKnowledgeRetriever.invalidateCache()
           }
           return {
             ship: decision.ship,
@@ -415,8 +421,8 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
     })
 
     // V3.8.1 §G environment-fact use-gate handlers. The adoption service roots at the same gateway
-    // baseDir the retriever reads (workspaceDir() calls configureGateway first), keyed by the active
-    // workspace path — so a project's adopt/reject decisions are isolated per project (§G.8).
+    // baseDir the retriever reads, keyed by the active workspace path — so a project's adopt/reject
+    // decisions are isolated per project (§G.8).
     const now = () => new Date().toISOString()
 
     const envFacts = Effect.fn("DeepAgentHttpApi.envFacts")(function* () {
@@ -435,7 +441,6 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
           const adoption = AgentGateway.DeepAgentKnowledgeSource.environmentFactAdoptionFor(dir)
           if (ctx.payload.decision === "adopt") adoption.adopt(ctx.payload.factId, now())
           else adoption.reject(ctx.payload.factId, now())
-          AgentGateway.DeepAgentKnowledgeRetriever.invalidateCache()
           return { ok: true, factId: ctx.payload.factId }
         },
         catch: (error) =>
@@ -456,7 +461,6 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
             mode: ctx.payload.mode,
             now: now(),
           })
-          AgentGateway.DeepAgentKnowledgeRetriever.invalidateCache()
           return { ok: true, factId: updatedId }
         },
         catch: (error) =>
@@ -504,7 +508,8 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
       const verdict = yield* consultPanel(
         {
           question:
-            ctx.payload.question ?? "Review the current changes in this conversation for correctness, security, and design.",
+            ctx.payload.question ??
+            "Review the current changes in this conversation for correctness, security, and design.",
           codeRefs: ctx.payload.codeRefs ? [...ctx.payload.codeRefs] : [],
           parentSessionID: sessionID,
           ...(ctx.payload.lenses ? { lenses: [...ctx.payload.lenses] } : {}),
@@ -519,9 +524,7 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
     // The global Expert Panel default (§C): the effective armed state falls back to this when a session
     // has never explicitly toggled. Read from the first-party SettingsStore (expertPanelDefault).
     const expertPanelDefault = () =>
-      Effect.promise(() => SettingsStore.read()).pipe(
-        Effect.map((s) => s.deepagent?.expertPanelDefault ?? false),
-      )
+      Effect.promise(() => SettingsStore.read()).pipe(Effect.map((s) => s.deepagent?.expertPanelDefault ?? false))
 
     const panelArm = Effect.fn("DeepAgentHttpApi.panelArm")(function* (ctx) {
       const { sessionID, armed, rounds } = ctx.payload
@@ -701,7 +704,9 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
         ...(ctx.query.scope ? { scope: ctx.query.scope } : {}),
       })
       index.close()
-      return { hits: hits.map((h) => ({ docId: h.docId, type: h.type, scope: h.scope, title: h.title, score: h.score })) }
+      return {
+        hits: hits.map((h) => ({ docId: h.docId, type: h.type, scope: h.scope, title: h.title, score: h.score })),
+      }
     })
 
     const wikiEdit = Effect.fn("DeepAgentHttpApi.wikiEdit")(function* (ctx) {
@@ -748,6 +753,7 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
       .handle("promote", promote)
       .handle("reject", reject)
       .handle("knowledgePending", knowledgePending)
+      .handle("knowledgeReviewSummary", knowledgeReviewSummary)
       .handle("knowledgeApprove", knowledgeApprove)
       .handle("knowledgeRejectIds", knowledgeRejectIds)
       .handle("knowledgeShipGate", knowledgeShipGate)

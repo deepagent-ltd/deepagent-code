@@ -4,14 +4,15 @@ import { Endpoint } from "../route/endpoint"
 import { Protocol } from "../route/protocol"
 import {
   LLMEvent,
+  ToolDefinition,
   Usage,
   type CacheHint,
   type FinishReason,
+  type FunctionToolDefinition,
   type LLMRequest,
   type ProviderMetadata,
   type ReasoningPart,
   type ToolCallPart,
-  type ToolDefinition,
   type ToolResultPart,
 } from "../schema"
 import { BedrockEventStream } from "./bedrock-event-stream"
@@ -205,7 +206,7 @@ type BedrockEvent = Schema.Schema.Type<typeof BedrockEvent>
 // =============================================================================
 // Request Lowering
 // =============================================================================
-const lowerToolSpec = (tool: ToolDefinition): BedrockToolSpec => ({
+const lowerToolSpec = (tool: FunctionToolDefinition): BedrockToolSpec => ({
   toolSpec: {
     name: tool.name,
     description: tool.description,
@@ -213,7 +214,10 @@ const lowerToolSpec = (tool: ToolDefinition): BedrockToolSpec => ({
   },
 })
 
-const lowerTools = (breakpoints: BedrockCache.Breakpoints, tools: ReadonlyArray<ToolDefinition>): BedrockTool[] => {
+const lowerTools = (
+  breakpoints: BedrockCache.Breakpoints,
+  tools: ReadonlyArray<FunctionToolDefinition>,
+): BedrockTool[] => {
   const result: BedrockTool[] = []
   for (const tool of tools) {
     result.push(lowerToolSpec(tool))
@@ -374,6 +378,8 @@ const lowerSystem = (
 ): BedrockSystemBlock[] => system.flatMap((part) => textWithCache(breakpoints, part.text, part.cache))
 
 const fromRequest = Effect.fn("BedrockConverse.fromRequest")(function* (request: LLMRequest) {
+  if (!request.tools.every(ToolDefinition.isFunction))
+    return yield* ProviderShared.invalidRequest("Bedrock Converse does not support custom text tools")
   const toolChoice = request.toolChoice ? yield* lowerToolChoice(request.toolChoice) : undefined
   const generation = request.generation
   // Bedrock-Claude shares Anthropic's 4-breakpoint cap. Spend the budget in
