@@ -1,7 +1,7 @@
 import { describe, expect } from "bun:test"
 import { Effect, Schema, Stream } from "effect"
 import { HttpClientRequest } from "effect/unstable/http"
-import { LLM, LLMError, Message, Model, ToolCallPart, Usage } from "../../src"
+import { LLM, LLMError, Message, Model, ToolCallPart, ToolDefinition, Usage } from "../../src"
 import * as Azure from "../../src/providers/azure"
 import * as OpenAI from "../../src/providers/openai"
 import * as OpenAIChat from "../../src/protocols/openai-chat"
@@ -223,6 +223,24 @@ describe("OpenAI Chat route", () => {
         stream: true,
         stream_options: { include_usage: true },
       })
+    }),
+  )
+
+  it.effect("rejects raw custom tools before sending Chat requests", () =>
+    Effect.gen(function* () {
+      const error = yield* LLMClient.prepare(
+        LLM.updateRequest(request, {
+          tools: [
+            ToolDefinition.custom({
+              name: "apply_patch",
+              description: "Apply a patch",
+              format: { type: "text" },
+            }),
+          ],
+        }),
+      ).pipe(Effect.flip)
+
+      expect(error.message).toContain("OpenAI Chat does not support custom text tools")
     }),
   )
 
@@ -579,6 +597,27 @@ describe("OpenAI Chat route", () => {
         { type: "tool-input-delta", id: "call_1", name: "lookup", text: ':"weather"}' },
       ])
       expect(response.toolCalls).toEqual([])
+    }),
+  )
+
+  it.effect("does not finalize streamed tool calls on a length finish", () =>
+    Effect.gen(function* () {
+      const body = sseEvents(
+        deltaChunk({
+          role: "assistant",
+          tool_calls: [{ index: 0, id: "call_1", function: { name: "write", arguments: '{"filePath":"x"' } }],
+        }),
+        deltaChunk({}, "length"),
+      )
+      const response = yield* LLMClient.generate(
+        LLM.updateRequest(request, {
+          tools: [{ name: "write", description: "Write file", inputSchema: { type: "object" } }],
+        }),
+      ).pipe(Effect.provide(fixedResponse(body)))
+
+      expect(response.toolCalls).toEqual([])
+      expect(response.events.some((event) => event.type === "tool-call")).toBe(false)
+      expect(response.events.at(-1)).toMatchObject({ type: "finish", reason: "length" })
     }),
   )
 

@@ -48,11 +48,6 @@ const providerKind = (providerID: string) => (providerID === "anthropic" ? "anth
 
 type DiscoveredProviderModel = { id: string; name: string }
 
-const discoveredModelConfig = (model: DiscoveredProviderModel) => ({
-  id: model.id,
-  name: model.name,
-})
-
 export function DialogConnectProvider(props: { provider: string }) {
   const dialog = useDialog()
   const serverSync = useServerSync()
@@ -486,7 +481,6 @@ export function DialogConnectProvider(props: { provider: string }) {
       return options
     }
 
-
     async function handleSubmit(e: SubmitEvent) {
       e.preventDefault()
 
@@ -577,6 +571,8 @@ export function DialogConnectProvider(props: { provider: string }) {
         setFormStore("selectedModel", nextSelected.id)
 
         const current = serverSync.data.config.provider?.[props.provider] ?? {}
+        const keepLegacySnapshot =
+          current.discovery !== true && current.npm === undefined && Object.keys(current.models ?? {}).length > 0
         await serverSync.updateConfig({
           provider: {
             [props.provider]: {
@@ -587,10 +583,14 @@ export function DialogConnectProvider(props: { provider: string }) {
                 baseURL,
                 ...(key ? { apiKey: key } : {}),
               },
-              models: {
-                ...(current.models ?? {}),
-                ...Object.fromEntries(nextModels.map((model) => [model.id, discoveredModelConfig(model)])),
-              },
+              // Keep the provider's live /models endpoint authoritative after the initial import.
+              // Existing discovery-mode entries may contain intentional per-model overrides. Legacy
+              // static snapshots stay untagged because config updates merge nested maps and cannot
+              // safely clear them; the backend recognizes that old shape and ignores the snapshot
+              // whenever a live list is available.
+              ...(keepLegacySnapshot
+                ? {}
+                : { discovery: true, models: current.discovery ? (current.models ?? {}) : {} }),
             },
           },
           disabled_providers: (serverSync.data.config.disabled_providers ?? []).filter((id) => id !== props.provider),

@@ -14,7 +14,7 @@
   <a href="https://github.com/deepagent-ltd/deepagent-code-enterprise">Enterprise 版本</a>
 </p>
 
-<p align="center"><sub>桌面版 1.4.2 · DeepAgent Core V4.0.4</sub></p>
+<p align="center"><sub>桌面版 1.4.3 · DeepAgent Core V4.0.4_r8</sub></p>
 
 ---
 
@@ -91,16 +91,18 @@ DeepAgent 可以把独立工作拆分给数量有界、相互隔离的 Worker。
 
 项目 IM 把团队成员和智能体放进同一条讨论。@ 某个智能体即可启动有明确作用域的运行，使用项目上下文、流式展示进度、关联执行工件，并把答案留在发起任务的对话里。
 
-## DeepAgent Core V4.0.4
+## DeepAgent Core V4.0.4_r8
 
-V4.0.4 在保持当前 turn 引擎稳定的前提下，关闭生产合同缺口：
+桌面版 1.4.3 搭载 V4.0.4 合同的第八次可靠性修订。本次发布重点加固长任务和委派任务的关键边界，避免重复执行、模糊终态或局部界面故障演变为整页崩溃：
 
-- **单一持久真相：** DocumentStore 通过原子、可恢复写入统一管理文档、计划、学习候选、治理状态和版本冲突。
-- **隔离子智能体：** 具备写权限的子智能体默认使用独立 worktree，并通过有界、可感知冲突的路径把改动回传到父工作区。
-- **可靠事件投递：** Event Bus 提供可替换 transport、持久 consumer offset、离线补投、真实优先级排序和可观测队列深度。
-- **受治理的学习与目标：** 知识晋升关联审阅证据与 ship-gate snapshot；事件驱动 goal tick 保持幂等并遵守 quiet hours。
-- **安全集成：** MCP 凭据使用环境变量引用或 macOS、Linux、Windows 原生 secret storage；capability 与来源检查逐层失败关闭。
-- **发布真实性：** 安装方式、CLI 示例、发布元数据、公开域名和支持版本文档与实际交付产品一致。
+- **持久化子智能体执行：** TaskRun 的准入、generation、owner、lease、结算与父会话投递均持久化。exact retry 会归并到原始运行，终态通过事务 CAS 结算，租约式 outbox 可在不重复执行 provider work 的前提下恢复完成通知。
+- **两阶段结构化终结：** 研究和结构化输出分为独立阶段。finalizer 是次数有界的单轮执行；在 provider 支持时关闭 thinking，只暴露 `StructuredOutput`，不混入历史 task 或 compaction 内容，也不存在空结果成功路径。
+- **失败关闭的模型与工具边界：** provider capability 决策不再静默放宽 required tool choice；无效工具输入在执行前被拒绝；provider、schema、permission、interruption、timeout 与 doom-loop 保留不同且可恢复的终态原因。
+- **语义级无进展保护：** shell 使用语义 fingerprint；无进展预算同时比较有界结果、工作区状态与计划进度，不能再靠改写命令描述绕过循环检测。
+- **故障隔离的监督面板：** 子智能体控件使用合法的 sibling interaction，展示真实终态，并由局部 ErrorBoundary、重试/关闭、持久 mode 校验、同 build quarantine 与 build 变化后的恢复机制保护。
+- **发布级验证：** 受影响的 Core、运行时、App 与 Desktop 路径已覆盖 exact retry、故障注入、production Chromium、Electron 冷启动和 source-map smoke。
+
+V4.0.4_r8 同时保留此前 V4.0.4 各修订建立的持久文档、可靠事件投递、知识治理、worktree 隔离与安全凭据边界。
 
 ## 安装
 
