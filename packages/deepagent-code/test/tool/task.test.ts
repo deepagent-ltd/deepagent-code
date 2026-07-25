@@ -129,6 +129,7 @@ function reply(input: SessionPrompt.PromptInput, text: string): SessionV1.WithPa
       providerID: input.model?.providerID ?? ref.providerID,
       time: { created: Date.now() },
       finish: "stop",
+      ...(input.format?.type === "json_schema" ? { structured: sampleSchema(input.format.schema) } : {}),
     },
     parts: [
       {
@@ -140,6 +141,21 @@ function reply(input: SessionPrompt.PromptInput, text: string): SessionV1.WithPa
       },
     ],
   }
+}
+
+function sampleSchema(schema: Record<string, unknown>): unknown {
+  if (Array.isArray(schema.enum) && schema.enum.length > 0) return schema.enum[0]
+  if (Array.isArray(schema.anyOf) && schema.anyOf.length > 0)
+    return sampleSchema(schema.anyOf[0] as Record<string, unknown>)
+  if (schema.type === "object") {
+    const properties = schema.properties as Record<string, Record<string, unknown>> | undefined
+    return Object.fromEntries(Object.entries(properties ?? {}).map(([key, value]) => [key, sampleSchema(value)]))
+  }
+  if (schema.type === "array") return []
+  if (schema.type === "number" || schema.type === "integer") return 0
+  if (schema.type === "boolean") return true
+  if (schema.type === "null") return null
+  return "done"
 }
 
 describe("tool.task", () => {
@@ -537,8 +553,14 @@ describe("tool.task", () => {
         const { chat, assistant } = yield* seed()
         const tool = yield* TaskTool
         const def = yield* tool.init()
-        let seen: SessionPrompt.PromptInput | undefined
-        const promptOps = stubOps({ onPrompt: (input) => (seen = input) })
+        let research: SessionPrompt.PromptInput | undefined
+        let finalizer: SessionPrompt.PromptInput | undefined
+        const promptOps = stubOps({
+          onPrompt: (input) => {
+            if (input.format?.type === "json_schema") finalizer = input
+            else research = input
+          },
+        })
 
         const result = yield* def.execute(
           {
@@ -561,6 +583,17 @@ describe("tool.task", () => {
         const child = yield* sessions.get(result.metadata.sessionId)
         expect(child.parentID).toBe(chat.id)
         expect(child.agent).toBe("reviewer")
+        expect(child.metadata?.deepagent?.subagent).toMatchObject({
+          finished: true,
+          state: "completed",
+          phase: "settled",
+          reason: "structured_output_valid",
+          generation: 1,
+          attempts: 1,
+          run_id: expect.any(String),
+          raw_result_ref: expect.any(String),
+          settled_at: expect.any(Number),
+        })
         expect(child.permission).toEqual([
           {
             permission: "todowrite",
@@ -578,11 +611,12 @@ describe("tool.task", () => {
             action: "allow",
           },
         ])
-        expect(seen?.tools).toEqual({
+        expect(research?.tools).toEqual({
           todowrite: false,
           bash: false,
           read: false,
         })
+        expect(finalizer?.tools).toBeUndefined()
       }),
     {
       config: {
@@ -739,6 +773,7 @@ describe("tool.task", () => {
   background.instance("background task completion waits for running updates", () =>
     Effect.gen(function* () {
       const jobs = yield* BackgroundJob.Service
+      const sessions = yield* Session.Service
       const { chat, assistant } = yield* seed()
       const tool = yield* TaskTool
       const def = yield* tool.init()
@@ -803,6 +838,11 @@ describe("tool.task", () => {
       const waited = yield* jobs.wait({ id: started.metadata.sessionId, timeout: 1_000 })
       expect(waited.info?.status).toBe("completed")
       expect(waited.info?.output).toBe("second done")
+      expect((yield* sessions.get(started.metadata.sessionId)).metadata?.deepagent?.subagent).toMatchObject({
+        generation: 1,
+        state: "completed",
+        finished: true,
+      })
       const notification = yield* Effect.promise(() => injected.promise)
       expect(notification.variant).toBe("xhigh")
       expect(notification.parts[0]?.type).toBe("text")
@@ -1081,7 +1121,11 @@ describe("tool.task", () => {
           AgentGateway.configure({ enabled: false, agentMode: "high", runsDir: undefined })
         }
       }),
-    { config: { provider: { deepagent: { name: "DeepAgent", options: { subagentIntensity: "downgrade" }, models: {} } } } },
+    {
+      config: {
+        provider: { deepagent: { name: "DeepAgent", options: { subagentIntensity: "downgrade" }, models: {} } },
+      },
+    },
   )
 
   // "inherit" (default): nothing is injected, so the child naturally runs at the process-global mode.
@@ -1116,7 +1160,9 @@ describe("tool.task", () => {
           AgentGateway.configure({ enabled: false, agentMode: "high", runsDir: undefined })
         }
       }),
-    { config: { provider: { deepagent: { name: "DeepAgent", options: { subagentIntensity: "inherit" }, models: {} } } } },
+    {
+      config: { provider: { deepagent: { name: "DeepAgent", options: { subagentIntensity: "inherit" }, models: {} } } },
+    },
   )
 
   // Per-request isolation: many concurrent downgraded subagents each carry their OWN override on their
@@ -1169,6 +1215,10 @@ describe("tool.task", () => {
           AgentGateway.configure({ enabled: false, agentMode: "high", runsDir: undefined })
         }
       }),
-    { config: { provider: { deepagent: { name: "DeepAgent", options: { subagentIntensity: "downgrade" }, models: {} } } } },
+    {
+      config: {
+        provider: { deepagent: { name: "DeepAgent", options: { subagentIntensity: "downgrade" }, models: {} } },
+      },
+    },
   )
 })

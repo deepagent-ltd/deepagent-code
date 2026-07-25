@@ -36,6 +36,14 @@ export const listPending = async (client: ReviewClient): Promise<KnowledgeItem[]
   return response.data?.items ?? []
 }
 
+export const reviewSummary = async (client: ReviewClient): Promise<{ pendingCount: number }> => {
+  const response = await client.client.request<{ pendingCount?: number }>({
+    method: "GET",
+    url: "/deepagent/knowledge/review-summary",
+  })
+  return { pendingCount: response.data?.pendingCount ?? 0 }
+}
+
 export const setStatus = async (
   client: ReviewClient,
   action: "approve" | "reject-ids",

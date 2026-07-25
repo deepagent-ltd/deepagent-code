@@ -54,6 +54,22 @@ export type BrowserAPI = {
   onState: (cb: (state: BrowserState) => void) => () => void
 }
 
+export type FileOpResult = { ok: boolean; error?: string; path?: string }
+export type FileOpsAPI = {
+  copy: (root: string, source: string, destDir: string) => Promise<FileOpResult>
+  move: (root: string, source: string, destDir: string) => Promise<FileOpResult>
+  remove: (root: string, target: string) => Promise<FileOpResult>
+  rename: (root: string, target: string, nextName: string) => Promise<FileOpResult>
+  archive: (root: string, target: string) => Promise<FileOpResult>
+  extract: (root: string, zipPath: string) => Promise<FileOpResult>
+}
+
+export type GitLogEntry = { hash: string; author: string; date: string; subject: string }
+export type GitAPI = {
+  isTracked: (workDir: string, relPath: string) => Promise<{ ok: boolean; tracked: boolean; error?: string }>
+  fileLog: (workDir: string, relPath: string) => Promise<{ ok: boolean; entries: GitLogEntry[]; error?: string }>
+}
+
 export type ElectronAPI = {
   killSidecar: () => Promise<void>
   installCli: () => Promise<string>
@@ -113,4 +129,6 @@ export type ElectronAPI = {
   setBackgroundColor: (color: string) => Promise<void>
   exportDebugLogs: (options?: { windowMs?: number; pick?: boolean }) => Promise<string | null>
   recordFatalRendererError: (error: FatalRendererError) => Promise<void>
+  fileOps: FileOpsAPI
+  git: GitAPI
 }

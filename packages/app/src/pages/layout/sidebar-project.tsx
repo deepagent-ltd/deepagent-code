@@ -269,24 +269,24 @@ const ProjectPreviewPanel = (props: {
 )
 
 export const SortableProject = (props: {
-  project: LocalProject
+  project: Accessor<LocalProject>
   mobile?: boolean
   ctx: ProjectSidebarContext
   sortNow: Accessor<number>
 }): JSX.Element => {
   const serverSync = useServerSync()
   const language = useLanguage()
-  const sortable = createSortable(props.project.worktree)
-  const selected = createMemo(() => props.ctx.currentProject()?.worktree === props.project.worktree)
-  const workspaces = createMemo(() => props.ctx.workspaceIds(props.project).slice(0, 2))
-  const workspaceEnabled = createMemo(() => props.ctx.workspacesEnabled(props.project))
-  const dirs = createMemo(() => props.ctx.workspaceIds(props.project))
+  const sortable = createSortable(props.project().worktree)
+  const selected = createMemo(() => props.ctx.currentProject()?.worktree === props.project().worktree)
+  const workspaces = createMemo(() => props.ctx.workspaceIds(props.project()).slice(0, 2))
+  const workspaceEnabled = createMemo(() => props.ctx.workspacesEnabled(props.project()))
+  const dirs = createMemo(() => props.ctx.workspaceIds(props.project()))
   const [state, setState] = createStore({
     menu: false,
     suppressHover: false,
   })
 
-  const isHoverProject = () => props.ctx.hoverProject() === props.project.worktree
+  const isHoverProject = () => props.ctx.hoverProject() === props.project().worktree
   const preview = createMemo(() => !props.mobile && props.ctx.sidebarOpened())
   const overlay = createMemo(() => !props.mobile && !props.ctx.sidebarOpened())
   const active = createMemo(() => state.menu || (preview() ? isHoverProject() : overlay() && isHoverProject()))
@@ -296,12 +296,12 @@ export const SortableProject = (props: {
   const label = (directory: string) => {
     const [data] = serverSync.child(directory, { bootstrap: false })
     const kind =
-      directory === props.project.worktree ? language.t("workspace.type.local") : language.t("workspace.type.sandbox")
-    const name = props.ctx.workspaceLabel(directory, data.vcs?.branch, props.project.id)
+      directory === props.project().worktree ? language.t("workspace.type.local") : language.t("workspace.type.sandbox")
+    const name = props.ctx.workspaceLabel(directory, data.vcs?.branch, props.project().id)
     return `${kind} : ${name}`
   }
 
-  const projectStore = createMemo(() => serverSync.child(props.project.worktree, { bootstrap: false })[0])
+  const projectStore = createMemo(() => serverSync.child(props.project().worktree, { bootstrap: false })[0])
   const isWorking = createMemo(() =>
     dirs().some((directory) => {
       const [store] = serverSync.child(directory, { bootstrap: false })
@@ -315,7 +315,7 @@ export const SortableProject = (props: {
   }
   const tile = () => (
     <ProjectTile
-      project={props.project}
+      project={props.project()}
       mobile={props.mobile}
       sidebarHovering={props.ctx.sidebarHovering}
       selected={selected}
@@ -333,7 +333,7 @@ export const SortableProject = (props: {
       workspacesEnabled={props.ctx.workspacesEnabled}
       closeProject={props.ctx.closeProject}
       setMenu={(value) => setState("menu", value)}
-      setOpen={(value) => props.ctx.onHoverOpenChanged(props.project.worktree, value)}
+      setOpen={(value) => props.ctx.onHoverOpenChanged(props.project().worktree, value)}
       setSuppressHover={(value) => setState("suppressHover", value)}
       language={language}
     />
@@ -353,11 +353,11 @@ export const SortableProject = (props: {
           onOpenChange={(value) => {
             if (state.menu) return
             if (value && state.suppressHover) return
-            props.ctx.onHoverOpenChanged(props.project.worktree, value)
+            props.ctx.onHoverOpenChanged(props.project().worktree, value)
           }}
         >
           <ProjectPreviewPanel
-            project={props.project}
+            project={props.project()}
             mobile={props.mobile}
             selected={selected}
             workspaceEnabled={workspaceEnabled}
