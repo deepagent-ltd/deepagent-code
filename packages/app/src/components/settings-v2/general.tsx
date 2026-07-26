@@ -132,6 +132,12 @@ export const SettingsGeneralV2: Component = () => {
     { initialValue: false },
   )
 
+  const [preventSleep, { mutate: setPreventSleep }] = createResource(
+    () => (desktop() && platform.getPreventSleepEnabled ? true : false),
+    () => Promise.resolve(platform.getPreventSleepEnabled?.() ?? true).catch(() => true),
+    { initialValue: true },
+  )
+
   onMount(() => {
     void theme.loadThemes()
   })
@@ -250,6 +256,13 @@ export const SettingsGeneralV2: Component = () => {
     const update = platform.setPinchZoomEnabled?.(checked)
     if (!update) return
     void update.catch(() => setPinchZoom(!checked))
+  }
+
+  const onPreventSleepChange = (checked: boolean) => {
+    setPreventSleep(checked)
+    const update = platform.setPreventSleepEnabled?.(checked)
+    if (!update) return
+    void update.catch(() => setPreventSleep(!checked))
   }
 
   const colorSchemeOptions = createMemo((): { value: ColorScheme; label: string }[] => [
@@ -915,6 +928,25 @@ export const SettingsGeneralV2: Component = () => {
     </Show>
   )
 
+  const PowerSection = () => (
+    <Show when={desktop()}>
+      <div class="settings-v2-section">
+        <h3 class="settings-v2-section-title">{language.t("settings.general.section.power")}</h3>
+
+        <SettingsListV2>
+          <SettingsRowV2
+            title={language.t("settings.general.row.preventSleep.title")}
+            description={language.t("settings.general.row.preventSleep.description")}
+          >
+            <div data-action="settings-prevent-sleep">
+              <Switch checked={preventSleep.latest} onChange={onPreventSleepChange} />
+            </div>
+          </SettingsRowV2>
+        </SettingsListV2>
+      </div>
+    </Show>
+  )
+
   return (
     <>
       <div class="settings-v2-tab-header">
@@ -939,6 +971,8 @@ export const SettingsGeneralV2: Component = () => {
         <UpdatesSection />
 
         <DisplaySection />
+
+        <PowerSection />
 
         <ImportSection />
       </div>
