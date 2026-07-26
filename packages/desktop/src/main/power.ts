@@ -14,7 +14,13 @@ export function getPreventSleepEnabled(): boolean {
 
 export function setPreventSleepEnabled(enabled: boolean): void {
   getStore().set(PREVENT_SLEEP_KEY, enabled)
-  if (enabled) {
+  syncPowerSaveBlocker()
+}
+
+// Reconciles the running blocker with the persisted setting. Must be called after any write path
+// that can change the stored value outside setPreventSleepEnabled (generic store delete/clear).
+export function syncPowerSaveBlocker(): void {
+  if (getPreventSleepEnabled()) {
     startPowerSaveBlocker()
     return
   }

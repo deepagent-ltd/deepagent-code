@@ -12,7 +12,8 @@ import { archivePath, copyPath, extractPath, guardFileOpCall, movePath, removePa
 import { fileLog, isTracked } from "./git"
 import { getStore } from "./store"
 import { getPinchZoomEnabled, setPinchZoomEnabled, setTitlebar, updateTitlebar } from "./windows"
-import { getPreventSleepEnabled, setPreventSleepEnabled } from "./power"
+import { getPreventSleepEnabled, setPreventSleepEnabled, syncPowerSaveBlocker } from "./power"
+import { PREVENT_SLEEP_KEY, SETTINGS_STORE } from "./store-keys"
 import { browserView } from "./browser-view"
 import type { UpdaterController } from "./updater-controller"
 import { createUpdaterSubscriptions } from "./updater-subscriptions"
@@ -93,13 +94,21 @@ export function registerIpcHandlers(deps: Deps) {
     }
   })
   ipcMain.handle("store-set", (_event: IpcMainInvokeEvent, name: string, key: string, value: string) => {
+    // preventSleep drives a live powerSaveBlocker side effect; routing writes through the
+    // dedicated set-prevent-sleep IPC keeps the blocker in sync with the persisted value.
+    if (name === SETTINGS_STORE && key === PREVENT_SLEEP_KEY) {
+      throw new Error(`"${PREVENT_SLEEP_KEY}" must be written via the set-prevent-sleep IPC`)
+    }
     getStore(name).set(key, value)
   })
   ipcMain.handle("store-delete", (_event: IpcMainInvokeEvent, name: string, key: string) => {
     getStore(name).delete(key)
+    // Deleting the key resets it to the default-on behavior; re-sync so the blocker matches.
+    if (name === SETTINGS_STORE && key === PREVENT_SLEEP_KEY) syncPowerSaveBlocker()
   })
   ipcMain.handle("store-clear", (_event: IpcMainInvokeEvent, name: string) => {
     getStore(name).clear()
+    if (name === SETTINGS_STORE) syncPowerSaveBlocker()
   })
   ipcMain.handle("store-keys", (_event: IpcMainInvokeEvent, name: string) => {
     const store = getStore(name)
