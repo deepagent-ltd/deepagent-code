@@ -40,7 +40,7 @@ import { createWslServersController } from "./wsl/servers"
 import { registerWslIpcHandlers } from "./wsl/ipc"
 import { spawnWslSidecar } from "./wsl/sidecar"
 import { migrate } from "./migrate"
-import { startPowerSaveBlocker, stopPowerSaveBlocker } from "./power"
+import { initPowerSaveBlocker, stopPowerSaveBlocker } from "./power"
 import { createTray, destroyTray } from "./tray"
 
 const APP_NAMES: Record<string, string> = {
@@ -303,11 +303,12 @@ const main = Effect.gen(function* () {
     })
   }
 
-  // Keep the app running (prevent idle sleep/hibernate) while it is active. The tray icon enables
+  // Keep the app running (prevent idle sleep/hibernate) while it is active, unless the user opted
+  // out in settings. The tray icon enables
   // close-to-tray: closing the window hides it to the tray with a right-click “Quit” to fully exit.
   // On platforms without tray support (e.g. Linux GNOME default), tray creation fails silently and
   // close-to-tray stays disabled so closing the window quits normally — avoiding a stranded window.
-  startPowerSaveBlocker()
+  initPowerSaveBlocker()
   const trayCreated = createTray(() => mainWindow)
   setCloseToTrayEnabled(trayCreated)
 

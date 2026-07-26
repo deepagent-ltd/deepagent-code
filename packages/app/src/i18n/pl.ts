@@ -566,6 +566,7 @@ export const dict = {
   "settings.general.row.expertPanelDefault.title": "Domyślnie włącz panel ekspertów",
   "settings.general.row.expertPanelDefault.description": "Rozpoczynaj nowe rozmowy z włączonym panelem ekspertów, aby jego przycisk mógł na żądanie przeglądać bieżący kontekst.",
   "settings.general.section.display": "Ekran",
+  "settings.general.section.power": "Zasilanie",
   "settings.general.row.language.title": "Język",
   "settings.general.row.language.description": "Zmień język wyświetlania dla DeepAgent Code",
   "settings.general.row.appearance.title": "Wygląd",
@@ -949,6 +950,8 @@ export const dict = {
   "settings.general.row.pinchZoom.title": "Powiększanie gestem szczypania",
   "settings.general.row.pinchZoom.description":
     "Zezwól na powiększanie gestem szczypania na trackpadzie i Ctrl-przewijaniem",
+  "settings.general.row.preventSleep.title": "Zapobiegaj uśpieniu systemu",
+  "settings.general.row.preventSleep.description": "Utrzymuj system aktywny, gdy aplikacja jest uruchomiona; ekran nadal może się wyłączyć",
   "settings.general.row.zoom.title": "Zoom level",
   "settings.general.row.zoom.description": "Set the interface zoom level",
   "settings.updates.action.downloading": "Pobieranie...",
