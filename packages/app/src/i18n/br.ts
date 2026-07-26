@@ -567,6 +567,7 @@ export const dict = {
   "settings.general.row.expertPanelDefault.title": "Ativar painel de especialistas por padrão",
   "settings.general.row.expertPanelDefault.description": "Iniciar novas conversas com o painel de especialistas ativado, para que seu botão inicie uma revisão do contexto atual sob demanda.",
   "settings.general.section.display": "Tela",
+  "settings.general.section.power": "Energia",
   "settings.general.row.language.title": "Idioma",
   "settings.general.row.language.description": "Alterar o idioma de exibição do DeepAgent Code",
   "settings.general.row.appearance.title": "Aparência",
@@ -954,6 +955,8 @@ export const dict = {
   "settings.general.row.pinchZoom.title": "Pinçar para zoom",
   "settings.general.row.pinchZoom.description":
     "Permitir gestos de pellizco en trackpad y Ctrl-desplazamiento para ampliar",
+  "settings.general.row.preventSleep.title": "Impedir suspensão do sistema",
+  "settings.general.row.preventSleep.description": "Manter o sistema ativo enquanto o app está em execução; a tela ainda pode desligar",
   "settings.general.row.zoom.title": "Zoom level",
   "settings.general.row.zoom.description": "Set the interface zoom level",
   "settings.updates.action.downloading": "Baixando...",

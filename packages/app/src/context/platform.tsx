@@ -122,6 +122,12 @@ type PlatformBase = {
   /** Allow native pinch/Ctrl-scroll zoom gestures (desktop only) */
   setPinchZoomEnabled?(enabled: boolean): Promise<void> | void
 
+  /** Get whether the app keeps the system awake while running (desktop only) */
+  getPreventSleepEnabled?(): Promise<boolean> | boolean
+
+  /** Keep the system awake while the app is running (desktop only) */
+  setPreventSleepEnabled?(enabled: boolean): Promise<void> | void
+
   /** Run a desktop-only menu action from the app chrome */
   runDesktopMenuAction?(action: DesktopMenuAction): Promise<void> | void
 
