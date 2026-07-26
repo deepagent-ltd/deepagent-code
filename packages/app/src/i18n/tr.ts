@@ -637,6 +637,7 @@ export const dict = {
   "settings.general.row.expertPanelDefault.title": "Uzman panelini varsayılan olarak etkinleştir",
   "settings.general.row.expertPanelDefault.description": "Yeni sohbetleri uzman paneli etkin olarak başlatın; böylece düğmesi istendiğinde mevcut bağlamı inceler.",
   "settings.general.section.display": "Ekran",
+  "settings.general.section.power": "Güç",
 
   "settings.general.row.language.title": "Dil",
   "settings.general.row.language.description": "DeepAgent Code'un görünüm dilini değiştirin",
@@ -1036,6 +1037,8 @@ export const dict = {
   "settings.general.row.pinchZoom.title": "Sıkıştırarak yakınlaştır",
   "settings.general.row.pinchZoom.description":
     "Trackpad sıkıştırma ve Ctrl-kaydırma hareketleriyle yakınlaştırmaya izin ver",
+  "settings.general.row.preventSleep.title": "Sistem uykusunu engelle",
+  "settings.general.row.preventSleep.description": "Uygulama çalışırken sistemi uyanık tutar; ekran yine de kapanabilir",
   "settings.general.row.zoom.title": "Zoom level",
   "settings.general.row.zoom.description": "Set the interface zoom level",
   "settings.updates.action.downloading": "İndiriliyor...",

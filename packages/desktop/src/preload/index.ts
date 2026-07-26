@@ -122,6 +122,13 @@ const api: ElectronAPI = {
     ipcRenderer.on("pinch-zoom-enabled-changed", handler)
     return () => ipcRenderer.removeListener("pinch-zoom-enabled-changed", handler)
   },
+  getPreventSleepEnabled: () => ipcRenderer.invoke("get-prevent-sleep"),
+  setPreventSleepEnabled: (enabled) => ipcRenderer.invoke("set-prevent-sleep", enabled),
+  onPreventSleepChanged: (cb) => {
+    const handler = (_: unknown, enabled: boolean) => cb(enabled)
+    ipcRenderer.on("prevent-sleep-changed", handler)
+    return () => ipcRenderer.removeListener("prevent-sleep-changed", handler)
+  },
   onZoomFactorChanged: (cb) => {
     const handler = (_: unknown, factor: number) => cb(factor)
     ipcRenderer.on("zoom-factor-changed", handler)
