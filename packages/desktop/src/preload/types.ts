@@ -123,6 +123,9 @@ export type ElectronAPI = {
   getPinchZoomEnabled: () => Promise<boolean>
   setPinchZoomEnabled: (enabled: boolean) => Promise<void>
   onPinchZoomEnabledChanged: (cb: (enabled: boolean) => void) => () => void
+  getPreventSleepEnabled: () => Promise<boolean>
+  setPreventSleepEnabled: (enabled: boolean) => Promise<void>
+  onPreventSleepChanged: (cb: (enabled: boolean) => void) => () => void
   onZoomFactorChanged: (cb: (factor: number) => void) => () => void
   setTitlebar: (theme: TitlebarTheme) => Promise<void>
   runDesktopMenuAction: (action: DesktopMenuAction) => Promise<void>
