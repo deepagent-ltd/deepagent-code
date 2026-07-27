@@ -21,6 +21,7 @@ import path from "node:path"
 import { Log } from "@deepagent-code/core/util/log"
 import { DeepAgentWorkspace } from "@/deepagent/workspace-context"
 import { ToolProvenance } from "@/tool/provenance"
+import { ToolInternal } from "@/tool/internal"
 import { SessionReminders } from "../reminders"
 
 type PromptContext = AgentGateway.PromptContext
@@ -342,7 +343,10 @@ function resolveTools(input: Pick<PrepareInput, "tools" | "agent" | "permission"
     Object.keys(input.tools),
     Permission.merge(input.agent.permission, input.permission ?? []),
   )
-  return Record.filter(input.tools, (_, k) => input.user.tools?.[k] !== false && !disabled.has(k))
+  return Record.filter(
+    input.tools,
+    (tool, name) => input.user.tools?.[name] !== false && (ToolInternal.has(tool) || !disabled.has(name)),
+  )
 }
 
 export function hasToolCalls(messages: ModelMessage[]): boolean {

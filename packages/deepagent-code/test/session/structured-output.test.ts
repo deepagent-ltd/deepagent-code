@@ -4,6 +4,7 @@ import { Exit, Schema } from "effect"
 import { MessageV2 } from "../../src/session/message-v2"
 import { SessionPrompt } from "../../src/session/prompt"
 import { SessionID, MessageID } from "../../src/session/schema"
+import { ToolInternal } from "../../src/tool/internal"
 
 const decodeFormat = Schema.decodeUnknownExit(SessionV1.Format)
 const decodeUser = Schema.decodeUnknownExit(SessionV1.User)
@@ -254,6 +255,7 @@ describe("structured-output.createStructuredOutputTool", () => {
     })
 
     expect(tool.description).toContain("structured format")
+    expect(ToolInternal.has(tool)).toBe(true)
   })
 
   test("creates tool with schema as inputSchema", () => {

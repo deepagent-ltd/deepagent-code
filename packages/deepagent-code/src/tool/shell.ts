@@ -22,6 +22,7 @@ import { ChildProcess } from "effect/unstable/process"
 import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import { ShellPrompt, type Parameters } from "./shell/prompt"
 import { BashArity } from "@/permission/arity"
+import { Hash } from "@deepagent-code/core/util/hash"
 
 export { Parameters } from "./shell/prompt"
 
@@ -636,7 +637,7 @@ export const ShellTool = Tool.define(
           }),
           resultFingerprint: (result) => ({
             exit: result.metadata.exit,
-            output: new Bun.CryptoHasher("sha256").update(result.output).digest("hex"),
+            output: Hash.sha256(result.output),
             attachments: result.attachments?.map((attachment) => ({
               mime: attachment.mime,
               filename: attachment.filename,
