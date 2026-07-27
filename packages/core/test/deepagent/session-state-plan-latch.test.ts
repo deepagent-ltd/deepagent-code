@@ -75,6 +75,13 @@ describe("session-state plan latch", () => {
     expect(reloaded.planLatch.latch).toBe("stale")
     expect(reloaded.planLatch.stale_reason).toBe("no_progress")
   })
+
+  test("a plan-gate nudge fingerprint is claimed only once", () => {
+    SessionState.getOrCreate("latch-s7", "high")
+    expect(SessionState.claimPlanGateNudge("latch-s7", "stale:user_appended:0")).toBe(true)
+    expect(SessionState.claimPlanGateNudge("latch-s7", "stale:user_appended:0")).toBe(false)
+    expect(SessionState.claimPlanGateNudge("latch-s7", "stale:tool_failed:0")).toBe(true)
+  })
 })
 
 // U10 step-reporting: the mutation-since-report counter and evidence plumbing on the production seam.

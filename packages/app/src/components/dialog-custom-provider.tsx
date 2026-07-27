@@ -18,6 +18,7 @@ import {
   deriveProviderIdentity,
   formStateFromProvider,
   headerRow,
+  isAmbiguousProtocolError,
   modelRow,
   validateCustomProvider,
 } from "./dialog-custom-provider-form"
@@ -244,8 +245,10 @@ export function DialogCustomProvider(props: Props) {
         const choice = protocolChoice()
         // Defensive client-side timeout: the backend already caps its /models fetch, but guard the
         // whole round-trip too so a stalled request can never leave the submit button hung. On
-        // timeout (or any error) we fall through to manual/validation handling instead of blocking.
-        const res = await Promise.race([
+        // A timeout or ordinary discovery failure falls through to manual validation. Protocol
+        // ambiguity is different: continuing would either guess the wrong SDK or fail with no useful
+        // feedback, so require an explicit protocol choice.
+        const discovery = await Promise.race([
           serverSDK.client.provider.models
             .discover(
               {
@@ -259,7 +262,18 @@ export function DialogCustomProvider(props: Props) {
             )
             .then((res) => res.data),
           new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), 20_000)),
-        ]).catch(() => undefined)
+        ]).then(
+          (data) => ({ data, error: undefined }),
+          (error: unknown) => ({ data: undefined, error }),
+        )
+        if (choice === "auto" && isAmbiguousProtocolError(discovery.error)) {
+          showToast({
+            title: language.t("common.requestFailed"),
+            description: language.t("provider.custom.error.protocol.ambiguous"),
+          })
+          return
+        }
+        const res = discovery.data
         if (res?.kind) setDetectedProtocol(res.kind)
         const discovered = res?.models ?? []
         if (discovered.length > 0 && !hasManualModels) {
