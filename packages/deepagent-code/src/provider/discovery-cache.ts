@@ -8,11 +8,14 @@ import type { EffectFlock } from "@deepagent-code/core/util/effect-flock"
 import {
   discoverProviderModels,
   isChatModel,
+  isProviderDiscoveryAuthError,
   type DiscoveredModel,
   type ProviderDiscoveryKind,
 } from "./model-discovery"
 
 const log = Log.create({ service: "provider-discovery-cache" })
+const AUTH_FAILURE_RETRY_MS = 60_000
+const authFailures = new Map<string, { error: unknown; retryAt: number }>()
 
 // Bounds on what an untrusted /models endpoint can inject into the provider model map. `id` becomes a
 // map key and `api.id` (flows into request payloads); `name` is display-only. Cap both count and
@@ -35,7 +38,11 @@ const sanitizeModels = (models: DiscoveredModel[]): DiscoveredModel[] => {
     if (seen.has(id)) continue
     seen.add(id)
     const rawName = typeof model.name === "string" && model.name ? model.name : id
-    out.push({ id, name: rawName.slice(0, MAX_MODEL_NAME_LENGTH) })
+    out.push({
+      id,
+      name: rawName.slice(0, MAX_MODEL_NAME_LENGTH),
+      ...(model.protocols ? { protocols: model.protocols } : {}),
+    })
     if (out.length >= MAX_DISCOVERED_MODELS) break
   }
   return out
@@ -44,8 +51,8 @@ const sanitizeModels = (models: DiscoveredModel[]): DiscoveredModel[] => {
 // Runtime model discovery for third-party providers that opt in with `discovery: true`.
 // The live /models list is cached to disk (mtime + TTL, cross-process flock) exactly like the
 // models.dev catalog cache, so a fresh instance start reuses the list and only refetches after the
-// TTL lapses. Discovery is best-effort: a failed fetch falls back to the last good disk copy, and a
-// total miss returns [] so the provider load never blocks on the network.
+// TTL lapses. Transient failures may use the last good copy, but authentication failures never do:
+// keeping revoked credentials looking healthy leaves models selectable even though every request fails.
 
 export const DEFAULT_DISCOVERY_TTL = Duration.hours(6)
 
@@ -85,6 +92,9 @@ export const discoverModelsCached = Effect.fn("ProviderDiscovery.cached")(functi
 ) {
   const ttl = input.ttl ?? DEFAULT_DISCOVERY_TTL
   const filepath = cacheFile(input)
+  const blocked = authFailures.get(filepath)
+  if (!force && blocked && blocked.retryAt > Date.now()) return yield* Effect.fail(blocked.error)
+  if (blocked) authFailures.delete(filepath)
 
   // Re-sanitize on read too: a cache file written by an older build (looser rules) is normalized to
   // the current bounds before use.
@@ -106,7 +116,13 @@ export const discoverModelsCached = Effect.fn("ProviderDiscovery.cached")(functi
   }
 
   const fetchAndWrite = Effect.gen(function* () {
-    const models = sanitizeModels(yield* Effect.tryPromise(() => fetch(input)))
+    const models = sanitizeModels(
+      yield* Effect.tryPromise({
+        try: () => fetch(input),
+        catch: (error) => error,
+      }),
+    )
+    authFailures.delete(filepath)
     // Never cache an empty result: a provider that's still provisioning (200 + `{data:[]}`) or whose
     // models are all filtered out would otherwise pin an empty list for the whole TTL and hide models
     // that come online later. Don't overwrite the cache; prefer a prior good (if stale) copy over
@@ -123,7 +139,8 @@ export const discoverModelsCached = Effect.fn("ProviderDiscovery.cached")(functi
   })
 
   // Refetch under a cross-process lock; re-check freshness inside in case a peer refreshed while we
-  // waited on the lock. Any failure (lock, network, write) falls back to a stale disk copy, then [].
+  // waited on the lock. Transient failures fall back to stale disk; 401/403 are propagated and held
+  // briefly in memory so independently created provider instances cannot hammer a revoked credential.
   return yield* flock
     .withLock(
       Effect.gen(function* () {
@@ -138,6 +155,11 @@ export const discoverModelsCached = Effect.fn("ProviderDiscovery.cached")(functi
     .pipe(
       Effect.catch((error) =>
         Effect.gen(function* () {
+          if (isProviderDiscoveryAuthError(error)) {
+            authFailures.set(filepath, { error, retryAt: Date.now() + AUTH_FAILURE_RETRY_MS })
+            log.warn("model discovery authentication failed", { providerID: input.providerID, error })
+            return yield* Effect.fail(error)
+          }
           log.warn("model discovery failed, falling back to cache", { providerID: input.providerID, error })
           const stale = yield* readDisk
           return stale ?? []

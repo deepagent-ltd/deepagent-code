@@ -104,6 +104,9 @@ export type SessionRunState = {
   // call) are never mistaken for genuine new user inputs. undefined = not yet recorded (session
   // created before this field was added; treated as "initial" on first observation).
   lastAdmissionUserMessageId: string | undefined
+  // The last soft plan-gate warning claimed by a tool call. A stale latch can span many tool calls;
+  // persisting its fingerprint prevents duplicate process-log warnings without touching history.
+  lastPlanGateNudgeFingerprint: string | null
 }
 
 // V3.9 §D: session-state pointer to a running goal. The GoalLoop's GoalStatus (persisted in the
@@ -165,6 +168,7 @@ export const getOrCreate = (sessionId: string, mode: AgentMode): SessionRunState
     createdAt: new Date().toISOString(),
     completedAt: null,
     lastAdmissionUserMessageId: undefined,
+    lastPlanGateNudgeFingerprint: null,
   }
   sessions.set(sessionId, state)
   saveToDisk()
@@ -455,6 +459,14 @@ export const clearPlanStale = (sessionId: string): void => {
   saveToDisk()
 }
 
+export const claimPlanGateNudge = (sessionId: string, fingerprint: string): boolean => {
+  const state = sessions.get(sessionId)
+  if (!state || state.lastPlanGateNudgeFingerprint === fingerprint) return false
+  state.lastPlanGateNudgeFingerprint = fingerprint
+  saveToDisk()
+  return true
+}
+
 // U1 anti-deadlock: record that the plan gate just blocked a mutating tool on a stale plan. Advances
 // the runtime grace counter so shouldGraceRelease can fire without the model cooperating.
 export const recordPlanGateBlock = (sessionId: string): void => {
@@ -615,6 +627,7 @@ function normalizeState(state: SessionRunState): SessionRunState {
     // Backfill: sessions persisted before V4.0 have no panelRounds → null (defaults to "single").
     panelRounds: state.panelRounds ?? null,
     activeGoal: state.activeGoal ?? null,
+    lastPlanGateNudgeFingerprint: state.lastPlanGateNudgeFingerprint ?? null,
   }
   // PR-4 migration cleanup: the legacy `suppressedFingerprints: string[]` field is carried through by
   // the `...state` spread above. Once its contents are migrated into `suppressedValidations`, drop the
