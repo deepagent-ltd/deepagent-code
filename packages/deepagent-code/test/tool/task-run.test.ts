@@ -80,6 +80,7 @@ describe("TaskRun durable store", () => {
       expect(requestHash({ b: [2, { y: true, x: null }], a: 1 })).toBe(
         requestHash({ a: 1, b: [2, { x: null, y: true }] }),
       )
+      expect(requestHash({ prompt: "a" })).toBe("732acbb3e402e912437dbe53442ca54368b45e73c284acbf4c0530fac53cca74")
       expect(requestHash({ prompt: "a" })).not.toBe(requestHash({ prompt: "b" }))
     }),
   )

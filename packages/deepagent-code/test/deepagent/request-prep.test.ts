@@ -3,6 +3,7 @@ import { AgentGateway } from "@deepagent-code/core/agent-gateway"
 import { Effect } from "effect"
 import { LLMRequestPrep } from "../../src/session/llm/request"
 import { ToolProvenance } from "../../src/tool/provenance"
+import { ToolInternal } from "../../src/tool/internal"
 
 const plugin = {
   trigger: (_name: string, _input: unknown, output: unknown) => Effect.succeed(output),
@@ -87,6 +88,37 @@ async function prepare(
 }
 
 describe("DeepAgent request prep", () => {
+  test("keeps marked internal tools while applying agent permission denies", async () => {
+    AgentGateway.configure({ enabled: false, agentMode: "general" })
+    const structuredOutput = {} as any
+    const external = {} as any
+    ToolInternal.set(structuredOutput)
+    const prepared = await Effect.runPromise(
+      LLMRequestPrep.prepare({
+        user: user("deepseek", "deepseek-chat", "ses_internal_tool_permission"),
+        sessionID: "ses_internal_tool_permission",
+        model: model("deepseek", "deepseek-chat"),
+        agent: {
+          name: "researcher",
+          mode: "subagent",
+          prompt: "researcher",
+          options: {},
+          permission: [{ permission: "*", pattern: "*", action: "deny" }],
+        } as any,
+        system: [],
+        messages: [{ role: "user", content: "finalize" }],
+        tools: { StructuredOutput: structuredOutput, external },
+        provider: { id: "deepseek", options: {} } as any,
+        auth: undefined,
+        plugin,
+        flags: { outputTokenMax: 32_000, client: "test" } as any,
+        isWorkflow: false,
+      }),
+    )
+
+    expect(Object.keys(prepared.tools)).toEqual(["StructuredOutput"])
+  })
+
   // V3.1 global runtime: in high/max the DeepAgent system prompt is injected for EVERY provider
   // (DeepAgent is a global agent system, not a provider). The distinguishing axis is strength
   // (general vs high/max), not providerID. See deepagent-production-contract.md "Runtime Boundary".
