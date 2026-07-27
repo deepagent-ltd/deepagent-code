@@ -7,6 +7,7 @@ import { FSUtil } from "@deepagent-code/core/fs-util"
 import { ConfigMCPV1 } from "@deepagent-code/core/v1/config/mcp"
 import { McpCatalog } from "./catalog"
 import * as Log from "@deepagent-code/core/util/log"
+import { buffer } from "node:stream/consumers"
 
 const log = Log.create({ service: "mcp.secret" })
 
@@ -232,16 +233,15 @@ export namespace SecretStore {
     put: async (account, secret) => {
       // secret-tool reads the secret from stdin so it never appears in the process table.
       const label = `${KEYCHAIN_SERVICE}:${account}`
-      const proc = Bun.spawn(
+      const proc = Process.spawn(
         ["secret-tool", "store", "--label", label, "service", KEYCHAIN_SERVICE, "account", account],
-        { stdin: "pipe", stdout: "pipe", stderr: "pipe" },
+        { stdin: "pipe", stdout: "ignore", stderr: "pipe" },
       )
-      proc.stdin.write(secret)
-      proc.stdin.end()
-      const code = await proc.exited
+      if (!proc.stdin || !proc.stderr) throw new Error("secret-tool process pipes are unavailable")
+      proc.stdin.end(secret)
+      const [code, stderr] = await Promise.all([proc.exited, buffer(proc.stderr)])
       if (code !== 0) {
-        const err = await new Response(proc.stderr).text()
-        throw new Error(`secret-tool store failed (code ${code}): ${err.trim()}`)
+        throw new Error(`secret-tool store failed (code ${code}): ${stderr.toString().trim()}`)
       }
     },
     get: async (account) => {

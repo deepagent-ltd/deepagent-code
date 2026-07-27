@@ -208,6 +208,8 @@ export const dict = {
   "provider.custom.error.required": "必填",
   "provider.custom.error.duplicate": "重複",
   "provider.custom.error.context": "請輸入正整數，或留空",
+  "provider.custom.error.protocol.ambiguous":
+    "此端點同時支援多種驗證方式，無法安全地自動判斷協定。請明確選擇 OpenAI-compatible 或 Anthropic。",
 
   "provider.disconnect.toast.disconnected.title": "{{provider}} 已中斷連線",
   "provider.disconnect.toast.disconnected.description": "{{provider}} 模型已不再可用。",

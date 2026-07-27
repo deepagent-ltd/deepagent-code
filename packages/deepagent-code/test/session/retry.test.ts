@@ -181,6 +181,26 @@ describe("session.retry.retryable", () => {
     })
   })
 
+  test("retries terminated Undici streams", () => {
+    const cause = Object.assign(new Error("other side closed"), { code: "UND_ERR_SOCKET" })
+    const request = MessageV2.fromError(new TypeError("terminated", { cause }), { providerID })
+
+    expect(SessionV1.APIError.isInstance(request)).toBe(true)
+    if (!SessionV1.APIError.isInstance(request)) throw new Error("expected APIError")
+    expect(request.data.isRetryable).toBe(true)
+    expect(request.data.metadata).toEqual({ code: "UND_ERR_SOCKET", message: "terminated" })
+    expect(SessionRetry.retryable(request, retryProvider)).toEqual({
+      message: "Provider connection was interrupted",
+    })
+  })
+
+  test("does not retry a terminated stream after user interruption", () => {
+    const request = MessageV2.fromError(new TypeError("terminated"), { providerID, aborted: true })
+
+    expect(SessionV1.AbortedError.isInstance(request)).toBe(true)
+    expect(SessionRetry.retryable(request, retryProvider)).toBeUndefined()
+  })
+
   test("does not retry context overflow errors", () => {
     const error = new SessionV1.ContextOverflowError({
       message: "Input exceeds context window of this model",

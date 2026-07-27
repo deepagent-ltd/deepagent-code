@@ -34,9 +34,18 @@ if (!result.success) throw new AggregateError(result.logs, "Failed to build the 
 // keep local usernames/workspace paths out of release artifacts.
 const buildRoot = path.resolve(dir, "../..")
 const bundle = Bun.file("./dist/node/node.js")
+const source = await bundle.text()
+// The plugin context exposes Bun.$ only behind a `typeof Bun` guard. Every other direct Bun API
+// in this Node-targeted bundle is an unreviewed runtime dependency and must fail the desktop build.
+const unsupportedBunAPIs = [...new Set(source.match(/\bBun\.[A-Za-z_$][A-Za-z0-9_$]*/g) ?? [])].filter(
+  (api) => api !== "Bun.$",
+)
+if (unsupportedBunAPIs.length > 0) {
+  throw new Error(`Node server bundle contains Bun-only runtime APIs: ${unsupportedBunAPIs.join(", ")}`)
+}
 await Bun.write(
   bundle,
-  (await bundle.text())
+  source
     .replaceAll(buildRoot, "/__deepagent_build__")
     .replaceAll(buildRoot.replaceAll("\\", "/"), "/__deepagent_build__")
     .replaceAll(buildRoot.replaceAll("\\", "\\\\"), "/__deepagent_build__"),

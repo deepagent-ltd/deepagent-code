@@ -21,16 +21,17 @@ type NextRoundSuggestion = {
   readonly body: string
 }
 
-// V3 A6: the multi-round autonomous loop, wrapping one completed deepagent-code assistant turn with
-// the DeepAgent round discipline — run validation, diagnose, decide (accept / revise / rollback),
-// and on revise inject a diagnosis follow-up turn — bounded by maxRounds only for autonomous
-// ultra runs, with
-// rollback-to-best so a failed attempt never accumulates. Ops are injected so the loop logic is
+// V3 A6: the multi-round validation driver, wrapping one completed deepagent-code assistant turn
+// with the DeepAgent round discipline. Every managed mode may validate and report, but only an
+// explicitly autonomous run may revise by injecting a diagnosis follow-up turn. Autonomous runs
+// are bounded by maxRounds and use rollback-to-best so a failed attempt never accumulates. Ops are
+// injected so the loop logic is
 // unit-testable in Effect without a live session; prompt.ts supplies the real ops (shell
 // validation A3, Snapshot checkpoints A5, revise = createUserMessage + loop).
 //
-// Gating: runs for high/max when enabled by mode. It remains fail-closed at the call site
-// (catchAll -> first turn), so validation/diagnostic failures do not regress the base turn.
+// Gating: runs for high/max when enabled by mode, but those modes stop after the first validation
+// result and surface it for human approval. It remains fail-closed at the call site (catchAll ->
+// first turn), so validation/diagnostic failures do not regress the base turn.
 
 const Orchestrator = AgentGateway.DeepAgentOrchestrator
 const Validation = AgentGateway.DeepAgentValidation
@@ -54,6 +55,9 @@ export type MultiRoundOps<T> = {
   readonly sessionID: string
   readonly agentMode: string
   readonly enabled: boolean
+  // Explicit execution authority from the caller. Agent mode alone is insufficient because a
+  // direct ultra request intentionally degrades to a human-approved, non-autonomous pass.
+  readonly autonomous?: boolean
   readonly maxRounds: number | null
   readonly first: T
   readonly validationCommands: readonly string[]
@@ -162,6 +166,11 @@ export const maybeRunRounds = <T>(ops: MultiRoundOps<T>): Effect.Effect<T> =>
         if (best) yield* ops.restore(best)
         break
       }
+
+      // high/max (and direct ultra) may validate and report, but must never manufacture another
+      // user turn. Only the supervisor-owned ultra path has authority to revise autonomously.
+      // Keep the current workspace intact so the human can inspect or continue the failed attempt.
+      if (!ops.autonomous) break
 
       // No-progress detection (before spending another revise turn): compare this round's
       // fingerprint to the previous failing round's. If unchanged for `noProgressLimit` rounds,
