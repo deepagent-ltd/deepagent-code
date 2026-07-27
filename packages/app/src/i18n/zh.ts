@@ -261,6 +261,8 @@ export const dict = {
   "provider.custom.error.required": "必填",
   "provider.custom.error.duplicate": "重复",
   "provider.custom.error.context": "请输入正整数，或留空",
+  "provider.custom.error.protocol.ambiguous":
+    "该端点同时支持多种认证方式，无法安全地自动判断协议。请明确选择 OpenAI-compatible 或 Anthropic。",
 
   "provider.disconnect.toast.disconnected.title": "{{provider}} 已断开连接",
   "provider.disconnect.toast.disconnected.description": "{{provider}} 模型已不再可用。",
@@ -995,6 +997,7 @@ export const dict = {
   "settings.general.section.sounds": "音效",
   "settings.general.section.feed": "动态",
   "settings.general.section.display": "显示",
+  "settings.general.section.power": "电源",
   "settings.general.section.sharing": "分享",
   "settings.general.row.shareUrl.title": "分享服务器地址",
   "settings.general.row.shareUrl.description": "分享会话时使用的服务器基础地址。留空则使用默认值。",
@@ -1442,6 +1445,8 @@ export const dict = {
   "settings.general.row.newLayoutDesigns.description": "启用重新设计的布局、首页、输入器和会话界面",
   "settings.general.row.pinchZoom.title": "双指缩放",
   "settings.general.row.pinchZoom.description": "允许触控板双指和 Ctrl 滚动手势缩放",
+  "settings.general.row.preventSleep.title": "阻止系统休眠",
+  "settings.general.row.preventSleep.description": "应用运行时保持系统唤醒，显示器仍可关闭",
   "settings.general.row.zoom.title": "缩放比例",
   "settings.general.row.zoom.description": "设置界面缩放比例",
   "settings.updates.action.downloading": "正在下载...",

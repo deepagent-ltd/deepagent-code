@@ -8,8 +8,8 @@ import { planGate, HookPolicy } from "../../src/deepagent/hooks"
 
 // U1 end-to-end contract (the exact decision the tools.ts chokepoint computes). DESIGN (aligned with
 // codex exec_policy): plan-ledger state is orthogonal to whether a tool may run, so a stale plan
-// NEVER hard-blocks a mutating tool — it WARNS (tool runs, reminder attached) so the model is nudged
-// to re-sync without being denied its tools. Read/plan tools always pass. The only hard block that
+// NEVER hard-blocks a mutating tool — it WARNS while the tool runs; dispatch keeps that warning out
+// of model-visible output and finalization owns plan enforcement. Read/plan tools always pass. The only hard block that
 // remains is the U9 per-step binding gate (strict hard modes), and even that has a runtime grace
 // release so it can never permanently deadlock. This mirrors session/tools.ts without booting the
 // full session loop.
@@ -88,7 +88,7 @@ describe("U1 soft-gate loop (chokepoint contract)", () => {
   test("read-only bash (ls/git status/grep/sed -n/sort) is allowed even while the plan is stale", () => {
     SessionState.getOrCreate("gate-ro", "xhigh")
     SessionState.markPlanStale("gate-ro", "validation_failed")
-    // a mutating bash command warns (runs + reminder), never a hard block…
+    // a mutating bash command warns but still runs, never a hard block…
     expect(decideAt("gate-ro", "bash", "xhigh", "rm -rf build").decision).toBe("warn")
     // …and read-only shell inspections pass outright (isMutating=false → allow).
     expect(decideAt("gate-ro", "bash", "xhigh", "ls -la").decision).toBe("allow")

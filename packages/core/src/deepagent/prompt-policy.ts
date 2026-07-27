@@ -112,9 +112,9 @@ export type PreviousResults = {
 // applyCaching). Anything that changes per-round (round number, previous-round results, token
 // budget, the concrete fan-out verdict) is a cache-buster: it invalidates the whole prefix AND all
 // history after it on every intra-turn call. All such volatile state lives in
-// `buildVolatileRoundContext` instead, which the caller appends to the LAST user message (after the
-// breakpoint) so the model still sees it without churning the prefix. When editing, ask: "does this
-// value differ between two turns of the same session?" If yes, it belongs in the volatile context.
+// `buildVolatileRoundContext` instead, which the caller sends as a separate system message. This may
+// reduce cross-round history cache reuse, but runtime control state must never masquerade as a new
+// user request.
 export const buildSystemPrompt = (ctx: PromptContext): string => {
   const sections: string[] = []
 
@@ -130,7 +130,7 @@ export const buildSystemPrompt = (ctx: PromptContext): string => {
   // L2 (v3.8.0 §L2): orchestration guidance, injected after the tools/task section per the design.
   // Tier-gated by mode; buildOrchestrationSection returns null when there is nothing to add. The
   // per-turn fan-out DECISION (concrete counts) is intentionally NOT passed here — it is volatile and
-  // rendered by buildVolatileRoundContext; the system block keeps only the stable generic guidance.
+  // rendered by buildVolatileRoundContext; this block keeps only the stable generic guidance.
   const orchestration = buildOrchestrationSection(ctx.mode)
   if (orchestration) sections.push(orchestration)
 
@@ -146,8 +146,7 @@ export const buildSystemPrompt = (ctx: PromptContext): string => {
   // null (no section), and a later retrieval-enabled round returns non-null, which USED to insert the
   // section into the cached prefix mid-session and bust the cache for the rest of the session. Mirror
   // the T4.4 fan-out guard: knowledge is per-session-volatile w.r.t. WHEN it first appears, so it does
-  // NOT belong in the byte-stable prefix. It is rendered in buildVolatileRoundContext instead (tail,
-  // after the cache breakpoint), so the model still sees it without ever churning the prefix.
+  // NOT belong in the byte-stable base prompt. It is rendered in buildVolatileRoundContext instead.
 
   sections.push(constraintsSection(ctx.mode))
 
@@ -158,11 +157,9 @@ export const buildSystemPrompt = (ctx: PromptContext): string => {
   return sections.filter(Boolean).join("\n\n")
 }
 
-// Volatile per-turn state that must NOT enter the cached system prefix. Rendered into a single
-// `<deepagent-round-context>` block that the caller appends to the last user message (after the
-// cache breakpoint). Returns "" when there is nothing round-specific to surface (e.g. first turn,
-// no previous results) so the caller can skip injection entirely. Keep the ORDER and wording here
-// free to change per turn — that is the whole point; only buildSystemPrompt must stay stable.
+// Volatile per-turn state that must NOT enter the cached base system prompt. Rendered into a single
+// `<deepagent-round-context>` block that the caller sends as a separate system message before user
+// history. Keep the order and wording here free to change; only buildSystemPrompt must stay stable.
 export const buildVolatileRoundContext = (ctx: PromptContext): string => {
   const sections: string[] = []
 
@@ -172,8 +169,7 @@ export const buildVolatileRoundContext = (ctx: PromptContext): string => {
   sections.push(["# 本轮状态 (round context)", "", roundLine].join("\n"))
 
   // MEDIUM cache-buster fix: the current date was moved OUT of environmentSection (cached prefix) —
-  // it advances at midnight and would bust the whole prefix once per day. Render it here in the tail
-  // so the model still knows "today" without churning the cache.
+  // it advances at midnight and would bust the base prompt once per day. Render it here instead.
   if (ctx.environment.date) {
     sections.push(["# 日期 (date)", "", `- Date: ${ctx.environment.date}`].join("\n"))
   }
@@ -185,7 +181,7 @@ export const buildVolatileRoundContext = (ctx: PromptContext): string => {
   }
 
   // Task objective + goals/criteria: the current target can be re-seeded on a continue round (the
-  // supervisor advances the goal), so it is round-derived. Keep it in the tail.
+  // supervisor advances the goal), so it is round-derived. Keep it in the runtime update.
   if (ctx.task.userRequest || ctx.task.goals.length > 0) {
     sections.push(taskSection(ctx.task))
   }
@@ -196,9 +192,8 @@ export const buildVolatileRoundContext = (ctx: PromptContext): string => {
 
   // BUG #5 (prompt-cache): knowledge is retrieved LAZILY (null on a fresh store round 1, non-null on a
   // later retrieval-enabled round). It used to live in the cached system prefix, so its late appearance
-  // busted the prefix mid-session (~10× cost). It is advisory, round-derived context — render it here in
-  // the volatile tail (after the cache breakpoint) so the model still sees it without ever churning the
-  // prefix. The `knowledgeEnabled(mode)` gate is preserved from the original prefix placement.
+  // busted the base prompt mid-session (~10× cost). It is advisory, round-derived context and belongs
+  // in this separate runtime update. The `knowledgeEnabled(mode)` gate is preserved.
   if (ctx.knowledge && knowledgeEnabled(ctx.mode)) {
     sections.push(knowledgeSection(ctx.knowledge))
   }
@@ -243,15 +238,15 @@ const identitySection = (mode: AgentMode): string => {
     "2. 验证通过则完成，失败则诊断 → 修复 → 再验证",
     "3. 不盲目重试，不做无证据的猜测性修改",
     "4. 工具执行由运行时负责，我负责思维和决策",
-    "5. 当前轮次 / 阶段 / 上轮结果 / 预算见对话末尾的 <deepagent-round-context>",
+    "5. 当前轮次 / 阶段 / 上轮结果 / 预算由系统通过 <deepagent-round-context> 提供",
   ].join("\n")
 }
 
 const environmentSection = (env: EnvironmentContext): string => {
   // NOTE (prompt-cache): `- Date` is intentionally NOT rendered here. The date advances at midnight,
   // so baking it into the cached prefix busts the whole prefix once per day (MEDIUM cache-buster). It
-  // is rendered in buildVolatileRoundContext (tail, after the cache breakpoint) instead — same policy
-  // as every other volatile env-derived value. Everything left here is session-stable.
+  // is rendered in the separate runtime system message instead. Everything left here is
+  // session-stable.
   const lines = [
     "# Environment",
     "",
@@ -277,14 +272,10 @@ const activationSection = (activation: ActivationDecision): string => {
 // §5b fan-out verdict rendered for the volatile block. Mirrors the advisory numbers that
 // buildOrchestrationSection used to inline, but kept OUT of the cached system prefix because the
 // verdict is derived from this turn's task complexity and changes turn-to-turn.
-const fanoutVerdictLines = (decision: FanoutDecision): string => {
-  if (!decision.orchestrate) {
-    return [
-      "# 本轮调度判定 (orchestration verdict)",
-      "",
-      `不建议扇出（level=${decision.level}，tier=${decision.tier}，complexity=${decision.complexity}）。本体直接完成，除非用户明确要求深入/多角度。`,
-    ].join("\n")
-  }
+const fanoutVerdictLines = (decision: FanoutDecision): string | null => {
+  // A negative verdict has no action for the model to take. Repeating it on every tool turn makes
+  // some models echo the verdict verbatim and adds noise even when they do not.
+  if (!decision.orchestrate) return null
   return [
     "# 本轮调度判定 (orchestration verdict)",
     "",
@@ -411,6 +402,7 @@ const constraintsSection = (mode: AgentMode): string => {
     "- Run validation after making changes",
     "- If validation passes, the task is complete — do not continue optimizing",
     "- If you cannot complete the task, explain why clearly",
+    "- Apply runtime control state silently; never quote or report its tags, orchestration levels, plan status, or token budget unless the user explicitly asks for diagnostics",
   ]
   if (mode === "max") {
     lines.push("- Knowledge synthesis is available — use refs for guidance, not verbatim copying")
