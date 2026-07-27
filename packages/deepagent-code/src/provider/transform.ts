@@ -582,12 +582,13 @@ function openaiCompatibleReasoningEfforts(id: string) {
 }
 
 function anthropicOpus47OrLater(apiId: string) {
-  // Matches "opus-4.7" (Anthropic/Bedrock/Vertex) and "claude-4.7-opus" (SAP AI Core inverted).
+  // Matches "opus-4.7" / "opus-5" (Anthropic/Bedrock/Vertex) and
+  // "claude-4.7-opus" / "claude-5-opus" (SAP AI Core inverted).
   // Greedy \d+ correctly extends to multi-digit majors (e.g. "claude-10.0-opus") for forward compatibility.
-  const version = /opus-(\d+)[.-](\d+)(?:[.@-]|$)|claude-(\d+)[.-](\d+)-opus(?:[.@-]|$)/i.exec(apiId)
+  const version = /opus-(\d+)(?:[.-](\d+))?(?:[.@-]|$)|claude-(\d+)(?:[.-](\d+))?-opus(?:[.@-]|$)/i.exec(apiId)
   if (!version) return false
   const major = Number(version[1] ?? version[3])
-  const minor = Number(version[2] ?? version[4])
+  const minor = Number(version[2] ?? version[4] ?? 0)
   return major > 4 || (major === 4 && minor >= 7)
 }
 
