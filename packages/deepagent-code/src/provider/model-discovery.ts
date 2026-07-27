@@ -3,7 +3,22 @@ export type ProviderDiscoveryKind = "openai-compatible" | "anthropic"
 export type DiscoveredModel = {
   id: string
   name: string
+  protocols?: ProviderDiscoveryKind[]
 }
+
+export class ProviderDiscoveryError extends Error {
+  override readonly name = "ProviderDiscoveryError"
+
+  constructor(
+    readonly providerID: string,
+    readonly status: number,
+  ) {
+    super(`${providerID} model discovery failed: HTTP ${status}`)
+  }
+}
+
+export const isProviderDiscoveryAuthError = (error: unknown) =>
+  error instanceof ProviderDiscoveryError && (error.status === 401 || error.status === 403)
 
 export function normalizeBaseURL(input: string) {
   const parsed = new URL(input)
@@ -27,7 +42,20 @@ function parseModelList(body: { data?: unknown[] }): DiscoveredModel[] {
   return (body.data ?? [])
     .map((item) => {
       if (!item || typeof item !== "object" || !("id" in item) || typeof item.id !== "string") return
-      return { id: item.id, name: modelName(item, item.id) }
+      const protocols =
+        "supported_endpoint_types" in item && Array.isArray(item.supported_endpoint_types)
+          ? [
+              ...new Set(
+                item.supported_endpoint_types.flatMap((value): ProviderDiscoveryKind[] => {
+                  if (typeof value !== "string") return []
+                  if (value === "anthropic" || value === "anthropic-messages") return ["anthropic"]
+                  if (value === "openai" || value === "openai-compatible") return ["openai-compatible"]
+                  return []
+                }),
+              ),
+            ]
+          : []
+      return { id: item.id, name: modelName(item, item.id), ...(protocols.length > 0 ? { protocols } : {}) }
     })
     .filter((item): item is DiscoveredModel => Boolean(item))
 }
@@ -37,10 +65,9 @@ export type ProtocolDiscoveryResult = {
   models: DiscoveredModel[]
 }
 
-// Resolve the provider protocol and its model list in one pass. When `kind` is given we probe only
-// that protocol; otherwise we try openai-compatible first (the common case), then anthropic, and
-// return whichever yields models. The last error message is surfaced when nothing succeeds so the
-// caller can report a useful failure. `probe` is injectable for testing.
+// A successful GET /models only proves that the credential can list models. Gateways commonly accept
+// more than one authentication header on that route, so protocol detection must use endpoint metadata
+// or an unambiguous single successful probe instead of silently preferring OpenAI compatibility.
 export async function discoverWithProtocol(
   input: {
     baseURL: string
@@ -53,17 +80,27 @@ export async function discoverWithProtocol(
     discoverProviderModels({ ...input, kind }),
 ): Promise<ProtocolDiscoveryResult> {
   const candidates: ProviderDiscoveryKind[] = input.kind ? [input.kind] : ["openai-compatible", "anthropic"]
-  let lastError: unknown
-  for (const kind of candidates) {
-    try {
-      const models = await probe(kind)
-      if (models.length > 0) return { kind, models }
-      lastError = new Error("No provider models were returned")
-    } catch (error) {
-      lastError = error
-    }
+  const results = await Promise.all(
+    candidates.map((kind) =>
+      probe(kind).then(
+        (models) => ({ kind, models, error: undefined }),
+        (error: unknown) => ({ kind, models: [] as DiscoveredModel[], error }),
+      ),
+    ),
+  )
+  const successful = results.filter((result) => result.models.length > 0)
+  const declared = [...new Set(successful.flatMap((result) => result.models.flatMap((model) => model.protocols ?? [])))]
+  if (declared.length === 1) {
+    const kind = declared[0]
+    const result = successful.find((item) => item.models.some((model) => model.protocols?.includes(kind)))
+    if (result) return { kind, models: result.models }
   }
-  throw lastError instanceof Error ? lastError : new Error("No provider models were returned")
+  if (successful.length === 1) return { kind: successful[0].kind, models: successful[0].models }
+  if (successful.length > 1) {
+    throw new Error("Provider protocol is ambiguous; select OpenAI-compatible or Anthropic explicitly")
+  }
+  const error = results.findLast((result) => result.error)?.error
+  throw error instanceof Error ? error : new Error("No provider models were returned")
 }
 
 // Discovery must never hang forever. An unreachable or silent /models endpoint (wrong URL, a host
@@ -108,7 +145,7 @@ export async function discoverProviderModels(input: {
     }
     throw error
   })
-  if (!response.ok) throw new Error(`${input.providerID} model discovery failed: HTTP ${response.status}`)
+  if (!response.ok) throw new ProviderDiscoveryError(input.providerID, response.status)
   const body = (await response.json()) as { data?: unknown[] }
 
   const seen = new Set<string>()

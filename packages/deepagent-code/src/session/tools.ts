@@ -45,21 +45,9 @@ export function validatedToolInputSchema(parameters: Schema.Decoder<unknown>, wi
   })
 }
 
-// Plan-gate WARN reminder placement. Prepending "⚠️ Plan gate: …" AHEAD of a tool's own output was
-// actively harmful: the plan gate is a soft nudge — the tool ALREADY RAN and the output below the
-// banner is its real (usually successful, exit 0) result. But a leading "⚠️ … gate …" line reads as a
-// FAILURE/denial, so the model recorded the call as a plan-gate-blocked failure, then re-diagnosed that
-// same false negative every round ("the previous 'failures' are again plan-gate artifacts — the bash
-// actually returned data"). Append the note AFTER the output and state plainly that the command ran, so
-// the real result leads and the nudge cannot be misread as a block. (Hard-BLOCK denials are unaffected —
-// they return their own message and never reach here because the tool did not execute.)
-export const appendPlanGateNote = (output: string, reason: string): string =>
-  `${output}\n\n---\n[plan-note] This command executed normally; the output above is its real result. Nudge: ${reason}.`
-
-// U1 PlanController soft gate: a HookPolicy with the before_tool_use plan gate. While the runtime
-// has flagged the plan as stale, mutating tools (write/edit/patch/shell) are soft-blocked until the
-// model calls `plan` to update it; read/diagnosis/`plan` always pass. Lightweight modes
-// (general/direct) only warn. Evaluated at the per-tool dispatch chokepoint below.
+// U1 PlanController gate: a HookPolicy with the before_tool_use plan gate. The current policy lets
+// tools execute and keeps stale-plan warnings in runtime logs; finalization owns plan enforcement.
+// The defensive block path remains for a future safety hook that explicitly denies execution.
 const PlanHook = new AgentGateway.DeepAgentHooks.HookPolicy().on(
   "before_tool_use",
   AgentGateway.DeepAgentHooks.planGate(),
@@ -152,10 +140,11 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
   // Shared plan-gate chokepoint (U1 soft gate + U9 hard gate). BOTH the builtin loop AND the MCP loop
   // must run this: a mutating tool of EITHER kind that is not bound to a fresh plan step has to be gated,
   // otherwise the model can route all mutations through MCP tools while the plan latch is stale and the
-  // gate is a silent no-op. Returns a directive the caller applies: "block" → return a soft tool-result
-  // WITHOUT executing; "warn" → execute then prepend the reminder; "pass" → execute normally.
+  // gate is a silent no-op. Returns a directive the caller applies: "block" → return a soft
+  // tool-result WITHOUT executing; "pass" → execute normally. Soft warnings are deduplicated and
+  // written only to the process log, never to provider-visible or durable conversation content.
   // `isMutating` is supplied by the caller (builtin: classifier on the command; MCP: risk tier).
-  type GateDirective = { kind: "block"; output: string } | { kind: "warn"; reason: string } | { kind: "pass" }
+  type GateDirective = { kind: "block"; output: string } | { kind: "pass" }
   const evaluatePlanGate = (sessionID: string, isMutating: boolean): GateDirective => {
     const latch = AgentGateway.DeepAgentSessionState.planLatch(sessionID)
     const planStale = latch?.latch === "stale" && !AgentGateway.DeepAgentPlanController.shouldEscapeToHuman(latch)
@@ -201,7 +190,20 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
       AgentGateway.DeepAgentSessionState.recordMutation(sessionID)
       AgentGateway.DeepAgentSessionState.resetPlanGateBlocks(sessionID)
     }
-    return gateWarnReason ? { kind: "warn", reason: gateWarnReason } : { kind: "pass" }
+    if (!gateWarnReason) return { kind: "pass" }
+    const fingerprint = JSON.stringify([
+      latch?.plan_id ?? null,
+      latch?.latch ?? null,
+      latch?.stale_reason ?? null,
+      latch?.replan_count ?? 0,
+      plan?.active_step_id ?? null,
+      AgentGateway.DeepAgentSessionState.get(sessionID)?.lastAdmissionUserMessageId ?? null,
+      gateWarnReason,
+    ])
+    if (AgentGateway.DeepAgentSessionState.claimPlanGateNudge(sessionID, fingerprint)) {
+      log.info("plan gate warning", { sessionID, reason: gateWarnReason })
+    }
+    return { kind: "pass" }
   }
 
   for (const item of yield* registry.tools({
@@ -244,22 +246,16 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
             if (gate.kind === "block") {
               return { title: "Plan update required", output: gate.output, metadata: {} }
             }
-            const gateWarnReason = gate.kind === "warn" ? gate.reason : undefined
             const result = yield* item.execute(args, ctx).pipe(
-              // I33-2: any tool execution failure marks the plan stale (tool_failed reason) so the
-              // model is nudged to re-plan before continuing. The gate is warn-only now (v4.0.4 P1),
-              // so this is a soft nudge: plan → stale but the next mutating tool still runs with a
-              // reminder rather than being blocked.
+              // I33-2: any tool execution failure marks the plan stale (tool_failed reason).
+              // Finalization and the next runtime-system boundary enforce that state; tool output
+              // remains exclusively the tool's real result.
               Effect.tapError(() =>
                 Effect.sync(() => AgentGateway.DeepAgentSessionState.markPlanStale(ctx.sessionID, "tool_failed")),
               ),
             )
-            const withReminder =
-              gateWarnReason && typeof result.output === "string"
-                ? { ...result, output: appendPlanGateNote(result.output, gateWarnReason) }
-                : result
             const output = {
-              ...withReminder,
+              ...result,
               attachments: result.attachments?.map((attachment) => ({
                 ...attachment,
                 id: PartID.ascending(),
@@ -343,7 +339,6 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
               content: [{ type: "text" as const, text: mcpGate.output }],
             }
           }
-          const mcpGateWarnReason = mcpGate.kind === "warn" ? mcpGate.reason : undefined
           yield* plugin.trigger(
             "tool.execute.before",
             { tool: key, sessionID: ctx.sessionID, callID: opts.toolCallId },
@@ -395,10 +390,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
             }
           }
 
-          const joinedText = mcpGateWarnReason
-            ? appendPlanGateNote(textParts.join("\n\n"), mcpGateWarnReason)
-            : textParts.join("\n\n")
-          const truncated = yield* truncate.output(joinedText, {}, input.agent)
+          const truncated = yield* truncate.output(textParts.join("\n\n"), {}, input.agent)
           const metadata = {
             ...result.metadata,
             truncated: truncated.truncated,
