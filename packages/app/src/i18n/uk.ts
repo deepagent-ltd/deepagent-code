@@ -735,6 +735,7 @@ export const dict = {
   "settings.general.row.expertPanelDefault.title": "Типово вмикати експертну панель",
   "settings.general.row.expertPanelDefault.description": "Починати нові розмови з увімкненою експертною панеллю, щоб її кнопка за потреби переглядала поточний контекст.",
   "settings.general.section.display": "Дисплей",
+  "settings.general.section.power": "Живлення",
 
   "settings.general.row.language.title": "Мова",
   "settings.general.row.language.description": "Змінити мову інтерфейсу DeepAgent Code",
@@ -1044,6 +1045,8 @@ export const dict = {
     "Включить обновленный макет, главную страницу, композер и интерфейс сессии",
   "settings.general.row.pinchZoom.title": "Масштабування щипком",
   "settings.general.row.pinchZoom.description": "Разрешить масштабирование щипком на трекпаде и Ctrl-прокруткой",
+  "settings.general.row.preventSleep.title": "Запобігати сну системи",
+  "settings.general.row.preventSleep.description": "Не давати системі засинати, доки застосунок працює; екран все одно може вимикатися",
   "settings.general.row.zoom.title": "Zoom level",
   "settings.general.row.zoom.description": "Set the interface zoom level",
   "settings.updates.action.downloading": "Завантаження...",

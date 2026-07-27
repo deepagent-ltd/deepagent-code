@@ -1,4 +1,6 @@
 import { AgentGateway } from "@deepagent-code/core/agent-gateway"
+import { buffer } from "node:stream/consumers"
+import { Process } from "@/util/process"
 
 // V3 A3: real validation executor. Runs the workspace validation commands (typecheck / lint /
 // test, inferred by workspace-context) and maps each to the universal ValidationResult the
@@ -15,12 +17,15 @@ export const runValidationCommands = async (
   for (const command of commands) {
     const started = Date.now()
     try {
-      const proc = Bun.spawn(["sh", "-c", command], {
+      const proc = Process.spawn(["sh", "-c", command], {
         cwd,
         stdout: "pipe",
         stderr: "pipe",
         env: { ...process.env },
       })
+      const stdout = proc.stdout
+      const stderr = proc.stderr
+      if (!stdout || !stderr) throw new Error("Validation process output is unavailable")
       // P2-5: race the full read+exit against a timeout sentinel. On timeout we kill the process
       // AND resolve immediately to a failed result, instead of awaiting stdout that may never close
       // after kill (the previous code could hang on `Response(proc.stdout).text()`).
@@ -34,9 +39,8 @@ export const runValidationCommands = async (
         }, timeoutMs)
       })
       const completed = (async () => {
-        const [stdout, stderr] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()])
-        const exitCode = await proc.exited
-        return { stdout, stderr, exitCode } as const
+        const [output, error, exitCode] = await Promise.all([buffer(stdout), buffer(stderr), proc.exited])
+        return { stdout: output.toString(), stderr: error.toString(), exitCode } as const
       })()
 
       const outcome = await Promise.race([completed, timeout])

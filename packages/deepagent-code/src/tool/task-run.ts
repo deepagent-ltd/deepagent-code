@@ -9,6 +9,7 @@ import { and, asc, eq, gt, inArray, isNull, lte, max, or, sql } from "drizzle-or
 import { Cause, Data, Effect } from "effect"
 import { Identifier } from "@/id/id"
 import { MessageID, SessionID } from "@/session/schema"
+import { Hash } from "@deepagent-code/core/util/hash"
 
 export type State =
   | "admitted"
@@ -88,7 +89,7 @@ const canonicalJson = (value: unknown): string => {
     .join(",")}}`
 }
 
-export const requestHash = (value: unknown) => new Bun.CryptoHasher("sha256").update(canonicalJson(value)).digest("hex")
+export const requestHash = (value: unknown) => Hash.sha256(canonicalJson(value))
 
 const fromRow = (row: typeof TaskRunTable.$inferSelect): Run => ({
   runID: row.run_id,

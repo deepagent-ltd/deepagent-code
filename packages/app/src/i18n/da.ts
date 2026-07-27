@@ -627,6 +627,7 @@ export const dict = {
   "settings.general.row.expertPanelDefault.title": "Aktivér ekspertpanel som standard",
   "settings.general.row.expertPanelDefault.description": "Start nye samtaler med ekspertpanelet aktiveret, så knappen kan gennemgå den aktuelle kontekst efter behov.",
   "settings.general.section.display": "Skærm",
+  "settings.general.section.power": "Strøm",
 
   "settings.general.row.language.title": "Sprog",
   "settings.general.row.language.description": "Ændr visningssproget for DeepAgent Code",
@@ -1016,6 +1017,8 @@ export const dict = {
   "settings.general.row.newLayoutDesigns.description": "Aktivér det redesignede layout, hjem, composer og sessions-UI",
   "settings.general.row.pinchZoom.title": "Knib for at zoome",
   "settings.general.row.pinchZoom.description": "Tillad trackpad-knib og Ctrl-scroll til zoom",
+  "settings.general.row.preventSleep.title": "Forhindr dvale",
+  "settings.general.row.preventSleep.description": "Hold systemet vågent, mens appen kører; skærmen kan stadig slukkes",
   "settings.general.row.zoom.title": "Zoom level",
   "settings.general.row.zoom.description": "Set the interface zoom level",
   "settings.updates.action.downloading": "Downloader...",
