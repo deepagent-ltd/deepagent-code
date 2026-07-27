@@ -1129,6 +1129,7 @@ interface State {
   catalog: Record<ProviderV2.ID, Info>
   errors: ConfigError[]
   sdk: Map<string, BundledSDK>
+  transportOptions: Map<string, Record<string, unknown>>
   modelLoaders: Record<string, CustomModelLoader>
   varsLoaders: Record<string, CustomVarsLoader>
 }
@@ -1345,6 +1346,7 @@ export const layer = Layer.effect(
 
         const providers: Record<ProviderV2.ID, Info> = {} as Record<ProviderV2.ID, Info>
         const languages = new Map<string, LanguageModelV3>()
+        const transportOptions = new Map<string, Record<string, unknown>>()
         const modelLoaders: {
           [providerID: string]: CustomModelLoader
         } = {}
@@ -1437,13 +1439,14 @@ export const layer = Layer.effect(
           }
         }
 
-        // Runtime model discovery (opt-in via `provider.<id>.discovery: true`). For each third-party
-        // provider that opts in, fetch its live /models list (disk-cached, TTL + flock) and expose it
-        // as config-model entries so the loop below runs them through the same parse/inference path as
-        // hand-listed models. This is what lets a URL+Key-only provider surface models at runtime
-        // instead of freezing them into config at save time. Best-effort: failures yield no entries.
+        // Discover provider-level and group-level model lists independently. A group is a complete
+        // transport boundary: its protocol, key, URL and headers inherit from the provider only when
+        // omitted, and one group's failure must not suppress another group's models.
         type ConfigModels = NonNullable<(typeof configProviders)[number][1]["models"]>
         const discoveredModels: Record<string, ConfigModels> = {}
+        const discoveredGroupModels: Record<string, Record<string, ConfigModels>> = {}
+        const failedDiscoveryProviders = new Set<string>()
+        const failedDiscoveryGroups = new Set<string>()
         // Track providers that opted into discovery so the zero-model deletion below can tell a
         // discovery provider that came up empty (worth an error) apart from a normal empty provider.
         const discoveryProviders = new Set<string>()
@@ -1484,38 +1487,75 @@ export const layer = Layer.effect(
               discoveredModels[providerID] = Object.fromEntries(
                 models.map((m: DiscoveredModel) => [m.id, { name: m.name || m.id }]),
               )
-
-              // NEW (v4.0.6): run discovery for each group that declares discovery:true.
-              // Uses group.npm to determine the protocol kind; group.options overrides baseURL/apiKey.
-              for (const [groupId, group] of Object.entries(provider.groups ?? {})) {
-                if (!group.discovery) continue
-                const gBaseURL = group.options?.baseURL ?? baseURL
-                const gApiKey = group.options?.apiKey ?? apiKey
-                const gHeaders = { ...headers, ...(group.options?.headers as Record<string, string> | undefined) }
-                if (!gBaseURL || (!gApiKey && !Object.keys(gHeaders).length)) continue
-                const gKind: ProviderDiscoveryKind =
-                  group.npm === "@ai-sdk/anthropic" ? "anthropic" : "openai-compatible"
-                const groupCacheKey = `${providerID}:${groupId}`
-                const gModels = yield* discoverModelsCached(fs, flock, {
-                  providerID: groupCacheKey,
-                  baseURL: gBaseURL,
-                  apiKey: gApiKey,
-                  kind: gKind,
-                  headers: gHeaders,
-                })
-                if (!gModels.length) continue
-                // Merge into the group's models map (hand-listed entries win over discovered)
-                group.models = {
-                  ...Object.fromEntries(gModels.map((m: DiscoveredModel) => [m.id, { name: m.name || m.id }])),
-                  ...(group.models ?? {}),
-                }
-              }
             }).pipe(
-              // Discovery is best-effort and must never take down the whole provider-state build. The
-              // cache already handles ordinary failures; this also swallows defects (e.g. a flock
-              // release die on a corrupt lock file) so one provider's discovery fault can't abort all.
+              Effect.catch((error) =>
+                Effect.sync(() => {
+                  failedDiscoveryProviders.add(providerID)
+                  errors.push(providerConfigError(providerID, error instanceof Error ? error.message : String(error)))
+                }),
+              ),
               Effect.catchDefect((defect) =>
                 Effect.sync(() => log.warn("discovery pre-pass defect", { providerID, defect })),
+              ),
+            ),
+          { concurrency: 5 },
+        )
+        yield* Effect.forEach(
+          configProviders
+            .filter(
+              ([providerID]) =>
+                providerID !== "deepagent-code" &&
+                providerID !== "deepagent" &&
+                !isOfficialProviderID(providerID) &&
+                isProviderAllowed(ProviderV2.ID.make(providerID)),
+            )
+            .flatMap(([providerID, provider]) =>
+              Object.entries(provider.groups ?? {})
+                .filter(([, group]) => group.discovery === true)
+                .map(([groupID, group]) => ({ providerID, provider, groupID, group })),
+            ),
+          ({ providerID, provider, groupID, group }) =>
+            Effect.gen(function* () {
+              discoveryProviders.add(providerID)
+              const baseURL = group.options?.baseURL ?? provider.options?.baseURL
+              if (!baseURL) return
+              const envKey = provider.env ? providerEnvKey(provider.env, envs) : undefined
+              const apiKey = group.options?.apiKey ?? provider.options?.apiKey ?? (envKey ? envs[envKey] : undefined)
+              const headers = {
+                ...(provider.options?.headers as Record<string, string> | undefined),
+                ...(group.options?.headers as Record<string, string> | undefined),
+              }
+              if (!apiKey && Object.keys(headers).length === 0) return
+              const kind: ProviderDiscoveryKind =
+                (group.npm ?? provider.npm ?? modelsDev[providerID]?.npm) === "@ai-sdk/anthropic"
+                  ? "anthropic"
+                  : "openai-compatible"
+              const models = yield* discoverModelsCached(fs, flock, {
+                providerID: `${providerID}:${groupID}`,
+                baseURL,
+                apiKey,
+                kind,
+                headers,
+              })
+              if (!models.length) return
+              discoveredGroupModels[providerID] ??= {}
+              discoveredGroupModels[providerID][groupID] = Object.fromEntries(
+                models.map((model: DiscoveredModel) => [model.id, { name: model.name || model.id }]),
+              )
+            }).pipe(
+              Effect.catch((error) =>
+                Effect.sync(() => {
+                  failedDiscoveryGroups.add(`${providerID}/${groupID}`)
+                  errors.push(
+                    providerConfigError(
+                      `${providerID}.groups.${groupID}`,
+                      error instanceof Error ? error.message : String(error),
+                    ),
+                  )
+                }),
+              ),
+              Effect.catchDefect((defect) =>
+                Effect.sync(() => log.warn("group discovery pre-pass defect", { providerID, groupID, defect })),
               ),
             ),
           { concurrency: 5 },
@@ -1548,8 +1588,9 @@ export const layer = Layer.effect(
 
           // Discovered models seed the source map; hand-listed `provider.models` override them so an
           // explicit config entry always wins over the runtime-discovered version of the same id.
-          const modelSource =
-            legacyDiscoveryProviders.has(providerID) && discoveredModels[providerID]
+          const modelSource = failedDiscoveryProviders.has(providerID)
+            ? {}
+            : legacyDiscoveryProviders.has(providerID) && discoveredModels[providerID]
               ? discoveredModels[providerID]
               : { ...(discoveredModels[providerID] ?? {}), ...(provider.models ?? {}) }
           for (const [modelID, model] of Object.entries(modelSource)) {
@@ -1582,13 +1623,15 @@ export const layer = Layer.effect(
               name,
               providerID: ProviderV2.ID.make(providerID),
               capabilities: {
-                temperature: model.temperature ?? existingModel?.capabilities.temperature ?? catalogModel?.temperature ?? false,
+                temperature:
+                  model.temperature ?? existingModel?.capabilities.temperature ?? catalogModel?.temperature ?? false,
                 reasoning:
                   model.reasoning ??
                   (existingModel?.capabilities.reasoning ||
                     catalogModel?.reasoning ||
                     inferredReasoning(providerID, apiID, modelID)),
-                attachment: model.attachment ?? existingModel?.capabilities.attachment ?? catalogModel?.attachment ?? false,
+                attachment:
+                  model.attachment ?? existingModel?.capabilities.attachment ?? catalogModel?.attachment ?? false,
                 toolcall: model.tool_call ?? existingModel?.capabilities.toolcall ?? catalogModel?.tool_call ?? true,
                 input: {
                   text:
@@ -1656,8 +1699,13 @@ export const layer = Layer.effect(
                 input: model?.cost?.input ?? existingModel?.cost?.input ?? catalogModel?.cost?.input ?? 0,
                 output: model?.cost?.output ?? existingModel?.cost?.output ?? catalogModel?.cost?.output ?? 0,
                 cache: {
-                  read: model?.cost?.cache_read ?? existingModel?.cost?.cache.read ?? catalogModel?.cost?.cache_read ?? 0,
-                  write: model?.cost?.cache_write ?? existingModel?.cost?.cache.write ?? catalogModel?.cost?.cache_write ?? 0,
+                  read:
+                    model?.cost?.cache_read ?? existingModel?.cost?.cache.read ?? catalogModel?.cost?.cache_read ?? 0,
+                  write:
+                    model?.cost?.cache_write ??
+                    existingModel?.cost?.cache.write ??
+                    catalogModel?.cost?.cache_write ??
+                    0,
                 },
               },
               options: mergeDeep(existingModel?.options ?? {}, model.options ?? {}),
@@ -1679,23 +1727,29 @@ export const layer = Layer.effect(
             parsed.models[modelID] = parsedModel
           }
 
-          // NEW (v4.0.6): process model groups — each group carries its own protocol (npm) and/or
-          // API key, overriding the provider-level defaults for its models. The model-building logic
-          // mirrors the modelSource loop above; group.npm > provider.npm and group.options.apiKey >
-          // provider.options.apiKey for every model inside the group.
+          // Each group carries its own transport. Discovered entries are ephemeral and configured
+          // entries win, so refresh cannot rewrite protocol, credentials, or durable model overrides.
+          const groupModelOwners = new Map<string, string>()
           for (const [groupId, group] of Object.entries(provider.groups ?? {})) {
             const groupNpm = group.npm ?? provider.npm
-            const groupApiKey = group.options?.apiKey
-            const groupBaseURL = group.options?.baseURL
-            // Merge group options onto provider options — group-level wins for apiKey/baseURL, rest inherited
-            const groupOptions = {
-              ...parsed.options,
-              ...(group.options ?? {}),
-              ...(groupApiKey ? { apiKey: groupApiKey } : {}),
-              ...(groupBaseURL ? { baseURL: groupBaseURL } : {}),
-            }
-            const groupModelSource = group.models ?? {}
+            const groupModelSource = failedDiscoveryGroups.has(`${providerID}/${groupId}`)
+              ? {}
+              : {
+                  ...(discoveredGroupModels[providerID]?.[groupId] ?? {}),
+                  ...(group.models ?? {}),
+                }
             for (const [modelID, model] of Object.entries(groupModelSource)) {
+              const owner = groupModelOwners.get(modelID)
+              if (owner) {
+                errors.push(
+                  providerConfigError(
+                    `${providerID}.groups.${groupId}`,
+                    `Model ${modelID} is already assigned to group ${owner}`,
+                  ),
+                )
+                continue
+              }
+              groupModelOwners.set(modelID, groupId)
               const existingModel = parsed.models[model.id ?? modelID]
               const apiID = model.id ?? existingModel?.api.id ?? modelID
               const catalogModel = existingModel ? undefined : catalogSpecFor(apiID, modelID, catalogIndex)
@@ -1716,47 +1770,97 @@ export const layer = Layer.effect(
                 api: {
                   id: apiID,
                   npm: apiNpm,
-                  url: model.provider?.api ?? provider?.api ?? existingModel?.api.url ?? modelsDev[providerID]?.api ?? "",
+                  url:
+                    model.provider?.api ?? provider?.api ?? existingModel?.api.url ?? modelsDev[providerID]?.api ?? "",
                 },
                 status: model.status ?? existingModel?.status ?? "active",
                 name,
                 providerID: ProviderV2.ID.make(providerID),
                 capabilities: {
-                  temperature: model.temperature ?? existingModel?.capabilities.temperature ?? catalogModel?.temperature ?? false,
+                  temperature:
+                    model.temperature ?? existingModel?.capabilities.temperature ?? catalogModel?.temperature ?? false,
                   reasoning:
                     model.reasoning ??
-                    (existingModel?.capabilities.reasoning || catalogModel?.reasoning || inferredReasoning(providerID, apiID, modelID)),
-                  attachment: model.attachment ?? existingModel?.capabilities.attachment ?? catalogModel?.attachment ?? false,
+                    (existingModel?.capabilities.reasoning ||
+                      catalogModel?.reasoning ||
+                      inferredReasoning(providerID, apiID, modelID)),
+                  attachment:
+                    model.attachment ?? existingModel?.capabilities.attachment ?? catalogModel?.attachment ?? false,
                   toolcall: model.tool_call ?? existingModel?.capabilities.toolcall ?? catalogModel?.tool_call ?? true,
                   interleaved: model.interleaved ?? existingModel?.capabilities.interleaved ?? false,
                   input: {
-                    text: model.modalities?.input?.includes("text") ?? existingModel?.capabilities.input.text ?? catalogModel?.modalities?.input?.includes("text") ?? true,
-                    audio: model.modalities?.input?.includes("audio") ?? existingModel?.capabilities.input.audio ?? catalogModel?.modalities?.input?.includes("audio") ?? false,
-                    image: model.modalities?.input?.includes("image") ?? existingModel?.capabilities.input.image ?? catalogModel?.modalities?.input?.includes("image") ?? false,
-                    video: model.modalities?.input?.includes("video") ?? existingModel?.capabilities.input.video ?? catalogModel?.modalities?.input?.includes("video") ?? false,
-                    pdf: model.modalities?.input?.includes("pdf") ?? existingModel?.capabilities.input.pdf ?? catalogModel?.modalities?.input?.includes("pdf") ?? false,
+                    text:
+                      model.modalities?.input?.includes("text") ??
+                      existingModel?.capabilities.input.text ??
+                      catalogModel?.modalities?.input?.includes("text") ??
+                      true,
+                    audio:
+                      model.modalities?.input?.includes("audio") ??
+                      existingModel?.capabilities.input.audio ??
+                      catalogModel?.modalities?.input?.includes("audio") ??
+                      false,
+                    image:
+                      model.modalities?.input?.includes("image") ??
+                      existingModel?.capabilities.input.image ??
+                      catalogModel?.modalities?.input?.includes("image") ??
+                      false,
+                    video:
+                      model.modalities?.input?.includes("video") ??
+                      existingModel?.capabilities.input.video ??
+                      catalogModel?.modalities?.input?.includes("video") ??
+                      false,
+                    pdf:
+                      model.modalities?.input?.includes("pdf") ??
+                      existingModel?.capabilities.input.pdf ??
+                      catalogModel?.modalities?.input?.includes("pdf") ??
+                      false,
                   },
                   output: {
-                    text: model.modalities?.output?.includes("text") ?? existingModel?.capabilities.output.text ?? catalogModel?.modalities?.output?.includes("text") ?? true,
-                    audio: model.modalities?.output?.includes("audio") ?? existingModel?.capabilities.output.audio ?? catalogModel?.modalities?.output?.includes("audio") ?? false,
-                    image: model.modalities?.output?.includes("image") ?? existingModel?.capabilities.output.image ?? catalogModel?.modalities?.output?.includes("image") ?? false,
-                    video: model.modalities?.output?.includes("video") ?? existingModel?.capabilities.output.video ?? catalogModel?.modalities?.output?.includes("video") ?? false,
-                    pdf: model.modalities?.output?.includes("pdf") ?? existingModel?.capabilities.output.pdf ?? catalogModel?.modalities?.output?.includes("pdf") ?? false,
+                    text:
+                      model.modalities?.output?.includes("text") ??
+                      existingModel?.capabilities.output.text ??
+                      catalogModel?.modalities?.output?.includes("text") ??
+                      true,
+                    audio:
+                      model.modalities?.output?.includes("audio") ??
+                      existingModel?.capabilities.output.audio ??
+                      catalogModel?.modalities?.output?.includes("audio") ??
+                      false,
+                    image:
+                      model.modalities?.output?.includes("image") ??
+                      existingModel?.capabilities.output.image ??
+                      catalogModel?.modalities?.output?.includes("image") ??
+                      false,
+                    video:
+                      model.modalities?.output?.includes("video") ??
+                      existingModel?.capabilities.output.video ??
+                      catalogModel?.modalities?.output?.includes("video") ??
+                      false,
+                    pdf:
+                      model.modalities?.output?.includes("pdf") ??
+                      existingModel?.capabilities.output.pdf ??
+                      catalogModel?.modalities?.output?.includes("pdf") ??
+                      false,
                   },
                 },
-                options: mergeDeep(
-                  mergeDeep(existingModel?.options ?? {}, groupOptions),
-                  model.options ?? {},
+                options: mergeDeep(existingModel?.options ?? {}, model.options ?? {}),
+                headers: mergeDeep(
+                  mergeDeep(existingModel?.headers ?? {}, (group.options?.headers as Record<string, string>) ?? {}),
+                  model.headers ?? {},
                 ),
-                headers: mergeDeep(mergeDeep(existingModel?.headers ?? {}, group.options?.headers as Record<string, string> ?? {}), model.headers ?? {}),
                 family: model.family ?? existingModel?.family ?? catalogModel?.family ?? "",
                 release_date: model.release_date ?? existingModel?.release_date ?? catalogModel?.release_date ?? "",
                 cost: {
                   input: model.cost?.input ?? existingModel?.cost?.input ?? catalogModel?.cost?.input ?? 0,
                   output: model.cost?.output ?? existingModel?.cost?.output ?? catalogModel?.cost?.output ?? 0,
                   cache: {
-                    read: model.cost?.cache_read ?? existingModel?.cost?.cache.read ?? catalogModel?.cost?.cache_read ?? 0,
-                    write: model.cost?.cache_write ?? existingModel?.cost?.cache.write ?? catalogModel?.cost?.cache_write ?? 0,
+                    read:
+                      model.cost?.cache_read ?? existingModel?.cost?.cache.read ?? catalogModel?.cost?.cache_read ?? 0,
+                    write:
+                      model.cost?.cache_write ??
+                      existingModel?.cost?.cache.write ??
+                      catalogModel?.cost?.cache_write ??
+                      0,
                   },
                 },
                 limit: {
@@ -1773,6 +1877,7 @@ export const layer = Layer.effect(
               )
               // groupId tag on the model for display/debugging (non-breaking — stored in options)
               ;(parsedModel.options as Record<string, unknown>)["__group"] = groupId
+              transportOptions.set(`${providerID}/${modelID}`, group.options ?? {})
               parsed.models[modelID] = parsedModel
             }
           }
@@ -1981,6 +2086,7 @@ export const layer = Layer.effect(
           catalog,
           errors,
           sdk,
+          transportOptions,
           modelLoaders,
           varsLoaders,
         }
@@ -2015,7 +2121,11 @@ export const layer = Layer.effect(
           providerID: model.providerID,
         })
         const provider = s.providers[model.providerID]
-        const options = { ...provider.options }
+        const options = mergeDeep(
+          mergeDeep({ ...provider.options }, s.transportOptions.get(`${model.providerID}/${model.id}`) ?? {}),
+          model.options ?? {},
+        )
+        delete options["__group"]
         if (model.providerID === "deepagent" && modelAuth?.type === "api") {
           options["apiKey"] = modelAuth.key
         }
