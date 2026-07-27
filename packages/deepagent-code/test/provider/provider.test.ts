@@ -124,6 +124,7 @@ beforeAll(() => {
     fetch(req) {
       const url = new URL(req.url)
       if (url.pathname.endsWith("/models")) {
+        if (url.pathname.startsWith("/unauthorized")) return new Response("unauthorized", { status: 401 })
         // `/empty/models` returns a 200 with no models (provisioning / not-implemented shape); every
         // other path returns two chat models plus one embedding model that runtime filtering must drop.
         if (url.pathname.startsWith("/empty")) return Response.json({ data: [] })
@@ -309,6 +310,30 @@ it.instance(
             "runtime-a": { name: "Pinned A" },
             "manual-only": { name: "Manual Only" },
           },
+        },
+      },
+    }),
+  },
+)
+
+it.instance(
+  "discovery authentication failure suppresses configured model snapshots",
+  Effect.gen(function* () {
+    const providerID = ProviderV2.ID.make("runtime-revoked")
+    expect((yield* list)[providerID]).toBeUndefined()
+    expect(
+      (yield* Provider.use.errors()).find((error) => error.source === `provider.${providerID}`)?.message,
+    ).toContain("HTTP 401")
+  }),
+  {
+    config: () => ({
+      provider: {
+        "runtime-revoked": {
+          name: "Runtime Revoked",
+          npm: "@ai-sdk/openai-compatible",
+          discovery: true,
+          options: { apiKey: "revoked", baseURL: `${discoveryServerURL}/../unauthorized` },
+          models: { "stale-snapshot": { name: "Stale Snapshot" } },
         },
       },
     }),
@@ -2286,7 +2311,11 @@ it.effect("provider groups: models in a group use the group npm (protocol overri
                 npm: "@ai-sdk/anthropic",
                 options: { apiKey: "claude-key" },
                 models: {
-                  "claude-3-5-sonnet": { name: "Claude 3.5 Sonnet", tool_call: true, limit: { context: 200000, output: 8096 } },
+                  "claude-3-5-sonnet": {
+                    name: "Claude 3.5 Sonnet",
+                    tool_call: true,
+                    limit: { context: 200000, output: 8096 },
+                  },
                 },
               },
             },
@@ -2301,6 +2330,63 @@ it.effect("provider groups: models in a group use the group npm (protocol overri
     expect(gpt4o?.api.npm).toBe("@ai-sdk/openai-compatible")
     const claude = mygateway.models[ModelV2.ID.make("claude-3-5-sonnet")]
     expect(claude?.api.npm).toBe("@ai-sdk/anthropic")
+    expect(claude?.options.apiKey).toBeUndefined()
+    const language = yield* Provider.use.getLanguage(claude).pipe(provideInstanceEffect(dir))
+    const config = (
+      language as unknown as {
+        config: { baseURL: string; headers: () => Promise<Record<string, string>> }
+      }
+    ).config
+    expect(config.baseURL).toBe("https://gateway.example.com/v1")
+    expect((yield* Effect.promise(() => Promise.resolve(config.headers())))["x-api-key"]).toBe("claude-key")
+  }).pipe(provideMultiInstance),
+)
+
+it.effect("provider groups: discovery isolates one group's authentication failure", () =>
+  Effect.gen(function* () {
+    const server = Bun.serve({
+      port: 0,
+      fetch: (request) => {
+        if (request.headers.get("authorization") !== "Bearer group-key") return new Response("bad key", { status: 401 })
+        return Response.json({ data: [{ id: "group-model", name: "Group Model" }] })
+      },
+    })
+    yield* Effect.addFinalizer(() => Effect.sync(() => server.stop(true)))
+    const dir = yield* tmpdirScoped({
+      config: {
+        provider: {
+          groupedgateway: {
+            name: "Grouped Gateway",
+            options: { baseURL: `http://localhost:${server.port}/v1`, apiKey: "top-key" },
+            groups: {
+              openai: {
+                npm: "@ai-sdk/openai-compatible",
+                options: { apiKey: "group-key" },
+                discovery: true,
+              },
+              anthropic: {
+                npm: "@ai-sdk/anthropic",
+                options: { apiKey: "revoked-group-key" },
+                discovery: true,
+              },
+            },
+          },
+        },
+      },
+    })
+    const providers = yield* Provider.use.list().pipe(provideInstanceEffect(dir)).pipe(provideMultiInstance)
+    const model = providers[ProviderV2.ID.make("groupedgateway")].models[ModelV2.ID.make("group-model")]
+    expect(model?.api.npm).toBe("@ai-sdk/openai-compatible")
+    expect((model?.options as Record<string, unknown>).apiKey).toBeUndefined()
+    const language = yield* Provider.use.getLanguage(model).pipe(provideInstanceEffect(dir))
+    const headers = (language as unknown as { config: { headers: () => Promise<Record<string, string>> } }).config
+      .headers
+    expect((yield* Effect.promise(() => Promise.resolve(headers()))).authorization).toBe("Bearer group-key")
+    expect(
+      (yield* Provider.use.errors().pipe(provideInstanceEffect(dir))).find(
+        (error) => error.source === "provider.groupedgateway.groups.anthropic",
+      )?.message,
+    ).toContain("HTTP 401")
   }).pipe(provideMultiInstance),
 )
 

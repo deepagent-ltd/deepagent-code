@@ -2,11 +2,19 @@ import { describe, expect, test } from "bun:test"
 import {
   deriveProviderIdentity,
   formStateFromProvider,
+  isAmbiguousProtocolError,
   modelRow,
   validateCustomProvider,
 } from "./dialog-custom-provider-form"
 
 const t = (key: string) => key
+
+test("recognizes protocol ambiguity from SDK and Error response shapes", () => {
+  const message = "Provider protocol is ambiguous; select OpenAI-compatible or Anthropic explicitly"
+  expect(isAmbiguousProtocolError(new Error(message))).toBe(true)
+  expect(isAmbiguousProtocolError({ message })).toBe(true)
+  expect(isAmbiguousProtocolError(new Error("HTTP 404"))).toBe(false)
+})
 
 describe("validateCustomProvider", () => {
   test("builds trimmed config payload", () => {
@@ -290,6 +298,7 @@ describe("formStateFromProvider", () => {
         npm: "@ai-sdk/openai-compatible",
         discovery: true,
         options: { baseURL: "https://relay.example.com", apiKey: "secret", headers: { "X-Env": "prod" } },
+        models: { "gpt-4o": { name: "GPT-4o" } },
       },
       resolved: {
         id: "relay",
@@ -336,6 +345,50 @@ describe("formStateFromProvider", () => {
       reasoning: false,
       temperature: true,
     })
+  })
+
+  test("does not turn discovered runtime models into durable overrides", () => {
+    const form = formStateFromProvider({
+      config: {
+        name: "My Relay",
+        npm: "@ai-sdk/openai-compatible",
+        discovery: true,
+        options: { baseURL: "https://relay.example.com", apiKey: "secret" },
+      },
+      resolved: {
+        id: "relay",
+        name: "My Relay",
+        source: "custom",
+        env: [],
+        options: {},
+        models: {
+          stale: {
+            id: "stale",
+            providerID: "relay",
+            api: { id: "stale", url: "", npm: "@ai-sdk/openai-compatible" },
+            name: "Stale",
+            capabilities: {
+              temperature: false,
+              reasoning: false,
+              attachment: false,
+              toolcall: true,
+              input: { text: true, audio: false, image: false, video: false, pdf: false },
+              output: { text: true, audio: false, image: false, video: false, pdf: false },
+              interleaved: false,
+            },
+            cost: { input: 0, output: 0, cache: { read: 0, write: 0 } },
+            limit: { context: 0, output: 0 },
+            status: "active",
+            options: {},
+            headers: {},
+            release_date: "",
+          },
+        },
+      },
+    })
+
+    expect(form.models).toHaveLength(1)
+    expect(form.models[0]).toMatchObject({ id: "", name: "" })
   })
 })
 

@@ -208,6 +208,8 @@ export const dict = {
   "provider.custom.error.required": "必填",
   "provider.custom.error.duplicate": "重複",
   "provider.custom.error.context": "請輸入正整數，或留空",
+  "provider.custom.error.protocol.ambiguous":
+    "此端點同時支援多種驗證方式，無法安全地自動判斷協定。請明確選擇 OpenAI-compatible 或 Anthropic。",
 
   "provider.disconnect.toast.disconnected.title": "{{provider}} 已中斷連線",
   "provider.disconnect.toast.disconnected.description": "{{provider}} 模型已不再可用。",
@@ -781,6 +783,7 @@ export const dict = {
   "settings.general.section.sounds": "音效",
   "settings.general.section.feed": "資訊流",
   "settings.general.section.display": "顯示",
+  "settings.general.section.power": "電源",
   "settings.general.section.sharing": "分享",
   "settings.general.row.shareUrl.title": "分享伺服器網址",
   "settings.general.row.shareUrl.description": "分享工作階段時使用的伺服器基礎網址。留空則使用預設值。",
@@ -1164,6 +1167,8 @@ export const dict = {
   "settings.general.row.newLayoutDesigns.description": "啟用重新設計的布局、首頁、輸入器和會話介面",
   "settings.general.row.pinchZoom.title": "雙指縮放",
   "settings.general.row.pinchZoom.description": "允許觸控板雙指和 Ctrl 捲動手勢縮放",
+  "settings.general.row.preventSleep.title": "防止系統休眠",
+  "settings.general.row.preventSleep.description": "應用程式執行時保持系統喚醒，顯示器仍可關閉",
   "settings.general.row.zoom.title": "Zoom level",
   "settings.general.row.zoom.description": "Set the interface zoom level",
   "settings.updates.action.downloading": "正在下載...",

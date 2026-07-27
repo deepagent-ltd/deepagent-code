@@ -632,6 +632,7 @@ export const dict = {
   "settings.general.row.expertPanelDefault.title": "Zadano uključi ekspertni panel",
   "settings.general.row.expertPanelDefault.description": "Pokreni nove razgovore s uključenim ekspertnim panelom, tako da njegovo dugme po potrebi pokreće pregled trenutnog konteksta.",
   "settings.general.section.display": "Prikaz",
+  "settings.general.section.power": "Napajanje",
 
   "settings.general.row.language.title": "Jezik",
   "settings.general.row.language.description": "Promijeni jezik prikaza u DeepAgent Code-u",
@@ -1027,6 +1028,8 @@ export const dict = {
   "settings.general.row.pinchZoom.title": "Powiększanie gestem szczypania",
   "settings.general.row.pinchZoom.description":
     "Zezwól na powiększanie gestem szczypania na trackpadzie i Ctrl-przewijaniem",
+  "settings.general.row.preventSleep.title": "Spriječi mirovanje sistema",
+  "settings.general.row.preventSleep.description": "Zadržava sistem budnim dok je aplikacija pokrenuta; ekran se i dalje može ugasiti",
   "settings.general.row.zoom.title": "Zoom level",
   "settings.general.row.zoom.description": "Set the interface zoom level",
   "settings.updates.action.downloading": "Preuzimanje...",
