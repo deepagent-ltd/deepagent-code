@@ -1,5 +1,7 @@
 import os from "node:os"
 import path from "node:path"
+import { buffer } from "node:stream/consumers"
+import { Process } from "@/util/process"
 
 // V4.0 §C3.2 (P4.5a) — PHYSICAL per-agent worktree isolation for the event-driven turn runner.
 //
@@ -9,7 +11,7 @@ import path from "node:path"
 // two agents editing the same repo genuinely operate on separate working trees (complementing — not
 // replacing — the P2.9 locks + P2.9 conflict arbiter).
 //
-// It is a self-contained git-CLI helper (Bun.spawn, mirroring git-groundtruth.ts) rather than the
+// It is a self-contained git-CLI helper rather than the
 // Worktree.Service: that service is InstanceState-bound + project-sandbox-registered + persisted under
 // Global.Path.data (built for long-lived, user-visible worktrees), whereas these are EPHEMERAL, per-turn,
 // temp-dir worktrees created + torn down inside one dispatch turn — and the SubagentTurnRunner effect has
@@ -42,7 +44,14 @@ const git = async (
   timeoutMs = GIT_TIMEOUT_MS,
 ): Promise<{ code: number; stdout: string } | null> => {
   try {
-    const proc = Bun.spawn(["git", ...args], { cwd, stdout: "pipe", stderr: "pipe", env: { ...process.env } })
+    const proc = Process.spawn(["git", ...args], {
+      cwd,
+      stdout: "pipe",
+      stderr: "pipe",
+      env: { ...process.env },
+    })
+    const stdout = proc.stdout
+    if (!stdout) return null
     let timer: ReturnType<typeof setTimeout> | undefined
     const timeout = new Promise<"timeout">((resolve) => {
       timer = setTimeout(() => {
@@ -53,8 +62,8 @@ const git = async (
       }, timeoutMs)
     })
     const completed = (async () => {
-      const [stdout, exitCode] = await Promise.all([new Response(proc.stdout).text(), proc.exited])
-      return { stdout, exitCode } as const
+      const [output, exitCode] = await Promise.all([buffer(stdout), proc.exited])
+      return { stdout: output.toString(), exitCode } as const
     })()
     const outcome = await Promise.race([completed, timeout])
     if (timer) clearTimeout(timer)

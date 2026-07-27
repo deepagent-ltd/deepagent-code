@@ -71,6 +71,7 @@ function ops(sessionID: string, over: Partial<MultiRoundOps<string>>): MultiRoun
     sessionID,
     agentMode: "max",
     enabled: true,
+    autonomous: true,
     maxRounds: 3,
     first: "turn-1",
     validationCommands: ["npm test"],
@@ -103,6 +104,7 @@ describe("A6 multi-round loop (Effect)", () => {
       maybeRunRounds(
         ops(sessionID, {
           agentMode: "high",
+          autonomous: false,
           runValidation: () => {
             validationRounds++
             return Effect.succeed([vr("npm test", true)])
@@ -112,6 +114,39 @@ describe("A6 multi-round loop (Effect)", () => {
     )
     expect(out).toBe("turn-1")
     expect(validationRounds).toBe(1)
+  })
+
+  test("non-autonomous modes report a failed validation without injecting a user turn", async () => {
+    const sessionID = setup()
+    let revises = 0
+    let restores = 0
+    let emitted: { status: string; body: string } | undefined
+    const out = await Effect.runPromise(
+      maybeRunRounds(
+        ops(sessionID, {
+          agentMode: "max",
+          autonomous: false,
+          maxRounds: null,
+          runValidation: () => Effect.succeed([vr("npm test", false)]),
+          restore: () => {
+            restores++
+            return Effect.void
+          },
+          reviseTurn: () => {
+            revises++
+            return Effect.succeed("synthetic-revision")
+          },
+          onMacroRound: (suggestion) =>
+            Effect.sync(() => {
+              emitted = suggestion
+            }),
+        }),
+      ),
+    )
+    expect(out).toBe("turn-1")
+    expect(revises).toBe(0)
+    expect(restores).toBe(0)
+    expect(emitted?.status).toBe("needs_human")
   })
 
   test("env opt-out disables the mode-driven loop", () => {

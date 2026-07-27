@@ -1,5 +1,11 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test"
-import { discoverProviderModels, discoverWithProtocol, isChatModel, normalizeBaseURL } from "@/provider/model-discovery"
+import {
+  ProviderDiscoveryError,
+  discoverProviderModels,
+  discoverWithProtocol,
+  isChatModel,
+  normalizeBaseURL,
+} from "@/provider/model-discovery"
 
 describe("normalizeBaseURL", () => {
   test("strips query, hash and trailing slashes", () => {
@@ -30,14 +36,20 @@ describe("discoverWithProtocol", () => {
     expect(result.models).toHaveLength(1)
   })
 
-  test("probes openai-compatible first when kind omitted", async () => {
+  test("uses endpoint metadata when both authentication styles can list models", async () => {
     const tried: string[] = []
     const result = await discoverWithProtocol(input, async (kind) => {
       tried.push(kind)
-      return [{ id: "m", name: "M" }]
+      return [{ id: "m", name: "M", protocols: ["openai-compatible"] }]
     })
-    expect(tried).toEqual(["openai-compatible"])
+    expect(tried).toEqual(["openai-compatible", "anthropic"])
     expect(result.kind).toBe("openai-compatible")
+  })
+
+  test("rejects ambiguous protocol detection instead of silently choosing OpenAI", async () => {
+    await expect(discoverWithProtocol(input, async () => [{ id: "m", name: "M" }])).rejects.toThrow(
+      "protocol is ambiguous",
+    )
   })
 
   test("falls back to anthropic when openai-compatible yields nothing", async () => {
@@ -93,6 +105,26 @@ describe("discoverProviderModels (real fetch)", () => {
   test("returns models from a responsive endpoint", async () => {
     const models = await discoverProviderModels({ baseURL, apiKey: "k", providerID: "relay" })
     expect(models).toEqual([{ id: "model-a", name: "Model A" }])
+  })
+
+  test("preserves endpoint protocol metadata", async () => {
+    server?.stop(true)
+    server = Bun.serve({
+      port: 0,
+      fetch: () => Response.json({ data: [{ id: "claude-x", supported_endpoint_types: ["anthropic-messages"] }] }),
+    })
+    baseURL = `http://localhost:${server.port}/v1`
+    const models = await discoverProviderModels({ baseURL, apiKey: "k", providerID: "relay", kind: "anthropic" })
+    expect(models).toEqual([{ id: "claude-x", name: "claude-x", protocols: ["anthropic"] }])
+  })
+
+  test("returns a typed HTTP error for authentication failures", async () => {
+    server?.stop(true)
+    server = Bun.serve({ port: 0, fetch: () => new Response("unauthorized", { status: 401 }) })
+    baseURL = `http://localhost:${server.port}/v1`
+    await expect(discoverProviderModels({ baseURL, apiKey: "bad", providerID: "relay" })).rejects.toBeInstanceOf(
+      ProviderDiscoveryError,
+    )
   })
 
   test("rejects (does not hang) when the host is unreachable", async () => {

@@ -4,7 +4,7 @@ import { Config } from "@/config/config"
 import { Env } from "@/env"
 import { ModelsDev } from "@deepagent-code/core/models-dev"
 import { Provider } from "@/provider/provider"
-import { discoverProviderModels, discoverWithProtocol, isChatModel, normalizeBaseURL } from "@/provider/model-discovery"
+import { discoverWithProtocol, isChatModel, normalizeBaseURL } from "@/provider/model-discovery"
 import { discoverModelsCached } from "@/provider/discovery-cache"
 import { buildCatalogIndex, projectSpec, specMatchFor } from "@/provider/catalog-spec"
 import { FSUtil } from "@deepagent-code/core/fs-util"
@@ -151,49 +151,69 @@ export const providerHandlers = HttpApiBuilder.group(InstanceHttpApi, "provider"
         typeof item?.options?.baseURL === "string" &&
         Object.keys(item.models ?? {}).length > 0 &&
         catalog[providerID] !== undefined
-      if (!item || (!item.discovery && !legacyDiscovery)) {
+      const groups = Object.entries(item?.groups ?? {}).filter(([, group]) => group.discovery === true)
+      if (!item || (!item.discovery && !legacyDiscovery && groups.length === 0)) {
         return yield* new ProviderModelRefreshError({
           message: `Provider ${providerID} does not have runtime model discovery enabled`,
         })
       }
 
-      const baseURL = item.options?.baseURL
-      if (typeof baseURL !== "string" || !baseURL.trim()) {
-        return yield* new ProviderModelRefreshError({ message: `Provider ${providerID} is missing a base URL` })
-      }
-
       const envs = yield* env.all()
-      const apiKey =
-        typeof item.options?.apiKey === "string"
-          ? item.options.apiKey
-          : item.env?.map((key) => envs[key]).find((value): value is string => typeof value === "string" && !!value)
-      const headers =
-        item.options?.headers && typeof item.options.headers === "object"
-          ? Object.fromEntries(
-              Object.entries(item.options.headers).filter(
-                (entry): entry is [string, string] => typeof entry[1] === "string",
+      const envKey = item.env
+        ?.map((key) => envs[key])
+        .find((value): value is string => typeof value === "string" && !!value)
+      const targets = [
+        ...(item.discovery || legacyDiscovery ? [{ id: providerID, npm: item.npm, options: item.options ?? {} }] : []),
+        ...groups.map(([groupID, group]) => ({
+          id: `${providerID}:${groupID}`,
+          npm: group.npm ?? item.npm,
+          options: { ...(item.options ?? {}), ...(group.options ?? {}) },
+        })),
+      ]
+      yield* Effect.forEach(
+        targets,
+        (target) =>
+          Effect.gen(function* () {
+            const baseURL = target.options.baseURL
+            if (typeof baseURL !== "string" || !baseURL.trim()) {
+              return yield* new ProviderModelRefreshError({ message: `${target.id} is missing a base URL` })
+            }
+            const apiKey = typeof target.options.apiKey === "string" ? target.options.apiKey : envKey
+            const headers =
+              target.options.headers && typeof target.options.headers === "object"
+                ? Object.fromEntries(
+                    Object.entries(target.options.headers).filter(
+                      (entry): entry is [string, string] => typeof entry[1] === "string",
+                    ),
+                  )
+                : undefined
+            if (!apiKey && !headers) {
+              return yield* new ProviderModelRefreshError({
+                message: `${target.id} is missing discovery credentials`,
+              })
+            }
+            const kind =
+              (target.npm ?? catalog[providerID]?.npm) === "@ai-sdk/anthropic" ? "anthropic" : "openai-compatible"
+            const models = yield* discoverModelsCached(
+              fs,
+              flock,
+              { providerID: target.id, baseURL, apiKey, kind, headers },
+              undefined,
+              true,
+            ).pipe(
+              Effect.mapError(
+                (error) =>
+                  new ProviderModelRefreshError({
+                    message: error instanceof Error ? error.message : String(error),
+                  }),
               ),
             )
-          : undefined
-      if (!apiKey && !headers) {
-        return yield* new ProviderModelRefreshError({
-          message: `Provider ${providerID} is missing discovery credentials`,
-        })
-      }
+            if (models.length) return
+            return yield* new ProviderModelRefreshError({ message: `${target.id} returned no chat models` })
+          }),
+        { concurrency: 5 },
+      ).pipe(Effect.ensuring(provider.reload()))
 
-      const kind = (item.npm ?? catalog[providerID]?.npm) === "@ai-sdk/anthropic" ? "anthropic" : "openai-compatible"
-      const input = { providerID, baseURL, apiKey, kind, headers } as const
-      const discovered = yield* Effect.tryPromise({
-        try: () => discoverProviderModels(input),
-        catch: (error) =>
-          new ProviderModelRefreshError({ message: error instanceof Error ? error.message : String(error) }),
-      })
-      const models = yield* discoverModelsCached(fs, flock, input, () => Promise.resolve(discovered), true)
-      if (!models.length) {
-        return yield* new ProviderModelRefreshError({ message: `Provider ${providerID} returned no chat models` })
-      }
-
-      yield* provider.reload()
       const refreshed = yield* provider.getProvider(providerID)
       if (refreshed) return Provider.toPublicInfo(refreshed)
       return yield* new ProviderModelRefreshError({ message: `Provider not found after refresh: ${providerID}` })
