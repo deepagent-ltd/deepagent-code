@@ -1940,6 +1940,7 @@ export const layer = Layer.effect(
             sessionID: input.sessionID,
             agentMode,
             enabled: true,
+            autonomous,
             maxRounds: autonomous ? ultraMaxRounds : null,
             // T3 (S1-v3.4): yellow-stall narrowing budget before escalating to red (default 1).
             narrowLimit: flags.microbatchNarrowLimit ?? 1,

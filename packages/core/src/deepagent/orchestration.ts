@@ -306,7 +306,7 @@ export const buildOrchestrationSection = (mode: AgentMode): string | null => {
     "抑制信号（命中则本体做，禁止过度编排）：单文件；机制已明确；纯机械改动（改名/typo/格式）；用户要求快速/直接。",
     "",
     "关键判定（reviewer 的 verdict、研究结果的合并）走结构化结果：调 `task` 时传 `output_schema`（reviewer→ReviewResult，researcher→ResearchResult），不要依赖散文解析。",
-    `扇出规模自控（宽松上限，非硬性）：单次编排子 agent 总数控制在 ${DEFAULT_MAX_FANOUT} 个以内，单轮并行不超过 ${DEFAULT_MAX_CONCURRENCY} 个；确有必要可分多轮，但不要一次性发起远超此规模的 task。本轮的具体扇出建议数见对话末尾 <deepagent-round-context>。`,
+    `扇出规模自控（宽松上限，非硬性）：单次编排子 agent 总数控制在 ${DEFAULT_MAX_FANOUT} 个以内，单轮并行不超过 ${DEFAULT_MAX_CONCURRENCY} 个；确有必要可分多轮，但不要一次性发起远超此规模的 task。本轮的具体扇出建议数由系统通过 <deepagent-round-context> 提供。`,
   ]
   if (mode === "ultra") {
     lines.push("当前为 ultra：默认倾向编排并可多轮迭代。")
