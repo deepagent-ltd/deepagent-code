@@ -6,6 +6,11 @@ describe("provider model refresh", () => {
     expect(canRefreshProviderModels("openai", undefined)).toBe(true)
     expect(canRefreshProviderModels("custom", { discovery: true })).toBe(true)
     expect(
+      canRefreshProviderModels("grouped", {
+        groups: { anthropic: { npm: "@ai-sdk/anthropic", discovery: true } },
+      }),
+    ).toBe(true)
+    expect(
       canRefreshProviderModels("mistral", {
         options: { baseURL: "https://api.mistral.ai/v1" },
         models: { mistral: { name: "Mistral" } },

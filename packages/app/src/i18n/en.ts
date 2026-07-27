@@ -247,6 +247,8 @@ export const dict = {
   "provider.custom.error.required": "Required",
   "provider.custom.error.duplicate": "Duplicate",
   "provider.custom.error.context": "Enter a positive whole number, or leave blank",
+  "provider.custom.error.protocol.ambiguous":
+    "This endpoint supports multiple authentication styles. Select OpenAI-compatible or Anthropic explicitly.",
 
   "provider.disconnect.toast.disconnected.title": "{{provider}} disconnected",
   "provider.disconnect.toast.disconnected.description": "{{provider}} models are no longer available.",
