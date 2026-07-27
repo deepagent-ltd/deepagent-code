@@ -219,7 +219,7 @@ describe("§5b orchestration section is stable (no per-turn verdict inlined)", (
     expect(decideFanout({ mode: "high", signals }).orchestrate).toBe(false)
   })
 
-  test("section points the model to the tail-appended round context", () => {
+  test("section points the model to the runtime system context", () => {
     const section = buildOrchestrationSection("high")!
     expect(section).toContain("deepagent-round-context")
   })

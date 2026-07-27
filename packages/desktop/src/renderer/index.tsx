@@ -265,6 +265,10 @@ const createPlatform = (): Platform => {
 
     setPinchZoomEnabled,
 
+    getPreventSleepEnabled: () => window.api.getPreventSleepEnabled(),
+
+    setPreventSleepEnabled: (enabled: boolean) => window.api.setPreventSleepEnabled(enabled),
+
     runDesktopMenuAction,
 
     checkAppExists: async (appName: string) => {

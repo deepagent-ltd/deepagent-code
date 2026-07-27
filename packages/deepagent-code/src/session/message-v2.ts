@@ -37,7 +37,6 @@ import { ProviderError } from "@/provider/error"
 import { iife } from "@/util/iife"
 import { errorMessage } from "@/util/error"
 import { isMedia } from "@/util/media"
-import type { SystemError } from "bun"
 import type { Provider } from "@/provider/provider"
 import { Effect, Exit, Schema } from "effect"
 import * as EffectLogger from "@deepagent-code/core/effect/logger"
@@ -48,6 +47,21 @@ interface FetchDecompressionError extends Error {
   errno: number
   path: string
 }
+
+const transientTransportCodes = new Set([
+  "EAI_AGAIN",
+  "ECONNREFUSED",
+  "ECONNRESET",
+  "EHOSTUNREACH",
+  "ENETDOWN",
+  "ENETUNREACH",
+  "EPIPE",
+  "ETIMEDOUT",
+  "UND_ERR_BODY_TIMEOUT",
+  "UND_ERR_CONNECT_TIMEOUT",
+  "UND_ERR_HEADERS_TIMEOUT",
+  "UND_ERR_SOCKET",
+])
 
 export const SYNTHETIC_ATTACHMENT_PROMPT = "Attached media from tool result:"
 export { isMedia }
@@ -661,6 +675,7 @@ export function fromError(
   e: unknown,
   ctx: { providerID: ProviderV2.ID; aborted?: boolean },
 ): NonNullable<Assistant["error"]> {
+  const transport = transientTransportError(e)
   switch (true) {
     case e instanceof DOMException && e.name === "AbortError":
       return new AbortedError(
@@ -685,16 +700,16 @@ export function fromError(
         },
         { cause: e },
       ).toObject()
-    case (e as SystemError)?.code === "ECONNRESET":
+    case transport !== undefined:
+      if (ctx.aborted) {
+        return new AbortedError({ message: transport.message }, { cause: e }).toObject()
+      }
       return new APIError(
         {
-          message: "Connection reset by server",
+          message:
+            transport.code === "ECONNRESET" ? "Connection reset by server" : "Provider connection was interrupted",
           isRetryable: true,
-          metadata: {
-            code: (e as SystemError).code ?? "",
-            syscall: (e as SystemError).syscall ?? "",
-            message: (e as SystemError).message ?? "",
-          },
+          metadata: transport,
         },
         { cause: e },
       ).toObject()
@@ -790,6 +805,23 @@ export function fromError(
         }
       } catch {}
       return new NamedError.Unknown({ message: JSON.stringify(e) }, { cause: e }).toObject()
+  }
+}
+
+function transientTransportError(
+  error: unknown,
+  message?: string,
+  seen = new Set<Error>(),
+): { code: string; message: string } | undefined {
+  if (!(error instanceof Error) || seen.has(error)) return
+  seen.add(error)
+  const rootMessage = message ?? error.message
+  const code = "code" in error && typeof error.code === "string" ? error.code : undefined
+  if (code && transientTransportCodes.has(code)) return { code, message: rootMessage }
+  const cause = transientTransportError(error.cause, rootMessage, seen)
+  if (cause) return cause
+  if (error instanceof TypeError && error.message.trim().toLowerCase() === "terminated") {
+    return { code: "UND_ERR_SOCKET", message: rootMessage }
   }
 }
 

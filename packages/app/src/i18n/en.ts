@@ -247,6 +247,8 @@ export const dict = {
   "provider.custom.error.required": "Required",
   "provider.custom.error.duplicate": "Duplicate",
   "provider.custom.error.context": "Enter a positive whole number, or leave blank",
+  "provider.custom.error.protocol.ambiguous":
+    "This endpoint supports multiple authentication styles. Select OpenAI-compatible or Anthropic explicitly.",
 
   "provider.disconnect.toast.disconnected.title": "{{provider}} disconnected",
   "provider.disconnect.toast.disconnected.description": "{{provider}} models are no longer available.",
@@ -1204,6 +1206,7 @@ export const dict = {
   "settings.general.section.sounds": "Sound effects",
   "settings.general.section.feed": "Feed",
   "settings.general.section.display": "Display",
+  "settings.general.section.power": "Power",
   "settings.general.section.sharing": "Sharing",
 
   "settings.general.row.language.title": "Language",
@@ -1367,6 +1370,8 @@ export const dict = {
   "settings.general.row.newLayoutDesigns.description": "Enable the redesigned layout, home, composer, and session UI",
   "settings.general.row.pinchZoom.title": "Pinch to zoom",
   "settings.general.row.pinchZoom.description": "Allow trackpad pinch and Ctrl-scroll gestures to zoom",
+  "settings.general.row.preventSleep.title": "Prevent system sleep",
+  "settings.general.row.preventSleep.description": "Keep the system awake while the app is running; the display can still turn off",
   "settings.general.row.zoom.title": "Zoom level",
   "settings.general.row.zoom.description": "Set the interface zoom level",
 

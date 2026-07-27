@@ -96,6 +96,38 @@ jobs:
           retention-days: 7
           path: packages/*/.artifacts/unit/junit.xml
 
+  desktop-smoke:
+    name: desktop-smoke (macos)
+    # The prevent-sleep smoke drives the real packaged main bundle through Playwright and asserts
+    # against pmset, so it needs a macOS runner with a window server; keep it out of the unit matrix.
+    runs-on: macos-14
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+
+      - name: Setup Bun
+        uses: ./.github/actions/setup-bun
+
+      - name: Build desktop main bundle
+        working-directory: packages/desktop
+        run: bun run build
+        timeout-minutes: 15
+
+      - name: Run prevent-sleep smoke
+        working-directory: packages/desktop
+        run: bun run test:prevent-sleep-smoke
+        timeout-minutes: 10
+
   e2e:
     name: e2e (${{ matrix.settings.name }})
     strategy:

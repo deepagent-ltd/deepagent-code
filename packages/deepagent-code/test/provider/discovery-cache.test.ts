@@ -7,7 +7,7 @@ import { FSUtil } from "@deepagent-code/core/fs-util"
 import { EffectFlock } from "@deepagent-code/core/util/effect-flock"
 import { Global } from "@deepagent-code/core/global"
 import { discoverModelsCached, type DiscoverModelsCachedInput } from "@/provider/discovery-cache"
-import type { DiscoveredModel } from "@/provider/model-discovery"
+import { ProviderDiscoveryError, type DiscoveredModel } from "@/provider/model-discovery"
 
 // Point the data root at a throwaway dir so cache files (Global.Path.cache) never touch the real
 // home. Global reads DEEPAGENT_CODE_HOME lazily on each Path.cache access.
@@ -109,6 +109,30 @@ describe("discoverModelsCached", () => {
     const second = await run((fs, flock) => discoverModelsCached(fs, flock, input, fetch))
     expect(second.map((m) => m.id)).toEqual(["good"])
     expect(calls).toBe(2)
+  })
+
+  test("never masks an authentication failure with stale models and throttles retries", async () => {
+    let calls = 0
+    const fetch = async () => {
+      calls++
+      if (calls === 1) return [model("revoked-later")]
+      throw new ProviderDiscoveryError("revoked", 401)
+    }
+    const input = { ...baseInput("revoked"), ttl: Duration.zero }
+
+    await run((fs, flock) => discoverModelsCached(fs, flock, input, fetch))
+    await expect(run((fs, flock) => discoverModelsCached(fs, flock, input, fetch))).rejects.toBeInstanceOf(
+      ProviderDiscoveryError,
+    )
+    await expect(run((fs, flock) => discoverModelsCached(fs, flock, input, fetch))).rejects.toBeInstanceOf(
+      ProviderDiscoveryError,
+    )
+    expect(calls).toBe(2)
+
+    await expect(run((fs, flock) => discoverModelsCached(fs, flock, input, fetch, true))).rejects.toBeInstanceOf(
+      ProviderDiscoveryError,
+    )
+    expect(calls).toBe(3)
   })
 
   test("returns [] when there is no cache and the fetch fails", async () => {
