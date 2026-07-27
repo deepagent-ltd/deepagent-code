@@ -261,6 +261,8 @@ export const dict = {
   "provider.custom.error.required": "必填",
   "provider.custom.error.duplicate": "重复",
   "provider.custom.error.context": "请输入正整数，或留空",
+  "provider.custom.error.protocol.ambiguous":
+    "该端点同时支持多种认证方式，无法安全地自动判断协议。请明确选择 OpenAI-compatible 或 Anthropic。",
 
   "provider.disconnect.toast.disconnected.title": "{{provider}} 已断开连接",
   "provider.disconnect.toast.disconnected.description": "{{provider}} 模型已不再可用。",
