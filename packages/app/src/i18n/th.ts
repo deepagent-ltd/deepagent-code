@@ -626,6 +626,7 @@ export const dict = {
   "settings.general.row.expertPanelDefault.title": "เปิดใช้คณะผู้เชี่ยวชาญโดยค่าเริ่มต้น",
   "settings.general.row.expertPanelDefault.description": "เริ่มการสนทนาใหม่โดยเปิดใช้คณะผู้เชี่ยวชาญ เพื่อให้ปุ่มสามารถตรวจทานบริบทปัจจุบันได้ตามต้องการ",
   "settings.general.section.display": "การแสดงผล",
+  "settings.general.section.power": "พลังงาน",
 
   "settings.general.row.language.title": "ภาษา",
   "settings.general.row.language.description": "เปลี่ยนภาษาที่แสดงสำหรับ DeepAgent Code",
@@ -1011,6 +1012,8 @@ export const dict = {
   "settings.general.row.newLayoutDesigns.description": "เปิดใช้เลย์เอาต์ หน้าแรก ตัวเขียน และ UI เซสชันที่ออกแบบใหม่",
   "settings.general.row.pinchZoom.title": "จีบนิ้วเพื่อซูม",
   "settings.general.row.pinchZoom.description": "อนุญาตท่าทางจีบนิ้วบนแทร็กแพดและ Ctrl-เลื่อนเพื่อซูม",
+  "settings.general.row.preventSleep.title": "ป้องกันการสลีปของระบบ",
+  "settings.general.row.preventSleep.description": "ทำให้ระบบทำงานต่อเนื่องขณะแอปกำลังทำงาน หน้าจอยังคงดับได้",
   "settings.general.row.zoom.title": "Zoom level",
   "settings.general.row.zoom.description": "Set the interface zoom level",
   "settings.updates.action.downloading": "กำลังดาวน์โหลด...",
