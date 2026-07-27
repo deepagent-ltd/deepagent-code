@@ -1,4 +1,6 @@
 import path from "node:path"
+import { buffer } from "node:stream/consumers"
+import { Process } from "@/util/process"
 
 // V3.1 A4 (P0 fix): real runner ground truth for the round report's change-surface dimension.
 // The round report reconciles MODEL CLAIMS against RUNNER GROUND TRUTH; the changed-file list and
@@ -19,7 +21,14 @@ const EMPTY: GitGroundTruth = { changed_files: [], diff_stat: null, repo_root: n
 
 const run = async (args: readonly string[], cwd: string, timeoutMs: number): Promise<string | null> => {
   try {
-    const proc = Bun.spawn(["git", ...args], { cwd, stdout: "pipe", stderr: "pipe", env: { ...process.env } })
+    const proc = Process.spawn(["git", ...args], {
+      cwd,
+      stdout: "pipe",
+      stderr: "pipe",
+      env: { ...process.env },
+    })
+    const stdout = proc.stdout
+    if (!stdout) return null
     // P2-5: race read+exit against a timeout sentinel; on timeout kill and resolve null instead of
     // awaiting stdout that may never close after kill.
     let timer: ReturnType<typeof setTimeout> | undefined
@@ -32,8 +41,8 @@ const run = async (args: readonly string[], cwd: string, timeoutMs: number): Pro
       }, timeoutMs)
     })
     const completed = (async () => {
-      const [stdout, exitCode] = await Promise.all([new Response(proc.stdout).text(), proc.exited])
-      return { stdout, exitCode } as const
+      const [output, exitCode] = await Promise.all([buffer(stdout), proc.exited])
+      return { stdout: output.toString(), exitCode } as const
     })()
     const outcome = await Promise.race([completed, timeout])
     if (timer) clearTimeout(timer)

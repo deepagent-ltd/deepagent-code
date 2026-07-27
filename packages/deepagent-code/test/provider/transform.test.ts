@@ -2568,6 +2568,22 @@ describe("ProviderTransform.variants", () => {
     expect(result.xhigh).toEqual({ reasoningEffort: "xhigh" })
   })
 
+  test("openai-compatible claude-opus-5 forwards max adaptive effort", () => {
+    const result = ProviderTransform.variants(
+      createMockModel({
+        id: "gateway/claude-opus-5",
+        providerID: "gateway",
+        api: {
+          id: "claude-opus-5",
+          url: "https://api.gateway.ai/v1",
+          npm: "@ai-sdk/openai-compatible",
+        },
+      }),
+    )
+    expect(Object.keys(result)).toEqual(["low", "medium", "high", "xhigh", "max"])
+    expect(result.max).toEqual({ reasoningEffort: "max" })
+  })
+
   test("openai-compatible non-gpt5 model still gets only low/medium/high", () => {
     const model = createMockModel({
       id: "third-party/some-model",
@@ -3468,6 +3484,27 @@ describe("ProviderTransform.variants", () => {
           expect(result.high).toEqual(testCase.expectedHigh)
         })
       }
+    }
+
+    for (const apiId of ["claude-opus-5", "claude-opus-5-20260720"]) {
+      test(`opus 5 ${apiId} uses max adaptive effort`, () => {
+        const result = ProviderTransform.variants(
+          createMockModel({
+            id: `anthropic/${apiId}`,
+            providerID: "anthropic",
+            api: {
+              id: apiId,
+              url: "https://api.anthropic.com",
+              npm: "@ai-sdk/anthropic",
+            },
+          }),
+        )
+        expect(Object.keys(result)).toEqual(["low", "medium", "high", "xhigh", "max"])
+        expect(result.max).toEqual({
+          thinking: { type: "adaptive", display: "summarized" },
+          effort: "max",
+        })
+      })
     }
 
     test("github copilot opus 4.7 returns only medium reasoning effort", () => {
