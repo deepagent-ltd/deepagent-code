@@ -34,6 +34,16 @@ export type CustomProviderConfig = {
 
 const npmForProtocol = (kind: ProviderProtocol | undefined) => (kind === "anthropic" ? ANTHROPIC : OPENAI_COMPATIBLE)
 
+export function isAmbiguousProtocolError(error: unknown) {
+  const message =
+    error instanceof Error
+      ? error.message
+      : error && typeof error === "object" && "message" in error && typeof error.message === "string"
+        ? error.message
+        : ""
+  return message.includes("Provider protocol is ambiguous")
+}
+
 // Leading host labels that are generic service prefixes and make a poor provider id, so we skip past
 // them to reach the brand label (api.deepseek.com -> "deepseek", not "api"). Kept deliberately small:
 // only unambiguous service prefixes, never anything that could be a brand.
@@ -183,11 +193,14 @@ export function validateCustomProvider(input: ValidateArgs) {
   // Zero-config path: when the user leaves id/name blank we derive them from the URL, so those
   // fields are no longer required. Derivation needs a usable URL — if the URL itself is invalid we
   // skip it and let urlError drive the failure instead of emitting a spurious id/name error.
-  const derived = !urlError && (!typedID || !typedName) ? deriveProviderIdentity({
-    baseURL,
-    existingProviderIDs: input.existingProviderIDs,
-    disabledProviders: input.disabledProviders,
-  }) : undefined
+  const derived =
+    !urlError && (!typedID || !typedName)
+      ? deriveProviderIdentity({
+          baseURL,
+          existingProviderIDs: input.existingProviderIDs,
+          disabledProviders: input.disabledProviders,
+        })
+      : undefined
   const providerID = typedID || derived?.providerID || ""
   const name = typedName || derived?.name || ""
 
@@ -232,8 +245,7 @@ export function validateCustomProvider(input: ValidateArgs) {
     const contextError = ctx && !/^\d+$/.test(ctx) ? input.t("provider.custom.error.context") : undefined
     return { id: idError, name: nameError, context: contextError }
   })
-  const modelsValid =
-    (discoveryMode || models.every((m) => !m.id && !m.name)) && models.every((m) => !m.context)
+  const modelsValid = (discoveryMode || models.every((m) => !m.id && !m.name)) && models.every((m) => !m.context)
   const modelConfig = Object.fromEntries(
     input.form.models.map((m) => {
       const ctx = m.context.trim()
@@ -309,10 +321,9 @@ export function validateCustomProvider(input: ValidateArgs) {
   }
 }
 
-// Build the dialog form state for editing an existing custom provider. Fields (URL/key/headers/name)
-// come from the raw config entry; model rows are seeded from the RESOLVED provider so the user sees the
-// actual context/reasoning/temperature values (a discovery provider has no models in config — its
-// specs only exist post-resolve). Each row is pre-filled so edits override just those fields.
+// Discovery results are runtime state, not durable config. In discovery mode only configured model
+// overrides become editable rows; otherwise merely opening and saving the dialog would snapshot every
+// cached model into config and keep revoked/removed models alive indefinitely.
 export function formStateFromProvider(input: {
   config: ProviderConfig
   resolved: ResolvedProvider | undefined
@@ -321,20 +332,24 @@ export function formStateFromProvider(input: {
   const headers = config.options?.headers
   const headerRows =
     headers && typeof headers === "object" && Object.keys(headers).length
-      ? Object.entries(headers as Record<string, string>).map(([key, value]) =>
-          headerRow2(String(key), String(value)),
-        )
+      ? Object.entries(headers as Record<string, string>).map(([key, value]) => headerRow2(String(key), String(value)))
       : [headerRow()]
 
-  const resolvedModels = resolved?.models ?? {}
-  const modelRows = Object.entries(resolvedModels).map(([id, m]) =>
-    modelRow({
-      id,
-      name: m.name || id,
-      context: m.limit?.context ? String(m.limit.context) : "",
-      reasoning: !!m.capabilities?.reasoning,
-      temperature: !!m.capabilities?.temperature,
-    }),
+  const modelRows = Object.entries(config.discovery ? (config.models ?? {}) : (resolved?.models ?? {})).map(
+    ([id, configured]) => {
+      const model = resolved?.models[id]
+      return modelRow({
+        id,
+        name: configured.name || model?.name || id,
+        context: configured.limit?.context
+          ? String(configured.limit.context)
+          : model?.limit?.context
+            ? String(model.limit.context)
+            : "",
+        reasoning: configured.reasoning ?? !!model?.capabilities?.reasoning,
+        temperature: configured.temperature ?? !!model?.capabilities?.temperature,
+      })
+    },
   )
 
   return {

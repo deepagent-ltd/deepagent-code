@@ -46,6 +46,7 @@ import { Snapshot } from "@/snapshot"
 import { NamedError } from "@deepagent-code/core/util/error"
 import { SessionProcessor } from "./processor"
 import { Tool } from "@/tool/tool"
+import { ToolInternal } from "@/tool/internal"
 import { Permission } from "@/permission"
 import { SessionStatus } from "./status"
 import { LLM } from "./llm"
@@ -1939,6 +1940,7 @@ export const layer = Layer.effect(
             sessionID: input.sessionID,
             agentMode,
             enabled: true,
+            autonomous,
             maxRounds: autonomous ? ultraMaxRounds : null,
             // T3 (S1-v3.4): yellow-stall narrowing budget before escalating to red (default 1).
             narrowLimit: flags.microbatchNarrowLimit ?? 1,
@@ -3353,7 +3355,7 @@ export function createStructuredOutputTool(input: {
   // Remove $schema property if present (not needed for tool input)
   const { $schema: _, ...toolSchema } = input.schema
 
-  return tool({
+  const result = tool({
     description: STRUCTURED_OUTPUT_DESCRIPTION,
     inputSchema: jsonSchema(toolSchema as JSONSchema7),
     async execute(args) {
@@ -3372,6 +3374,8 @@ export function createStructuredOutputTool(input: {
       }
     },
   })
+  ToolInternal.set(result)
+  return result
 }
 const bashRegex = /!`([^`]+)`/g
 // Match [Image N] as single token, quoted strings, or non-space sequences

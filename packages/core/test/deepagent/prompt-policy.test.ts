@@ -186,4 +186,22 @@ describe("buildVolatileRoundContext", () => {
     // still non-empty: round/stage are always present
     expect(vol).toContain("第 1 轮")
   })
+
+  test("omits a non-actionable fan-out verdict", () => {
+    const vol = buildVolatileRoundContext({
+      ...ctxAt(1, 100_000),
+      fanoutDecision: {
+        orchestrate: false,
+        level: 0,
+        tier: 1,
+        complexity: 0,
+        researchers: 0,
+        reviewers: 0,
+        maxConcurrency: 4,
+      },
+    })
+    expect(vol).not.toContain("orchestration verdict")
+    expect(vol).not.toContain("本体直接完成")
+    expect(vol).not.toContain("level=0")
+  })
 })

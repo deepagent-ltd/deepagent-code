@@ -134,7 +134,7 @@ describe("planGate (before_tool_use soft gate)", () => {
   })
 
   // DESIGN (aligned with codex exec_policy): a stale plan ledger NEVER denies tool execution — it
-  // WARNS (tool runs, reminder attached) so the model is nudged to re-sync without being deadlocked.
+  // WARNS while the tool runs; dispatch records it outside model-visible tool output.
   // This holds in every mode, including high+ (the old code hard-blocked here, which caused the
   // production deadlock). The only remaining hard block is the U9 per-step binding gate, covered below.
   test("warns (never blocks) on a mutating tool when stale in high+ mode", () => {

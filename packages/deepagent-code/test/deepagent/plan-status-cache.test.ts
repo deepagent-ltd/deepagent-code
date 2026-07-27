@@ -4,10 +4,9 @@ import { Effect } from "effect"
 import { LLMRequestPrep } from "../../src/session/llm/request"
 import { SessionReminders } from "../../src/session/reminders"
 
-// Regression coverage for the prompt-cache fix (docs/deepagent-cache-hit-fix-plan.md): the plan-status
-// snapshot must NOT be pushed onto a user history message (it changes every step and busted the cache
-// from that anchor through all tool-loop history). It now rides the trailing volatile round-context
-// message, after the Anthropic cache breakpoint. These tests lock that contract in.
+// Plan status is trusted runtime control. It must stay out of durable user history and travel in the
+// same privileged runtime system message as round context. The stable base system message remains
+// byte-identical even when the plan advances.
 
 const plugin = {
   trigger: (_name: string, _input: unknown, output: unknown) => Effect.succeed(output),
@@ -67,6 +66,8 @@ async function prepare(sessionID: string, messages: any[], metadata?: Record<str
   )
 }
 
+const continueRound = { deepagent: { round_control: { action: "continue" } } }
+
 // Seed a plan into DeepAgent session state so renderPlanStatus has something to render. `done` steps
 // are marked done; the rest pending, with the first pending step active — matching a real in-progress
 // plan. Recording mutations bumps the count that renderPlanStatus embeds (the cache-buster we moved).
@@ -87,18 +88,21 @@ function seedPlan(sessionID: string, doneCount: number, total: number, mutations
   for (let i = 0; i < mutations; i++) AgentGateway.DeepAgentSessionState.recordMutation(sessionID)
 }
 
-const tail = (prepared: { messages: any[] }): string => {
-  const last = prepared.messages[prepared.messages.length - 1]
-  if (!last || last.role !== "user") return ""
-  return typeof last.content === "string" ? last.content : JSON.stringify(last.content)
-}
+const runtimeSystem = (prepared: { messages: any[] }): string =>
+  prepared.messages.find(
+    (message) => message.role === "system" && typeof message.content === "string" && message.content.startsWith("<deepagent-round-context>"),
+  )?.content ?? ""
 
 const userHistory = (prepared: { messages: any[] }): string =>
   prepared.messages
-    .slice(0, -1) // exclude the trailing volatile message
     .filter((m) => m.role === "user")
     .map((m) => (typeof m.content === "string" ? m.content : JSON.stringify(m.content)))
     .join("\n")
+
+const stableMessages = (prepared: { messages: any[] }) =>
+  prepared.messages.filter(
+    (message) => !(message.role === "system" && typeof message.content === "string" && message.content.startsWith("<deepagent-round-context>")),
+  )
 
 describe("plan-status prompt-cache fix", () => {
   test("renderPlanStatus returns the snapshot text in high mode with a plan", () => {
@@ -128,26 +132,35 @@ describe("plan-status prompt-cache fix", () => {
     AgentGateway.configure({ enabled: false, agentMode: "high" })
   })
 
-  test("plan-status rides the trailing volatile message, NOT the user history", async () => {
+  test("does not send first-round plan telemetry for a non-orchestrated task", async () => {
+    AgentGateway.configure({ enabled: true, agentMode: "high" })
+    const sessionID = `ses_planstatus_noop_${crypto.randomUUID()}`
+    seedPlan(sessionID, 0, 2, 0)
+    const prepared = await prepare(sessionID, [{ role: "user", content: "fix one typo" }])
+    expect(runtimeSystem(prepared)).toBe("")
+    expect(JSON.stringify(prepared.messages.filter((message) => message.role === "user"))).not.toContain("plan-status")
+    AgentGateway.configure({ enabled: false, agentMode: "high" })
+  })
+
+  test("plan-status uses system authority, not user history", async () => {
     AgentGateway.configure({ enabled: true, agentMode: "high" })
     const sessionID = `ses_planstatus_tail_${crypto.randomUUID()}`
     seedPlan(sessionID, 1, 3, 2)
-    const prepared = await prepare(sessionID, [
-      { role: "user", content: "implement the parser" },
-      { role: "assistant", content: "working on it" },
-    ])
-    // plan-status must appear ONLY in the trailing volatile user message.
-    expect(tail(prepared)).toContain("<plan-status>")
-    expect(tail(prepared)).toContain("Current plan (1/3 done)")
-    // ...and must NOT have been injected into any prior (cached-prefix) user message.
+    const prepared = await prepare(
+      sessionID,
+      [
+        { role: "user", content: "implement the parser" },
+        { role: "assistant", content: "working on it" },
+      ],
+      continueRound,
+    )
+    expect(runtimeSystem(prepared)).toContain("<plan-status>")
+    expect(runtimeSystem(prepared)).toContain("Current plan (1/3 done)")
     expect(userHistory(prepared)).not.toContain("<plan-status>")
     AgentGateway.configure({ enabled: false, agentMode: "high" })
   })
 
-  // The core invariant: across a simulated tool loop where plan progress + mutation count advance every
-  // step (exactly the values that used to bust the cache), the ENTIRE prefix before the trailing volatile
-  // message must stay byte-identical. Only the last message may differ.
-  test("cached prefix is byte-stable across tool-loop steps despite advancing plan progress", async () => {
+  test("stable base prompt and history remain unchanged while runtime plan state advances", async () => {
     AgentGateway.configure({ enabled: true, agentMode: "high" })
     const sessionID = `ses_planstatus_prefix_${crypto.randomUUID()}`
     const history = [
@@ -158,51 +171,41 @@ describe("plan-status prompt-cache fix", () => {
 
     // Step A: 1/3 done, 2 mutations.
     seedPlan(sessionID, 1, 3, 2)
-    const stepA = await prepare(sessionID, history)
+    const stepA = await prepare(sessionID, history, continueRound)
 
     // Step B: same history prefix, but plan advanced to 2/3 done and mutation count changed — the exact
     // per-step churn that previously busted the cache when written onto the user anchor.
     seedPlan(sessionID, 2, 3, 5)
-    const stepB = await prepare(sessionID, history)
+    const stepB = await prepare(sessionID, history, continueRound)
 
-    const prefixA = stepA.messages.slice(0, -1)
-    const prefixB = stepB.messages.slice(0, -1)
-    // The whole prefix (system + history, everything before the trailing volatile message) is identical.
-    expect(JSON.stringify(prefixB)).toBe(JSON.stringify(prefixA))
-    // ...while the trailing volatile message DID reflect the advancing plan (proving it moved, not vanished).
-    expect(tail(stepA)).toContain("1/3 done")
-    expect(tail(stepB)).toContain("2/3 done")
-    // Exactly one trailing volatile message is appended (not two) — appending a second would shift the
-    // cache breakpoint off the last stable history message.
-    expect(stepA.messages.length).toBe(history.length + 1 /* system */ + 1 /* volatile tail */)
+    expect(JSON.stringify(stableMessages(stepB))).toBe(JSON.stringify(stableMessages(stepA)))
+    expect(runtimeSystem(stepA)).toContain("1/3 done")
+    expect(runtimeSystem(stepB)).toContain("2/3 done")
+    expect(stepA.messages.length).toBe(history.length + 1 /* stable system */ + 1 /* runtime system */)
     AgentGateway.configure({ enabled: false, agentMode: "high" })
   })
 
-  test("plan-status shares the SINGLE trailing message with the round-context block", async () => {
+  test("plan-status shares one runtime system message with round context", async () => {
     AgentGateway.configure({ enabled: true, agentMode: "high" })
     const sessionID = `ses_planstatus_single_tail_${crypto.randomUUID()}`
     seedPlan(sessionID, 1, 2, 1)
-    const prepared = await prepare(sessionID, [{ role: "user", content: "do it" }])
-    // Both the round-context and the plan-status live in the one trailing message.
-    expect(tail(prepared)).toContain("deepagent-round-context")
-    expect(tail(prepared)).toContain("<plan-status>")
-    // The tail is the only user message after the system block + original history.
-    const trailingUserMessages = prepared.messages.filter(
-      (m, i) => m.role === "user" && i === prepared.messages.length - 1,
+    const prepared = await prepare(sessionID, [{ role: "user", content: "do it" }], continueRound)
+    expect(runtimeSystem(prepared)).toContain("deepagent-round-context")
+    expect(runtimeSystem(prepared)).toContain("<plan-status>")
+    const runtimeMessages = prepared.messages.filter(
+      (message) => message.role === "system" && typeof message.content === "string" && message.content.startsWith("<deepagent-round-context>"),
     )
-    expect(trailingUserMessages).toHaveLength(1)
+    expect(runtimeMessages).toHaveLength(1)
+    expect(prepared.messages.filter((message) => message.role === "user")).toHaveLength(1)
     AgentGateway.configure({ enabled: false, agentMode: "high" })
   })
 })
 
 // V4.1 §S3.1 — the goal plan HOT-EDIT (§S2) cache contract. A user revising a running goal's plan
-// (loop.applyPlanEdit writes the durable doc; the next tick's seedChildPlan mirrors it into the worker's
-// plan-state that renderPlanStatus reads) changes ONLY the trailing volatile plan-status message. The
-// cached prefix (system + real history) must stay byte-identical across the edit — the plan revision is
-// exactly the kind of per-turn churn that would bust the cache if it leaked onto a history anchor.
-// steer's tail-anchoring is locked separately in session/steer.test.ts ("steer only adds a tail history
-// message: system prefix byte-identical"); here we lock the PLAN-EDIT side of the same red-line.
-describe("V4.1 §S3.1 — goal plan hot-edit stays tail-anchored (cache red-line)", () => {
+// (loop.applyPlanEdit writes the durable doc; the next tick's seedChildPlan mirrors it into the
+// worker's plan-state that renderPlanStatus reads) changes only the runtime system message. It must
+// never leak onto a durable user-history anchor.
+describe("V4.1 §S3.1 — goal plan hot-edit stays runtime-system scoped", () => {
   // Apply a user plan revision the way the goal bridge surfaces it to the prompt on the next tick: the
   // reconciled PlanDoc is set into the session's plan-state (getPlan/setPlan), which is renderPlanStatus's
   // source of truth. Mirrors buildPlanFromInput → setPlan, the seedChildPlan path in goal-loop-wiring.
@@ -212,7 +215,7 @@ describe("V4.1 §S3.1 — goal plan hot-edit stays tail-anchored (cache red-line
     AgentGateway.DeepAgentSessionState.setPlan(sessionID, plan)
   }
 
-  test("a plan edit moves the tail plan-status but leaves the cached prefix byte-identical", async () => {
+  test("a plan edit changes runtime status but leaves base prompt and history byte-identical", async () => {
     AgentGateway.configure({ enabled: true, agentMode: "high" })
     const sessionID = `ses_planedit_prefix_${crypto.randomUUID()}`
     const history = [
@@ -223,11 +226,11 @@ describe("V4.1 §S3.1 — goal plan hot-edit stays tail-anchored (cache red-line
 
     // Before the edit: a 3-step plan, first done.
     seedPlan(sessionID, 1, 3, 2)
-    const before = await prepare(sessionID, history)
-    expect(tail(before)).toContain("Current plan (1/3 done)")
+    const before = await prepare(sessionID, history, continueRound)
+    expect(runtimeSystem(before)).toContain("Current plan (1/3 done)")
 
     // User hot-edits: re-open step 1 (done→pending), rename it, and drop a step — the exact structural
-    // churn a running-goal edit produces. Reflected in the tail via the plan-state render path.
+    // churn a running-goal edit produces. Reflected through the plan-state render path.
     applyEdit(sessionID, {
       goal: "ship the feature",
       steps: [
@@ -235,19 +238,12 @@ describe("V4.1 §S3.1 — goal plan hot-edit stays tail-anchored (cache red-line
         { step_id: "step_2", title: "Step 2", status: "pending" },
       ],
     })
-    const after = await prepare(sessionID, history)
+    const after = await prepare(sessionID, history, continueRound)
 
-    // The tail DID reflect the revision (proving the edit surfaces, not vanishes).
-    expect(tail(after)).toContain("Current plan (0/2 done)")
-    expect(tail(after)).toContain("reworked step")
-    // ...while the ENTIRE cached prefix (system + real history, everything before the volatile tail) is
-    // byte-identical across the edit — the cache breakpoint is preserved.
-    const prefixBefore = before.messages.slice(0, -1)
-    const prefixAfter = after.messages.slice(0, -1)
-    expect(JSON.stringify(prefixAfter)).toBe(JSON.stringify(prefixBefore))
-    // Still exactly one trailing volatile message (no second tail introduced that would shift slice(-2)).
+    expect(runtimeSystem(after)).toContain("Current plan (0/2 done)")
+    expect(runtimeSystem(after)).toContain("reworked step")
+    expect(JSON.stringify(stableMessages(after))).toBe(JSON.stringify(stableMessages(before)))
     expect(after.messages.length).toBe(before.messages.length)
-    // The revision NEVER leaked into a prior user-history anchor.
     expect(userHistory(after)).not.toContain("reworked step")
     AgentGateway.configure({ enabled: false, agentMode: "high" })
   })
@@ -259,9 +255,7 @@ describe("V4.1 §S3.1 — goal plan hot-edit stays tail-anchored (cache red-line
     // Turn 1 baselines: cache write, no reads (first turn is always a write).
     expect(() => LLMRequestPrep.recordCacheHitOutcome(sessionID, { input: 500, cache: { read: 0, write: 1180 } })).not.toThrow()
 
-    // A hot-edit keeps the cached prefix unchanged (§S3.1 above proves it), so the next turn serves a
-    // strong cache read. The monitor must NOT read this as a break (that signature is a COLLAPSED ratio
-    // on a NON-shrinking prompt); a healthy read is the happy path and never warns/throws.
+    // Cache telemetry remains diagnostic-only across the plan edit.
     applyEdit(sessionID, { goal: "ship the feature", steps: [{ step_id: "step_1", title: "reworked", status: "pending" }] })
     expect(() => LLMRequestPrep.recordCacheHitOutcome(sessionID, { input: 12, cache: { read: 1180, write: 0 } })).not.toThrow()
     AgentGateway.configure({ enabled: false, agentMode: "high" })
