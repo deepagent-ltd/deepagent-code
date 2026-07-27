@@ -48,20 +48,23 @@ const model = (providerID: string, modelID: string) =>
     headers: {},
   }) as any
 
-// Prompt-cache split (docs/deepagent-cache-hit-fix-plan.md): the round/stage/budget context is no
-// longer baked into the cached system prefix — it is appended as a trailing user message. Read it
-// back from the LAST message so the round-advance assertions test the right place.
-const tailContext = (prepared: { messages: any[] }): string => {
-  const last = prepared.messages[prepared.messages.length - 1]
-  if (!last || last.role !== "user") return ""
-  return typeof last.content === "string" ? last.content : JSON.stringify(last.content)
+const roundContext = (prepared: { messages: any[] }): string => {
+  const message = prepared.messages.find(
+    (item) => item.role === "system" && typeof item.content === "string" && item.content.startsWith("<deepagent-round-context>"),
+  )
+  return message?.content ?? ""
 }
 
 async function prepare(
   providerID: string,
   modelID: string,
   sessionID = `ses_deepagent_request_prep_${providerID}_${modelID}`,
-  options: { messages?: any[]; metadata?: Record<string, unknown> } = {},
+  options: {
+    messages?: any[]
+    metadata?: Record<string, unknown>
+    runtimeTail?: string
+    federatedProjection?: boolean
+  } = {},
 ) {
   return Effect.runPromise(
     LLMRequestPrep.prepare({
@@ -83,6 +86,8 @@ async function prepare(
       plugin,
       flags: { outputTokenMax: 32_000, client: "test" } as any,
       isWorkflow: false,
+      runtimeTail: options.runtimeTail,
+      federatedProjection: options.federatedProjection,
     }),
   )
 }
@@ -119,6 +124,24 @@ describe("DeepAgent request prep", () => {
     expect(Object.keys(prepared.tools)).toEqual(["StructuredOutput"])
   })
 
+  test("suppresses no-op first-round state while keeping federated projection in a data tail", async () => {
+    AgentGateway.configure({ enabled: true, agentMode: "high" })
+    const prepared = await prepare("deepagent", "deepseek-deepseek-v4-flash", crypto.randomUUID(), {
+      runtimeTail: "project-context-json-v1 bytes=2\n{}",
+      federatedProjection: true,
+    })
+    const tails = prepared.messages.filter(
+      (message) => message.role === "user" && typeof message.content === "string" && message.content.includes("project-context-json-v1"),
+    )
+    expect(tails).toHaveLength(1)
+    const tail = tails[0].content as string
+    expect(tail).toContain("project-context-json-v1 bytes=2")
+    expect(tail).toStartWith("<context-reference>\n")
+    expect(tail).toEndWith("\n</context-reference>")
+    expect(roundContext(prepared)).toBe("")
+    expect(prepared.system.join("\n")).not.toContain("project-context-json-v1")
+  })
+
   // V3.1 global runtime: in high/max the DeepAgent system prompt is injected for EVERY provider
   // (DeepAgent is a global agent system, not a provider). The distinguishing axis is strength
   // (general vs high/max), not providerID. See deepagent-production-contract.md "Runtime Boundary".
@@ -128,10 +151,9 @@ describe("DeepAgent request prep", () => {
     expect(deepagent.system[0]).toContain("DeepAgent Code")
     expect(deepagent.system[0]).not.toContain("DeepCode")
     expect(deepagent.system[0]).toContain("High")
-    // Prompt-cache split: the activation stage is round-derived and now lives in the volatile tail
-    // message, NOT the cached system prefix.
+    // A simple first-round task has no actionable runtime update.
     expect(deepagent.system[0]).not.toContain("first_fast_design")
-    expect(tailContext(deepagent)).toContain("first_fast_design")
+    expect(roundContext(deepagent)).toBe("")
     expect(deepagent.system[0]).not.toContain("generic agent prompt")
     expect(deepagent.system[0]).not.toContain("You are deepagent-code")
     expect(deepagent.messages[0]).toMatchObject({
@@ -149,7 +171,7 @@ describe("DeepAgent request prep", () => {
       role: "system",
       content: expect.stringContaining("DeepAgent Code"),
     })
-    expect(ordinary.messages[1]).toMatchObject({ role: "user", content: "hello" })
+    expect(ordinary.messages.find((message) => message.role === "user" && message.content === "hello")).toBeDefined()
   })
 
   test("general mode keeps the DeepAgent provider on the default agent path", async () => {
@@ -195,7 +217,7 @@ describe("DeepAgent request prep", () => {
   // a per-turn fan-out VERDICT into the system prompt — that was request-text-derived and busted the
   // cache. The system block now carries only the STABLE, mode-derived generic guidance, so it is
   // byte-identical regardless of the request. (The DeepAgent path surfaces the concrete verdict via the
-  // volatile tail context instead.)
+  // separate runtime system context instead.)
   test("§5b system prompt carries only stable orchestration guidance, no per-turn verdict (non-DeepAgent, high)", async () => {
     AgentGateway.configure({ enabled: false, agentMode: "high" })
     const complex = await prepare("deepseek", "deepseek-v4-flash", "ses_orch_decision_complex", {
@@ -270,7 +292,7 @@ describe("DeepAgent request prep", () => {
         ],
       },
     )
-    expect(tailContext(prepared)).toContain("第 1 轮")
+    expect(roundContext(prepared)).toBe("")
     // The round number must NOT be in the cached system prefix (prompt-cache invariant).
     expect(prepared.system[0]).not.toContain("第 1 轮")
   })
@@ -291,7 +313,7 @@ describe("DeepAgent request prep", () => {
         ],
       },
     )
-    expect(tailContext(prepared)).toContain("第 2 轮")
+    expect(roundContext(prepared)).toContain("第 2 轮")
   })
 
   // T3 (S1-v3.4): the advance-trigger set {continue, revise, narrow} advances the round; the terminal
@@ -312,7 +334,7 @@ describe("DeepAgent request prep", () => {
           ],
         },
       )
-      expect(tailContext(prepared)).toContain("第 2 轮")
+      expect(roundContext(prepared)).toContain("第 2 轮")
     })
   }
 
@@ -334,9 +356,9 @@ describe("DeepAgent request prep", () => {
 
     // The cached system prefix must not change even though the round advanced 1 → 2.
     expect(round2.system[0]).toBe(round1.system[0])
-    // ...and the round actually advanced, proving the round number lives only in the volatile tail.
-    expect(tailContext(round1)).toContain("第 1 轮")
-    expect(tailContext(round2)).toContain("第 2 轮")
+    // The no-op first round is silent; an explicit continuation receives actionable runtime state.
+    expect(roundContext(round1)).toBe("")
+    expect(roundContext(round2)).toContain("第 2 轮")
   })
 
   for (const action of ["stop", "escalate"]) {
@@ -355,7 +377,7 @@ describe("DeepAgent request prep", () => {
           ],
         },
       )
-      expect(tailContext(prepared)).toContain("第 1 轮")
+      expect(roundContext(prepared)).toBe("")
     })
   }
 
