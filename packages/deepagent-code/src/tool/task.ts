@@ -36,6 +36,7 @@ import { TaskConcurrency } from "./task-concurrency"
 import Ajv from "ajv"
 import { KeyedMutex } from "@deepagent-code/core/effect/keyed-mutex"
 import { Log } from "@deepagent-code/core/util/log"
+import { FSUtil } from "@deepagent-code/core/fs-util"
 import {
   admitTaskRun,
   claimTaskProvisioning,
@@ -1595,7 +1596,7 @@ export const TaskTool = Tool.define(
           parentID: ctx.sessionID,
           title: params.description + ` (@${next.name} subagent)`,
           agent: next.name,
-          ...(worktreeInfo ? { directory: worktreeInfo.directory } : {}),
+          ...(worktreeInfo ? { directory: FSUtil.resolve(worktreeInfo.directory) } : {}),
           // F5: write normalised depth into metadata so future resolveSessionDepth calls for this
           // session return the correct value without needing to walk the full parentID chain.
           metadata: {

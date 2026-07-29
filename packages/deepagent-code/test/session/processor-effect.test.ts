@@ -302,12 +302,28 @@ it.live("session.processor effect tests capture llm input cleanly", () =>
           tools: {},
         } satisfies LLM.StreamInput
 
-        const value = yield* handle.process(input)
+        const transitions: string[] = []
+        const value = yield* handle.process(input, {
+          attemptId: "attempt_effect",
+          dispatching: Effect.sync(() => {
+            transitions.push("dispatching")
+          }),
+          streaming: Effect.sync(() => {
+            transitions.push("streaming")
+          }),
+          settled: Effect.sync(() => {
+            transitions.push("settled")
+          }),
+          failed: () => Effect.sync(() => {
+            transitions.push("failed")
+          }),
+        })
         const parts = yield* MessageV2.parts(msg.id)
         const calls = yield* llm.calls
 
         expect(value).toBe("continue")
         expect(calls).toBe(1)
+        expect(transitions).toEqual(["dispatching", "streaming", "settled"])
         expect(parts.some((part) => part.type === "text" && part.text === "hello")).toBe(true)
       }),
     { config: (url) => providerCfg(url) },
@@ -538,6 +554,69 @@ it.live("session.processor effect tests reset reasoning state across retries", (
         expect(yield* llm.calls).toBe(2)
         expect(reasoning.some((part) => part.text === "two")).toBe(true)
         expect(reasoning.some((part) => part.text === "onetwo")).toBe(false)
+      }),
+    { config: (url) => providerCfg(url) },
+  ),
+)
+
+it.live("session.processor effect tests never retry a durable provider attempt", () =>
+  provideTmpdirServer(
+    ({ dir, llm }) =>
+      Effect.gen(function* () {
+        const { processors, session, provider } = yield* boot()
+
+        yield* llm.push(reply().reason("one").reset(), reply().reason("two").stop())
+
+        const chat = yield* session.create({})
+        const parent = yield* user(chat.id, "reason")
+        const msg = yield* assistant(chat.id, parent.id, path.resolve(dir))
+        const mdl = yield* provider.getModel(ref.providerID, ref.modelID)
+        const handle = yield* processors.create({
+          assistantMessage: msg,
+          sessionID: chat.id,
+          model: mdl,
+        })
+        const transitions: string[] = []
+
+        const value = yield* handle.process(
+          {
+            user: {
+              id: parent.id,
+              sessionID: chat.id,
+              role: "user",
+              time: parent.time,
+              agent: parent.agent,
+              model: { providerID: ref.providerID, modelID: ref.modelID },
+            } satisfies SessionV1.User,
+            sessionID: chat.id,
+            model: mdl,
+            agent: agent(),
+            system: [],
+            messages: [{ role: "user", content: "reason" }],
+            tools: {},
+            durableAttempt: true,
+          },
+          {
+            attemptId: "attempt_no_retry",
+            dispatching: Effect.sync(() => {
+              transitions.push("dispatching")
+            }),
+            streaming: Effect.sync(() => {
+              transitions.push("streaming")
+            }),
+            settled: Effect.sync(() => {
+              transitions.push("settled")
+            }),
+            failed: () =>
+              Effect.sync(() => {
+                transitions.push("failed")
+              }),
+          },
+        )
+
+        expect(value).toBe("stop")
+        expect(yield* llm.calls).toBe(1)
+        expect(transitions).toEqual(["dispatching", "failed"])
       }),
     { config: (url) => providerCfg(url) },
   ),

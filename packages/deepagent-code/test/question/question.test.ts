@@ -45,6 +45,11 @@ const rejectEffect = Effect.fn("QuestionTest.reject")(function* (id: QuestionID)
   yield* question.reject(id)
 })
 
+const rejectSessionEffect = Effect.fn("QuestionTest.rejectSession")(function* (sessionID: SessionID) {
+  const question = yield* Question.Service
+  yield* question.rejectSession(sessionID)
+})
+
 afterEach(async () => {
   await disposeAllInstances()
 })
@@ -121,6 +126,39 @@ it.instance(
       expect(pending[0].questions).toEqual(questions)
       yield* rejectAll
       expect((yield* Fiber.await(fiber))._tag).toBe("Failure")
+    }),
+  { git: true },
+)
+
+it.instance(
+  "ask - publishes rejected when the caller is interrupted",
+  () =>
+    Effect.gen(function* () {
+      const events = yield* EventV2Bridge.Service
+      const rejected = yield* Queue.unbounded<void>()
+      const off = yield* events.listen((event) => {
+        if (event.type === Question.Event.Rejected.type) {
+          Queue.offerUnsafe(rejected, undefined)
+        }
+        return Effect.void
+      })
+      yield* Effect.addFinalizer(() => off)
+      const fiber = yield* askEffect({
+        sessionID: SessionID.make("ses_interrupted"),
+        questions: [
+          {
+            question: "Wait for interruption?",
+            header: "Interrupt",
+            options: [{ label: "Wait", description: "Wait" }],
+          },
+        ],
+      }).pipe(Effect.forkScoped)
+
+      yield* waitForPending(1)
+      yield* Fiber.interrupt(fiber)
+
+      expect(yield* listEffect).toHaveLength(0)
+      yield* Queue.take(rejected).pipe(Effect.timeout("2 seconds"))
     }),
   { git: true },
 )
@@ -278,6 +316,42 @@ it.instance(
       if (Exit.isFailure(exit)) {
         expect(Cause.squash(exit.cause)).toMatchObject({ _tag: "Question.NotFoundError", requestID: "que_unknown" })
       }
+    }),
+  { git: true },
+)
+
+it.instance(
+  "rejectSession - rejects only questions owned by the interrupted session",
+  () =>
+    Effect.gen(function* () {
+      const interrupted = yield* askEffect({
+        sessionID: SessionID.make("ses_interrupted"),
+        questions: [
+          {
+            question: "Interrupt this session?",
+            header: "Interrupt",
+            options: [{ label: "Yes", description: "Yes" }],
+          },
+        ],
+      }).pipe(Effect.forkScoped)
+      const retained = yield* askEffect({
+        sessionID: SessionID.make("ses_retained"),
+        questions: [
+          {
+            question: "Retain this session?",
+            header: "Retain",
+            options: [{ label: "Yes", description: "Yes" }],
+          },
+        ],
+      }).pipe(Effect.forkScoped)
+
+      yield* waitForPending(2)
+      yield* rejectSessionEffect(SessionID.make("ses_interrupted"))
+
+      expect((yield* listEffect).map((item) => item.sessionID)).toEqual([SessionID.make("ses_retained")])
+      expect((yield* Fiber.await(interrupted))._tag).toBe("Failure")
+      yield* rejectAll
+      expect((yield* Fiber.await(retained))._tag).toBe("Failure")
     }),
   { git: true },
 )

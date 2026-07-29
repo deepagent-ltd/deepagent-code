@@ -93,6 +93,8 @@ it.instance("explore agent denies edit and write", () =>
     expect(evalPerm(explore, "edit")).toBe("deny")
     expect(evalPerm(explore, "write")).toBe("deny")
     expect(evalPerm(explore, "todowrite")).toBe("deny")
+    expect(evalPerm(explore, "code_intel")).toBe("allow")
+    expect(evalPerm(explore, "context_query")).toBe("allow")
   }),
 )
 
@@ -110,6 +112,8 @@ it.instance("researcher agent is a read-only subagent that denies edit/write/tas
     expect(evalPerm(researcher, "read")).toBe("allow")
     expect(evalPerm(researcher, "grep")).toBe("allow")
     expect(evalPerm(researcher, "webfetch")).toBe("allow")
+    expect(evalPerm(researcher, "code_intel")).toBe("allow")
+    expect(evalPerm(researcher, "context_query")).toBe("allow")
     // mutation + recursive fan-out denied
     expect(evalPerm(researcher, "edit")).toBe("deny")
     expect(evalPerm(researcher, "write")).toBe("deny")
@@ -129,6 +133,8 @@ it.instance("reviewer agent is a read-only subagent that denies edit/write/task 
     // read-only analysis tools allowed
     expect(evalPerm(reviewer, "read")).toBe("allow")
     expect(evalPerm(reviewer, "grep")).toBe("allow")
+    expect(evalPerm(reviewer, "code_intel")).toBe("allow")
+    expect(evalPerm(reviewer, "context_query")).toBe("allow")
     // mutation + recursive fan-out denied
     expect(evalPerm(reviewer, "edit")).toBe("deny")
     expect(evalPerm(reviewer, "write")).toBe("deny")
@@ -186,6 +192,8 @@ it.instance("general agent denies todo tools", () =>
     expect(general?.mode).toBe("subagent")
     expect(general?.hidden).toBeUndefined()
     expect(evalPerm(general, "todowrite")).toBe("deny")
+    expect(evalPerm(general, "code_intel")).toBe("allow")
+    expect(evalPerm(general, "context_query")).toBe("allow")
   }),
 )
 
@@ -197,6 +205,8 @@ it.instance("compaction agent denies all permissions", () =>
     expect(evalPerm(compaction, "bash")).toBe("deny")
     expect(evalPerm(compaction, "edit")).toBe("deny")
     expect(evalPerm(compaction, "read")).toBe("deny")
+    expect(evalPerm(compaction, "code_intel")).toBe("deny")
+    expect(evalPerm(compaction, "context_query")).toBe("deny")
   }),
 )
 

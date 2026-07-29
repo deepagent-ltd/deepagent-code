@@ -481,6 +481,7 @@ export const Assistant = Schema.Struct({
   parentID: MessageID,
   modelID: ModelV2.ID,
   providerID: ProviderV2.ID,
+  providerAttemptID: Schema.optional(Schema.String),
   mode: Schema.String,
   agent: Schema.String,
   path: Schema.Struct({

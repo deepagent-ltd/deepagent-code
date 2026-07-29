@@ -124,6 +124,7 @@ export interface Interface {
     answers: ReadonlyArray<Answer>
   }) => Effect.Effect<void, NotFoundError>
   readonly reject: (requestID: QuestionID) => Effect.Effect<void, NotFoundError>
+  readonly rejectSession: (sessionID: SessionID) => Effect.Effect<void>
   readonly list: () => Effect.Effect<ReadonlyArray<Request>>
 }
 
@@ -173,8 +174,17 @@ export const layer = Layer.effect(
 
       return yield* Effect.ensuring(
         Deferred.await(deferred),
-        Effect.sync(() => {
+        Effect.gen(function* () {
+          // reply/reject remove the entry before resolving the Deferred. If the
+          // caller is interrupted instead (for example, Session abort), no API
+          // endpoint performs that cleanup, so publish the terminal event here
+          // to keep renderer and CLI question stores from retaining a stale dock.
+          if (!pending.has(id)) return
           pending.delete(id)
+          yield* events.publish(Event.Rejected, {
+            sessionID: info.sessionID,
+            requestID: info.id,
+          })
         }),
       )
     })
@@ -215,12 +225,21 @@ export const layer = Layer.effect(
       yield* Deferred.fail(existing.deferred, new RejectedError())
     })
 
+    const rejectSession = Effect.fn("Question.rejectSession")(function* (sessionID: SessionID) {
+      const pending = (yield* InstanceState.get(state)).pending
+      yield* Effect.forEach(
+        Array.from(pending.values(), (item) => item.info).filter((item) => item.sessionID === sessionID),
+        (item) => reject(item.id).pipe(Effect.catchTag("Question.NotFoundError", () => Effect.void)),
+        { discard: true },
+      )
+    })
+
     const list = Effect.fn("Question.list")(function* () {
       const pending = (yield* InstanceState.get(state)).pending
       return Array.from(pending.values(), (x) => x.info)
     })
 
-    return Service.of({ ask, reply, reject, list })
+    return Service.of({ ask, reply, reject, rejectSession, list })
   }),
 )
 

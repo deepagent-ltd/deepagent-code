@@ -99,6 +99,7 @@ import { WorkspaceConfig } from "@deepagent-code/core/deepagent/workspace-config
 import { WorkspaceConcurrency } from "@deepagent-code/core/deepagent/workspace-concurrency"
 import { SecurityResolvers } from "@deepagent-code/core/deepagent/security-resolvers"
 import { V4EventRuntime } from "@/session/v4-event-runtime"
+import { LocationIndexRuntime } from "@/location-index/runtime"
 import { experimentalHandlers } from "./handlers/experimental"
 import { debugHandlers } from "./handlers/debug"
 import { fileHandlers } from "./handlers/file"
@@ -116,6 +117,7 @@ import { ptyConnectHandlers, ptyHandlers } from "./handlers/pty"
 import { questionHandlers } from "./handlers/question"
 import { referenceHandlers } from "./handlers/reference"
 import { sessionHandlers } from "./handlers/session"
+import { ContextFederationDiagnostics } from "@/context-federation/diagnostics"
 import { syncHandlers } from "./handlers/sync"
 import { tuiHandlers } from "./handlers/tui"
 import { handlers } from "@deepagent-code/server/handlers"
@@ -192,6 +194,7 @@ const imRuntimeLayer = Layer.mergeAll(
 // below. Daemon startup is gated on the V4 flags inside V4EventRuntime.layer, so with flags off (the
 // default) it is inert — nothing subscribes, ticks, or prunes.
 const v4EventRuntimeLayer = V4EventRuntime.layer.pipe(
+  Layer.provide(LocationIndexRuntime.defaultLayer),
   // §E1 — the PRODUCTION four-layer security resolvers. Providing this makes the MultiAgentRuntime gate
   // evaluate REAL facts (L1 event-source trust per workspace, L2 actor workspace membership, L4 runtime
   // pre-gate) and FAIL CLOSED, instead of the default-open lenient stubs. Its deps (WorkspaceConfig +
@@ -268,6 +271,7 @@ const instanceRoutes = instanceApiRoutes.pipe(
   // /workspace/:workspaceID/config/trusted-sources). Provide the default layer (Database-backed) here so
   // it shares the same Database singleton as the rest of the instance graph.
   Layer.provide(WorkspaceConfig.defaultLayer),
+  Layer.provide(ContextFederationDiagnostics.defaultLayer),
 )
 const serverRoutes = HttpApiBuilder.layer(Api).pipe(
   Layer.provide(handlers),

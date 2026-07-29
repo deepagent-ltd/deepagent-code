@@ -7,6 +7,7 @@ import {
   highestDiagnosticSeverity,
   makeGoalLoopWiring,
   makePlanBridge,
+  makeTaskSubagentRunner,
   type PanelQuestionInput,
   type SubagentTurnResult,
   type SubagentTurnRunner,
@@ -18,6 +19,12 @@ import { tmpdir } from "node:os"
 import path from "node:path"
 import { DocumentStore } from "@deepagent-code/core/deepagent/document-store"
 import { AgentGateway } from "@deepagent-code/core/agent-gateway"
+import { Agent } from "../../src/agent/agent"
+import { Permission } from "../../src/permission"
+import type { Session } from "../../src/session/session"
+import type { SessionPrompt } from "../../src/session/prompt"
+import { SessionID } from "../../src/session/schema"
+import { PLAN_WRITE_OWN_GOAL } from "../../src/agent/subagent-permissions"
 import { createPlanDoc, planScope, type PlanDoc, type PlanStep } from "@deepagent-code/core/deepagent/plan-controller"
 
 /**
@@ -65,6 +72,72 @@ const panelQuestion = (): PanelQuestionInput => ({
   codeRefs: [],
   lenses: ["correctness", "security"],
   maxRounds: 1,
+})
+
+describe("makeTaskSubagentRunner capability boundary", () => {
+  const worker: Agent.Info = {
+    name: "goal-worker",
+    mode: "subagent",
+    permission: Permission.fromConfig({ "*": "deny", read: "allow" }),
+    capabilities: [PLAN_WRITE_OWN_GOAL],
+    options: {},
+  }
+  const parent: Agent.Info = {
+    name: "parent",
+    mode: "primary",
+    permission: [],
+    options: {},
+  }
+
+  const run = async (input: { readonly allowPlanWriteCapability?: boolean; readonly purpose?: "goal-loop" | "panel" | "generic" }) => {
+    const created: Array<NonNullable<Session.CreateInput>> = []
+    const sessions = {
+      get: () => Effect.succeed({ id: SessionID.make("ses_parent"), agent: parent.name, permission: [] }),
+      create: (createInput: NonNullable<Session.CreateInput>) => {
+        created.push(createInput)
+        return Effect.succeed({ id: SessionID.make("ses_child") })
+      },
+    } as unknown as Session.Interface
+    const agents = {
+      get: (name: string) => Effect.succeed(name === worker.name ? worker : name === parent.name ? parent : undefined),
+    } as unknown as Agent.Interface
+    const sessionPrompt = {
+      resolvePromptParts: () => Effect.succeed([]),
+      prompt: () => Effect.succeed({ info: { role: "assistant", tokens: {}, cost: 0 }, parts: [] }),
+    } as unknown as SessionPrompt.Interface
+    const runner = makeTaskSubagentRunner({
+      sessions,
+      agents,
+      sessionPrompt,
+      parentSessionID: SessionID.make("ses_parent"),
+      model: { providerID: "test", modelID: "test" },
+      ...input,
+    })
+
+    const result = await Effect.runPromise(runner({ agentType: worker.name, prompt: "run" }))
+    return { result, createInput: created[0] }
+  }
+
+  test("defaults plan-write capability to false and labels generic children accurately", async () => {
+    const { result, createInput } = await run({})
+    expect(result.ok).toBe(true)
+    expect(createInput?.title).toBe("goal-worker (generic)")
+    expect(Permission.evaluate("plan", "*", createInput?.permission ?? []).action).not.toBe("allow")
+  })
+
+  test("goal-loop callers explicitly opt in and receive the capability grant", async () => {
+    const { result, createInput } = await run({ allowPlanWriteCapability: true, purpose: "goal-loop" })
+    expect(result.ok).toBe(true)
+    expect(createInput?.title).toBe("goal-worker (goal-loop)")
+    expect(Permission.evaluate("plan", "*", createInput?.permission ?? []).action).toBe("allow")
+  })
+
+  test("panel callers remain opted out and use a panel child title", async () => {
+    const { result, createInput } = await run({ allowPlanWriteCapability: false, purpose: "panel" })
+    expect(result.ok).toBe(true)
+    expect(createInput?.title).toBe("goal-worker (panel)")
+    expect(Permission.evaluate("plan", "*", createInput?.permission ?? []).action).not.toBe("allow")
+  })
 })
 
 const baseDeps = (over: Partial<Parameters<typeof buildGraderPorts>[0]> = {}) => ({

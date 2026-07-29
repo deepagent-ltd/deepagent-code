@@ -93,6 +93,32 @@ export class Service extends ConfigService.Service<Service>()("@deepagent-code/R
   experimentalPlanMode: enabledByExperimental("DEEPAGENT_CODE_EXPERIMENTAL_PLAN_MODE"),
   experimentalEventSystem: enabledByExperimental("DEEPAGENT_CODE_EXPERIMENTAL_EVENT_SYSTEM"),
   experimentalWorkspaces: enabledByExperimental("DEEPAGENT_CODE_EXPERIMENTAL_WORKSPACES"),
+  // Four-graph federation rollout is owner-based and defaults OFF. These flags expose capability
+  // requests only; ContextFederationRollout.resolve applies the dependency and parity gates before
+  // any production owner may activate.
+  contextFederationShadow: bool("DEEPAGENT_CODE_CONTEXT_FEDERATION_SHADOW"),
+  locationIndexesV2Shadow: bool("DEEPAGENT_CODE_LOCATION_INDEXES_V2_SHADOW"),
+  contextProjectionV2: bool("DEEPAGENT_CODE_CONTEXT_PROJECTION_V2"),
+  contextQueryToolsV2: bool("DEEPAGENT_CODE_CONTEXT_QUERY_TOOLS_V2"),
+  coreV2ExecutionOwner: bool("DEEPAGENT_CODE_CORE_V2_EXECUTION_OWNER"),
+  contextFederationKillSwitch: bool("DEEPAGENT_CODE_CONTEXT_FEDERATION_KILL_SWITCH"),
+  contextFederationRolloutStage: Config.string("DEEPAGENT_CODE_CONTEXT_FEDERATION_ROLLOUT_STAGE").pipe(
+    Config.withDefault("all"),
+    Config.map((value) => {
+      if (value === "internal") return value
+      if (value === "percentage") return value
+      if (value === "all") return value
+      return "shadow" as const
+    }),
+  ),
+  contextFederationRolloutPercent: Config.number("DEEPAGENT_CODE_CONTEXT_FEDERATION_ROLLOUT_PERCENT").pipe(
+    Config.withDefault(0),
+    Config.map((value) => Number.isFinite(value) ? Math.max(0, Math.min(100, value)) : 0),
+  ),
+  contextFederationInternalProjects: Config.string("DEEPAGENT_CODE_CONTEXT_FEDERATION_INTERNAL_PROJECTS").pipe(
+    Config.withDefault(""),
+    Config.map((value) => value.split(",").map((project) => project.trim()).filter(Boolean)),
+  ),
   // V3.9 §C: Expert Panel（会诊机制）— differentiated expert lenses answer one frozen high-risk
   // question independently, aggregated by a deterministic non-LLM Arbiter. SHIPS ON by default (mode
   // redesign: mature capabilities are always present, flags are only a kill-switch — mirrors Codex's
@@ -170,6 +196,10 @@ export class Service extends ConfigService.Service<Service>()("@deepagent-code/R
   microbatchNarrowLimit: positiveInteger("DEEPAGENT_CODE_MICROBATCH_NARROW_LIMIT"),
   bashDefaultTimeoutMs: positiveInteger("DEEPAGENT_CODE_EXPERIMENTAL_BASH_DEFAULT_TIMEOUT_MS"),
   experimentalNativeLlm: bool("DEEPAGENT_CODE_EXPERIMENTAL_NATIVE_LLM"),
+  // Diagnostic-only request assembly event. Default OFF: when enabled, request preparation emits only
+  // Process-local HMAC fingerprints, aggregate counts, and existing request/session identifiers only —
+  // never raw prompt, message, tool, header, metadata, or credential values.
+  assembledRequestFingerprint: bool("DEEPAGENT_CODE_ASSEMBLED_REQUEST_FINGERPRINT"),
   experimentalWebSockets: bool("DEEPAGENT_CODE_EXPERIMENTAL_WEBSOCKETS"),
   // ── V4.0 event-driven Agent-OS — DEFAULT OFF (production-safe, operator opt-in) ──────────────────
   // Per §H3 (Feature Flags: all six ship OFF) and §H1 (staged rollout: shadow → low-risk → push
@@ -247,9 +277,9 @@ export class Service extends ConfigService.Service<Service>()("@deepagent-code/R
   v4Steering: stableOn("DEEPAGENT_CODE_V4_STEERING"),
   // PR-2: Streaming degeneration detector mode for reasoning outputs.
   // "off"    — detector is disabled; all output passes through unmodified.
-  // "shadow" — detector runs and logs hits, but never triggers a circuit break (default).
-  // "enforce"— detector triggers a circuit break on confirmed degeneration (production opt-in).
-  // Set DEEPAGENT_CODE_REASONING_DEGENERATION_MODE=enforce to activate hard enforcement.
+  // "shadow" — detector runs and logs hits, but never triggers a circuit break.
+  // "enforce"— detector triggers a circuit break on confirmed degeneration (default, production-on).
+  // Set DEEPAGENT_CODE_REASONING_DEGENERATION_MODE=shadow or =off to reduce enforcement.
   degenerationDetectorMode: Config.string("DEEPAGENT_CODE_REASONING_DEGENERATION_MODE").pipe(
     Config.withDefault("enforce"),
   ),

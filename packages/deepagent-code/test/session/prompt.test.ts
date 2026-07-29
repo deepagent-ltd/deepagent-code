@@ -57,14 +57,19 @@ import { Search } from "@deepagent-code/core/filesystem/search"
 import { Format } from "../../src/format"
 import { Reference } from "../../src/reference/reference"
 import { RepositoryCache } from "../../src/reference/repository-cache"
-import { TestInstance } from "../fixture/fixture"
+import { TestInstance, testInstanceStoreLayer, tmpdirScoped } from "../fixture/fixture"
+import { InstanceStore } from "@/project/instance-store"
 import { AgentGateway } from "@deepagent-code/core/agent-gateway"
 import { createHash } from "node:crypto"
+import { symlink } from "node:fs/promises"
 import { awaitWithTimeout, pollWithTimeout, testEffect } from "../lib/effect"
 import { reply, TestLLMServer } from "../lib/llm-server"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { ProviderV2 } from "@deepagent-code/core/provider"
 import { ModelV2 } from "@deepagent-code/core/model"
+import { TestContextFacades } from "../fixture/context-facades"
+import { SessionFederatedContext } from "../../src/context-federation/session-context-runtime"
+import { ContextFederationObservability } from "../../src/context-federation/observability"
 
 void Log.init({ print: false })
 
@@ -226,7 +231,14 @@ const stubDebugServiceLayer = Layer.succeed(
   }),
 )
 
-function makePrompt(input?: { processor?: "blocking" }) {
+type PromptLayerOptions = {
+  processor?: "blocking"
+  flags?: Partial<RuntimeFlags.Info>
+  federation?: SessionFederatedContext.Interface
+}
+
+function makePrompt(input?: PromptLayerOptions) {
+  const runtimeFlags = RuntimeFlags.layer({ experimentalEventSystem: true, ...input?.flags })
   const deps = Layer.mergeAll(
     Session.defaultLayer,
     Snapshot.defaultLayer,
@@ -250,6 +262,7 @@ function makePrompt(input?: { processor?: "blocking" }) {
   const question = Question.layer.pipe(Layer.provideMerge(deps))
   const todo = Todo.layer.pipe(Layer.provideMerge(deps))
   const registry = ToolRegistry.layer.pipe(
+    Layer.provide(TestContextFacades.layer),
     Layer.provide(Skill.defaultLayer),
     Layer.provide(FetchHttpClient.layer),
     Layer.provide(CrossSpawnSpawner.defaultLayer),
@@ -258,7 +271,7 @@ function makePrompt(input?: { processor?: "blocking" }) {
     Layer.provide(Reference.defaultLayer),
     Layer.provide(Search.defaultLayer),
     Layer.provide(Format.defaultLayer),
-    Layer.provide(RuntimeFlags.layer({ experimentalEventSystem: true })),
+    Layer.provide(runtimeFlags),
     // V3.5: the registry layer now requires DebugService + RuntimeBase (debug/profile
     // tools route through D1/R0). These tests never invoke those tools, so provide the
     // real (lightweight) DebugService over a no-op RuntimeBase stub — this satisfies the
@@ -277,18 +290,19 @@ function makePrompt(input?: { processor?: "blocking" }) {
       : SessionProcessor.layer.pipe(
           Layer.provide(summary),
           Layer.provide(Image.defaultLayer),
-          Layer.provide(RuntimeFlags.layer({ experimentalEventSystem: true })),
+          Layer.provide(runtimeFlags),
           Layer.provideMerge(deps),
         )
   const compact = SessionCompaction.layer.pipe(
-    Layer.provide(RuntimeFlags.layer({ experimentalEventSystem: true })),
+    Layer.provide(runtimeFlags),
     Layer.provideMerge(proc),
     Layer.provideMerge(deps),
   )
   // V4.1 §S1.1: the durable steer buffer shares the SAME Database instance as Session (built over
   // `deps`) so drained steers are visible to the loop's history reads.
   const steer = SessionSteer.layer.pipe(Layer.provideMerge(deps))
-  return SessionPrompt.layer.pipe(
+  const promptLayer = SessionPrompt.layer.pipe(
+    Layer.provide(testInstanceStoreLayer),
     Layer.provide(SessionRevert.defaultLayer),
     Layer.provide(Image.defaultLayer),
     Layer.provide(Reference.defaultLayer),
@@ -301,23 +315,124 @@ function makePrompt(input?: { processor?: "blocking" }) {
     Layer.provideMerge(trunc),
     Layer.provide(Instruction.defaultLayer),
     Layer.provide(SystemPrompt.defaultLayer),
-    Layer.provide(RuntimeFlags.layer({ experimentalEventSystem: true })),
+    Layer.provide(runtimeFlags),
     Layer.provideMerge(deps),
     Layer.provide(summary),
   )
+  if (!input?.federation) return promptLayer
+  return promptLayer.pipe(
+    Layer.provideMerge(
+      Layer.succeed(
+        SessionFederatedContext.Service,
+        SessionFederatedContext.Service.of(input.federation),
+      ),
+    ),
+  )
 }
 
-function makeHttp(input?: { processor?: "blocking" }) {
+function makeHttp(input?: PromptLayerOptions) {
   return Layer.mergeAll(TestLLMServer.layer, makePrompt(input))
 }
 
-function makeHttpNoLLMServer(input?: { processor?: "blocking" }) {
+function makeHttpNoLLMServer(input?: PromptLayerOptions) {
   return makePrompt(input)
 }
 
 const it = testEffect(makeHttp())
 const noLLMServer = testEffect(makeHttpNoLLMServer())
 const raceNoLLMServer = testEffect(makeHttpNoLLMServer({ processor: "blocking" }))
+const federationTrace: string[] = []
+const federationAdapter = {
+    recover: () => Effect.sync(() => {
+      federationTrace.push("recover")
+      return 0
+    }),
+    resolve: (input) => Effect.sync(() => {
+      federationTrace.push(`resolve:${input.agent.name}:${input.inputIds.join(",")}`)
+      return {
+        selection: {
+          selectionId: "selection_prompt_adapter",
+          sessionId: input.session.id,
+          activityId: "activity_prompt_adapter",
+          revision: 0,
+          triggerInputId: input.inputIds[0] ?? "msg_prompt_adapter",
+          locationKey: "loc_prompt_adapter",
+          promotedInputIds: input.inputIds,
+          queryFingerprint: "query_prompt_adapter",
+          authorizationFingerprint: "authorization_prompt_adapter",
+          authorizationEpoch: 1,
+          executionFingerprint: "execution_prompt_adapter",
+          selectedSourceFingerprint: "sources_prompt_adapter",
+          observedLocationMutationEpoch: 1,
+          nextRevalidationAt: Date.now() + 60_000,
+          graphRevisions: { code: "1", documents: "1", knowledge: "1", memory: "1" },
+          graphStatuses: [],
+          selectedRefs: [],
+          projection: "project-context-json-v1 bytes=2\n{}",
+          projectionHash: "projection_prompt_adapter",
+          tokenCount: 8,
+          artifactBinding: { status: "available", ref: "artifact_prompt_adapter" },
+          createdAt: Date.now(),
+        } as unknown as SessionFederatedContext.Resolved["selection"],
+        envelope: {
+          principal: {
+            securityNamespaceId: "sec_prompt_adapter",
+            principalId: "local-user",
+            authorizationEpoch: 1,
+            locationKeys: ["loc_prompt_adapter"],
+            projectScopeKeys: ["prjctx_prompt_adapter"],
+            sessionIds: [input.session.id],
+            subjectIds: ["local-user"],
+            allowBuiltin: true,
+          },
+          egress: {
+            policyId: "provider:test",
+            epoch: 1,
+            graphs: ["code", "documents", "knowledge", "memory"],
+            sensitivities: ["public", "source_code"],
+          },
+        } as unknown as SessionFederatedContext.Resolved["envelope"],
+        observedLocationMutationEpoch: 1,
+      }
+    }),
+    prepareProviderTurn: () => Effect.sync(() => {
+      federationTrace.push("prepare")
+      return {
+        attemptId: "attempt_prompt_adapter",
+        dispatching: Effect.sync(() => {
+          federationTrace.push("dispatching")
+        }),
+        streaming: Effect.sync(() => {
+          federationTrace.push("streaming")
+        }),
+        settled: Effect.sync(() => {
+          federationTrace.push("attempt:settled")
+        }),
+        failed: () => Effect.sync(() => {
+          federationTrace.push("attempt:failed")
+        }),
+      }
+    }),
+    settleActivity: (_selection, state) => Effect.sync(() => {
+      federationTrace.push(`activity:${state}`)
+    }),
+    replayIndeterminate: () => Effect.die("not used"),
+  } satisfies SessionFederatedContext.Interface
+const federated = testEffect(makeHttp({
+  flags: {
+    contextFederationShadow: true,
+    locationIndexesV2Shadow: true,
+    contextProjectionV2: true,
+  },
+  federation: federationAdapter,
+}))
+const shadowFederated = testEffect(makeHttp({
+  flags: {
+    contextFederationShadow: true,
+    locationIndexesV2Shadow: true,
+  },
+  federation: federationAdapter,
+}))
 const unix = process.platform !== "win32" ? it.instance : it.instance.skip
 const unixNoLLMServer = process.platform !== "win32" ? noLLMServer.instance : noLLMServer.instance.skip
 
@@ -617,6 +732,107 @@ it.instance("loop stops provider overflow instead of auto-compacting when disabl
   }),
 )
 
+federated.instance("production prompt adapter owns one federated tail and durable provider lifecycle", () =>
+  Effect.gen(function* () {
+    federationTrace.length = 0
+    const { llm } = yield* useServerConfig(providerCfg)
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const chat = yield* sessions.create({ title: "Federated" })
+
+    yield* llm.text("done")
+    const user = yield* prompt.prompt({
+      sessionID: chat.id,
+      agent: "build",
+      model: ref,
+      noReply: true,
+      parts: [{ type: "text", text: "find the runner" }],
+    })
+    const result = yield* prompt.loop({ sessionID: chat.id })
+    const inputs = yield* llm.inputs
+    const serialized = JSON.stringify(inputs[0]?.messages)
+    const calls = yield* llm.calls
+
+    expect(result.info.role).toBe("assistant")
+    expect(calls).toBe(1)
+    if (result.info.role === "assistant") expect(result.info.error).toBeUndefined()
+    expect(serialized.match(/project-context-json-v1/g)).toHaveLength(1)
+    expect(federationTrace).toEqual([
+      "recover",
+      `resolve:auto:${user.info.id}`,
+      "prepare",
+      "dispatching",
+      "streaming",
+      "attempt:settled",
+      "activity:settled",
+    ])
+  }),
+)
+
+shadowFederated.instance("runs selection shadow without model projection or a Provider attempt", () =>
+  Effect.gen(function* () {
+    federationTrace.length = 0
+    ContextFederationObservability.reset()
+    const { llm } = yield* useServerConfig(providerCfg)
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const chat = yield* sessions.create({ title: "Federated shadow" })
+
+    yield* llm.text("done")
+    const user = yield* prompt.prompt({
+      sessionID: chat.id,
+      agent: "build",
+      model: ref,
+      noReply: true,
+      parts: [{ type: "text", text: "shadow the runner" }],
+    })
+    yield* prompt.loop({ sessionID: chat.id })
+    const inputs = yield* llm.inputs
+
+    expect(JSON.stringify(inputs[0]?.messages)).not.toContain("project-context-json-v1")
+    expect(ContextFederationObservability.snapshot().shadow.comparisons).toBe(1)
+    expect(federationTrace).toEqual([
+      `resolve:auto:${user.info.id}`,
+      "activity:settled",
+    ])
+  }),
+)
+
+federated.instance("production prompt adapter fails the attempt and interrupts the activity on cancel", () =>
+  Effect.gen(function* () {
+    federationTrace.length = 0
+    const { llm } = yield* useServerConfig(providerCfg)
+    const gate = yield* Deferred.make<void>()
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const chat = yield* sessions.create({ title: "Federated cancel" })
+
+    yield* llm.hold("partial", deferredAsPromise(gate))
+    yield* prompt.prompt({
+      sessionID: chat.id,
+      agent: "build",
+      model: ref,
+      noReply: true,
+      parts: [{ type: "text", text: "hold the runner" }],
+    })
+    const running = yield* prompt.loop({ sessionID: chat.id }).pipe(Effect.forkChild)
+    yield* llm.wait(1)
+    yield* pollWithTimeout(
+      Effect.sync(() => federationTrace.includes("streaming") ? true : undefined),
+      "timed out waiting for the federated attempt to enter streaming",
+    )
+    yield* prompt.cancel(chat.id)
+    yield* Fiber.await(running)
+
+    expect(federationTrace).toContain("dispatching")
+    expect(federationTrace).toContain("streaming")
+    expect(federationTrace).toContain("attempt:failed")
+    expect(federationTrace).toContain("activity:interrupted")
+    expect(federationTrace).not.toContain("attempt:settled")
+    expect(federationTrace).not.toContain("activity:settled")
+  }),
+)
+
 noLLMServer.instance.skip(
   "prompt emits v2 prompted and synthetic events (v2 projector disabled)",
   () =>
@@ -895,6 +1111,37 @@ it.instance("loop continues when finish is stop but assistant has tool parts", (
       expect(result.parts.some((part) => part.type === "text" && part.text === "second")).toBe(true)
       expect(result.info.finish).toBe("stop")
     }
+  }),
+)
+
+it.instance("agent step limit removes tools from the final provider turn", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig((url) => ({
+      ...providerCfg(url),
+      agent: { build: { steps: 2 } },
+    }))
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const session = yield* sessions.create({
+      title: "Bounded",
+      permission: [{ permission: "*", pattern: "*", action: "allow" }],
+    })
+    yield* prompt.prompt({
+      sessionID: session.id,
+      agent: "build",
+      noReply: true,
+      parts: [{ type: "text", text: "inspect files" }],
+    })
+    yield* llm.tool("glob", { pattern: "**/*.txt" })
+    yield* llm.text("Maximum steps reached; here is the partial result.")
+
+    yield* prompt.loop({ sessionID: session.id })
+
+    const finalInput = (yield* llm.inputs).find((input) =>
+      JSON.stringify(input).includes("CRITICAL - MAXIMUM STEPS REACHED"),
+    )
+    expect(finalInput).toBeDefined()
+    expect(finalInput?.tools ?? []).toEqual([])
   }),
 )
 
@@ -1464,7 +1711,9 @@ it.instance(
 
       const inputs = yield* llm.inputs
       expect(inputs).toHaveLength(2)
-      expect(JSON.stringify(inputs.at(-1)?.messages)).toContain("second")
+      const steeredInput = JSON.stringify(inputs.at(-1)?.messages)
+      expect(steeredInput).toContain("second")
+      expect(steeredInput).not.toContain("The user sent the following message:")
     }),
   15_000,
 )
@@ -2382,6 +2631,44 @@ it.instance("does not loop empty assistant turns for a simple reply", () =>
     const msgs = yield* sessions.messages({ sessionID: session.id })
     expect(msgs.filter((msg) => msg.info.role === "assistant")).toHaveLength(1)
     expect(yield* llm.calls).toBe(1)
+  }),
+)
+
+it.instance("runs a prompt in the persisted session directory", () =>
+  Effect.gen(function* () {
+    const { directory: parentDirectory } = yield* TestInstance
+    const targetDirectory = yield* tmpdirScoped({ git: true })
+    const aliasRoot = yield* tmpdirScoped()
+    const persistedDirectory =
+      process.platform === "win32" ? targetDirectory : path.join(aliasRoot, "workspace-alias")
+    if (persistedDirectory !== targetDirectory) {
+      yield* Effect.promise(() => symlink(targetDirectory, persistedDirectory, "dir"))
+    }
+    const llm = yield* TestLLMServer
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const instances = yield* InstanceStore.Service
+
+    yield* writeConfig(targetDirectory, providerCfg(llm.url))
+    const child = yield* instances.provide(
+      { directory: targetDirectory },
+      sessions.create({ title: "Persisted directory child", directory: persistedDirectory }),
+    )
+    yield* llm.text("child context complete")
+
+    const result = yield* prompt.prompt({
+      sessionID: child.id,
+      agent: "build",
+      parts: [{ type: "text", text: "Report the active directory context." }],
+    })
+
+    expect(path.resolve(parentDirectory)).not.toBe(path.resolve(targetDirectory))
+    expect(FSUtil.resolve(child.directory)).toBe(FSUtil.resolve(targetDirectory))
+    expect(result.info.role).toBe("assistant")
+    if (result.info.role === "assistant") {
+      expect(path.resolve(result.info.path.cwd)).toBe(path.resolve(targetDirectory))
+      expect(path.resolve(result.info.path.root)).toBe(path.resolve(targetDirectory))
+    }
   }),
 )
 

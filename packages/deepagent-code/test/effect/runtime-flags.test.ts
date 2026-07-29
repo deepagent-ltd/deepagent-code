@@ -17,6 +17,33 @@ describe("RuntimeFlags", () => {
     }),
   )
 
+  it.effect("four-graph owner rollout flags default OFF and remain independently observable", () =>
+    Effect.gen(function* () {
+      const defaults = yield* readFlags.pipe(Effect.provide(fromConfig({})))
+      expect({
+        contextFederationShadow: defaults.contextFederationShadow,
+        locationIndexesV2Shadow: defaults.locationIndexesV2Shadow,
+        contextProjectionV2: defaults.contextProjectionV2,
+        contextQueryToolsV2: defaults.contextQueryToolsV2,
+        coreV2ExecutionOwner: defaults.coreV2ExecutionOwner,
+      }).toEqual({
+        contextFederationShadow: false,
+        locationIndexesV2Shadow: false,
+        contextProjectionV2: false,
+        contextQueryToolsV2: false,
+        coreV2ExecutionOwner: false,
+      })
+
+      const requested = yield* readFlags.pipe(
+        Effect.provide(fromConfig({ DEEPAGENT_CODE_CONTEXT_FEDERATION_SHADOW: "true" })),
+      )
+      expect(requested.contextFederationShadow).toBe(true)
+      expect(requested.contextProjectionV2).toBe(false)
+      expect(requested.contextQueryToolsV2).toBe(false)
+      expect(requested.coreV2ExecutionOwner).toBe(false)
+    }),
+  )
+
   it.effect("U5: background subagents default ON (stable local capability) and can be disabled with =false", () =>
     Effect.gen(function* () {
       const on = yield* readFlags.pipe(Effect.provide(fromConfig({})))
@@ -104,9 +131,7 @@ describe("RuntimeFlags", () => {
     Effect.gen(function* () {
       // turning ONE still-opt-in flag on must not affect others — operator advances rollout
       // capability by capability. Uses v4ThreadEnabled, which remains OFF-by-default.
-      const flags = yield* readFlags.pipe(
-        Effect.provide(fromConfig({ DEEPAGENT_CODE_V4_THREAD_ENABLED: "true" })),
-      )
+      const flags = yield* readFlags.pipe(Effect.provide(fromConfig({ DEEPAGENT_CODE_V4_THREAD_ENABLED: "true" })))
       expect(flags.v4ThreadEnabled).toBe(true)
       expect(flags.v4EventDrivenIm).toBe(false)
       expect(flags.v4FileUploadEnabled).toBe(false)

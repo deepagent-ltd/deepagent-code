@@ -500,10 +500,18 @@ export type TaskSubagentRunnerDeps = {
   readonly sessions: Session.Interface
   readonly agents: Agent.Interface
   readonly sessionPrompt: SessionPrompt.Interface
-  /** The parent (goal) session; the child is parented here and inherits its deny rules + directory. */
+  /** The parent session; the child is parented here and inherits its deny rules + directory. */
   readonly parentSessionID: SessionID
-  /** The model the goal runs on (providerID/modelID) — mirrors the task tool inheriting the model. */
+  /** The model the child runs on (providerID/modelID) — mirrors the task tool inheriting the model. */
   readonly model: { readonly providerID: string; readonly modelID: string }
+  /**
+   * Whether this caller may honor the subagent's PLAN_WRITE_OWN_GOAL capability. Defaults to false so
+   * generic and panel callers cannot accidentally grant plan writes. Goal start/resume and the cold goal
+   * tick port must opt in explicitly.
+   */
+  readonly allowPlanWriteCapability?: boolean
+  /** Labels the child session by its actual role rather than always calling it a goal-loop turn. */
+  readonly purpose?: "goal-loop" | "panel" | "generic"
 }
 
 /**
@@ -525,7 +533,7 @@ export const makeTaskSubagentRunner = (deps: TaskSubagentRunnerDeps): SubagentTu
 
       const child = yield* deps.sessions.create({
         parentID: deps.parentSessionID,
-        title: `${input.agentType} (goal-loop)`,
+        title: `${input.agentType} (${deps.purpose ?? "generic"})`,
         agent: next.name,
         // §F2 trace back-half — stamp the correlationID onto the child session's metadata; Observability
         // .trace reads it back (json_extract) and appends this child as a "session" node, so the trace
@@ -536,11 +544,9 @@ export const makeTaskSubagentRunner = (deps: TaskSubagentRunnerDeps): SubagentTu
           parentSessionPermission: parent.permission ?? [],
           parentAgent,
           subagent: next,
-          // §E/§F.3: this is the flag-gated opt-in call site (makeTaskSubagentRunner is only reached
-          // through makeGoalLoopWiring, which returns null unless experimentalGoalLoop is on). Honoring
-          // the PLAN_WRITE_OWN_GOAL capability HERE — and nowhere else — makes the flag the structural
-          // gate for the §E relaxation.
-          allowPlanWriteCapability: true,
+          // §E/§F.3: capability-bearing agents receive plan-write only when this runner's caller explicitly
+          // opts in. Goal start/resume and cold goal ticks pass true; panel/generic callers default false.
+          allowPlanWriteCapability: deps.allowPlanWriteCapability ?? false,
         }),
       })
 

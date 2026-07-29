@@ -103,12 +103,13 @@ describe("V4EventRuntime durable consumer-group lifecycle", () => {
   const registration = (flags: Partial<RuntimeFlags.Info>) =>
     V4EventRuntime.consumerRegistrationLayer.pipe(Layer.provide(RuntimeFlags.layer(flags)))
 
-  const fullRuntimeFlagsOff: Partial<RuntimeFlags.Info> = {
+  const fullRuntimeFlagsOff = {
     v4MultiAgentRuntime: false,
     v4EventDrivenIm: false,
     v4PanelAutoConvene: false,
     v4EventDrivenArchive: false,
     v4AgentPushEnabled: false,
+    v4GoalTickEventDriven: false,
   }
 
   const publish = (key: string): DeepAgentEvent.PublishInput => ({
@@ -119,6 +120,68 @@ describe("V4EventRuntime durable consumer-group lifecycle", () => {
     priority: "normal",
     payload: {},
   })
+
+  baseIt.effect("goal-tick-only mode activates daemon setup and registers only the tick group", () =>
+    Effect.gen(function* () {
+      const flags = { ...fullRuntimeFlagsOff, v4GoalTickEventDriven: true }
+      expect(V4EventRuntime.anyV4DaemonEnabled(flags)).toBe(true)
+      expect(V4EventRuntime.goalTickConsumerEnabled(flags)).toBe(true)
+
+      const busScope = yield* Scope.make()
+      const busContext = yield* Layer.build(
+        DeepAgentEventBus.layer.pipe(Layer.provideMerge(Database.layerFromPath(":memory:"))),
+      ).pipe(Scope.provide(busScope))
+      const bus = Context.get(busContext, DeepAgentEventBus.Service)
+      const registrationScope = yield* Scope.make()
+      yield* Layer.build(registration(flags)).pipe(
+        Scope.provide(registrationScope),
+        Effect.provide(busContext),
+      )
+
+      const goalTick = yield* bus.publish({
+        type: "goal.tick.requested",
+        source: "system",
+        workspaceID: "wrk_1",
+        idempotencyKey: "goal-tick-only",
+        priority: "normal",
+        payload: {},
+      })
+      const unrelated = yield* bus.publish(publish("goal-tick-only-unrelated"))
+      const due = yield* bus.dueRetries(Number.MAX_SAFE_INTEGER)
+      expect(
+        due.some(
+          (delivery) => delivery.eventID === goalTick.id && delivery.subscriptionGroup === "goal-tick-consumer",
+        ),
+      ).toBe(true)
+      expect(due.some((delivery) => delivery.eventID === unrelated.id && staleRuntimeGroups.includes(delivery.subscriptionGroup))).toBe(false)
+
+      yield* Scope.close(registrationScope, Exit.void)
+      yield* Scope.close(busScope, Exit.void)
+    }),
+  )
+
+  baseIt.effect("all-off mode leaves daemon setup and goal-tick consumer disabled", () =>
+    Effect.sync(() => {
+      expect(V4EventRuntime.anyV4DaemonEnabled(fullRuntimeFlagsOff)).toBe(false)
+      expect(V4EventRuntime.goalTickConsumerEnabled(fullRuntimeFlagsOff)).toBe(false)
+    }),
+  )
+
+  baseIt.effect("multi-agent mode still activates the goal-tick consumer", () =>
+    Effect.sync(() => {
+      const flags = { ...fullRuntimeFlagsOff, v4MultiAgentRuntime: true }
+      expect(V4EventRuntime.anyV4DaemonEnabled(flags)).toBe(true)
+      expect(V4EventRuntime.goalTickConsumerEnabled(flags)).toBe(true)
+    }),
+  )
+
+  baseIt.effect("multi-agent and goal-tick mode keeps the goal-tick consumer active", () =>
+    Effect.sync(() => {
+      const flags = { ...fullRuntimeFlagsOff, v4MultiAgentRuntime: true, v4GoalTickEventDriven: true }
+      expect(V4EventRuntime.anyV4DaemonEnabled(flags)).toBe(true)
+      expect(V4EventRuntime.goalTickConsumerEnabled(flags)).toBe(true)
+    }),
+  )
 
   baseIt.effect("enabled runtime registers its groups; a subsequent disabled startup removes only those historical groups", () =>
     Effect.gen(function* () {

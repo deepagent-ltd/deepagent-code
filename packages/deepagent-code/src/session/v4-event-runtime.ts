@@ -374,6 +374,8 @@ export const makeEventPanelPort = (deps: {
         sessionPrompt: deps.sessionPrompt,
         parentSessionID: root.id,
         model: { providerID: model.providerID, modelID: model.modelID },
+        allowPlanWriteCapability: false,
+        purpose: "panel",
       })
       const runTurn: PanelTurnRunner = (turnInput) =>
         withContext(
@@ -470,12 +472,27 @@ const runtimeLayer = Layer.unwrap(
 // ticks, and — critically — the RetentionSweeper does NOT run (it would otherwise prune events on a
 // 30-day TTL, a real behavior change). Flip a flag and restart to activate; per-event behavior remains
 // additionally flag-gated inside each daemon.
-const anyV4DaemonEnabled = (flags: RuntimeFlags.Info): boolean =>
+type GoalTickFlags = Pick<RuntimeFlags.Info, "v4MultiAgentRuntime" | "v4GoalTickEventDriven">
+type V4DaemonFlags = Pick<
+  RuntimeFlags.Info,
+  | "v4MultiAgentRuntime"
+  | "v4EventDrivenIm"
+  | "v4PanelAutoConvene"
+  | "v4AgentPushEnabled"
+  | "v4EventDrivenArchive"
+  | "v4GoalTickEventDriven"
+>
+
+export const goalTickConsumerEnabled = (flags: GoalTickFlags): boolean =>
+  flags.v4MultiAgentRuntime || flags.v4GoalTickEventDriven
+
+export const anyV4DaemonEnabled = (flags: V4DaemonFlags): boolean =>
   flags.v4MultiAgentRuntime ||
   flags.v4EventDrivenIm ||
   flags.v4PanelAutoConvene ||
   flags.v4AgentPushEnabled ||
-  flags.v4EventDrivenArchive
+  flags.v4EventDrivenArchive ||
+  flags.v4GoalTickEventDriven
 
 // Register the durable delivery policy before any V4 publisher can emit. `Layer.mergeAll` starts
 // components concurrently, so relying on each consumer's live subscribe stream loses first-start events.
@@ -493,7 +510,7 @@ const runtimeConsumerGroups: ReadonlyArray<RuntimeConsumerGroup> = [
   {
     id: TICK_GROUP,
     typeFilter: LMNEvents.GOAL_TICK_REQUESTED,
-    enabled: (flags) => flags.v4MultiAgentRuntime,
+    enabled: goalTickConsumerEnabled,
   },
   { id: CONVENE_GROUP, enabled: (flags) => flags.v4PanelAutoConvene },
   { id: ARCHIVE_GROUP, enabled: (flags) => flags.v4EventDrivenArchive || flags.v4MultiAgentRuntime },
@@ -772,10 +789,10 @@ const panelConsumerLayer = Layer.unwrap(
 // SessionRevert / SessionSteer / LSP / EventV2Bridge for the rollback / goal-steer / diagnostics / SSE
 // ports, all from the shared graph.
 //
-// FLAG COUPLING: runLoop = v4MultiAgentRuntime (the master event-driven switch — the goal-manager's
-// dual-path start publishes the FIRST command only on this flag). Default posture matches the flag: with
-// it off, runLoop is false ⇒ NO subscription ⇒ the "goal-tick-consumer" group is never registered ⇒ no
-// pending-row pileup, and handle() additionally acks-and-drives-nothing on a stray delivery.
+// FLAG COUPLING: runLoop = v4MultiAgentRuntime || v4GoalTickEventDriven. GoalManager seeds the command
+// chain under either flag, so the consumer and its durable group must activate under the same predicate.
+// With both off, runLoop is false ⇒ NO subscription ⇒ no pending-row pileup, and handle() additionally
+// acks-and-drives-nothing on a stray delivery.
 const goalTickConsumerLayer = Layer.unwrap(
   Effect.gen(function* () {
     const flags = yield* RuntimeFlags.Service
@@ -805,7 +822,10 @@ const goalTickConsumerLayer = Layer.unwrap(
       flags,
       goalStoreRoot,
     })
-    return GoalTickConsumer.layerWith({ runTick, runLoop: flags.v4MultiAgentRuntime })
+    return GoalTickConsumer.layerWith({
+      runTick,
+      runLoop: goalTickConsumerEnabled(flags),
+    })
   }),
 )
 
@@ -842,11 +862,11 @@ export const layer = Layer.mergeAll(
   // All flag-gated on v4AgentPushEnabled; inert (no push, no flush) when off. Draws DeepAgentEventBus /
   // Database / WorkspaceConfig / IMRepository / RuntimeFlags from the shared graph.
   pushStackLayer,
-  // V4.1 §N — the event-driven goal-tick consumer. Gated on v4MultiAgentRuntime (see goalTickConsumerLayer).
-  // Shares the ONE DeepAgentEventBus + ApprovalQueue + session stack with the rest of the runtime.
+  // V4.1 §N — the event-driven goal-tick consumer. Gated on v4MultiAgentRuntime ||
+  // v4GoalTickEventDriven (see goalTickConsumerLayer). Shares the ONE DeepAgentEventBus + ApprovalQueue +
+  // session stack with the rest of the runtime.
   goalTickConsumerLayer,
 ).pipe(
   Layer.provideMerge(consumerRegistrationLayer),
   Layer.provideMerge(runtimeLayer),
 )
-

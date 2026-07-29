@@ -45,6 +45,18 @@ export function validatedToolInputSchema(parameters: Schema.Decoder<unknown>, wi
   })
 }
 
+export function mcpResultError(
+  toolName: string,
+  result: { isError?: boolean; content: ReadonlyArray<{ type: string; text?: string }> },
+) {
+  if (!result.isError) return
+  const message = result.content
+    .flatMap((item) => (item.type === "text" && typeof item.text === "string" ? [item.text] : []))
+    .join("\n\n")
+    .trim()
+  return new Error(message || `MCP tool ${toolName} returned an error`)
+}
+
 // U1 PlanController gate: a HookPolicy with the before_tool_use plan gate. The current policy lets
 // tools execute and keeps stale-plan warnings in runtime logs; finalization owns plan enforcement.
 // The defensive block path remains for a future safety hook that explicitly denies execution.
@@ -210,6 +222,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
     modelID: ModelV2.ID.make(input.model.api.id),
     providerID: input.model.providerID,
     agent: input.agent,
+    projectScopeKey: input.session.projectID,
   })) {
     const schema = ProviderTransform.schema(input.model, ToolJsonSchema.fromTool(item))
     const aiToolDef: AITool = tool({
@@ -360,6 +373,8 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
               },
             }),
           )
+          const executionError = mcpResultError(key, result)
+          if (executionError) return yield* Effect.fail(executionError)
           yield* plugin.trigger(
             "tool.execute.after",
             { tool: key, sessionID: ctx.sessionID, callID: opts.toolCallId, args },
