@@ -44,10 +44,10 @@ import { SessionSteer } from "./steer"
 import { EventV2Bridge } from "@/event-v2-bridge"
 // §C3 (P2.9) — file locks + code-graph symbols.
 import { FileLock } from "@deepagent-code/core/file-lock"
-import { openProjectStore } from "@deepagent-code/core/deepagent/durable-knowledge-store"
-import { symbolsForFilePaths } from "@deepagent-code/core/deepagent/code-indexer"
-import { resolveDeepAgentCodeHome } from "@deepagent-code/core/deepagent/workspace"
+import { LocationIndexRuntime } from "@/location-index/runtime"
+import { LocationIndexCoordinator } from "@/location-index/coordinator"
 import * as Log from "@deepagent-code/core/util/log"
+import path from "node:path"
 // §C3.2 (P4.5a) — physical per-agent worktree isolation (git-CLI helper; fail-safe → event dir).
 import { createAgentWorktree, cleanupAgentWorktree, type AgentWorktree } from "./agent-worktree"
 
@@ -74,6 +74,27 @@ const log = Log.create({ service: "v4-event-runtime" })
 const EVENT_TURN_TIMEOUT_MS = 10 * 60 * 1000
 
 const failedTurn = (): SubagentTurnResult => ({ ok: false, structured: undefined, text: "", tokensUsed: 0, cost: 0 })
+
+export const resolveCodeGraphSymbols = (input: {
+  readonly coordinator: LocationIndexCoordinator.Interface
+  readonly canonicalRoot: string
+  readonly files: readonly string[]
+}) => Effect.gen(function* () {
+  const normalized = input.files.map((file) => {
+    const relative = path.isAbsolute(file) ? path.relative(input.canonicalRoot, file) : file
+    return relative.replaceAll("\\", "/").replace(/^\.\//, "")
+  })
+  const found = yield* Effect.forEach(
+    normalized,
+    (file) => input.coordinator.searchCode({ query: file, limit: 100 }),
+    { concurrency: 4 },
+  )
+  const wanted = new Set(normalized)
+  return [...new Set(found.flatMap((result) => result.hits).flatMap((hit) => {
+    if (!hit.file || !hit.symbol || !wanted.has(hit.file.path)) return []
+    return [`${hit.file.path}#${hit.symbol.symbolPath}`]
+  }))]
+})
 
 // The production SubagentTurnRunner for event-driven dispatch. Unlike the goal-loop runner (which
 // parents each turn to a fixed goal session), an event has no parent session — so this creates a fresh
@@ -388,6 +409,7 @@ const runtimeLayer = Layer.unwrap(
     const provider = yield* Provider.Service
     const instanceStore = yield* InstanceStore.Service
     const concurrency = yield* WorkspaceConcurrency.Service
+    const locationIndexes = yield* LocationIndexRuntime.Service
     // §E1 — the PRODUCTION security resolvers. Without these the four-layer gate is default-OPEN (L1/L2/L4
     // resolve to trusted/permitted/allowed unconditionally); injecting them makes L1 (event-source trust),
     // L2 (actor workspace permission) and L4 (runtime operation pre-gate) evaluate REAL facts and FAIL
@@ -416,21 +438,18 @@ const runtimeLayer = Layer.unwrap(
       runner,
       concurrency,
       fileLock,
-      // §C3.3 — feed the arbiter's semantic layer. Best-effort: open the event directory's project store
-      // and read the code-graph symbol keys hosted by the subtask's files. A bare "wrk"-id (not a real
-      // path) OR any store/config failure resolves to [] so file-level conflict detection still holds.
+      // §C3.3 — feed the arbiter from the Location-owned CodeGraph snapshot. This is best-effort:
+      // a cold/disabled index or any query failure resolves to [] so file-level conflict detection holds.
       symbolsForFiles: (event, files) =>
         Effect.gen(function* () {
           if (files.length === 0) return [] as ReadonlyArray<string>
-          const directory =
-            typeof (event.payload as { directory?: unknown } | null)?.directory === "string"
-              ? (event.payload as { directory: string }).directory
-              : event.workspaceID && !event.workspaceID.startsWith("wrk")
-                ? event.workspaceID
-                : undefined
-          if (!directory) return [] as ReadonlyArray<string>
-          const store = openProjectStore(resolveDeepAgentCodeHome(), directory)
-          return yield* symbolsForFilePaths(store, files)
+          const handle = yield* locationIndexes.current()
+          if (!handle) return [] as ReadonlyArray<string>
+          return yield* resolveCodeGraphSymbols({
+            coordinator: handle.coordinator,
+            canonicalRoot: handle.identity.canonicalRoot,
+            files,
+          })
         }).pipe(Effect.catchCause(() => Effect.succeed([] as ReadonlyArray<string>))),
       trustedSourcesFor: (event) => sec.resolveTrustedSources(event.workspaceID),
       actorHasPermission: (event, agent) =>

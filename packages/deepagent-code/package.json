@@ -25,6 +25,11 @@
     "./*": "./src/*.ts"
   },
   "imports": {
+    "#location-index-sqlite": {
+      "bun": "./src/location-index/sqlite.bun.ts",
+      "node": "./src/location-index/sqlite.node.ts",
+      "default": "./src/location-index/sqlite.bun.ts"
+    },
     "#db": {
       "bun": "./src/storage/db.bun.ts",
       "node": "./src/storage/db.node.ts",
@@ -128,8 +133,10 @@
     "glob": "13.0.5",
     "google-auth-library": "10.5.0",
     "gray-matter": "4.0.3",
+    "marked": "catalog:",
     "htmlparser2": "8.0.2",
     "immer": "11.1.4",
+    "ignore": "7.0.5",
     "jsonc-parser": "3.3.1",
     "mime-types": "3.0.2",
     "minimatch": "10.2.3",

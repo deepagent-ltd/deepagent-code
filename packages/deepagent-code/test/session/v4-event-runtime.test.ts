@@ -18,6 +18,7 @@ import type { SessionPrompt } from "../../src/session/prompt"
 import { SessionID } from "../../src/session/schema"
 import { ProviderV2 } from "@deepagent-code/core/provider"
 import { ModelV2 } from "@deepagent-code/core/model"
+import type { LocationIndexCoordinator } from "../../src/location-index/coordinator"
 import { it as baseIt, testEffect, pollWithTimeout } from "../lib/effect"
 
 // V4.0 — proves the production event-runtime layer BUILDS and starts its scoped daemons without error
@@ -32,6 +33,39 @@ import { it as baseIt, testEffect, pollWithTimeout } from "../lib/effect"
 // tears down cleanly, and that the bus it shares is the one events land on.
 
 const database = Database.layerFromPath(":memory:")
+
+describe("V4EventRuntime CodeGraph conflict evidence", () => {
+  baseIt.effect("resolves only requested-file symbols from the Location snapshot", () =>
+    Effect.gen(function* () {
+      const coordinator = {
+        searchCode: ({ query }: { query: string }) => Effect.succeed({
+          revision: undefined,
+          hits: [
+            {
+              entity: {},
+              file: { path: query },
+              symbol: { symbolPath: "run" },
+              score: 1,
+            },
+            {
+              entity: {},
+              file: { path: "src/unrelated.ts" },
+              symbol: { symbolPath: "ignore" },
+              score: 1,
+            },
+          ],
+        }),
+      } as unknown as LocationIndexCoordinator.Interface
+
+      const symbols = yield* V4EventRuntime.resolveCodeGraphSymbols({
+        coordinator,
+        canonicalRoot: "/repo",
+        files: ["/repo/src/a.ts", "./src/b.ts"],
+      })
+      expect(symbols).toEqual(["src/a.ts#run", "src/b.ts#run"])
+    }),
+  )
+})
 
 describe("V4EventRuntime.layer", () => {
   // We can't build the full layer here (it requires the session stack), but we CAN assert the exported
