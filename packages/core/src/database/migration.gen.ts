@@ -55,5 +55,9 @@ export const migrations = (
     import("./migration/20260719000000_deepagent_consumer_group"),
     import("./migration/20260722000000_session_steer_correlation"),
     import("./migration/20260724134000_task_run_delivery"),
+    import("./migration/20260726063857_context_identity"),
+    import("./migration/20260726070000_context_activity"),
+    import("./migration/20260726073000_context_links"),
+    import("./migration/20260726080000_location_change_journal"),
   ])
 ).map((module) => module.default) satisfies DatabaseMigration.Migration[]
