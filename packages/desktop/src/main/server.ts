@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url"
 import { app, utilityProcess } from "electron"
 import type { Details } from "electron"
 import { getLogger } from "./logging"
-import { getUserShell, loadShellEnv } from "./shell-env"
+import { getUserShell, loadShellEnv, shouldLoadShellEnv } from "./shell-env"
 import { getStore } from "./store"
 import { DEFAULT_SERVER_URL_KEY } from "./store-keys"
 
@@ -46,7 +46,7 @@ export function setDefaultServerUrl(url: string | null) {
 }
 
 export function preferAppEnv(userDataPath: string) {
-  const shell = process.platform === "win32" ? null : getUserShell()
+  const shell = process.platform === "win32" || !shouldLoadShellEnv() ? null : getUserShell()
   Object.assign(process.env, {
     ...(shell ? loadShellEnv(shell, getLogger()) : null),
     DEEPAGENT_CODE_EXPERIMENTAL_ICON_DISCOVERY: "true",

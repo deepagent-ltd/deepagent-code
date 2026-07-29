@@ -2005,6 +2005,61 @@ describe("run stream transport", () => {
     }
   })
 
+  test("forwards intelligence metadata exactly through the session prompt path", async () => {
+    const src = eventFeed()
+    const ui = footer()
+    const seen: unknown[] = []
+    const metadata = {
+      deepagent: {
+        prompt_pipeline: {
+          mode: "intelligence",
+        },
+      },
+    }
+
+    const transport = await createSessionTransport({
+      sdk: sdk({
+        stream: src.stream,
+        promptAsync: async (input) => {
+          seen.push(input)
+          queueMicrotask(() => {
+            src.push(busy())
+            src.push(idle())
+          })
+          return ok(undefined)
+        },
+      }),
+      sessionID: "session-1",
+      thinking: true,
+      limits: () => ({}),
+      footer: ui.api,
+    })
+
+    try {
+      await transport.runPromptTurn({
+        agent: undefined,
+        model: undefined,
+        variant: undefined,
+        prompt: { text: "hello", metadata, parts: [] },
+        files: [],
+        includeFiles: true,
+      })
+
+      expect(seen).toHaveLength(1)
+      expect(seen[0]).toEqual({
+        sessionID: "session-1",
+        agent: undefined,
+        model: undefined,
+        variant: undefined,
+        metadata,
+        parts: [{ type: "text", text: "hello" }],
+      })
+    } finally {
+      src.close()
+      await transport.close()
+    }
+  })
+
   test("respects the includeFiles flag when building prompt payloads", async () => {
     const src = eventFeed()
     const ui = footer()

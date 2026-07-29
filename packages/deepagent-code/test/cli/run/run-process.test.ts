@@ -5,6 +5,7 @@
 // `DEEPAGENT_CODE_CONFIG_CONTENT` providing the test provider config inline.
 import { describe, expect } from "bun:test"
 import { Effect } from "effect"
+import path from "node:path"
 import { cliIt } from "../../lib/cli-process"
 
 describe("deepagentCode run (non-interactive subprocess)", () => {
@@ -18,6 +19,42 @@ describe("deepagentCode run (non-interactive subprocess)", () => {
         const result = yield* deepagentCode.run("say hi")
         deepagentCode.expectExit(result, 0)
         expect(result.stdout).toContain("hello from the test llm")
+      }),
+    60_000,
+  )
+
+  cliIt.concurrent(
+    "auto-approves an asked permission without human input when explicitly requested",
+    ({ llm, home, deepagentCode }) =>
+      Effect.gen(function* () {
+        const target = path.join(home, ".env")
+        yield* Effect.promise(() => Bun.write(target, "UNATTENDED_PERMISSION_MARKER\n"))
+        yield* llm.tool("read", { filePath: target })
+        yield* llm.text("permission flow completed")
+
+        const result = yield* deepagentCode.run("read the marker", {
+          format: "json",
+          extraArgs: ["--dangerously-skip-permissions"],
+        })
+        deepagentCode.expectExit(result, 0)
+
+        const events = deepagentCode.parseJsonEvents(result.stdout)
+        expect(events).toContainEqual(
+          expect.objectContaining({
+            type: "permission",
+            reply: "once",
+          }),
+        )
+        expect(
+          events.some(
+            (event) =>
+              event.type === "tool_use" &&
+              typeof event.part === "object" &&
+              event.part !== null &&
+              "tool" in event.part &&
+              event.part.tool === "read",
+          ),
+        ).toBe(true)
       }),
     60_000,
   )
@@ -41,19 +78,13 @@ describe("deepagentCode run (non-interactive subprocess)", () => {
     30_000,
   )
 
-  // Locks in the current behavior: when the LLM stream errors mid-response
-  // (the prompt was accepted, then the upstream provider failed), deepagentCode
-  // emits a session.error event and the process exits 0 today.
-  //
-  // This is debatable — a future cleanup might flip it to exit 1. If you're
-  // changing this expectation, do it deliberately and say so in the PR.
   cliIt.concurrent(
-    "mid-stream LLM error still exits 0 today (contract lock-in)",
+    "exits nonzero when the LLM stream fails mid-response",
     ({ llm, deepagentCode }) =>
       Effect.gen(function* () {
         yield* llm.fail("upstream provider exploded mid-stream")
         const result = yield* deepagentCode.run("trigger midstream error", { timeoutMs: 30_000 })
-        expect(result.exitCode).toBe(0)
+        expect(result.exitCode).not.toBe(0)
       }),
     60_000,
   )
@@ -78,6 +109,23 @@ describe("deepagentCode run (non-interactive subprocess)", () => {
         // At least one `text` event should appear with the LLM's response.
         const text = events.find((e) => e.type === "text")
         expect(text).toBeDefined()
+      }),
+    60_000,
+  )
+
+  cliIt.concurrent(
+    "resolves attachments from the real cwd when inherited PWD is stale",
+    ({ llm, home, deepagentCode }) =>
+      Effect.gen(function* () {
+        yield* Effect.promise(() => Bun.write(path.join(home, "attachment.txt"), "ATTACHMENT_MARKER\n"))
+        yield* llm.text("attachment accepted")
+
+        const result = yield* deepagentCode.spawn(
+          ["run", "inspect the attachment", "--model", "test/test-model", "--file", "attachment.txt"],
+          { env: { PWD: path.join(home, "stale-pwd") } },
+        )
+        deepagentCode.expectExit(result, 0)
+        expect(result.stdout).toContain("attachment accepted")
       }),
     60_000,
   )
