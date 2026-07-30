@@ -150,6 +150,18 @@ function buildStructuredOutputSystemPrompt(schema: Record<string, any>): string 
   return `IMPORTANT: The user has requested structured output. You MUST use the StructuredOutput tool to provide your final response. Do NOT respond with plain text - you MUST call the StructuredOutput tool with your answer formatted according to the schema.${fieldHint}`
 }
 
+function buildStructuredOutputRuntimeTail(format: SessionV1.OutputFormat, finalizerMode: boolean): string {
+  if (format.type !== "json_schema") return ""
+  return [
+    buildStructuredOutputSystemPrompt(format.schema),
+    finalizerMode
+      ? "This is a bounded finalizer turn. Read the supplied research result and call StructuredOutput once. No research or other work is permitted."
+      : "",
+  ]
+    .filter(Boolean)
+    .join("\n")
+}
+
 function extractSchemaTopLevelFields(schema: Record<string, any>): string[] {
   if (!schema || typeof schema !== "object") return []
   const props = schema.properties
@@ -2477,6 +2489,12 @@ export const layer = Layer.effect(
               overflow: task.overflow,
             })
             if (result === "stop") break
+            // Inject volatile state only after the compaction summary is durable. Injecting it when the
+            // compaction marker is created makes this synthetic user message the next iteration's lastUser,
+            // so compaction.process pairs the summary with the wrong parent and the marker never becomes a
+            // completed compaction boundary.
+            if (task.auto && flags.worldStateReinjection)
+              yield* injectWorldStateTail(sessionID, ctx.directory, lastUser.model, lastUser.agent)
             continue
           }
 
@@ -2545,11 +2563,6 @@ export const layer = Layer.effect(
                 // recovers into the fresh window (the durable write is the世代 marker).
                 yield* writeSoftLandingState(sessionID, nextState)
                 yield* compaction.create({ sessionID, agent: lastUser.agent, model: lastUser.model, auto: true })
-                // P1 §3.3: re-inject the latest World State as a TAIL block right after the hard compaction
-                // so the model sees current file/env values, not the summary's (now-narrowed) stale ones.
-                // Ordered after compaction.create ⇒ higher message id ⇒ sits at the tail after the summary.
-                if (flags.worldStateReinjection)
-                  yield* injectWorldStateTail(sessionID, ctx.directory, lastUser.model, lastUser.agent)
                 continue
               }
               // action === "none": fallback already delivered this epoch (still under hard line), reminder
@@ -2695,23 +2708,13 @@ export const layer = Layer.effect(
               model,
               { terminalBoundaryID },
             )
-            const system = finalizerMode
-              ? [
-                  buildStructuredOutputSystemPrompt(format.type === "json_schema" ? format.schema : {}),
-                  "This is a bounded finalizer turn. Read the supplied research result and call StructuredOutput once. No research or other work is permitted.",
-                ]
-              : yield* Effect.all([
-                  sys.skills(agent),
-                  sys.environment(model),
-                  instruction.system().pipe(Effect.orDie),
-                ]).pipe(
-                  Effect.map(([skills, env, instructions]) => [...env, ...instructions, ...(skills ? [skills] : [])]),
-                )
-            // P1: inject schema-aware prompt so the model knows the exact field names even
-            // during extended-thinking (xhigh) reasoning where the tool definition may not
-            // be immediately visible when the model starts generating its thinking tokens.
-            if (!finalizerMode && format.type === "json_schema")
-              system.push(buildStructuredOutputSystemPrompt(format.schema))
+            const system = yield* Effect.all([
+              sys.skills(agent),
+              sys.environment(model),
+              instruction.system().pipe(Effect.orDie),
+            ]).pipe(
+              Effect.map(([skills, env, instructions]) => [...env, ...instructions, ...(skills ? [skills] : [])]),
+            )
             activeContext =
               federation && sessionFederationRollout.enabled.contextFederationShadow && !finalizerMode
                 ? yield* federation
@@ -2735,6 +2738,16 @@ export const layer = Layer.effect(
                 : undefined
             if (activeContext) activeFederatedContexts.set(sessionID, activeContext)
             pendingContextInputIds = []
+            const projectedContext =
+              sessionFederationRollout.enabled.contextProjectionV2 && activeContext?.selection.projection
+                ? activeContext.selection.projection
+                : ""
+            // Schema/finalizer guidance changes per request and must not enter the provider-cached
+            // system prefix. Keep it in the same ephemeral tail used for other volatile runtime
+            // context; the durable user prompt and the StructuredOutput tool remain the hard gates.
+            const runtimeTail = [buildStructuredOutputRuntimeTail(format, finalizerMode), projectedContext]
+              .filter(Boolean)
+              .join("\n\n")
             const streamInput: LLM.StreamInput = {
               user: lastUser,
               agent,
@@ -2747,13 +2760,8 @@ export const layer = Layer.effect(
               model,
               toolChoice: finalizerDecision?.toolChoice ?? (format.type === "json_schema" ? "required" : undefined),
               reasoning: finalizerDecision?.reasoning,
-              ...(sessionFederationRollout.enabled.contextProjectionV2 && activeContext?.selection.projection
-                ? {
-                    runtimeTail: activeContext.selection.projection,
-                    federatedProjection: true,
-                    durableAttempt: true,
-                  }
-                : {}),
+              ...(runtimeTail ? { runtimeTail } : {}),
+              ...(projectedContext ? { federatedProjection: true, durableAttempt: true } : {}),
               ...(!sessionFederationRollout.enabled.contextProjectionV2 && activeContext
                 ? {
                     federatedShadow: activeContext.selection.selectedRefs.reduce(
@@ -2881,10 +2889,6 @@ export const layer = Layer.effect(
                 auto: true,
                 overflow: !handle.message.finish,
               })
-              // P1 §3.3: re-inject the latest World State as a TAIL block right after this hard rollover
-              // (same responsibility-separation intent as the turn-start branch). Gated by the same flag.
-              if (flags.worldStateReinjection)
-                yield* injectWorldStateTail(sessionID, ctx.directory, lastUser.model, lastUser.agent)
             }
             return "continue" as const
           }).pipe(
@@ -3478,8 +3482,7 @@ function stableJson(value: unknown, seen = new WeakSet<object>()): string {
 }
 
 /** @internal Exported for testing */
-/** @internal Exported for testing */
-export { buildStructuredOutputSystemPrompt, extractSchemaTopLevelFields }
+export { buildStructuredOutputRuntimeTail, buildStructuredOutputSystemPrompt, extractSchemaTopLevelFields }
 
 export function createStructuredOutputTool(input: {
   schema: Record<string, any>

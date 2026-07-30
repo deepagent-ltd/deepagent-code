@@ -29,6 +29,7 @@ import { AgentGateway } from "@deepagent-code/core/agent-gateway"
 import { ToolSemanticFingerprint } from "@/tool/semantic-fingerprint"
 
 const log = Log.create({ service: "session.tools" })
+const DEFAULT_SUBAGENT_PERMISSION_TIMEOUT_MS = 60_000
 
 export function validatedToolInputSchema(parameters: Schema.Decoder<unknown>, wireSchema: JSONSchema7) {
   const decode = Schema.decodeUnknownResult(parameters)
@@ -145,6 +146,9 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
           sessionID: input.session.id,
           tool: { messageID: input.processor.message.id, callID: options.toolCallId },
           ruleset: Permission.merge(input.agent.permission, input.session.permission ?? []),
+          ...(input.session.parentID
+            ? { timeoutMs: flags.subagentPermissionTimeoutMs ?? DEFAULT_SUBAGENT_PERMISSION_TIMEOUT_MS }
+            : {}),
         })
         .pipe(Effect.orDie),
   })

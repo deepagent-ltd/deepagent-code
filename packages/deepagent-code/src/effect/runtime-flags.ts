@@ -61,6 +61,7 @@ export class Service extends ConfigService.Service<Service>()("@deepagent-code/R
   subagentResearchTokenLimit: positiveInteger("DEEPAGENT_CODE_SUBAGENT_RESEARCH_TOKEN_LIMIT"),
   subagentResearchWallMs: positiveInteger("DEEPAGENT_CODE_SUBAGENT_RESEARCH_WALL_MS"),
   subagentNoProgressLimit: positiveInteger("DEEPAGENT_CODE_SUBAGENT_NO_PROGRESS_LIMIT"),
+  subagentPermissionTimeoutMs: positiveInteger("DEEPAGENT_CODE_SUBAGENT_PERMISSION_TIMEOUT_MS"),
   experimentalLspTy: bool("DEEPAGENT_CODE_EXPERIMENTAL_LSP_TY"),
   experimentalLspTool: enabledByExperimental("DEEPAGENT_CODE_EXPERIMENTAL_LSP_TOOL"),
   // V3.8 App-A C2.5 (Stage 5): query_log tool — lets the agent retrieve slices of the append-only
@@ -113,11 +114,16 @@ export class Service extends ConfigService.Service<Service>()("@deepagent-code/R
   ),
   contextFederationRolloutPercent: Config.number("DEEPAGENT_CODE_CONTEXT_FEDERATION_ROLLOUT_PERCENT").pipe(
     Config.withDefault(0),
-    Config.map((value) => Number.isFinite(value) ? Math.max(0, Math.min(100, value)) : 0),
+    Config.map((value) => (Number.isFinite(value) ? Math.max(0, Math.min(100, value)) : 0)),
   ),
   contextFederationInternalProjects: Config.string("DEEPAGENT_CODE_CONTEXT_FEDERATION_INTERNAL_PROJECTS").pipe(
     Config.withDefault(""),
-    Config.map((value) => value.split(",").map((project) => project.trim()).filter(Boolean)),
+    Config.map((value) =>
+      value
+        .split(",")
+        .map((project) => project.trim())
+        .filter(Boolean),
+    ),
   ),
   // V3.9 §C: Expert Panel（会诊机制）— differentiated expert lenses answer one frozen high-risk
   // question independently, aggregated by a deterministic non-LLM Arbiter. SHIPS ON by default (mode

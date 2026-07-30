@@ -2,7 +2,7 @@ import { ConfigPermissionV1 } from "@deepagent-code/core/v1/config/permission"
 import { InstanceState } from "@/effect/instance-state"
 import * as Log from "@deepagent-code/core/util/log"
 import { Wildcard } from "@deepagent-code/core/util/wildcard"
-import { Deferred, Effect, Layer, Context } from "effect"
+import { Deferred, Duration, Effect, Layer, Context, Option } from "effect"
 import os from "os"
 import { PermissionV1 } from "@deepagent-code/core/v1/permission"
 import { EventV2Bridge } from "@/event-v2-bridge"
@@ -22,8 +22,12 @@ export const Event = {
   }),
 }
 
+export type AskInput = PermissionV1.AskInput & {
+  timeoutMs?: number
+}
+
 export interface Interface {
-  readonly ask: (input: PermissionV1.AskInput) => Effect.Effect<void, PermissionV1.Error>
+  readonly ask: (input: AskInput) => Effect.Effect<void, PermissionV1.Error>
   readonly reply: (input: PermissionV1.ReplyInput) => Effect.Effect<void, PermissionV1.NotFoundError>
   readonly list: () => Effect.Effect<ReadonlyArray<PermissionV1.Request>>
 }
@@ -77,9 +81,9 @@ export const layer = Layer.effect(
       }),
     )
 
-    const ask = Effect.fn("Permission.ask")(function* (input: PermissionV1.AskInput) {
+    const ask = Effect.fn("Permission.ask")(function* (input: AskInput) {
       const { approved, pending } = yield* InstanceState.get(state)
-      const { ruleset, ...request } = input
+      const { ruleset, timeoutMs, ...request } = input
       let needsAsk = false
 
       for (const pattern of request.patterns) {
@@ -112,7 +116,31 @@ export const layer = Layer.effect(
       pending.set(id, { info, deferred })
       yield* events.publish(Event.Asked, info)
       return yield* Effect.ensuring(
-        Deferred.await(deferred),
+        Effect.gen(function* () {
+          if (timeoutMs === undefined) return yield* Deferred.await(deferred)
+          const result = yield* Deferred.await(deferred).pipe(
+            Effect.as(true),
+            Effect.timeoutOption(Duration.millis(Math.max(1, timeoutMs))),
+          )
+          if (Option.isSome(result)) return
+
+          // A concurrent human reply removes the entry before completing the deferred. In that narrow
+          // race, the human decision owns settlement; only the fiber that deletes the pending entry may
+          // publish the synthetic rejection.
+          if (!pending.delete(id)) return yield* Deferred.await(deferred)
+          log.warn("permission request timed out", {
+            id,
+            sessionID: info.sessionID,
+            permission: info.permission,
+            timeoutMs,
+          })
+          yield* events.publish(Event.Replied, {
+            sessionID: info.sessionID,
+            requestID: id,
+            reply: "reject",
+          })
+          return yield* new PermissionV1.RejectedError()
+        }),
         Effect.sync(() => {
           pending.delete(id)
         }),

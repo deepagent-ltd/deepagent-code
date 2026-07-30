@@ -133,6 +133,9 @@ describe("task structured finalizer", () => {
     expect(calls[1]?.format?.type).toBe("json_schema")
     expect(calls[1]?.tools).toBeUndefined()
     expect(calls[1]?.metadata?.deepagent).toMatchObject({ structured_finalizer: { attempt: 1 } })
+    expect(calls[1]?.parts[0]?.type === "text" ? calls[1].parts[0].text : "").toContain(
+      "Preserve exact evidence identifiers, literals, paths, and values",
+    )
   })
 
   test("plain-text finalizer outcomes consume the two-attempt budget", async () => {

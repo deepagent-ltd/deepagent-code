@@ -1,7 +1,9 @@
 import { afterEach, describe, expect } from "bun:test"
 import { SessionV1 } from "@deepagent-code/core/v1/session"
 import { Database } from "@deepagent-code/core/database/database"
+import { FSUtil } from "@deepagent-code/core/fs-util"
 import { Deferred, Effect, Exit, Fiber, Layer } from "effect"
+import { mkdir, mkdtemp, rm, symlink } from "node:fs/promises"
 import { Agent } from "../../src/agent/agent"
 import { BackgroundJob } from "@/background/job"
 import { EventV2Bridge } from "@/event-v2-bridge"
@@ -17,6 +19,7 @@ import { TaskTool, type TaskPromptOps } from "../../src/tool/task"
 import { Truncate } from "@/tool/truncate"
 import { ToolRegistry } from "@/tool/registry"
 import { RuntimeFlags } from "@/effect/runtime-flags"
+import { Worktree } from "@/worktree"
 import { disposeAllInstances } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 import { ProviderV2 } from "@deepagent-code/core/provider"
@@ -56,6 +59,22 @@ const layer = (flags: Partial<RuntimeFlags.Info> = {}) =>
 
 const it = testEffect(layer())
 const background = testEffect(layer({ experimentalBackgroundSubagents: true }))
+const worktreeFixture = { directory: "" }
+const worktreeIsolation = testEffect(
+  Layer.mergeAll(
+    layer(),
+    Layer.mock(Worktree.Service, {
+      create: () =>
+        Effect.sync(() => ({
+          name: "canonical-path-test",
+          branch: "deepagent-code/canonical-path-test",
+          directory: worktreeFixture.directory,
+        })),
+      remove: () => Effect.succeed(true),
+      safeRemove: () => Effect.succeed(true),
+    }),
+  ),
+)
 // U5: background subagents are ON by default now; this variant explicitly disables them to assert
 // the rejection path still works when a user opts out.
 const noBackground = testEffect(layer({ experimentalBackgroundSubagents: false }))
@@ -543,6 +562,51 @@ describe("tool.task", () => {
       expect(result.output).toContain(`<task id="${result.metadata.sessionId}" state="completed">`)
       expect(seen?.sessionID).toBe(result.metadata.sessionId)
     }),
+  )
+
+  worktreeIsolation.instance("persists the canonical worktree directory on the child session", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(async () => {
+        const root = await mkdtemp("/tmp/deepagent-code-task-worktree-")
+        const target = `${root}/target`
+        const alias = `${root}/alias`
+        await mkdir(target)
+        await symlink(target, alias, process.platform === "win32" ? "junction" : "dir")
+        worktreeFixture.directory = alias
+        return { root, target, alias }
+      }),
+      ({ target, alias }) =>
+        Effect.gen(function* () {
+          const sessions = yield* Session.Service
+          const { chat, assistant } = yield* seed()
+          const tool = yield* TaskTool
+          const def = yield* tool.init()
+
+          const result = yield* def.execute(
+            {
+              description: "inspect isolated bug",
+              prompt: "look into the cache key path",
+              subagent_type: "general",
+              isolation: "worktree",
+            },
+            {
+              sessionID: chat.id,
+              messageID: assistant.id,
+              agent: "build",
+              abort: new AbortController().signal,
+              extra: { promptOps: stubOps() },
+              messages: [],
+              metadata: () => Effect.void,
+              ask: () => Effect.void,
+            },
+          )
+
+          const child = yield* sessions.get(result.metadata.sessionId)
+          expect(child.directory).toBe(FSUtil.resolve(target))
+          expect(child.directory).not.toBe(alias)
+        }),
+      ({ root }) => Effect.promise(() => rm(root, { recursive: true, force: true })),
+    ),
   )
 
   it.instance(

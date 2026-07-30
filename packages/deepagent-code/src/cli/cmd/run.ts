@@ -11,7 +11,8 @@ import type { PermissionV1 } from "@deepagent-code/core/v1/permission"
 //
 // Also supports `--command` for slash-command execution, `--format json` for
 // raw event streaming, `--continue` / `--session` for session resumption,
-// and `--fork` for forking before continuing.
+// `--fork` for forking before continuing, and `--goal --agent loop` for a
+// scriptable Goal Loop lifecycle that exits only after a terminal goal event.
 import type { Argv } from "yargs"
 import path from "path"
 import { pathToFileURL } from "url"
@@ -140,6 +141,11 @@ export const RunCommand = effectCmd({
       .option("command", {
         describe: "the command to run, use message for args",
         type: "string",
+      })
+      .option("goal", {
+        describe: "start the message or existing goal+plan.md as a Goal Loop (requires --agent loop)",
+        type: "boolean",
+        default: false,
       })
       .option("continue", {
         alias: ["c"],
@@ -275,6 +281,26 @@ export const RunCommand = effectCmd({
         die("--interactive cannot be used with --command")
       }
 
+      if (args.goal && args.interactive) {
+        die("--goal cannot be used with --interactive")
+      }
+
+      if (args.goal && args.command) {
+        die("--goal cannot be used with --command")
+      }
+
+      if (args.goal && args.file) {
+        die("--goal does not accept --file; put durable inputs in the goal workspace")
+      }
+
+      if (args.goal && args.agent !== "loop") {
+        die("--goal requires --agent loop")
+      }
+
+      if (args.goal && (args.continue || args.session || args.fork)) {
+        die("--goal starts a fresh loop session and cannot be used with --continue, --session, or --fork")
+      }
+
       if (args.demo && !args.interactive) {
         die("--demo requires --interactive")
       }
@@ -358,7 +384,7 @@ export const RunCommand = effectCmd({
       message = resolveRunInput(message, piped) ?? ""
       const initialInput = resolveRunInput(rawMessage, piped)
 
-      if (message.trim().length === 0 && !args.command && !args.interactive) {
+      if (message.trim().length === 0 && !args.command && !args.interactive && !args.goal) {
         UI.error("You must provide a message or a command")
         process.exit(1)
       }
@@ -457,8 +483,13 @@ export const RunCommand = effectCmd({
         }
 
         const name = title()
+        const goalModel = args.goal ? pick(args.model) : undefined
         const result = await sdk.session.create({
           title: name,
+          agent: args.goal ? args.agent : undefined,
+          model: goalModel
+            ? { providerID: goalModel.providerID, id: goalModel.modelID, variant: args.variant }
+            : undefined,
           permission: [...rules],
         })
         const id = result.data?.id
@@ -616,6 +647,12 @@ export const RunCommand = effectCmd({
         }
         const sessionID = sess.id
         const background = createBackgroundSessions()
+        let releaseGoalStart = () => {}
+        const goalStartReady = args.goal
+          ? new Promise<void>((resolve) => {
+              releaseGoalStart = resolve
+            })
+          : Promise.resolve()
 
         function emit(type: string, data: Record<string, unknown>) {
           if (args.format === "json") {
@@ -648,6 +685,7 @@ export const RunCommand = effectCmd({
         // created, and replies issued from inside the loop must use that client.
         async function loop(client: OpencodeClient, events: Awaited<ReturnType<typeof sdk.event.subscribe>>) {
           const toggles = new Map<string, boolean>()
+          const goalMode = args.goal === true
           const sessions = createSessionTree(sessionID, async (candidate) => {
             const result = await client.session.get({ sessionID: candidate }).catch(() => undefined)
             return result?.data
@@ -683,7 +721,17 @@ export const RunCommand = effectCmd({
                 sessions.track(task.sessionID)
                 background.admit(task.sessionID, task.messageID)
               }
-              if (part.sessionID !== sessionID) continue
+              if (part.sessionID !== sessionID) {
+                if (
+                  goalMode &&
+                  (await sessions.contains(part.sessionID)) &&
+                  part.type === "tool" &&
+                  (part.state.status === "completed" || part.state.status === "error")
+                ) {
+                  emit("goal_tool_use", { part })
+                }
+                continue
+              }
 
               if (part.type === "tool" && (part.state.status === "completed" || part.state.status === "error")) {
                 if (emit("tool_use", { part })) continue
@@ -757,6 +805,19 @@ export const RunCommand = effectCmd({
               UI.error(err)
             }
 
+            if (event.type === "goal.updated" && event.properties.sessionID === sessionID) {
+              await goalStartReady
+              const phase = event.properties.phase
+              if (!emit("goal", { goal: event.properties })) {
+                UI.println(`goal ${event.properties.goalId}: ${phase}`)
+              }
+              if (["done", "needs_human", "rolled_back", "stopped"].includes(phase)) {
+                emit("session_terminal", { reason: "goal", phase, goalId: event.properties.goalId })
+                if (phase !== "done") process.exitCode = 1
+                break
+              }
+            }
+
             if (
               event.type === "session.status" &&
               event.properties.sessionID !== sessionID &&
@@ -770,6 +831,7 @@ export const RunCommand = effectCmd({
               event.type === "session.status" &&
               event.properties.sessionID === sessionID &&
               event.properties.status.type === "idle" &&
+              !goalMode &&
               !background.pending()
             ) {
               break
@@ -851,6 +913,28 @@ export const RunCommand = effectCmd({
               process.exitCode = 1
               return
             }
+            if (await loopTask) process.exitCode = 1
+            return
+          }
+
+          if (args.goal) {
+            const result = await client.deepagent.goal
+              .start({
+                sessionID,
+                ...(message.trim() ? { objective: message.trim() } : {}),
+              })
+              .catch((error) => ({ data: undefined, error }))
+            if (result.error || !result.data) {
+              const error = result.error ?? "Goal start returned no data"
+              if (!emit("error", { error })) UI.error(formatRunError(error))
+              process.exitCode = 1
+              releaseGoalStart()
+              await events.stream.return?.(undefined).catch(() => undefined)
+              await loopTask
+              return
+            }
+            emit("goal_start", { goal: result.data })
+            releaseGoalStart()
             if (await loopTask) process.exitCode = 1
             return
           }

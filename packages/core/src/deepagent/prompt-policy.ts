@@ -106,7 +106,7 @@ export type PreviousResults = {
   readonly bestCandidate: CandidateRef | null
 }
 
-// PROMPT-CACHE CONTRACT (see docs/deepagent-cache-hit-fix-plan.md):
+// PROMPT-CACHE CONTRACT (see docs/llmrealtest-v2.md §11.2):
 // `buildSystemPrompt` MUST be byte-stable across every turn of a session — it becomes the cached
 // Anthropic prefix (cache_control breakpoint sits at the end of the system block, transform.ts
 // applyCaching). Anything that changes per-round (round number, previous-round results, token

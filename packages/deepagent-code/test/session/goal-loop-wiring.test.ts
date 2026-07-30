@@ -19,6 +19,7 @@ import { tmpdir } from "node:os"
 import path from "node:path"
 import { DocumentStore } from "@deepagent-code/core/deepagent/document-store"
 import { AgentGateway } from "@deepagent-code/core/agent-gateway"
+import { SessionV1 } from "@deepagent-code/core/v1/session"
 import { Agent } from "../../src/agent/agent"
 import { Permission } from "../../src/permission"
 import type { Session } from "../../src/session/session"
@@ -58,7 +59,10 @@ const execInput = (
   goalId: "g",
   sessionId: "s",
   planDocId: "p",
+  goal: "reach goal",
   activeStepId: null,
+  activeStep: null,
+  graderFeedback: [],
   ledger: { ticks: 0, tokens: 0, cost: 0, wallclockMs: 0, startedAtMs: 0 },
   limits: { maxTicks: 100, maxTokens: 100_000, maxWallclockMs: 100_000 },
   ...over,
@@ -89,21 +93,44 @@ describe("makeTaskSubagentRunner capability boundary", () => {
     options: {},
   }
 
-  const run = async (input: { readonly allowPlanWriteCapability?: boolean; readonly purpose?: "goal-loop" | "panel" | "generic" }) => {
+  const run = async (
+    input: { readonly allowPlanWriteCapability?: boolean; readonly purpose?: "goal-loop" | "panel" | "generic" },
+    turn: { readonly outputSchema?: Record<string, unknown> } = {},
+  ) => {
     const created: Array<NonNullable<Session.CreateInput>> = []
+    const prompted: SessionPrompt.PromptInput[] = []
+    const assistants: SessionV1.WithParts[] = []
     const sessions = {
       get: () => Effect.succeed({ id: SessionID.make("ses_parent"), agent: parent.name, permission: [] }),
       create: (createInput: NonNullable<Session.CreateInput>) => {
         created.push(createInput)
         return Effect.succeed({ id: SessionID.make("ses_child") })
       },
+      messages: () => Effect.succeed(assistants),
     } as unknown as Session.Interface
     const agents = {
       get: (name: string) => Effect.succeed(name === worker.name ? worker : name === parent.name ? parent : undefined),
     } as unknown as Agent.Interface
     const sessionPrompt = {
       resolvePromptParts: () => Effect.succeed([]),
-      prompt: () => Effect.succeed({ info: { role: "assistant", tokens: {}, cost: 0 }, parts: [] }),
+      cancel: () => Effect.void,
+      prompt: (promptInput: SessionPrompt.PromptInput) => {
+        prompted.push(promptInput)
+        const assistant = {
+          info: {
+            role: "assistant",
+            id: `msg_${prompted.length}`,
+            tokens: { input: 1, output: 1, reasoning: 0, cache: { read: 0, write: 0 } },
+            cost: 0,
+            ...(promptInput.format ? { structured: { verdict: "revise" } } : {}),
+          },
+          parts: promptInput.format
+            ? []
+            : [{ type: "text", text: "grounded review draft", synthetic: false, ignored: false }],
+        } as unknown as SessionV1.WithParts
+        assistants.push(assistant)
+        return Effect.succeed(assistant)
+      },
     } as unknown as SessionPrompt.Interface
     const runner = makeTaskSubagentRunner({
       sessions,
@@ -114,8 +141,10 @@ describe("makeTaskSubagentRunner capability boundary", () => {
       ...input,
     })
 
-    const result = await Effect.runPromise(runner({ agentType: worker.name, prompt: "run" }))
-    return { result, createInput: created[0] }
+    const result = await Effect.runPromise(
+      runner({ agentType: worker.name, prompt: "run", outputSchema: turn.outputSchema }),
+    )
+    return { result, createInput: created[0], prompted }
   }
 
   test("defaults plan-write capability to false and labels generic children accurately", async () => {
@@ -137,6 +166,26 @@ describe("makeTaskSubagentRunner capability boundary", () => {
     expect(result.ok).toBe(true)
     expect(createInput?.title).toBe("goal-worker (panel)")
     expect(Permission.evaluate("plan", "*", createInput?.permission ?? []).action).not.toBe("allow")
+  })
+
+  test("structured reviewer turns collect evidence before the separate finalizer", async () => {
+    const { result, prompted } = await run(
+      { purpose: "panel" },
+      {
+        outputSchema: {
+          type: "object",
+          properties: { verdict: { type: "string" } },
+          required: ["verdict"],
+        },
+      },
+    )
+
+    expect(result.ok).toBe(true)
+    expect(result.structured).toEqual({ verdict: "revise" })
+    expect(prompted).toHaveLength(2)
+    expect(prompted[0]?.format).toBeUndefined()
+    expect(prompted[1]?.format?.type).toBe("json_schema")
+    expect(prompted[1]?.metadata?.deepagent?.structured_finalizer).toBeDefined()
   })
 })
 
@@ -282,6 +331,30 @@ describe("V3.9 §D wiring — buildStepExecutor", () => {
     const exec = buildStepExecutor(() => Effect.die("boom"))
     const res = await Effect.runPromise(exec(execInput()))
     expect(res.critical).toBe(true)
+  })
+
+  test("threads prior grader gaps into the next goal-worker prompt", async () => {
+    let seenPrompt = ""
+    const exec = buildStepExecutor((input) => {
+      seenPrompt = input.prompt
+      return Effect.succeed(turnFrom({ ok: true }))
+    })
+
+    await Effect.runPromise(
+      exec(
+        execInput({
+          graderFeedback: [
+            "plan_complete: outstanding steps [a]",
+            "tests_pass: one or more of [bun test] failed",
+          ],
+        }),
+      ),
+    )
+
+    expect(seenPrompt).toContain("GRADER FEEDBACK FROM THE PREVIOUS TICK")
+    expect(seenPrompt).toContain("plan_complete: outstanding steps [a]")
+    expect(seenPrompt).toContain("tests_pass: one or more of [bun test] failed")
+    expect(seenPrompt.indexOf("GRADER FEEDBACK")).toBeLessThan(seenPrompt.indexOf("Advance goal"))
   })
 
   // V4.0.1 P2 §4.4 — tiered cost soft-notice threaded into the step-prompt TAIL.
@@ -468,6 +541,33 @@ describe("V3.9 §E F3 wiring — plan bridge (worker plan edits reach the goal p
     const goalPlan = JSON.parse(goalDoc.body) as PlanDoc
     expect(goalPlan.steps.find((s) => s.step_id === "a")!.status).toBe("done")
     expect(goalPlan.active_step_id).toBe("b")
+  })
+
+  test("mirrorChildPlan rejects goal and step-structure rewrites while preserving status progress", () => {
+    const store = freshStore()
+    const planDocId = putGoalPlan(store, "goal-sess-restricted", [step("a", "active"), step("b", "pending")])
+    const bridge = makePlanBridge({ store, planDocId, agentMode: "general" })
+    const childId = "child-sess-restricted"
+    bridge.seedChildPlan(childId)
+    const seeded = AgentGateway.DeepAgentSessionState.getPlan(childId)!
+    AgentGateway.DeepAgentSessionState.setPlan(childId, {
+      ...seeded,
+      goal: "rewritten goal",
+      steps: [
+        { ...seeded.steps[0], title: "rewritten title", status: "done" },
+        { ...seeded.steps[1], status: "active" },
+        step("injected", "pending"),
+      ],
+      active_step_id: "b",
+    })
+
+    bridge.mirrorChildPlan(childId)
+    const mirrored = JSON.parse(store.get(planDocId)!.body) as PlanDoc
+    expect(mirrored.goal).toBe("reach goal")
+    expect(mirrored.steps.map((item) => item.step_id)).toEqual(["a", "b"])
+    expect(mirrored.steps.map((item) => item.title)).toEqual(["a", "b"])
+    expect(mirrored.steps.map((item) => item.status)).toEqual(["done", "active"])
+    expect(mirrored.active_step_id).toBe("b")
   })
 
   test("mirrorChildPlan is a no-op version-wise when the worker changed nothing (idempotency-safe)", () => {

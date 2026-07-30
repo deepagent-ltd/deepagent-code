@@ -354,7 +354,7 @@ describe("DeepAgent request prep", () => {
     AgentGateway.configure({ enabled: false, agentMode: "high" })
   })
 
-  // Prompt-cache split (docs/deepagent-cache-hit-fix-plan.md): the non-DeepAgent path no longer inlines
+  // Prompt-cache split (docs/llmrealtest-v2.md §11.2): the non-DeepAgent path no longer inlines
   // a per-turn fan-out VERDICT into the system prompt — that was request-text-derived and busted the
   // cache. The system block now carries only the STABLE, mode-derived generic guidance, so it is
   // byte-identical regardless of the request. (The DeepAgent path surfaces the concrete verdict via the

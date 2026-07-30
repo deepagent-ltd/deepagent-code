@@ -339,6 +339,12 @@ function makeHttpNoLLMServer(input?: PromptLayerOptions) {
 }
 
 const it = testEffect(makeHttp())
+const worldStateCompaction = testEffect(
+  makeHttp({ flags: { softLandingCompaction: false, worldStateReinjection: true } }),
+)
+const worldStateCompactionDisabled = testEffect(
+  makeHttp({ flags: { softLandingCompaction: false, worldStateReinjection: false } }),
+)
 const noLLMServer = testEffect(makeHttpNoLLMServer())
 const raceNoLLMServer = testEffect(makeHttpNoLLMServer({ processor: "blocking" }))
 const federationTrace: string[] = []
@@ -700,6 +706,78 @@ it.instance("loop calls LLM and returns assistant message", () =>
     expect(parts.some((p) => p.type === "text" && p.text === "world")).toBe(true)
     expect(yield* llm.hits).toHaveLength(1)
   }),
+)
+
+worldStateCompaction.instance("injects World State only after an automatic compaction is durable", () =>
+  Effect.gen(function* () {
+    const { dir, llm } = yield* useServerConfig(providerCfg)
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const chat = yield* sessions.create({ title: "World State compaction ordering" })
+    const marker = `world-state-${crypto.randomUUID()}.txt`
+    const seeded = yield* seed(chat.id, { finish: "stop" })
+    seeded.assistant.tokens.input = 95_000
+    seeded.assistant.tokens.total = 95_000
+    yield* sessions.updateMessage(seeded.assistant)
+    yield* writeText(path.join(dir, marker), "marker contents are not part of the conversation")
+    yield* user(chat.id, "Continue after automatic compaction.")
+    yield* llm.text("## Progress\n- prior context compacted")
+    yield* llm.text("continued")
+
+    const result = yield* prompt.loop({ sessionID: chat.id })
+    const messages = yield* sessions.messages({ sessionID: chat.id })
+    const compaction = messages.find((message) => message.parts.some((part) => part.type === "compaction"))
+    const summary = messages.find(
+      (message) => message.info.role === "assistant" && message.info.summary === true,
+    )
+    const worldState = messages.find((message) =>
+      message.parts.some(
+        (part) => part.type === "text" && part.synthetic === true && part.text.includes("<world-state>"),
+      ),
+    )
+    const inputs = yield* llm.inputs
+
+    expect(result.info.role).toBe("assistant")
+    expect(compaction?.parts.find((part) => part.type === "compaction")?.auto).toBe(true)
+    expect(summary?.info.role === "assistant" ? summary.info.parentID : undefined).toBe(compaction?.info.id)
+    expect(worldState?.info.id && summary?.info.id ? worldState.info.id > summary.info.id : false).toBe(true)
+    expect(JSON.stringify(inputs[0]?.messages)).not.toContain(marker)
+    expect(JSON.stringify(inputs[1]?.messages)).toContain(marker)
+  }),
+  { git: true },
+  30_000,
+)
+
+worldStateCompactionDisabled.instance("does not recover World State when reinjection is disabled", () =>
+  Effect.gen(function* () {
+    const { dir, llm } = yield* useServerConfig(providerCfg)
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const chat = yield* sessions.create({ title: "World State compaction mutation control" })
+    const marker = `world-state-disabled-${crypto.randomUUID()}.txt`
+    const seeded = yield* seed(chat.id, { finish: "stop" })
+    seeded.assistant.tokens.input = 95_000
+    seeded.assistant.tokens.total = 95_000
+    yield* sessions.updateMessage(seeded.assistant)
+    yield* writeText(path.join(dir, marker), "marker contents are not part of the conversation")
+    yield* user(chat.id, "Continue after automatic compaction.")
+    yield* llm.text("## Progress\n- prior context compacted")
+    yield* llm.text("continued")
+
+    yield* prompt.loop({ sessionID: chat.id })
+    const messages = yield* sessions.messages({ sessionID: chat.id })
+    const inputs = yield* llm.inputs
+
+    expect(messages.some((message) => message.parts.some((part) => part.type === "compaction"))).toBe(true)
+    expect(
+      messages.some((message) =>
+        message.parts.some((part) => part.type === "text" && part.synthetic && part.text.includes("<world-state>")),
+      ),
+    ).toBe(false)
+    expect(JSON.stringify(inputs)).not.toContain(marker)
+  }),
+  { git: true },
+  30_000,
 )
 
 it.instance("loop stops provider overflow instead of auto-compacting when disabled", () =>

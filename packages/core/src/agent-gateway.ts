@@ -482,7 +482,7 @@ import type { RoundState as DeepAgentRoundState } from "./deepagent/round-state"
 export const systemPrompt = (_providerID: string, context?: PromptContext) =>
   isActiveDeepAgentRuntime() ? [context ? buildSystemPrompt(context) : bootMessage(current.agentMode)] : []
 
-// Prompt-cache split (see docs/deepagent-cache-hit-fix-plan.md): the per-turn volatile state that must
+// Prompt-cache split (see docs/llmrealtest-v2.md §11.2): the per-turn volatile state that must
 // NOT ride the cached system prefix. The caller appends this to the tail of the message array (after
 // the cache breakpoint) so the model still sees round/stage/previous-results/budget without churning
 // the prefix. Returns "" when there is nothing round-specific (⇒ caller skips injection). Only emitted

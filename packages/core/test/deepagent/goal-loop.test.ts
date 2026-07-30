@@ -272,7 +272,82 @@ describe("V3.9 §D — Controller tick semantics", () => {
     expect(outcome).toBe("continue")
   })
 
-  test("§D.6 幂等: repeated tick at same plan version → no double side-effect", async () => {
+  test("feeds the previous grader gaps into the next executor turn", async () => {
+    const clock = new FakeClock()
+    const planDocId = putPlan([step("a", "active")])
+    const feedback: string[][] = []
+    let executions = 0
+    const executor: StepExecutor = ({ planDocId, graderFeedback }) =>
+      Effect.sync(() => {
+        feedback.push([...graderFeedback])
+        executions++
+        if (executions > 1) {
+          updatePlan(planDocId, (plan) => ({
+            ...plan,
+            steps: [{ ...plan.steps[0], status: "done" }],
+            active_step_id: null,
+          }))
+        }
+        return { tokensUsed: 1 }
+      })
+    const ports: GraderPorts = {
+      ...passingPorts(),
+      runTests: () => Effect.succeed({ pass: executions > 1 }),
+    }
+    const loop = makeGoalLoop(deps({ executor, ports }, clock))
+    const handle = await Effect.runPromise(
+      loop.start(
+        spec(planDocId, {
+          criteria: [{ kind: "plan_complete" }, { kind: "tests_pass", commands: ["bun test"] }],
+        }),
+      ),
+    )
+
+    expect(await Effect.runPromise(loop.tick(handle))).toBe("continue")
+    expect(await Effect.runPromise(loop.tick(handle))).toBe("done")
+    expect(feedback[0]).toEqual([])
+    expect(feedback[1]).toEqual([
+      "plan_complete: outstanding steps [a]",
+      "tests_pass: one or more of [bun test] failed",
+    ])
+  })
+
+  test("delivers unchanged-plan grader feedback once, then deduplicates the same retry", async () => {
+    const clock = new FakeClock()
+    const planDocId = putPlan([step("a", "active")])
+    const feedback: string[][] = []
+    const executor: StepExecutor = ({ graderFeedback }) =>
+      Effect.sync(() => {
+        feedback.push([...graderFeedback])
+        return { tokensUsed: 1 }
+      })
+    const ports: GraderPorts = {
+      ...passingPorts(),
+      runTests: () => Effect.succeed({ pass: false }),
+    }
+    const loop = makeGoalLoop(deps({ executor, ports }, clock))
+    const handle = await Effect.runPromise(
+      loop.start(
+        spec(planDocId, {
+          criteria: [{ kind: "plan_complete" }, { kind: "tests_pass", commands: ["bun test"] }],
+          stallThreshold: 4,
+        }),
+      ),
+    )
+
+    expect(await Effect.runPromise(loop.tick(handle))).toBe("continue")
+    expect(await Effect.runPromise(loop.tick(handle))).toBe("continue")
+    expect(await Effect.runPromise(loop.tick(handle))).toBe("continue")
+    expect(feedback).toEqual([
+      [],
+      ["plan_complete: outstanding steps [a]", "tests_pass: one or more of [bun test] failed"],
+    ])
+    const status = await Effect.runPromise(loop.status(handle))
+    expect(status.ledger.ticks).toBe(2)
+    expect(status.stallCount).toBe(3)
+  })
+
+  test("§D.6 幂等: same-version feedback retries once, then stops duplicating side effects", async () => {
     const clock = new FakeClock()
     const planDocId = putPlan([step("a", "pending")])
     let execCount = 0
@@ -283,14 +358,16 @@ describe("V3.9 §D — Controller tick semantics", () => {
         return { tokensUsed: 7 }
       })
     const loop = makeGoalLoop(deps({ executor }, clock))
-    const handle = await Effect.runPromise(loop.start(spec(planDocId)))
+    const handle = await Effect.runPromise(loop.start(spec(planDocId, { stallThreshold: 4 })))
     const first = await Effect.runPromise(loop.tick(handle))
     const second = await Effect.runPromise(loop.tick(handle))
-    expect(first).toBe(second) // replayed outcome
-    expect(execCount).toBe(1) // executor NOT invoked twice
+    const third = await Effect.runPromise(loop.tick(handle))
+    expect(first).toBe(second)
+    expect(second).toBe(third)
+    expect(execCount).toBe(2) // empty feedback, then the newly-produced gap; the third tick is deduplicated
     const status = await Effect.runPromise(loop.status(handle))
-    expect(status.ledger.ticks).toBe(1) // budget accumulated once
-    expect(status.ledger.tokens).toBe(7)
+    expect(status.ledger.ticks).toBe(2)
+    expect(status.ledger.tokens).toBe(14)
   })
 
   test("goal tick cursor stays monotonic when progress follows a stalled tick", async () => {
@@ -753,13 +830,13 @@ describe("V3.9 §D — confirmed-bug regressions (2026-07-14)", () => {
     const handle = await Effect.runPromise(loop.start(spec(planDocId, { stallThreshold: 3 })))
     const outcomes: string[] = []
     for (let i = 0; i < 3; i++) outcomes.push(await Effect.runPromise(loop.tick(handle)))
-    // tick1 executes (no progress) → stall 1 continue; tick2/tick3 are version-dedup replays that STILL
-    // accrue stall → stall 2 continue, stall 3 == threshold → needs_human. Bounded by the stall guard.
+    // tick1 executes with no feedback; tick2 executes once with the newly-produced gap; tick3 sees the
+    // same version and already-delivered feedback, so it deduplicates while still reaching the stall cap.
     expect(outcomes).toEqual(["continue", "continue", "needs_human"])
-    expect(execCount).toBe(1) // idempotency preserved: the replay never re-ran the executor
+    expect(execCount).toBe(2)
     const status = await Effect.runPromise(loop.status(handle))
     expect(status.phase).toBe("needs_human")
-    expect(status.ledger.ticks).toBe(1) // replay never re-accrued budget either
+    expect(status.ledger.ticks).toBe(2)
   })
 
   test("cost clamp: a negative cost from a port does NOT decrement the ledger (clamped to 0)", async () => {

@@ -6,6 +6,10 @@ DeepAgent Code is a document-centered, event-driven AI coding system. It combine
 
 The architecture is designed around one requirement: a long-running agent must remain correct and governable after many model turns, tool calls, user interventions, process restarts, and worker handoffs.
 
+## User Guides
+
+- [Running Real-LLM Tests](./real-llm-testing.md)
+
 ## Design Principles
 
 - **Durable document and project memory** — atomic, recoverable storage with retrieval gates, provenance, governance, and conflict detection

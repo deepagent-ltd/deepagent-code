@@ -696,6 +696,60 @@ it.instance(
   { git: true },
 )
 
+it.instance(
+  "ask - bounded waits reject and clear unattended permission requests",
+  () =>
+    Effect.gen(function* () {
+      const events = yield* EventV2Bridge.Service
+      const replied = yield* Deferred.make<{
+        sessionID: SessionID
+        requestID: PermissionV1.ID
+        reply: PermissionV1.Reply
+      }>()
+      const unsub = yield* events.listen((event) => {
+        if (event.type === Permission.Event.Replied.type)
+          Deferred.doneUnsafe(
+            replied,
+            Effect.succeed(
+              event.data as { sessionID: SessionID; requestID: PermissionV1.ID; reply: PermissionV1.Reply },
+            ),
+          )
+        return Effect.void
+      })
+      yield* Effect.addFinalizer(() => unsub)
+
+      const id = PermissionV1.ID.make("per_bounded_wait")
+      const error = yield* fail(
+        ask({
+          id,
+          sessionID: SessionID.make("session_subagent"),
+          permission: "external_directory",
+          patterns: ["/data/model/*"],
+          metadata: {},
+          always: ["/data/model/*"],
+          ruleset: [],
+          timeoutMs: 25,
+        }),
+      )
+
+      expect(error).toBeInstanceOf(PermissionV1.RejectedError)
+      expect(yield* list()).toEqual([])
+      expect(
+        yield* Deferred.await(replied).pipe(
+          Effect.timeoutOrElse({
+            duration: "1 second",
+            orElse: () => Effect.fail(new Error("timed out waiting for synthetic permission rejection")),
+          }),
+        ),
+      ).toEqual({
+        sessionID: SessionID.make("session_subagent"),
+        requestID: id,
+        reply: "reject",
+      })
+    }),
+  { git: true },
+)
+
 // reply tests
 
 it.instance(

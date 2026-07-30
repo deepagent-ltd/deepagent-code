@@ -573,6 +573,7 @@ export function runSubagentPrompt(input: SubagentPromptInput): Effect.Effect<str
             text: [
               "Convert the persisted research result below into the requested StructuredOutput schema.",
               "Do not continue research and do not add facts that are absent from the result.",
+              "Preserve exact evidence identifiers, literals, paths, and values when the research result says they must appear in a schema field.",
               correction ? `Previous validation error: ${correction}` : "",
               "<research_result>",
               boundedRaw,

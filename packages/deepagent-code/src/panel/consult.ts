@@ -6,6 +6,7 @@ import {
   DEFAULT_QUORUM_POLICY,
   SECURITY_AUDIT_QUORUM_POLICY,
   type PanelLens,
+  type PanelOpinion,
   type PanelVerdict,
   type QuorumPolicy,
 } from "../agent/schema/panel"
@@ -49,6 +50,8 @@ export type ConsultDeps = {
   readonly runTurn: PanelTurnRunner
   /** Optional archiver so each opinion is projected into the Document Graph (§B Wiki). */
   readonly archive?: PanelArchiver
+  /** Optional read-only observer for the exact surviving opinions handed to the Arbiter. */
+  readonly observeOpinion?: (input: { readonly opinion: PanelOpinion; readonly round: number }) => Effect.Effect<void>
 }
 
 const resolvePolicy = (policy: ConsultInput["policy"]): QuorumPolicy => {
@@ -63,17 +66,28 @@ const resolvePolicy = (policy: ConsultInput["policy"]): QuorumPolicy => {
  * `needs_human` verdict via the Arbiter, never a silent approve.
  */
 export const consultPanel = (input: ConsultInput, deps: ConsultDeps): Effect.Effect<PanelVerdict> =>
-  runPanel({
-    question: {
-      question: input.question,
-      codeRefs: input.codeRefs,
-      lenses: input.lenses ?? PANEL_LENSES,
-      maxRounds: input.maxRounds ?? 1,
-      policy: resolvePolicy(input.policy),
-    },
-    runPanelist: buildPanelistRunner(deps.runTurn),
-    ...(deps.archive ? { archive: deps.archive } : {}),
-    parentSessionID: input.parentSessionID,
+  Effect.gen(function* () {
+    const runPanelist = buildPanelistRunner(deps.runTurn)
+    return yield* runPanel({
+      question: {
+        question: input.question,
+        codeRefs: input.codeRefs,
+        lenses: input.lenses ?? PANEL_LENSES,
+        maxRounds: input.maxRounds ?? 1,
+        policy: resolvePolicy(input.policy),
+      },
+      runPanelist,
+      ...(deps.observeOpinion
+        ? {
+            observeFinalOpinions: ({ opinions, rounds }: { opinions: readonly PanelOpinion[]; rounds: number }) =>
+              Effect.forEach(opinions, (opinion) => deps.observeOpinion!({ opinion, round: rounds }), {
+                discard: true,
+              }),
+          }
+        : {}),
+      ...(deps.archive ? { archive: deps.archive } : {}),
+      parentSessionID: input.parentSessionID,
+    })
   })
 
 export * as PanelConsult from "./consult"

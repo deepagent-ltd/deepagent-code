@@ -392,6 +392,16 @@ describe("RuntimeFlags", () => {
     )
   }
 
+  it.effect("parses the subagent permission wait timeout", () =>
+    Effect.gen(function* () {
+      const flags = yield* readFlags.pipe(
+        Effect.provide(fromConfig({ DEEPAGENT_CODE_SUBAGENT_PERMISSION_TIMEOUT_MS: "4321" })),
+      )
+
+      expect(flags.subagentPermissionTimeoutMs).toBe(4321)
+    }),
+  )
+
   for (const input of [
     { name: "absent", config: {}, expected: undefined },
     {

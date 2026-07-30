@@ -5,8 +5,16 @@
 // `DEEPAGENT_CODE_CONFIG_CONTENT` providing the test provider config inline.
 import { describe, expect } from "bun:test"
 import { Effect } from "effect"
+import { mkdir } from "node:fs/promises"
 import path from "node:path"
 import { cliIt } from "../../lib/cli-process"
+
+const goalEnvironment = {
+  DEEPAGENT_ENABLED: "true",
+  DEEPAGENT_CODE_EXPERIMENTAL_GOAL_LOOP: "true",
+  DEEPAGENT_CODE_V4_MULTI_AGENT_RUNTIME: "false",
+  DEEPAGENT_CODE_V4_GOAL_TICK_EVENT_DRIVEN: "false",
+}
 
 describe("deepagentCode run (non-interactive subprocess)", () => {
   // Happy path: prompt completes, output reaches stdout, process exits 0.
@@ -126,6 +134,152 @@ describe("deepagentCode run (non-interactive subprocess)", () => {
         )
         deepagentCode.expectExit(result, 0)
         expect(result.stdout).toContain("attachment accepted")
+      }),
+    60_000,
+  )
+
+  cliIt.concurrent(
+    "requires the loop agent for the scriptable goal entry",
+    ({ deepagentCode }) =>
+      Effect.gen(function* () {
+        const result = yield* deepagentCode.run("finish the goal", {
+          agent: "general",
+          extraArgs: ["--goal"],
+        })
+        expect(result.exitCode).not.toBe(0)
+        expect(`${result.stdout}\n${result.stderr}`).toContain("--goal requires --agent loop")
+      }),
+    30_000,
+  )
+
+  cliIt.concurrent(
+    "requires a fresh session for the scriptable goal entry",
+    ({ deepagentCode }) =>
+      Effect.gen(function* () {
+        const result = yield* deepagentCode.run("finish the goal", {
+          agent: "loop",
+          extraArgs: ["--goal", "--continue"],
+        })
+        expect(result.exitCode).not.toBe(0)
+        expect(`${result.stdout}\n${result.stderr}`).toContain("--goal starts a fresh loop session")
+      }),
+    30_000,
+  )
+
+  cliIt.concurrent(
+    "runs a scriptable goal through the production Goal lifecycle and orders JSON events",
+    ({ llm, deepagentCode }) =>
+      Effect.gen(function* () {
+        const objective = "Complete the deterministic CLI goal"
+        yield* llm.tool("plan", {
+          goal: objective,
+          steps: [{ step_id: "step_1", title: objective, status: "done" }],
+        })
+        yield* llm.text("Goal step completed")
+
+        const result = yield* deepagentCode.run(objective, {
+          agent: "loop",
+          format: "json",
+          extraArgs: ["--goal"],
+          env: goalEnvironment,
+          timeoutMs: 30_000,
+        })
+        deepagentCode.expectExit(result, 0)
+
+        const events = deepagentCode.parseJsonEvents(result.stdout)
+        const start = events.findIndex((event) => event.type === "goal_start")
+        const running = events.findIndex(
+          (event) =>
+            event.type === "goal" &&
+            typeof event.goal === "object" &&
+            event.goal !== null &&
+            "phase" in event.goal &&
+            event.goal.phase === "running",
+        )
+        const done = events.findIndex(
+          (event) =>
+            event.type === "goal" &&
+            typeof event.goal === "object" &&
+            event.goal !== null &&
+            "phase" in event.goal &&
+            event.goal.phase === "done",
+        )
+        const terminal = events.findIndex(
+          (event) => event.type === "session_terminal" && event.phase === "done",
+        )
+
+        expect(start).toBeGreaterThanOrEqual(0)
+        expect(running).toBeGreaterThan(start)
+        expect(done).toBeGreaterThan(running)
+        expect(terminal).toBeGreaterThan(done)
+        expect(events.some((event) => event.type === "permission" || event.type === "question")).toBe(false)
+        expect(yield* llm.pending).toBe(0)
+        expect(yield* llm.misses).toEqual([])
+      }),
+    60_000,
+  )
+
+  cliIt.concurrent(
+    "reads goal+plan.md when the scriptable goal has no message",
+    ({ llm, home, deepagentCode }) =>
+      Effect.gen(function* () {
+        const objective = "Complete the plan-file CLI goal"
+        yield* Effect.promise(() => mkdir(path.join(home, ".deepagent-code/plans"), { recursive: true }))
+        yield* Effect.promise(() =>
+          Bun.write(
+            path.join(home, ".deepagent-code/plans/goal+plan.md"),
+            [
+              "## Goal",
+              objective,
+              "",
+              "## Criteria",
+              "- plan complete",
+              "",
+              "## Plan",
+              `- [>] ${objective}`,
+              "",
+            ].join("\n"),
+          ),
+        )
+        yield* llm.tool("plan", {
+          goal: objective,
+          steps: [{ step_id: "step_1", title: objective, status: "done" }],
+        })
+        yield* llm.text("Plan-file goal completed")
+
+        const result = yield* deepagentCode.spawn(
+          ["run", "--goal", "--agent", "loop", "--model", "test/test-model", "--format", "json"],
+          { env: goalEnvironment, timeoutMs: 30_000 },
+        )
+        deepagentCode.expectExit(result, 0)
+        const events = deepagentCode.parseJsonEvents(result.stdout)
+        expect(events.some((event) => event.type === "goal_start")).toBe(true)
+        expect(events.some((event) => event.type === "session_terminal" && event.phase === "done")).toBe(true)
+      }),
+    60_000,
+  )
+
+  cliIt.concurrent(
+    "returns nonzero when a goal-worker provider turn fails",
+    ({ llm, deepagentCode }) =>
+      Effect.gen(function* () {
+        yield* llm.fail("goal worker provider failure")
+        const result = yield* deepagentCode.run("Exercise the Goal failure path", {
+          agent: "loop",
+          format: "json",
+          extraArgs: ["--goal"],
+          env: goalEnvironment,
+          timeoutMs: 30_000,
+        })
+        expect(result.exitCode).not.toBe(0)
+        const events = deepagentCode.parseJsonEvents(result.stdout)
+        expect(
+          events.some(
+            (event) =>
+              event.type === "session_terminal" &&
+              ["rolled_back", "needs_human"].includes(String(event.phase)),
+          ),
+        ).toBe(true)
       }),
     60_000,
   )

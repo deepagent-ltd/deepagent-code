@@ -437,7 +437,7 @@ async function logPrompt(sessionId: string, round: number, prompt: string) {
   await writeFile(path.join(dir, filename), prompt, "utf8")
 }
 
-// P2-b prompt-cache break detection (docs/deepagent-cache-hit-fix-plan.md). The cached Anthropic
+// P2-b prompt-cache break detection (docs/llmrealtest-v2.md §11.2). The cached Anthropic
 // prefix is the system block; it MUST stay byte-stable across a session's turns. This hashes the
 // system string per session and warns the first time it changes — an early-warning tripwire for
 // accidental prefix churn (a future edit sneaking volatile content back into buildSystemPrompt). It
@@ -458,7 +458,7 @@ function detectSystemPromptCacheBreak(sessionId: string, system: string): void {
   }
 }
 
-// Response-side prompt-cache-hit monitor (docs/deepagent-cache-hit-fix-plan.md). The system-hash
+// Response-side prompt-cache-hit monitor (docs/llmrealtest-v2.md §11.2). The system-hash
 // tripwire above catches PREFIX churn we author; this catches the real billing outcome — Anthropic's
 // reported cache_read tokens. Inspired by claude-code's promptCacheBreakDetection.ts phase 2, which
 // watches cache_read_input_tokens drop across calls. We compare each step's cache-read ratio

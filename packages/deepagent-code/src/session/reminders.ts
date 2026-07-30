@@ -16,7 +16,7 @@ import PLAN_MODE from "./prompt/plan-mode.txt"
 // (high+ only), so it can SEE its checklist and report against it — and, when it has made several
 // edits without a status change, nudge it (soft) to report progress.
 //
-// PROMPT-CACHE CONTRACT (docs/deepagent-cache-hit-fix-plan.md): the plan snapshot embeds live
+// PROMPT-CACHE CONTRACT (docs/llmrealtest-v2.md §11.2): the plan snapshot embeds live
 // per-step state (done/total, mutation count, nudge) that changes EVERY model call within a turn.
 // It MUST NOT be pushed onto a durable message inside the cached prefix. Historically this pushed a
 // synthetic part onto the last durable user message, which sits before accumulated assistant/tool
