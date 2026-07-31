@@ -14,7 +14,7 @@
   <a href="https://github.com/deepagent-ltd/deepagent-code-enterprise">Enterprise</a>
 </p>
 
-<p align="center"><sub>Desktop 1.4.3 · DeepAgent Core V4.0.4_r8</sub></p>
+<p align="center"><sub>Desktop 1.4.4 · DeepAgent Core V4.0.5</sub></p>
 
 ---
 
@@ -93,18 +93,18 @@ For high-risk decisions, convene an **Expert Panel**. Correctness, security, per
 
 Project IM brings people and agents into the same thread. Mention an agent to start a scoped run with project context, stream its progress, inspect its artifacts, and keep the answer attached to the conversation that requested it.
 
-## DeepAgent Core V4.0.4_r8
+## DeepAgent Core V4.0.5
 
-Desktop 1.4.3 ships the eighth reliability revision of the V4.0.4 contract. This release hardens the boundaries where long-running and delegated work previously risked duplicate execution, ambiguous completion, or renderer-wide failure:
+Desktop 1.4.4 ships the durable context and collaboration release. It connects Session V2, federated context, delegated execution, Git/PR review, and human supervision without moving durable authority back into process-local agent loops:
 
-- **Durable subagent execution:** TaskRun admission, generation, ownership, leases, settlement, and parent delivery are persisted. Exact retries reconcile to the original run, terminal state uses transactional compare-and-set, and a leased outbox makes completion delivery recoverable without re-running provider work.
-- **Two-stage structured finalization:** research and structured output are separate phases. The finalizer is a bounded single turn with thinking disabled when supported, only the `StructuredOutput` tool visible, no historical task or compaction payload, and no empty-success path.
-- **Fail-closed model and tool boundaries:** provider capability decisions no longer silently relax required tool choice, invalid tool input is rejected before execution, and provider, schema, permission, interruption, timeout, and doom-loop failures keep distinct recoverable terminal reasons.
-- **Semantic no-progress protection:** shell activity uses semantic fingerprints, while the no-progress budget compares bounded results, workspace state, and plan progress so cosmetic command changes cannot evade loop detection.
-- **Contained supervision UI:** subagent controls use valid sibling interactions, display real terminal state, and run behind a local ErrorBoundary with retry, close, persisted-mode validation, same-build quarantine, and recovery after build changes.
-- **Release-grade verification:** the affected Core, runtime, app, and desktop paths are covered by exact-retry, failure-injection, production Chromium, Electron cold-start, and source-map smoke tests.
+- **Durable context and execution:** prompt admission, Context Epoch selection, AgentExecution claims, leases, generations, resource locks, token debits, terminal metadata, and handoffs are persisted before scheduling provider work.
+- **Complete multi-agent Git/PR collaboration:** write workers use canonical isolated worktrees, commit only scoped changes, and enqueue SHA-bound PRs. A normal Reviewer handles each item, merges are serialized with `--no-ff`, and a Senior Reviewer closes the batch.
+- **Generation-fenced supervision:** resume, cancellation, timeout, takeover, review feedback, and cleanup reuse durable Session identity while preventing stale workers from settling newer work.
+- **One private filesystem root:** Core, CLI, Desktop, WSL, databases, logs, caches, and temporary files stay under `~/.deepagent/code/`; production writes cannot be redirected by ordinary environment variables.
+- **Cache-safe real-model verification:** stable prompt prefixes are separated from volatile tails, finalizer and compaction baselines are isolated, and the DeepSeek matrix covers sandboxed tools, cache retention, parallel workers, PR closure, recovery, strength inheritance, and EVAL scoring.
+- **Release-grade verification:** deterministic state-machine tests, cross-process ownership tests, real-model suites, packaged sidecar checks, Desktop UI coverage, and source-map smoke tests exercise the production entry points.
 
-V4.0.4_r8 retains the durable documents, event delivery, governed learning, isolated worktrees, and secure credential boundaries introduced across the earlier V4.0.4 revisions.
+V4.0.5 retains the durable documents, event delivery, governed learning, secure credential boundaries, and fail-closed provider/tool contracts established in the V4.0 line.
 
 ## Installation
 

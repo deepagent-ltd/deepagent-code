@@ -29,7 +29,7 @@
     },
     "packages/app": {
       "name": "@deepagent-code/app",
-      "version": "1.4.3",
+      "version": "1.4.4",
       "dependencies": {
         "@codemirror/autocomplete": "6",
         "@codemirror/commands": "6",
@@ -129,7 +129,7 @@
     },
     "packages/core": {
       "name": "@deepagent-code/core",
-      "version": "4.0.4-r8",
+      "version": "4.0.5",
       "bin": {
         "deepagent-code": "./bin/deepagent-code",
       },
@@ -347,7 +347,7 @@
     },
     "packages/desktop": {
       "name": "@deepagent-code/desktop",
-      "version": "1.4.3",
+      "version": "1.4.4",
       "dependencies": {
         "@deepagent-code/core": "workspace:*",
         "@zip.js/zip.js": "2.7.62",

@@ -2,7 +2,7 @@
 
 SolidJS front-end shell for the DeepAgent Code desktop app (Electron/Tauri).
 
-Current release: Desktop 1.4.3, powered by DeepAgent Core V4.0.4_r8.
+Current release: Desktop 1.4.4, powered by DeepAgent Core V4.0.5.
 
 ## Stack
 
@@ -24,7 +24,7 @@ bun run dev        # hot-reload dev server
 bun run build      # production bundle → dist/
 ```
 
-Desktop releases are produced by the `desktop-build` CI workflow, which reads the version from this `package.json` and tags the release `app-v{version}-main.{run_number}`.
+Desktop releases are produced by the `desktop-build` CI workflow, which reads `packages/desktop/package.json` and tags the release `app-v{version}-main.{run_number}`.
 
 ## Configuration
 

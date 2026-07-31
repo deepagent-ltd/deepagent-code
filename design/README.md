@@ -1,6 +1,6 @@
 # DeepAgent Code Architecture & Design
 
-> **Public design overview for DeepAgent Core V4.0.4_r8 / Desktop 1.4.3.** Internal implementation details and roadmap documents live in the private `docs/` tree and are intentionally not version-controlled.
+> **Public design overview for DeepAgent Core V4.0.5 / Desktop 1.4.4.** Internal implementation details and roadmap documents live in the private `docs/` tree and are intentionally not version-controlled.
 
 DeepAgent Code is a document-centered, event-driven AI coding system. It combines a coding-agent runtime with a durable control plane that owns context, planning, learning, collaboration, safety, and human oversight.
 
@@ -26,7 +26,7 @@ Sessions, inputs, plans, documents, goals, events, approvals, and learning decis
 
 A user instruction is durably admitted before execution is scheduled. A successful API response therefore means the instruction is recorded, not merely present in a process-local queue.
 
-DeepAgent is built **on top of** the opencode agent/runtime/session/tool/MCP stack. V4.0.4_r8 strengthens the control plane without replacing the current turn engine, tool system, or provider layer.
+DeepAgent is built **on top of** the opencode agent/runtime/session/tool/MCP stack. V4.0.5 strengthens the durable control plane without replacing the current turn engine, tool system, or provider layer.
 
 ### Durable delegated execution
 
@@ -128,8 +128,8 @@ All production-private filesystem data resolves from one root: `~/.deepagent/cod
 | Dangerous writes: approval gate (`ctx.ask`) | Available |
 | Read-only DB: restricted mode enforced at server | Available |
 | Credential indirection (`${VAR}` / `secret://`) | Available |
-| Native secret storage (macOS / Linux / Windows) | Available in V4.0.4 |
-| Subagent write isolation and conflict-aware return | Available in V4.0.4 |
+| Native secret storage (macOS / Linux / Windows) | Available |
+| Subagent write isolation and conflict-aware return | Available |
 
 - a stable ID and monotonic version;
 - type, scope, status, domain, tags, and description;
