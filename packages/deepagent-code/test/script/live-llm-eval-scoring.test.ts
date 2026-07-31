@@ -17,7 +17,14 @@ describe("autonomous eval scoring", () => {
       { id: "pass", label: "passing code", lines: ["assert 2 + 2 == 4"] },
       { id: "fail", label: "failing code", lines: ["assert 2 + 2 == 5, 'wrong total'"] },
     ])
-    const subprocess = Bun.spawn(["/bin/sh", "-c", verifier.script], { stdout: "pipe", stderr: "pipe" })
+    const subprocess = Bun.spawn(["/bin/sh", "-c", verifier.script], {
+      stdout: "pipe",
+      stderr: "pipe",
+      env: {
+        ...process.env,
+        DEEPAGENT_LIVE_LLM_PYTHON: process.env.DEEPAGENT_CODE_LIVE_LLM_PYTHON ?? "python3",
+      },
+    })
     const [stdout, exitCode] = await Promise.all([new Response(subprocess.stdout).text(), subprocess.exited])
 
     expect(exitCode).toBe(1)

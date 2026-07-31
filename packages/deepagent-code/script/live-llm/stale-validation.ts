@@ -12,13 +12,11 @@ import { runLegacyLiveCases } from "./runtime"
 // :531-546). The three cases run in ONE durable Session on purpose: round 3 is a brand new read-only task,
 // so round 1's per-run error marker has no live source there.
 //
-// SCOPE HONESTY: the real symptom is duplication inside ASSEMBLED PROVIDER CONTEXT, which this harness
-// cannot observe. Oracle 5 is therefore a proxy (marker leakage forward), and Oracle 4 (round-3 shell
-// count) is recorded as evidence rather than asserted. See the comments at each oracle.
+// The harness observes the exact assembled-request validation multiplicities through a redacted
+// production event. Oracle 5 additionally preserves the original user-visible marker-leak regression.
 //
-// The gateway that owns this state IS live here: DEEPAGENT_ENABLED=false only gates the core V2 stack
-// (packages/core/src/location-layer.ts:48, consumed at :130), while the legacy path this suite exercises
-// hardcodes `enabled: true` at packages/deepagent-code/src/deepagent/config.ts:44.
+// This suite explicitly selects high mode because validation harvesting is part of the active DeepAgent
+// prompt path. The general-mode path intentionally does not build DeepAgent validation context.
 const successMarker = `stale-ok-${crypto.randomUUID()}`
 const errorMarker = `stale-error-${crypto.randomUUID()}`
 const readMarker = `stale-reference-${crypto.randomUUID()}`
@@ -32,7 +30,7 @@ const verifier = [
   "exit 23",
   "",
 ].join("\n")
-const validationCommand = "bun run verify"
+const validationCommand = "./verify"
 const prompts = {
   fail: [
     `Run ${validationCommand} exactly once. It is expected to fail.`,
@@ -62,12 +60,16 @@ const artifact = await runLegacyLiveCases({
     { name: "repair", prompt: prompts.repair },
     { name: "unrelated", prompt: prompts.unrelated },
   ],
-  files: { "src/pipeline.txt": "mode=broken\n", "notes/reference.txt": `reference=${readMarker}\n` },
-  packageScripts: { verify: "./verify" },
+  files: {
+    "src/pipeline.txt": "mode=broken\n",
+    "notes/reference.txt": `reference=${readMarker}\n`,
+    "AGENTS.md": "- `./verify` - test the pipeline state\n",
+  },
   inspectFiles: ["src/pipeline.txt", "notes/reference.txt"],
   toolSandbox: { verifierScript: verifier, initialVerifier: "fail" },
   sharedSession: true,
   observeAssembledRequestFingerprints: true,
+  environment: { DEEPAGENT_MODE: "high" },
   // The runtime's default primary prompt says "do not add validation steps", which would pre-suppress the
   // re-validation this suite is trying to observe and would turn Oracle 4 into a tautology. Use a neutral
   // multi-round prompt instead so a re-injected stale failure is free to produce its original symptom.
@@ -76,6 +78,18 @@ const artifact = await runLegacyLiveCases({
     "do the work the current round asks for, and do not redo work that an earlier round already completed.",
   modelMaxTokens: 1024,
 })
+await writeLiveArtifact(
+  { artifactDirectory: path.resolve(import.meta.dir, "../../.artifacts/live-llm") },
+  `${artifact.suite}-observed`,
+  artifact,
+  {
+    redactions: [
+      { value: successMarker, replacement: "<success-marker>" },
+      { value: errorMarker, replacement: "<error-marker>" },
+      { value: readMarker, replacement: "<read-marker>" },
+    ],
+  },
+)
 
 // Oracle 6 (HARD): no marker may reach the model through a prompt. Every round is checked against every
 // marker, so each oracle below can only be satisfied by real tool output.
@@ -168,15 +182,13 @@ if (!reference?.output?.includes(readMarker) || !unrelated.finalText.includes(re
 // manufacture false failures, so this is measured into `evidence.bashCallsPerCase` and left to review.
 const unrelatedShells = unrelated.newTools.filter((tool) => tool.name === "bash")
 
-// Oracle 5 (HARD, and a PROXY — the one anti-regression assertion in this suite). The documented symptom
-// lives at src/session/llm/request.ts:531-546 (STALE-REHARVEST GUARD): extractValidationResults re-scans
+// Oracle 5 (HARD): an additional user-visible anti-regression assertion. The documented symptom
+// lives at src/session/llm/request.ts (STALE-REHARVEST GUARD): extractValidationResults re-scans
 // the whole transcript every turn, and without the `validationFingerprint` comparison at :542 (defined at
 // :684) each turn re-ran recordValidation → processValidationResults → addCandidate, which appends
 // unconditionally. After N turns the candidate list held N copies of the SAME stale ValidationResult and
-// collectValidationFailureText emitted that identical block N times into ASSEMBLED CONTEXT. This harness
-// cannot observe assembled context, so it cannot assert on that block directly — hence a proxy: the error
-// marker is minted per run and is only ever reachable through round 1's verifier stderr, so its appearance
-// in round 3's answer means round 1's failure was replayed forward rather than deduplicated.
+// collectValidationFailureText emitted that identical block N times into ASSEMBLED CONTEXT. The fingerprint
+// assertions above directly cover multiplicity; this marker check preserves the user-visible symptom too.
 // This stays valid even if round 3 does re-run the verifier: src/pipeline.txt is already repaired by then,
 // so a fresh run prints successMarker and exits 0. errorMarker has no live source in round 3.
 const errorMarkerInUnrelatedFinalText = unrelated.finalText.includes(errorMarker)
@@ -184,7 +196,7 @@ const errorMarkerInUnrelatedTools = JSON.stringify(unrelated.newTools).includes(
 if (errorMarkerInUnrelatedFinalText || errorMarkerInUnrelatedTools) {
   throw new Error(
     "Round 3 surfaced round 1's failure marker, so stale validation evidence survived into a later round " +
-      "(src/session/llm/request.ts:531-546 STALE-REHARVEST GUARD / validationFingerprint at :542)",
+      "(src/session/llm/request.ts STALE-REHARVEST GUARD / validationFingerprint)",
   )
 }
 
@@ -194,7 +206,7 @@ if (!artifact.sandbox?.networkDenied || !artifact.sandbox.verifierWriteDenied) {
   throw new Error("Stale-validation regression ran without a qualified sandbox")
 }
 
-// Classified LIVE+DET/P0 in docs/llmrealtest-v2.md, so the artifact keeps the runtime's "live" mode.
+// Classified LIVE+DET/P0 in design/real-llm-testing.md, so the artifact keeps the runtime's "live" mode.
 const result = {
   ...artifact,
   evidence: {

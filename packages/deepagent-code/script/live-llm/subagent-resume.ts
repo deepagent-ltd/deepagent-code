@@ -30,6 +30,9 @@ const artifact = await runLegacyLiveCases({
 
 const observation = artifact.cases[0]
 if (!observation) throw new Error("Missing subagent resume observation")
+if (observation.providerErrors.length > 0) {
+  throw new Error(`Subagent resume provider turn failed: ${JSON.stringify(observation.providerErrors)}`)
+}
 const tasks = observation.tools.filter((tool) => tool.name === "task")
 if (observation.tools.length !== 2 || tasks.length !== 2 || tasks.some((tool) => tool.status !== "completed")) {
   throw new Error(
@@ -41,8 +44,64 @@ if (observation.children.length !== 1) {
 }
 const child = observation.children[0]
 if (!child) throw new Error("Missing resumed child")
+if (child.parentID !== observation.sessionID || child.agent !== "researcher") {
+  throw new Error("Resumed child lineage or agent identity is incorrect")
+}
+if (
+  child.model?.providerID !== "live-deepseek" ||
+  child.model.id !== artifact.fingerprint.modelID ||
+  child.assistants.some(
+    (assistant) =>
+      assistant.providerID !== "live-deepseek" ||
+      assistant.modelID !== artifact.fingerprint.modelID ||
+      assistant.error !== undefined,
+  )
+) {
+  throw new Error("Resumed child persisted the wrong provider/model identity or a provider error")
+}
 const secondInput = record(tasks[1]?.input, "second task input")
 if (secondInput.task_id !== child.id) throw new Error("Second task call did not reuse the persisted child Session id")
+const childTools = child.assistants.flatMap((assistant) => assistant.tools)
+if (
+  childTools.filter((tool) => tool.name === "StructuredOutput" && tool.status === "completed").length !== 2 ||
+  childTools.some((tool) => tool.status !== "completed" || !["read", "StructuredOutput"].includes(tool.name))
+) {
+  throw new Error(
+    `Resumed child tool sequence mismatch: ${childTools.map((tool) => `${tool.name}:${tool.status}`).join(", ")}`,
+  )
+}
+const readInputs = childTools
+  .filter((tool) => tool.name === "read")
+  .map((tool) => String(record(tool.input, "read input").filePath ?? record(tool.input, "read input").path ?? ""))
+if (
+  !childTools.some(
+    (tool) =>
+      tool.name === "read" &&
+      String(
+        record(tool.input, "first read input").filePath ?? record(tool.input, "first read input").path ?? "",
+      ).endsWith("fixtures/resume-first.txt") &&
+      tool.output?.includes(firstMarker),
+  ) ||
+  !childTools.some(
+    (tool) =>
+      tool.name === "read" &&
+      String(
+        record(tool.input, "second read input").filePath ?? record(tool.input, "second read input").path ?? "",
+      ).endsWith("fixtures/resume-second.txt") &&
+      tool.output?.includes(secondMarker),
+  )
+) {
+  throw new Error(`Resumed child did not read both phase fixtures: ${readInputs.join(", ")}`)
+}
+const subagent = nestedRecord(child.metadata, ["deepagent", "subagent"])
+if (
+  subagent.state !== "completed" ||
+  subagent.finished !== true ||
+  subagent.reason !== "structured_output_valid" ||
+  subagent.generation !== 2
+) {
+  throw new Error(`Resumed child durable generation is invalid: ${JSON.stringify(subagent)}`)
+}
 const childText = child.assistants
   .map((assistant) => `${assistant.text}\n${JSON.stringify(assistant.structured)}`)
   .join("\n")
@@ -64,6 +123,9 @@ const result = {
     secondMarkerHash: Bun.hash(secondMarker).toString(16),
     childCount: observation.children.length,
     taskCalls: tasks.length,
+    childGeneration: subagent.generation,
+    childToolCalls: childTools.map((tool) => tool.name),
+    childReadCalls: readInputs.length,
     childMessageCount: child.messageCount,
   },
 }
@@ -80,6 +142,20 @@ console.log(
 function record(value: unknown, name: string): Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error(`${name} is not an object`)
   return value as Record<string, unknown>
+}
+
+function nestedRecord(value: unknown, keys: string[]) {
+  const result = keys.reduce<Record<string, unknown> | undefined>(
+    (current, key) => {
+      if (!current) return undefined
+      const next = current[key]
+      if (typeof next !== "object" || next === null || Array.isArray(next)) return undefined
+      return next as Record<string, unknown>
+    },
+    record(value, keys[0] ?? "value"),
+  )
+  if (!result) throw new Error(`Missing object path ${keys.join(".")}`)
+  return result
 }
 
 finishLiveScript()

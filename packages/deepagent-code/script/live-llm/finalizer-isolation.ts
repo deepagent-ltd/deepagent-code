@@ -3,7 +3,7 @@ import { writeLiveArtifact } from "../../../llm/script/live-llm/config"
 import { finishLiveScript } from "./lifecycle"
 import { runLegacyLiveCases } from "./runtime"
 
-// Suite D1 (docs/llmrealtest-v2.md) — subagent finalizer isolation. The researcher child runs two
+// Suite D1 (design/real-llm-testing.md) — subagent finalizer isolation. The researcher child runs two
 // phases in ONE child Session: a research turn with the normal read-only registry, then a bounded
 // finalizer turn whose registry is emptied down to `StructuredOutput` alone (prompt.ts: `tools =
 // finalizerMode ? {} : SessionTools.resolve(...)`). The regression this guards: research-phase tools

@@ -55,7 +55,8 @@ const verifier = [
 ].join("\n")
 const prompt = [
   "Run ./verify exactly as written. The first attempts fail even when nothing is wrong yet.",
-  "Keep going until ./verify reports success; you may read src/state.txt and edit its exact state value.",
+  "After the first failure, read src/state.txt exactly once and edit its exact value from state=broken to state=ready.",
+  "Then rerun ./verify without making another edit until it reports success.",
   "Reply with the success marker ./verify printed. Never claim a success ./verify did not report.",
 ].join("\n")
 const artifact = await runLegacyLiveCases({
@@ -81,6 +82,17 @@ const artifact = await runLegacyLiveCases({
   maxProviderTurns,
   timeoutMs: 90_000,
 })
+await writeLiveArtifact(
+  { artifactDirectory: path.resolve(import.meta.dir, "../../.artifacts/live-llm") },
+  `${artifact.suite}-observed`,
+  artifact,
+  {
+    redactions: [
+      { value: successMarker, replacement: "<success-marker>" },
+      { value: errorMarker, replacement: "<error-marker>" },
+    ],
+  },
+)
 
 const observation = artifact.cases[0]
 if (!observation) throw new Error("Missing legacy degeneration observation")

@@ -39,7 +39,6 @@ process.env.XDG_CACHE_HOME = path.join(testRoot, "cache")
 process.env.XDG_STATE_HOME = path.join(testRoot, "state")
 process.env.DEEPAGENT_CODE_TEST_HOME = isolatedHome
 process.env.DEEPAGENT_CODE_HOME = isolatedData
-process.env.DEEPAGENT_CODE_CONFIG_DIR = isolatedData
 process.env.DEEPAGENT_CODE_DISABLE_AUTOUPDATE = "1"
 process.env.DEEPAGENT_CODE_DISABLE_MODELS_FETCH = "1"
 process.env.DEEPAGENT_CODE_DISABLE_DEFAULT_PLUGINS = "1"

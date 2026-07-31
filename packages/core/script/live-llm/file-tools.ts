@@ -113,7 +113,9 @@ async function mutationSuite() {
     {
       name: "write",
       agent: "write-test",
-      prompt: `Call write exactly once to create generated/note.txt with this exact JSON string content: ${JSON.stringify(writeContent)}. Then stop.`,
+      prompt:
+        `Call write exactly once to create generated/note.txt. Set the content argument to the decoded string ` +
+        `represented by this JSON literal (do not include the outer quotes; interpret JSON escapes): ${JSON.stringify(writeContent)}. Then stop.`,
     },
     {
       name: "edit",

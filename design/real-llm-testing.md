@@ -1,8 +1,37 @@
-# 运行真实 LLM 测试
+# DeepAgent Code 真实 LLM 测试标准与运行指南
 
-本文面向需要在本地验证 DeepAgent Code 真实模型能力的开发者，介绍如何准备凭证、选择测试范围、启动测试，以及如何解读终端输出和 JSON 报告。
+本文是仓库中真实 LLM 测试设计、覆盖、运行、资格认证和审阅标准的唯一权威文件。历史 `docs/llmrealtest*.md`、LLM 测试审阅记录和覆盖矩阵只保留迁移指针，不再定义合同；任何冲突以本文和当前源码注册表为准。
 
-真实 LLM 测试会访问 DeepSeek 官方 API，可能产生调用费用。建议先运行 `--dry-run`，再从无 Desktop、无 EVAL 的小矩阵开始。
+本文面向需要设计、审阅或运行 DeepAgent Code 真实模型测试的开发者，说明凭证、安全边界、Oracle、路由、资格和结果解释。真实 LLM 测试会访问 DeepSeek 官方 API，可能产生调用费用；先运行 `--dry-run`，再从无 Desktop、无 EVAL 的小矩阵开始。
+
+## 0. 权威状态与硬合同
+
+截至 2026-07-31，聚合 runner 注册 55 条命令，其中 48 条调用真实模型；headless 矩阵为 48 条命令、43 条真实模型 suite，进一步跳过 EVAL 和安装后为 46 条命令、42 条真实模型 suite。数字由 `script/run-live-llm-all.ts` 动态注册表决定，文档数字发生漂移时以注册表和 `validateSuiteManifest()` 为准。
+
+`qualifiedLiveRuns` 当前为空。注册、单次通过和 EXT 可达都不代表 pre-push 资格；LIVE suite 只有完成本节资格合同后才能进入该集合。
+
+| 模式    | 用途                                   | 真实模型 | 普通 pre-push    |
+| ------- | -------------------------------------- | -------- | ---------------- |
+| DET     | 状态机、路由、安全和 Oracle 自检       | 否       | 是               |
+| LIVE    | 小型、稳定、低成本生产合同             | 是       | 资格通过后可进入 |
+| EXT     | 多 Agent、故障恢复、长会话和高成本编排 | 是       | 否               |
+| EVAL    | 多 seed 能力评分                       | 是       | 否，只报告       |
+| RELEASE | Desktop、GUI 和 packaged sidecar       | 是       | 否               |
+
+所有真实 suite 必须满足以下不变量：
+
+1. 只允许 `https://api.deepseek.com`，并记录 provider、模型、revision 和 generation fingerprint。
+2. API key 只从 `DEEPAGENT_CODE_LIVE_LLM_API_KEY_FILE` 指向的仓库外 `0600` 单行文件读取；raw key 环境变量一律拒绝。
+3. HOME、应用数据、数据库、workspace 和临时目录全部隔离；子进程只继承显式环境 allowlist。
+4. 工具权限默认 deny；Bash suite 在请求 provider 前完成 sandbox conformance，并拒绝宿主文件、symlink escape 和网络。
+   Python hidden verifier 必须通过 sandbox 选择的原生 Python 运行时执行；运行时不可用或不能产生结构化 verifier marker 时，结果归类为 `sandbox-contract`，不得归因于模型。
+5. 通过条件优先使用 fresh-copy verifier、精确磁盘状态、durable Session/tool/PR 状态和 typed terminal reason；模型自述不能单独判定通过。
+6. suite 必须有 provider turn、工具调用、输出、磁盘、并发和 wall-time 上限，结束时不得残留进程、权限请求或问题请求。
+7. 失败必须归类为 `preflight`、`sandbox-contract`、`provider-contract`、`runtime-contract`、`model-behavior`、`budget` 或 `harness-bug`，并报告最早失效层。
+
+LIVE 资格要求 committed harness、固定 fingerprint、至少三个独立进程连续 30/30、mutation/self-test、14 天滚动稳定性、artifact 脱敏审阅和负责人批准。复杂多 Agent、长会话、Desktop 与 EVAL 原则上保持 EXT/RELEASE；没有上述证据不得加入 `qualifiedLiveRuns`。
+
+Provider prompt cache 的归因也必须 fail closed：同一 Session 的 system prefix 和工具 schema/order 若由 DeepAgent Code 改变，先判 `runtime-contract`；只有 assembled prefix identity、历史和参数稳定而 provider cache read 仍崩溃时，才允许判 `provider-contract`。round、plan、World State、schema 和 finalizer 等逐轮信息只能进入 ephemeral runtime tail，不能污染稳定 system prefix。
 
 ## 1. 前置条件
 
@@ -27,17 +56,17 @@ bun install --frozen-lockfile
 该文件只能包含一行原始 API key，不是 JSON 或 `KEY=value`。macOS 和 Linux 示例：
 
 ```sh
-mkdir -p "$HOME/.config/deepagent-code"
-touch "$HOME/.config/deepagent-code/live-llm-deepseek.key"
-chmod 600 "$HOME/.config/deepagent-code/live-llm-deepseek.key"
-${EDITOR:-vi} "$HOME/.config/deepagent-code/live-llm-deepseek.key"
+mkdir -p "$HOME/.deepagent/code"
+touch "$HOME/.deepagent/code/live-llm-deepseek.key"
+chmod 600 "$HOME/.deepagent/code/live-llm-deepseek.key"
+${EDITOR:-vi} "$HOME/.deepagent/code/live-llm-deepseek.key"
 ```
 
 检查文件没有多余行，并确认权限：
 
 ```sh
-awk 'END { print NR }' "$HOME/.config/deepagent-code/live-llm-deepseek.key"
-ls -l "$HOME/.config/deepagent-code/live-llm-deepseek.key"
+awk 'END { print NR }' "$HOME/.deepagent/code/live-llm-deepseek.key"
+ls -l "$HOME/.deepagent/code/live-llm-deepseek.key"
 ```
 
 测试不接受以下明文 key 环境变量：
@@ -66,7 +95,7 @@ ${EDITOR:-vi} script/live-llm.config.local.json
 ```json
 {
   "baseURL": "https://api.deepseek.com",
-  "apiKeyFile": "~/.config/deepagent-code/live-llm-deepseek.key",
+  "apiKeyFile": "~/.deepagent/code/live-llm-deepseek.key",
   "model": "deepseek-v4-flash",
   "modelRevision": "",
   "requestTimeoutMs": 180000,
@@ -141,7 +170,7 @@ bun run test:llm:all -- --config /absolute/path/live-llm.json --headless --skip-
 单 suite 命令不读取聚合 JSON，需要先在当前 shell 中导出配置：
 
 ```sh
-export DEEPAGENT_CODE_LIVE_LLM_API_KEY_FILE="$HOME/.config/deepagent-code/live-llm-deepseek.key"
+export DEEPAGENT_CODE_LIVE_LLM_API_KEY_FILE="$HOME/.deepagent/code/live-llm-deepseek.key"
 export DEEPAGENT_CODE_LIVE_LLM_MODEL="deepseek-v4-flash"
 export DEEPAGENT_CODE_LIVE_LLM_BASE_URL="https://api.deepseek.com"
 export DEEPAGENT_CODE_LIVE_LLM_TIMEOUT_MS="180000"
@@ -154,6 +183,12 @@ export DEEPAGENT_CODE_LIVE_LLM_TIMEOUT_MS="180000"
 (cd packages/core && bun run test:llm-live:v2-provider-loop)
 (cd packages/deepagent-code && bun run test:llm-live:cli-headless)
 (cd packages/deepagent-code && bun run test:llm-ext:subagent-worktree)
+(cd packages/deepagent-code && bun run test:llm-ext:multi-agent-parallel-worktrees)
+(cd packages/deepagent-code && bun run test:llm-ext:multi-agent-pr-collaboration)
+(cd packages/deepagent-code && bun run test:llm-ext:v4-multi-agent-runtime)
+(cd packages/deepagent-code && bun run test:llm-ext:subagent-intensity)
+(cd packages/deepagent-code && bun run test:llm-ext:subagent-resume)
+(cd packages/deepagent-code && bun run test:llm-ext:subagent-takeover)
 (cd packages/desktop && bun run test:llm-release:ui)
 ```
 
@@ -164,6 +199,46 @@ bun run test:llm:all -- --dry-run
 ```
 
 测试脚本必须从其所属 package 目录运行。上面的括号命令会在子 shell 中切换目录，因此可以逐条从仓库根目录复制执行。
+
+### 5.1 并行多 Agent 回归
+
+`multi-agent-dag` 验证 researcher、worker PR 合并、结果 reviewer 的串行交接；worker 与结果 reviewer 之间必须真实经过 `pr_finalize` 的普通 Reviewer 和 Senior Reviewer。`expert-panel` 验证 panel 专用路径的并发。通用 `task` 协作链路的权威并行回归是 `multi-agent-parallel-worktrees`：父 Agent 必须在同一次模型响应中启动两个前台 worker，每个 worker 使用独立 Git worktree 完成一项文件修改。
+
+测试在两个 worker 的 `Permission.ask` 之间设置屏障。在两个请求都进入 pending 之前不会批准任何一个，因此通过不依赖耗时阈值的方式证明真实重叠。Oracle 同时要求父会话能够列举并回复两个子会话权限、事件路由回到父目录、两个 worktree 各自保留唯一且通过隐藏 verifier 的产物、父工作区零泄漏、父 Agent 汇总两个结果，且结束后没有残留 pending permission。显式 `isolation: "worktree"` 的契约是保留改动等待后续显式合并，并不自动 merge-back。任何 worker 未启动、串行启动、事件丢失、权限不可见、worktree 冲突或子 Agent 卡住都会使 suite 非零退出。
+
+### 5.2 Git/PR 多 Agent 闭环
+
+`multi-agent-pr-collaboration` 是自动写协作的权威生产入口回归。父 Agent 必须在同一模型响应中并行启动两个未显式指定 `isolation` 的前台 worker；生产 `task` 工具为它们创建独立 worktree，提交各自受作用域约束的 commit，并将两条 PR 持久化到同一批次。父 Agent 随后单独调用一次 `pr_finalize`，由同一个普通 Reviewer Session 逐 PR 审查精确 worker SHA、协调器在 Session 分支串行执行两次 `--no-ff` merge，最后由同一个 Senior Reviewer Session 完成批次级复审。
+
+Oracle 不依赖父模型的成功文本。它直接核验 queue.json 中两条 PR 均为 `merged`、parent/worker/reviewer/batch 身份一致、verdict 绑定精确 SHA；Git 一方必须位于 `deepagent-code/session-*` 分支，first-parent 历史恰有两个双亲 merge commit，父工作区干净且两个隐藏 marker 均存在；会话一方必须恰有两个 worker、一个 Reviewer、一个 Senior Reviewer，所有子会话持久化终态，worker worktree 全部删除，权限屏障证明两个 worker 真正重叠，且没有残留权限请求。默认分支（包括仓库解析出的自定义默认分支以及 `main`、`master`、`dev`）不得成为 PR merge 目标。
+
+### 5.3 子 Agent 强度继承与降级
+
+`subagent-intensity` 使用真实 `task` 生产入口分别验证两种配置。父 Agent 固定为 `max`：`inherit` 必须不注入 `agent_mode_override`，且子请求组装后的最终强度仍为 `max`；`downgrade` 必须在子 prompt 元数据中注入 `xhigh`，且请求组装后的最终强度确实为 `xhigh`。Oracle 同时核验唯一子 Session 的 parent lineage、真实 Provider/模型身份、持久化终态和无工具纯文本结果，防止只测试配置解析而没有覆盖真实模型请求。
+
+### 5.4 子 Agent 恢复、监督和失败边界
+
+`subagent-resume` 必须通过两次真实前台 `task` 调用复用同一个 child Session。第二次调用的 `task_id` 必须等于持久化 child ID；child generation 必须从 1 推进到 2；两代必须分别完成目标文件的真实 `read`，并各完成一次 `StructuredOutput`；最终 durable metadata 为 `completed/structured_output_valid`，且第二代结果保留第一代证据并加入新证据。Oracle 同时拒绝 provider error、错误 lineage、错误模型身份、新建第二 child、非 read/finalizer 工具或目标 read 没有返回隐藏证据；权限范围内的额外只读探查不属于产品故障。
+
+监督合同由确定性测试承担：前台 task 默认有有限 wall time；超时或崩溃后旧 generation 必须被取消并失去写终态资格，接管 generation 只能有一个 owner；父 Agent 收到有界输出而不是无限子 transcript；取消、作用域释放和 cleanup 必须中断仍存活的 fiber。增加退出条件但仍让旧执行继续写状态不算修复。
+
+`subagent-takeover` 使用真实 DeepSeek child 的 `question` 工具制造可观测挂起点，harness 不回复问题。生产 timeout 必须取消原 child，再启动恰好一个 takeover child；达到配置上限后 task 以 typed timeout 和 `task_read` 恢复指针返回，两个 child 分别持久化 `cancelled/takeover` 与 `error/timeout`，所有 Question pending entry 必须清零。suite 不允许用测试总超时杀进程来冒充产品收敛。
+
+Git 合同分入口定义：交互式写型 `task` 使用独立 worktree，并在自动协作模式提交 PR；`pr_finalize` 绑定精确 worker SHA，由同一个普通 Reviewer Session 逐项审查、串行 `--no-ff` merge，再由一个 Senior Reviewer Session 做批次复审。Senior review 在 merge 后崩溃时，queue 必须持久化 `stageReview: pending` 和 reviewer Session ID，重试复用同一 Session，不能把已 merge 批次误报为“无待办”。父 checkout 有未提交改动时必须在启动 worker/model 前失败；不得自动提交、覆盖或清理用户改动。
+
+事件驱动 V4 DAG 是独立生产入口：独立 DAG 节点按 wave 通过 WorkspaceConcurrency 有界并行，依赖边保持串行；写 turn 必须使用独立 worktree，cleanup 必须以 command-scoped DeepAgent Git 身份产出 durable continuation ref，依赖 turn 从精确 ref 继续；创建隔离失败或无法证明 cleanup 已保留 commit 时 fail closed 并升级人工。AgentExecution 的 claim、lease、generation、resource lock、token debit 和 handoff 使用 SQLite durable state，并由真实 OS 进程测试跨进程竞争。
+
+`v4-multi-agent-runtime` 是直接 V4 生产入口的真实模型回归：它通过 EventDispatcher、MultiAgentRuntime、真实 SessionPrompt/provider/tool loop 执行 `ci.failure` DAG，核验事件根 lineage、每个 turn 的 generation/token/terminal metadata、canonical worktree、依赖 continuation ref 和零权限等待。terminal leaf 有变更时必须从精确 ref 创建可恢复作者 worktree，把原 child Session relocation 到该目录，并以 `cleanupRequired: true` 进入同一 PR queue，同时产生一条 ApprovalQueue human event；重复 callback 不得重复入队。无 diff terminal leaf 不得切换父分支或创建 PR。真实 suite 到显式审批边界停止，不以模型自述冒充 merge。
+
+审批后的完整闭环由直接生产状态机测试验证：Reviewer 首次返回 `request_changes` 后，使用原 `task_id` 恢复同一个 V4 child Session 和作者 worktree，重新提交到同一 PR；再次 `pr_finalize` 后绑定新 SHA 审阅、`--no-ff` merge、Senior Reviewer 和 worktree cleanup 全部完成。默认 V4 分区规则当前没有产生独立同 wave 节点，因此 V4 wave pool 的并行性使用确定性双 runner 同步屏障证明；真实模型并行性由 `multi-agent-parallel-worktrees` 和 `expert-panel` 覆盖，不能把两类证据混写。
+
+### 5.5 Expert Panel 与缓存边界
+
+`expert-panel` 必须并行创建 correctness、security、architecture 三个 Reviewer Session。每个 Reviewer 只能成功读取自己的目标文件，必须经过独立的 structured finalizer，并由确定性 arbiter 重算最终 verdict 和 dissent。Oracle 要求每个 lens 至少有一条命中预埋代码事实且置信度为 `0.95` 的 finding；额外 finding 只要仍受目标文件、类别、证据隔离和置信度范围约束，就不应被误判为产品故障。模型对未授权路径的额外 read 尝试可以存在，但必须由权限层拒绝；任何额外成功读取或其他工具调用都应失败。
+
+普通同 Session Provider 轮次必须保持稳定 system prompt 和历史前缀。响应侧监控比较连续轮次的实际 `cache.read / prompt input` 比率和绝对 `cache.read`；只有 prompt 未缩短、命中率显著下降且缓存读取量也显著下降时，才报告疑似缓存崩溃。缓存读取量不变而新增未缓存尾部使比率下降，属于正常增长，不能误报为前缀崩溃。
+
+structured finalizer 是显式新前缀：生产实现会主动裁掉研究历史并把工具集切换为唯一的 `StructuredOutput`，进入 finalizer 前必须重置响应侧缓存基线。compaction summary 同样在原 Session ID 下使用独立的 compaction Agent/system/tool 前缀，但它不得读取或覆盖普通会话的 system/响应监控基线；压缩后的首个普通轮次仍必须与压缩前最后一个普通轮次直接比较。以上隔离只消除跨请求类型假阳性，不得放宽普通对话、工具续轮、压缩续轮或计划热更新的稳定性约束。
 
 ## 6. 只运行不调用模型的前置检查
 
@@ -177,6 +252,26 @@ bun run test:llm:all -- --dry-run
 ```
 
 建议在真实模型测试前先运行这些命令。聚合 runner 也会先执行相应前置检查；如果前置检查失败，后续模型调用不会继续。
+
+多 Agent 变更至少还要从 `packages/deepagent-code` 运行以下源码级回归：
+
+```sh
+bun test test/tool/task.test.ts test/tool/task-run.test.ts test/tool/task-takeover.test.ts test/tool/task-finalizer.test.ts
+bun test test/agent/pr-collaboration.test.ts test/agent/pr-queue.test.ts test/agent/pr-queue-process.test.ts test/tool/pr-finalize.test.ts
+bun test test/session/agent-worktree.test.ts test/session/multi-agent-runtime.test.ts test/session/agent-handoff-consumer.test.ts
+bun test test/session/v4-event-runtime.test.ts test/session/v4-integration.test.ts test/session/v4-pr-collaboration.test.ts test/session/session.test.ts
+bun test test/script/live-llm-routes.test.ts test/script/run-live-llm-all.test.ts
+bun typecheck
+```
+
+AgentExecution 变更还必须从 `packages/core` 运行：
+
+```sh
+bun test test/agent-execution.test.ts test/agent-execution-process.test.ts test/event-router.test.ts test/database-migration.test.ts
+bun typecheck
+```
+
+这些测试必须直接调用生产实现。允许注入 runner/provider/partition 边界来制造超时、崩溃和并行 DAG，但不得在测试中复制 task、调度器、PR queue、worktree cleanup 或 durable generation 的实现逻辑。V4 并行测试必须使用两个 runner 共同到达的同步屏障，并断言依赖 runner 只在整个上游 wave 完成后启动；耗时比较不能作为并行 Oracle。
 
 ## 7. 查看测试输出和报告
 
@@ -342,7 +437,7 @@ Token 指标用于比较用量，不是货币成本。实际费用应按 DeepSee
 确认环境变量指向真实文件，而不是直接保存 key：
 
 ```sh
-export DEEPAGENT_CODE_LIVE_LLM_API_KEY_FILE="$HOME/.config/deepagent-code/live-llm-deepseek.key"
+export DEEPAGENT_CODE_LIVE_LLM_API_KEY_FILE="$HOME/.deepagent/code/live-llm-deepseek.key"
 ```
 
 ### 提示 key 文件权限过宽

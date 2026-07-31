@@ -114,7 +114,6 @@ try {
     XDG_CACHE_HOME: path.join(testRoot, "cache"),
     DEEPAGENT_CODE_TEST_HOME: home,
     DEEPAGENT_CODE_HOME: data,
-    DEEPAGENT_CODE_CONFIG_DIR: data,
     DEEPAGENT_CODE_CONFIG_CONTENT: JSON.stringify(workspaceConfig),
     DEEPAGENT_CODE_DISABLE_PROJECT_CONFIG: "1",
     DEEPAGENT_CODE_PURE: "1",

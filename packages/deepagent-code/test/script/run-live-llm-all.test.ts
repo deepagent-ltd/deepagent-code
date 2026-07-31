@@ -1,9 +1,9 @@
 import { describe, expect, test } from "bun:test"
-import { chmod, realpath } from "node:fs/promises"
+import { chmod, mkdir, realpath } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { loadLiveLLMConfig, writeLiveArtifact } from "../../../llm/script/live-llm/config"
-import { liveSubprocessEnvironment, liveWorkspaceConfig } from "../../script/live-llm/runtime"
+import { directoryExists, liveSubprocessEnvironment, liveWorkspaceConfig } from "../../script/live-llm/runtime"
 import { tmpdir } from "../fixture/fixture"
 import {
   parseEvaluationSummary,
@@ -34,7 +34,7 @@ describe("all real LLM test runner", () => {
       installDependencies: true,
     })
 
-    expect(selected.filter((suite) => suite.realLLM)).toHaveLength(43)
+    expect(selected.filter((suite) => suite.realLLM)).toHaveLength(48)
     expect(selected.filter((suite) => suite.id === "setup:desktop-build")).toHaveLength(1)
     expect(new Set(selected.map((suite) => suite.id)).size).toBe(selected.length)
     expect(
@@ -59,6 +59,8 @@ describe("all real LLM test runner", () => {
     expect(selected.some((suite) => suite.eval)).toBe(false)
     expect(selected.some((suite) => suite.install)).toBe(false)
     expect(selected.some((suite) => suite.id === "live:subagent-foreground")).toBe(true)
+    expect(selected.some((suite) => suite.id === "ext:multi-agent-parallel-worktrees")).toBe(true)
+    expect(selected.some((suite) => suite.id === "ext:multi-agent-pr-collaboration")).toBe(true)
   })
 
   test("validates the official DeepSeek configuration without retaining an empty revision", () => {
@@ -80,6 +82,10 @@ describe("all real LLM test runner", () => {
     const hostEnvironment = {
       PATH: "/usr/bin:/bin",
       LANG: "C.UTF-8",
+      USER: "test-user",
+      LOGNAME: "test-user",
+      DISPLAY: ":99",
+      MODELS_DEV_API_JSON: "/isolated/models.json",
       HOME: "/host/home",
       SSH_AUTH_SOCK: "/host/agent.sock",
       AWS_SECRET_ACCESS_KEY: "host-secret",
@@ -90,10 +96,18 @@ describe("all real LLM test runner", () => {
     expect(runnerEnvironment(config, hostEnvironment)).toEqual({
       PATH: "/usr/bin:/bin",
       LANG: "C.UTF-8",
+      USER: "test-user",
+      LOGNAME: "test-user",
+      DISPLAY: ":99",
+      MODELS_DEV_API_JSON: "/isolated/models.json",
     })
     expect(runnerEnvironment(config, hostEnvironment, true)).toEqual({
       PATH: "/usr/bin:/bin",
       LANG: "C.UTF-8",
+      USER: "test-user",
+      LOGNAME: "test-user",
+      DISPLAY: ":99",
+      MODELS_DEV_API_JSON: "/isolated/models.json",
       DEEPAGENT_CODE_LIVE_LLM_API_KEY_FILE: config.apiKeyFile,
       DEEPAGENT_CODE_LIVE_LLM_BASE_URL: config.baseURL,
       DEEPAGENT_CODE_LIVE_LLM_MODEL: config.model,
@@ -124,6 +138,18 @@ describe("all real LLM test runner", () => {
       HOME: "/isolated/home",
       DEEPAGENT_CODE_LIVE_LLM_API_KEY_FILE: "/secure/live-llm.key",
     })
+  })
+
+  test("recognizes child worktree directories without treating them as Bun files", async () => {
+    await using directory = await tmpdir()
+    const worktree = path.join(directory.path, "worktree")
+    const file = path.join(directory.path, "file")
+    await mkdir(worktree)
+    await Bun.write(file, "not a directory")
+
+    expect(await directoryExists(worktree)).toBe(true)
+    expect(await directoryExists(file)).toBe(false)
+    expect(await directoryExists(path.join(directory.path, "missing"))).toBe(false)
   })
 
   test("loads credentials only from a protected live-test key file", async () => {

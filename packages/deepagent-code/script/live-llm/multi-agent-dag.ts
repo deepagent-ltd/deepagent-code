@@ -10,8 +10,16 @@ import { runLegacyLiveCases } from "./runtime"
 // checks the resulting bytes; the parent must aggregate all three durable child results.
 const researchMarker = `research-${crypto.randomUUID()}`
 const expectedOutput = `artifact-${crypto.randomUUID()}`
+const researchContent = `${researchMarker}\n`
+const expectedContent = `${expectedOutput}\n`
 const verifierSuccess = `dag-ok-${crypto.randomUUID()}`
 const verifierFailure = `dag-error-${crypto.randomUUID()}`
+const workerOutputSchema = {
+  type: "object",
+  properties: { result: { type: "string" } },
+  required: ["result"],
+  additionalProperties: false,
+}
 const verifierScript = `#!/bin/sh
 set -eu
 if [ "$(cat output/result.txt 2>/dev/null || true)" = "${expectedOutput}" ]; then
@@ -23,12 +31,15 @@ exit 31
 `
 
 const prompt = [
-  "Coordinate exactly three FOREGROUND child tasks, sequentially, and do not use background mode.",
+  "Coordinate exactly three FOREGROUND task calls, sequentially, and do not use background mode.",
   "First call task with subagent_type researcher and output_schema ResearchResult.",
   "Its prompt must tell it to read fixtures/research.txt exactly once and return a valid ResearchResult whose mechanism is the exact file content.",
-  "Second call task with subagent_type worker and a raw output_schema requiring an object with one required string property named result.",
+  "Second call task with subagent_type worker and the raw output_schema provided below; pass it as an object, not a string.",
+  `Use this exact worker output_schema: ${JSON.stringify(workerOutputSchema)}.`,
   "In the worker prompt, include the exact mechanism returned by the researcher.",
   "Tell the worker to read fixtures/instruction.txt exactly once, write its exact content to output/result.txt, and return result set to the exact bytes it wrote.",
+  "After the worker returns, call pr_finalize exactly once with no pr_ids so its automatic PR is reviewed, merged, and stage-reviewed.",
+  "Wait for pr_finalize to finish before starting the third task.",
   "Third call task with subagent_type reviewer and output_schema ReviewResult.",
   "Tell the reviewer to read output/result.txt exactly once, verify it against the expected value stated in fixtures/review.txt, and return approve only when byte-exact; otherwise block with a finding.",
   "Do not read, write, edit, or run bash yourself. Do not call task_status or task_read.",
@@ -38,7 +49,7 @@ const prompt = [
 const artifact = await runLegacyLiveCases({
   suite: "multi-agent-dag-legacy",
   permission: { "*": "deny" },
-  primaryPermission: { "*": "deny", task: "allow" },
+  primaryPermission: { "*": "deny", task: "allow", pr_finalize: "allow" },
   agentPermissions: {
     researcher: {
       "*": "deny",
@@ -47,7 +58,7 @@ const artifact = await runLegacyLiveCases({
     worker: {
       "*": "deny",
       read: { "*": "deny", "fixtures/instruction.txt": "allow" },
-      write: { "*": "deny", "output/result.txt": "allow" },
+      edit: { "*": "deny", "output/result.txt": "allow" },
     },
     reviewer: {
       "*": "deny",
@@ -60,17 +71,26 @@ const artifact = await runLegacyLiveCases({
   },
   cases: [{ name: "dag", prompt }],
   files: {
-    "fixtures/research.txt": researchMarker,
-    "fixtures/instruction.txt": expectedOutput,
-    "fixtures/review.txt": expectedOutput,
+    "fixtures/research.txt": researchContent,
+    "fixtures/instruction.txt": expectedContent,
+    "fixtures/review.txt": expectedContent,
   },
-  inspectFiles: [
-    "fixtures/research.txt",
-    "fixtures/instruction.txt",
-    "fixtures/review.txt",
-    "output/result.txt",
-  ],
+  inspectFiles: ["fixtures/research.txt", "fixtures/instruction.txt", "fixtures/review.txt", "output/result.txt"],
+  inspectPRCollaboration: true,
   toolSandbox: { verifierScript, initialVerifier: "fail" },
+  evaluateWorkspace: async (directory, sandbox) => {
+    if (!sandbox) throw new Error("Multi-Agent DAG verifier requires a qualified tool sandbox")
+    const result = Bun.spawnSync([sandbox.shell, "-c", sandbox.verifier], {
+      cwd: directory,
+      stdout: "pipe",
+      stderr: "pipe",
+    })
+    return {
+      exitCode: result.exitCode,
+      stdout: result.stdout.toString(),
+      stderr: result.stderr.toString(),
+    }
+  },
   modelMaxTokens: 2048,
   maxProviderTurns: 14,
 })
@@ -90,12 +110,16 @@ if (!artifact.sandbox?.networkDenied || !artifact.sandbox.verifierWriteDenied) {
 const observation = artifact.cases[0]
 if (!observation) throw new Error("Missing Multi-Agent DAG observation")
 const children = observation.children
-if (children.length !== 3) {
-  throw new Error(`Expected exactly three child sessions, received ${children.length}`)
+if (children.length !== 5) {
+  throw new Error(`Expected three task children plus Reviewer and Senior Reviewer, received ${children.length}`)
 }
 const researcher = requireChild("researcher")
 const worker = requireChild("worker")
-const reviewer = requireChild("reviewer")
+const reviewers = children.filter((child) => child.agent === "reviewer")
+const reviewer = reviewers.find((child) => nestedRecord(child.metadata, ["deepagent"]).pr_review === undefined)
+const prReviewer = reviewers.find((child) => nestedRecord(child.metadata, ["deepagent"]).pr_review !== undefined)
+const seniorReviewer = requireChild("senior-reviewer")
+if (!reviewer || !prReviewer) throw new Error("DAG did not create distinct result and PR Reviewer sessions")
 
 for (const child of children) {
   if (child.parentID !== observation.sessionID) {
@@ -106,7 +130,9 @@ for (const child of children) {
     child.model.id !== artifact.fingerprint.modelID ||
     child.assistants.some(
       (assistant) =>
-        assistant.providerID !== "live-deepseek" || assistant.modelID !== artifact.fingerprint.modelID,
+        assistant.providerID !== "live-deepseek" ||
+        assistant.modelID !== artifact.fingerprint.modelID ||
+        assistant.error !== undefined,
     )
   ) {
     throw new Error(`Child ${child.id} persisted the wrong provider/model identity`)
@@ -124,7 +150,7 @@ for (const child of children) {
 }
 
 const researchResult = structuredResult(researcher, "ResearchResult")
-if (researchResult.mechanism !== researchMarker) {
+if (researchResult.mechanism !== researchMarker && researchResult.mechanism !== researchContent) {
   throw new Error(`Researcher returned wrong hidden marker: ${JSON.stringify(researchResult.mechanism)}`)
 }
 const researcherReads = completedTools(researcher, "read")
@@ -133,15 +159,15 @@ if (researcherReads.length !== 1) {
 }
 
 const workerResult = structuredResult(worker, "WorkerResult")
-if (workerResult.result !== expectedOutput) {
-  throw new Error(`Worker structured result is not byte-exact: ${JSON.stringify(workerResult.result)}`)
+if (typeof workerResult.result !== "string" || workerResult.result.split(expectedOutput).length !== 2) {
+  throw new Error(`Worker structured result did not carry the unique hidden artifact: ${JSON.stringify(workerResult.result)}`)
 }
 if (completedTools(worker, "read").length !== 1 || completedTools(worker, "write").length !== 1) {
   throw new Error("Worker did not complete exactly one read and one write")
 }
 
 const reviewResult = structuredResult(reviewer, "ReviewResult")
-if (reviewResult.verdict !== "approve" || reviewResult.requires_human !== false) {
+if (reviewResult.verdict !== "approve" || !Array.isArray(reviewResult.findings) || reviewResult.findings.length !== 0) {
   throw new Error(`Reviewer did not independently approve exact output: ${JSON.stringify(reviewResult)}`)
 }
 if (completedTools(reviewer, "read").length !== 2) {
@@ -152,8 +178,12 @@ const taskTools = observation.tools.filter((tool) => tool.name === "task" && too
 if (taskTools.length !== 3) {
   throw new Error(`Parent expected three completed task calls, got ${taskTools.length}`)
 }
+const finalizeTools = observation.tools.filter((tool) => tool.name === "pr_finalize" && tool.status === "completed")
+if (finalizeTools.length !== 1) {
+  throw new Error(`Parent expected one completed pr_finalize call, got ${finalizeTools.length}`)
+}
 const forbiddenParentTools = observation.tools.filter(
-  (tool) => tool.status === "completed" && tool.name !== "task",
+  (tool) => tool.status === "completed" && !["task", "pr_finalize"].includes(tool.name),
 )
 if (forbiddenParentTools.length > 0) {
   throw new Error(`Parent executed forbidden tools: ${forbiddenParentTools.map((tool) => tool.name).join(", ")}`)
@@ -165,15 +195,11 @@ if (observation.permissionRequests.length > 0) {
 }
 
 const output = artifact.workspace.files["output/result.txt"]
-if (output !== expectedOutput) {
+if (output !== expectedContent) {
   throw new Error(`Final artifact bytes mismatch: ${JSON.stringify(output)}`)
 }
-const verifier = Bun.spawnSync(["./verify"], {
-  cwd: artifact.workspace.directory,
-  stdout: "pipe",
-  stderr: "pipe",
-})
-const verifierStdout = verifier.stdout.toString()
+const verifier = record(artifact.evaluation, "DAG verifier")
+const verifierStdout = String(verifier.stdout)
 if (verifier.exitCode !== 0 || !verifierStdout.includes(verifierSuccess)) {
   throw new Error(
     `Hidden verifier did not pass after DAG completion: exit=${verifier.exitCode}, stdout=${JSON.stringify(verifierStdout)}`,
@@ -184,8 +210,23 @@ const changedPaths = artifact.workspace.status
   .split("\n")
   .filter((line) => line.trim())
   .map((line) => line.slice(3).trim())
-if (changedPaths.length !== 1 || changedPaths[0] !== "output/result.txt") {
+if (changedPaths.length !== 0) {
   throw new Error(`Unexpected workspace mutations: ${JSON.stringify(changedPaths)}`)
+}
+const collaboration = artifact.collaboration
+if (!collaboration) throw new Error("Missing DAG PR collaboration evidence")
+const entries = array(record(collaboration.queue, "DAG PR queue").entries, "DAG PR entries").map((entry) =>
+  record(entry, "DAG PR entry"),
+)
+if (
+  entries.length !== 1 ||
+  entries[0]?.status !== "merged" ||
+  entries[0]?.workerID !== worker.id ||
+  entries[0]?.reviewerID !== prReviewer.id ||
+  !collaboration.branch.startsWith("deepagent-code/session-") ||
+  (collaboration.worktrees.match(/^worktree /gm) ?? []).length !== 1
+) {
+  throw new Error("DAG worker PR did not complete the production review and merge lifecycle")
 }
 for (const marker of [researchMarker, expectedOutput]) {
   if (!observation.finalText.includes(marker)) {
@@ -202,10 +243,13 @@ const result = {
   evidence: {
     childIDs: children.map((child) => child.id),
     childAgents: children.map((child) => child.agent),
-    researchMarkerHash: Bun.hash(researchMarker).toString(16),
-    expectedOutputHash: Bun.hash(expectedOutput).toString(16),
+    researchMarkerHash: Bun.hash(researchContent).toString(16),
+    expectedOutputHash: Bun.hash(expectedContent).toString(16),
     taskCallCount: taskTools.length,
     changedPaths,
+    prReviewerSessionID: prReviewer.id,
+    seniorReviewerSessionID: seniorReviewer.id,
+    prID: entries[0]?.id,
     hiddenVerifierExit: verifier.exitCode,
     hiddenVerifierPassed: verifierStdout.includes(verifierSuccess),
     parentAggregatedResearch: observation.finalText.includes(researchMarker),
@@ -250,6 +294,11 @@ function record(value: unknown, name: string): Record<string, unknown> {
     throw new Error(`${name} is not an object`)
   }
   return value as Record<string, unknown>
+}
+
+function array(value: unknown, name: string): unknown[] {
+  if (!Array.isArray(value)) throw new Error(`${name} is not an array`)
+  return value
 }
 
 function nestedRecord(value: unknown, keys: string[]) {

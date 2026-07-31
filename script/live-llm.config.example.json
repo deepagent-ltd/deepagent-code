@@ -1,6 +1,6 @@
 {
   "baseURL": "https://api.deepseek.com",
-  "apiKeyFile": "~/.config/deepagent-code/live-llm-deepseek.key",
+  "apiKeyFile": "~/.deepagent/code/tmp/live-llm-deepseek.key",
   "model": "deepseek-v4-flash",
   "modelRevision": "",
   "requestTimeoutMs": 180000,

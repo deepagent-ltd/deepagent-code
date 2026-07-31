@@ -161,9 +161,8 @@ export async function launch(name: string, config: LiveConfig) {
     XDG_STATE_HOME: path.join(root, "state"),
     DEEPAGENT_CODE_TEST_ONBOARDING: "1",
     DEEPAGENT_CODE_TEST_ROOT: root,
+    DEEPAGENT_CODE_TEST_HOME: path.join(root, "home"),
     DEEPAGENT_CODE_DB: path.join(root, "deepagent.sqlite"),
-    DEEPAGENT_CODE_HOME: path.join(root, "deepagent-home"),
-    DEEPAGENT_CODE_CONFIG_DIR: path.join(root, "deepagent-home"),
     DEEPAGENT_CODE_DISABLE_AUTOUPDATE: "1",
     DEEPAGENT_CODE_DISABLE_CHANNEL_DB: "1",
     DEEPAGENT_CODE_DISABLE_DEFAULT_PLUGINS: "1",
@@ -262,7 +261,7 @@ export async function launch(name: string, config: LiveConfig) {
     mkdir(env.XDG_CONFIG_HOME, { recursive: true }),
     mkdir(env.XDG_CACHE_HOME, { recursive: true }),
     mkdir(env.XDG_STATE_HOME, { recursive: true }),
-    mkdir(env.DEEPAGENT_CODE_HOME, { recursive: true }),
+    mkdir(env.DEEPAGENT_CODE_TEST_HOME, { recursive: true }),
   ])
   const app = await electron.launch({ args: [main], env, timeout: 90_000 })
   activeApps.add(app)

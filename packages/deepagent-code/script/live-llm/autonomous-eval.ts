@@ -4,7 +4,7 @@ import type { ConfigV1 } from "@deepagent-code/core/v1/config/config"
 import type { ToolSandbox } from "../../../core/script/live-llm/sandbox"
 import { evalReport, type EvalFailure, type EvalRun } from "../../../llm/script/live-llm/eval-report"
 import { loadLiveLLMConfig, writeLiveArtifact } from "../../../llm/script/live-llm/config"
-import { parseVerifierChecks, pythonVerifier, scoreRubric, type RubricItem } from "./eval-scoring"
+import { parseVerifierChecks, pythonVerifier, scoreRubric, verifierMarker, type RubricItem } from "./eval-scoring"
 import { finishLiveScript } from "./lifecycle"
 import { runLegacyLiveCases } from "./runtime"
 
@@ -69,6 +69,7 @@ for (const index of Array.from({ length: runCount }, (_, value) => value)) {
         unexpectedToolErrors,
       }),
     )
+    const evaluationFailure = classifyEvaluationFailure(evaluation)
     const passed =
       evaluation.passed === true &&
       resourcePassed &&
@@ -80,7 +81,7 @@ for (const index of Array.from({ length: runCount }, (_, value) => value)) {
       task: task.id,
       taskSeed: task.seed,
       passed,
-      failure: passed ? undefined : resourcePassed ? "model-behavior" : "budget",
+      failure: passed ? undefined : evaluationFailure ?? (resourcePassed ? "model-behavior" : "budget"),
       score,
       providerTurns: observation.assistantTurns,
       toolCalls: observation.tools.length,
@@ -441,6 +442,7 @@ async function evaluateFreshCopy(task: EvalTask, directory: string, sandbox?: To
       hiddenVerifier: true,
       sandboxed: true,
       exitCode,
+      verifierStructured: stdout.split("\n").some((line) => line.startsWith(verifierMarker)),
       checks: parseVerifierChecks(stdout, task.verifier.checks),
       outputHash: Bun.hash(`${stdout}\n${stderr}`).toString(16),
       diagnostic:
@@ -457,6 +459,17 @@ async function evaluateFreshCopy(task: EvalTask, directory: string, sandbox?: To
   } finally {
     await rm(fresh, { recursive: true, force: true })
   }
+}
+
+function classifyEvaluationFailure(evaluation: Record<string, unknown>) {
+  if (
+    evaluation.hiddenVerifier === true &&
+    evaluation.sandboxed === true &&
+    evaluation.verifierStructured === false
+  ) {
+    return "sandbox-contract" as const
+  }
+  return undefined
 }
 
 function rubricItems(input: {

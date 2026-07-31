@@ -25,11 +25,12 @@ const question = [
   "1. Invoke the registered read tool exactly once for the assigned file. Do not print or imitate XML/tool markup.",
   "2. Wait for the read tool result and use the EVIDENCE constant from that result.",
   "3. Write a complete textual draft containing the required finding and verdict; the separate finalizer will convert it to ReviewResult.",
-  "CORRECTNESS: read only fixtures/correctness.ts, return verdict block with one correctness or edge-case finding, and finding confidence 0.95.",
-  "SECURITY: read only fixtures/security.ts, return verdict block with one security finding, and finding confidence 0.95.",
-  "ARCHITECTURE: read only fixtures/architecture.ts, return verdict revise with one convention finding, and finding confidence 0.95.",
+  "CORRECTNESS: read only fixtures/correctness.ts, return verdict block with one or more correctness or edge-case findings, including a seeded finding with confidence 0.95.",
+  "SECURITY: read only fixtures/security.ts, return verdict block with one or more security findings, including a seeded finding with confidence 0.95.",
+  "ARCHITECTURE: read only fixtures/architecture.ts, return verdict revise with one or more convention findings, including a seeded finding with confidence 0.95.",
   "Use the exact EVIDENCE constant returned by the real read as your private evidence check; the final finding must instead preserve the fixture-specific code fact required for your lens.",
-  "Use the assigned relative file path in the finding and give a concrete failureScenario.",
+  "Every finding.file must equal the assigned relative file path exactly; never append :line because line is a separate numeric field.",
+  "Give every finding a concrete failureScenario.",
   "Do not add lens or panelist identity fields or phrases such as 'my lens'; normal technical terms and file paths remain allowed.",
   "Do not call any other tool.",
 ].join("\n")
@@ -151,39 +152,40 @@ const expected = {
 for (const opinion of opinions) {
   const contract = expected[opinion.lens as keyof typeof expected]
   if (!contract) throw new Error(`D3 returned unexpected lens ${opinion.lens}`)
-  if (opinion.verdict !== contract.verdict || opinion.findings.length !== 1) {
+  if (opinion.verdict !== contract.verdict || opinion.findings.length === 0) {
     throw new Error(`D3 ${opinion.lens} opinion did not follow its seeded verdict contract`)
   }
-  const finding = opinion.findings[0]
-  const findingText = finding
-    ? [finding.summary, finding.failureScenario, finding.suggestion ?? ""].join("\n")
-    : ""
-  const foreignMarkerPresent = Object.values(evidence).some(
-    (marker) => marker !== contract.marker && findingText.includes(marker),
-  )
-  const missingFindingEvidence = contract.findingEvidence.filter((value) => !findingText.includes(value))
-  if (
-    !finding ||
-    finding.file !== contract.file ||
-    !contract.category.includes(finding.category as never) ||
-    foreignMarkerPresent ||
-    missingFindingEvidence.length > 0 ||
-    finding.failureScenario.trim().length === 0 ||
-    finding.confidence !== 0.95
-  ) {
+  const invalidFinding = opinion.findings.find((finding) => {
+    const findingText = [finding.summary, finding.failureScenario, finding.suggestion ?? ""].join("\n")
+    return (
+      finding.file !== contract.file ||
+      !contract.category.includes(finding.category as never) ||
+      Object.values(evidence).some((marker) => marker !== contract.marker && findingText.includes(marker)) ||
+      finding.failureScenario.trim().length === 0 ||
+      finding.confidence < 0 ||
+      finding.confidence > 1
+    )
+  })
+  const seededFinding = opinion.findings.find((finding) => {
+    const findingText = [finding.summary, finding.failureScenario, finding.suggestion ?? ""].join("\n")
+    return contract.findingEvidence.some((value) => findingText.includes(value)) && finding.confidence === 0.95
+  })
+  if (invalidFinding || !seededFinding) {
     throw new Error(
-      `D3 ${opinion.lens} finding was not grounded in its unique seeded evidence: ${JSON.stringify({
-        file: finding?.file,
-        category: finding?.category,
-        foreignMarkerPresent,
-        missingFindingEvidence,
-        failureScenarioPresent: Boolean(finding?.failureScenario.trim()),
-        confidence: finding?.confidence,
+      `D3 ${opinion.lens} findings were not grounded in their unique seeded evidence: ${JSON.stringify({
+        invalidFile: invalidFinding?.file,
+        invalidCategory: invalidFinding?.category,
+        invalidConfidence: invalidFinding?.confidence,
+        seededFindingPresent: Boolean(seededFinding),
       })}`,
     )
   }
-  const prose = [finding.summary, finding.failureScenario, finding.suggestion ?? ""].join("\n").toLowerCase()
-  if (/\b(?:my|assigned)\s+lens\b|\bpanelist\b|\blens\s+(?:is|:)\b/.test(prose)) {
+  const identityLeak = opinion.findings.find((finding) =>
+    /\b(?:my|assigned)\s+lens\b|\bpanelist\b|\blens\s+(?:is|:)\b/.test(
+      [finding.summary, finding.failureScenario, finding.suggestion ?? ""].join("\n").toLowerCase(),
+    ),
+  )
+  if (identityLeak) {
     throw new Error(`D3 ${opinion.lens} finding leaked its panel identity`)
   }
 
@@ -192,18 +194,33 @@ for (const opinion of opinions) {
   )
   if (!child) throw new Error(`D3 could not map ${opinion.lens} to a differentiated child prompt`)
   const tools = child.assistants.flatMap((assistant) => assistant.tools)
-  const completed = tools.filter((tool) => tool.status === "completed")
-  if (
-    tools.length !== 2 ||
-    completed.map((tool) => tool.name).join("\0") !== ["read", "StructuredOutput"].join("\0")
-  ) {
+  const completedReads = tools.filter((tool) => tool.name === "read" && tool.status === "completed")
+  const finalizerCalls = tools.filter((tool) => tool.name === "StructuredOutput" && tool.status === "completed")
+  const invalidTool = tools.find((tool) => {
+    if (tool.name === "read" && tool.status === "completed") return false
+    if (tool.name === "StructuredOutput" && tool.status === "completed") return false
+    if (tool.name !== "read" || tool.status !== "error") return true
+    const input = record(tool.input, `${opinion.lens} rejected read input`)
+    return typeof input.filePath !== "string" || input.filePath.endsWith(contract.file)
+  })
+  if (completedReads.length < 1 || finalizerCalls.length < 1 || finalizerCalls.length > 2 || invalidTool !== undefined) {
     throw new Error(`D3 ${opinion.lens} tool sequence was ${tools.map((tool) => `${tool.name}:${tool.status}`).join(" -> ")}`)
   }
-  const read = record(completed[0]?.input, `${opinion.lens} read input`)
-  if (typeof read.filePath !== "string" || !read.filePath.endsWith(contract.file)) {
+  const finalizerResult = record(finalizerCalls.at(-1)?.input, `${opinion.lens} finalizer result`)
+  if (
+    finalizerResult.verdict !== opinion.verdict ||
+    JSON.stringify(finalizerResult.findings) !== JSON.stringify(opinion.findings)
+  ) {
+    throw new Error(`D3 ${opinion.lens} finalizer did not settle on the arbitrated opinion`)
+  }
+  const reads = completedReads.map((tool) => ({
+    input: record(tool.input, `${opinion.lens} read input`),
+    output: typeof tool.output === "string" ? tool.output : "",
+  }))
+  if (reads.some((read) => typeof read.input.filePath !== "string" || !read.input.filePath.endsWith(contract.file))) {
     throw new Error(`D3 ${opinion.lens} read the wrong evidence file`)
   }
-  const readOutput = typeof completed[0]?.output === "string" ? completed[0].output : ""
+  const readOutput = reads.map((read) => read.output).join("\n")
   const researchText = child.assistants.map((assistant) => assistant.text).join("\n")
   const evidenceText = `${readOutput}\n${researchText}`
   if (

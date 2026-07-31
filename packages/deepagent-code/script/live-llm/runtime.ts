@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events"
-import { mkdir, mkdtemp, rm } from "node:fs/promises"
+import { mkdir, mkdtemp, rm, stat } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import type { ConfigV1 } from "@deepagent-code/core/v1/config/config"
@@ -18,6 +18,14 @@ import {
 import { prepareToolSandbox, type ToolSandbox } from "../../../core/script/live-llm/sandbox"
 
 export const runtimeProviderID = "live-deepseek"
+
+export async function directoryExists(directory: string): Promise<boolean> {
+  try {
+    return (await stat(directory)).isDirectory()
+  } catch {
+    return false
+  }
+}
 
 const liveSubprocessHostKeys = [
   "PATH",
@@ -101,6 +109,12 @@ export type LegacyPanelCase = {
   policy?: "default" | "security"
 }
 
+export type V4LiveEventCase = {
+  type: "ci.failure" | "ci.repair.requested" | "git.push" | "monitor.alert" | "pr.comment" | "schedule.scan"
+  source: "ci" | "git" | "monitor" | "schedule"
+  payload: Record<string, unknown>
+}
+
 export async function runLegacyLiveCases(input: {
   suite: string
   cases: LegacyLiveCase[]
@@ -110,11 +124,15 @@ export async function runLegacyLiveCases(input: {
   mcp?: ConfigV1.Info["mcp"]
   files?: Record<string, string>
   inspectFiles?: string[]
+  inspectChildFiles?: string[]
+  inspectPRCollaboration?: boolean
   packageScripts?: Readonly<Record<string, string>>
   toolSandbox?: { verifierScript?: string; initialVerifier?: "fail" | "pass" }
-  permissionReply?: { reply: "reject"; message?: string }
+  verifyChildWorktrees?: boolean
+  permissionReply?: { reply: "once" | "always" | "reject"; message?: string }
+  permissionBarrierCount?: number
   questionReply?: string
-  questionAction?: { type: "abort" } | { type: "background"; reply: string }
+  questionAction?: { type: "abort" } | { type: "background"; reply: string } | { type: "hold" }
   awaitParentTools?: string[]
   primaryPrompt?: string
   modelMaxTokens?: number
@@ -131,10 +149,21 @@ export async function runLegacyLiveCases(input: {
   // durable admission evidence before awaiting that prompt to completion.
   steerDuringCases?: ReadonlyArray<{ duringCaseName: string; text: string }>
   observeAssembledRequestFingerprints?: boolean
+  subagentIntensity?: "inherit" | "downgrade"
   environment?: Readonly<Record<string, string>>
   panel?: LegacyPanelCase
+  v4Event?: V4LiveEventCase
 }) {
   const config = await loadLiveLLMConfig()
+  if (
+    input.permissionBarrierCount !== undefined &&
+    (!Number.isSafeInteger(input.permissionBarrierCount) || input.permissionBarrierCount < 2)
+  ) {
+    throw new Error("permissionBarrierCount must be an integer greater than or equal to 2")
+  }
+  if (input.verifyChildWorktrees && !input.toolSandbox?.verifierScript) {
+    throw new Error("verifyChildWorktrees requires a toolSandbox verifierScript")
+  }
   const preflight = await preflightLiveLLM(config)
   const testRoot = await mkdtemp(path.join(os.tmpdir(), `deepagent-code-${input.suite}-`))
   const isolatedHome = path.join(testRoot, "home")
@@ -149,10 +178,20 @@ export async function runLegacyLiveCases(input: {
     const { ModelV2 } = await import("@deepagent-code/core/model")
     const { ProviderV2 } = await import("@deepagent-code/core/provider")
     const { CrossSpawnSpawner } = await import("@deepagent-code/core/cross-spawn-spawner")
-    const { Effect, Fiber, Layer, Schedule } = await import("effect")
+    const { Context, Deferred, Effect, Fiber, Layer, Schedule } = await import("effect")
+    const { AgentExecution } = await import("@deepagent-code/core/deepagent/agent-execution")
+    const { ApprovalQueue } = await import("@deepagent-code/core/deepagent/approval-queue")
+    const { DeepAgentEventBus } = await import("@deepagent-code/core/deepagent/deepagent-event-bus")
+    const { Scheduler } = await import("@deepagent-code/core/deepagent/scheduler")
+    const { TaskPartitioner } = await import("@deepagent-code/core/deepagent/task-partitioner")
+    const { BUILTIN_AGENT_DESCRIPTORS } = await import("@deepagent-code/core/im/builtin-agents")
+    const { AgentListProviderService } = await import("@deepagent-code/core/im/agent-list-provider")
+    const { Database } = await import("@deepagent-code/core/database/database")
     const globalBus = GlobalBus as unknown as EventEmitter
     const { EventV2Bridge } = await import("../../src/event-v2-bridge")
     const { Agent } = await import("../../src/agent/agent")
+    const { PRQueue } = await import("../../src/agent/pr-queue")
+    const { Git } = await import("../../src/git")
     const { Permission } = await import("../../src/permission")
     const { Question } = await import("../../src/question")
     const { SessionCompaction } = await import("../../src/session/compaction")
@@ -161,6 +200,12 @@ export async function runLegacyLiveCases(input: {
     const { MessageID } = await import("../../src/session/schema")
     const { SessionSteer } = await import("../../src/session/steer")
     const { Session } = await import("../../src/session/session")
+    const { EventDispatcher } = await import("../../src/session/event-dispatcher")
+    const { MultiAgentRuntime } = await import("../../src/session/multi-agent-runtime")
+    const { makeEventTurnRunner } = await import("../../src/session/v4-event-runtime")
+    const { V4PRCollaboration } = await import("../../src/session/v4-pr-collaboration")
+    const { RuntimeFlags } = await import("../../src/effect/runtime-flags")
+    const { InstanceRef } = await import("../../src/effect/instance-ref")
     const { InstanceStore } = await import("../../src/project/instance-store")
     const { Worktree } = await import("../../src/worktree")
     const { consultPanel } = await import("../../src/panel/consult")
@@ -185,9 +230,14 @@ export async function runLegacyLiveCases(input: {
       const compaction = yield* SessionCompaction.Service
       const sessions = yield* Session.Service
       const instance = yield* TestInstance
+      const parentInstance = yield* InstanceRef
+      if (!parentInstance) return yield* Effect.die(new Error("Live LLM harness has no parent InstanceRef"))
       const permissions = yield* Permission.Service
       const questions = yield* Question.Service
-      const agents = input.panel ? yield* Agent.Service : undefined
+      const agents = input.panel || input.v4Event ? yield* Agent.Service : undefined
+      const instances = input.v4Event ? yield* InstanceStore.Service : undefined
+      const gitService = input.v4Event ? yield* Git.Service : undefined
+      const prQueue = input.v4Event ? yield* PRQueue.Service : undefined
       const assembledRequestFingerprints: GlobalEvent[] = []
       const requestFingerprintListener = (event: GlobalEvent) => {
         if (event.payload?.type !== "session.request.assembled-fingerprint") return
@@ -198,25 +248,43 @@ export async function runLegacyLiveCases(input: {
         yield* Effect.addFinalizer(() => Effect.sync(() => globalBus.off("event", requestFingerprintListener)))
       }
       const permissionRequests: PermissionV1.Request[] = []
+      const permissionLocations = new Map<PermissionV1.ID, { directory?: string; workspaceID?: string }>()
+      const permissionBarrier = input.permissionBarrierCount ? yield* Deferred.make<void>() : undefined
+      const permissionBarrierSnapshots: string[][] = []
       const questionRequests: Array<{
         id: QuestionID
         sessionID: string
         questions: ReadonlyArray<unknown>
         tool?: { messageID: string; callID: string }
-        latch?: { type: "abort" | "background"; parentSessionID?: string; taskRunning?: boolean }
+        latch?: { type: "abort" | "background" | "hold"; parentSessionID?: string; taskRunning?: boolean }
       }> = []
       const events = yield* EventV2Bridge.Service
       const unsubscribe = yield* events.listen((event) => {
         if (event.type !== Permission.Event.Asked.type) return Effect.void
         const request = event.data as PermissionV1.Request
         permissionRequests.push(request)
-        return permissions
-          .reply({
+        permissionLocations.set(request.id, {
+          directory: event.location?.directory,
+          workspaceID: event.location?.workspaceID,
+        })
+        return Effect.gen(function* () {
+          if (permissionBarrier && input.permissionBarrierCount) {
+            if (permissionRequests.length === input.permissionBarrierCount) {
+              permissionBarrierSnapshots.push(
+                (yield* permissions.list().pipe(Effect.provideService(InstanceRef, parentInstance))).map((item) =>
+                  String(item.id),
+                ),
+              )
+              yield* Deferred.succeed(permissionBarrier, undefined)
+            }
+            yield* Deferred.await(permissionBarrier)
+          }
+          yield* permissions.reply({
             requestID: request.id,
             reply: input.permissionReply?.reply ?? "reject",
             message: input.permissionReply?.message,
           })
-          .pipe(Effect.orDie)
+        }).pipe(Effect.provideService(InstanceRef, parentInstance), Effect.orDie)
       })
       yield* Effect.addFinalizer(() => unsubscribe)
       const unsubscribeQuestions = yield* events.listen((event) => {
@@ -259,12 +327,210 @@ export async function runLegacyLiveCases(input: {
             })
           }).pipe(Effect.orDie)
         }
+        if (questionAction?.type === "hold") {
+          request.latch = { type: "hold" }
+          return Effect.void
+        }
         if (input.questionReply !== undefined) {
           return questions.reply({ requestID: request.id, answers: [[input.questionReply]] }).pipe(Effect.orDie)
         }
         return questions.reject(request.id).pipe(Effect.orDie)
       })
       yield* Effect.addFinalizer(() => unsubscribeQuestions)
+      const v4Event = input.v4Event
+      const v4 =
+        v4Event && agents && instances && gitService && prQueue
+          ? yield* Effect.gen(function* () {
+              const database = yield* Database.Service
+              const databaseLayer = Layer.succeed(Database.Service, database)
+              const core = Layer.mergeAll(
+                DeepAgentEventBus.layer,
+                ApprovalQueue.layer,
+                AgentExecution.layer,
+                Scheduler.layer,
+              ).pipe(Layer.provide(databaseLayer))
+              const flags = RuntimeFlags.layer({ v4MultiAgentRuntime: true })
+              const registry = Layer.succeed(AgentListProviderService, {
+                listAgents: () => Effect.succeed([...BUILTIN_AGENT_DESCRIPTORS]),
+                findByTrigger: () => Effect.succeed([]),
+                findByCapability: () => Effect.succeed([]),
+              })
+              const runtime = Layer.unwrap(
+                Effect.gen(function* () {
+                  const execution = yield* AgentExecution.Service
+                  const bus = yield* DeepAgentEventBus.Service
+                  const approvalQueue = yield* ApprovalQueue.Service
+                  return MultiAgentRuntime.layerWith({
+                    execution,
+                    trustedSources: [v4Event.source],
+                    onEventCompleted: V4PRCollaboration.make({
+                      sessions,
+                      instanceStore: instances,
+                      git: gitService,
+                      queue: prQueue,
+                      bus,
+                      approvalQueue,
+                    }),
+                    runner: makeEventTurnRunner({
+                      sessions,
+                      agents,
+                      sessionPrompt: prompts,
+                      instanceStore: instances,
+                      defaultModel: () => Effect.succeed({ providerID, modelID }),
+                    }),
+                  })
+                }),
+              ).pipe(Layer.provide(core), Layer.provide(registry))
+              const dispatcher = Layer.unwrap(
+                Effect.gen(function* () {
+                  const multiAgent = yield* MultiAgentRuntime.Service
+                  const bus = yield* DeepAgentEventBus.Service
+                  return EventDispatcher.layerWith({
+                    dispatchPort: { dispatch: multiAgent.dispatch },
+                    runLoops: false,
+                    pendingDeliveryCount: bus.pendingDeliveryCount,
+                  })
+                }),
+              ).pipe(Layer.provide(runtime), Layer.provide(core), Layer.provide(registry), Layer.provide(flags))
+              const context = yield* Layer.build(Layer.mergeAll(core, registry, runtime, dispatcher, flags))
+              const bus = Context.get(context, DeepAgentEventBus.Service)
+              const execution = Context.get(context, AgentExecution.Service)
+              const eventDispatcher = Context.get(context, EventDispatcher.Service)
+              yield* bus.registerConsumerGroup(EventDispatcher.DISPATCH_GROUP, v4Event.type)
+              const event = yield* bus.publish({
+                type: v4Event.type,
+                source: v4Event.source,
+                workspaceID: instance.directory,
+                idempotencyKey: `live-v4:${input.suite}`,
+                priority: "normal",
+                payload: { ...v4Event.payload, directory: instance.directory },
+              })
+              const sourceDeliveryPendingBefore = (yield* bus.dueRetries(Number.MAX_SAFE_INTEGER)).some(
+                (delivery) =>
+                  delivery.subscriptionGroup === EventDispatcher.DISPATCH_GROUP && delivery.eventID === event.id,
+              )
+              const decision = yield* eventDispatcher.handle(event)
+              const sourceDeliveryPendingAfter = (yield* bus.dueRetries(Number.MAX_SAFE_INTEGER)).some(
+                (delivery) =>
+                  delivery.subscriptionGroup === EventDispatcher.DISPATCH_GROUP && delivery.eventID === event.id,
+              )
+              const tasks = TaskPartitioner.partition(event, { stableIDPrefix: event.id }).subtasks
+              const executions = yield* Effect.forEach(tasks, (task) =>
+                execution.get({ workspaceID: event.workspaceID, eventID: event.id, taskID: task.id }),
+              )
+              const summary = {
+                event,
+                outcomes: tasks.map((task, index) => ({
+                  taskID: task.id,
+                  capability: task.capability,
+                  status: executions[index]?.status === "completed" ? ("completed" as const) : ("blocked" as const),
+                  agentID: executions[index]?.agentID,
+                  ...(executions[index]?.status === "completed"
+                    ? {}
+                    : { reason: executions[index]?.lastError ?? executions[index]?.status ?? "execution_missing" }),
+                })),
+                hasUnfinished: executions.some((record) => record?.status !== "completed"),
+              }
+              const refs = [
+                ...new Set(executions.flatMap((record) => (record?.continuationRef ? [record.continuationRef] : []))),
+              ]
+              const refFiles = yield* Effect.promise(async () =>
+                Object.fromEntries(
+                  await Promise.all(
+                    refs.map(async (ref) => [
+                      ref,
+                      Object.fromEntries(
+                        await Promise.all(
+                          (input.inspectFiles ?? []).map(async (file) => {
+                            const child = Bun.spawn(["git", "show", `${ref}:${file}`], {
+                              cwd: instance.directory,
+                              stdout: "pipe",
+                              stderr: "ignore",
+                            })
+                            const [content, exitCode] = await Promise.all([
+                              new Response(child.stdout).text(),
+                              child.exited,
+                            ])
+                            return [file, exitCode === 0 ? content : undefined] as const
+                          }),
+                        ),
+                      ),
+                    ] as const),
+                  ),
+                ),
+              )
+              const sessionIDs = [
+                ...new Set(
+                  executions.flatMap((record) =>
+                    (record?.artifacts ?? [])
+                      .filter((artifact) => artifact.startsWith("session:"))
+                      .map((artifact) => artifact.slice("session:".length)),
+                  ),
+                ),
+              ]
+              const childSessions = yield* Effect.forEach(sessionIDs, (sessionID) =>
+                Effect.gen(function* () {
+                  const info = yield* sessions.get(sessionID as SessionID)
+                  const messages = yield* sessions.messages({ sessionID: info.id })
+                  return {
+                    id: info.id,
+                    agent: info.agent,
+                    directory: info.directory,
+                    parentID: info.parentID,
+                    assistants: messages.flatMap((message) =>
+                      message.info.role !== "assistant"
+                        ? []
+                        : [
+                            {
+                              providerID: message.info.providerID,
+                              modelID: message.info.modelID,
+                              error: message.info.error,
+                              tokens: message.info.tokens,
+                              tools: message.parts
+                                .filter((part) => part.type === "tool")
+                                .map((part) => ({ name: part.tool, status: part.state.status })),
+                            },
+                          ],
+                    ),
+                  }
+                }),
+              )
+              const parentSessionID = MultiAgentRuntime.parentSessionIDFor(event.id)
+              const parentSession = yield* sessions.get(parentSessionID)
+              const collaborationEntries = (yield* prQueue.list()).filter(
+                (entry) => entry.metadata?.eventID === event.id,
+              )
+              const approvals = yield* Context.get(context, ApprovalQueue.Service).listPending(event.workspaceID)
+              return {
+                event,
+                dispatch: { decision, sourceDeliveryPendingBefore, sourceDeliveryPendingAfter },
+                summary,
+                executions,
+                childSessions,
+                parentSession: {
+                  id: parentSession.id,
+                  directory: parentSession.directory,
+                  children: childSessions.map((session) => ({
+                    id: session.id,
+                    parentID: session.parentID,
+                  })),
+                },
+                prCollaboration: {
+                  entries: collaborationEntries,
+                  approvals,
+                  branch: yield* gitService.branch(instance.directory),
+                  worktrees: (yield* gitService.run(["worktree", "list", "--porcelain"], { cwd: instance.directory })).text(),
+                },
+                refFiles,
+                permissionRequests: permissionRequests.filter((request) => sessionIDs.includes(request.sessionID)),
+                questionRequests: questionRequests.filter((request) => sessionIDs.includes(request.sessionID)),
+                pendingPermissionIDs: (yield* permissions
+                  .list()
+                  .pipe(Effect.provideService(InstanceRef, parentInstance))).map((request) => String(request.id)),
+                pendingQuestionIDs: (yield* questions.list()).map((request) => String(request.id)),
+              }
+            })
+          : undefined
       const sharedSession = input.sharedSession
         ? yield* sessions.create({
             title: `Live ${input.suite}: shared Session`,
@@ -470,18 +736,57 @@ export async function runLegacyLiveCases(input: {
           const children = yield* Effect.forEach(yield* sessions.children(session.id), (child) =>
             Effect.gen(function* () {
               const childMessages = yield* sessions.messages({ sessionID: child.id })
+              const childDirectoryExists = yield* Effect.promise(() => directoryExists(child.directory))
               const childAssistants = childMessages.filter(
                 (message): message is SessionV1.WithParts & { info: SessionV1.Assistant } =>
                   message.info.role === "assistant",
               )
+              const verifier =
+                input.verifyChildWorktrees && childDirectoryExists
+                  ? yield* Effect.sync(() => {
+                      if (!sandbox) throw new Error("Child worktree verifier requires a qualified tool sandbox")
+                      const result = Bun.spawnSync([sandbox.shell, "-c", sandbox.verifier], {
+                        cwd: child.directory,
+                        stdout: "pipe",
+                        stderr: "pipe",
+                      })
+                      return {
+                        exitCode: result.exitCode,
+                        stdout: result.stdout.toString(),
+                        stderr: result.stderr.toString(),
+                      }
+                    })
+                  : undefined
               return {
                 id: child.id,
                 parentID: child.parentID,
                 directory: child.directory,
+                directoryExists: childDirectoryExists,
                 agent: child.agent,
                 model: child.model,
                 metadata: child.metadata,
                 messageCount: childMessages.length,
+                assembledRequestFingerprints: assembledRequestFingerprints
+                  .slice(requestFingerprintCountBefore)
+                  .filter((event) => event.payload?.properties?.sessionID === child.id)
+                  .map((event) => event.payload.properties),
+                files: Object.fromEntries(
+                  yield* Effect.forEach(input.inspectChildFiles ?? [], (file) =>
+                    Effect.promise(
+                      async () =>
+                        [
+                          file,
+                          childDirectoryExists && (await Bun.file(path.join(child.directory, file)).exists())
+                            ? await Bun.file(path.join(child.directory, file)).text()
+                            : undefined,
+                        ] as const,
+                    ),
+                  ),
+                ),
+                status: childDirectoryExists
+                  ? yield* Effect.promise(() => git(child.directory, "status", "--short", "--untracked-files=all"))
+                  : "<removed>",
+                verifier,
                 users: childMessages
                   .filter(
                     (message): message is SessionV1.WithParts & { info: SessionV1.User } =>
@@ -499,6 +804,7 @@ export async function runLegacyLiveCases(input: {
                   modelID: message.info.modelID,
                   path: message.info.path,
                   finish: message.info.finish,
+                  error: message.info.error,
                   structured: message.info.structured,
                   text: message.parts
                     .flatMap((part) => (part.type === "text" && !part.synthetic && !part.ignored ? [part.text] : []))
@@ -506,6 +812,7 @@ export async function runLegacyLiveCases(input: {
                   tools: message.parts
                     .filter((part) => part.type === "tool")
                     .map((part) => ({
+                      messageID: message.info.id,
                       id: part.callID,
                       name: part.tool,
                       status: part.state.status,
@@ -522,6 +829,7 @@ export async function runLegacyLiveCases(input: {
             message.parts
               .filter((part) => part.type === "tool")
               .map((part) => ({
+                messageID: message.info.id,
                 id: part.callID,
                 name: part.tool,
                 status: part.state.status,
@@ -605,6 +913,7 @@ export async function runLegacyLiveCases(input: {
                 ),
               )
               .join("\n"),
+            providerErrors: currentAssistants.flatMap((message) => (message.info.error ? [message.info.error] : [])),
             finishReasons: currentAssistants.map((message) => message.info.finish),
             models: currentAssistants.map((message) => ({
               providerID: message.info.providerID,
@@ -634,7 +943,14 @@ export async function runLegacyLiveCases(input: {
                 permission: request.permission,
                 patterns: request.patterns,
                 tool: request.tool,
+                eventDirectory: permissionLocations.get(request.id)?.directory,
+                eventWorkspaceID: permissionLocations.get(request.id)?.workspaceID,
               })),
+            permissionBarrierSnapshots,
+            pendingPermissionIDs: (yield* permissions
+              .list()
+              .pipe(Effect.provideService(InstanceRef, parentInstance))).map((request) => String(request.id)),
+            pendingQuestionIDs: (yield* questions.list()).map((request) => String(request.id)),
             questionRequests: questionRequests
               .filter(
                 (request) =>
@@ -670,10 +986,27 @@ export async function runLegacyLiveCases(input: {
           ),
           status: yield* Effect.promise(() => git(instance.directory, "status", "--short", "--untracked-files=all")),
         },
+        collaboration: input.inspectPRCollaboration
+          ? yield* Effect.promise(async () => ({
+              queue: (await Bun.file(
+                path.join(isolatedData, "agent-gateway", "state", "pr-queue", "queue.json"),
+              ).exists())
+                ? await Bun.file(path.join(isolatedData, "agent-gateway", "state", "pr-queue", "queue.json")).json()
+                : { entries: [] },
+              branch: (await git(instance.directory, "branch", "--show-current")).trim(),
+              head: (await git(instance.directory, "rev-parse", "HEAD")).trim(),
+              firstParentLog: (await git(instance.directory, "log", "--first-parent", "--format=%H%x09%P%x09%s"))
+                .trim()
+                .split("\n")
+                .filter(Boolean),
+              worktrees: await git(instance.directory, "worktree", "list", "--porcelain"),
+            }))
+          : undefined,
         evaluation: input.evaluateWorkspace
           ? yield* Effect.promise(() => input.evaluateWorkspace!(instance.directory, sandbox))
           : undefined,
         panel: panelEvidence,
+        v4,
       }
     })
     const result = await Effect.runPromise(
@@ -687,6 +1020,7 @@ export async function runLegacyLiveCases(input: {
             maxProviderTurns: input.maxProviderTurns,
             toolOutput: input.toolOutput,
             agentPermissions: input.agentPermissions,
+            subagentIntensity: input.subagentIntensity,
           }),
           init: (directory) =>
             Effect.promise(async () => {
@@ -707,7 +1041,10 @@ export async function runLegacyLiveCases(input: {
                     workspace: directory,
                     testRoot,
                     verifierScript: input.toolSandbox.verifierScript,
-                    additionalWorkspaceRoots: [path.join(isolatedData, "worktree")],
+                    additionalWorkspaceRoots: [
+                      path.join(isolatedData, "worktree"),
+                      path.join(isolatedData, "tmp", "agent"),
+                    ],
                   })
                 : undefined
               if (sandbox && input.toolSandbox?.initialVerifier) {
@@ -753,7 +1090,10 @@ export async function runLegacyLiveCases(input: {
             Question.defaultLayer,
             EventV2Bridge.defaultLayer,
             Worktree.appLayer,
+            Git.defaultLayer,
+            PRQueue.layer.pipe(Layer.orDie),
             CrossSpawnSpawner.defaultLayer,
+            Database.defaultLayer,
           ).pipe(Layer.provideMerge(testInstanceStoreLayer)),
         ),
         Effect.timeout(
@@ -761,20 +1101,36 @@ export async function runLegacyLiveCases(input: {
         ),
       ),
     )
+    const providerErrors = result.observations.flatMap((observation) => observation.providerErrors)
+    const v4Errors = result.v4
+      ? [
+          ...(result.v4.summary.hasUnfinished ? ["V4 coordination remained unfinished"] : []),
+          ...result.v4.summary.outcomes
+            .filter((outcome) => outcome.status !== "completed")
+            .map((outcome) => `${outcome.taskID}:${outcome.status}:${outcome.reason ?? "unknown"}`),
+          ...result.v4.childSessions.flatMap((session) =>
+            session.assistants.flatMap((assistant) => (assistant.error ? [assistant.error] : [])),
+          ),
+        ]
+      : []
+    const errors = [...providerErrors, ...v4Errors]
 
     return {
       suite: input.suite,
-      mode: "live" as const,
-      stack: "legacy-session" as const,
-      status: "passed" as const,
+      mode: input.v4Event ? ("ext" as const) : ("live" as const),
+      stack: input.v4Event ? ("v4-event-runtime" as const) : ("legacy-session" as const),
+      status: errors.length > 0 ? ("failed" as const) : ("passed" as const),
+      error: errors.length > 0 ? errors : undefined,
       fingerprint: { ...modelFingerprint(config), runtimeProviderID },
       preflight: { durationMs: preflight.durationMs },
       sandbox: sandbox?.evidence,
       initialVerifier,
       cases: result.observations,
       workspace: result.workspace,
+      collaboration: result.collaboration,
       evaluation: result.evaluation,
       panel: result.panel,
+      v4: result.v4,
       durationMs: Date.now() - startedAt,
       completedAt: new Date().toISOString(),
     }
@@ -792,7 +1148,6 @@ const isolationEnvironmentKeys = [
   "XDG_STATE_HOME",
   "DEEPAGENT_CODE_TEST_HOME",
   "DEEPAGENT_CODE_HOME",
-  "DEEPAGENT_CODE_CONFIG_DIR",
   "DEEPAGENT_CODE_DISABLE_AUTOUPDATE",
   "DEEPAGENT_CODE_DISABLE_MODELS_FETCH",
   "DEEPAGENT_CODE_DISABLE_DEFAULT_PLUGINS",
@@ -830,6 +1185,7 @@ async function prepareIsolation(
     mkdir(isolatedHome, { recursive: true }),
     mkdir(path.join(isolatedData, "node_modules"), { recursive: true }),
     mkdir(path.join(isolatedData, "worktree"), { recursive: true }),
+    mkdir(path.join(isolatedData, "tmp", "agent"), { recursive: true }),
   ])
   await Bun.write(
     path.join(isolatedData, "package.json"),
@@ -849,7 +1205,6 @@ async function prepareIsolation(
   process.env.XDG_STATE_HOME = path.join(testRoot, "state")
   process.env.DEEPAGENT_CODE_TEST_HOME = isolatedHome
   process.env.DEEPAGENT_CODE_HOME = isolatedData
-  process.env.DEEPAGENT_CODE_CONFIG_DIR = isolatedData
   process.env.DEEPAGENT_CODE_DISABLE_AUTOUPDATE = "1"
   process.env.DEEPAGENT_CODE_DISABLE_MODELS_FETCH = "1"
   process.env.DEEPAGENT_CODE_DISABLE_DEFAULT_PLUGINS = "1"
@@ -874,6 +1229,7 @@ export function liveWorkspaceConfig(
     maxProviderTurns?: number
     toolOutput?: ConfigV1.Info["tool_output"]
     agentPermissions?: Readonly<Record<string, ConfigV1.Info["permission"]>>
+    subagentIntensity?: "inherit" | "downgrade"
   },
 ): ConfigV1.Info {
   return {
@@ -895,11 +1251,20 @@ export function liveWorkspaceConfig(
       ...Object.fromEntries(
         Object.entries(options?.agentPermissions ?? {}).map(([name, agentPermission]) => [
           name,
-          { permission: agentPermission },
+          { permission: agentPermission, steps: options?.maxProviderTurns },
         ]),
       ),
     },
     provider: {
+      ...(options?.subagentIntensity
+        ? {
+            deepagent: {
+              name: "DeepAgent",
+              options: { subagentIntensity: options.subagentIntensity },
+              models: {},
+            },
+          }
+        : {}),
       [runtimeProviderID]: {
         name: "DeepSeek legacy live test",
         env: [],

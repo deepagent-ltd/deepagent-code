@@ -1105,12 +1105,14 @@ export const layer = Layer.effect(
               usage: value.usage ?? new Usage({}),
               metadata: value.providerMetadata,
             })
-            // Response-side prompt-cache monitor: compare this step's real cache-read ratio to the
-            // previous step and warn if it collapsed while the prompt didn't shrink (suspected cache
-            // break the static system-hash tripwire can't see). Diagnostic only; never throws.
-            yield* Effect.sync(() => LLMRequestPrep.recordCacheHitOutcome(ctx.sessionID, usage.tokens)).pipe(
-              Effect.ignore,
-            )
+            // Compaction summaries use an isolated provider prefix under the same Session ID. They
+            // must not replace the ordinary conversation baseline; the next ordinary request remains
+            // directly comparable with the request before compaction.
+            if (!ctx.assistantMessage.summary) {
+              yield* Effect.sync(() => LLMRequestPrep.recordCacheHitOutcome(ctx.sessionID, usage.tokens)).pipe(
+                Effect.ignore,
+              )
+            }
             if (!ctx.assistantMessage.summary) {
               // TODO(v2): Temporary dual-write while migrating session messages to v2 events.
               if (mirrorAssistant) {

@@ -15,8 +15,18 @@ const env = Object.fromEntries(
 )
 env.DEEPAGENT_CODE_TEST_ONBOARDING = "1"
 env.DEEPAGENT_CODE_TEST_ROOT = root
+env.HOME = join(root, "home")
+env.XDG_DATA_HOME = join(root, "data")
+env.XDG_CONFIG_HOME = join(root, "config")
+env.XDG_CACHE_HOME = join(root, "cache")
+env.XDG_STATE_HOME = join(root, "state")
 env.DEEPAGENT_CODE_DB = join(root, "deepagent.sqlite")
 env.DEEPAGENT_CODE_DISABLE_CHANNEL_DB = "1"
+await Promise.all(
+  [env.HOME, env.XDG_DATA_HOME, env.XDG_CONFIG_HOME, env.XDG_CACHE_HOME, env.XDG_STATE_HOME].map((directory) =>
+    mkdir(directory, { recursive: true }),
+  ),
+)
 
 type DesktopAPI = {
   awaitInitialization(): Promise<{ url: string; username: string; password: string }>

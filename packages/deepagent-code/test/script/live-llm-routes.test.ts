@@ -76,15 +76,35 @@ describe("live LLM route manifest", () => {
         runs: [
           "ext:cli-subprocess:goal-grader-cli-entry",
           "ext:legacy-session:expert-panel",
+          "ext:legacy-session:multi-agent-parallel-worktrees",
+          "ext:legacy-session:multi-agent-pr-collaboration",
           "ext:legacy-session:subagent-background",
+          "ext:legacy-session:subagent-intensity",
           "ext:legacy-session:subagent-interrupted",
+          "ext:legacy-session:subagent-resume",
+          "ext:legacy-session:subagent-takeover",
           "ext:legacy-session:subagent-worktree-routing",
           "live:legacy-session:subagent-foreground",
         ],
       },
       {
         path: "packages/deepagent-code/src/project/instance-layer.ts",
-        runs: ["ext:legacy-session:subagent-worktree-routing"],
+        runs: [
+          "ext:legacy-session:multi-agent-parallel-worktrees",
+          "ext:legacy-session:multi-agent-pr-collaboration",
+          "ext:legacy-session:subagent-worktree-routing",
+        ],
+      },
+      {
+        path: "packages/deepagent-code/src/effect/instance-ref.ts",
+        runs: [
+          "ext:legacy-session:multi-agent-parallel-worktrees",
+          "ext:legacy-session:multi-agent-pr-collaboration",
+          "ext:legacy-session:subagent-background",
+          "ext:legacy-session:subagent-interrupted",
+          "ext:legacy-session:subagent-resume",
+          "ext:legacy-session:subagent-takeover",
+        ],
       },
       {
         path: "packages/deepagent-code/src/mcp/adapter.ts",
@@ -115,11 +135,17 @@ describe("live LLM route manifest", () => {
           "ext:legacy-session:intelligence-draft-confirmation",
           "ext:legacy-session:mcp-marker",
           "ext:legacy-session:multi-agent-dag",
+          "ext:legacy-session:multi-agent-parallel-worktrees",
+          "ext:legacy-session:multi-agent-pr-collaboration",
           "ext:legacy-session:permissions-deny",
           "ext:legacy-session:subagent-background",
           "ext:legacy-session:subagent-finalizer-isolation",
+          "ext:legacy-session:subagent-intensity",
           "ext:legacy-session:subagent-interrupted",
+          "ext:legacy-session:subagent-resume",
+          "ext:legacy-session:subagent-takeover",
           "ext:legacy-session:subagent-worktree-routing",
+          "ext:v4-event-runtime:v4-multi-agent-runtime",
           "live:adapter:provider-smoke",
           "live:adapter:structured-output",
           "live:cli-subprocess:cli-headless",
@@ -199,6 +225,40 @@ describe("live LLM route manifest", () => {
       const selected = selectRoutes([path])
       expect(selected.runs.map(modelRunKey)).toContain("ext:legacy-session:subagent-worktree-routing")
       expect(selected.checks).toContain("worktree-routing")
+    })
+  })
+
+  test("keeps resumed child execution reachable from its harness and owning production seams", () => {
+    const paths = [
+      "packages/deepagent-code/script/live-llm/subagent-resume.ts",
+      "packages/deepagent-code/src/tool/task.ts",
+      "packages/deepagent-code/src/session/session.ts",
+      "packages/deepagent-code/src/effect/instance-ref.ts",
+    ]
+
+    paths.forEach((path) => {
+      const selected = selectRoutes([path])
+      expect(selected.runs.map(modelRunKey)).toContain("ext:legacy-session:subagent-resume")
+      expect(
+        commandForModelRun(selected.runs.find((run) => modelRunKey(run) === "ext:legacy-session:subagent-resume")!),
+      ).toBeDefined()
+    })
+  })
+
+  test("keeps bounded takeover reachable from its harness and supervision seams", () => {
+    const paths = [
+      "packages/deepagent-code/script/live-llm/subagent-takeover.ts",
+      "packages/deepagent-code/src/tool/task.ts",
+      "packages/deepagent-code/src/effect/runtime-flags.ts",
+      "packages/deepagent-code/src/question/index.ts",
+    ]
+
+    paths.forEach((path) => {
+      const selected = selectRoutes([path])
+      expect(selected.runs.map(modelRunKey)).toContain("ext:legacy-session:subagent-takeover")
+      expect(
+        commandForModelRun(selected.runs.find((run) => modelRunKey(run) === "ext:legacy-session:subagent-takeover")!),
+      ).toBeDefined()
     })
   })
 
@@ -553,13 +613,41 @@ describe("pre-push dispatcher", () => {
     expect(live.DEEPSEEK_API_KEY).toBeUndefined()
   })
 
-  test("registers the production Multi-Agent DAG extended run", () => {
-    const route = routeManifest.find((item) => item.id === "live-llm-multi-agent-dag-harness")
-    expect(route).toBeDefined()
-    const runs = route?.runs ?? []
-    expect(runs.map(modelRunKey)).toEqual(["ext:legacy-session:multi-agent-dag"])
-    expect(route?.checks).toContain("tool-bash-sandbox")
-    expect(runs[0] && commandForModelRun(runs[0])).toBeDefined()
+  test("registers the production multi-agent extended runs", () => {
+    const cases = [
+      ["live-llm-multi-agent-dag-harness", "ext:legacy-session:multi-agent-dag"],
+      ["live-llm-multi-agent-parallel-worktrees-harness", "ext:legacy-session:multi-agent-parallel-worktrees"],
+      ["live-llm-multi-agent-pr-collaboration-harness", "ext:legacy-session:multi-agent-pr-collaboration"],
+      ["live-llm-v4-multi-agent-runtime-harness", "ext:v4-event-runtime:v4-multi-agent-runtime"],
+    ] as const
+
+    for (const [id, key] of cases) {
+      const route = routeManifest.find((item) => item.id === id)
+      expect(route).toBeDefined()
+      const runs = route?.runs ?? []
+      expect(runs.map(modelRunKey)).toEqual([key])
+      expect(route?.checks).toContain("tool-bash-sandbox")
+      expect(runs[0] && commandForModelRun(runs[0])).toBeDefined()
+    }
+  })
+
+  test("keeps the direct V4 runtime suite reachable from every durable execution seam", () => {
+    for (const path of [
+      "packages/core/src/deepagent/agent-execution.ts",
+      "packages/core/src/deepagent/event-router.ts",
+      "packages/deepagent-code/src/session/agent-handoff-consumer.ts",
+      "packages/deepagent-code/src/session/agent-worktree.ts",
+      "packages/deepagent-code/src/session/multi-agent-runtime.ts",
+      "packages/deepagent-code/src/session/v4-event-runtime.ts",
+    ]) {
+      const selected = selectRoutes([path])
+      expect(selected.runs.map(modelRunKey)).toContain("ext:v4-event-runtime:v4-multi-agent-runtime")
+      expect(
+        commandForModelRun(
+          selected.runs.find((run) => modelRunKey(run) === "ext:v4-event-runtime:v4-multi-agent-runtime")!,
+        ),
+      ).toBeDefined()
+    }
   })
 
   test("maps every automatically selectable live run to a package command", () => {
@@ -591,6 +679,7 @@ describe("pre-push dispatcher", () => {
       commands.filter((item) => item.cwd === "packages/deepagent-code" && item.args[1] === "typecheck"),
     ).toHaveLength(1)
     expect(commands.some((item) => item.args.includes("test/permission/next.test.ts"))).toBe(true)
+    expect(commands.some((item) => item.args.includes("test/question/question.test.ts"))).toBe(true)
     expect(commands.some((item) => item.args.includes("test/mcp"))).toBe(true)
   })
 

@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm } from "node:fs/promises"
+import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import {
@@ -50,7 +50,6 @@ try {
     XDG_CACHE_HOME: path.join(root, "cache"),
     DEEPAGENT_CODE_TEST_HOME: home,
     DEEPAGENT_CODE_HOME: data,
-    DEEPAGENT_CODE_CONFIG_DIR: data,
     DEEPAGENT_CODE_CONFIG_CONTENT: JSON.stringify(
       liveWorkspaceConfig(
         config,
@@ -117,11 +116,65 @@ try {
       }
       return value as Record<string, unknown>
     })
+  const permissionEvents = events.filter((event) => event.type === "permission")
+  const toolEvents = events.flatMap((event) => {
+    if (event.type !== "tool_use") return []
+    const part = record(event.part, "CLI tool event")
+    return [{ part, state: record(part.state, "CLI tool state") }]
+  })
+  const callIDs = new Set(
+    toolEvents.flatMap((event) => (typeof event.part.callID === "string" ? [event.part.callID] : [])),
+  )
+  const toolInputs = toolEvents.flatMap((event) =>
+    typeof event.state.input === "object" && event.state.input !== null && !Array.isArray(event.state.input)
+      ? [event.state.input as Record<string, unknown>]
+      : [],
+  )
+  const toolInputPaths = await Promise.all(
+    toolInputs.map((input) =>
+      typeof input.filePath === "string" ? realpath(input.filePath).catch(() => undefined) : undefined,
+    ),
+  )
+  const expectedReadPath = await realpath(path.join(workspace, "private.txt"))
+  const markerPresence = {
+    attachment: stdout.includes(attachmentMarker),
+    read: stdout.includes(readMarker),
+  }
+  await writeLiveArtifact(
+    config,
+    "cli-headless-observed",
+    {
+      suite: "cli-headless",
+      mode: "live",
+      stack: "cli-subprocess",
+      status: "observed",
+      fingerprint: { ...modelFingerprint(config), runtimeProviderID },
+      preflight: { durationMs: preflight.durationMs },
+      process: {
+        exitCode,
+        stdoutBytes: stdout.length,
+        stderrTail: stderr.slice(-4_000),
+        eventTypes: events.map((event) => event.type),
+        markerPresence,
+        permissionReplies: permissionEvents.length,
+        readToolEvents: toolEvents.length,
+        readToolCalls: callIDs.size,
+      },
+      events,
+      durationMs: Date.now() - startedAt,
+      completedAt: new Date().toISOString(),
+    },
+    {
+      redactions: [
+        { value: attachmentMarker, replacement: "<attachment-marker>" },
+        { value: readMarker, replacement: "<read-marker>" },
+      ],
+    },
+  )
   if (exitCode !== 0) throw new Error(`CLI exited ${exitCode}: ${stderr.slice(-4_000)}`)
-  if (!stdout.includes(attachmentMarker) || !stdout.includes(readMarker)) {
+  if (!markerPresence.attachment || !markerPresence.read) {
     throw new Error("CLI final JSON stream lost an attachment or read marker")
   }
-  const permissionEvents = events.filter((event) => event.type === "permission")
   if (permissionEvents.length !== 1 || permissionEvents[0]?.reply !== "once") {
     throw new Error(`CLI emitted ${permissionEvents.length} permission replies instead of one read approval`)
   }
@@ -136,29 +189,12 @@ try {
   ) {
     throw new Error(`CLI approved an unexpected permission request: ${JSON.stringify(permissionRequest)}`)
   }
-  const toolEvents = events.flatMap((event) => {
-    if (event.type !== "tool_use") return []
-    const part = record(event.part, "CLI tool event")
-    return [{ part, state: record(part.state, "CLI tool state") }]
-  })
-  const callIDs = new Set(
-    toolEvents.flatMap((event) => (typeof event.part.callID === "string" ? [event.part.callID] : [])),
-  )
-  const toolInputs = toolEvents.flatMap((event) =>
-    typeof event.state.input === "object" && event.state.input !== null && !Array.isArray(event.state.input)
-      ? [event.state.input as Record<string, unknown>]
-      : [],
-  )
   if (
     toolEvents.length === 0 ||
     callIDs.size !== 1 ||
     toolEvents.some((event) => event.part.tool !== "read") ||
-    toolInputs.length === 0 ||
-    toolInputs.some(
-      (input) =>
-        typeof input.filePath !== "string" ||
-        path.resolve(workspace, input.filePath) !== path.join(workspace, "private.txt"),
-    )
+    toolInputPaths.length === 0 ||
+    toolInputPaths.some((inputPath) => inputPath !== expectedReadPath)
   ) {
     throw new Error("CLI did not execute exactly one canonical private.txt read call")
   }

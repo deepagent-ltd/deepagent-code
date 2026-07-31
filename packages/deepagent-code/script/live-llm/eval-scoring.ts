@@ -1,6 +1,6 @@
 import { scoreSummary } from "../../../llm/script/live-llm/eval-report"
 
-const verifierMarker = "__DEEPAGENT_EVAL_RUBRIC__"
+export const verifierMarker = "__DEEPAGENT_EVAL_RUBRIC__"
 
 export type RubricItem = {
   id: string
@@ -38,7 +38,7 @@ export function pythonVerifier(checks: PythonVerifierCheck[]) {
     script: [
       "#!/bin/sh",
       "set -eu",
-      "/usr/bin/python3 -B - <<'PY'",
+      `"$DEEPAGENT_LIVE_LLM_PYTHON" -B - <<'PY'`,
       "import json",
       "_results = []",
       "",

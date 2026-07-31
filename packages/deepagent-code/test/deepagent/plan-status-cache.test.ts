@@ -265,11 +265,15 @@ describe("V4.1 §S3.1 — goal plan hot-edit stays runtime-tail scoped", () => {
     const sessionID = `ses_planedit_cachehit_${crypto.randomUUID()}`
     seedPlan(sessionID, 1, 3, 1)
     // Turn 1 baselines: cache write, no reads (first turn is always a write).
-    expect(() => LLMRequestPrep.recordCacheHitOutcome(sessionID, { input: 500, cache: { read: 0, write: 1180 } })).not.toThrow()
+    expect(LLMRequestPrep.recordCacheHitOutcome(sessionID, { input: 500, cache: { read: 0, write: 1180 } })).toBe(
+      "baseline",
+    )
 
     // Cache telemetry remains diagnostic-only across the plan edit.
     applyEdit(sessionID, { goal: "ship the feature", steps: [{ step_id: "step_1", title: "reworked", status: "pending" }] })
-    expect(() => LLMRequestPrep.recordCacheHitOutcome(sessionID, { input: 12, cache: { read: 1180, write: 0 } })).not.toThrow()
+    expect(LLMRequestPrep.recordCacheHitOutcome(sessionID, { input: 12, cache: { read: 1180, write: 0 } })).toBe(
+      "stable",
+    )
     AgentGateway.configure({ enabled: false, agentMode: "high" })
   })
 })
@@ -284,16 +288,35 @@ describe("recordCacheHitOutcome (response-side monitor)", () => {
   test("first call baselines without throwing; subsequent calls compare without throwing", () => {
     const sessionID = `ses_cachehit_${crypto.randomUUID()}`
     // Turn 1: cache write, zero reads (normal on the first turn) — baseline only.
-    expect(() => LLMRequestPrep.recordCacheHitOutcome(sessionID, tokens(500, 0, 1180))).not.toThrow()
+    expect(LLMRequestPrep.recordCacheHitOutcome(sessionID, tokens(500, 0, 1180))).toBe("baseline")
     // Turn 2: strong cache read (healthy) — no warning path, no throw.
-    expect(() => LLMRequestPrep.recordCacheHitOutcome(sessionID, tokens(12, 1180))).not.toThrow()
+    expect(LLMRequestPrep.recordCacheHitOutcome(sessionID, tokens(12, 1180))).toBe("stable")
     // Turn 3: collapsed hit ratio with a non-shrinking prompt (the break signature) — warns, never throws.
-    expect(() => LLMRequestPrep.recordCacheHitOutcome(sessionID, tokens(1180, 12))).not.toThrow()
+    expect(LLMRequestPrep.recordCacheHitOutcome(sessionID, tokens(1180, 12))).toBe("break")
+  })
+
+  test("keeps a stable cached prefix healthy while the uncached suffix grows", () => {
+    const sessionID = `ses_cachehit_suffix_${crypto.randomUUID()}`
+    expect(LLMRequestPrep.recordCacheHitOutcome(sessionID, tokens(128, 1152))).toBe("baseline")
+    expect(LLMRequestPrep.recordCacheHitOutcome(sessionID, tokens(396, 1152))).toBe("stable")
+  })
+
+  test("requires a material absolute cache-read drop as well as a ratio drop", () => {
+    const sessionID = `ses_cachehit_small_drop_${crypto.randomUUID()}`
+    expect(LLMRequestPrep.recordCacheHitOutcome(sessionID, tokens(128, 1152))).toBe("baseline")
+    expect(LLMRequestPrep.recordCacheHitOutcome(sessionID, tokens(500, 1100))).toBe("stable")
   })
 
   test("handles zero/empty usage safely", () => {
     const sessionID = `ses_cachehit_zero_${crypto.randomUUID()}`
-    expect(() => LLMRequestPrep.recordCacheHitOutcome(sessionID, tokens(0, 0, 0))).not.toThrow()
-    expect(() => LLMRequestPrep.recordCacheHitOutcome(sessionID, tokens(0, 0, 0))).not.toThrow()
+    expect(LLMRequestPrep.recordCacheHitOutcome(sessionID, tokens(0, 0, 0))).toBe("baseline")
+    expect(LLMRequestPrep.recordCacheHitOutcome(sessionID, tokens(0, 0, 0))).toBe("baseline")
+  })
+
+  test("resets at an intentional structured-finalizer request boundary", () => {
+    const sessionID = `ses_cachehit_finalizer_${crypto.randomUUID()}`
+    expect(LLMRequestPrep.recordCacheHitOutcome(sessionID, tokens(12, 1180))).toBe("baseline")
+    LLMRequestPrep.resetCacheHitOutcome(sessionID)
+    expect(LLMRequestPrep.recordCacheHitOutcome(sessionID, tokens(2214, 256))).toBe("baseline")
   })
 })

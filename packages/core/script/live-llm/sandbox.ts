@@ -1,5 +1,7 @@
-import { chmod, mkdir, readlink, realpath, symlink } from "node:fs/promises"
+import { chmod, mkdir, readlink, realpath, stat, symlink } from "node:fs/promises"
 import path from "node:path"
+
+const pythonEnvironmentName = "DEEPAGENT_LIVE_LLM_PYTHON"
 
 export type ToolSandbox = {
   shell: string
@@ -16,6 +18,7 @@ export type ToolSandbox = {
     symlinkWriteDenied: boolean
     verifierExecutable: boolean
     verifierWriteDenied: boolean
+    pythonRuntimeAvailable: boolean
     environmentKeys: string[]
   }
 }
@@ -52,6 +55,9 @@ export async function prepareToolSandbox(input: {
   const verifierLink = path.join(workspace, "verify")
   const canary = `host-${crypto.randomUUID()}`
   const verifierMarker = `verify-${crypto.randomUUID()}`
+  const pythonRuntime = input.verifierScript?.includes(`$${pythonEnvironmentName}`)
+    ? await resolvePythonRuntime()
+    : undefined
 
   await Promise.all([
     mkdir(sandboxHome, { recursive: true }),
@@ -62,13 +68,21 @@ export async function prepareToolSandbox(input: {
   await Bun.write(verifier, `#!/bin/sh\nprintf '%s\\n' ${quote(verifierMarker)}\n`)
   await chmod(verifier, 0o555)
   await Promise.all([symlink(hostCanary, escape), symlink(verifier, verifierLink)])
-  const policy = macOSPolicy({ workspaceRoots, sandboxHome, sandboxTmp, oracle })
+  const policy = macOSPolicy({
+    workspaceRoots,
+    sandboxHome,
+    sandboxTmp,
+    oracle,
+    runtimeRoots: pythonRuntime?.roots ?? [],
+  })
   await Bun.write(profile, policy)
   await Bun.write(
     shell,
     [
       "#!/bin/sh",
-      `exec /usr/bin/env -i HOME=${quote(sandboxHome)} TMPDIR=${quote(`${sandboxTmp}/`)} PATH=/usr/bin:/bin LANG=C.UTF-8 ` +
+      `exec /usr/bin/env -i HOME=${quote(sandboxHome)} TMPDIR=${quote(`${sandboxTmp}/`)} PATH=/usr/bin:/bin LANG=C.UTF-8` +
+        (pythonRuntime ? ` ${pythonEnvironmentName}=${quote(pythonRuntime.executable)}` : "") +
+        " " +
         `/usr/bin/sandbox-exec -f ${quote(profile)} /bin/sh "$@"`,
       "",
     ].join("\n"),
@@ -86,7 +100,10 @@ export async function prepareToolSandbox(input: {
   const environmentIsolated = await command(
     shell,
     `[ "$HOME" = ${quote(sandboxHome)} ] && [ "$TMPDIR" = ${quote(`${sandboxTmp}/`)} ] && ` +
-      '[ "$PATH" = "/usr/bin:/bin" ] && [ "$LANG" = "C.UTF-8" ] && [ -z "${SSH_AUTH_SOCK+x}" ]',
+      `[ "$PATH" = "/usr/bin:/bin" ] && [ "$LANG" = "C.UTF-8" ] && [ -z "\${SSH_AUTH_SOCK+x}" ] && ` +
+      (pythonRuntime
+        ? `[ "$${pythonEnvironmentName}" = ${quote(pythonRuntime.executable)} ]`
+        : `[ -z "\${${pythonEnvironmentName}+x}" ]`),
     workspace,
   )
   const environmentProcess = Bun.spawn([shell, "-c", "/usr/bin/env"], {
@@ -105,7 +122,16 @@ export async function prepareToolSandbox(input: {
       return separator > 0 ? [line.slice(0, separator)] : []
     })
     .toSorted()
-  const expectedEnvironmentKeys = ["HOME", "LANG", "PATH", "PWD", "SHLVL", "TMPDIR", "_"]
+  const expectedEnvironmentKeys = [
+    "HOME",
+    "LANG",
+    "PATH",
+    "PWD",
+    "SHLVL",
+    "TMPDIR",
+    "_",
+    ...(pythonRuntime ? [pythonEnvironmentName] : []),
+  ].toSorted()
   const server = Bun.serve({ port: 0, fetch: () => new Response("reachable") })
   const network = await command(
     shell,
@@ -156,6 +182,7 @@ export async function prepareToolSandbox(input: {
       symlinkWriteDenied: true,
       verifierExecutable: true,
       verifierWriteDenied: true,
+      pythonRuntimeAvailable: pythonRuntime !== undefined,
       environmentKeys,
     },
   }
@@ -166,6 +193,7 @@ function macOSPolicy(input: {
   sandboxHome: string
   sandboxTmp: string
   oracle: string
+  runtimeRoots: string[]
 }) {
   return [
     "(version 1)",
@@ -182,6 +210,7 @@ function macOSPolicy(input: {
     '(allow file-read* (subpath "/usr/bin") (subpath "/usr/lib") (subpath "/usr/libexec") (subpath "/usr/share"))',
     '(allow file-map-executable (subpath "/usr/bin") (subpath "/usr/lib") (subpath "/usr/libexec"))',
     '(allow file-read* file-map-executable (subpath "/Applications/Xcode.app/Contents/Developer") (subpath "/Library/Developer"))',
+    ...input.runtimeRoots.map((root) => `(allow file-read* file-map-executable (subpath ${scheme(root)}))`),
     '(allow file-read* file-map-executable (subpath "/Library/Apple") (subpath "/Library/Preferences/Logging"))',
     '(allow file-read* (literal "/private/etc/localtime") (subpath "/private/var/db/timezone"))',
     '(allow file-read* (literal "/private/var/db/DarwinDirectory/local/recordStore.data"))',
@@ -195,6 +224,41 @@ function macOSPolicy(input: {
     "(deny network*)",
     "",
   ].join("\n")
+}
+
+async function resolvePythonRuntime() {
+  const candidates = [
+    process.env.DEEPAGENT_CODE_LIVE_LLM_PYTHON,
+    "/opt/homebrew/bin/python3",
+    "/usr/local/bin/python3",
+    "/Library/Frameworks/Python.framework/Versions/Current/bin/python3",
+    "/usr/bin/python3",
+  ].filter((candidate): candidate is string => typeof candidate === "string" && candidate.length > 0)
+
+  for (const candidate of candidates) {
+    const executable = await realpath(candidate).catch(() => undefined)
+    if (!executable) continue
+    const information = await stat(executable).catch(() => undefined)
+    if (!information || (information.mode & 0o111) === 0) continue
+    const process = Bun.spawn(
+      [executable, "-S", "-c", "import sys, sysconfig; print(sys.executable); print(sys.prefix); print(sys.exec_prefix)"],
+      { stdout: "pipe", stderr: "ignore" },
+    )
+    const [stdout, exitCode] = await Promise.all([new Response(process.stdout).text(), process.exited])
+    if (exitCode !== 0) continue
+    const paths = stdout
+      .trim()
+      .split("\n")
+      .filter((value) => path.isAbsolute(value))
+    const resolvedExecutable = paths[0]
+    if (!resolvedExecutable) continue
+    return {
+      executable: resolvedExecutable,
+      roots: [...new Set([path.dirname(resolvedExecutable), ...paths.slice(1)])],
+    }
+  }
+
+  throw new Error("macOS live LLM Python verifier requires an executable Python 3 runtime")
 }
 
 function scheme(value: string) {

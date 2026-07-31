@@ -107,6 +107,7 @@ const checkCommands: Record<DeterministicCheck, DispatcherCommand[]> = {
       "bun",
       "test",
       "test/permission/next.test.ts",
+      "test/question/question.test.ts",
       "test/permission-task.test.ts",
       "test/agent/subagent-plan-permission.test.ts",
     ),
@@ -120,10 +121,7 @@ const checkCommands: Record<DeterministicCheck, DispatcherCommand[]> = {
     command("packages/desktop", "bun", "typecheck"),
     command("packages/desktop", "bun", "test"),
   ],
-  "ui-runtime": [
-    command("packages/app", "bun", "typecheck"),
-    command("packages/app", "bun", "run", "test:unit"),
-  ],
+  "ui-runtime": [command("packages/app", "bun", "typecheck"), command("packages/app", "bun", "run", "test:unit")],
   "worktree-routing": [
     command(
       "packages/deepagent-code",
@@ -146,10 +144,7 @@ const checkCommands: Record<DeterministicCheck, DispatcherCommand[]> = {
 
 const modelCommands = new Map<string, DispatcherCommand>([
   ["live:adapter:provider-smoke", command("packages/llm", "bun", "run", "test:llm-live:provider")],
-  [
-    "live:adapter:structured-output",
-    command("packages/llm", "bun", "run", "test:llm-live:structured-adapter"),
-  ],
+  ["live:adapter:structured-output", command("packages/llm", "bun", "run", "test:llm-live:structured-adapter")],
   ["live:session-v2:v2-provider-loop", command("packages/core", "bun", "run", "test:llm-live:v2-provider-loop")],
   [
     "live:legacy-session:structured-output",
@@ -157,19 +152,13 @@ const modelCommands = new Map<string, DispatcherCommand>([
   ],
   ["live:session-v2:file-read-search", command("packages/core", "bun", "run", "test:llm-live:file-read")],
   ["live:session-v2:file-mutations", command("packages/core", "bun", "run", "test:llm-live:file-mutations")],
-  [
-    "live:legacy-session:file-read-search",
-    command("packages/deepagent-code", "bun", "run", "test:llm-live:file-read"),
-  ],
+  ["live:legacy-session:file-read-search", command("packages/deepagent-code", "bun", "run", "test:llm-live:file-read")],
   [
     "live:legacy-session:file-mutations",
     command("packages/deepagent-code", "bun", "run", "test:llm-live:file-mutations"),
   ],
   ["live:session-v2:bash-repair", command("packages/core", "bun", "run", "test:llm-live:bash-repair")],
-  [
-    "live:legacy-session:bash-repair",
-    command("packages/deepagent-code", "bun", "run", "test:llm-live:bash-repair"),
-  ],
+  ["live:legacy-session:bash-repair", command("packages/deepagent-code", "bun", "run", "test:llm-live:bash-repair")],
   [
     "live:legacy-session:subagent-foreground",
     command("packages/deepagent-code", "bun", "run", "test:llm-live:subagent-foreground"),
@@ -182,10 +171,7 @@ const modelCommands = new Map<string, DispatcherCommand>([
     "live:legacy-session:stale-validation",
     command("packages/deepagent-code", "bun", "run", "test:llm-live:stale-validation"),
   ],
-  [
-    "live:legacy-session:degeneration",
-    command("packages/deepagent-code", "bun", "run", "test:llm-live:degeneration"),
-  ],
+  ["live:legacy-session:degeneration", command("packages/deepagent-code", "bun", "run", "test:llm-live:degeneration")],
   [
     "ext:legacy-session:subagent-finalizer-isolation",
     command("packages/deepagent-code", "bun", "run", "test:llm-ext:finalizer-isolation"),
@@ -203,6 +189,30 @@ const modelCommands = new Map<string, DispatcherCommand>([
     command("packages/deepagent-code", "bun", "run", "test:llm-ext:multi-agent-dag"),
   ],
   [
+    "ext:legacy-session:multi-agent-parallel-worktrees",
+    command("packages/deepagent-code", "bun", "run", "test:llm-ext:multi-agent-parallel-worktrees"),
+  ],
+  [
+    "ext:legacy-session:multi-agent-pr-collaboration",
+    command("packages/deepagent-code", "bun", "run", "test:llm-ext:multi-agent-pr-collaboration"),
+  ],
+  [
+    "ext:v4-event-runtime:v4-multi-agent-runtime",
+    command("packages/deepagent-code", "bun", "run", "test:llm-ext:v4-multi-agent-runtime"),
+  ],
+  [
+    "ext:legacy-session:subagent-intensity",
+    command("packages/deepagent-code", "bun", "run", "test:llm-ext:subagent-intensity"),
+  ],
+  [
+    "ext:legacy-session:subagent-resume",
+    command("packages/deepagent-code", "bun", "run", "test:llm-ext:subagent-resume"),
+  ],
+  [
+    "ext:legacy-session:subagent-takeover",
+    command("packages/deepagent-code", "bun", "run", "test:llm-ext:subagent-takeover"),
+  ],
+  [
     "ext:legacy-session:subagent-interrupted",
     command("packages/deepagent-code", "bun", "run", "test:llm-ext:subagent-interrupted"),
   ],
@@ -216,19 +226,10 @@ const modelCommands = new Map<string, DispatcherCommand>([
   ],
   ["ext:legacy-session:mcp-marker", command("packages/deepagent-code", "bun", "run", "test:llm-ext:mcp-marker")],
   ["ext:adapter:provider-abort", command("packages/llm", "bun", "run", "test:llm-ext:provider-abort")],
-  [
-    "ext:packaged-sidecar:packaged-sidecar",
-    command("packages/desktop", "bun", "run", "test:llm-ext:sidecar"),
-  ],
-  [
-    "ext:packaged-sidecar:desktop-subagents",
-    command("packages/desktop", "bun", "run", "test:llm-release:subagents"),
-  ],
+  ["ext:packaged-sidecar:packaged-sidecar", command("packages/desktop", "bun", "run", "test:llm-ext:sidecar")],
+  ["ext:packaged-sidecar:desktop-subagents", command("packages/desktop", "bun", "run", "test:llm-release:subagents")],
   ["ext:renderer-ui:desktop-ui", command("packages/desktop", "bun", "run", "test:llm-release:ui")],
-  [
-    "live:cli-subprocess:cli-headless",
-    command("packages/deepagent-code", "bun", "run", "test:llm-live:cli-headless"),
-  ],
+  ["live:cli-subprocess:cli-headless", command("packages/deepagent-code", "bun", "run", "test:llm-live:cli-headless")],
   [
     "ext:cli-subprocess:goal-grader-cli-entry",
     command("packages/deepagent-code", "bun", "run", "test:llm-ext:goal-cli"),
@@ -237,10 +238,7 @@ const modelCommands = new Map<string, DispatcherCommand>([
     "ext:legacy-session:compaction-retention",
     command("packages/deepagent-code", "bun", "run", "test:llm-ext:compaction-retention"),
   ],
-  [
-    "ext:legacy-session:expert-panel",
-    command("packages/deepagent-code", "bun", "run", "test:llm-ext:expert-panel"),
-  ],
+  ["ext:legacy-session:expert-panel", command("packages/deepagent-code", "bun", "run", "test:llm-ext:expert-panel")],
   [
     "ext:legacy-session:intelligence-draft-confirmation",
     command("packages/deepagent-code", "bun", "run", "test:llm-ext:intelligence-draft"),
