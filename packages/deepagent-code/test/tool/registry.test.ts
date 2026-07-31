@@ -164,6 +164,30 @@ afterEach(async () => {
 })
 
 describe("tool.registry", () => {
+  it.instance("exposes pr_finalize only to primary agents", () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      const agents = yield* Agent.Service
+      const build = yield* agents.get("build")
+      const reviewer = yield* agents.get("reviewer")
+
+      expect(
+        (yield* registry.tools({
+          providerID: ProviderV2.ID.make("deepagent-code"),
+          modelID: ModelV2.ID.make("test"),
+          agent: build,
+        })).map((tool) => tool.id),
+      ).toContain("pr_finalize")
+      expect(
+        (yield* registry.tools({
+          providerID: ProviderV2.ID.make("deepagent-code"),
+          modelID: ModelV2.ID.make("test"),
+          agent: reviewer,
+        })).map((tool) => tool.id),
+      ).not.toContain("pr_finalize")
+    }),
+  )
+
   it.instance("exposes task_status (v4.0.4 block1 1c: read-only subagent status view)", () =>
     Effect.gen(function* () {
       const registry = yield* ToolRegistry.Service

@@ -61,6 +61,8 @@ import { ToolRegistry } from "@/tool/registry"
 import { lazy } from "@/util/lazy"
 import { Vcs } from "@/project/vcs"
 import { Worktree } from "@/worktree"
+import { Git } from "@/git"
+import { PRQueue } from "@/agent/pr-queue"
 import { Workspace } from "@/control-plane/workspace"
 import { IMRepository, IMRepositoryLive } from "@deepagent-code/core/im/repository"
 import { IMBroadcasterLive } from "@deepagent-code/core/im/broadcaster"
@@ -194,6 +196,8 @@ const imRuntimeLayer = Layer.mergeAll(
 // below. Daemon startup is gated on the V4 flags inside V4EventRuntime.layer, so with flags off (the
 // default) it is inert — nothing subscribes, ticks, or prunes.
 const v4EventRuntimeLayer = V4EventRuntime.layer.pipe(
+  Layer.provide(Git.defaultLayer),
+  Layer.provide(PRQueue.layer.pipe(Layer.orDie)),
   Layer.provide(LocationIndexRuntime.defaultLayer),
   // §E1 — the PRODUCTION four-layer security resolvers. Providing this makes the MultiAgentRuntime gate
   // evaluate REAL facts (L1 event-source trust per workspace, L2 actor workspace membership, L4 runtime

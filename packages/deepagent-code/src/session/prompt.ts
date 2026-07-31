@@ -52,6 +52,7 @@ import { Permission } from "@/permission"
 import { Question } from "@/question"
 import { SessionStatus } from "./status"
 import { LLM } from "./llm"
+import { LLMRequestPrep } from "./llm/request"
 import { AgentGateway } from "@deepagent-code/core/agent-gateway"
 import * as MultiRound from "./deepagent-multiround"
 import { runValidationCommands } from "../deepagent/validation-exec"
@@ -119,7 +120,7 @@ import { collectVolatileFacts, refreshWorldState } from "./context-ledger"
 import { ToolSemanticFingerprint } from "@/tool/semantic-fingerprint"
 import { deliverTaskNotifications, recoverExpiredTaskRuns } from "@/tool/task-run"
 import { registerDisposer, registerInitializer } from "@/effect/instance-registry"
-import { InstanceRef } from "@/effect/instance-ref"
+import { EventRouteRef, InstanceRef } from "@/effect/instance-ref"
 import { InstanceStore } from "@/project/instance-store"
 
 // @ts-ignore
@@ -359,6 +360,16 @@ export const layer = Layer.effect(
         yield* federation.settleActivity(current.selection, state).pipe(Effect.orDie)
         activeFederatedContexts.delete(sessionID)
       })
+    const rootSession = Effect.fn("SessionPrompt.rootSession")(function* (input: Session.Info) {
+      const seen = new Set<SessionID>()
+      let current = input
+      while (current.parentID) {
+        if (seen.has(current.id)) return yield* Effect.die(new Error(`Session parent cycle at ${current.id}`))
+        seen.add(current.id)
+        current = yield* sessions.get(current.parentID).pipe(Effect.orDie)
+      }
+      return current
+    })
     const ops = Effect.fn("SessionPrompt.ops")(function* () {
       return {
         cancel: (sessionID: SessionID) => cancel(sessionID),
@@ -1802,6 +1813,24 @@ export const layer = Layer.effect(
       }
       const session = yield* sessions.get(input.sessionID).pipe(Effect.orDie)
       const current = yield* InstanceState.context
+      const route = yield* EventRouteRef
+      const root = yield* rootSession(session)
+      if (
+        !route ||
+        FSUtil.resolve(route.directory) !== FSUtil.resolve(root.directory) ||
+        route.workspaceID !== root.workspaceID
+      ) {
+        const rootContext =
+          FSUtil.resolve(current.directory) === FSUtil.resolve(root.directory)
+            ? current
+            : yield* instances.load({ directory: root.directory })
+        return yield* prompt(input).pipe(
+          Effect.provideService(EventRouteRef, {
+            ...rootContext,
+            ...(root.workspaceID ? { workspaceID: root.workspaceID } : {}),
+          }),
+        )
+      }
       if (FSUtil.resolve(session.directory) !== FSUtil.resolve(current.directory)) {
         return yield* instances.provide({ directory: session.directory }, prompt(input))
       }
@@ -2457,6 +2486,10 @@ export const layer = Layer.effect(
           }
 
           step++
+          // Structured finalization deliberately starts a new provider prefix: it excludes research
+          // history and replaces the tool set with StructuredOutput. Do not compare that bounded
+          // request with the preceding research turn in the cache-break monitor.
+          if (step === 1 && finalizerMode) LLMRequestPrep.resetCacheHitOutcome(sessionID)
           if (lastAssistant && taskActivity?.maxSteps && step > taskActivity.maxSteps) {
             yield* failTaskBudget(lastAssistant, "steps", taskActivity.maxSteps, step - 1)
             break
@@ -3029,6 +3062,29 @@ export const layer = Layer.effect(
     const loop: (input: LoopInput) => Effect.Effect<SessionV1.WithParts> = Effect.fn("SessionPrompt.loop")(function* (
       input: LoopInput,
     ) {
+      const session = yield* sessions.get(input.sessionID).pipe(Effect.orDie)
+      const current = yield* InstanceState.context
+      const route = yield* EventRouteRef
+      const root = yield* rootSession(session)
+      if (
+        !route ||
+        FSUtil.resolve(route.directory) !== FSUtil.resolve(root.directory) ||
+        route.workspaceID !== root.workspaceID
+      ) {
+        const rootContext =
+          FSUtil.resolve(current.directory) === FSUtil.resolve(root.directory)
+            ? current
+            : yield* instances.load({ directory: root.directory })
+        return yield* loop(input).pipe(
+          Effect.provideService(EventRouteRef, {
+            ...rootContext,
+            ...(root.workspaceID ? { workspaceID: root.workspaceID } : {}),
+          }),
+        )
+      }
+      if (FSUtil.resolve(session.directory) !== FSUtil.resolve(current.directory)) {
+        return yield* instances.provide({ directory: session.directory }, loop(input))
+      }
       return yield* state.ensureRunning(
         input.sessionID,
         lastAssistant(input.sessionID),

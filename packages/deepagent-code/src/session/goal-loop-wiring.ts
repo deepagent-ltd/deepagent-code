@@ -105,6 +105,8 @@ const reviewRank = (s: string): number => REVIEW_SEVERITY_RANK[s.trim().toLowerC
 
 export type SubagentTurnResult = {
   readonly ok: boolean
+  /** Stable machine-readable failure reason when `ok` is false. */
+  readonly reason?: string
   /** The structured output object when an output schema was requested and the turn produced one. */
   readonly structured: unknown | undefined
   /** The final text part (free-text turns). */
@@ -131,6 +133,13 @@ export type SubagentTurnResult = {
    * plan doc after the turn. Undefined when the runner does not create/expose a session (stubs).
    */
   readonly sessionID?: string
+  /**
+   * A durable source-control ref containing this turn's filesystem result. Event-driven DAG execution
+   * passes it to dependent turns so validation/review observes the exact upstream change.
+   */
+  readonly continuationRef?: string
+  /** Durable artifacts produced by the runner in addition to its child session. */
+  readonly artifacts?: ReadonlyArray<string>
 }
 
 export type SubagentTurnInput = {
@@ -146,6 +155,15 @@ export type SubagentTurnInput = {
    */
   readonly workspaceID?: string
   readonly directory?: string
+  /** Durable parent Session that owns every child turn and collaboration artifact for one V4 event. */
+  readonly parentSessionID?: string
+  /**
+   * Event-driven write turns fail closed when a dedicated worktree cannot be created. Read-only turns may
+   * deliberately degrade to the event directory.
+   */
+  readonly requiresWriteIsolation?: boolean
+  /** Durable git ref from an upstream DAG dependency. The isolated turn starts from this ref, not HEAD. */
+  readonly baseRef?: string
   /**
    * §F2 trace — the triggering event's correlationID. When present, the runner STAMPS it onto the child
    * session's `metadata.correlationID`. This is one HALF of the §F2 back-half: `Observability.trace` READS

@@ -7,6 +7,9 @@ import os from "os"
 import { PermissionV1 } from "@deepagent-code/core/v1/permission"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { EventV2 } from "@deepagent-code/core/event"
+import { EventRouteRef, type EventRoute } from "@/effect/instance-ref"
+import { FSUtil } from "@deepagent-code/core/fs-util"
+import type { InstanceContext } from "@/project/instance-context"
 
 const log = Log.create({ service: "permission" })
 
@@ -35,6 +38,9 @@ export interface Interface {
 interface PendingEntry {
   info: PermissionV1.Request
   deferred: Deferred.Deferred<void, PermissionV1.RejectedError | PermissionV1.CorrectedError>
+  owner: State
+  origin: InstanceContext
+  route: EventRoute
 }
 
 interface State {
@@ -60,9 +66,27 @@ export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const events = yield* EventV2Bridge.Service
+    const allPending = new Map<PermissionV1.ID, PendingEntry>()
+    const removePending = (id: PermissionV1.ID, entry: PendingEntry) => {
+      if (allPending.get(id) !== entry) return false
+      allPending.delete(id)
+      entry.owner.pending.delete(id)
+      return true
+    }
+    const visibleFrom = (entry: PendingEntry, directory: string, workspaceID: string | undefined) =>
+      (entry.route.workspaceID === undefined || entry.route.workspaceID === workspaceID) &&
+      (FSUtil.resolve(entry.origin.directory) === FSUtil.resolve(directory) ||
+        FSUtil.resolve(entry.route.directory) === FSUtil.resolve(directory))
+    const publishReply = (entry: PendingEntry, reply: PermissionV1.Reply) =>
+      events
+        .publish(Event.Replied, {
+          sessionID: entry.info.sessionID,
+          requestID: entry.info.id,
+          reply,
+        })
+        .pipe(Effect.provideService(EventRouteRef, entry.route))
     const state = yield* InstanceState.make<State>(
-      Effect.fn("Permission.state")(function* (ctx) {
-        void ctx
+      Effect.fn("Permission.state")(function* () {
         const state = {
           pending: new Map<PermissionV1.ID, PendingEntry>(),
           approved: [],
@@ -70,7 +94,9 @@ export const layer = Layer.effect(
 
         yield* Effect.addFinalizer(() =>
           Effect.gen(function* () {
-            for (const item of state.pending.values()) {
+            for (const [id, item] of state.pending) {
+              if (!removePending(id, item)) continue
+              yield* publishReply(item, "reject")
               yield* Deferred.fail(item.deferred, new PermissionV1.RejectedError())
             }
             state.pending.clear()
@@ -82,12 +108,18 @@ export const layer = Layer.effect(
     )
 
     const ask = Effect.fn("Permission.ask")(function* (input: AskInput) {
-      const { approved, pending } = yield* InstanceState.get(state)
+      const owner = yield* InstanceState.get(state)
+      const origin = yield* InstanceState.context
+      const workspaceID = yield* InstanceState.workspaceID
+      const route = (yield* EventRouteRef) ?? {
+        ...origin,
+        ...(workspaceID ? { workspaceID } : {}),
+      }
       const { ruleset, timeoutMs, ...request } = input
       let needsAsk = false
 
       for (const pattern of request.patterns) {
-        const rule = evaluate(request.permission, pattern, ruleset, approved)
+        const rule = evaluate(request.permission, pattern, ruleset, owner.approved)
         log.info("evaluated", { permission: request.permission, pattern, action: rule })
         if (rule.action === "deny") {
           return yield* new PermissionV1.DeniedError({
@@ -113,7 +145,9 @@ export const layer = Layer.effect(
       log.info("asking", { id, permission: info.permission, patterns: info.patterns })
 
       const deferred = yield* Deferred.make<void, PermissionV1.RejectedError | PermissionV1.CorrectedError>()
-      pending.set(id, { info, deferred })
+      const entry: PendingEntry = { info, deferred, owner, origin, route }
+      owner.pending.set(id, entry)
+      allPending.set(id, entry)
       yield* events.publish(Event.Asked, info)
       return yield* Effect.ensuring(
         Effect.gen(function* () {
@@ -127,37 +161,32 @@ export const layer = Layer.effect(
           // A concurrent human reply removes the entry before completing the deferred. In that narrow
           // race, the human decision owns settlement; only the fiber that deletes the pending entry may
           // publish the synthetic rejection.
-          if (!pending.delete(id)) return yield* Deferred.await(deferred)
+          if (!removePending(id, entry)) return yield* Deferred.await(deferred)
           log.warn("permission request timed out", {
             id,
             sessionID: info.sessionID,
             permission: info.permission,
             timeoutMs,
           })
-          yield* events.publish(Event.Replied, {
-            sessionID: info.sessionID,
-            requestID: id,
-            reply: "reject",
-          })
+          yield* publishReply(entry, "reject")
           return yield* new PermissionV1.RejectedError()
         }),
-        Effect.sync(() => {
-          pending.delete(id)
+        Effect.gen(function* () {
+          if (!removePending(id, entry)) return
+          yield* publishReply(entry, "reject")
         }),
       )
     })
 
     const reply = Effect.fn("Permission.reply")(function* (input: PermissionV1.ReplyInput) {
-      const { approved, pending } = yield* InstanceState.get(state)
-      const existing = pending.get(input.requestID)
-      if (!existing) return yield* new PermissionV1.NotFoundError({ requestID: input.requestID })
+      const current = yield* InstanceState.context
+      const workspaceID = yield* InstanceState.workspaceID
+      const existing = allPending.get(input.requestID)
+      if (!existing || !visibleFrom(existing, current.directory, workspaceID))
+        return yield* new PermissionV1.NotFoundError({ requestID: input.requestID })
 
-      pending.delete(input.requestID)
-      yield* events.publish(Event.Replied, {
-        sessionID: existing.info.sessionID,
-        requestID: existing.info.id,
-        reply: input.reply,
-      })
+      removePending(input.requestID, existing)
+      yield* publishReply(existing, input.reply)
 
       if (input.reply === "reject") {
         yield* Deferred.fail(
@@ -167,14 +196,10 @@ export const layer = Layer.effect(
             : new PermissionV1.RejectedError(),
         )
 
-        for (const [id, item] of pending.entries()) {
+        for (const [id, item] of allPending) {
           if (item.info.sessionID !== existing.info.sessionID) continue
-          pending.delete(id)
-          yield* events.publish(Event.Replied, {
-            sessionID: item.info.sessionID,
-            requestID: item.info.id,
-            reply: "reject",
-          })
+          removePending(id, item)
+          yield* publishReply(item, "reject")
           yield* Deferred.fail(item.deferred, new PermissionV1.RejectedError())
         }
         return
@@ -184,32 +209,31 @@ export const layer = Layer.effect(
       if (input.reply === "once") return
 
       for (const pattern of existing.info.always) {
-        approved.push({
+        existing.owner.approved.push({
           permission: existing.info.permission,
           pattern,
           action: "allow",
         })
       }
 
-      for (const [id, item] of pending.entries()) {
+      for (const [id, item] of allPending) {
         if (item.info.sessionID !== existing.info.sessionID) continue
         const ok = item.info.patterns.every(
-          (pattern) => evaluate(item.info.permission, pattern, approved).action === "allow",
+          (pattern) => evaluate(item.info.permission, pattern, item.owner.approved).action === "allow",
         )
         if (!ok) continue
-        pending.delete(id)
-        yield* events.publish(Event.Replied, {
-          sessionID: item.info.sessionID,
-          requestID: item.info.id,
-          reply: "always",
-        })
+        removePending(id, item)
+        yield* publishReply(item, "always")
         yield* Deferred.succeed(item.deferred, undefined)
       }
     })
 
     const list = Effect.fn("Permission.list")(function* () {
-      const pending = (yield* InstanceState.get(state)).pending
-      return Array.from(pending.values(), (item) => item.info)
+      const current = yield* InstanceState.context
+      const workspaceID = yield* InstanceState.workspaceID
+      return Array.from(allPending.values())
+        .filter((item) => visibleFrom(item, current.directory, workspaceID))
+        .map((item) => item.info)
     })
 
     return Service.of({ ask, reply, list })

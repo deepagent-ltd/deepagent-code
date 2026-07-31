@@ -4,6 +4,7 @@ import { SessionV1 } from "@deepagent-code/core/v1/session"
 import { Database } from "@deepagent-code/core/database/database"
 import { eq } from "drizzle-orm"
 import { EventV2Bridge } from "@/event-v2-bridge"
+import { WorkspaceV2 } from "@deepagent-code/core/workspace"
 import { FetchHttpClient } from "effect/unstable/http"
 import { expect } from "bun:test"
 import { Cause, Deferred, Duration, Effect, Exit, Fiber, Layer } from "effect"
@@ -2726,12 +2727,30 @@ it.instance("runs a prompt in the persisted session directory", () =>
     const prompt = yield* SessionPrompt.Service
     const sessions = yield* Session.Service
     const instances = yield* InstanceStore.Service
+    const events = yield* EventV2Bridge.Service
 
     yield* writeConfig(targetDirectory, providerCfg(llm.url))
+    const rootWorkspaceID = WorkspaceV2.ID.make("wrk_prompt_event_route")
+    const parent = yield* sessions.create({ title: "Parent session", workspaceID: rootWorkspaceID })
     const child = yield* instances.provide(
       { directory: targetDirectory },
-      sessions.create({ title: "Persisted directory child", directory: persistedDirectory }),
+      sessions.create({
+        title: "Persisted directory child",
+        directory: persistedDirectory,
+        parentID: parent.id,
+      }),
     )
+    const childEventDirectories: string[] = []
+    const childEventWorkspaceIDs: Array<WorkspaceV2.ID | undefined> = []
+    const off = yield* events.listen((event) =>
+      Effect.sync(() => {
+        if ((event.data as { sessionID?: SessionID }).sessionID !== child.id) return
+        if (!event.location?.directory) return
+        childEventDirectories.push(event.location.directory)
+        childEventWorkspaceIDs.push(event.location.workspaceID)
+      }),
+    )
+    yield* Effect.addFinalizer(() => off)
     yield* llm.text("child context complete")
 
     const result = yield* prompt.prompt({
@@ -2747,6 +2766,11 @@ it.instance("runs a prompt in the persisted session directory", () =>
       expect(path.resolve(result.info.path.cwd)).toBe(path.resolve(targetDirectory))
       expect(path.resolve(result.info.path.root)).toBe(path.resolve(targetDirectory))
     }
+    expect(childEventDirectories.length).toBeGreaterThan(0)
+    expect(childEventDirectories.every((directory) => path.resolve(directory) === path.resolve(parentDirectory))).toBe(
+      true,
+    )
+    expect(childEventWorkspaceIDs.every((workspaceID) => workspaceID === rootWorkspaceID)).toBe(true)
   }),
 )
 

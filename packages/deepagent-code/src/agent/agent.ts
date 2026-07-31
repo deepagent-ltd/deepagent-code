@@ -14,6 +14,7 @@ import PROMPT_COMPACTION from "./prompt/compaction.txt"
 import PROMPT_EXPLORE from "./prompt/explore.txt"
 import PROMPT_RESEARCHER from "./prompt/researcher.txt"
 import PROMPT_REVIEWER from "./prompt/reviewer.txt"
+import PROMPT_SENIOR_REVIEWER from "./prompt/senior-reviewer.txt"
 import PROMPT_GOAL_WORKER from "./prompt/goal-worker.txt"
 import PROMPT_LOOP_MODE from "./prompt/loop-mode.txt"
 import PROMPT_DESIGN_MODE from "./prompt/design-mode.txt"
@@ -335,7 +336,7 @@ export const layer = Layer.effect(
                 grep: "allow",
                 glob: "allow",
                 list: "allow",
-                bash: "allow",
+                bash: "deny",
                 read: "allow",
                 code_intel: "allow",
                 context_query: "allow",
@@ -347,6 +348,34 @@ export const layer = Layer.effect(
             ),
             description: `Independent, adversarial review agent. Use this to critique a plan or a set of changes from a skeptical, outside perspective — its default stance is that the change has problems. It hunts for correctness bugs, security issues, edge cases, convention conflicts, and missing tests, and reports reproducible failure scenarios. Read-only. Returns structured findings with an overall verdict.`,
             prompt: PROMPT_REVIEWER,
+            options: {},
+            mode: "subagent",
+            native: true,
+          },
+          "senior-reviewer": {
+            name: "senior-reviewer",
+            permission: Permission.merge(
+              defaults,
+              Permission.fromConfig({
+                "*": "deny",
+                grep: "allow",
+                glob: "allow",
+                list: "allow",
+                bash: "deny",
+                read: "allow",
+                edit: "allow",
+                write: "allow",
+                patch: "allow",
+                code_intel: "allow",
+                context_query: "allow",
+                task: "deny",
+                external_directory: readonlyExternalDirectory,
+              }),
+              user,
+              Permission.fromConfig({ doom_loop: "ask" }),
+            ),
+            description: `Stage-level senior reviewer. Reviews the merged batch, applies ordinary file fixes when needed, and returns a commit-bound structured verdict. It cannot delegate or merge.`,
+            prompt: PROMPT_SENIOR_REVIEWER,
             options: {},
             mode: "subagent",
             native: true,

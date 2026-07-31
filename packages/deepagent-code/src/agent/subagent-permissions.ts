@@ -26,15 +26,22 @@ const log = Log.create({ service: "subagent-permissions" })
 
 /**
  * I33-3: is this subagent WRITE-type (defaults to worktree isolation) or READ-ONLY (defaults to
- * shared parent dir)? Evaluates the subagent's own permission ruleset for each edit-class tool via the
- * same `Permission.evaluate` the runtime uses (last matching rule wins; unmatched ⇒ "ask", which is
- * NOT "deny" ⇒ still write-capable). A subagent is read-only only when EVERY edit-class permission
- * resolves to "deny". Pure + exported for unit testing; no I/O.
+ * shared parent dir)? A subagent is read-only only when its ruleset denies every resource for every
+ * edit-class permission. Checking one synthetic resource is insufficient: a common least-privilege
+ * ruleset denies `*` and then allows one output path. Such an agent is still write-capable and must
+ * be isolated. Pure + exported for unit testing; no I/O.
  */
 export function subagentIsWriteType(subagent: Agent.Info): boolean {
-  return EDIT_CLASS_PERMISSIONS.some(
-    (perm) => evaluatePermission(perm, "**", subagent.permission).action !== "deny",
-  )
+  return EDIT_CLASS_PERMISSIONS.some((permission) => {
+    const rules = subagent.permission.filter((rule) =>
+      evaluatePermission(permission, rule.pattern, [rule]).permission === rule.permission,
+    )
+    const globalDeny = rules.findLastIndex(
+      (rule) => (rule.pattern === "*" || rule.pattern === "**") && rule.action === "deny",
+    )
+    if (globalDeny === -1) return true
+    return rules.slice(globalDeny + 1).some((rule) => rule.action !== "deny")
+  })
 }
 
 /**

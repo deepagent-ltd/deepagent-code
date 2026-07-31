@@ -20,12 +20,15 @@ import {
 import { evaluate as evaluatePermission } from "../permission"
 import type { SessionPrompt } from "../session/prompt"
 import { Config } from "@/config/config"
-import { Cause, Duration, Effect, Exit, Option, Schedule, Schema, Scope } from "effect"
+import { Cause, Duration, Effect, Exit, Fiber, Option, Schedule, Schema, Scope } from "effect"
 import { EffectBridge } from "@/effect/bridge"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Database } from "@deepagent-code/core/database/database"
 import { Worktree } from "@/worktree"
 import { Git } from "@/git"
+import { DEFAULT_WORKER_IDENTITY } from "../agent/collaboration-identity"
+import { coordinator, ensureSessionBranch } from "../agent/pr-collaboration"
+import { PRQueue } from "../agent/pr-queue"
 import { Orchestration } from "../agent/schema/orchestration"
 import { Orchestration as CoreOrchestration } from "@deepagent-code/core/deepagent/orchestration"
 import { AgentGateway } from "@deepagent-code/core/agent-gateway"
@@ -123,6 +126,8 @@ export type SubagentPromptInput = {
   agent: string
   agentModeOverride: AgentMode | undefined
   outputSchema: Record<string, unknown> | undefined
+  directStructuredOutput?: boolean
+  finalizerInstructions?: readonly string[]
   runID?: string
   budget?: SubagentResearchBudget
   tools: Record<string, boolean>
@@ -148,6 +153,84 @@ type SubagentTerminalReason =
   | "execution_lease_expired"
   | "runtime_error"
 const subagentSettlementLocks = KeyedMutex.makeUnsafe<SessionID>()
+const sharedWriteFallbackLocks = KeyedMutex.makeUnsafe<string>()
+
+type SubmittedPR = {
+  readonly id: string
+  readonly workerCommit: string
+}
+
+const submitAutomaticWorktree = Effect.fn("TaskTool.submitAutomaticWorktree")(function* (input: {
+  git: Git.Interface
+  queue: PRQueue.Interface
+  info: Worktree.Info
+  parentDirectory: string
+  parentSessionID: SessionID
+  workerSessionID: SessionID
+  reviewerSessionID: SessionID
+  batchID: MessageID
+  prID: string
+  description: string
+  prompt: string
+}) {
+  const workerDirectory = FSUtil.resolve(input.info.directory)
+  const status = yield* input.git.porcelainStatus(workerDirectory)
+  if (!status) {
+    return yield* Effect.fail(new Error(`Unable to inspect automatic worktree at ${workerDirectory}`))
+  }
+  const existing = (yield* input.queue.list()).find(
+    (entry) =>
+      entry.parentID === input.parentSessionID &&
+      entry.workerID === input.workerSessionID &&
+      !["merged", "conflicted", "rejected", "superseded"].includes(entry.status),
+  )
+  if (existing && existing.status !== "changes_requested") {
+    return yield* Effect.fail(
+      new Error(`PR ${existing.id} is already ${existing.status}; worker preserved at ${workerDirectory}`),
+    )
+  }
+  const id = existing?.id ?? input.prID
+  if (!existing) {
+    const admitted = yield* coordinator
+      .admit({
+        id,
+        parentID: input.parentSessionID,
+        workerID: input.workerSessionID,
+        reviewerID: input.reviewerSessionID,
+        parentDirectory: input.parentDirectory,
+        workerDirectory,
+        metadata: { batchID: input.batchID, description: input.description, prompt: input.prompt },
+      })
+      .pipe(Effect.provideService(Git.Service, input.git), Effect.provideService(PRQueue.Service, input.queue))
+    if (admitted.type !== "admitted") {
+      return yield* Effect.fail(
+        new Error(`PR admission failed (${admitted.reason}); worker preserved at ${workerDirectory}`),
+      )
+    }
+  }
+  const committed = yield* coordinator
+    .commitWorker({
+      id,
+      workerID: input.workerSessionID,
+      paths: status.paths,
+      message: `chore(deepagent): submit ${input.description.replace(/\s+/g, " ").trim().slice(0, 100) || "subagent work"}`,
+      identity: DEFAULT_WORKER_IDENTITY,
+    })
+    .pipe(Effect.provideService(Git.Service, input.git), Effect.provideService(PRQueue.Service, input.queue))
+  if (committed.type === "committed") {
+    if (committed.state.workerCommit) {
+      return { id, workerCommit: committed.state.workerCommit } satisfies SubmittedPR
+    }
+    return yield* Effect.fail(new Error(`PR submission did not produce a worker commit for ${id}`))
+  }
+  if (!existing && committed.reason === "no-changes") {
+    yield* input.queue.supersede(id)
+    return undefined
+  }
+  return yield* Effect.fail(
+    new Error(`PR submission failed (${committed.reason}); worker preserved at ${workerDirectory}`),
+  )
+})
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -370,7 +453,15 @@ function withTaskRunLease<A, E, R>(run: DurableTaskRun, owner: string, effect: E
     Effect.repeat(Schedule.spaced(Duration.seconds(10))),
     Effect.flatMap(() => Effect.never),
   )
-  return Effect.raceFirst(effect, heartbeat)
+  return Effect.scoped(
+    Effect.gen(function* () {
+      const execution = yield* Effect.forkScoped(effect)
+      const renewal = yield* Effect.forkScoped(heartbeat)
+      return yield* Effect.raceFirst(Fiber.join(execution), Fiber.join(renewal)).pipe(
+        Effect.ensuring(Effect.all([Fiber.interrupt(execution), Fiber.interrupt(renewal)], { discard: true })),
+      )
+    }),
+  )
 }
 
 function taskError(input: {
@@ -419,6 +510,92 @@ export function runSubagentPrompt(input: SubagentPromptInput): Effect.Effect<str
     const parts = yield* input.ops.resolvePromptParts(input.prompt)
     const startedAt = Date.now()
     const budget = input.budget ?? DEFAULT_SUBAGENT_RESEARCH_BUDGET
+    if (input.directStructuredOutput) {
+      if (!input.outputSchema) {
+        return yield* Effect.fail(new Error("Direct structured output requires an output schema"))
+      }
+      taskLog.info("subagent.structured.started", {
+        run_id: input.runID,
+        child_session_id: input.sessionID,
+      })
+      const result = yield* input.ops
+        .prompt({
+          messageID: MessageID.ascending(),
+          sessionID: input.sessionID,
+          model: input.model,
+          variant: input.variant,
+          agent: input.agent,
+          format: new SessionV1.OutputFormatJsonSchema({
+            type: "json_schema",
+            schema: input.outputSchema,
+            retryCount: 1,
+          }),
+          metadata: {
+            deepagent: {
+              ...(input.agentModeOverride ? { agent_mode_override: input.agentModeOverride } : {}),
+              structured_direct: true,
+            },
+          },
+          tools: input.tools,
+          parts: [...parts, ...(input.finalizerInstructions ?? []).map((text) => ({ type: "text" as const, text }))],
+        })
+        .pipe(
+          Effect.timeout(Duration.millis(budget.maxWallMs)),
+          Effect.catchIf(Cause.isTimeoutError, () =>
+            Effect.fail(
+              taskError({
+                code: "budget_exhausted",
+                message: `Structured output wall-time budget exhausted (${budget.maxWallMs}ms).`,
+                sessionID: input.sessionID,
+                phase: "finalize",
+              }),
+            ),
+          ),
+        )
+      const error = assistantError(result)
+      if (error) {
+        return yield* Effect.fail(
+          taskError({
+            code: error.name === "APIError" ? "provider_error" : "structured_output_invalid",
+            message: `${error.name}: ${error.message}`,
+            sessionID: input.sessionID,
+            phase: "finalize",
+            attempts: 1,
+          }),
+        )
+      }
+      const structured = result.info.role === "assistant" ? result.info.structured : undefined
+      if (structured === undefined) {
+        return yield* Effect.fail(
+          taskError({
+            code: "structured_output_missing",
+            message: "Model did not call StructuredOutput.",
+            sessionID: input.sessionID,
+            phase: "finalize",
+            attempts: 1,
+          }),
+        )
+      }
+      const validationError = validateStructuredOutput(input.outputSchema, structured)
+      if (validationError) {
+        return yield* Effect.fail(
+          taskError({
+            code: "structured_output_invalid",
+            message: validationError.slice(0, 1_000),
+            sessionID: input.sessionID,
+            phase: "finalize",
+            attempts: 1,
+          }),
+        )
+      }
+      if (input.onFinalized) yield* input.onFinalized(result.info.id)
+      taskLog.info("subagent.structured.completed", {
+        run_id: input.runID,
+        child_session_id: input.sessionID,
+        result_message_id: result.info.id,
+      })
+      return JSON.stringify(structured)
+    }
     taskLog.info("subagent.research.started", {
       run_id: input.runID,
       child_session_id: input.sessionID,
@@ -574,6 +751,7 @@ export function runSubagentPrompt(input: SubagentPromptInput): Effect.Effect<str
               "Convert the persisted research result below into the requested StructuredOutput schema.",
               "Do not continue research and do not add facts that are absent from the result.",
               "Preserve exact evidence identifiers, literals, paths, and values when the research result says they must appear in a schema field.",
+              ...(input.finalizerInstructions ?? []),
               correction ? `Previous validation error: ${correction}` : "",
               "<research_result>",
               boundedRaw,
@@ -755,6 +933,16 @@ function renderOutput(input: {
   ].join("\n")
 }
 
+function withPRSubmission(output: string, pr: SubmittedPR | undefined) {
+  if (!pr) return output
+  return [
+    output,
+    `<pr id="${pr.id}" state="awaiting_review" implementation_commit_sha="${pr.workerCommit}">`,
+    "Call pr_finalize after every foreground write task in this batch has returned.",
+    "</pr>",
+  ].join("\n")
+}
+
 // v4.0.4 块1 (1a+1b): the per-attempt bundle the takeover drivers thread through spawn → drive →
 // recycle. Each takeover respawn mints a fresh one (new child session, new worktree).
 type AttemptMetadata = Record<string, unknown> & {
@@ -781,7 +969,7 @@ interface AttemptBundle {
   ) => Effect.Effect<void, unknown>
   readonly inject: (state: "completed" | "error", text: string, takeovers: number) => Effect.Effect<unknown, unknown>
   readonly automaticWriteIsolation: boolean
-  readonly mergeWorktree: () => Effect.Effect<boolean, unknown>
+  readonly submitWorktree: () => Effect.Effect<SubmittedPR | undefined, unknown>
   readonly teardownWorktree: (force: boolean) => Effect.Effect<unknown, unknown>
 }
 
@@ -801,6 +989,8 @@ export const TaskTool = Tool.define(
     const scope = yield* Scope.Scope
     const flags = yield* RuntimeFlags.Service
     const database = yield* Database.Service
+    const git = Option.getOrUndefined(yield* Effect.serviceOption(Git.Service))
+    const queue = Option.getOrUndefined(yield* Effect.serviceOption(PRQueue.Service))
 
     const run = Effect.fn("TaskTool.execute")(function* (
       params: Schema.Schema.Type<typeof Parameters>,
@@ -891,6 +1081,8 @@ export const TaskTool = Tool.define(
       // embedded integrations) predate that contract, so give those invocations a unique identity;
       // exact-retry semantics are available only when the caller supplies the stable callID.
       const toolCallID = ctx.callID ?? Identifier.ascending("tool")
+      const reviewerSessionID = SessionID.make(`ses_pr_reviewer_${ctx.messageID}`)
+      const prID = `pr:${ctx.sessionID}:${toolCallID}`
       const msg = yield* MessageV2.get({ sessionID: ctx.sessionID, messageID: ctx.messageID }).pipe(
         Effect.provideService(Database.Service, database),
         Effect.orDie,
@@ -920,6 +1112,9 @@ export const TaskTool = Tool.define(
         maxTokens: flags.subagentResearchTokenLimit ?? DEFAULT_SUBAGENT_RESEARCH_BUDGET.maxTokens,
         maxWallMs: flags.subagentResearchWallMs ?? DEFAULT_SUBAGENT_RESEARCH_BUDGET.maxWallMs,
         maxNoProgress: flags.subagentNoProgressLimit ?? DEFAULT_SUBAGENT_RESEARCH_BUDGET.maxNoProgress,
+      }
+      if (params.isolation !== "worktree" && subagentIsWriteType(next) && git && queue) {
+        yield* ensureSessionBranch({ git, directory: parent.directory, sessionID: parent.id })
       }
       const activeRun = session
         ? yield* getActiveTaskRunByChild(session.id).pipe(Effect.provideService(Database.Service, database))
@@ -999,6 +1194,33 @@ export const TaskTool = Tool.define(
       const admittedSession =
         session ??
         (yield* sessions.get(admission.run.childSessionID).pipe(Effect.catchCause(() => Effect.succeed(undefined))))
+      const collaborationPR =
+        admittedSession && queue
+          ? (yield* queue.list())
+              .filter((entry) => entry.parentID === ctx.sessionID && entry.workerID === admittedSession.id)
+              .toSorted((left, right) => right.updatedAt - left.updatedAt)[0]
+          : undefined
+      if (session && collaborationPR && collaborationPR.status !== "changes_requested") {
+        return yield* Effect.fail(
+          new Error(
+            `Cannot resume task "${session.id}" while PR ${collaborationPR.id} is ${collaborationPR.status}. ` +
+              (collaborationPR.status === "awaiting_review" || collaborationPR.status === "approved"
+                ? "Call pr_finalize before asking the author to revise it."
+                : "Only a PR in changes_requested may resume its author worktree."),
+          ),
+        )
+      }
+      const resumedWorktreeInfo =
+        admittedSession &&
+        collaborationPR?.status === "changes_requested" &&
+        typeof collaborationPR.metadata?.workerDirectory === "string" &&
+        FSUtil.resolve(admittedSession?.directory ?? "") === FSUtil.resolve(collaborationPR.metadata.workerDirectory)
+          ? {
+              name: `agent-${params.subagent_type}-${admittedSession.id}`,
+              directory: FSUtil.resolve(admittedSession.directory),
+              ...(git ? { branch: yield* git.branch(admittedSession.directory) } : {}),
+            }
+          : undefined
       const ownsActiveRun = (run: DurableTaskRun) =>
         (run.state === "researching" || run.state === "finalizing") &&
         run.executionOwner === executionOwner &&
@@ -1049,13 +1271,10 @@ export const TaskTool = Tool.define(
               .pipe(Effect.asVoid),
         }).pipe(Effect.provideService(Database.Service, database), Effect.asVoid)
 
-      // v4.0.4 块1 (1a+1b): timeout + takeover — enabled ONLY when DEEPAGENT_CODE_SUBAGENT_TIMEOUT_MS
-      // is set; when it is not, execution falls through to the default path below, which stays
-      // byte-identical to the pre-flag behavior. timeout and takeover are an inseparable unit: a bare
-      // timeout would kill legitimate long tasks, so a timed-out/failed attempt is judged crashed and
-      // atomically replaced — the old attempt is cancelled and its worktree recycled BEFORE a
-      // brand-new child session respawns from the same fork base (single-driver invariant: the two
-      // attempts never run concurrently). Retries are bounded by subagentTakeoverLimit (default 2).
+      // v4.0.4 块1 (1a+1b): production supplies a finite timeout; explicit compatibility and test layers
+      // may still set it to undefined to exercise the unsupervised path. Timeout and takeover are an
+      // inseparable unit: a timed-out/failed attempt is cancelled before a fresh child session respawns
+      // from the same fork base. Retries are bounded by subagentTakeoverLimit (default 2).
       if (flags.subagentTimeoutMs !== undefined) {
         const timeoutMs = flags.subagentTimeoutMs
         const takeoverLimit = flags.subagentTakeoverLimit ?? 2
@@ -1065,15 +1284,17 @@ export const TaskTool = Tool.define(
         const spawnAttempt = Effect.fn("TaskTool.spawnAttempt")(function* (first: boolean, runState: DurableTaskRun) {
           const resumed = first ? admittedSession : undefined
           const isolate = !resumed && (params.isolation === "worktree" || subagentIsWriteType(next))
-          const worktreeOpt = isolate
-            ? yield* Effect.serviceOption(Worktree.Service)
-            : Option.none<Worktree.Interface>()
+          const worktreeOpt =
+            isolate || resumedWorktreeInfo
+              ? yield* Effect.serviceOption(Worktree.Service)
+              : Option.none<Worktree.Interface>()
           const worktreeInfo =
-            isolate && Option.isSome(worktreeOpt)
+            resumedWorktreeInfo ??
+            (isolate && Option.isSome(worktreeOpt)
               ? yield* worktreeOpt.value
-                  .create({ name: `agent-${params.subagent_type}-${Identifier.ascending("tool")}` })
+                  .createReady({ name: `agent-${params.subagent_type}-${Identifier.ascending("tool")}` })
                   .pipe(Effect.catchTag("WorktreeNotGitError", () => Effect.succeed(undefined)))
-              : undefined
+              : undefined)
           const nextSession =
             resumed ??
             (yield* sessions.create({
@@ -1081,7 +1302,7 @@ export const TaskTool = Tool.define(
               parentID: ctx.sessionID,
               title: params.description + ` (@${next.name} subagent)`,
               agent: next.name,
-              ...(worktreeInfo ? { directory: worktreeInfo.directory } : {}),
+              ...(worktreeInfo ? { directory: FSUtil.resolve(worktreeInfo.directory) } : {}),
               // F5: write normalised depth into metadata so future resolveSessionDepth calls for this
               // session return the correct value without needing to walk the full parentID chain.
               metadata: {
@@ -1177,7 +1398,10 @@ export const TaskTool = Tool.define(
                 subagentType: params.subagent_type,
                 agentMaxConcurrency,
                 caps,
-                effect: runTaskInner(),
+                effect:
+                  subagentIsWriteType(next) && !a.worktreeInfo
+                    ? sharedWriteFallbackLocks.withLock(FSUtil.resolve(parent.directory))(runTaskInner())
+                    : runTaskInner(),
               }),
             ).pipe(Effect.provideService(Database.Service, database))
           })
@@ -1210,13 +1434,13 @@ export const TaskTool = Tool.define(
             yield* dispatchNotifications()
           })
 
-          // 1d: worktree teardown hangs off the completion points (only in this flag-gated path; the
-          // default path intentionally keeps the status quo). Completion/cancellation uses the
-          // fail-closed safeRemove (refuses to destroy unmerged work — a dirty worktree leaks rather
-          // than losing changes); takeover recycling force-removes because the old attempt's
-          // half-finished state is explicitly superseded by the redo from the same fork base.
+          // 1d: worktree teardown hangs off the completion points. Explicit isolation is caller-owned
+          // and stays available for inspection/merge even when Git ignores the produced files.
+          // Automatic isolation uses fail-closed safeRemove; takeover recycling force-removes because
+          // the old attempt is explicitly superseded by the redo from the same fork base.
+          const automaticWriteIsolation = params.isolation !== "worktree" && !!a.worktreeInfo
           const teardownWorktree = Effect.fn("TaskTool.teardownWorktree")(function* (force: boolean) {
-            if (!a.worktreeInfo) return
+            if (!a.worktreeInfo || (!automaticWriteIsolation && !force)) return
             const worktreeOpt = yield* Effect.serviceOption(Worktree.Service)
             if (Option.isNone(worktreeOpt)) return
             yield* (
@@ -1226,57 +1450,29 @@ export const TaskTool = Tool.define(
             ).pipe(Effect.ignore)
           })
 
-          // 2c (Block 2): automatic write-isolation merge-back. When the worktree was created
-          // automatically (not via explicit isolation:"worktree"), integrate the worker's committed
-          // changes back into the PARENT checkout via Git.mergeInto rather than Worktree.mergeBack.
-          // Worktree.mergeBack targets the repo default branch with --no-commit, which is wrong here:
-          // the parent may be on any branch and the merge must be a committed --no-ff. We also check
-          // the parent HEAD hasn't advanced since spawn (baseline guard) so we don't silently merge
-          // onto a moved target. On any failure we abort the merge state and preserve the worker
-          // worktree for recovery; teardownWorktree(false) is then called by the caller to keep it.
-          //
-          // We resolve Git.Service here (at bundle-build time inside startAttempt) so that
-          // mergeWorktree itself can be typed without service requirements: the service is captured
-          // in the closure. `true` reports a successful automatic merge, whose worker may be removed.
-          // `false` means no automatic merge was applicable and therefore must keep fail-closed cleanup.
-          const automaticWriteIsolation = params.isolation !== "worktree" && !!a.worktreeInfo
+          // Automatically isolated write agents submit a scoped commit to the durable PR queue.
+          // Explicit isolation stays detached and never enters the automatic collaboration flow.
           const parentDir = parent.directory
-          const gitOpt = yield* Effect.serviceOption(Git.Service)
-          const parentBaselineHead =
-            parentDir && Option.isSome(gitOpt)
-              ? yield* gitOpt.value.resolveRef(parentDir).pipe(Effect.orElseSucceed(() => undefined))
-              : undefined
-          const mergeWorktree = Effect.fn("TaskTool.mergeWorktree")(function* () {
-            if (!a.worktreeInfo || !automaticWriteIsolation || !parentDir || Option.isNone(gitOpt)) return false
-            const git = gitOpt.value
-            const workerBranch = a.worktreeInfo.branch
-            if (!workerBranch) return false // detached HEAD on worker — nothing to merge
-            const currentParentHead = yield* git.resolveRef(parentDir).pipe(Effect.orElseSucceed(() => undefined))
-            if (currentParentHead !== parentBaselineHead) {
-              // Parent advanced — preserve worker for human resolution; caller treats this as merge failure.
+          const submitWorktree = Effect.fn("TaskTool.submitWorktree")(function* () {
+            if (!a.worktreeInfo || !automaticWriteIsolation) return undefined
+            if (!parentDir || !git || !queue) {
               return yield* Effect.fail(
-                new Error(
-                  `Automatic worktree merge skipped: parent HEAD advanced since task spawn ` +
-                    `(baseline ${parentBaselineHead ?? "none"}, current ${currentParentHead ?? "none"}). ` +
-                    `Worker branch ${workerBranch} preserved for manual review.`,
-                ),
+                new Error(`Automatic PR submission unavailable; worker preserved at ${a.worktreeInfo.directory}`),
               )
             }
-            const result = yield* git.mergeInto(parentDir, workerBranch)
-            if (result.type === "merged") return true
-            // On conflict or failure: abort merge state so parent checkout is usable, then re-throw
-            // so the caller knows to preserve the worker worktree.
-            yield* git.abortMerge(parentDir).pipe(Effect.ignore)
-            const diag =
-              result.type === "conflict"
-                ? `conflicts in ${result.paths.join(", ")}`
-                : (result.diagnostic ?? result.type)
-            return yield* Effect.fail(
-              new Error(
-                `Automatic worktree merge failed (${diag}). ` +
-                  `Worker branch ${workerBranch} preserved at ${a.worktreeInfo.directory}.`,
-              ),
-            )
+            return yield* submitAutomaticWorktree({
+              git,
+              queue,
+              info: a.worktreeInfo,
+              parentDirectory: parentDir,
+              parentSessionID: ctx.sessionID,
+              workerSessionID: a.nextSession.id,
+              reviewerSessionID,
+              batchID: ctx.messageID,
+              prID,
+              description: params.description,
+              prompt: params.prompt,
+            })
           })
 
           const bundle: AttemptBundle = {
@@ -1287,7 +1483,7 @@ export const TaskTool = Tool.define(
             automaticWriteIsolation,
             markFinished,
             inject,
-            mergeWorktree,
+            submitWorktree,
             teardownWorktree,
           }
 
@@ -1364,34 +1560,33 @@ export const TaskTool = Tool.define(
             )
             if (outcome.kind === "promoted") return backgroundResult(b)
             if (outcome.kind === "completed") {
-              const merged = yield* b.mergeWorktree().pipe(
+              const pr = yield* b.submitWorktree().pipe(
                 Effect.catchCause((cause) =>
                   Effect.gen(function* () {
                     const diagnostic = Cause.squash(cause)
                     yield* b.markFinished("error", "runtime_error", {
                       error: { code: "runtime_error", message: String(diagnostic) },
                     })
-                    yield* b.inject("error", `Worktree merge-back failed: ${String(diagnostic)}`, takeovers)
+                    yield* b.inject("error", `PR submission failed: ${String(diagnostic)}`, takeovers)
                     yield* b.teardownWorktree(false)
-                    return false
+                    return yield* Effect.fail(new Error(`PR submission failed: ${String(diagnostic)}`))
                   }),
                 ),
               )
-              if (!merged && b.automaticWriteIsolation)
-                return yield* Effect.fail(new Error("Worktree merge-back failed"))
+              const output = withPRSubmission(outcome.output, pr)
               yield* b.markFinished(
                 "completed",
                 resolvedOutputSchema ? "structured_output_valid" : "text_output_valid",
-                { output: outcome.output },
+                { output },
               )
-              yield* b.teardownWorktree(merged)
+              if (!pr) yield* b.teardownWorktree(b.automaticWriteIsolation)
               return {
                 title: params.description,
-                metadata: b.metadata,
+                metadata: { ...b.metadata, ...(pr ? { prId: pr.id, workerCommit: pr.workerCommit } : {}) },
                 output: renderOutput({
                   sessionID: b.nextSession.id,
                   state: "completed",
-                  text: outcome.output,
+                  text: output,
                   maxChars: flags.subagentOutputMaxChars,
                 }),
               }
@@ -1453,11 +1648,11 @@ export const TaskTool = Tool.define(
             const waited = yield* background.wait({ id: b.nextSession.id, timeout: timeoutMs })
             const status = waited.info?.status
             if (!waited.timedOut && status === "completed") {
-              const merged = yield* b.mergeWorktree().pipe(
+              const pr = yield* b.submitWorktree().pipe(
                 Effect.catchCause((cause) =>
                   Effect.gen(function* () {
                     const diagnostic = Cause.squash(cause)
-                    const text = `Worktree merge-back failed: ${String(diagnostic)}`
+                    const text = `PR submission failed: ${String(diagnostic)}`
                     yield* b.markFinished("error", "runtime_error", {
                       error: { code: "runtime_error", message: text },
                       notifyText: renderOutput({
@@ -1470,12 +1665,11 @@ export const TaskTool = Tool.define(
                     })
                     yield* b.inject("error", text, takeovers)
                     yield* b.teardownWorktree(false)
-                    return false
+                    return yield* Effect.fail(new Error(text))
                   }),
                 ),
               )
-              if (!merged && b.automaticWriteIsolation) return
-              const output = waited.info?.output ?? ""
+              const output = withPRSubmission(waited.info?.output ?? "", pr)
               yield* b.markFinished(
                 "completed",
                 resolvedOutputSchema ? "structured_output_valid" : "text_output_valid",
@@ -1490,7 +1684,7 @@ export const TaskTool = Tool.define(
                   }),
                 },
               )
-              yield* b.teardownWorktree(merged)
+              if (!pr) yield* b.teardownWorktree(b.automaticWriteIsolation)
               yield* b.inject("completed", output, takeovers)
               return
             }
@@ -1582,13 +1776,17 @@ export const TaskTool = Tool.define(
       // Only the non-git degradation (NotGitError) is tolerated as a shared-directory fallback; any
       // other create failure now FAILS the task loudly instead of silently un-isolating it.
       const isolate = !admittedSession && (params.isolation === "worktree" || subagentIsWriteType(next))
-      const worktreeOpt = isolate ? yield* Effect.serviceOption(Worktree.Service) : Option.none<Worktree.Interface>()
+      const worktreeOpt =
+        isolate || resumedWorktreeInfo
+          ? yield* Effect.serviceOption(Worktree.Service)
+          : Option.none<Worktree.Interface>()
       const worktreeInfo =
-        isolate && Option.isSome(worktreeOpt)
+        resumedWorktreeInfo ??
+        (isolate && Option.isSome(worktreeOpt)
           ? yield* worktreeOpt.value
-              .create({ name: `agent-${params.subagent_type}-${Identifier.ascending("tool")}` })
+              .createReady({ name: `agent-${params.subagent_type}-${Identifier.ascending("tool")}` })
               .pipe(Effect.catchTag("WorktreeNotGitError", () => Effect.succeed(undefined)))
-          : undefined
+          : undefined)
 
       const nextSession =
         admittedSession ??
@@ -1650,7 +1848,10 @@ export const TaskTool = Tool.define(
             subagentType: params.subagent_type,
             agentMaxConcurrency,
             caps,
-            effect: runTaskInner(),
+            effect:
+              subagentIsWriteType(next) && !worktreeInfo
+                ? sharedWriteFallbackLocks.withLock(FSUtil.resolve(parent.directory))(runTaskInner())
+                : runTaskInner(),
           }),
         ).pipe(Effect.provideService(Database.Service, database))
       })
@@ -1719,20 +1920,86 @@ export const TaskTool = Tool.define(
         if (!won) yield* Effect.fail(lostTaskRunLease(runState))
       })
 
-      const notify = Effect.fn("TaskTool.notifyBackgroundResult")(function* (jobID: string) {
-        yield* background.wait({ id: jobID }).pipe(
-          Effect.flatMap((result) => {
-            if (result.info?.status === "completed")
-              return markFinished("completed", resolvedOutputSchema ? "structured_output_valid" : "text_output_valid", {
-                output: result.info.output ?? "",
+      const automaticWriteIsolation = params.isolation !== "worktree" && !!worktreeInfo
+      const teardownWorktree = Effect.fn("TaskTool.teardownWorktree")(function* (force: boolean) {
+        if (!worktreeInfo || (!automaticWriteIsolation && !force) || Option.isNone(worktreeOpt)) return
+        yield* (
+          force
+            ? worktreeOpt.value.remove({ directory: worktreeInfo.directory })
+            : worktreeOpt.value.safeRemove({ directory: worktreeInfo.directory })
+        ).pipe(Effect.ignore)
+      })
+      const submitWorktree = Effect.fn("TaskTool.submitWorktree")(function* () {
+        if (!worktreeInfo || !automaticWriteIsolation) return undefined
+        if (!parent.directory || !git || !queue) {
+          return yield* Effect.fail(
+            new Error(`Automatic PR submission unavailable; worker preserved at ${worktreeInfo.directory}`),
+          )
+        }
+        return yield* submitAutomaticWorktree({
+          git,
+          queue,
+          info: worktreeInfo,
+          parentDirectory: parent.directory,
+          parentSessionID: ctx.sessionID,
+          workerSessionID: nextSession.id,
+          reviewerSessionID,
+          batchID: ctx.messageID,
+          prID,
+          description: params.description,
+          prompt: params.prompt,
+        })
+      })
+      const complete = Effect.fn("TaskTool.complete")(function* (output: string, notifyParent: boolean) {
+        const pr = yield* submitWorktree().pipe(
+          Effect.catchCause((cause) =>
+            Effect.gen(function* () {
+              const diagnostic = String(Cause.squash(cause))
+              const text = `PR submission failed: ${diagnostic}`
+              yield* markFinished("error", "runtime_error", {
+                error: { code: "runtime_error", message: diagnostic },
+                ...(notifyParent
+                  ? {
+                      notifyText: renderOutput({
+                        sessionID: nextSession.id,
+                        state: "error",
+                        summary: `Background task failed: ${params.description}`,
+                        text,
+                        maxChars: flags.subagentOutputMaxChars,
+                      }),
+                    }
+                  : {}),
+              })
+              yield* teardownWorktree(false)
+              if (notifyParent) yield* inject("error", text)
+              return yield* Effect.fail(new Error(text))
+            }),
+          ),
+        )
+        const completedOutput = withPRSubmission(output, pr)
+        yield* markFinished("completed", resolvedOutputSchema ? "structured_output_valid" : "text_output_valid", {
+          output: completedOutput,
+          ...(notifyParent
+            ? {
                 notifyText: renderOutput({
                   sessionID: nextSession.id,
                   state: "completed",
                   summary: `Background task completed: ${params.description}`,
-                  text: result.info.output ?? "",
+                  text: completedOutput,
                   maxChars: flags.subagentOutputMaxChars,
                 }),
-              }).pipe(Effect.andThen(inject("completed", result.info.output ?? "")))
+              }
+            : {}),
+        })
+        if (!pr) yield* teardownWorktree(automaticWriteIsolation)
+        if (notifyParent) yield* inject("completed", completedOutput)
+        return pr
+      })
+
+      const notify = Effect.fn("TaskTool.notifyBackgroundResult")(function* (jobID: string) {
+        yield* background.wait({ id: jobID }).pipe(
+          Effect.flatMap((result) => {
+            if (result.info?.status === "completed") return complete(result.info.output ?? "", true)
             if (result.info?.status === "error")
               return markFinished("error", terminalReason(result.info.error), {
                 error: {
@@ -1746,8 +2013,9 @@ export const TaskTool = Tool.define(
                   text: result.info.error ?? "Task failed",
                   maxChars: flags.subagentOutputMaxChars,
                 }),
-              }).pipe(Effect.andThen(inject("error", result.info.error ?? "")))
-            if (result.info?.status === "cancelled") return markFinished("cancelled", "parent_interrupted")
+              }).pipe(Effect.andThen(teardownWorktree(false)), Effect.andThen(inject("error", result.info.error ?? "")))
+            if (result.info?.status === "cancelled")
+              return markFinished("cancelled", "parent_interrupted").pipe(Effect.andThen(teardownWorktree(false)))
             return Effect.void
           }),
           Effect.forkIn(scope, { startImmediately: true }),
@@ -1836,10 +2104,12 @@ export const TaskTool = Tool.define(
               yield* markFinished("error", terminalReason(result.error), {
                 error: { code: terminalReason(result.error), message: result.error ?? "Task failed" },
               })
+              yield* teardownWorktree(false)
               return yield* Effect.fail(new Error(result.error ?? "Task failed"))
             }
             if (result?.status === "cancelled") {
               yield* markFinished("interrupted", "human")
+              yield* teardownWorktree(false)
               return yield* Effect.fail(
                 new Error(
                   `Task interrupted by the user. Partial work is preserved in subagent session ${nextSession.id}. ` +
@@ -1847,24 +2117,24 @@ export const TaskTool = Tool.define(
                 ),
               )
             }
-            yield* markFinished("completed", resolvedOutputSchema ? "structured_output_valid" : "text_output_valid", {
-              output: result?.output ?? "",
-            })
+            const pr = yield* complete(result?.output ?? "", false)
             return {
               title: params.description,
-              metadata,
+              metadata: { ...metadata, ...(pr ? { prId: pr.id, workerCommit: pr.workerCommit } : {}) },
               output: renderOutput({
                 sessionID: nextSession.id,
                 state: "completed",
-                text: result?.output ?? "",
+                text: withPRSubmission(result?.output ?? "", pr),
                 maxChars: flags.subagentOutputMaxChars,
               }),
             }
           }),
         (_, exit) =>
           Effect.gen(function* () {
-            if (Exit.hasInterrupts(exit))
+            if (Exit.hasInterrupts(exit)) {
               yield* Effect.all([cancel, background.cancel(nextSession.id)], { discard: true })
+              yield* teardownWorktree(false)
+            }
           }).pipe(
             Effect.ensuring(
               Effect.sync(() => {

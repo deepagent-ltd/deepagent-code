@@ -138,10 +138,27 @@ it.instance("reviewer agent is a read-only subagent that denies edit/write/task 
     // mutation + recursive fan-out denied
     expect(evalPerm(reviewer, "edit")).toBe("deny")
     expect(evalPerm(reviewer, "write")).toBe("deny")
+    expect(evalPerm(reviewer, "bash")).toBe("deny")
     expect(Permission.evaluate("task", "reviewer", reviewer!.permission).action).toBe("deny")
     // reviewer is strictly local: no web tools
     expect(evalPerm(reviewer, "webfetch")).toBe("deny")
     expect(evalPerm(reviewer, "websearch")).toBe("deny")
+  }),
+)
+
+it.instance("senior reviewer can fix files but cannot use shell or delegate", () =>
+  Effect.gen(function* () {
+    const reviewer = yield* load((svc) => svc.get("senior-reviewer"))
+    expect(reviewer).toBeDefined()
+    expect(reviewer?.mode).toBe("subagent")
+    expect(reviewer?.native).toBe(true)
+    expect(evalPerm(reviewer, "read")).toBe("allow")
+    expect(evalPerm(reviewer, "grep")).toBe("allow")
+    expect(evalPerm(reviewer, "edit")).toBe("allow")
+    expect(evalPerm(reviewer, "write")).toBe("allow")
+    expect(evalPerm(reviewer, "patch")).toBe("allow")
+    expect(evalPerm(reviewer, "bash")).toBe("deny")
+    expect(Permission.evaluate("task", "general", reviewer!.permission).action).toBe("deny")
   }),
 )
 

@@ -44,11 +44,13 @@ import { Identifier } from "@/id/id"
 import type { Provider } from "@/provider/provider"
 import { Permission } from "@/permission"
 import { Global } from "@deepagent-code/core/global"
-import { Effect, Layer, Option, Context, Schema, Types } from "effect"
-import { NonNegativeInt, optionalOmitUndefined } from "@deepagent-code/core/schema"
+import { DateTime, Effect, Layer, Option, Context, Schema, Types } from "effect"
+import { AbsolutePath, NonNegativeInt, optionalOmitUndefined } from "@deepagent-code/core/schema"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { ProviderV2 } from "@deepagent-code/core/provider"
 import { ModelV2 } from "@deepagent-code/core/model"
+import { Location } from "@deepagent-code/core/location"
+import { SessionEvent } from "@deepagent-code/core/session/event"
 
 const log = Log.create({ service: "session" })
 const runtime = makeRuntime(Database.Service, Database.defaultLayer)
@@ -519,6 +521,8 @@ export interface Interface {
   readonly setSummary: (input: { sessionID: SessionID; summary: Info["summary"] }) => Effect.Effect<void>
   readonly setShare: (input: { sessionID: SessionID; share: Info["share"] }) => Effect.Effect<void>
   readonly setWorkspace: (input: { sessionID: SessionID; workspaceID: Info["workspaceID"] }) => Effect.Effect<void>
+  /** Relocates a durable Session after a managed worktree has replaced its original checkout. */
+  readonly setDirectory: (input: { sessionID: SessionID; directory: string }) => Effect.Effect<void>
   readonly diff: (sessionID: SessionID) => Effect.Effect<Snapshot.FileDiff[]>
   readonly messages: (input: { sessionID: SessionID; limit?: number }) => Effect.Effect<SessionV1.WithParts[], NotFound>
   readonly messagesPage: (input: {
@@ -823,7 +827,7 @@ export const layer: Layer.Layer<
         input.isolate === "worktree" ? yield* Effect.serviceOption(Worktree.Service) : Option.none<Worktree.Interface>()
       const worktreeInfo =
         input.isolate === "worktree" && Option.isSome(worktreeOpt)
-          ? yield* worktreeOpt.value.create({ name: `fork-${Identifier.ascending("session")}` }).pipe(
+          ? yield* worktreeOpt.value.createReady({ name: `fork-${Identifier.ascending("session")}` }).pipe(
               Effect.catchTag("WorktreeNotGitError", () => Effect.succeed(undefined)),
               Effect.orDie,
             )
@@ -963,6 +967,22 @@ export const layer: Layer.Layer<
 
     const setMetadata = Effect.fn("Session.setMetadata")(function* (input: typeof SetMetadataInput.Type) {
       yield* patch(input.sessionID, { metadata: input.metadata, time: { updated: Date.now() } }).pipe(Effect.orDie)
+    })
+
+    const setDirectory = Effect.fn("Session.setDirectory")(function* (input: {
+      sessionID: SessionID
+      directory: string
+    }) {
+      const current = yield* get(input.sessionID).pipe(Effect.orDie)
+      if (current.directory === input.directory) return
+      yield* events.publish(SessionEvent.Moved, {
+        sessionID: input.sessionID,
+        location: Location.Ref.make({
+          directory: AbsolutePath.make(input.directory),
+          ...(current.workspaceID ? { workspaceID: current.workspaceID } : {}),
+        }),
+        timestamp: yield* DateTime.now,
+      })
     })
 
     const setPermission = Effect.fn("Session.setPermission")(function* (input: {
@@ -1109,6 +1129,7 @@ export const layer: Layer.Layer<
       setSummary,
       setShare,
       setWorkspace,
+      setDirectory,
       diff,
       messages,
       messagesPage,

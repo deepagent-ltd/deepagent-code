@@ -1,5 +1,5 @@
 import { describe, expect } from "bun:test"
-import { Effect, Layer } from "effect"
+import { Context, Deferred, Effect, Fiber, Layer } from "effect"
 import { MultiAgentRuntime } from "../../src/session/multi-agent-runtime"
 import type { SubagentTurnRunner } from "../../src/session/goal-loop-wiring"
 import { DeepAgentEventBus } from "@deepagent-code/core/deepagent/deepagent-event-bus"
@@ -7,6 +7,8 @@ import { DeepAgentEvent } from "@deepagent-code/core/deepagent/deepagent-event"
 import { Database } from "@deepagent-code/core/database/database"
 import { AgentListProviderService } from "@deepagent-code/core/im/agent-list-provider"
 import { ApprovalQueue } from "@deepagent-code/core/deepagent/approval-queue"
+import { AgentExecution } from "@deepagent-code/core/deepagent/agent-execution"
+import { LMNEvents } from "@deepagent-code/core/deepagent/lmn-events"
 import { SecurityResolvers } from "@deepagent-code/core/deepagent/security-resolvers"
 import { WorkspaceConfig } from "@deepagent-code/core/deepagent/workspace-config"
 import { IMRepositoryLive } from "@deepagent-code/core/im/repository"
@@ -16,7 +18,7 @@ import { BUILTIN_AGENT_DESCRIPTORS } from "@deepagent-code/core/im/builtin-agent
 import { Agent } from "@/agent/agent"
 import { ServerAgentListProviderLive } from "@/im/agent-executor-server"
 import { InstanceStore } from "@/project/instance-store"
-import { testEffect } from "../lib/effect"
+import { awaitWithTimeout, testEffect } from "../lib/effect"
 
 // V4.0 §C Multi-Agent Runtime — verifies the coordination pipeline (partition → gate → arbitrate → run
 // → emit) with a fake runner + fake registry. The pure decisions are covered by core tests.
@@ -31,22 +33,44 @@ const setNow = (t: number) => {
 let ran: string[] = []
 let runnerOk = true
 let correlationIDs: (string | undefined)[] = []
+let baseRefs: (string | undefined)[] = []
+let writeIsolationRequirements: (boolean | undefined)[] = []
+let runnerPrompts: string[] = []
+let parentSessionIDs: (string | undefined)[] = []
 // a stable synthetic child session id the fake runner "creates" (§F2 artifacts + trace stamping).
 let runnerSessionCounter = 0
 const resetRunner = () => {
   ran = []
   runnerOk = true
   correlationIDs = []
+  baseRefs = []
+  writeIsolationRequirements = []
+  runnerPrompts = []
+  parentSessionIDs = []
   runnerSessionCounter = 0
 }
 const fakeRunner: SubagentTurnRunner = (input) =>
   Effect.sync(() => {
     ran.push(input.agentType)
     correlationIDs.push(input.correlationID)
+    baseRefs.push(input.baseRef)
+    writeIsolationRequirements.push(input.requiresWriteIsolation)
+    runnerPrompts.push(input.prompt)
+    parentSessionIDs.push(input.parentSessionID)
     // mirror the real runners: a successful turn reports the child session it ran in (P1) so the
     // runtime can populate §F2 artifacts from it.
-    const sessionID = `ses_fake_${++runnerSessionCounter}`
-    return { ok: runnerOk, structured: undefined, text: "done", tokensUsed: 0, cost: 0, sessionID }
+    const turn = ++runnerSessionCounter
+    const sessionID = `ses_fake_${turn}`
+    const continuationRef = input.requiresWriteIsolation ? `agent/fake-${turn}` : undefined
+    return {
+      ok: runnerOk,
+      structured: undefined,
+      text: "done",
+      tokensUsed: 0,
+      cost: 0,
+      sessionID,
+      ...(continuationRef ? { continuationRef, artifacts: [`git-ref:${continuationRef}`] } : {}),
+    }
   })
 
 // registry knobs per-test.
@@ -78,13 +102,17 @@ const agent = (
 const makeLayer = (opts?: Partial<MultiAgentRuntime.LayerOptions>) => {
   const database = Database.layerFromPath(":memory:")
   // bus + approval queue share the one in-memory DB so autonomy escalations MAR offers are queued.
-  const core = Layer.mergeAll(DeepAgentEventBus.layerWith({ now }), ApprovalQueue.layerWith({ now })).pipe(
-    Layer.provideMerge(database),
-  )
-  const runtime = MultiAgentRuntime.layerWith({ runner: fakeRunner, ...opts }).pipe(
-    Layer.provide(core),
-    Layer.provide(fakeAgentList),
-  )
+  const core = Layer.mergeAll(
+    DeepAgentEventBus.layerWith({ now }),
+    ApprovalQueue.layerWith({ now }),
+    AgentExecution.layerWith({ now }),
+  ).pipe(Layer.provideMerge(database))
+  const runtime = Layer.unwrap(
+    Effect.gen(function* () {
+      const execution = yield* AgentExecution.Service
+      return MultiAgentRuntime.layerWith({ runner: fakeRunner, execution, ...opts })
+    }),
+  ).pipe(Layer.provide(core), Layer.provide(fakeAgentList))
   return Layer.mergeAll(runtime, core)
 }
 
@@ -115,10 +143,41 @@ describe("MultiAgentRuntime.coordinate", () => {
       expect(summary.outcomes.map((o) => o.status)).toEqual(["completed", "completed"])
       expect(ran).toEqual(["fixer", "fixer"])
       // §C4 coordination events landed on the bus (started + completed per subtask).
-      const coord = yield* bus.recentByType({ type: "agent.task.started", windowMs: Number.MAX_SAFE_INTEGER, now: 1_000 })
+      const coord = yield* bus.recentByType({
+        type: "agent.task.started",
+        windowMs: Number.MAX_SAFE_INTEGER,
+        now: 1_000,
+      })
       expect(coord.length).toBe(2)
-      const done = yield* bus.recentByType({ type: "agent.task.completed", windowMs: Number.MAX_SAFE_INTEGER, now: 1_000 })
+      const done = yield* bus.recentByType({
+        type: "agent.task.completed",
+        windowMs: Number.MAX_SAFE_INTEGER,
+        now: 1_000,
+      })
       expect(done.length).toBe(2)
+    }),
+  )
+
+  it.effect("passes event facts to the model without leaking the routing directory", () =>
+    Effect.gen(function* () {
+      resetRunner()
+      setNow(1_000)
+      setRegistry([agent("fixer", ["code_edit", "test_run"], "level_2")])
+      const runtime = yield* MultiAgentRuntime.Service
+      yield* runtime.coordinate(
+        event({
+          payload: {
+            directory: "/private/parent-checkout",
+            files: ["src/a.ts"],
+            failure: "expected 42, received -2",
+          },
+        }),
+      )
+      expect(runnerPrompts).toHaveLength(2)
+      expect(runnerPrompts.every((prompt) => prompt.includes("expected 42, received -2"))).toBe(true)
+      expect(runnerPrompts.every((prompt) => prompt.includes("src/a.ts"))).toBe(true)
+      expect(runnerPrompts.every((prompt) => !prompt.includes("/private/parent-checkout"))).toBe(true)
+      expect(runnerPrompts.every((prompt) => prompt.includes("repo-relative paths"))).toBe(true)
     }),
   )
 
@@ -156,7 +215,11 @@ describe("MultiAgentRuntime.coordinate", () => {
       const runtime = yield* MultiAgentRuntime.Service
       const bus = yield* DeepAgentEventBus.Service
       yield* runtime.coordinate(event({ payload: { files: ["src/a.ts"] } }))
-      const done = yield* bus.recentByType({ type: "agent.task.completed", windowMs: Number.MAX_SAFE_INTEGER, now: 1_000 })
+      const done = yield* bus.recentByType({
+        type: "agent.task.completed",
+        windowMs: Number.MAX_SAFE_INTEGER,
+        now: 1_000,
+      })
       expect(done.length).toBe(2)
       // each completed event names the child session the turn ran in — a non-empty artifact the §F2 trace
       // + Oversight pivot on (not the old hardcoded []).
@@ -221,6 +284,149 @@ describe("MultiAgentRuntime.coordinate", () => {
       const runtime = yield* MultiAgentRuntime.Service
       const summary = yield* runtime.coordinate(event({ payload: { files: ["src/x.ts"] } }))
       expect(summary.outcomes.map((o) => o.status)).toEqual(["completed", "completed"])
+      expect(writeIsolationRequirements).toEqual([true, true])
+      expect(baseRefs).toEqual([undefined, "agent/fake-1"])
+    }),
+  )
+
+  it.effect("hands only terminal durable refs to the event-owned PR collaboration boundary", () =>
+    Effect.gen(function* () {
+      resetRunner()
+      setNow(1_000)
+      setRegistry([agent("fixer", ["code_edit", "test_run"], "level_2")])
+      const completed: Parameters<NonNullable<MultiAgentRuntime.LayerOptions["onEventCompleted"]>>[0][] = []
+      const ev = event({ payload: { files: ["src/x.ts"] } })
+      const summary = yield* Effect.gen(function* () {
+        const runtime = yield* MultiAgentRuntime.Service
+        return yield* runtime.coordinate(ev)
+      }).pipe(
+        Effect.provide(
+          makeLayer({
+            onEventCompleted: (input) => Effect.sync(() => completed.push(input)),
+          }),
+        ),
+      )
+
+      expect(summary.hasUnfinished).toBe(false)
+      expect(completed).toHaveLength(1)
+      expect(completed[0]?.turns).toHaveLength(1)
+      expect(completed[0]?.turns[0]).toMatchObject({
+        task: { capability: "test_run" },
+        agentID: "fixer",
+        sessionID: "ses_fake_2",
+        continuationRef: "agent/fake-2",
+      })
+      expect(parentSessionIDs).toEqual([completed[0]?.parentSessionID, completed[0]?.parentSessionID])
+      expect(completed[0]?.parentSessionID).toStartWith("ses_v4_")
+    }),
+  )
+
+  it.effect("§C2 runs independent DAG nodes concurrently and waits for the wave before dependents", () =>
+    Effect.gen(function* () {
+      setNow(1_000)
+      setRegistry([
+        agent("left", ["left"], "level_1"),
+        agent("right", ["right"], "level_1"),
+        agent("joiner", ["join"], "level_1"),
+      ])
+      const bothRootsStarted = yield* Deferred.make<void>()
+      let rootsStarted = 0
+      let rootsFinished = 0
+      const order: string[] = []
+      const parallelRunner: SubagentTurnRunner = (input) =>
+        Effect.gen(function* () {
+          if (input.agentType === "joiner") {
+            expect(rootsFinished).toBe(2)
+            order.push("joiner")
+            return { ok: true, structured: undefined, text: "joined", tokensUsed: 0, cost: 0 }
+          }
+
+          rootsStarted++
+          order.push(`${input.agentType}:started`)
+          if (rootsStarted === 2) yield* Deferred.succeed(bothRootsStarted, undefined)
+          yield* awaitWithTimeout(
+            Deferred.await(bothRootsStarted),
+            "same-wave runners did not overlap",
+            "1 second",
+          ).pipe(Effect.orDie)
+          rootsFinished++
+          order.push(`${input.agentType}:finished`)
+          return { ok: true, structured: undefined, text: "done", tokensUsed: 0, cost: 0 }
+        })
+      const partition: NonNullable<MultiAgentRuntime.LayerOptions["partition"]> = (input) => ({
+        event: input,
+        subtasks: [
+          {
+            id: `${input.id}:left`,
+            capability: "left",
+            intent: "run left",
+            dependsOn: [],
+            fileScope: ["left.ts"],
+            requiredAutonomy: "level_1",
+          },
+          {
+            id: `${input.id}:right`,
+            capability: "right",
+            intent: "run right",
+            dependsOn: [],
+            fileScope: ["right.ts"],
+            requiredAutonomy: "level_1",
+          },
+          {
+            id: `${input.id}:join`,
+            capability: "join",
+            intent: "join roots",
+            dependsOn: [`${input.id}:left`, `${input.id}:right`],
+            fileScope: [],
+            requiredAutonomy: "level_1",
+          },
+        ],
+      })
+      const summary = yield* Effect.gen(function* () {
+        const runtime = yield* MultiAgentRuntime.Service
+        return yield* runtime.coordinate(event({ type: "test.parallel" }))
+      }).pipe(Effect.provide(makeLayer({ runner: parallelRunner, partition })))
+
+      expect(summary.outcomes.map((outcome) => outcome.status)).toEqual(["completed", "completed", "completed"])
+      expect(order.slice(0, 2).sort()).toEqual(["left:started", "right:started"])
+      expect(order.at(-1)).toBe("joiner")
+    }),
+  )
+
+  it.effect("§C3 restores an upstream git ref from completion artifacts when a failed DAG resumes", () =>
+    Effect.gen(function* () {
+      setNow(1_000)
+      setRegistry([agent("fixer", ["code_edit", "test_run"], "level_2")])
+      const seenBases: (string | undefined)[] = []
+      let invocation = 0
+      const retryRunner: SubagentTurnRunner = (input) =>
+        Effect.sync(() => {
+          invocation++
+          seenBases.push(input.baseRef)
+          if (invocation === 2) {
+            return { ok: false, structured: undefined, text: "", tokensUsed: 0, cost: 0 }
+          }
+          const continuationRef = invocation === 1 ? "agent/retry-upstream" : "agent/retry-verified"
+          return {
+            ok: true,
+            structured: undefined,
+            text: "done",
+            tokensUsed: 0,
+            cost: 0,
+            continuationRef,
+            artifacts: [`git-ref:${continuationRef}`],
+          }
+        })
+      const ev = event({ payload: { files: ["src/x.ts"] } })
+      const summaries = yield* Effect.gen(function* () {
+        const runtime = yield* MultiAgentRuntime.Service
+        return [yield* runtime.coordinate(ev), yield* runtime.coordinate(ev)] as const
+      }).pipe(Effect.provide(makeLayer({ runner: retryRunner })))
+
+      expect(summaries[0].hasUnfinished).toBe(true)
+      expect(summaries[1].outcomes[0].reason).toBe("already_completed")
+      expect(summaries[1].outcomes[1].status).toBe("completed")
+      expect(seenBases).toEqual([undefined, "agent/retry-upstream", "agent/retry-upstream"])
     }),
   )
 
@@ -264,15 +470,12 @@ describe("MultiAgentRuntime.coordinate", () => {
       // dependency_not_met. Neither runs.
       setRegistry([agent("fixer", ["code_edit", "test_run"], "level_2", { maxFilesChanged: 2 })])
       const runtime = yield* MultiAgentRuntime.Service
-      const summary = yield* runtime.coordinate(
-        event({ payload: { files: ["src/a.ts", "src/b.ts", "src/c.ts"] } }),
-      )
+      const summary = yield* runtime.coordinate(event({ payload: { files: ["src/a.ts", "src/b.ts", "src/c.ts"] } }))
       const codeEdit = summary.outcomes.find((o) => o.capability === "code_edit")
       expect(codeEdit?.status).toBe("blocked")
       expect(codeEdit?.reason).toBe("max_files_changed")
       expect(ran.length).toBe(0)
-      // terminal, NOT deferred: the dependency_not_met dependent DOES mark the event unfinished, but the
-      // max_files_changed block itself is terminal (no retry would shrink the scope).
+      expect(summary.hasUnfinished).toBe(false)
     }),
   )
 
@@ -282,9 +485,7 @@ describe("MultiAgentRuntime.coordinate", () => {
       setNow(1_000)
       setRegistry([agent("fixer", ["code_edit", "test_run"], "level_2", { maxFilesChanged: 3 })])
       const runtime = yield* MultiAgentRuntime.Service
-      const summary = yield* runtime.coordinate(
-        event({ payload: { files: ["src/a.ts", "src/b.ts"] } }),
-      )
+      const summary = yield* runtime.coordinate(event({ payload: { files: ["src/a.ts", "src/b.ts"] } }))
       expect(summary.outcomes.map((o) => o.status)).toEqual(["completed", "completed"])
     }),
   )
@@ -298,7 +499,15 @@ describe("MultiAgentRuntime.coordinate", () => {
         Effect.sync(() => {
           calls++
           ran.push(input.agentType)
-          return { ok: true, structured: undefined, text: "done", tokensUsed: 100, cost: 0 }
+          return {
+            ok: true,
+            structured: undefined,
+            text: "done",
+            tokensUsed: 100,
+            cost: 0,
+            continuationRef: "agent/big-spend",
+            artifacts: ["git-ref:agent/big-spend"],
+          }
         })
       ran = []
       setNow(1_000)
@@ -342,6 +551,152 @@ describe("MultiAgentRuntime.coordinate", () => {
   )
 })
 
+describe("MultiAgentRuntime durable multi-owner execution", () => {
+  const it = testEffect(makeLayer())
+  const oneTask: NonNullable<MultiAgentRuntime.LayerOptions["partition"]> = (input) => ({
+    event: input,
+    subtasks: [
+      {
+        id: `${input.id}:work`,
+        capability: "code_edit",
+        intent: "implement the change",
+        dependsOn: [],
+        fileScope: ["src/shared.ts"],
+        requiredAutonomy: "level_2",
+      },
+    ],
+  })
+
+  it.effect("two runtime owners cannot execute the same event task concurrently", () =>
+    Effect.gen(function* () {
+      setNow(10_000)
+      setRegistry([agent("fixer", ["code_edit"], "level_2")])
+      const bus = yield* DeepAgentEventBus.Service
+      const queue = yield* ApprovalQueue.Service
+      const execution = yield* AgentExecution.Service
+      const started = yield* Deferred.make<void>()
+      const release = yield* Deferred.make<void>()
+      let firstRuns = 0
+      let secondRuns = 0
+      const firstRunner: SubagentTurnRunner = () =>
+        Effect.gen(function* () {
+          firstRuns++
+          yield* Deferred.succeed(started, undefined)
+          yield* Deferred.await(release)
+          return { ok: true, structured: undefined, text: "first", tokensUsed: 0, cost: 0 }
+        })
+      const secondRunner: SubagentTurnRunner = () =>
+        Effect.sync(() => {
+          secondRuns++
+          return { ok: true, structured: undefined, text: "second", tokensUsed: 0, cost: 0 }
+        })
+      const dependencies = Layer.mergeAll(
+        Layer.succeed(DeepAgentEventBus.Service, bus),
+        Layer.succeed(ApprovalQueue.Service, queue),
+        Layer.succeed(AgentExecution.Service, execution),
+        fakeAgentList,
+      )
+      const runtime = (ownerID: string, runner: SubagentTurnRunner) =>
+        Layer.build(
+          MultiAgentRuntime.layerWith({
+            runner,
+            partition: oneTask,
+            execution,
+            ownerID,
+            leaseMs: 1_000,
+          }).pipe(Layer.provide(dependencies)),
+        ).pipe(Effect.map((context) => Context.get(context, MultiAgentRuntime.Service)))
+      const first = yield* runtime("runtime_a", firstRunner)
+      const second = yield* runtime("runtime_b", secondRunner)
+      const input = event({ id: DeepAgentEvent.ID.create(10_000), type: "test.multi-owner" })
+      const firstFiber = yield* Effect.forkScoped(first.coordinate(input))
+      yield* Deferred.await(started)
+      const contended = yield* second.coordinate(input)
+      expect(contended.outcomes).toEqual([
+        expect.objectContaining({ status: "deferred", reason: "execution_busy", agentID: "fixer" }),
+      ])
+      expect(secondRuns).toBe(0)
+      yield* Deferred.succeed(release, undefined)
+      expect((yield* Fiber.join(firstFiber)).outcomes[0]?.status).toBe("completed")
+      const replay = yield* second.coordinate(input)
+      expect(replay.outcomes[0]).toMatchObject({ status: "completed", reason: "already_completed" })
+      expect(firstRuns).toBe(1)
+      expect(secondRuns).toBe(0)
+    }),
+  )
+
+  it.effect("runner failure durably requests handoff to the next capable agent", () =>
+    Effect.gen(function* () {
+      setNow(20_000)
+      setRegistry([agent("agent_a", ["code_edit"], "level_2"), agent("agent_b", ["code_edit"], "level_2")])
+      const bus = yield* DeepAgentEventBus.Service
+      const queue = yield* ApprovalQueue.Service
+      const execution = yield* AgentExecution.Service
+      const runtime = Context.get(
+        yield* Layer.build(
+          MultiAgentRuntime.layerWith({
+            partition: oneTask,
+            execution,
+            ownerID: "runtime_a",
+            runner: () =>
+              Effect.succeed({
+                ok: false,
+                reason: "runner_failed",
+                structured: undefined,
+                text: "",
+                tokensUsed: 0,
+                cost: 0,
+                continuationRef: "agent/partial",
+              }),
+          }).pipe(
+            Layer.provide(
+              Layer.mergeAll(
+                Layer.succeed(DeepAgentEventBus.Service, bus),
+                Layer.succeed(ApprovalQueue.Service, queue),
+                Layer.succeed(AgentExecution.Service, execution),
+                fakeAgentList,
+              ),
+            ),
+          ),
+        ),
+        MultiAgentRuntime.Service,
+      )
+      const input = event({ id: DeepAgentEvent.ID.create(20_000), type: "test.handoff" })
+      const summary = yield* runtime.coordinate(input)
+      expect(summary.outcomes[0]).toMatchObject({
+        status: "deferred",
+        agentID: "agent_a",
+        reason: "handoff_requested",
+      })
+      const pending = yield* execution.get({
+        workspaceID: input.workspaceID,
+        eventID: input.id,
+        taskID: `${input.id}:work`,
+      })
+      expect(pending).toMatchObject({
+        status: "handoff_pending",
+        agentID: "agent_a",
+        handoffToAgentID: "agent_b",
+        continuationRef: "agent/partial",
+      })
+      const handoffs = yield* bus.recentByType({
+        type: LMNEvents.AGENT_HANDOFF_REQUESTED,
+        workspaceID: input.workspaceID,
+        windowMs: Number.MAX_SAFE_INTEGER,
+        now: input.createdAt,
+      })
+      expect(handoffs).toHaveLength(1)
+      expect(handoffs[0]?.payload).toMatchObject({
+        type: LMNEvents.AGENT_HANDOFF_REQUESTED,
+        eventID: input.id,
+        taskID: `${input.id}:work`,
+        fromAgentID: "agent_a",
+        toAgentID: "agent_b",
+      })
+    }),
+  )
+})
+
 describe("MultiAgentRuntime security layer-2 fail", () => {
   const it = testEffect(makeLayer({ actorHasPermission: () => Effect.succeed(false) }))
 
@@ -375,6 +730,33 @@ describe("MultiAgentRuntime runner failure", () => {
       expect(summary.hasUnfinished).toBe(true) // → dispatch fails → bus retries
     }),
   )
+
+  it.effect("write-isolation failure settles the DAG and escalates to a human instead of retrying forever", () =>
+    Effect.gen(function* () {
+      setNow(1_000)
+      setRegistry([agent("fixer", ["code_edit", "test_run"], "level_2")])
+      const isolationFailure: SubagentTurnRunner = () =>
+        Effect.succeed({
+          ok: false,
+          reason: "isolation_unavailable",
+          structured: undefined,
+          text: "",
+          tokensUsed: 0,
+          cost: 0,
+        })
+      const result = yield* Effect.gen(function* () {
+        const runtime = yield* MultiAgentRuntime.Service
+        const summary = yield* runtime.coordinate(event())
+        const queue = yield* ApprovalQueue.Service
+        return { summary, pending: yield* queue.listPending("wrk_1") }
+      }).pipe(Effect.provide(makeLayer({ runner: isolationFailure })))
+
+      expect(result.summary.outcomes[0]).toMatchObject({ status: "blocked", reason: "isolation_unavailable" })
+      expect(result.summary.outcomes[1]).toMatchObject({ status: "blocked", reason: "dependency_not_met" })
+      expect(result.summary.hasUnfinished).toBe(false)
+      expect(result.pending.some((item) => item.eventType === "agent.task.needs_human")).toBe(true)
+    }),
+  )
 })
 
 describe("MultiAgentRuntime DAG + idempotency + retry semantics", () => {
@@ -393,7 +775,7 @@ describe("MultiAgentRuntime DAG + idempotency + retry semantics", () => {
       expect(test?.status).toBe("blocked")
       expect(test?.reason).toBe("dependency_not_met")
       expect(ran).toEqual([]) // nothing ran
-      expect(summary.hasUnfinished).toBe(true)
+      expect(summary.hasUnfinished).toBe(false)
     }),
   )
 
@@ -420,9 +802,7 @@ describe("MultiAgentRuntime DAG + idempotency + retry semantics", () => {
       setNow(1_000)
       setRegistry([agent("fixer", ["code_edit", "test_run"], "level_2")])
       const runtime = yield* MultiAgentRuntime.Service
-      const exit = yield* runtime
-        .dispatch({ event: event(), priority: "normal", targets: [] })
-        .pipe(Effect.exit)
+      const exit = yield* runtime.dispatch({ event: event(), priority: "normal", targets: [] }).pipe(Effect.exit)
       expect(exit._tag).toBe("Failure") // dispatcher will nack
     }),
   )
@@ -433,9 +813,7 @@ describe("MultiAgentRuntime DAG + idempotency + retry semantics", () => {
       setNow(1_000)
       setRegistry([agent("fixer", ["code_edit", "test_run"], "level_2")])
       const runtime = yield* MultiAgentRuntime.Service
-      const exit = yield* runtime
-        .dispatch({ event: event(), priority: "normal", targets: [] })
-        .pipe(Effect.exit)
+      const exit = yield* runtime.dispatch({ event: event(), priority: "normal", targets: [] }).pipe(Effect.exit)
       expect(exit._tag).toBe("Success")
     }),
   )
@@ -525,21 +903,23 @@ const makeProdLayer = () => {
 describe("MultiAgentRuntime §E1 production wiring (real SecurityResolvers) fails closed", () => {
   const it = testEffect(makeProdLayer())
 
-  it.effect("§E1 L1 fail-closed: an event whose source is NOT in the workspace trusted set is BLOCKED (security:event_source)", () =>
-    Effect.gen(function* () {
-      resetRunner()
-      setNow(1_000)
-      // capable + autonomy-cleared agent — the ONLY reason it must not run is layer 1.
-      setRegistry([agent("fixer", ["code_edit", "test_run"], "level_2")])
-      // tighten the workspace to trust ONLY "im"; the event below is source "ci" → untrusted.
-      const cfg = yield* WorkspaceConfig.Service
-      yield* cfg.set("wrk_1", { trustedSources: ["im"] })
-      const runtime = yield* MultiAgentRuntime.Service
-      const summary = yield* runtime.coordinate(event({ source: "ci" }))
-      expect(summary.outcomes.every((o) => o.status === "blocked")).toBe(true)
-      expect(summary.outcomes[0].reason).toBe("security:event_source")
-      expect(ran).toEqual([]) // nothing ran — the default-open bug would have run both subtasks
-    }),
+  it.effect(
+    "§E1 L1 fail-closed: an event whose source is NOT in the workspace trusted set is BLOCKED (security:event_source)",
+    () =>
+      Effect.gen(function* () {
+        resetRunner()
+        setNow(1_000)
+        // capable + autonomy-cleared agent — the ONLY reason it must not run is layer 1.
+        setRegistry([agent("fixer", ["code_edit", "test_run"], "level_2")])
+        // tighten the workspace to trust ONLY "im"; the event below is source "ci" → untrusted.
+        const cfg = yield* WorkspaceConfig.Service
+        yield* cfg.set("wrk_1", { trustedSources: ["im"] })
+        const runtime = yield* MultiAgentRuntime.Service
+        const summary = yield* runtime.coordinate(event({ source: "ci" }))
+        expect(summary.outcomes.every((o) => o.status === "blocked")).toBe(true)
+        expect(summary.outcomes[0].reason).toBe("security:event_source")
+        expect(ran).toEqual([]) // nothing ran — the default-open bug would have run both subtasks
+      }),
   )
 
   it.effect("§E1 L1: a TRUSTED source with the same agent DOES run (proves the gate isn't blanket-deny)", () =>
@@ -556,23 +936,24 @@ describe("MultiAgentRuntime §E1 production wiring (real SecurityResolvers) fail
     }),
   )
 
-  it.effect("§E1 L4 fail-closed: an agent whose toolWhitelist excludes the capability is BLOCKED (security:runtime_operation)", () =>
-    Effect.gen(function* () {
-      resetRunner()
-      setNow(1_000)
-      // capable (L3 ok) + autonomy-cleared — but its declared toolWhitelist does NOT permit the required
-      // capability, so layer 4 must deny. First trust "ci" so L1 passes and the gate reaches L4.
-      const cfg = yield* WorkspaceConfig.Service
-      yield* cfg.set("wrk_1", { trustedSources: ["ci", "im", "system"] })
-      setRegistry([agentWithTools("locked", ["code_edit", "test_run"], ["read_only"])])
-      const runtime = yield* MultiAgentRuntime.Service
-      const summary = yield* runtime.coordinate(event())
-      expect(summary.outcomes.every((o) => o.status === "blocked")).toBe(true)
-      expect(summary.outcomes[0].reason).toBe("security:runtime_operation")
-      expect(ran).toEqual([])
-    }),
+  it.effect(
+    "§E1 L4 fail-closed: an agent whose toolWhitelist excludes the capability is BLOCKED (security:runtime_operation)",
+    () =>
+      Effect.gen(function* () {
+        resetRunner()
+        setNow(1_000)
+        // capable (L3 ok) + autonomy-cleared — but its declared toolWhitelist does NOT permit the required
+        // capability, so layer 4 must deny. First trust "ci" so L1 passes and the gate reaches L4.
+        const cfg = yield* WorkspaceConfig.Service
+        yield* cfg.set("wrk_1", { trustedSources: ["ci", "im", "system"] })
+        setRegistry([agentWithTools("locked", ["code_edit", "test_run"], ["read_only"])])
+        const runtime = yield* MultiAgentRuntime.Service
+        const summary = yield* runtime.coordinate(event())
+        expect(summary.outcomes.every((o) => o.status === "blocked")).toBe(true)
+        expect(summary.outcomes[0].reason).toBe("security:runtime_operation")
+        expect(ran).toEqual([])
+      }),
   )
-
 })
 
 describe("MultiAgentRuntime §E1 production wiring — L2 actor_permission fails closed", () => {
@@ -602,21 +983,23 @@ describe("MultiAgentRuntime §E1 production wiring — L2 actor_permission fails
   const runtime = prodRuntimeLayer.pipe(Layer.provide(sec), Layer.provide(core), Layer.provide(fakeAgentList))
   const it = testEffect(Layer.mergeAll(runtime, core, wsConfig))
 
-  it.effect("§E1 L2 fail-closed: a NON-member actor whose agent isn't in their scope is BLOCKED (security:actor_permission)", () =>
-    Effect.gen(function* () {
-      resetRunner()
-      setNow(1_000)
-      // trust the event source so L1 PASSES — we must reach L2 to test it. The bound agent is capable
-      // (L3 ok), autonomy-cleared, no toolWhitelist (L4 ok). The ONLY failing layer is L2.
-      const cfg = yield* WorkspaceConfig.Service
-      yield* cfg.set("wrk_1", { trustedSources: ["ci", "im", "system"] })
-      setRegistry([agent("fixer", ["code_edit", "test_run"], "level_2")])
-      const runtime = yield* MultiAgentRuntime.Service
-      const summary = yield* runtime.coordinate(event({ actorID: "stranger_not_a_member" }))
-      expect(summary.outcomes.every((o) => o.status === "blocked")).toBe(true)
-      expect(summary.outcomes[0].reason).toBe("security:actor_permission")
-      expect(ran).toEqual([])
-    }),
+  it.effect(
+    "§E1 L2 fail-closed: a NON-member actor whose agent isn't in their scope is BLOCKED (security:actor_permission)",
+    () =>
+      Effect.gen(function* () {
+        resetRunner()
+        setNow(1_000)
+        // trust the event source so L1 PASSES — we must reach L2 to test it. The bound agent is capable
+        // (L3 ok), autonomy-cleared, no toolWhitelist (L4 ok). The ONLY failing layer is L2.
+        const cfg = yield* WorkspaceConfig.Service
+        yield* cfg.set("wrk_1", { trustedSources: ["ci", "im", "system"] })
+        setRegistry([agent("fixer", ["code_edit", "test_run"], "level_2")])
+        const runtime = yield* MultiAgentRuntime.Service
+        const summary = yield* runtime.coordinate(event({ actorID: "stranger_not_a_member" }))
+        expect(summary.outcomes.every((o) => o.status === "blocked")).toBe(true)
+        expect(summary.outcomes[0].reason).toBe("security:actor_permission")
+        expect(ran).toEqual([])
+      }),
   )
 })
 
@@ -786,7 +1169,9 @@ describe("MultiAgentRuntime with BUILT-IN descriptors — autonomous path is no 
       // the exact built-ins the core AgentListProviderImpl now appends.
       setRegistry([...BUILTIN_AGENT_DESCRIPTORS])
       const runtime = yield* MultiAgentRuntime.Service
-      const summary = yield* runtime.coordinate(event({ type: "ci.failure", source: "ci", payload: { files: ["src/a.ts"] } }))
+      const summary = yield* runtime.coordinate(
+        event({ type: "ci.failure", source: "ci", payload: { files: ["src/a.ts"] } }),
+      )
       // NO subtask blocked for lack of a capable agent — the whole point of §A1.
       expect(summary.outcomes.some((o) => o.reason === "no_capable_agent")).toBe(false)
       // code_edit binds CodeFixAgent(name:auto), test_run binds CodeFixAgent too (first in registry order).
@@ -795,20 +1180,22 @@ describe("MultiAgentRuntime with BUILT-IN descriptors — autonomous path is no 
     }),
   )
 
-  it.effect("§A1 monitor.alert binds diagnose(general) + code_edit(auto) — reaches the gates, no no_capable_agent", () =>
-    Effect.gen(function* () {
-      resetRunner()
-      setNow(1_000)
-      setRegistry([...BUILTIN_AGENT_DESCRIPTORS])
-      const runtime = yield* MultiAgentRuntime.Service
-      const summary = yield* runtime.coordinate(
-        event({ type: "monitor.alert", source: "monitor", payload: { files: ["src/y.ts"] } }),
-      )
-      expect(summary.outcomes.some((o) => o.reason === "no_capable_agent")).toBe(false)
-      // diagnose → DiagnosisAgent(general), propose-fix code_edit → CodeFixAgent(auto).
-      expect(ran).toEqual(["general", "auto"])
-      expect(summary.outcomes.map((o) => o.status)).toEqual(["completed", "completed"])
-    }),
+  it.effect(
+    "§A1 monitor.alert binds diagnose(general) + code_edit(auto) — reaches the gates, no no_capable_agent",
+    () =>
+      Effect.gen(function* () {
+        resetRunner()
+        setNow(1_000)
+        setRegistry([...BUILTIN_AGENT_DESCRIPTORS])
+        const runtime = yield* MultiAgentRuntime.Service
+        const summary = yield* runtime.coordinate(
+          event({ type: "monitor.alert", source: "monitor", payload: { files: ["src/y.ts"] } }),
+        )
+        expect(summary.outcomes.some((o) => o.reason === "no_capable_agent")).toBe(false)
+        // diagnose → DiagnosisAgent(general), propose-fix code_edit → CodeFixAgent(auto).
+        expect(ran).toEqual(["general", "auto"])
+        expect(summary.outcomes.map((o) => o.status)).toEqual(["completed", "completed"])
+      }),
   )
 
   it.effect("§A1 pr.comment (analyze→code_edit→review) all bind capable agents — no no_capable_agent", () =>
@@ -861,13 +1248,17 @@ describe("MultiAgentRuntime over the REAL ServerAgentListProvider (production wi
 
   const makeRealLayer = () => {
     const database = Database.layerFromPath(":memory:")
-    const core = Layer.mergeAll(DeepAgentEventBus.layerWith({ now }), ApprovalQueue.layerWith({ now })).pipe(
-      Layer.provideMerge(database),
-    )
-    const runtime = MultiAgentRuntime.layerWith({ runner: fakeRunner }).pipe(
-      Layer.provide(core),
-      Layer.provide(realProvider),
-    )
+    const core = Layer.mergeAll(
+      DeepAgentEventBus.layerWith({ now }),
+      ApprovalQueue.layerWith({ now }),
+      AgentExecution.layerWith({ now }),
+    ).pipe(Layer.provideMerge(database))
+    const runtime = Layer.unwrap(
+      Effect.gen(function* () {
+        const execution = yield* AgentExecution.Service
+        return MultiAgentRuntime.layerWith({ runner: fakeRunner, execution })
+      }),
+    ).pipe(Layer.provide(core), Layer.provide(realProvider))
     return Layer.mergeAll(runtime, core)
   }
   const it = testEffect(makeRealLayer())
@@ -877,7 +1268,9 @@ describe("MultiAgentRuntime over the REAL ServerAgentListProvider (production wi
       resetRunner()
       setNow(1_000)
       const runtime = yield* MultiAgentRuntime.Service
-      const summary = yield* runtime.coordinate(event({ type: "ci.failure", source: "ci", payload: { files: ["src/a.ts"] } }))
+      const summary = yield* runtime.coordinate(
+        event({ type: "ci.failure", source: "ci", payload: { files: ["src/a.ts"] } }),
+      )
       // the built-ins are appended INSIDE ServerAgentListProvider → the production path is live.
       expect(summary.outcomes.some((o) => o.reason === "no_capable_agent")).toBe(false)
       expect(summary.outcomes.map((o) => o.status)).toEqual(["completed", "completed"])

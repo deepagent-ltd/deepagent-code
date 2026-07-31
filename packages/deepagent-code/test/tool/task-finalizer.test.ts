@@ -80,6 +80,29 @@ function ops(prompt: TaskPromptOps["prompt"]): TaskPromptOps {
 }
 
 describe("task structured finalizer", () => {
+  test("direct structured output uses one schema-bound prompt", async () => {
+    const calls: SessionPrompt.PromptInput[] = []
+    const request = input(
+      ops((prompt) =>
+        Effect.sync(() => {
+          calls.push(prompt)
+          return response(prompt, { structured: { result: "ok" } })
+        }),
+      ),
+    )
+    request.directStructuredOutput = true
+    request.finalizerInstructions = ["Preserve the assigned identity."]
+
+    const result = await Effect.runPromise(runSubagentPrompt(request))
+
+    expect(result).toBe('{"result":"ok"}')
+    expect(calls).toHaveLength(1)
+    expect(calls[0]?.format?.type).toBe("json_schema")
+    expect(calls[0]?.tools).toEqual({ task: false })
+    expect(calls[0]?.metadata?.deepagent).toEqual({ structured_direct: true })
+    expect(calls[0]?.parts.at(-1)).toMatchObject({ type: "text", text: "Preserve the assigned identity." })
+  })
+
   test("schema-less tasks preserve the last-text compatibility path", async () => {
     const calls: SessionPrompt.PromptInput[] = []
     const request = input(

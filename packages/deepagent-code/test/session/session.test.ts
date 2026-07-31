@@ -248,6 +248,24 @@ describe("Session", () => {
     }),
   )
 
+  it.instance("durably relocates a Session through the moved-event projector", () =>
+    Effect.gen(function* () {
+      const sessions = yield* SessionNs.Service
+      const created = yield* Effect.acquireRelease(sessions.create({ title: "relocate" }), (info) =>
+        sessions.remove(info.id).pipe(Effect.ignore),
+      )
+      const directory = path.join(created.directory, "managed-revision-worktree")
+
+      yield* sessions.setDirectory({ sessionID: created.id, directory })
+
+      expect(yield* sessions.get(created.id)).toMatchObject({
+        id: created.id,
+        directory,
+      })
+      expect((yield* sessions.get(created.id)).path).toBeUndefined()
+    }),
+  )
+
   it.instance("omits metadata when not provided", () =>
     Effect.gen(function* () {
       const session = yield* SessionNs.Service

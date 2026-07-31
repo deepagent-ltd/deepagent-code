@@ -1,6 +1,10 @@
 import { describe, expect } from "bun:test"
 import { ConfigProvider, Effect, Layer } from "effect"
-import { RuntimeFlags } from "../../src/effect/runtime-flags"
+import {
+  DEFAULT_SUBAGENT_OUTPUT_MAX_CHARS,
+  DEFAULT_SUBAGENT_TIMEOUT_MS,
+  RuntimeFlags,
+} from "../../src/effect/runtime-flags"
 import { it } from "../lib/effect"
 
 const fromConfig = (input: Record<string, unknown>) =>
@@ -52,6 +56,37 @@ describe("RuntimeFlags", () => {
         Effect.provide(fromConfig({ DEEPAGENT_CODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS: "false" })),
       )
       expect(off.experimentalBackgroundSubagents).toBe(false)
+    }),
+  )
+
+  for (const input of [
+    {},
+    { DEEPAGENT_CODE_SUBAGENT_TIMEOUT_MS: "0", DEEPAGENT_CODE_SUBAGENT_OUTPUT_MAX_CHARS: "-1" },
+    { DEEPAGENT_CODE_SUBAGENT_TIMEOUT_MS: "invalid", DEEPAGENT_CODE_SUBAGENT_OUTPUT_MAX_CHARS: "invalid" },
+  ]) {
+    it.effect("subagent supervision and parent output remain bounded for missing or invalid config", () =>
+      Effect.gen(function* () {
+        const flags = yield* readFlags.pipe(Effect.provide(fromConfig(input)))
+
+        expect(flags.subagentTimeoutMs).toBe(DEFAULT_SUBAGENT_TIMEOUT_MS)
+        expect(flags.subagentOutputMaxChars).toBe(DEFAULT_SUBAGENT_OUTPUT_MAX_CHARS)
+      }),
+    )
+  }
+
+  it.effect("accepts positive subagent supervision and output bounds", () =>
+    Effect.gen(function* () {
+      const flags = yield* readFlags.pipe(
+        Effect.provide(
+          fromConfig({
+            DEEPAGENT_CODE_SUBAGENT_TIMEOUT_MS: "1234",
+            DEEPAGENT_CODE_SUBAGENT_OUTPUT_MAX_CHARS: "5678",
+          }),
+        ),
+      )
+
+      expect(flags.subagentTimeoutMs).toBe(1234)
+      expect(flags.subagentOutputMaxChars).toBe(5678)
     }),
   )
 

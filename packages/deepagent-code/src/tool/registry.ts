@@ -10,6 +10,7 @@ import { ReadTool } from "./read"
 import { TaskTool } from "./task"
 import { TaskStatusTool } from "./task_status"
 import { TaskReadTool } from "./task_read"
+import { PRFinalizeTool } from "./pr_finalize"
 import { DismissValidationTool } from "./dismiss_validation"
 import { Database } from "@deepagent-code/core/database/database"
 import { WebFetchTool } from "./webfetch"
@@ -69,6 +70,8 @@ import { BackgroundJob } from "@/background/job"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { ProviderV2 } from "@deepagent-code/core/provider"
 import { ModelV2 } from "@deepagent-code/core/model"
+import { Git } from "@/git"
+import { PRQueue } from "@/agent/pr-queue"
 
 const log = Log.create({ service: "tool.registry" })
 
@@ -143,6 +146,7 @@ const layerWithFacades: Layer.Layer<
     const task = yield* TaskTool
     const taskstatus = yield* TaskStatusTool
     const taskread = yield* TaskReadTool
+    const prfinalize = yield* PRFinalizeTool
     const dismissvalidation = yield* DismissValidationTool
     const read = yield* ReadTool
     const question = yield* QuestionTool
@@ -287,6 +291,7 @@ const layerWithFacades: Layer.Layer<
           task: Tool.init(task),
           task_status: Tool.init(taskstatus),
           task_read: Tool.init(taskread),
+          pr_finalize: Tool.init(prfinalize),
           dismiss_validation: Tool.init(dismissvalidation),
           fetch: Tool.init(webfetch),
           search: Tool.init(websearch),
@@ -317,6 +322,7 @@ const layerWithFacades: Layer.Layer<
             tool.task,
             tool.task_status,
             tool.task_read,
+            tool.pr_finalize,
             tool.dismiss_validation,
             tool.fetch,
             tool.search,
@@ -378,6 +384,7 @@ const layerWithFacades: Layer.Layer<
         },
       )
       const filtered = [...registryState.builtin, ...registryState.custom].flatMap((tool) => {
+        if (tool.id === PRFinalizeTool.id && input.agent.mode !== "primary") return []
         if (tool.id === CodeIntelTool.id) {
           return [projectRollout.enabled.contextQueryToolsV2 ? registryState.codeIntelV2 : registryState.codeIntelV1]
         }
@@ -489,6 +496,8 @@ export const defaultLayer = Layer.suspend(() =>
         Truncate.configuredLayer,
         Database.defaultLayer,
         RuntimeFlags.defaultLayer,
+        Git.defaultLayer,
+        PRQueue.layer.pipe(Layer.orDie),
       ),
     ),
   ),

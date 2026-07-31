@@ -10,6 +10,13 @@ const positiveInteger = (name: string) =>
     Config.map((value) => (Number.isInteger(value) && value > 0 ? value : undefined)),
     Config.orElse(() => Config.succeed(undefined)),
   )
+const positiveIntegerWithDefault = (name: string, fallback: number) =>
+  Config.number(name).pipe(
+    Config.map((value) => (Number.isInteger(value) && value > 0 ? value : fallback)),
+    Config.orElse(() => Config.succeed(fallback)),
+  )
+export const DEFAULT_SUBAGENT_TIMEOUT_MS = 30 * 60_000
+export const DEFAULT_SUBAGENT_OUTPUT_MAX_CHARS = 8_000
 const experimental = bool("DEEPAGENT_CODE_EXPERIMENTAL")
 const enabledByExperimental = (name: string) =>
   Config.all({ experimental, enabled: Config.boolean(name).pipe(Config.option) }).pipe(
@@ -47,16 +54,19 @@ export class Service extends ConfigService.Service<Service>()("@deepagent-code/R
   // by default. NOTE: this is local, non-durable (process restart loses live jobs); cross-restart
   // recovery + remote/cloud agents are deferred to V3.4 (S1 §10). Disable with =false.
   experimentalBackgroundSubagents: stableOn("DEEPAGENT_CODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS"),
-  // v4.0.4 块1 (I33-3 可靠性): 子 Agent 存活超时(毫秒)。超过则判定挂死/崩溃并触发 takeover(同 fork
-  // 基点重生,受 subagentTakeoverLimit 上限约束)。默认 undefined = 不启用超时(逐字节等价现状:子 Agent
-  // 可无限期运行,长任务不被误杀) —— 保守默认,回滚安全。设为正整数毫秒才启用。
-  subagentTimeoutMs: positiveInteger("DEEPAGENT_CODE_SUBAGENT_TIMEOUT_MS"),
+  // Attempt wall limit. A provider/tool that never returns cannot leave the parent blocked forever:
+  // expiry cancels the old fiber and starts a bounded takeover from the same fork point. Missing,
+  // malformed, zero, and negative values all fail closed to the production default.
+  subagentTimeoutMs: positiveIntegerWithDefault("DEEPAGENT_CODE_SUBAGENT_TIMEOUT_MS", DEFAULT_SUBAGENT_TIMEOUT_MS),
   // v4.0.4 块1: 单个子 Agent 任务被 takeover(超时/崩溃后重生)的最大次数。达上限仍失败则上报主 Agent。
   // 默认 undefined ⇒ 代码内回退到 2。防无限接管。
   subagentTakeoverLimit: positiveInteger("DEEPAGENT_CODE_SUBAGENT_TAKEOVER_LIMIT"),
-  // v4.0.4 块1 (I33-4): 子 Agent 结果注入父会话的有界长度(字符数)。超过则父只收截断摘要 + 指向子
-  // session 的引用(全量 text 不丢,仍在子 session 可查)。默认 undefined = 全量注入(逐字节等价现状)。
-  subagentOutputMaxChars: positiveInteger("DEEPAGENT_CODE_SUBAGENT_OUTPUT_MAX_CHARS"),
+  // Parent injection is bounded by default. The complete result remains durable in the child Session
+  // and the truncated envelope carries the task_read recovery pointer.
+  subagentOutputMaxChars: positiveIntegerWithDefault(
+    "DEEPAGENT_CODE_SUBAGENT_OUTPUT_MAX_CHARS",
+    DEFAULT_SUBAGENT_OUTPUT_MAX_CHARS,
+  ),
   subagentResearchStepLimit: positiveInteger("DEEPAGENT_CODE_SUBAGENT_RESEARCH_STEP_LIMIT"),
   subagentResearchTokenLimit: positiveInteger("DEEPAGENT_CODE_SUBAGENT_RESEARCH_TOKEN_LIMIT"),
   subagentResearchWallMs: positiveInteger("DEEPAGENT_CODE_SUBAGENT_RESEARCH_WALL_MS"),

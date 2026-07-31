@@ -1,6 +1,6 @@
 import { expect } from "bun:test"
 import { Effect, Layer, Context } from "effect"
-import { InstanceRef } from "../../src/effect/instance-ref"
+import { EventRouteRef, InstanceRef } from "../../src/effect/instance-ref"
 import { makeRuntime } from "../../src/effect/run-service"
 import { ProjectV2 } from "@deepagent-code/core/project"
 import { it } from "../lib/effect"
@@ -77,6 +77,42 @@ it.live("makeRuntime inherits InstanceRef from the current fiber", () =>
   }).pipe(
     Effect.provideService(InstanceRef, {
       directory: testDirectory,
+      worktree: testDirectory,
+      project: {
+        id: ProjectV2.ID.global,
+        worktree: testDirectory,
+        time: { created: 0, updated: 0 },
+        sandboxes: [],
+      },
+    }),
+  ),
+)
+
+it.live("makeRuntime inherits EventRouteRef from the current fiber", () =>
+  Effect.gen(function* () {
+    class NeedsEventRoute extends Context.Service<
+      NeedsEventRoute,
+      { readonly directory: () => Effect.Effect<string | undefined> }
+    >()("@test/NeedsEventRoute") {}
+
+    const runtime = makeRuntime(
+      NeedsEventRoute,
+      Layer.succeed(
+        NeedsEventRoute,
+        NeedsEventRoute.of({
+          directory: () =>
+            Effect.gen(function* () {
+              return (yield* EventRouteRef)?.directory
+            }),
+        }),
+      ),
+    )
+
+    const actual = yield* Effect.promise(() => runtime.runPromise((svc) => svc.directory()))
+    expect(actual).toBe(`${testDirectory}/root-session`)
+  }).pipe(
+    Effect.provideService(EventRouteRef, {
+      directory: `${testDirectory}/root-session`,
       worktree: testDirectory,
       project: {
         id: ProjectV2.ID.global,

@@ -1,7 +1,7 @@
 import { afterEach, expect } from "bun:test"
 import { Cause, Effect, Exit, Fiber, Layer, Queue } from "effect"
 import { Question } from "../../src/question"
-import { InstanceRef } from "../../src/effect/instance-ref"
+import { EventRouteRef, InstanceRef, WorkspaceRef } from "../../src/effect/instance-ref"
 import { InstanceStore } from "../../src/project/instance-store"
 import { QuestionID } from "../../src/question/schema"
 import { disposeAllInstances, provideInstance, testInstanceStoreLayer, tmpdirScoped } from "../fixture/fixture"
@@ -9,6 +9,7 @@ import { SessionID } from "../../src/session/schema"
 import { testEffect } from "../lib/effect"
 import { CrossSpawnSpawner } from "@deepagent-code/core/cross-spawn-spawner"
 import { EventV2Bridge } from "../../src/event-v2-bridge"
+import { WorkspaceV2 } from "@deepagent-code/core/workspace"
 
 const it = testEffect(
   Layer.mergeAll(Question.layer.pipe(Layer.provideMerge(EventV2Bridge.defaultLayer)), CrossSpawnSpawner.defaultLayer),
@@ -512,6 +513,58 @@ lifecycle.live("pending question rejects on instance dispose", () =>
     const exit = yield* Fiber.await(fiber)
     expect(Exit.isFailure(exit)).toBe(true)
     if (Exit.isFailure(exit)) expect(Cause.squash(exit.cause)).toBeInstanceOf(Question.RejectedError)
+  }),
+)
+
+lifecycle.live("root session directory supervises a child worktree question", () =>
+  Effect.gen(function* () {
+    const parent = yield* tmpdirScoped({ git: true })
+    const child = yield* tmpdirScoped({ git: true })
+    const unrelated = yield* tmpdirScoped({ git: true })
+    const store = yield* InstanceStore.Service
+    const parentContext = yield* store.load({ directory: parent })
+    const workspaceID = WorkspaceV2.ID.make("wrk_question_child_route")
+    const wrongWorkspaceID = WorkspaceV2.ID.make("wrk_question_child_route_wrong")
+
+    const fiber = yield* store
+      .provide(
+        { directory: child },
+        askEffect({
+          sessionID: SessionID.make("ses_child_route"),
+          questions: [
+            {
+              question: "Continue?",
+              header: "Continue",
+              options: [{ label: "Yes", description: "Continue the child task" }],
+            },
+          ],
+        }).pipe(Effect.provideService(EventRouteRef, { ...parentContext, workspaceID })),
+      )
+      .pipe(Effect.forkScoped)
+
+    const parentPending = yield* store
+      .provide({ directory: parent }, waitForPending(1))
+      .pipe(Effect.provideService(WorkspaceRef, workspaceID))
+    expect(parentPending).toHaveLength(1)
+    expect(yield* store.provide({ directory: unrelated }, listEffect)).toEqual([])
+    expect(
+      yield* store
+        .provide({ directory: parent }, listEffect)
+        .pipe(Effect.provideService(WorkspaceRef, wrongWorkspaceID)),
+    ).toEqual([])
+    const wrongReply = yield* store
+      .provide({ directory: parent }, replyEffect({ requestID: parentPending[0].id, answers: [["Wrong"]] }))
+      .pipe(Effect.provideService(WorkspaceRef, wrongWorkspaceID), Effect.exit)
+    expect(Exit.isFailure(wrongReply)).toBe(true)
+    if (Exit.isFailure(wrongReply)) expect(Cause.squash(wrongReply.cause)).toBeInstanceOf(Question.NotFoundError)
+
+    yield* store
+      .provide({ directory: parent }, replyEffect({ requestID: parentPending[0].id, answers: [["Yes"]] }))
+      .pipe(Effect.provideService(WorkspaceRef, workspaceID))
+    expect(yield* Fiber.join(fiber)).toEqual([["Yes"]])
+    expect(
+      yield* store.provide({ directory: parent }, listEffect).pipe(Effect.provideService(WorkspaceRef, workspaceID)),
+    ).toEqual([])
   }),
 )
 
