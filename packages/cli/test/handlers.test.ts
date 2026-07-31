@@ -62,12 +62,14 @@ const homes: string[] = []
 beforeEach(async () => {
   home = await mkdtemp(path.join(tmpdir(), "dacode-cli-test-"))
   homes.push(home)
+  process.env.DEEPAGENT_CODE_TEST_HOME = home
   process.env.DEEPAGENT_CODE_HOME = home
   delete process.env.DEEPAGENT_GATEWAY_URL
 })
 
 afterAll(async () => {
   delete process.env.DEEPAGENT_CODE_HOME
+  delete process.env.DEEPAGENT_CODE_TEST_HOME
   server.stop()
   await Promise.all(homes.map((dir) => rm(dir, { recursive: true, force: true })))
 })
@@ -90,9 +92,7 @@ describe("login handler", () => {
 
   it("fails with a clear message when neither the argument nor DEEPAGENT_GATEWAY_URL is set", async () => {
     const result = await run(
-      login({ gateway: Option.none(), email: Option.some("a@b.c"), password: Option.some("pw") }).pipe(
-        Effect.result,
-      ),
+      login({ gateway: Option.none(), email: Option.some("a@b.c"), password: Option.some("pw") }).pipe(Effect.result),
     )
     expect(Result.isFailure(result)).toBe(true)
     if (Result.isFailure(result)) expect(String(result.failure)).toContain("Gateway URL required")

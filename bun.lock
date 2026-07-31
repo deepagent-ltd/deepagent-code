@@ -349,6 +349,7 @@
       "name": "@deepagent-code/desktop",
       "version": "1.4.3",
       "dependencies": {
+        "@deepagent-code/core": "workspace:*",
         "@zip.js/zip.js": "2.7.62",
         "effect": "catalog:",
         "electron-context-menu": "4.1.2",

@@ -249,7 +249,7 @@ export const layer = Layer.effectDiscard(
           .update(SessionTable)
           .set({
             directory: event.data.location.directory,
-            path: event.data.subdirectory,
+            path: event.data.subdirectory ?? null,
             workspace_id: event.data.location.workspaceID ? WorkspaceV2.ID.make(event.data.location.workspaceID) : null,
             time_updated: DateTime.toEpochMillis(event.data.timestamp),
           })

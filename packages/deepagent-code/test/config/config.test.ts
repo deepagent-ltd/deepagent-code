@@ -318,7 +318,7 @@ it.effect("creates global jsonc config with schema when no global configs exist"
   ),
 )
 
-it.effect("does not create global config when DEEPAGENT_CODE_CONFIG_DIR is set", () =>
+it.effect("ignores DEEPAGENT_CODE_CONFIG_DIR and keeps the canonical global config", () =>
   Effect.gen(function* () {
     const custom = yield* tmpdirScoped()
     yield* withGlobalConfig({}, ({ dir }) =>
@@ -328,7 +328,7 @@ it.effect("does not create global config when DEEPAGENT_CODE_CONFIG_DIR is set",
         Effect.gen(function* () {
           yield* Config.use.get().pipe(provideInstanceEffect(dir))
 
-          expect(yield* FSUtil.use.existsSafe(path.join(dir, "config.jsonc"))).toBe(false)
+          expect(yield* FSUtil.use.existsSafe(path.join(dir, "config.jsonc"))).toBe(true)
         }).pipe(Effect.provide(testInstanceStoreLayer), Effect.provide(CrossSpawnSpawner.defaultLayer)),
       ),
     )
@@ -1040,7 +1040,7 @@ it.instance("gets config directories", () =>
   }),
 )
 
-it.effect("does not try to install dependencies in read-only DEEPAGENT_CODE_CONFIG_DIR", () =>
+it.effect("ignores a read-only DEEPAGENT_CODE_CONFIG_DIR", () =>
   Effect.gen(function* () {
     if (process.platform === "win32") return
 
@@ -1051,10 +1051,11 @@ it.effect("does not try to install dependencies in read-only DEEPAGENT_CODE_CONF
     yield* Effect.addFinalizer(() => FSUtil.use.chmod(readonly, 0o755).pipe(Effect.ignore))
 
     yield* withProcessEnv("DEEPAGENT_CODE_CONFIG_DIR", readonly, Config.use.get().pipe(provideInstanceEffect(dir)))
+    expect(yield* FSUtil.use.existsSafe(path.join(readonly, ".gitignore"))).toBe(false)
   }).pipe(Effect.provide(testInstanceStoreLayer), Effect.provide(CrossSpawnSpawner.defaultLayer)),
 )
 
-it.effect("installs dependencies in writable DEEPAGENT_CODE_CONFIG_DIR", () =>
+it.effect("does not install dependencies in a writable DEEPAGENT_CODE_CONFIG_DIR", () =>
   Effect.gen(function* () {
     const dir = yield* tmpdirScoped()
     const configDir = path.join(dir, "configdir")
@@ -1068,7 +1069,7 @@ it.effect("installs dependencies in writable DEEPAGENT_CODE_CONFIG_DIR", () =>
       ),
     )
 
-    expect(yield* FSUtil.use.readFileString(path.join(configDir, ".gitignore"))).toContain("package-lock.json")
+    expect(yield* FSUtil.use.existsSafe(path.join(configDir, ".gitignore"))).toBe(false)
   }).pipe(Effect.provide(testInstanceStoreLayer), Effect.provide(CrossSpawnSpawner.defaultLayer)),
 )
 
@@ -1950,7 +1951,7 @@ describe("DEEPAGENT_CODE_DISABLE_PROJECT_CONFIG", () => {
     "skips relative instructions with warning when flag is set but no config dir",
     () =>
       withProcessEnvs(
-        { DEEPAGENT_CODE_CONFIG_DIR: undefined, DEEPAGENT_CODE_DISABLE_PROJECT_CONFIG: "true" },
+        { DEEPAGENT_CODE_DISABLE_PROJECT_CONFIG: "true" },
         Effect.gen(function* () {
           const test = yield* TestInstance
           yield* FSUtil.use.writeWithDirs(path.join(test.directory, "CUSTOM.md"), "# Custom Instructions")
@@ -1963,7 +1964,7 @@ describe("DEEPAGENT_CODE_DISABLE_PROJECT_CONFIG", () => {
   )
 
   it.instance(
-    "DEEPAGENT_CODE_CONFIG_DIR still works when flag is set",
+    "ignores DEEPAGENT_CODE_CONFIG_DIR when project config is disabled",
     () =>
       Effect.gen(function* () {
         const configDir = yield* tmpdirScoped({ config: { model: "configdir/model" } })
@@ -1971,7 +1972,7 @@ describe("DEEPAGENT_CODE_DISABLE_PROJECT_CONFIG", () => {
           { DEEPAGENT_CODE_DISABLE_PROJECT_CONFIG: "true", DEEPAGENT_CODE_CONFIG_DIR: configDir },
           Effect.gen(function* () {
             const config = yield* Config.use.get()
-            expect(config.model).toBe("configdir/model")
+            expect(config.model).not.toBe("configdir/model")
           }),
         )
       }),

@@ -3,7 +3,7 @@
 // Variants are provider-specific reasoning effort levels (e.g., "high", "max").
 // Resolution priority: CLI --variant flag > saved preference > session history.
 //
-// The saved variant persists across sessions in ~/.local/state/deepagent-code/model.json
+// The saved variant persists across sessions in ~/.deepagent/code/state/model.json
 // so your last-used variant sticks. Cycling (ctrl+t) updates both the active
 // variant and the persisted file.
 import path from "path"

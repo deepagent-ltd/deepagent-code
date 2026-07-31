@@ -3,6 +3,8 @@ import { which } from "@deepagent-code/core/util/which"
 import { PAP } from "@/profile/pap"
 import { Vocabulary } from "@/profile/vocabulary"
 import { RuntimeBase } from "@/runtime/base"
+import { Global } from "@deepagent-code/core/global"
+import path from "node:path"
 
 const log = Log.create({ service: "profile.perf" })
 
@@ -158,7 +160,11 @@ export class PerfAdapter implements PAP.ProfileAdapter {
   readonly vendor = "cpu_generic" as const
   readonly domain = "cpu_sampling" as const
   readonly privileges: readonly RuntimeBase.PrivilegeSpec[] = [
-    { kind: "perf_event_paranoid", reason: "Linux perf requires perf_event_paranoid <= 2 for CPU sampling", maxParanoid: 2 },
+    {
+      kind: "perf_event_paranoid",
+      reason: "Linux perf requires perf_event_paranoid <= 2 for CPU sampling",
+      maxParanoid: 2,
+    },
   ]
   readonly mapping = perfMapping
 
@@ -167,16 +173,19 @@ export class PerfAdapter implements PAP.ProfileAdapter {
   async collect(target: PAP.ProfileTarget): Promise<PAP.NativeReportRef> {
     const bin = this.probe.locate("perf")
     if (!bin) {
-      const msg = "perf (Linux perf_events) is not installed or not on PATH. Install linux-perf or linux-tools-$(uname -r)."
+      const msg =
+        "perf (Linux perf_events) is not installed or not on PATH. Install linux-perf or linux-tools-$(uname -r)."
       log.info(msg)
       return Promise.reject(new Error(msg))
     }
-    const outPath = `/tmp/deepagent-perf-${Date.now()}.data`
+    const outPath = path.join(Global.Path.tmp, `profile-perf-${Date.now()}.data`)
     const args = [
       "record",
-      "-g",                    // call graph
-      "-e", "cycles,instructions,cache-misses,cache-references,branch-misses,branches",
-      "-o", outPath,
+      "-g", // call graph
+      "-e",
+      "cycles,instructions,cache-misses,cache-references,branch-misses,branches",
+      "-o",
+      outPath,
       "--",
       target.command,
       ...(target.args ?? []),
@@ -273,69 +282,70 @@ export class PerfAdapter implements PAP.ProfileAdapter {
     const branches = getNative(ns, N.branches)
 
     // cpi = cycles / instructions (computed, but vocab says derived:false).
-    const cpiVal = cycles !== undefined && instructions !== undefined && instructions > 0
-      ? cycles / instructions
-      : undefined
+    const cpiVal =
+      cycles !== undefined && instructions !== undefined && instructions > 0 ? cycles / instructions : undefined
 
     // ipc = instructions / cycles (PAP-derived, vocab says derived:true).
-    const ipcVal = instructions !== undefined && cycles !== undefined && cycles > 0
-      ? instructions / cycles
-      : undefined
+    const ipcVal = instructions !== undefined && cycles !== undefined && cycles > 0 ? instructions / cycles : undefined
 
     // cache_miss_rate = cache-misses / cache-references (ratio 0–1).
-    const cacheMissRate = cacheMisses !== undefined && cacheRefs !== undefined && cacheRefs > 0
-      ? cacheMisses / cacheRefs
-      : undefined
+    const cacheMissRate =
+      cacheMisses !== undefined && cacheRefs !== undefined && cacheRefs > 0 ? cacheMisses / cacheRefs : undefined
 
     // branch_misprediction_pct = branch-misses / branches * 100.
-    const branchMispredPct = branchMisses !== undefined && branches !== undefined && branches > 0
-      ? (branchMisses / branches) * 100
-      : undefined
+    const branchMispredPct =
+      branchMisses !== undefined && branches !== undefined && branches > 0 ? (branchMisses / branches) * 100 : undefined
 
     const summary: Record<string, PAP.MetricValue> = {
       self_pct: PAP.missing("not_applicable_to_domain", "top-level self_pct is per-symbol, not aggregated"),
 
-      cpi: cpiVal !== undefined
-        ? PAP.present(cpiVal, "ratio", {
-            nativeMetric: [N.cycles, N.instructions],
-            semantic: "exact",
-            // cpi is not marked derived in vocab, but we compute it from primitives.
-            formula: "cycles / instructions",
-          })
-        : PAP.missing("not_collected"),
+      cpi:
+        cpiVal !== undefined
+          ? PAP.present(cpiVal, "ratio", {
+              nativeMetric: [N.cycles, N.instructions],
+              semantic: "exact",
+              // cpi is not marked derived in vocab, but we compute it from primitives.
+              formula: "cycles / instructions",
+            })
+          : PAP.missing("not_collected"),
 
-      ipc: ipcVal !== undefined
-        ? PAP.present(ipcVal, "ratio", {
-            nativeMetric: [N.instructions, N.cycles],
-            semantic: "exact",
-            derived: true,
-            formula: "instructions / cycles",
-          })
-        : PAP.missing("not_collected"),
+      ipc:
+        ipcVal !== undefined
+          ? PAP.present(ipcVal, "ratio", {
+              nativeMetric: [N.instructions, N.cycles],
+              semantic: "exact",
+              derived: true,
+              formula: "instructions / cycles",
+            })
+          : PAP.missing("not_collected"),
 
-      clockticks: cycles !== undefined
-        ? PAP.present(cycles, "count", { nativeMetric: N.cycles, semantic: "exact" })
-        : PAP.missing("not_collected"),
+      clockticks:
+        cycles !== undefined
+          ? PAP.present(cycles, "count", { nativeMetric: N.cycles, semantic: "exact" })
+          : PAP.missing("not_collected"),
 
-      instructions_retired: instructions !== undefined
-        ? PAP.present(instructions, "count", { nativeMetric: N.instructions, semantic: "exact" })
-        : PAP.missing("not_collected"),
+      instructions_retired:
+        instructions !== undefined
+          ? PAP.present(instructions, "count", { nativeMetric: N.instructions, semantic: "exact" })
+          : PAP.missing("not_collected"),
 
-      cache_miss_rate: cacheMissRate !== undefined
-        ? PAP.present(cacheMissRate, "ratio", {
-            nativeMetric: [N.cacheMisses, N.cacheReferences],
-            semantic: "exact",
-            formula: "cache-misses / cache-references",
-          })
-        : PAP.missing("not_collected"),
+      cache_miss_rate:
+        cacheMissRate !== undefined
+          ? PAP.present(cacheMissRate, "ratio", {
+              nativeMetric: [N.cacheMisses, N.cacheReferences],
+              semantic: "exact",
+              formula: "cache-misses / cache-references",
+            })
+          : PAP.missing("not_collected"),
 
-      branch_misprediction_pct: branchMispredPct !== undefined
-        ? PAP.present(branchMispredPct, "pct", {
-            nativeMetric: [N.branchMisses, N.branches],
-            semantic: "exact",
-            formula: "(branch-misses / branches) * 100",
-          })
-        : PAP.missing("not_collected"),
+      branch_misprediction_pct:
+        branchMispredPct !== undefined
+          ? PAP.present(branchMispredPct, "pct", {
+              nativeMetric: [N.branchMisses, N.branches],
+              semantic: "exact",
+              formula: "(branch-misses / branches) * 100",
+            })
+          : PAP.missing("not_collected"),
     }
 
     // Per-hotspot normalization (symbols from perf report).
@@ -354,7 +364,10 @@ export class PerfAdapter implements PAP.ProfileAdapter {
           clockticks: PAP.missing("not_collected", "per-symbol cycle count requires `perf annotate`"),
           instructions_retired: PAP.missing("not_collected", "per-symbol instruction count requires `perf annotate`"),
           cache_miss_rate: PAP.missing("not_collected", "per-symbol cache miss rate requires `perf annotate`"),
-          branch_misprediction_pct: PAP.missing("not_collected", "per-symbol branch misprediction requires `perf annotate`"),
+          branch_misprediction_pct: PAP.missing(
+            "not_collected",
+            "per-symbol branch misprediction requires `perf annotate`",
+          ),
         },
       }
     })
@@ -372,5 +385,4 @@ export class PerfAdapter implements PAP.ProfileAdapter {
   }
 }
 
-export const makePerfAdapter = (probe: PerfBinaryProbe = defaultPerfProbe): PAP.ProfileAdapter =>
-  new PerfAdapter(probe)
+export const makePerfAdapter = (probe: PerfBinaryProbe = defaultPerfProbe): PAP.ProfileAdapter => new PerfAdapter(probe)

@@ -209,7 +209,6 @@ const env = () => {
   const processEnv = globalThis.process?.env ?? {}
   return {
     failClosed: processEnv.DEEPAGENT_FAIL_CLOSED,
-    runsDir: processEnv.DEEPAGENT_RUNS_DIR,
     allowProviderExecutedTools: processEnv.DEEPAGENT_ALLOW_PROVIDER_EXECUTED_TOOLS,
     allowProviderExecutedToolNames: processEnv.DEEPAGENT_PROVIDER_EXECUTED_TOOL_ALLOWLIST,
     killSwitch: processEnv.DEEPAGENT_KILL_SWITCH,
@@ -251,7 +250,7 @@ let current: CurrentConfig = {
     reason: env().routerReason ?? "DeepAgent global runtime default router policy",
     userPreference: "none",
   },
-  runsDir: env().runsDir ?? path.join(resolveDeepAgentCodeHome(), "runs"),
+  runsDir: path.join(resolveDeepAgentCodeHome(), "runs"),
   baseDir: resolveDeepAgentCodeHome(),
   resumeFrom: undefined,
 }
@@ -283,8 +282,7 @@ export const configure = (config: Config = {}) => {
   const nextRunsDir = "runsDir" in config ? config.runsDir : current.runsDir
   // P0-0: memory/state always root at the single storage home. Production injects `baseDir`
   // explicitly (config.ts passes Global.Path.agent.data on every configure call); when absent we
-  // re-resolve from env (resolveDeepAgentCodeHome honors DEEPAGENT_CODE_HOME / TEST_HOME exactly
-  // like Global). We do NOT fall back to a frozen module-init value, so a late env change (tests)
+  // re-resolve from the canonical/test storage root. We do NOT fall back to a frozen module-init value, so a late env change (tests)
   // is still observed. This replaces the old path.dirname(runsDir) inference that made durable
   // knowledge/state diverge from project-memory whenever runsDir pointed outside <home>/runs.
   const baseDir = config.baseDir ?? resolveDeepAgentCodeHome()
@@ -502,7 +500,7 @@ const preflightWith = (input: RunInput, config: CurrentConfig): Effect.Effect<vo
     // general mode / disabled runtime is pure passthrough (protects the deepagent-code baseline).
     if (!isManagedDeepAgentRuntimeWith(config)) return
     if (!config.enabled) return yield* Effect.fail(gatewayBlocked("DeepAgent runtime is not enabled"))
-    if (!config.runsDir) return yield* Effect.fail(gatewayBlocked("DEEPAGENT_RUNS_DIR is not configured"))
+    if (!config.runsDir) return yield* Effect.fail(gatewayBlocked("DeepAgent runs directory is not configured"))
     if (!config.resumeFrom) return
     const valid = yield* Effect.promise(() => verifyCheckpoint(config.resumeFrom!))
     if (!valid) return yield* Effect.fail(gatewayBlocked("DeepAgent checkpoint hash mismatch or checkpoint missing"))
@@ -648,7 +646,7 @@ export const runAuxiliary = <A, E, R>(
 }
 
 const open = Effect.fn("AgentGateway.open")(function* (input: RunInput, config: CurrentConfig) {
-  if (!config.runsDir) return yield* Effect.fail(gatewayBlocked("DEEPAGENT_RUNS_DIR is not configured"))
+  if (!config.runsDir) return yield* Effect.fail(gatewayBlocked("DeepAgent runs directory is not configured"))
   if (config.resumeFrom) {
     const resume = config.resumeFrom
     const valid = yield* Effect.promise(() => verifyCheckpoint(resume))

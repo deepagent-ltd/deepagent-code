@@ -9,6 +9,7 @@ import { isAbsolute, join } from "path"
 import { DatabaseMigration } from "./migration"
 import { InstallationChannel } from "../installation/version"
 import { makeGlobalNode } from "../effect/app-node"
+import { containsDataPath } from "../global-path"
 
 const makeDatabase = EffectDrizzleSqlite.makeWithDefaults()
 type DatabaseShape = Effect.Success<typeof makeDatabase>
@@ -46,8 +47,12 @@ export function layerFromPath(filename: string) {
 
 export function path() {
   if (Flag.DEEPAGENT_CODE_DB) {
-    if (Flag.DEEPAGENT_CODE_DB === ":memory:" || isAbsolute(Flag.DEEPAGENT_CODE_DB)) return Flag.DEEPAGENT_CODE_DB
-    return join(Global.Path.data, Flag.DEEPAGENT_CODE_DB)
+    if (Flag.DEEPAGENT_CODE_DB === ":memory:") return Flag.DEEPAGENT_CODE_DB
+    const filename = isAbsolute(Flag.DEEPAGENT_CODE_DB)
+      ? Flag.DEEPAGENT_CODE_DB
+      : join(Global.Path.data, Flag.DEEPAGENT_CODE_DB)
+    if (process.env.DEEPAGENT_CODE_TEST_HOME || containsDataPath(filename)) return filename
+    throw new Error(`DEEPAGENT_CODE_DB must stay under ${Global.Path.data}`)
   }
   if (
     ["latest", "beta", "prod"].includes(InstallationChannel) ||
