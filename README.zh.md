@@ -83,7 +83,9 @@ Session V2 运行器在持久 Context Epoch 下从明确的 Context Source 装�
 
 ### 专业子智能体与 Expert Panel
 
-DeepAgent 可以把独立工作拆分给数量有界、相互隔离的 Worker。具备写权限的子智能体获得独立 worktree，只向父会话返回紧凑摘要和工件引用，完整执行记录仍可随时查看。
+DeepAgent 可以把独立工作拆分给数量有界、相互隔离的 Worker。委派运行会持久化自己的身份、generation、owner、lease、阶段、终态、结果和父会话投递，因此 exact retry 会恢复同一项工作，而不是静默启动另一个 Worker。具备写权限的子智能体获得独立 worktree，只向父会话返回紧凑摘要和工件引用，完整执行记录仍可随时查看。
+
+自动写协作走一条持久 Git/PR 路径。Worker 只提交其作用域内的改动；同一个普通 Reviewer Session 按精确 Worker SHA 逐项审阅，协调器在 Session 分支上串行执行 `--no-ff` merge，再由同一个 Senior Reviewer Session 审阅合并后的完整批次。恢复、超时、取消、接管、审阅反馈和清理都受 generation fence 保护，过期 Worker 无法结算或覆盖较新的工作。
 
 高风险决策可以召集 **Expert Panel**。正确性、安全、性能、架构与可复现性等专家视角审阅同一个冻结问题，进行最多三轮匿名辩论，再由确定性仲裁器生成裁定。少数派意见会被保留，无法安全达成一致时会失败关闭并交给人类。
 
@@ -177,6 +179,8 @@ deepagent auth list
 通过应用/CLI 添加的官方供应商密钥单独存放在 `~/.deepagent/code/auth.json`，不在配置文件里。
 完整参考（Base URL 覆盖、请求头、逐模型配置、网关）见
 [供应商文档](https://deepagent-code.ai/docs/providers/)。
+
+DeepAgent Code 的所有私有文件数据都位于 `~/.deepagent/code/`，包括配置、凭据引用、数据库、桌面状态、日志、缓存和临时文件；原生 secret 值仍由操作系统凭据存储保管。测试使用显式隔离的数据根，普通环境变量不能重定向生产存储。
 
 ## 快速示例
 
@@ -279,6 +283,7 @@ bun run --cwd packages/deepagent-code dev import-history --from codex --dry-run
 
 - [供应商与模型](https://deepagent-code.ai/docs/providers/)
 - [架构与设计](design/README.md)
+- [真实 LLM 测试指南](design/real-llm-testing.md)
 - [安全策略](SECURITY.md)
 - [隐私策略](PRIVACY.md)
 - [贡献指南](CONTRIBUTING.md)

@@ -83,7 +83,9 @@ Composable domain packs add language, framework, platform, hardware, business, a
 
 ### Specialist agents and Expert Panel
 
-DeepAgent can partition independent work across bounded, isolated workers. Write-capable subagents receive dedicated worktrees, return compact summaries and artifact references, and leave their full transcripts available for inspection.
+DeepAgent can partition independent work across bounded, isolated workers. Delegated runs persist their identity, generation, owner, lease, phase, terminal state, result, and parent delivery, so an exact retry resumes the same work instead of silently starting another worker. Write-capable subagents receive dedicated worktrees, return compact summaries and artifact references, and leave their full transcripts available for inspection.
+
+Automatic write collaboration follows a durable Git/PR path. Workers commit only their scoped changes; one Reviewer session checks each exact worker SHA, the coordinator performs serial `--no-ff` merges on the Session branch, and one Senior Reviewer examines the merged batch. Resume, timeout, cancellation, takeover, review feedback, and cleanup are generation-fenced so a stale worker cannot settle or overwrite newer work.
 
 For high-risk decisions, convene an **Expert Panel**. Correctness, security, performance, architecture, and reproducibility lenses review the same frozen question, debate anonymously for up to three rounds, and feed a deterministic arbiter that preserves minority opinions and fails closed to human review.
 
@@ -182,6 +184,8 @@ Official-provider keys added via the app/CLI are stored separately in
 `~/.deepagent/code/auth.json`, not in the config file. See the
 [providers guide](https://deepagent-code.ai/docs/providers/) for the full
 reference (base URL overrides, headers, per-model config, gateways).
+
+All DeepAgent Code private filesystem data lives under `~/.deepagent/code/`, including configuration, credential references, databases, Desktop state, logs, caches, and temporary files. Native secret values remain in the operating system's credential store. Tests use explicit isolated roots and cannot redirect production storage through ordinary environment variables.
 
 ## Quick Example
 
@@ -284,6 +288,7 @@ bun run --cwd packages/deepagent-code dev import-history --from codex --dry-run
 
 - [Providers & Models](https://deepagent-code.ai/docs/providers/)
 - [Architecture & Design](design/README.md)
+- [Real-LLM Testing Guide](design/real-llm-testing.md)
 - [Security Policy](SECURITY.md)
 - [Privacy Policy](PRIVACY.md)
 - [Contributing](CONTRIBUTING.md)

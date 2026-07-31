@@ -10,6 +10,15 @@
 
 `qualifiedLiveRuns` 当前为空。注册、单次通过和 EXT 可达都不代表 pre-push 资格；LIVE suite 只有完成本节资格合同后才能进入该集合。
 
+测试清单有四层权威，职责不能混用：
+
+1. 各 package 的 `test:llm-*` scripts 定义可直接执行的 suite 入口；
+2. `script/run-live-llm-all.ts` 定义完整聚合矩阵，并用 `validateSuiteManifest()` 保证所有真实 suite 恰好注册一次；
+3. `packages/deepagent-code/script/live-llm/routes.ts` 把生产源码路径映射到确定性检查和受影响的模型运行；
+4. `packages/deepagent-code/script/live-llm/dispatcher.ts` 把路由运行映射到实际命令，并单独维护已完成资格认证的 `qualifiedLiveRuns`。
+
+`routes.ts`/`dispatcher.ts` 服务变更影响分析和 pre-push，聚合 runner 服务显式全矩阵验证。新增或重命名 suite 时必须同时更新 package script、聚合矩阵、相关源码路由和 dispatcher；`test:llm-routes` 会拒绝缺失、陈旧、重复或无法分类的注册。
+
 | 模式    | 用途                                   | 真实模型 | 普通 pre-push    |
 | ------- | -------------------------------------- | -------- | ---------------- |
 | DET     | 状态机、路由、安全和 Oracle 自检       | 否       | 是               |
@@ -56,17 +65,17 @@ bun install --frozen-lockfile
 该文件只能包含一行原始 API key，不是 JSON 或 `KEY=value`。macOS 和 Linux 示例：
 
 ```sh
-mkdir -p "$HOME/.deepagent/code"
-touch "$HOME/.deepagent/code/live-llm-deepseek.key"
-chmod 600 "$HOME/.deepagent/code/live-llm-deepseek.key"
-${EDITOR:-vi} "$HOME/.deepagent/code/live-llm-deepseek.key"
+mkdir -p "$HOME/.deepagent/code/tmp"
+touch "$HOME/.deepagent/code/tmp/live-llm-deepseek.key"
+chmod 600 "$HOME/.deepagent/code/tmp/live-llm-deepseek.key"
+${EDITOR:-vi} "$HOME/.deepagent/code/tmp/live-llm-deepseek.key"
 ```
 
 检查文件没有多余行，并确认权限：
 
 ```sh
-awk 'END { print NR }' "$HOME/.deepagent/code/live-llm-deepseek.key"
-ls -l "$HOME/.deepagent/code/live-llm-deepseek.key"
+awk 'END { print NR }' "$HOME/.deepagent/code/tmp/live-llm-deepseek.key"
+ls -l "$HOME/.deepagent/code/tmp/live-llm-deepseek.key"
 ```
 
 测试不接受以下明文 key 环境变量：
@@ -95,7 +104,7 @@ ${EDITOR:-vi} script/live-llm.config.local.json
 ```json
 {
   "baseURL": "https://api.deepseek.com",
-  "apiKeyFile": "~/.deepagent/code/live-llm-deepseek.key",
+  "apiKeyFile": "~/.deepagent/code/tmp/live-llm-deepseek.key",
   "model": "deepseek-v4-flash",
   "modelRevision": "",
   "requestTimeoutMs": 180000,
@@ -129,6 +138,8 @@ bun run test:llm:all -- --dry-run
 ```
 
 `--dry-run` 会验证配置结构和 suite 注册，并打印将要执行的命令；它不会读取 key 文件，也不会请求 Provider。
+
+聚合 runner 只读取 `--config` 指定的 JSON（默认 `script/live-llm.config.local.json`），再为真实 suite 构造最小环境 allowlist。单 suite 不读取该 JSON，只读取第 5 节列出的 `DEEPAGENT_CODE_LIVE_LLM_*` 环境变量。不要同时假定两种配置入口会互相回填。
 
 ### 4.2 推荐的首次真实运行
 
@@ -170,7 +181,7 @@ bun run test:llm:all -- --config /absolute/path/live-llm.json --headless --skip-
 单 suite 命令不读取聚合 JSON，需要先在当前 shell 中导出配置：
 
 ```sh
-export DEEPAGENT_CODE_LIVE_LLM_API_KEY_FILE="$HOME/.deepagent/code/live-llm-deepseek.key"
+export DEEPAGENT_CODE_LIVE_LLM_API_KEY_FILE="$HOME/.deepagent/code/tmp/live-llm-deepseek.key"
 export DEEPAGENT_CODE_LIVE_LLM_MODEL="deepseek-v4-flash"
 export DEEPAGENT_CODE_LIVE_LLM_BASE_URL="https://api.deepseek.com"
 export DEEPAGENT_CODE_LIVE_LLM_TIMEOUT_MS="180000"
@@ -272,6 +283,12 @@ bun typecheck
 ```
 
 这些测试必须直接调用生产实现。允许注入 runner/provider/partition 边界来制造超时、崩溃和并行 DAG，但不得在测试中复制 task、调度器、PR queue、worktree cleanup 或 durable generation 的实现逻辑。V4 并行测试必须使用两个 runner 共同到达的同步屏障，并断言依赖 runner 只在整个上游 wave 完成后启动；耗时比较不能作为并行 Oracle。
+
+### 6.1 pre-push 的真实行为
+
+安装的 pre-push hook 先基于待推送对象的最终 tree 计算变更路径，在隔离 detached worktree 中安装依赖并运行 `routes.ts` 选出的确定性检查。普通情况下不会调用真实模型。只有显式设置 `DEEPAGENT_CODE_LIVE_LLM_REQUIRED=1` 时才考虑执行 LIVE suite；此时任何命中的 LIVE run 若不在 `qualifiedLiveRuns` 中，push 会失败关闭。EXT、EVAL 和 RELEASE 永远不会由普通 pre-push 自动执行。
+
+跳过必需 LIVE 测试只允许同时设置 `DEEPAGENT_CODE_SKIP_LIVE_LLM=1` 和非空 `DEEPAGENT_CODE_SKIP_LIVE_LLM_REASON`；hook 会在 Git common directory 写入审计记录。pre-push 只复用 fingerprint、revision、commit、源码、harness、路由、sandbox 和 Oracle 全部匹配的 24 小时成功缓存，且跨进程复用要求显式 `modelRevision`。
 
 ## 7. 查看测试输出和报告
 
@@ -437,7 +454,7 @@ Token 指标用于比较用量，不是货币成本。实际费用应按 DeepSee
 确认环境变量指向真实文件，而不是直接保存 key：
 
 ```sh
-export DEEPAGENT_CODE_LIVE_LLM_API_KEY_FILE="$HOME/.deepagent/code/live-llm-deepseek.key"
+export DEEPAGENT_CODE_LIVE_LLM_API_KEY_FILE="$HOME/.deepagent/code/tmp/live-llm-deepseek.key"
 ```
 
 ### 提示 key 文件权限过宽

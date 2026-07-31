@@ -16,7 +16,7 @@ The architecture is designed around one requirement: a long-running agent must r
 - **Connected context** — selective, evidence-backed assembly across code, knowledge, project memory, and execution documents
 - **Plans and long-running goals** — structured plans, stale-state detection, validation evidence, bounded retries, and human control
 - **Event-driven coordination** — durable delivery, priority routing, offline catch-up, idempotent goal ticks, and observable queue state
-- **Isolated agent collaboration** — bounded subagents, worktree isolation for write-capable workers, and conflict-aware change return
+- **Durable agent collaboration** — generation-fenced delegated runs, worktree isolation, resumable supervision, and Reviewer/Senior Reviewer PR closure
 - **AI IDE microservice** — LSP-backed semantic code navigation via `code_intel`
 - **Secure MCP catalog** — curated integrations, derived safety tiers, environment references, and native OS secret storage
 
@@ -34,7 +34,7 @@ A delegated task is admitted before provider work begins and is identified indep
 
 Structured work uses two explicit stages. The research stage retains the child Agent's normal tools and transcript. The finalizer is a bounded, single provider turn with a narrow ephemeral tool registry, no task or compaction history, no ordinary steering, and a per-turn reasoning/tool-choice decision derived from provider capability. Completion is valid only after schema-validated structured output is persisted; provider, schema, permission, timeout, interruption, and no-progress failures remain distinct recoverable states.
 
-### 2. One durable authority per concern
+### One durable authority per concern
 
 Documents, plans, event delivery state, knowledge promotion, and goal progress each have one authoritative durable store. In-memory state may accelerate delivery, but it cannot become a second source of truth.
 
@@ -46,9 +46,11 @@ External events, credentials, tools, paths, autonomy, worker placement, and outb
 
 ### Humans can always intervene
 
-### 5. Keep execution boundaries explicit
-
 Write-capable subagents run in isolated worktrees by default. Event consumers claim durable work with idempotency and retry boundaries. Users retain explicit paths to approve, steer, pause, resume, take over, or roll back long-running work.
+
+### Keep execution boundaries explicit
+
+Interactive `task` collaboration and the event-driven V4 DAG share durable Session, permission, worktree, and PR primitives, but keep their scheduling contracts explicit. A task worker is supervised through a durable TaskRun generation. A V4 node is claimed through durable AgentExecution state with lease, resource, token, and dependency constraints. Both paths preserve author commits before cleanup and fail closed when they cannot prove ownership or continuation.
 
 ---
 
@@ -107,6 +109,8 @@ Steering never aborts an in-flight tool or stream. The input is persisted first,
 `SessionExecution` is process-global and keyed by Session ID. A drain discovers placement from durable Session location only when it starts. SessionRunner, model resolution, tools, permissions, and filesystem services remain Location-scoped.
 
 Same-Session resumes join one coordinator; advisory wakes coalesce; different Sessions can run concurrently. Every provider turn performs one explicit `llm.stream(request)` call and reloads projected history before durable continuation.
+
+All production-private filesystem data resolves from one root: `~/.deepagent/code/`. Core databases and configuration, CLI state, Desktop state/logs/caches, credential references, and runtime temporary files remain under that directory; native secret values remain in the operating system's credential store. `DEEPAGENT_CODE_HOME` is honored only together with an explicit test-home boundary, so ordinary production environments cannot redirect private writes.
 
 **Credentials** are declared by key name in the catalog template (`CredentialSpec`). Configuration stores environment references or `secret://` handles instead of plaintext values. Handles resolve at connection time through macOS Keychain, Linux Secret Service (`libsecret`), or Windows DPAPI-backed credential storage.
 
@@ -203,6 +207,20 @@ The Router combines event type, trusted source, actor identity, Agent trigger/ca
 The Worker Pool owns bounded concurrency, placement, claims, leases, renewal, recovery, and handoff. Independent DAG nodes run concurrently; dependency edges remain ordered. File and symbol claims are shared across Workers so conflicting writes cannot run together.
 
 Write-capable Agents use isolated worktrees by default. Parent Agents receive bounded summaries, status, artifact/session references, and necessary diffs; complete child transcripts remain in their own Sessions.
+
+`AgentExecution` persists claim, lease, generation, resource locks, token debits, terminal metadata, and handoff state in SQLite. Independent DAG nodes may execute concurrently under `WorkspaceConcurrency`; dependent nodes start only after their complete upstream wave settles. Cleanup must preserve a command-scoped Git continuation ref before an author worktree is removed.
+
+## Multi-Agent Git and PR Collaboration
+
+The model-facing `task` and `pr_finalize` tools form one production collaboration path:
+
+1. write workers are admitted as durable TaskRuns and receive canonical isolated worktrees;
+2. each worker commits only its declared scope and enqueues a PR bound to the exact author Session and SHA;
+3. one ordinary Reviewer Session reviews each queued SHA, with `request_changes` resuming the same author Session and worktree;
+4. accepted commits merge serially with `--no-ff` into the Session branch;
+5. one Senior Reviewer Session reviews the merged batch before cleanup and terminal delivery.
+
+Queue state, reviewer identities, verdict SHA, batch review, merge state, and cleanup requirements are durable. Retry reuses the recorded Reviewer or Senior Reviewer Session; stale generations cannot settle current work. Default branches are never automatic merge targets, and a dirty parent checkout fails before worker or provider execution.
 
 ## Human Collaboration and Oversight
 
