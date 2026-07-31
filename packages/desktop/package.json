@@ -36,6 +36,7 @@
   },
   "main": "./out/main/index.js",
   "dependencies": {
+    "@deepagent-code/core": "workspace:*",
     "@lydell/node-pty": "catalog:",
     "@zip.js/zip.js": "2.7.62",
     "effect": "catalog:",
