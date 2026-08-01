@@ -4,8 +4,9 @@ import { strict as assert } from "node:assert"
 import { readdir } from "node:fs/promises"
 import path from "node:path"
 
-const chunks = path.resolve("out/main/chunks")
-const sidecar = await Bun.file(path.resolve("out/main/sidecar.js")).text()
+const main = path.resolve("out/main")
+const chunks = path.join(main, "chunks")
+const sidecar = await Bun.file(path.join(main, "sidecar.js")).text()
 const server = Bun.file(path.join(chunks, "node.js"))
 const sourceMap = Bun.file(path.join(chunks, "node.js.map"))
 const files = await readdir(chunks)
@@ -17,6 +18,22 @@ assert.deepEqual(
   files.filter((file) => /^node-.+\.js$/.test(file)),
   [],
   "Rollup must not emit a transformed copy of the server bundle",
+)
+assert.deepEqual(
+  (
+    await Promise.all(
+      [path.join(main, "index.js"), path.join(main, "sidecar.js"), ...files.map((file) => path.join(chunks, file))]
+        .filter((file) => file.endsWith(".js"))
+        .map(async (file) =>
+          new Bun.Transpiler({ loader: "js" })
+            .scanImports(await Bun.file(file).text())
+            .filter((item) => item.path.startsWith("@deepagent-code/"))
+            .map((item) => `${path.relative(main, file)} -> ${item.path}`),
+        ),
+    )
+  ).flat(),
+  [],
+  "Packaged main process must not import TypeScript workspace packages",
 )
 
 const source = await server.text()
