@@ -349,7 +349,6 @@
       "name": "@deepagent-code/desktop",
       "version": "1.4.4",
       "dependencies": {
-        "@deepagent-code/core": "workspace:*",
         "@lydell/node-pty": "catalog:",
         "@zip.js/zip.js": "2.7.62",
         "effect": "catalog:",
@@ -364,6 +363,7 @@
       "devDependencies": {
         "@actions/artifact": "4.0.0",
         "@deepagent-code/app": "workspace:*",
+        "@deepagent-code/core": "workspace:*",
         "@deepagent-code/ui": "workspace:*",
         "@jridgewell/trace-mapping": "0.3.31",
         "@playwright/test": "catalog:",
