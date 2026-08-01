@@ -81,6 +81,7 @@ export const renderPanelistPrompt = (input: PanelistRunInput): string => {
     "",
     `Question (frozen): ${input.question.question}`,
     input.question.codeRefs.length > 0 ? `Code references: ${input.question.codeRefs.join(", ")}` : "",
+    "This is the evidence-collection phase. Invoke registered read-only tools through real tool calls and wait for their returned content before drafting findings. Text such as <read>...</read> is not a tool call and counts as no evidence. A separate structured finalizer will convert the persisted draft; do not skip evidence collection or invent file contents.",
   ].filter((s) => s.length > 0)
   if (input.round > 1 && input.peers.length > 0) {
     parts.push(

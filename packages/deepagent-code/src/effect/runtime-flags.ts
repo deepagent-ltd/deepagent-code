@@ -10,6 +10,13 @@ const positiveInteger = (name: string) =>
     Config.map((value) => (Number.isInteger(value) && value > 0 ? value : undefined)),
     Config.orElse(() => Config.succeed(undefined)),
   )
+const positiveIntegerWithDefault = (name: string, fallback: number) =>
+  Config.number(name).pipe(
+    Config.map((value) => (Number.isInteger(value) && value > 0 ? value : fallback)),
+    Config.orElse(() => Config.succeed(fallback)),
+  )
+export const DEFAULT_SUBAGENT_TIMEOUT_MS = 30 * 60_000
+export const DEFAULT_SUBAGENT_OUTPUT_MAX_CHARS = 8_000
 const experimental = bool("DEEPAGENT_CODE_EXPERIMENTAL")
 const enabledByExperimental = (name: string) =>
   Config.all({ experimental, enabled: Config.boolean(name).pipe(Config.option) }).pipe(
@@ -47,20 +54,24 @@ export class Service extends ConfigService.Service<Service>()("@deepagent-code/R
   // by default. NOTE: this is local, non-durable (process restart loses live jobs); cross-restart
   // recovery + remote/cloud agents are deferred to V3.4 (S1 §10). Disable with =false.
   experimentalBackgroundSubagents: stableOn("DEEPAGENT_CODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS"),
-  // v4.0.4 块1 (I33-3 可靠性): 子 Agent 存活超时(毫秒)。超过则判定挂死/崩溃并触发 takeover(同 fork
-  // 基点重生,受 subagentTakeoverLimit 上限约束)。默认 undefined = 不启用超时(逐字节等价现状:子 Agent
-  // 可无限期运行,长任务不被误杀) —— 保守默认,回滚安全。设为正整数毫秒才启用。
-  subagentTimeoutMs: positiveInteger("DEEPAGENT_CODE_SUBAGENT_TIMEOUT_MS"),
+  // Attempt wall limit. A provider/tool that never returns cannot leave the parent blocked forever:
+  // expiry cancels the old fiber and starts a bounded takeover from the same fork point. Missing,
+  // malformed, zero, and negative values all fail closed to the production default.
+  subagentTimeoutMs: positiveIntegerWithDefault("DEEPAGENT_CODE_SUBAGENT_TIMEOUT_MS", DEFAULT_SUBAGENT_TIMEOUT_MS),
   // v4.0.4 块1: 单个子 Agent 任务被 takeover(超时/崩溃后重生)的最大次数。达上限仍失败则上报主 Agent。
   // 默认 undefined ⇒ 代码内回退到 2。防无限接管。
   subagentTakeoverLimit: positiveInteger("DEEPAGENT_CODE_SUBAGENT_TAKEOVER_LIMIT"),
-  // v4.0.4 块1 (I33-4): 子 Agent 结果注入父会话的有界长度(字符数)。超过则父只收截断摘要 + 指向子
-  // session 的引用(全量 text 不丢,仍在子 session 可查)。默认 undefined = 全量注入(逐字节等价现状)。
-  subagentOutputMaxChars: positiveInteger("DEEPAGENT_CODE_SUBAGENT_OUTPUT_MAX_CHARS"),
+  // Parent injection is bounded by default. The complete result remains durable in the child Session
+  // and the truncated envelope carries the task_read recovery pointer.
+  subagentOutputMaxChars: positiveIntegerWithDefault(
+    "DEEPAGENT_CODE_SUBAGENT_OUTPUT_MAX_CHARS",
+    DEFAULT_SUBAGENT_OUTPUT_MAX_CHARS,
+  ),
   subagentResearchStepLimit: positiveInteger("DEEPAGENT_CODE_SUBAGENT_RESEARCH_STEP_LIMIT"),
   subagentResearchTokenLimit: positiveInteger("DEEPAGENT_CODE_SUBAGENT_RESEARCH_TOKEN_LIMIT"),
   subagentResearchWallMs: positiveInteger("DEEPAGENT_CODE_SUBAGENT_RESEARCH_WALL_MS"),
   subagentNoProgressLimit: positiveInteger("DEEPAGENT_CODE_SUBAGENT_NO_PROGRESS_LIMIT"),
+  subagentPermissionTimeoutMs: positiveInteger("DEEPAGENT_CODE_SUBAGENT_PERMISSION_TIMEOUT_MS"),
   experimentalLspTy: bool("DEEPAGENT_CODE_EXPERIMENTAL_LSP_TY"),
   experimentalLspTool: enabledByExperimental("DEEPAGENT_CODE_EXPERIMENTAL_LSP_TOOL"),
   // V3.8 App-A C2.5 (Stage 5): query_log tool — lets the agent retrieve slices of the append-only
@@ -93,6 +104,37 @@ export class Service extends ConfigService.Service<Service>()("@deepagent-code/R
   experimentalPlanMode: enabledByExperimental("DEEPAGENT_CODE_EXPERIMENTAL_PLAN_MODE"),
   experimentalEventSystem: enabledByExperimental("DEEPAGENT_CODE_EXPERIMENTAL_EVENT_SYSTEM"),
   experimentalWorkspaces: enabledByExperimental("DEEPAGENT_CODE_EXPERIMENTAL_WORKSPACES"),
+  // Four-graph federation rollout is owner-based and defaults OFF. These flags expose capability
+  // requests only; ContextFederationRollout.resolve applies the dependency and parity gates before
+  // any production owner may activate.
+  contextFederationShadow: bool("DEEPAGENT_CODE_CONTEXT_FEDERATION_SHADOW"),
+  locationIndexesV2Shadow: bool("DEEPAGENT_CODE_LOCATION_INDEXES_V2_SHADOW"),
+  contextProjectionV2: bool("DEEPAGENT_CODE_CONTEXT_PROJECTION_V2"),
+  contextQueryToolsV2: bool("DEEPAGENT_CODE_CONTEXT_QUERY_TOOLS_V2"),
+  coreV2ExecutionOwner: bool("DEEPAGENT_CODE_CORE_V2_EXECUTION_OWNER"),
+  contextFederationKillSwitch: bool("DEEPAGENT_CODE_CONTEXT_FEDERATION_KILL_SWITCH"),
+  contextFederationRolloutStage: Config.string("DEEPAGENT_CODE_CONTEXT_FEDERATION_ROLLOUT_STAGE").pipe(
+    Config.withDefault("all"),
+    Config.map((value) => {
+      if (value === "internal") return value
+      if (value === "percentage") return value
+      if (value === "all") return value
+      return "shadow" as const
+    }),
+  ),
+  contextFederationRolloutPercent: Config.number("DEEPAGENT_CODE_CONTEXT_FEDERATION_ROLLOUT_PERCENT").pipe(
+    Config.withDefault(0),
+    Config.map((value) => (Number.isFinite(value) ? Math.max(0, Math.min(100, value)) : 0)),
+  ),
+  contextFederationInternalProjects: Config.string("DEEPAGENT_CODE_CONTEXT_FEDERATION_INTERNAL_PROJECTS").pipe(
+    Config.withDefault(""),
+    Config.map((value) =>
+      value
+        .split(",")
+        .map((project) => project.trim())
+        .filter(Boolean),
+    ),
+  ),
   // V3.9 §C: Expert Panel（会诊机制）— differentiated expert lenses answer one frozen high-risk
   // question independently, aggregated by a deterministic non-LLM Arbiter. SHIPS ON by default (mode
   // redesign: mature capabilities are always present, flags are only a kill-switch — mirrors Codex's
@@ -170,6 +212,10 @@ export class Service extends ConfigService.Service<Service>()("@deepagent-code/R
   microbatchNarrowLimit: positiveInteger("DEEPAGENT_CODE_MICROBATCH_NARROW_LIMIT"),
   bashDefaultTimeoutMs: positiveInteger("DEEPAGENT_CODE_EXPERIMENTAL_BASH_DEFAULT_TIMEOUT_MS"),
   experimentalNativeLlm: bool("DEEPAGENT_CODE_EXPERIMENTAL_NATIVE_LLM"),
+  // Diagnostic-only request assembly event. Default OFF: when enabled, request preparation emits only
+  // Process-local HMAC fingerprints, aggregate counts, and existing request/session identifiers only —
+  // never raw prompt, message, tool, header, metadata, or credential values.
+  assembledRequestFingerprint: bool("DEEPAGENT_CODE_ASSEMBLED_REQUEST_FINGERPRINT"),
   experimentalWebSockets: bool("DEEPAGENT_CODE_EXPERIMENTAL_WEBSOCKETS"),
   // ── V4.0 event-driven Agent-OS — DEFAULT OFF (production-safe, operator opt-in) ──────────────────
   // Per §H3 (Feature Flags: all six ship OFF) and §H1 (staged rollout: shadow → low-risk → push
@@ -247,9 +293,9 @@ export class Service extends ConfigService.Service<Service>()("@deepagent-code/R
   v4Steering: stableOn("DEEPAGENT_CODE_V4_STEERING"),
   // PR-2: Streaming degeneration detector mode for reasoning outputs.
   // "off"    — detector is disabled; all output passes through unmodified.
-  // "shadow" — detector runs and logs hits, but never triggers a circuit break (default).
-  // "enforce"— detector triggers a circuit break on confirmed degeneration (production opt-in).
-  // Set DEEPAGENT_CODE_REASONING_DEGENERATION_MODE=enforce to activate hard enforcement.
+  // "shadow" — detector runs and logs hits, but never triggers a circuit break.
+  // "enforce"— detector triggers a circuit break on confirmed degeneration (default, production-on).
+  // Set DEEPAGENT_CODE_REASONING_DEGENERATION_MODE=shadow or =off to reduce enforcement.
   degenerationDetectorMode: Config.string("DEEPAGENT_CODE_REASONING_DEGENERATION_MODE").pipe(
     Config.withDefault("enforce"),
   ),

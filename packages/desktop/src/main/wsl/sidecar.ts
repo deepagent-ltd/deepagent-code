@@ -33,7 +33,13 @@ export async function spawnWslSidecar(
     "export DEEPAGENT_CODE_CLIENT=desktop",
     `export DEEPAGENT_CODE_SERVER_USERNAME=${shellEscape(username)}`,
     `export DEEPAGENT_CODE_SERVER_PASSWORD=${shellEscape(password)}`,
-    'export XDG_STATE_HOME="$HOME/.local/state"',
+    'export DEEPAGENT_CODE_HOME="$HOME/.deepagent/code"',
+    'export XDG_DATA_HOME="$HOME/.deepagent/code"',
+    'export XDG_CONFIG_HOME="$HOME/.deepagent/code"',
+    'export XDG_CACHE_HOME="$HOME/.deepagent/code/cache"',
+    'export XDG_STATE_HOME="$HOME/.deepagent/code/state"',
+    'export TMPDIR="$HOME/.deepagent/code/tmp"',
+    'mkdir -p "$XDG_CACHE_HOME" "$XDG_STATE_HOME" "$TMPDIR"',
     `exec ${shellEscape(deepagentCode)} --print-logs --log-level ${app.isPackaged ? "WARN" : "INFO"} serve --hostname 0.0.0.0 --port ${port}`,
   ].join("\n")
   const child = spawn("wsl", wslArgs(["bash", "-se"], distro), {

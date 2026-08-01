@@ -1,6 +1,10 @@
 import { describe, expect } from "bun:test"
 import { ConfigProvider, Effect, Layer } from "effect"
-import { RuntimeFlags } from "../../src/effect/runtime-flags"
+import {
+  DEFAULT_SUBAGENT_OUTPUT_MAX_CHARS,
+  DEFAULT_SUBAGENT_TIMEOUT_MS,
+  RuntimeFlags,
+} from "../../src/effect/runtime-flags"
 import { it } from "../lib/effect"
 
 const fromConfig = (input: Record<string, unknown>) =>
@@ -17,6 +21,33 @@ describe("RuntimeFlags", () => {
     }),
   )
 
+  it.effect("four-graph owner rollout flags default OFF and remain independently observable", () =>
+    Effect.gen(function* () {
+      const defaults = yield* readFlags.pipe(Effect.provide(fromConfig({})))
+      expect({
+        contextFederationShadow: defaults.contextFederationShadow,
+        locationIndexesV2Shadow: defaults.locationIndexesV2Shadow,
+        contextProjectionV2: defaults.contextProjectionV2,
+        contextQueryToolsV2: defaults.contextQueryToolsV2,
+        coreV2ExecutionOwner: defaults.coreV2ExecutionOwner,
+      }).toEqual({
+        contextFederationShadow: false,
+        locationIndexesV2Shadow: false,
+        contextProjectionV2: false,
+        contextQueryToolsV2: false,
+        coreV2ExecutionOwner: false,
+      })
+
+      const requested = yield* readFlags.pipe(
+        Effect.provide(fromConfig({ DEEPAGENT_CODE_CONTEXT_FEDERATION_SHADOW: "true" })),
+      )
+      expect(requested.contextFederationShadow).toBe(true)
+      expect(requested.contextProjectionV2).toBe(false)
+      expect(requested.contextQueryToolsV2).toBe(false)
+      expect(requested.coreV2ExecutionOwner).toBe(false)
+    }),
+  )
+
   it.effect("U5: background subagents default ON (stable local capability) and can be disabled with =false", () =>
     Effect.gen(function* () {
       const on = yield* readFlags.pipe(Effect.provide(fromConfig({})))
@@ -25,6 +56,37 @@ describe("RuntimeFlags", () => {
         Effect.provide(fromConfig({ DEEPAGENT_CODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS: "false" })),
       )
       expect(off.experimentalBackgroundSubagents).toBe(false)
+    }),
+  )
+
+  for (const input of [
+    {},
+    { DEEPAGENT_CODE_SUBAGENT_TIMEOUT_MS: "0", DEEPAGENT_CODE_SUBAGENT_OUTPUT_MAX_CHARS: "-1" },
+    { DEEPAGENT_CODE_SUBAGENT_TIMEOUT_MS: "invalid", DEEPAGENT_CODE_SUBAGENT_OUTPUT_MAX_CHARS: "invalid" },
+  ]) {
+    it.effect("subagent supervision and parent output remain bounded for missing or invalid config", () =>
+      Effect.gen(function* () {
+        const flags = yield* readFlags.pipe(Effect.provide(fromConfig(input)))
+
+        expect(flags.subagentTimeoutMs).toBe(DEFAULT_SUBAGENT_TIMEOUT_MS)
+        expect(flags.subagentOutputMaxChars).toBe(DEFAULT_SUBAGENT_OUTPUT_MAX_CHARS)
+      }),
+    )
+  }
+
+  it.effect("accepts positive subagent supervision and output bounds", () =>
+    Effect.gen(function* () {
+      const flags = yield* readFlags.pipe(
+        Effect.provide(
+          fromConfig({
+            DEEPAGENT_CODE_SUBAGENT_TIMEOUT_MS: "1234",
+            DEEPAGENT_CODE_SUBAGENT_OUTPUT_MAX_CHARS: "5678",
+          }),
+        ),
+      )
+
+      expect(flags.subagentTimeoutMs).toBe(1234)
+      expect(flags.subagentOutputMaxChars).toBe(5678)
     }),
   )
 
@@ -104,9 +166,7 @@ describe("RuntimeFlags", () => {
     Effect.gen(function* () {
       // turning ONE still-opt-in flag on must not affect others — operator advances rollout
       // capability by capability. Uses v4ThreadEnabled, which remains OFF-by-default.
-      const flags = yield* readFlags.pipe(
-        Effect.provide(fromConfig({ DEEPAGENT_CODE_V4_THREAD_ENABLED: "true" })),
-      )
+      const flags = yield* readFlags.pipe(Effect.provide(fromConfig({ DEEPAGENT_CODE_V4_THREAD_ENABLED: "true" })))
       expect(flags.v4ThreadEnabled).toBe(true)
       expect(flags.v4EventDrivenIm).toBe(false)
       expect(flags.v4FileUploadEnabled).toBe(false)
@@ -366,6 +426,16 @@ describe("RuntimeFlags", () => {
       }),
     )
   }
+
+  it.effect("parses the subagent permission wait timeout", () =>
+    Effect.gen(function* () {
+      const flags = yield* readFlags.pipe(
+        Effect.provide(fromConfig({ DEEPAGENT_CODE_SUBAGENT_PERMISSION_TIMEOUT_MS: "4321" })),
+      )
+
+      expect(flags.subagentPermissionTimeoutMs).toBe(4321)
+    }),
+  )
 
   for (const input of [
     { name: "absent", config: {}, expected: undefined },

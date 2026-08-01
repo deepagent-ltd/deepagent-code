@@ -292,6 +292,24 @@ describe("RequestExecutor", () => {
     ),
   )
 
+  it.effect("does not retry when the request transport retry budget is zero", () =>
+    Effect.gen(function* () {
+      const executor = yield* RequestExecutor.Service
+      const error = yield* executor.execute(request).pipe(Effect.flip)
+
+      expectLLMError(error)
+      expect(error.reason).toMatchObject({ _tag: "ProviderInternal", status: 503 })
+    }).pipe(
+      Effect.provideService(RequestExecutor.CurrentRetryLimit, 0),
+      Effect.provide(
+        responsesLayer([
+          new Response("busy", { status: 503, headers: { "retry-after-ms": "0" } }),
+          new Response("must not be consumed", { status: 200 }),
+        ]),
+      ),
+    ),
+  )
+
   it.effect("marks 504 and 529 status responses retryable", () =>
     Effect.gen(function* () {
       const failWith = (status: number) =>

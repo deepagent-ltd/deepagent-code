@@ -25,7 +25,7 @@ const shellLayer = Layer.mergeAll(
   CrossSpawnSpawner.defaultLayer,
   FSUtil.defaultLayer,
   Plugin.defaultLayer,
-  Truncate.defaultLayer,
+  Truncate.configuredLayer,
   Config.defaultLayer,
   Agent.defaultLayer,
   RuntimeFlags.defaultLayer,
@@ -1235,6 +1235,21 @@ describe("tool.shell truncation", () => {
         expect(result.output).toContain("1")
       }),
     ),
+  )
+
+  it.live("honors workspace tool_output limits through the production layer", () =>
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirScoped({ config: { tool_output: { max_lines: 10, max_bytes: 1024 * 1024 } } })
+      const result = yield* runIn(
+        tmp,
+        run({
+          command: fill("lines", 20),
+          description: "Generate lines exceeding configured limit",
+        }),
+      )
+      mustTruncate(result)
+      expect(result.output).toContain("...output truncated...")
+    }),
   )
 
   it.live("full output is saved to file when truncated", () =>

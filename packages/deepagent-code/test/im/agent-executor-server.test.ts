@@ -15,10 +15,6 @@ import { SessionPrompt } from "@/session/prompt"
 import { ServerAgentExecutorLive } from "@/im/agent-executor-server"
 
 const emptyContext: AgentContext = {
-  code: undefined,
-  knowledge: [],
-  memory: [],
-  documents: [],
   conversation: { groupID: "g1", recentMessages: [] },
 }
 
@@ -142,5 +138,34 @@ describe("ServerAgentExecutor", () => {
     )
     expect(captured?.workspaceID).toBeUndefined()
     expect(captured?.directory).toBe("/tmp/ws1")
+  })
+
+  it("admits IM conversation as Session input and leaves graph retrieval to SessionPrompt", async () => {
+    let captured: unknown
+    await run(
+      makeLayer({
+        prompt: (input) => {
+          captured = input
+          return Effect.succeed(reply(["ok"]))
+        },
+      }),
+      {
+        ...baseInput,
+        context: {
+          conversation: {
+            groupID: "g1",
+            recentMessages: [
+              { id: "old", sender_id: "u2", sender_type: "user", content: "prior question", created_at: 1 },
+            ],
+          },
+        },
+      },
+    )
+    expect(captured).toMatchObject({
+      parts: [{ type: "text", text: "IM conversation:\nuser:u2: prior question\n\nCurrent message:\nhello" }],
+      metadata: { im: { groupID: "g1", messageID: "m1", userID: "u1" } },
+    })
+    expect(JSON.stringify(captured)).not.toContain("knowledge")
+    expect(JSON.stringify(captured)).not.toContain("documents")
   })
 })

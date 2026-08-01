@@ -39,32 +39,13 @@ export type DocType =
   // version chain IS the plan change history surfaced by U2 — not a knowledge type, so no confidence
   // is required. Persisted under scope "run:<sessionId>".
   | "plan"
-  // --- V3.8 Phase 0 (roadmap C1): three NON-knowledge, derived-data node types added once so later
-  // phases (GraphQuery / IM code bucket / Context-management refactor) never re-touch this union.
+  // --- V3.8 Phase 0: three NON-knowledge, derived-data node types retained for durable compatibility.
   // NONE of these are knowledge: they are excluded from KNOWLEDGE_TYPES (below) and from
   // KNOWLEDGE_DOC_TYPES (durable-knowledge-store.ts) so they never require confidence
   // (assertKnowledgeConfidence) and never pass the retrieve() whitelist. See the comments at each set.
   //
-  // code_symbol (v3.8.1 §B): a code entity node (file / module / top-level symbol). Identity is
-  // slug-derived via allocateId (path/symbol name), NOT content-addressed; the content hash is only
-  // for integrity (INV-2). body carries path/language/symbol/signature; an optional content sha in
-  // extensions is for change-detection only, never identity/dedup. The lightweight indexer that
-  // registers these nodes is Phase 3's concern — this union entry is the only Phase-0 change.
-  //   version-bloat tradeoff (v3.8.1 §B.3): upsert()/update() bump version+1 and write a supersede link
-  //   on every fingerprint change (INV-4, append-only). A frequently-edited code base makes code_symbol
-  //   version files grow linearly.
-  //   ⚠ T4.2 EVALUATION (V4.1): bloat is now bounded on TWO layers before it reaches here —
-  //     (1) content-sha gating in code-indexer.registerFile writes ZERO new versions for an unchanged
-  //         file (a re-index of an unchanged tree bumps nothing), and
-  //     (2) T4.1's mtime gate in code-index-trigger skips the read+hash of an mtime-unchanged file, so
-  //         an unchanged file never even reaches registerFile.
-  //   So a version is created ONLY on a genuine content change — which is semantically correct
-  //   versioning, one version per real edit. The residual (a single file edited many times across a
-  //   long session accumulates that many versions) is low-severity derived data. DECISION: do NOT relax
-  //   the append-only invariant for code_symbol here — the in-place-overwrite option would carve a
-  //   special case into a load-bearing store invariant (INV-4) for a bounded, cosmetic cost. If disk
-  //   growth ever becomes real, prefer a periodic retention sweep of superseded code_symbol versions
-  //   (external to the store's write path) over relaxing append-only. Left as a marker, not relaxed.
+  // code_symbol is a frozen legacy node. Production writers and graph-query consumers were removed in
+  // the four-graph migration; the type remains so old durable stores and Wiki read-only views decode.
   | "code_symbol"
   // ledger (v3.8.0 App-A §C2 Session Ledger): the session's structured, incrementally-maintained
   // authoritative fact ledger (entries {kind: goal|constraint|decision|done|open|next|artifact,
@@ -109,8 +90,7 @@ export type LinkRel =
   | "references" // code_symbol -> doc (design/knowledge): the code references/uses that document
   | "implements" // code_symbol -> requirements: the code implements that requirement
   // V3.9 §A (code-graph deepening) consumes these two + `contains` (below). imports = file-node ->
-  // file-node module edge; calls = symbol-node -> symbol-node call edge. Produced by
-  // code-indexer.indexSymbols from LSP-extracted data, consumed by graph-query BFS.
+  // Legacy code_symbol relations retained so existing durable stores remain readable.
   | "imports" // code_symbol(file) -> code_symbol(file): module/file import edge
   | "calls" // code_symbol(symbol) -> code_symbol(symbol): call edge (callHierarchy-derived)
   // V3.9 §A.2 containment edge: an AST-level symbol child node (identity `path#symbolPath`) hangs off

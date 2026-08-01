@@ -377,6 +377,10 @@ import type {
   SessionChildrenResponses,
   SessionCommandErrors,
   SessionCommandResponses,
+  SessionContextAttemptResolveErrors,
+  SessionContextAttemptResolveResponses,
+  SessionContextDiagnosticsErrors,
+  SessionContextDiagnosticsResponses,
   SessionCreateErrors,
   SessionCreateResponses,
   SessionDeleteErrors,
@@ -8118,6 +8122,91 @@ export class Session2 extends HeyApiClient {
       url: "/session/{sessionID}/unrevert",
       ...options,
       ...params,
+    })
+  }
+
+  /**
+   * Get session context diagnostics
+   *
+   * Inspect four-graph status, opaque evidence, audit availability, and provider attempts.
+   */
+  public contextDiagnostics<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<
+      SessionContextDiagnosticsResponses,
+      SessionContextDiagnosticsErrors,
+      ThrowOnError
+    >({
+      url: "/session/{sessionID}/context",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Resolve an indeterminate provider attempt
+   *
+   * Apply an audited abandon, verified-settle, or risk-acknowledged replay decision.
+   */
+  public contextAttemptResolve<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      attemptID: string
+      directory?: string
+      workspace?: string
+      decision: "abandoned" | "settled" | "replayed"
+      reason: string
+      riskAcknowledged?: boolean
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "path", key: "attemptID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "decision" },
+            { in: "body", key: "reason" },
+            { in: "body", key: "riskAcknowledged" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      SessionContextAttemptResolveResponses,
+      SessionContextAttemptResolveErrors,
+      ThrowOnError
+    >({
+      url: "/session/{sessionID}/context/attempt/{attemptID}/resolve",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
     })
   }
 }
