@@ -202,6 +202,21 @@ export function softLandingDecision(input: {
   }
 }
 
+export function decide(input: {
+  cfg: ConfigV1.Info
+  tokens: SessionV1.Assistant["tokens"]
+  model: Provider.Model
+  outputTokenMax?: number
+}) {
+  const status = overflowStatus({
+    cfg: input.cfg,
+    model: input.model,
+    outputTokenMax: input.outputTokenMax,
+    tokens: tokensUsed(input.tokens),
+  })
+  return { count: status.used, usable: status.hardLine, isOverflow: status.phase === "hard" }
+}
+
 export function isOverflow(input: {
   cfg: ConfigV1.Info
   tokens: SessionV1.Assistant["tokens"]
@@ -210,12 +225,5 @@ export function isOverflow(input: {
 }) {
   // Thin backward-compatible wrapper: overflow == the hard line is crossed. The softLanding layers never
   // change where the hard line sits, so every existing caller keeps its exact semantics.
-  return (
-    overflowStatus({
-      cfg: input.cfg,
-      model: input.model,
-      outputTokenMax: input.outputTokenMax,
-      tokens: tokensUsed(input.tokens),
-    }).phase === "hard"
-  )
+  return decide(input).isOverflow
 }

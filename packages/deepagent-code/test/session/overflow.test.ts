@@ -6,6 +6,7 @@ import {
   overflowStatus,
   softLandingDecision,
   isOverflow,
+  decide,
   usable,
   outputContinuationMax,
   initialSoftLandingState,
@@ -89,6 +90,14 @@ describe("overflowStatus lines", () => {
     // The hard line is byte-identical to isOverflow regardless of the softLanding layers.
     expect(isOverflow({ cfg: c, model: m, tokens: tokensFor(hard - 1) })).toBe(false)
     expect(isOverflow({ cfg: c, model: m, tokens: tokensFor(hard) })).toBe(true)
+  })
+
+  test("compaction.reserved moves the hard trigger", () => {
+    const reserved = cfg({ reserved: 40_000 })
+    const hardWithReserved = usable({ cfg: reserved, model: m })
+    expect(hardWithReserved).toBe(70_000)
+    expect(isOverflow({ cfg: reserved, model: m, tokens: tokensFor(hardWithReserved - 1) })).toBe(false)
+    expect(isOverflow({ cfg: reserved, model: m, tokens: tokensFor(hardWithReserved) })).toBe(true)
   })
 
   test("isOverflow == overflowStatus(...).phase === 'hard'", () => {

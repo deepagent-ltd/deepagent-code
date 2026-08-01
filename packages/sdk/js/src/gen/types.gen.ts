@@ -71,6 +71,7 @@ export type Event =
   | EventAccountRemoved
   | EventAccountSwitched
   | EventFileWatcherUpdated
+  | EventFileWatcherOverflow
   | EventPtyCreated
   | EventPtyUpdated
   | EventPtyExited
@@ -383,6 +384,7 @@ export type AssistantMessage = {
   parentID: string
   modelID: string
   providerID: string
+  providerAttemptID?: string
   mode: string
   agent: string
   path: {
@@ -1499,6 +1501,13 @@ export type GlobalEvent = {
         properties: {
           file: string
           event: "add" | "change" | "unlink"
+        }
+      }
+    | {
+        id: string
+        type: "file.watcher.overflow"
+        properties: {
+          reason: string
         }
       }
     | {
@@ -5688,6 +5697,14 @@ export type EventFileWatcherUpdated = {
   properties: {
     file: string
     event: "add" | "change" | "unlink"
+  }
+}
+
+export type EventFileWatcherOverflow = {
+  id: string
+  type: "file.watcher.overflow"
+  properties: {
+    reason: string
   }
 }
 
@@ -13186,6 +13203,598 @@ export type PartUpdateResponses = {
 }
 
 export type PartUpdateResponse = PartUpdateResponses[keyof PartUpdateResponses]
+
+export type SessionContextDiagnosticsData = {
+  body?: never
+  path: {
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/session/{sessionID}/context"
+}
+
+export type SessionContextDiagnosticsErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+}
+
+export type SessionContextDiagnosticsError = SessionContextDiagnosticsErrors[keyof SessionContextDiagnosticsErrors]
+
+export type SessionContextDiagnosticsResponses = {
+  /**
+   * Session context diagnostics
+   */
+  200: {
+    sessionId: string
+    selections: Array<{
+      selectionId: string
+      activityId: string
+      activityState: "active" | "settled" | "failed" | "interrupted"
+      revision: number
+      summary: "complete" | "partial" | "empty"
+      statuses: Array<
+        | {
+            graph: "code" | "knowledge" | "memory" | "documents"
+            revisions: Array<
+              | {
+                  source: string
+                  revision: string
+                  state: "ready"
+                }
+              | {
+                  source: string
+                  revision?: string
+                  state: "cold" | "indexing" | "stale" | "degraded" | "unavailable" | "denied"
+                  reasonCode:
+                    | "cold_start"
+                    | "bootstrap_complete_no_match"
+                    | "bootstrap_budget_exhausted"
+                    | "bootstrap_timeout"
+                    | "fresh_timeout"
+                    | "refresh_failed"
+                    | "parser_unsupported"
+                    | "lsp_unavailable"
+                    | "overlay_unavailable"
+                    | "scope_denied"
+                    | "provider_egress_denied"
+                    | "source_timeout"
+                    | "source_error"
+                    | "partial_sources"
+                    | "source_disabled"
+                    | "link_refresh_pending"
+                }
+            >
+            capabilities?: Array<string>
+            kind: "complete"
+            state: "ready"
+            outcome: "matched"
+          }
+        | {
+            graph: "code" | "knowledge" | "memory" | "documents"
+            revisions: Array<
+              | {
+                  source: string
+                  revision: string
+                  state: "ready"
+                }
+              | {
+                  source: string
+                  revision?: string
+                  state: "cold" | "indexing" | "stale" | "degraded" | "unavailable" | "denied"
+                  reasonCode:
+                    | "cold_start"
+                    | "bootstrap_complete_no_match"
+                    | "bootstrap_budget_exhausted"
+                    | "bootstrap_timeout"
+                    | "fresh_timeout"
+                    | "refresh_failed"
+                    | "parser_unsupported"
+                    | "lsp_unavailable"
+                    | "overlay_unavailable"
+                    | "scope_denied"
+                    | "provider_egress_denied"
+                    | "source_timeout"
+                    | "source_error"
+                    | "partial_sources"
+                    | "source_disabled"
+                    | "link_refresh_pending"
+                }
+            >
+            capabilities?: Array<string>
+            kind: "complete"
+            state: "ready"
+            outcome: "empty"
+            reasonCode?: "bootstrap_complete_no_match"
+          }
+        | {
+            graph: "code" | "knowledge" | "memory" | "documents"
+            revisions: Array<
+              | {
+                  source: string
+                  revision: string
+                  state: "ready"
+                }
+              | {
+                  source: string
+                  revision?: string
+                  state: "cold" | "indexing" | "stale" | "degraded" | "unavailable" | "denied"
+                  reasonCode:
+                    | "cold_start"
+                    | "bootstrap_complete_no_match"
+                    | "bootstrap_budget_exhausted"
+                    | "bootstrap_timeout"
+                    | "fresh_timeout"
+                    | "refresh_failed"
+                    | "parser_unsupported"
+                    | "lsp_unavailable"
+                    | "overlay_unavailable"
+                    | "scope_denied"
+                    | "provider_egress_denied"
+                    | "source_timeout"
+                    | "source_error"
+                    | "partial_sources"
+                    | "source_disabled"
+                    | "link_refresh_pending"
+                }
+            >
+            capabilities?: Array<string>
+            kind: "partial"
+            state: "cold" | "indexing" | "stale" | "degraded"
+            outcome: "partial"
+            reasonCode:
+              | "cold_start"
+              | "bootstrap_complete_no_match"
+              | "bootstrap_budget_exhausted"
+              | "bootstrap_timeout"
+              | "fresh_timeout"
+              | "refresh_failed"
+              | "parser_unsupported"
+              | "lsp_unavailable"
+              | "overlay_unavailable"
+              | "scope_denied"
+              | "provider_egress_denied"
+              | "source_timeout"
+              | "source_error"
+              | "partial_sources"
+              | "source_disabled"
+              | "link_refresh_pending"
+          }
+        | {
+            graph: "code" | "knowledge" | "memory" | "documents"
+            revisions: Array<
+              | {
+                  source: string
+                  revision: string
+                  state: "ready"
+                }
+              | {
+                  source: string
+                  revision?: string
+                  state: "cold" | "indexing" | "stale" | "degraded" | "unavailable" | "denied"
+                  reasonCode:
+                    | "cold_start"
+                    | "bootstrap_complete_no_match"
+                    | "bootstrap_budget_exhausted"
+                    | "bootstrap_timeout"
+                    | "fresh_timeout"
+                    | "refresh_failed"
+                    | "parser_unsupported"
+                    | "lsp_unavailable"
+                    | "overlay_unavailable"
+                    | "scope_denied"
+                    | "provider_egress_denied"
+                    | "source_timeout"
+                    | "source_error"
+                    | "partial_sources"
+                    | "source_disabled"
+                    | "link_refresh_pending"
+                }
+            >
+            capabilities?: Array<string>
+            kind: "blocked"
+            state: "unavailable" | "denied"
+            outcome: "not_queried"
+            reasonCode:
+              | "cold_start"
+              | "bootstrap_complete_no_match"
+              | "bootstrap_budget_exhausted"
+              | "bootstrap_timeout"
+              | "fresh_timeout"
+              | "refresh_failed"
+              | "parser_unsupported"
+              | "lsp_unavailable"
+              | "overlay_unavailable"
+              | "scope_denied"
+              | "provider_egress_denied"
+              | "source_timeout"
+              | "source_error"
+              | "partial_sources"
+              | "source_disabled"
+              | "link_refresh_pending"
+          }
+        | {
+            graph: "code" | "knowledge" | "memory" | "documents"
+            revisions: Array<unknown>
+            capabilities?: Array<string>
+            kind: "not_queried"
+            state: "not_queried"
+            outcome: "not_queried"
+            reasonCode: "source_disabled"
+          }
+      >
+      evidence: Array<{
+        token: string
+        graph: "code" | "knowledge" | "memory" | "documents"
+        revision: string
+        sensitivity: "public" | "source_code" | "pii" | "secret_adjacent" | "secret"
+        freshness: "current" | "historical" | "expired" | "superseded" | "conflict" | "unknown"
+        score: number
+        reason: string
+        provenance: Array<string>
+        relations: Array<{
+          relation: string
+          token: string
+          freshness: "exact" | "rebound" | "broken"
+        }>
+      }>
+      tokenCount: number
+      stale: boolean
+      nextRevalidationAt: number
+      artifact:
+        | {
+            status: "available"
+            ref: string
+          }
+        | {
+            status: "degraded_unavailable" | "expired" | "unavailable"
+            reasonCode: string
+          }
+      createdAt: number
+    }>
+    attempts: Array<{
+      attemptId: string
+      activityId: string
+      providerTurnSeq: number
+      selectionId: string
+      providerId: string
+      parentAttemptId?: string
+      state:
+        | "prepared"
+        | "dispatching"
+        | "streaming"
+        | "settled"
+        | "failed"
+        | "indeterminate_after_crash"
+        | "resolved_abandoned"
+        | "resolved_settled"
+        | "resolved_replayed"
+      createdAt: number
+      firstEventAt?: number
+      settledAt?: number
+      errorCode?: string
+      ageMs: number
+      canAbandon: boolean
+      canSettle: boolean
+      canReplay: boolean
+      resolution?: {
+        decision: "abandoned" | "settled" | "replayed"
+        actorType: "user" | "administrator" | "system"
+        actorId: string
+        riskAcknowledged: boolean
+        reason: string
+        createdAt: number
+      }
+    }>
+    metrics: {
+      selections: number
+      tokens: number
+      shadow: {
+        comparisons: number
+        legacyKnowledgeRefs: number
+        legacyMemoryRefs: number
+        federated: {
+          code: number
+          knowledge: number
+          memory: number
+          documents: number
+        }
+        knowledgeMemoryDelta: number
+      }
+      graphs: Array<{
+        graph: "code" | "knowledge" | "memory" | "documents"
+        queries: number
+        candidates: number
+        selected: number
+        rejected: number
+        redacted: number
+        averageLatencyMs: number
+        maxLatencyMs: number
+        lastLatencyMs: number
+        lastObservedAt?: number
+        status?:
+          | {
+              graph: "code" | "knowledge" | "memory" | "documents"
+              revisions: Array<
+                | {
+                    source: string
+                    revision: string
+                    state: "ready"
+                  }
+                | {
+                    source: string
+                    revision?: string
+                    state: "cold" | "indexing" | "stale" | "degraded" | "unavailable" | "denied"
+                    reasonCode:
+                      | "cold_start"
+                      | "bootstrap_complete_no_match"
+                      | "bootstrap_budget_exhausted"
+                      | "bootstrap_timeout"
+                      | "fresh_timeout"
+                      | "refresh_failed"
+                      | "parser_unsupported"
+                      | "lsp_unavailable"
+                      | "overlay_unavailable"
+                      | "scope_denied"
+                      | "provider_egress_denied"
+                      | "source_timeout"
+                      | "source_error"
+                      | "partial_sources"
+                      | "source_disabled"
+                      | "link_refresh_pending"
+                  }
+              >
+              capabilities?: Array<string>
+              kind: "complete"
+              state: "ready"
+              outcome: "matched"
+            }
+          | {
+              graph: "code" | "knowledge" | "memory" | "documents"
+              revisions: Array<
+                | {
+                    source: string
+                    revision: string
+                    state: "ready"
+                  }
+                | {
+                    source: string
+                    revision?: string
+                    state: "cold" | "indexing" | "stale" | "degraded" | "unavailable" | "denied"
+                    reasonCode:
+                      | "cold_start"
+                      | "bootstrap_complete_no_match"
+                      | "bootstrap_budget_exhausted"
+                      | "bootstrap_timeout"
+                      | "fresh_timeout"
+                      | "refresh_failed"
+                      | "parser_unsupported"
+                      | "lsp_unavailable"
+                      | "overlay_unavailable"
+                      | "scope_denied"
+                      | "provider_egress_denied"
+                      | "source_timeout"
+                      | "source_error"
+                      | "partial_sources"
+                      | "source_disabled"
+                      | "link_refresh_pending"
+                  }
+              >
+              capabilities?: Array<string>
+              kind: "complete"
+              state: "ready"
+              outcome: "empty"
+              reasonCode?: "bootstrap_complete_no_match"
+            }
+          | {
+              graph: "code" | "knowledge" | "memory" | "documents"
+              revisions: Array<
+                | {
+                    source: string
+                    revision: string
+                    state: "ready"
+                  }
+                | {
+                    source: string
+                    revision?: string
+                    state: "cold" | "indexing" | "stale" | "degraded" | "unavailable" | "denied"
+                    reasonCode:
+                      | "cold_start"
+                      | "bootstrap_complete_no_match"
+                      | "bootstrap_budget_exhausted"
+                      | "bootstrap_timeout"
+                      | "fresh_timeout"
+                      | "refresh_failed"
+                      | "parser_unsupported"
+                      | "lsp_unavailable"
+                      | "overlay_unavailable"
+                      | "scope_denied"
+                      | "provider_egress_denied"
+                      | "source_timeout"
+                      | "source_error"
+                      | "partial_sources"
+                      | "source_disabled"
+                      | "link_refresh_pending"
+                  }
+              >
+              capabilities?: Array<string>
+              kind: "partial"
+              state: "cold" | "indexing" | "stale" | "degraded"
+              outcome: "partial"
+              reasonCode:
+                | "cold_start"
+                | "bootstrap_complete_no_match"
+                | "bootstrap_budget_exhausted"
+                | "bootstrap_timeout"
+                | "fresh_timeout"
+                | "refresh_failed"
+                | "parser_unsupported"
+                | "lsp_unavailable"
+                | "overlay_unavailable"
+                | "scope_denied"
+                | "provider_egress_denied"
+                | "source_timeout"
+                | "source_error"
+                | "partial_sources"
+                | "source_disabled"
+                | "link_refresh_pending"
+            }
+          | {
+              graph: "code" | "knowledge" | "memory" | "documents"
+              revisions: Array<
+                | {
+                    source: string
+                    revision: string
+                    state: "ready"
+                  }
+                | {
+                    source: string
+                    revision?: string
+                    state: "cold" | "indexing" | "stale" | "degraded" | "unavailable" | "denied"
+                    reasonCode:
+                      | "cold_start"
+                      | "bootstrap_complete_no_match"
+                      | "bootstrap_budget_exhausted"
+                      | "bootstrap_timeout"
+                      | "fresh_timeout"
+                      | "refresh_failed"
+                      | "parser_unsupported"
+                      | "lsp_unavailable"
+                      | "overlay_unavailable"
+                      | "scope_denied"
+                      | "provider_egress_denied"
+                      | "source_timeout"
+                      | "source_error"
+                      | "partial_sources"
+                      | "source_disabled"
+                      | "link_refresh_pending"
+                  }
+              >
+              capabilities?: Array<string>
+              kind: "blocked"
+              state: "unavailable" | "denied"
+              outcome: "not_queried"
+              reasonCode:
+                | "cold_start"
+                | "bootstrap_complete_no_match"
+                | "bootstrap_budget_exhausted"
+                | "bootstrap_timeout"
+                | "fresh_timeout"
+                | "refresh_failed"
+                | "parser_unsupported"
+                | "lsp_unavailable"
+                | "overlay_unavailable"
+                | "scope_denied"
+                | "provider_egress_denied"
+                | "source_timeout"
+                | "source_error"
+                | "partial_sources"
+                | "source_disabled"
+                | "link_refresh_pending"
+            }
+          | {
+              graph: "code" | "knowledge" | "memory" | "documents"
+              revisions: Array<unknown>
+              capabilities?: Array<string>
+              kind: "not_queried"
+              state: "not_queried"
+              outcome: "not_queried"
+              reasonCode: "source_disabled"
+            }
+      }>
+      alerts: Array<{
+        graph: "code" | "knowledge" | "memory" | "documents"
+        state: "ready" | "cold" | "indexing" | "stale" | "degraded" | "unavailable" | "denied" | "not_queried"
+        reasonCode: string
+      }>
+    }
+  }
+}
+
+export type SessionContextDiagnosticsResponse =
+  SessionContextDiagnosticsResponses[keyof SessionContextDiagnosticsResponses]
+
+export type SessionContextAttemptResolveData = {
+  body?: {
+    decision: "abandoned" | "settled" | "replayed"
+    reason: string
+    riskAcknowledged?: boolean
+  }
+  path: {
+    sessionID: string
+    attemptID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/session/{sessionID}/context/attempt/{attemptID}/resolve"
+}
+
+export type SessionContextAttemptResolveErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+}
+
+export type SessionContextAttemptResolveError =
+  SessionContextAttemptResolveErrors[keyof SessionContextAttemptResolveErrors]
+
+export type SessionContextAttemptResolveResponses = {
+  /**
+   * Resolved provider attempt
+   */
+  200: {
+    attemptId: string
+    activityId: string
+    providerTurnSeq: number
+    selectionId: string
+    providerId: string
+    parentAttemptId?: string
+    state:
+      | "prepared"
+      | "dispatching"
+      | "streaming"
+      | "settled"
+      | "failed"
+      | "indeterminate_after_crash"
+      | "resolved_abandoned"
+      | "resolved_settled"
+      | "resolved_replayed"
+    createdAt: number
+    firstEventAt?: number
+    settledAt?: number
+    errorCode?: string
+    ageMs: number
+    canAbandon: boolean
+    canSettle: boolean
+    canReplay: boolean
+    resolution?: {
+      decision: "abandoned" | "settled" | "replayed"
+      actorType: "user" | "administrator" | "system"
+      actorId: string
+      riskAcknowledged: boolean
+      reason: string
+      createdAt: number
+    }
+  }
+}
+
+export type SessionContextAttemptResolveResponse =
+  SessionContextAttemptResolveResponses[keyof SessionContextAttemptResolveResponses]
 
 export type SyncStartData = {
   body?: never

@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url"
 import { app, utilityProcess } from "electron"
 import type { Details } from "electron"
 import { getLogger } from "./logging"
-import { getUserShell, loadShellEnv } from "./shell-env"
+import { getUserShell, loadShellEnv, shouldLoadShellEnv } from "./shell-env"
 import { getStore } from "./store"
 import { DEFAULT_SERVER_URL_KEY } from "./store-keys"
 
@@ -25,7 +25,6 @@ const SIDECAR_START_STALL_TIMEOUT = 60_000
 const SIDECAR_STOP_TIMEOUT = 6_000
 
 type SpawnLocalServerOptions = {
-  userDataPath: string
   onStdout?: (message: string) => void
   onStderr?: (message: string) => void
   onExit?: (code: number) => void
@@ -45,15 +44,23 @@ export function setDefaultServerUrl(url: string | null) {
   getStore().delete(DEFAULT_SERVER_URL_KEY)
 }
 
-export function preferAppEnv(userDataPath: string) {
-  const shell = process.platform === "win32" ? null : getUserShell()
+export function preferAppEnv(dataRoot: string) {
+  const shell = process.platform === "win32" || !shouldLoadShellEnv() ? null : getUserShell()
   Object.assign(process.env, {
     ...(shell ? loadShellEnv(shell, getLogger()) : null),
     DEEPAGENT_CODE_EXPERIMENTAL_ICON_DISCOVERY: "true",
     DEEPAGENT_CODE_EXPERIMENTAL_FILEWATCHER: "true",
     DEEPAGENT_CODE_CLIENT: "desktop",
-    XDG_STATE_HOME: process.env.XDG_STATE_HOME ?? userDataPath,
+    DEEPAGENT_CODE_HOME: dataRoot,
+    XDG_DATA_HOME: dataRoot,
+    XDG_CONFIG_HOME: dataRoot,
+    XDG_CACHE_HOME: join(dataRoot, "cache"),
+    XDG_STATE_HOME: join(dataRoot, "state"),
+    TMPDIR: join(dataRoot, "tmp"),
+    TMP: join(dataRoot, "tmp"),
+    TEMP: join(dataRoot, "tmp"),
   })
+  delete process.env.DEEPAGENT_CODE_CONFIG_DIR
 }
 
 export async function spawnLocalServer(
@@ -149,7 +156,6 @@ export async function spawnLocalServer(
       hostname,
       port,
       password,
-      userDataPath: options.userDataPath,
     })
   }).catch((error) => {
     if (!exited) child.kill()

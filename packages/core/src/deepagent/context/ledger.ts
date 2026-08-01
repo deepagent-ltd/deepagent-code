@@ -8,8 +8,8 @@ import type { DocumentStore, Doc } from "../document-store"
 // ONE `ledger` DocType doc per session, scope "run:<sessionId>", whose body is the serialized entry
 // array. Every incremental update upserts that doc; the DocumentStore supersede chain (INV-4) IS the
 // ledger change history. `ledger` is a NON-knowledge type (KNOWLEDGE_TYPES / KNOWLEDGE_DOC_TYPES
-// exclude it, Phase 0) so it carries no confidence and never enters knowledge retrieval — the Curator
-// reaches it through GraphQuery's documentStore path, not retrieve().
+// exclude it, Phase 0) so it carries no confidence and never enters knowledge retrieval. Session-owned
+// consumers read it through the durable document store.
 
 export type LedgerEntryKind = "goal" | "constraint" | "decision" | "done" | "open" | "next" | "artifact"
 export type LedgerEntryStatus = "active" | "done" | "superseded"
@@ -135,10 +135,10 @@ export const recallCandidates = (ledger: Ledger): readonly LedgerEntry[] =>
 // --- persistence (ledger DocType, run-scoped) ---
 //
 // Each entry is persisted as its OWN `ledger` doc (idSlug = entry.id). This is deliberate: it is what
-// lets the Curator's relevance recall run through the shared GraphQuery service over individual
-// entries (a per-entry node with its own text surface) instead of one opaque blob — matching C2
+// lets Session-owned relevance selection work over individual entries (a per-entry node with its own
+// text surface) instead of one opaque blob — matching C2
 // ("每条带 id、时间、来源消息、状态 ... 可按相关性检索、可追溯"). The full entry is round-tripped in
-// `extensions.entry`; description/body/tags carry the keyword surface GraphQuery scores against. An
+// `extensions.entry`; description/body/tags carry the keyword surface used by selectors. An
 // unchanged entry upsert is a fingerprint no-op (INV-4), so re-persisting a stable ledger is cheap.
 
 const ledgerScope = (sessionId: string): string => `run:${sessionId}`

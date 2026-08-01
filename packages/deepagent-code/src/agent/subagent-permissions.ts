@@ -1,6 +1,5 @@
 import { PermissionV1 } from "@deepagent-code/core/v1/permission"
 import { evaluate as evaluatePermission } from "../permission"
-import type { Permission } from "../permission"
 import type { Agent } from "./agent"
 import { Effect } from "effect"
 import { Log } from "@deepagent-code/core/util/log"
@@ -27,15 +26,22 @@ const log = Log.create({ service: "subagent-permissions" })
 
 /**
  * I33-3: is this subagent WRITE-type (defaults to worktree isolation) or READ-ONLY (defaults to
- * shared parent dir)? Evaluates the subagent's own permission ruleset for each edit-class tool via the
- * same `Permission.evaluate` the runtime uses (last matching rule wins; unmatched ⇒ "ask", which is
- * NOT "deny" ⇒ still write-capable). A subagent is read-only only when EVERY edit-class permission
- * resolves to "deny". Pure + exported for unit testing; no I/O.
+ * shared parent dir)? A subagent is read-only only when its ruleset denies every resource for every
+ * edit-class permission. Checking one synthetic resource is insufficient: a common least-privilege
+ * ruleset denies `*` and then allows one output path. Such an agent is still write-capable and must
+ * be isolated. Pure + exported for unit testing; no I/O.
  */
 export function subagentIsWriteType(subagent: Agent.Info): boolean {
-  return EDIT_CLASS_PERMISSIONS.some(
-    (perm) => evaluatePermission(perm, "**", subagent.permission).action !== "deny",
-  )
+  return EDIT_CLASS_PERMISSIONS.some((permission) => {
+    const rules = subagent.permission.filter((rule) =>
+      evaluatePermission(permission, rule.pattern, [rule]).permission === rule.permission,
+    )
+    const globalDeny = rules.findLastIndex(
+      (rule) => (rule.pattern === "*" || rule.pattern === "**") && rule.action === "deny",
+    )
+    if (globalDeny === -1) return true
+    return rules.slice(globalDeny + 1).some((rule) => rule.action !== "deny")
+  })
 }
 
 /**
@@ -99,12 +105,16 @@ export function filterPrimaryToolsForSubagent(primaryTools: readonly string[] | 
  * Build the `permission` ruleset for a subagent's session when it's spawned
  * via the task tool. Combines:
  *
- * 1. The parent **agent's** edit-class deny rules — Plan Mode's file-edit
+ * 1. The parent **agent's** ordered edit rules — Plan Mode's file-edit
  *    restriction lives on the agent ruleset, not on the session, so a
  *    subagent that only inherited the parent SESSION's permission would
- *    silently bypass it. (#26514)
- * 2. The parent **session's** deny rules and external_directory rules —
- *    same forwarding the original code already did.
+ *    silently bypass it. Preserve matching allow exceptions after a deny-all;
+ *    forwarding only denies turns a narrow parent allowlist into a blanket
+ *    child denial. (#26514)
+ * 2. The parent **session's** deny rules, external_directory rules, and
+ *    narrow allow exceptions that the subagent's own ruleset independently
+ *    permits. This preserves ordered parent allowlists without elevating the
+ *    child to tools it cannot otherwise use.
  * 3. Default `todowrite` and `task` denies if the subagent's own ruleset
  *    doesn't already permit them.
  * 4. V3.9 §E — for a Goal Loop worker (capability `PLAN_WRITE_OWN_GOAL`): a
@@ -129,24 +139,29 @@ export function deriveSubagentSessionPermission(input: {
    */
   allowPlanWriteCapability?: boolean
 }): PermissionV1.Ruleset {
-  // F5: use evaluate (not presence check) so "ask" does NOT count as delegation capability.
-  // A subagent that has only "ask"-level task permission cannot further delegate; only an explicit
-  // "allow" rule in the subagent's own permission set permits it. This preserves the default deny
-  // for researcher/reviewer/explore/goal-worker (all have `"*": "deny"` which covers "task") and
-  // keeps custom agents with explicit `task: allow` rules working.
-  const canTask = evaluatePermission("task", "*", input.subagent.permission).action === "allow"
-  const canTodo = evaluatePermission("todowrite", "*", input.subagent.permission).action === "allow"
+  // F5: an explicit allow for any target is enough to preserve the subagent's own ordered task rules.
+  // Evaluating only the literal "*" target loses narrow exceptions such as
+  // `task: { "*": "deny", worker: "allow" }`, then the derived session-level deny overrides that
+  // legitimate target. Ask rules still do not count because the action must be exactly "allow".
+  const canTask = input.subagent.permission.some((rule) => rule.permission === "task" && rule.action === "allow")
+  const canTodo = input.subagent.permission.some(
+    (rule) => rule.permission === "todowrite" && rule.action === "allow",
+  )
   // V3.9 §E: controlled relaxation — a Goal Loop worker gets plan-write ONLY when it BOTH declares the
   // capability in its Registry entry AND the call site opted in (the flag-gated goal-loop wiring). Both
   // conditions are required, so ordinary subagents — and any caller with the flag off — never get it.
   const canPlanOwnGoal =
     (input.allowPlanWriteCapability ?? false) && (input.subagent.capabilities?.includes(PLAN_WRITE_OWN_GOAL) ?? false)
-  const parentAgentDenies =
-    input.parentAgent?.permission.filter((rule) => rule.action === "deny" && rule.permission === "edit") ?? []
+  const parentAgentEditRules = input.parentAgent?.permission.filter((rule) => rule.permission === "edit") ?? []
   return [
-    ...parentAgentDenies,
+    ...parentAgentEditRules,
     ...input.parentSessionPermission.filter(
-      (rule) => rule.permission === "external_directory" || rule.action === "deny",
+      (rule) =>
+        rule.permission === "external_directory" ||
+        rule.action === "deny" ||
+        (rule.action === "allow" &&
+          !rule.permission.includes("*") &&
+          evaluatePermission(rule.permission, rule.pattern, input.subagent.permission).action === "allow"),
     ),
     // V3.9 §E: a Goal Loop worker may write its OWN goal's plan (bounded by
     // run:<sessionId> scope isolation). `plan: allow` is the real gate for the

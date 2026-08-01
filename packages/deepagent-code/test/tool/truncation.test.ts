@@ -1,6 +1,6 @@
 import { describe, test, expect } from "bun:test"
 import { ConfigV1 } from "@deepagent-code/core/v1/config/config"
-import { NodeFileSystem } from "@effect/platform-node"
+import { NodeFileSystem, NodePath } from "@effect/platform-node"
 import { FSUtil } from "@deepagent-code/core/fs-util"
 import { Effect, FileSystem, Layer } from "effect"
 import { Truncate } from "@/tool/truncate"
@@ -19,10 +19,13 @@ const it = testEffect(Layer.mergeAll(Truncate.defaultLayer, NodeFileSystem.layer
 
 const configuredLayer = (cfg: ConfigV1.Info) =>
   Layer.mergeAll(
-    Truncate.defaultLayer,
+    Truncate.layer.pipe(
+      Layer.provide(TestConfig.layer({ get: () => Effect.succeed(cfg) })),
+      Layer.provide(FSUtil.defaultLayer),
+      Layer.provide(NodePath.layer),
+    ),
     NodeFileSystem.layer,
     FSUtil.defaultLayer,
-    TestConfig.layer({ get: () => Effect.succeed(cfg) }),
   )
 const configuredIt = (cfg: ConfigV1.Info) => testEffect(configuredLayer(cfg))
 

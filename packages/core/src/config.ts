@@ -24,6 +24,7 @@ import { ConfigProvider } from "./config/provider"
 import { ConfigReference } from "./config/reference"
 import { ConfigToolOutput } from "./config/tool-output"
 import { ConfigWatcher } from "./config/watcher"
+import { ConfigVariable } from "./config/variable"
 import { ConfigV1 } from "./v1/config/config"
 import { ConfigMigrateV1 } from "./v1/config/migrate"
 
@@ -150,7 +151,11 @@ export const layer = Layer.effect(
       if (!text) return
 
       const errors: ParseError[] = []
-      const input: unknown = parse(text, errors, { allowTrailingComma: true })
+      const input: unknown = parse(
+        yield* ConfigVariable.substitute({ text, path: filepath, filesystem: fs }),
+        errors,
+        { allowTrailingComma: true },
+      )
       if (errors.length) return
 
       const info = Option.getOrUndefined(

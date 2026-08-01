@@ -130,10 +130,6 @@ function executeSingleAgent(input: {
       .pipe(
         Effect.catch(() =>
           Effect.succeed({
-            code: [],
-            knowledge: [],
-            memory: [],
-            documents: [],
             conversation: { groupID: input.groupID, recentMessages: [] },
           }),
         ),

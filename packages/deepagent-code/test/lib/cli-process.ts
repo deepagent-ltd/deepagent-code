@@ -72,6 +72,7 @@ function isolatedEnv(home: string, configJson: string): Record<string, string> {
     DEEPAGENT_CODE_DISABLE_AUTOCOMPACT: "1",
     DEEPAGENT_CODE_DISABLE_MODELS_FETCH: "1",
     DEEPAGENT_CODE_AUTH_CONTENT: "{}",
+    DEEPAGENT_MODE: "general",
   }
 }
 

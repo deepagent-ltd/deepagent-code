@@ -13,16 +13,17 @@
 
 import { stat } from "node:fs/promises"
 import { setTimeout as sleep } from "node:timers/promises"
+import { Global } from "@deepagent-code/core/global"
+import { DEBUG_WORKSPACE_DATA_FILE } from "../src/control-plane/dev/debug-workspace-path"
 
-const DEV_DATA_FILE = "/tmp/deepagent-code-workspace-dev-data.json"
 const RESTART_POLL_INTERVAL = 250
 
 async function readData() {
-  return await Bun.file(DEV_DATA_FILE).json()
+  return await Bun.file(DEBUG_WORKSPACE_DATA_FILE).json()
 }
 
 async function readDataMtime() {
-  return await stat(DEV_DATA_FILE)
+  return await stat(DEBUG_WORKSPACE_DATA_FILE)
     .then((info) => info.mtimeMs)
     .catch((error) => {
       if (typeof error === "object" && error && "code" in error && error.code === "ENOENT") {
@@ -66,7 +67,11 @@ function startDevServer(data: any) {
     env: {
       ...process.env,
       ...env,
-      XDG_DATA_HOME: "/tmp/data",
+      XDG_DATA_HOME: Global.Path.data,
+      XDG_CONFIG_HOME: Global.Path.config,
+      XDG_CACHE_HOME: Global.Path.cache,
+      XDG_STATE_HOME: Global.Path.state,
+      TMPDIR: Global.Path.tmp,
     },
     stdin: "inherit",
     stdout: "inherit",

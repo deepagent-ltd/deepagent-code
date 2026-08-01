@@ -3,7 +3,7 @@ import { Context, Deferred, Effect, Fiber, Layer, Logger } from "effect"
 import { CrossSpawnSpawner } from "@deepagent-code/core/cross-spawn-spawner"
 import { AppLayer } from "../../src/effect/app-runtime"
 import { EffectBridge } from "@/effect/bridge"
-import { InstanceRef } from "../../src/effect/instance-ref"
+import { EventRouteRef, InstanceRef } from "../../src/effect/instance-ref"
 import * as EffectLogger from "@deepagent-code/core/effect/logger"
 import * as Observability from "@deepagent-code/core/effect/observability"
 import { attach } from "../../src/effect/run-service"
@@ -71,11 +71,12 @@ it.instance(
 )
 
 it.instance(
-  "EffectBridge preserves logger and instance context across async boundaries",
+  "EffectBridge preserves logger, instance, and event route across async boundaries",
   () =>
     Effect.gen(function* () {
       const test = yield* TestInstance
-      const bridge = yield* EffectBridge.make()
+      const eventRoute = { ...test, directory: `${test.directory}/root-session` }
+      const bridge = yield* EffectBridge.make().pipe(Effect.provideService(EventRouteRef, eventRoute))
       const started = yield* Deferred.make<void>()
 
       const fiber = yield* Effect.gen(function* () {
@@ -86,6 +87,7 @@ it.instance(
               Effect.gen(function* () {
                 return {
                   directory: (yield* InstanceRef)?.directory,
+                  eventRoute: (yield* EventRouteRef)?.directory,
                   ...check(yield* Effect.service(Logger.CurrentLoggers)),
                 }
               }),
@@ -98,6 +100,7 @@ it.instance(
       const result = yield* Fiber.join(fiber)
 
       expect(result.directory).toBe(test.directory)
+      expect(result.eventRoute).toBe(eventRoute.directory)
       expect(result.effectLogger).toBe(true)
       expect(result.defaultLogger).toBe(false)
     }).pipe(Effect.provide(Observability.layer)),

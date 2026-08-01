@@ -99,11 +99,26 @@ class ServerAgentExecutor implements AgentExecutor {
       // as a STEER into that running turn instead of erroring/blocking; the running turn produces the
       // reply through its own progress bridge / IM output, so THIS call returns a steering-accepted ack
       // (no fabricated reply). If the session is idle, promptOrSteer runs a normal turn exactly as before.
+      const conversation = input.context.conversation.recentMessages
+        .filter((message) => message.id !== input.messageID)
+        .slice(-20)
+        .map((message) => `${message.sender_type}:${message.sender_id}: ${message.content}`)
+        .join("\n")
       const runPrompt = prompts.promptOrSteer({
         sessionID: session.id,
         agent: input.agentID,
         ...(imModel ? { model: imModel } : {}),
-        parts: [{ type: "text", text: input.content }],
+        parts: [{
+          type: "text",
+          text: conversation ? `IM conversation:\n${conversation}\n\nCurrent message:\n${input.content}` : input.content,
+        }],
+        metadata: {
+          im: {
+            groupID: input.groupID,
+            messageID: input.messageID,
+            userID: input.userID,
+          },
+        },
       })
 
       // Live streaming: when the orchestrator supplied an `onProgress` sink and

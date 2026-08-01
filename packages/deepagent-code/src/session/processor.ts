@@ -306,7 +306,16 @@ export interface Handle {
       attachments?: SessionV1.FilePart[]
     },
   ) => Effect.Effect<void, unknown>
-  readonly process: (streamInput: LLM.StreamInput) => Effect.Effect<Result>
+  readonly process: (
+    streamInput: LLM.StreamInput,
+    providerAttempt?: {
+      readonly attemptId: string
+      readonly dispatching: Effect.Effect<void>
+      readonly streaming: Effect.Effect<void>
+      readonly settled: Effect.Effect<void>
+      readonly failed: (error: unknown) => Effect.Effect<void>
+    },
+  ) => Effect.Effect<Result>
 }
 
 type Input = {
@@ -1096,12 +1105,14 @@ export const layer = Layer.effect(
               usage: value.usage ?? new Usage({}),
               metadata: value.providerMetadata,
             })
-            // Response-side prompt-cache monitor: compare this step's real cache-read ratio to the
-            // previous step and warn if it collapsed while the prompt didn't shrink (suspected cache
-            // break the static system-hash tripwire can't see). Diagnostic only; never throws.
-            yield* Effect.sync(() => LLMRequestPrep.recordCacheHitOutcome(ctx.sessionID, usage.tokens)).pipe(
-              Effect.ignore,
-            )
+            // Compaction summaries use an isolated provider prefix under the same Session ID. They
+            // must not replace the ordinary conversation baseline; the next ordinary request remains
+            // directly comparable with the request before compaction.
+            if (!ctx.assistantMessage.summary) {
+              yield* Effect.sync(() => LLMRequestPrep.recordCacheHitOutcome(ctx.sessionID, usage.tokens)).pipe(
+                Effect.ignore,
+              )
+            }
             if (!ctx.assistantMessage.summary) {
               // TODO(v2): Temporary dual-write while migrating session messages to v2 events.
               if (mirrorAssistant) {
@@ -1153,7 +1164,12 @@ export const layer = Layer.effect(
               .pipe(Effect.ignore, Effect.forkIn(scope))
             if (
               !ctx.assistantMessage.summary &&
-              isOverflow({ cfg: yield* config.get(), tokens: usage.tokens, model: ctx.model })
+              isOverflow({
+                cfg: yield* config.get(),
+                tokens: usage.tokens,
+                model: ctx.model,
+                outputTokenMax: flags.outputTokenMax,
+              })
             ) {
               ctx.needsCompaction = true
             }
@@ -1360,29 +1376,90 @@ export const layer = Layer.effect(
         yield* status.set(ctx.sessionID, { type: "idle" })
       })
 
-      const process = Effect.fn("SessionProcessor.process")(function* (streamInput: LLM.StreamInput) {
+      const process = Effect.fn("SessionProcessor.process")(function* (
+        streamInput: LLM.StreamInput,
+        providerAttempt?: {
+          readonly attemptId: string
+          readonly dispatching: Effect.Effect<void>
+          readonly streaming: Effect.Effect<void>
+          readonly settled: Effect.Effect<void>
+          readonly failed: (error: unknown) => Effect.Effect<void>
+        },
+      ) {
         slog.info("process")
         ctx.needsCompaction = false
         ctx.shouldBreak = (yield* config.get()).experimental?.continue_loop_on_deny !== true
 
         return yield* Effect.gen(function* () {
-          yield* Effect.gen(function* () {
+          const streamed = Effect.gen(function* () {
             ctx.currentText = undefined
             ctx.currentTextID = undefined
             ctx.reasoningMap = {}
             ctx.degenerationDetectors = {}
+            if (providerAttempt && ctx.assistantMessage.providerAttemptID !== providerAttempt.attemptId) {
+              ctx.assistantMessage.providerAttemptID = providerAttempt.attemptId
+              yield* session.updateMessage(ctx.assistantMessage)
+            }
             yield* status.set(ctx.sessionID, { type: "busy" })
+            yield* (providerAttempt?.dispatching ?? Effect.void)
             const stream = llm.stream(streamInput)
+            let firstEvent = true
 
             yield* stream.pipe(
-              Stream.tap((event) => handleEvent(event)),
+              Stream.tap((event) =>
+                Effect.gen(function* () {
+                  if (firstEvent) {
+                    firstEvent = false
+                    yield* (providerAttempt?.streaming ?? Effect.void)
+                  }
+                  yield* handleEvent(event)
+                }),
+              ),
               Stream.takeUntil(() => ctx.needsCompaction),
               Stream.runDrain,
             )
-          }).pipe(
+          })
+          const dispatched = providerAttempt
+            ? streamed
+            : streamed.pipe(
+                Effect.retry(
+                  SessionRetry.policy({
+                    provider: input.model.providerID,
+                    parse,
+                    set: (info) => {
+                      // TODO(v2): Temporary dual-write while migrating session messages to v2 events.
+                      const event = mirrorAssistant
+                        ? events.publish(SessionEvent.Retried, {
+                            sessionID: ctx.sessionID,
+                            attempt: info.attempt,
+                            error: {
+                              message: info.message,
+                              isRetryable: true,
+                            },
+                            timestamp: DateTime.makeUnsafe(Date.now()),
+                          })
+                        : Effect.void
+                      return flushV2Fragments().pipe(
+                        Effect.andThen(event),
+                        Effect.andThen(
+                          status.set(ctx.sessionID, {
+                            type: "retry",
+                            attempt: info.attempt,
+                            message: info.message,
+                            action: info.action,
+                            next: info.next,
+                          }),
+                        ),
+                      )
+                    },
+                  }),
+                ),
+              )
+          yield* dispatched.pipe(
             Effect.onInterrupt(() =>
               Effect.gen(function* () {
                 aborted = true
+                yield* (providerAttempt?.failed(new DOMException("Aborted", "AbortError")) ?? Effect.void)
                 if (!ctx.assistantMessage.error) {
                   yield* halt(new DOMException("Aborted", "AbortError"))
                 }
@@ -1392,39 +1469,11 @@ export const layer = Layer.effect(
               (cause) => !Cause.hasInterruptsOnly(cause),
               (cause) => Effect.fail(Cause.squash(cause)),
             ),
-            Effect.retry(
-              SessionRetry.policy({
-                provider: input.model.providerID,
-                parse,
-                set: (info) => {
-                  // TODO(v2): Temporary dual-write while migrating session messages to v2 events.
-                  const event = mirrorAssistant
-                    ? events.publish(SessionEvent.Retried, {
-                        sessionID: ctx.sessionID,
-                        attempt: info.attempt,
-                        error: {
-                          message: info.message,
-                          isRetryable: true,
-                        },
-                        timestamp: DateTime.makeUnsafe(Date.now()),
-                      })
-                    : Effect.void
-                  return flushV2Fragments().pipe(
-                    Effect.andThen(event),
-                    Effect.andThen(
-                      status.set(ctx.sessionID, {
-                        type: "retry",
-                        attempt: info.attempt,
-                        message: info.message,
-                        action: info.action,
-                        next: info.next,
-                      }),
-                    ),
-                  )
-                },
-              }),
-            ),
+            Effect.tapError((error) => providerAttempt?.failed(error) ?? Effect.void),
             Effect.catch(halt),
+            Effect.tap(() =>
+              providerAttempt && !ctx.assistantMessage.error ? providerAttempt.settled : Effect.void,
+            ),
             Effect.ensuring(cleanup()),
           )
 

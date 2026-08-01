@@ -5,6 +5,9 @@ import * as Log from "@deepagent-code/core/util/log"
 import { QuestionID } from "./schema"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { EventV2 } from "@deepagent-code/core/event"
+import { EventRouteRef, type EventRoute } from "@/effect/instance-ref"
+import { FSUtil } from "@deepagent-code/core/fs-util"
+import type { InstanceContext } from "@/project/instance-context"
 
 const log = Log.create({ service: "question" })
 
@@ -105,6 +108,9 @@ export class NotFoundError extends Schema.TaggedErrorClass<NotFoundError>()("Que
 interface PendingEntry {
   info: Request
   deferred: Deferred.Deferred<ReadonlyArray<Answer>, RejectedError>
+  owner: State
+  origin: InstanceContext
+  route: EventRoute
 }
 
 interface State {
@@ -124,6 +130,7 @@ export interface Interface {
     answers: ReadonlyArray<Answer>
   }) => Effect.Effect<void, NotFoundError>
   readonly reject: (requestID: QuestionID) => Effect.Effect<void, NotFoundError>
+  readonly rejectSession: (sessionID: SessionID) => Effect.Effect<void>
   readonly list: () => Effect.Effect<ReadonlyArray<Request>>
 }
 
@@ -133,6 +140,24 @@ export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const events = yield* EventV2Bridge.Service
+    const allPending = new Map<QuestionID, PendingEntry>()
+    const removePending = (id: QuestionID, entry: PendingEntry) => {
+      if (allPending.get(id) !== entry) return false
+      allPending.delete(id)
+      entry.owner.pending.delete(id)
+      return true
+    }
+    const visibleFrom = (entry: PendingEntry, directory: string, workspaceID: string | undefined) =>
+      (entry.route.workspaceID === undefined || entry.route.workspaceID === workspaceID) &&
+      (FSUtil.resolve(entry.origin.directory) === FSUtil.resolve(directory) ||
+        FSUtil.resolve(entry.route.directory) === FSUtil.resolve(directory))
+    const publishRejected = (entry: PendingEntry) =>
+      events
+        .publish(Event.Rejected, {
+          sessionID: entry.info.sessionID,
+          requestID: entry.info.id,
+        })
+        .pipe(Effect.provideService(EventRouteRef, entry.route))
     const state = yield* InstanceState.make<State>(
       Effect.fn("Question.state")(function* () {
         const state = {
@@ -141,7 +166,9 @@ export const layer = Layer.effect(
 
         yield* Effect.addFinalizer(() =>
           Effect.gen(function* () {
-            for (const item of state.pending.values()) {
+            for (const [id, item] of state.pending) {
+              if (!removePending(id, item)) continue
+              yield* publishRejected(item)
               yield* Deferred.fail(item.deferred, new RejectedError())
             }
             state.pending.clear()
@@ -157,7 +184,13 @@ export const layer = Layer.effect(
       questions: ReadonlyArray<Info>
       tool?: Tool
     }) {
-      const pending = (yield* InstanceState.get(state)).pending
+      const owner = yield* InstanceState.get(state)
+      const origin = yield* InstanceState.context
+      const workspaceID = yield* InstanceState.workspaceID
+      const route = (yield* EventRouteRef) ?? {
+        ...origin,
+        ...(workspaceID ? { workspaceID } : {}),
+      }
       const id = QuestionID.ascending()
       log.info("asking", { id, questions: input.questions.length })
 
@@ -168,13 +201,20 @@ export const layer = Layer.effect(
         questions: input.questions,
         tool: input.tool,
       }
-      pending.set(id, { info, deferred })
+      const entry: PendingEntry = { info, deferred, owner, origin, route }
+      owner.pending.set(id, entry)
+      allPending.set(id, entry)
       yield* events.publish(Event.Asked, info)
 
       return yield* Effect.ensuring(
         Deferred.await(deferred),
-        Effect.sync(() => {
-          pending.delete(id)
+        Effect.gen(function* () {
+          // reply/reject remove the entry before resolving the Deferred. If the
+          // caller is interrupted instead (for example, Session abort), no API
+          // endpoint performs that cleanup, so publish the terminal event here
+          // to keep renderer and CLI question stores from retaining a stale dock.
+          if (!removePending(id, entry)) return
+          yield* publishRejected(entry)
         }),
       )
     })
@@ -183,44 +223,60 @@ export const layer = Layer.effect(
       requestID: QuestionID
       answers: ReadonlyArray<Answer>
     }) {
-      const pending = (yield* InstanceState.get(state)).pending
-      const existing = pending.get(input.requestID)
-      if (!existing) {
+      const current = yield* InstanceState.context
+      const workspaceID = yield* InstanceState.workspaceID
+      const existing = allPending.get(input.requestID)
+      if (!existing || !visibleFrom(existing, current.directory, workspaceID)) {
         log.warn("reply for unknown request", { requestID: input.requestID })
         return yield* new NotFoundError({ requestID: input.requestID })
       }
-      pending.delete(input.requestID)
+      removePending(input.requestID, existing)
       log.info("replied", { requestID: input.requestID, answers: input.answers })
-      yield* events.publish(Event.Replied, {
-        sessionID: existing.info.sessionID,
-        requestID: existing.info.id,
-        answers: input.answers.map((a) => [...a]),
-      })
+      yield* events
+        .publish(Event.Replied, {
+          sessionID: existing.info.sessionID,
+          requestID: existing.info.id,
+          answers: input.answers.map((a) => [...a]),
+        })
+        .pipe(Effect.provideService(EventRouteRef, existing.route))
       yield* Deferred.succeed(existing.deferred, input.answers)
     })
 
     const reject = Effect.fn("Question.reject")(function* (requestID: QuestionID) {
-      const pending = (yield* InstanceState.get(state)).pending
-      const existing = pending.get(requestID)
-      if (!existing) {
+      const current = yield* InstanceState.context
+      const workspaceID = yield* InstanceState.workspaceID
+      const existing = allPending.get(requestID)
+      if (!existing || !visibleFrom(existing, current.directory, workspaceID)) {
         log.warn("reject for unknown request", { requestID })
         return yield* new NotFoundError({ requestID })
       }
-      pending.delete(requestID)
+      removePending(requestID, existing)
       log.info("rejected", { requestID })
-      yield* events.publish(Event.Rejected, {
-        sessionID: existing.info.sessionID,
-        requestID: existing.info.id,
-      })
+      yield* publishRejected(existing)
       yield* Deferred.fail(existing.deferred, new RejectedError())
     })
 
-    const list = Effect.fn("Question.list")(function* () {
-      const pending = (yield* InstanceState.get(state)).pending
-      return Array.from(pending.values(), (x) => x.info)
+    const rejectSession = Effect.fn("Question.rejectSession")(function* (sessionID: SessionID) {
+      const current = yield* InstanceState.context
+      const workspaceID = yield* InstanceState.workspaceID
+      yield* Effect.forEach(
+        Array.from(allPending.values()).filter(
+          (item) => item.info.sessionID === sessionID && visibleFrom(item, current.directory, workspaceID),
+        ),
+        (item) => reject(item.info.id).pipe(Effect.catchTag("Question.NotFoundError", () => Effect.void)),
+        { discard: true },
+      )
     })
 
-    return Service.of({ ask, reply, reject, list })
+    const list = Effect.fn("Question.list")(function* () {
+      const current = yield* InstanceState.context
+      const workspaceID = yield* InstanceState.workspaceID
+      return Array.from(allPending.values())
+        .filter((item) => visibleFrom(item, current.directory, workspaceID))
+        .map((item) => item.info)
+    })
+
+    return Service.of({ ask, reply, reject, rejectSession, list })
   }),
 )
 

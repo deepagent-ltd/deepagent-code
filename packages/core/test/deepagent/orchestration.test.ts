@@ -199,7 +199,7 @@ describe("§5b estimateSignalsFromText (lightweight heuristic)", () => {
   })
 })
 
-// Prompt-cache split (docs/deepagent-cache-hit-fix-plan.md): buildOrchestrationSection now returns
+// Prompt-cache split (docs/llmrealtest-v2.md §11.2): buildOrchestrationSection now returns
 // ONLY the stable, mode-derived generic guidance — the per-turn fan-out verdict (concrete numbers)
 // moved to prompt-policy's buildVolatileRoundContext so it never enters the cached system prefix.
 // The verdict rendering itself is covered in prompt-policy.test.ts.

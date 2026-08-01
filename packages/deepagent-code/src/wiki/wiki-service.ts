@@ -11,11 +11,11 @@ import type {
 /**
  * V3.9 §B — Repo & Wiki（人向监督层）: the WikiService.
  *
- * This is a PURE PROJECTION + governance封装 over the four graphs (document-store + code_symbol),
- * NOT a fifth store (§B.1). The same underlying data an Agent reads as structured graph nodes, a
- * human reads here as rendered Markdown / code views. There is NO independent wiki storage: a page's
- * version IS the document supersede chain, and an edit is `DocumentStore.updateWithProvenance`
- * (append-only new version + provenance `source:"human"`), reusing the existing governance pipeline.
+ * This is a PURE PROJECTION + governance封装 over durable Knowledge/Memory/Document data and frozen
+ * historical code_symbol nodes, NOT a fifth store (§B.1). A human reads the same underlying data as
+ * rendered Markdown / code views. There is NO independent wiki storage: a page's version IS the
+ * document supersede chain, and an edit is `DocumentStore.updateWithProvenance` (append-only new
+ * version + provenance `source:"human"`), reusing the existing governance pipeline.
  *
  * §B.2 治理不对等 (STRICTLY enforced here):
  *   - Knowledge / Memory / strategy / methodology → editable (governed via evidence-gate + human
@@ -28,9 +28,10 @@ import type {
  *     exist to the human layer.
  *
  * The service is constructed over an injected ordered set of DocumentStores (the same union
- * knowledge-source.storesForWorkspace / graph-query walk: user-global first, then the project store,
- * and optionally the session's run-scoped context store). This keeps the service a testable pure
- * projection — tests wire in-memory stores; production wires the real union via `openWikiGraph`.
+ * knowledge-source.storesForWorkspace returns: user-global first, then the project store, and
+ * optionally the session's run-scoped context store). This keeps the service a testable pure
+ * projection — tests wire in-memory stores; production wires the same ordered union via
+ * `openWikiGraph`.
  */
 
 // The 4 editable types (§B.2 / §B.3): exactly KNOWLEDGE_TYPES. Kept as a local const (not imported
@@ -296,7 +297,7 @@ export class WikiGraph {
   }
 }
 
-// A code_symbol node's file:line, pulled from its extensions (written by code-indexer §A.3). A file
+// A historical code_symbol node's file:line, pulled from its legacy extensions. A file
 // node has no host_path/symbol_path, so its path is the node description (= the file path, §A.3); a
 // symbol child node carries host_path + symbol_path + range in extensions.
 const codeLocation = (doc: Doc): { path: string | null; line: number | null; symbolPath: string | null } => {

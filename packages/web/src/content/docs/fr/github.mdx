@@ -64,10 +64,10 @@ Ajoutez le fichier de workflow suivant à `.github/workflows/deepagent-code.yml`
               persist-credentials: false
 
           - name: Run DeepAgent Code
-           uses: lessweb/deepagent-code/github@latest
-           env:
+            uses: deepagent-ltd/deepagent-code/github@github-v1.4.4
+            env:
              ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-           with:
+            with:
              model: anthropic/claude-sonnet-4-20250514
              # share: true
              # github_token: xxxx
@@ -140,7 +140,7 @@ jobs:
           persist-credentials: false
 
       - name: Run DeepAgent Code
-        uses: lessweb/deepagent-code/github@latest
+        uses: deepagent-ltd/deepagent-code/github@github-v1.4.4
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         with:
@@ -177,7 +177,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
-      - uses: lessweb/deepagent-code/github@latest
+      - uses: deepagent-ltd/deepagent-code/github@github-v1.4.4
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -233,7 +233,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: lessweb/deepagent-code/github@latest
+      - uses: deepagent-ltd/deepagent-code/github@github-v1.4.4
         if: steps.check.outputs.result == 'true'
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -255,7 +255,7 @@ Pour les événements `issues`, l'entrée `prompt` est **obligatoire** car il n'
 Remplacez l'invite par défaut pour personnaliser le comportement de DeepAgent Code pour votre workflow.
 
 ```yaml title=".github/workflows/deepagent-code.yml"
-- uses: lessweb/deepagent-code/github@latest
+- uses: deepagent-ltd/deepagent-code/github@github-v1.4.4
   with:
     model: anthropic/claude-sonnet-4-5
     prompt: |

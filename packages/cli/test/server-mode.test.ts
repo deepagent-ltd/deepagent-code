@@ -70,10 +70,9 @@ const server = Bun.serve({
       if (req.method === "POST") {
         const existed = gateway.provisioned
         gateway.provisioned = true
-        return Response.json(
-          existed ? container() : { ...container(), status: "creating" },
-          { status: existed ? 200 : 202 },
-        )
+        return Response.json(existed ? container() : { ...container(), status: "creating" }, {
+          status: existed ? 200 : 202,
+        })
       }
     }
 
@@ -117,6 +116,7 @@ const homes: string[] = []
 beforeEach(async () => {
   home = await mkdtemp(path.join(tmpdir(), "dacode-cli-test-"))
   homes.push(home)
+  process.env.DEEPAGENT_CODE_TEST_HOME = home
   process.env.DEEPAGENT_CODE_HOME = home
   delete process.env.DEEPAGENT_GATEWAY_URL
   gateway.validAccess = "tok-1"
@@ -127,6 +127,7 @@ beforeEach(async () => {
 
 afterAll(async () => {
   delete process.env.DEEPAGENT_CODE_HOME
+  delete process.env.DEEPAGENT_CODE_TEST_HOME
   server.stop()
   await Promise.all(homes.map((dir) => rm(dir, { recursive: true, force: true })))
 })
@@ -155,7 +156,12 @@ describe("ServerMode.login", () => {
   })
 
   it("fails with the gateway error message on bad credentials", async () => {
-    const result = await run(service.pipe(Effect.flatMap((s) => s.login(base, "a@b.c", "nope")), Effect.result))
+    const result = await run(
+      service.pipe(
+        Effect.flatMap((s) => s.login(base, "a@b.c", "nope")),
+        Effect.result,
+      ),
+    )
     expect(Result.isFailure(result)).toBe(true)
     if (Result.isFailure(result)) expect(String(result.failure)).toContain("bad credentials")
   })
@@ -251,7 +257,12 @@ describe("ServerMode.useWorkspace", () => {
     expect(found.id).toBe("ctr-1")
     expect(JSON.parse(await readFile(stateFile(), "utf8")).workspaceId).toBe("ctr-1")
 
-    const missing = await run(service.pipe(Effect.flatMap((s) => s.useWorkspace("ctr-bad")), Effect.result))
+    const missing = await run(
+      service.pipe(
+        Effect.flatMap((s) => s.useWorkspace("ctr-bad")),
+        Effect.result,
+      ),
+    )
     expect(Result.isFailure(missing)).toBe(true)
     if (Result.isFailure(missing)) expect(String(missing.failure)).toContain("ctr-bad")
   })
@@ -356,7 +367,12 @@ describe("ServerMode.transport", () => {
 
   it("fails when logged in but no workspace is selected", async () => {
     const result = await run(
-      service.pipe(Effect.flatMap((s) => s.login(base, "a@b.c", "pw")), Effect.flatMap(() => service), Effect.flatMap((s) => s.transport()), Effect.result),
+      service.pipe(
+        Effect.flatMap((s) => s.login(base, "a@b.c", "pw")),
+        Effect.flatMap(() => service),
+        Effect.flatMap((s) => s.transport()),
+        Effect.result,
+      ),
     )
     expect(Result.isFailure(result)).toBe(true)
     if (Result.isFailure(result)) expect(String(result.failure)).toContain("No workspace selected")

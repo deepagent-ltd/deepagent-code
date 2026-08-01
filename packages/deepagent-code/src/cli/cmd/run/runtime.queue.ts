@@ -10,7 +10,7 @@
 // Resolves when the footer closes and all in-flight work finishes.
 import * as Locale from "@/util/locale"
 import { MessageID, PartID } from "@/session/schema"
-import { isExitCommand, isNewCommand } from "./prompt.shared"
+import { isCompactCommand, isExitCommand, isNewCommand, localSessionCommand, type LocalSessionCommand } from "./prompt.shared"
 import type { FooterApi, FooterEvent, FooterQueuedPrompt, RunPrompt } from "./types"
 
 type Trace = {
@@ -29,6 +29,8 @@ export type QueueInput = {
   trace?: Trace
   onSend?: (prompt: RunPrompt) => void
   onNewSession?: () => void | Promise<void>
+  onCompactSession?: () => string | Promise<string>
+  onSessionCommand?: (command: LocalSessionCommand) => string | Promise<string>
   run: (prompt: RunPrompt, signal: AbortSignal) => Promise<void>
 }
 
@@ -126,6 +128,28 @@ export async function runPromptQueue(input: QueueInput): Promise<void> {
           const queued = state.queued.find((item) => item.prompt === prompt)
           if (queued) removeLocalQueued(queued)
 
+          if (prompt.mode !== "shell" && isCompactCommand(prompt.text)) {
+            syncQueue()
+            if (!input.onCompactSession) {
+              emit(
+                { type: "stream.patch", patch: { status: "session compaction unavailable" } },
+                { status: "session compaction unavailable" },
+              )
+              continue
+            }
+
+            emit(
+              { type: "stream.patch", patch: { phase: "running", status: "compacting session" } },
+              { phase: "running", status: "compacting session" },
+            )
+            const status = await input.onCompactSession()
+            emit(
+              { type: "stream.patch", patch: { phase: "idle", status } },
+              { phase: "idle", status },
+            )
+            continue
+          }
+
           if (prompt.mode !== "shell" && isNewCommand(prompt.text)) {
             syncQueue()
             if (!input.onNewSession) {
@@ -159,6 +183,25 @@ export async function runPromptQueue(input: QueueInput): Promise<void> {
               },
             )
             await input.onNewSession()
+            continue
+          }
+
+          const command = prompt.mode === "shell" ? undefined : localSessionCommand(prompt.text)
+          if (command) {
+            syncQueue()
+            if (!input.onSessionCommand) {
+              emit(
+                { type: "stream.patch", patch: { status: `/${command} unavailable` } },
+                { status: `/${command} unavailable` },
+              )
+              continue
+            }
+
+            const status = await input.onSessionCommand(command)
+            emit(
+              { type: "stream.patch", patch: { phase: "idle", status } },
+              { phase: "idle", status },
+            )
             continue
           }
 

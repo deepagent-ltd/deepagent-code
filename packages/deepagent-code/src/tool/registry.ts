@@ -10,6 +10,7 @@ import { ReadTool } from "./read"
 import { TaskTool } from "./task"
 import { TaskStatusTool } from "./task_status"
 import { TaskReadTool } from "./task_read"
+import { PRFinalizeTool } from "./pr_finalize"
 import { DismissValidationTool } from "./dismiss_validation"
 import { Database } from "@deepagent-code/core/database/database"
 import { WebFetchTool } from "./webfetch"
@@ -29,6 +30,11 @@ import { WebSearchTool } from "./websearch"
 import * as Log from "@deepagent-code/core/util/log"
 import { LspTool } from "./lsp"
 import { CodeIntelTool } from "./code_intel"
+import { CodeIntelV2Tool } from "./code_intel_v2"
+import { CodeIntelFacade } from "@/code-intelligence/facade"
+import { ContextFederationRollout } from "@deepagent-code/core/context-federation/rollout"
+import { ContextQueryTool } from "./context_query"
+import { ContextQueryFacade } from "@/context-federation/context-query-facade"
 import { ProfileTool } from "./profile"
 import { DebugTool } from "./debug"
 import { QueryLogTool } from "./query_log"
@@ -64,6 +70,8 @@ import { BackgroundJob } from "@/background/job"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { ProviderV2 } from "@deepagent-code/core/provider"
 import { ModelV2 } from "@deepagent-code/core/model"
+import { Git } from "@/git"
+import { PRQueue } from "@/agent/pr-queue"
 
 const log = Log.create({ service: "tool.registry" })
 
@@ -79,6 +87,9 @@ type State = {
   builtin: Tool.Def[]
   task: TaskDef
   read: ReadDef
+  codeIntelV1: Tool.Def
+  codeIntelV2: Tool.Def
+  contextQuery: Tool.Def
 }
 
 export interface Interface {
@@ -89,12 +100,13 @@ export interface Interface {
     providerID: ProviderV2.ID
     modelID: ModelV2.ID
     agent: Agent.Info
+    projectScopeKey?: string
   }) => Effect.Effect<Tool.Def[]>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@deepagent-code/ToolRegistry") {}
 
-export const layer: Layer.Layer<
+const layerWithFacades: Layer.Layer<
   Service,
   never,
   | Config.Service
@@ -119,6 +131,8 @@ export const layer: Layer.Layer<
   | Database.Service
   | DebugService.Service
   | RuntimeBase.Service
+  | CodeIntelFacade.Service
+  | ContextQueryFacade.Service
 > = Layer.effect(
   Service,
   Effect.gen(function* () {
@@ -132,6 +146,7 @@ export const layer: Layer.Layer<
     const task = yield* TaskTool
     const taskstatus = yield* TaskStatusTool
     const taskread = yield* TaskReadTool
+    const prfinalize = yield* PRFinalizeTool
     const dismissvalidation = yield* DismissValidationTool
     const read = yield* ReadTool
     const question = yield* QuestionTool
@@ -148,7 +163,19 @@ export const layer: Layer.Layer<
     const patchtool = yield* ApplyPatchTool
     const patchchunk = yield* ApplyPatchChunkTool
     const skilltool = yield* SkillTool
-    const codeintel = yield* CodeIntelTool
+    const rollout = ContextFederationRollout.resolve(
+      {
+        contextFederationShadow: flags.contextFederationShadow,
+        locationIndexesV2Shadow: flags.locationIndexesV2Shadow,
+        contextProjectionV2: flags.contextProjectionV2,
+        contextQueryToolsV2: flags.contextQueryToolsV2,
+        coreV2ExecutionOwner: flags.coreV2ExecutionOwner,
+      },
+      { coreV2ParityVerified: false },
+    )
+    const codeIntelV1 = yield* Tool.init(yield* CodeIntelTool)
+    const codeIntelV2 = yield* Tool.init(yield* CodeIntelV2Tool)
+    const contextQuery = yield* Tool.init(yield* ContextQueryTool)
     const profiletool = yield* ProfileTool
     const debugtool = yield* DebugTool
     const querylog = yield* QueryLogTool
@@ -264,6 +291,7 @@ export const layer: Layer.Layer<
           task: Tool.init(task),
           task_status: Tool.init(taskstatus),
           task_read: Tool.init(taskread),
+          pr_finalize: Tool.init(prfinalize),
           dismiss_validation: Tool.init(dismissvalidation),
           fetch: Tool.init(webfetch),
           search: Tool.init(websearch),
@@ -272,7 +300,7 @@ export const layer: Layer.Layer<
           patch_chunk: Tool.init(patchchunk),
           question: Tool.init(question),
           lsp: Tool.init(lsptool),
-          code_intel: Tool.init(codeintel),
+          code_intel: Effect.succeed(rollout.enabled.contextQueryToolsV2 ? codeIntelV2 : codeIntelV1),
           profile: Tool.init(profiletool),
           debug: Tool.init(debugtool),
           plan: Tool.init(plan),
@@ -294,6 +322,7 @@ export const layer: Layer.Layer<
             tool.task,
             tool.task_status,
             tool.task_read,
+            tool.pr_finalize,
             tool.dismiss_validation,
             tool.fetch,
             tool.search,
@@ -303,6 +332,7 @@ export const layer: Layer.Layer<
             tool.planwrite,
             ...(flags.experimentalLspTool ? [tool.lsp] : []),
             ...(flags.codeIntelTool ? [tool.code_intel] : []),
+            ...(rollout.enabled.contextQueryToolsV2 ? [contextQuery] : []),
             ...(flags.profileTool ? [tool.profile] : []),
             ...(flags.debugTool ? [tool.debug] : []),
             ...(flags.experimentalQueryLogTool ? [tool.query_log] : []),
@@ -310,6 +340,9 @@ export const layer: Layer.Layer<
           ],
           task: tool.task,
           read: tool.read,
+          codeIntelV1,
+          codeIntelV2,
+          contextQuery,
         }
       }),
     )
@@ -339,12 +372,29 @@ export const layer: Layer.Layer<
     })
 
     const tools: Interface["tools"] = Effect.fn("ToolRegistry.tools")(function* (input) {
-      const filtered = (yield* all()).filter((tool) => {
+      const registryState = yield* InstanceState.get(state)
+      const projectRollout = ContextFederationRollout.resolveProject(
+        rollout,
+        input.projectScopeKey ?? "project_scope_unbound",
+        {
+          stage: flags.contextFederationRolloutStage,
+          percentage: flags.contextFederationRolloutPercent,
+          internalProjectScopeKeys: flags.contextFederationInternalProjects,
+          killSwitch: flags.contextFederationKillSwitch,
+        },
+      )
+      const filtered = [...registryState.builtin, ...registryState.custom].flatMap((tool) => {
+        if (tool.id === PRFinalizeTool.id && input.agent.mode !== "primary") return []
+        if (tool.id === CodeIntelTool.id) {
+          return [projectRollout.enabled.contextQueryToolsV2 ? registryState.codeIntelV2 : registryState.codeIntelV1]
+        }
+        if (tool.id === ContextQueryTool.id && !projectRollout.enabled.contextQueryToolsV2) return []
         if (tool.id === WebSearchTool.id) {
           return webSearchEnabled(input.providerID, { exa: flags.enableExa, parallel: flags.enableParallel })
+            ? [tool]
+            : []
         }
-
-        return true
+        return [tool]
       })
 
       return yield* Effect.forEach(
@@ -391,6 +441,8 @@ export const layer: Layer.Layer<
   }),
 )
 
+export const layer = layerWithFacades
+
 /**
  * InstanceStore backed by a NO-OP InstanceBootstrap — used only to satisfy the
  * Worktree dependency for debug/profile `withIsolation`. The real InstanceBootstrap
@@ -404,6 +456,7 @@ const noopBootstrapInstanceStore = InstanceStore.defaultLayer.pipe(
 
 export const defaultLayer = Layer.suspend(() =>
   layer.pipe(
+    Layer.provide(Layer.merge(CodeIntelFacade.defaultLayer, ContextQueryFacade.defaultLayer)),
     // Ordered dependency chain (must stay explicit so instances are SHARED):
     // DebugService.layer needs RuntimeBase.Service + EventV2Bridge.Service; RuntimeBase.layer
     // needs Worktree.Service. Providing them outermost-last means the EventV2Bridge in the
@@ -440,9 +493,11 @@ export const defaultLayer = Layer.suspend(() =>
         Format.defaultLayer,
         CrossSpawnSpawner.defaultLayer,
         Search.defaultLayer,
-        Truncate.defaultLayer,
+        Truncate.configuredLayer,
         Database.defaultLayer,
         RuntimeFlags.defaultLayer,
+        Git.defaultLayer,
+        PRQueue.layer.pipe(Layer.orDie),
       ),
     ),
   ),

@@ -16,16 +16,13 @@ import PLAN_MODE from "./prompt/plan-mode.txt"
 // (high+ only), so it can SEE its checklist and report against it — and, when it has made several
 // edits without a status change, nudge it (soft) to report progress.
 //
-// PROMPT-CACHE CONTRACT (docs/deepagent-cache-hit-fix-plan.md): the plan snapshot embeds live
+// PROMPT-CACHE CONTRACT (docs/llmrealtest-v2.md §11.2): the plan snapshot embeds live
 // per-step state (done/total, mutation count, nudge) that changes EVERY model call within a turn.
-// It MUST NOT be pushed onto a message that sits inside the cached prefix. Historically this pushed
-// a synthetic part onto the LAST USER message — but in a tool loop a turn has exactly one user
-// message at the FRONT, followed by the accumulated assistant/tool history, so that anchor is NOT
-// the tail. Mutating it busted the cache from the user message through the entire tool-loop history,
-// every step. So this is now a PURE RENDERER: the caller (session/llm/request.ts) folds the returned
-// string into the SAME trailing `<deepagent-round-context>` message that carries the other volatile
-// round state, which lands AFTER the Anthropic cache breakpoint. Returns null when there is nothing
-// to surface (lightweight mode, or no plan) so the caller can skip it.
+// It MUST NOT be pushed onto a durable message inside the cached prefix. Historically this pushed a
+// synthetic part onto the last durable user message, which sits before accumulated assistant/tool
+// history. Mutating that anchor busted every later cache block. This is now a PURE RENDERER: the caller
+// folds the result into the same ephemeral trailing `<deepagent-round-context>` message as the other
+// volatile round state. Returns null when there is nothing to surface.
 export const renderPlanStatus = (sessionID: string): string | null => {
   const agentMode = AgentGateway.snapshot().agentMode ?? "high"
   // Lightweight modes (general/direct) never carry the plan machinery — no snapshot, no nudge.

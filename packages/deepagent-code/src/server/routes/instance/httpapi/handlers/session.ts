@@ -2,6 +2,7 @@ import { PermissionV1 } from "@deepagent-code/core/v1/permission"
 import { Agent } from "@/agent/agent"
 import { SessionV1 } from "@deepagent-code/core/v1/session"
 import { EventV2Bridge } from "@/event-v2-bridge"
+import { ContextFederationDiagnostics } from "@/context-federation/diagnostics"
 import { Command } from "@/command"
 import { Permission } from "@/permission"
 import { SessionShare } from "@/share/session"
@@ -24,6 +25,7 @@ import * as Sse from "effect/unstable/encoding/Sse"
 import { InstanceHttpApi } from "../api"
 import {
   CommandPayload,
+  ContextAttemptResolvePayload,
   DiffQuery,
   ForkPayload,
   InitPayload,
@@ -75,6 +77,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     const todoSvc = yield* Todo.Service
     const summary = yield* SessionSummary.Service
     const events = yield* EventV2Bridge.Service
+    const contextDiagnosticsSvc = yield* ContextFederationDiagnostics.Service
     const scope = yield* Scope.Scope
 
     const list = Effect.fn("SessionHttpApi.list")(function* (ctx: { query: typeof ListQuery.Type }) {
@@ -537,6 +540,47 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       return yield* session.updatePart(payload)
     })
 
+    const contextDiagnostics = Effect.fn("SessionHttpApi.contextDiagnostics")(function* (ctx: {
+      params: { sessionID: SessionID }
+    }) {
+      yield* requireSession(ctx.params.sessionID)
+      return yield* contextDiagnosticsSvc
+        .get(ctx.params.sessionID)
+        .pipe(Effect.mapError(() => new HttpApiError.BadRequest({})))
+    })
+
+    const contextAttemptResolve = Effect.fn("SessionHttpApi.contextAttemptResolve")(function* (ctx: {
+      params: { sessionID: SessionID; attemptID: string }
+      payload: typeof ContextAttemptResolvePayload.Type
+    }) {
+      const current = yield* requireSession(ctx.params.sessionID)
+      const resolved = yield* contextDiagnosticsSvc
+        .resolveAttempt({
+          session: current,
+          attemptId: ctx.params.attemptID,
+          decision: ctx.payload.decision,
+          reason: ctx.payload.reason,
+          riskAcknowledged: ctx.payload.riskAcknowledged ?? false,
+          actorId: "local-user",
+        })
+        .pipe(Effect.mapError(() => new HttpApiError.BadRequest({})))
+      if (ctx.payload.decision === "replayed") {
+        yield* promptSvc.loop({ sessionID: ctx.params.sessionID }).pipe(
+          Effect.catchCause((cause) =>
+            Effect.logError("context provider replay failed").pipe(
+              Effect.annotateLogs({
+                sessionID: ctx.params.sessionID,
+                attemptID: resolved.attemptId,
+                cause,
+              }),
+            ),
+          ),
+          Effect.forkIn(scope, { startImmediately: true }),
+        )
+      }
+      return resolved
+    })
+
     return handlers
       .handle("list", list)
       .handle("status", status)
@@ -568,5 +612,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       .handle("deleteMessage", deleteMessage)
       .handle("deletePart", deletePart)
       .handle("updatePart", updatePart)
+      .handle("contextDiagnostics", contextDiagnostics)
+      .handle("contextAttemptResolve", contextAttemptResolve)
   }),
 )

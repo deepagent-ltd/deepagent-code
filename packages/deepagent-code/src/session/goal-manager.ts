@@ -413,6 +413,8 @@ export const layer = Layer.effect(
           sessionPrompt,
           parentSessionID: SessionID.make(sessionID),
           model,
+          allowPlanWriteCapability: true,
+          purpose: "goal-loop",
         })
 
         // §S1.3 — ONE goal-steer relay per run, shared by the wiring (executor threads staged guidance
@@ -627,6 +629,8 @@ export const layer = Layer.effect(
           sessionPrompt,
           parentSessionID: SessionID.make(sessionID),
           model,
+          allowPlanWriteCapability: true,
+          purpose: "goal-loop",
         })
         // §S1.3 — a fresh relay for the resumed run (steers admitted while paused are still pending in the
         // durable buffer, so the resumed driver re-drains and threads them on its first tick — no loss).

@@ -364,7 +364,7 @@ export function RunCommandMenuBody(props: {
   const skills = createMemo(() => (props.commands() ?? []).filter((item) => item.source === "skill"))
   const activeSubagentCount = createMemo(() => props.subagents().filter((item) => item.status === "running").length)
   const entries = createMemo<CommandEntry[]>(() => {
-    const builtins = ["editor", "new"]
+    const builtins = ["editor", "new", "compact", "undo", "redo", "fork", "share", "unshare"]
     const session: CommandEntry[] = [
       {
         action: "editor",
@@ -396,6 +396,33 @@ export function RunCommandMenuBody(props: {
         footer: "/new",
         keywords: "new session clear",
       },
+      {
+        action: "slash",
+        category: "Session",
+        name: "compact",
+        display: "Compact session",
+        footer: "/compact",
+        keywords: "compact summarize context session",
+      },
+    ]
+    const advancedSession: CommandEntry[] = [
+      ...[
+        ["undo", "Undo turn", "undo revert session"],
+        ["redo", "Redo turn", "redo restore session"],
+        ["fork", "Fork session", "fork branch session"],
+        ["share", "Share session", "share link session"],
+        ["unshare", "Unshare session", "unshare revoke session"],
+      ].map(
+        ([name, display, keywords]) =>
+          ({
+            action: "slash",
+            category: "Session",
+            name,
+            display,
+            footer: `/${name}`,
+            keywords,
+          }) satisfies CommandEntry,
+      ),
     ]
     const prompt: CommandEntry[] =
       props.commands() === undefined || skills().length > 0
@@ -471,6 +498,7 @@ export function RunCommandMenuBody(props: {
       ...session,
       ...prompt,
       ...agent,
+      ...advancedSession,
       ...commands,
       { action: "exit", category: "System", display: "Exit", footer: "/exit", keywords: "/exit exit" },
     ]

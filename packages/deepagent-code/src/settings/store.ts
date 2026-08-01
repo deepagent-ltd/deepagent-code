@@ -65,8 +65,8 @@ export namespace SettingsStore {
 
   const FILE = () => path.join(Global.Path.data, "settings.json")
 
-  // Cache is keyed by resolved file path so a mid-process home switch (TEST_HOME / DEEPAGENT_CODE_HOME
-  // in tests) doesn't serve a stale other-home cache.
+  // Cache is keyed by resolved file path so a mid-process test-root switch doesn't serve a stale
+  // other-home cache.
   let cache: { path: string; value: Settings } | undefined
 
   const isRecord = (v: unknown): v is Record<string, unknown> =>
