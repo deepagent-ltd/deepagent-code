@@ -9,6 +9,7 @@ import type {
   StepExecutorResult,
 } from "@deepagent-code/core/deepagent/goal-loop"
 import { budgetNotice } from "@deepagent-code/core/deepagent/goal-loop"
+import type { PlanDoc } from "@deepagent-code/core/deepagent/plan-controller"
 import { SessionV1 } from "@deepagent-code/core/v1/session"
 import { ModelV2 } from "@deepagent-code/core/model"
 import { ProviderV2 } from "@deepagent-code/core/provider"
@@ -28,6 +29,7 @@ import { deriveSubagentSessionPermission } from "../agent/subagent-permissions"
 import { MessageID, SessionID } from "./schema"
 import { runValidationCommands } from "../deepagent/validation-exec"
 import type { GoalSteerRelay, PendingGoalSteer } from "./goal-driver"
+import { runSubagentPrompt } from "../tool/task"
 
 /**
  * V3.9 §D / §F.3 — Goal Loop production WIRING.
@@ -103,6 +105,8 @@ const reviewRank = (s: string): number => REVIEW_SEVERITY_RANK[s.trim().toLowerC
 
 export type SubagentTurnResult = {
   readonly ok: boolean
+  /** Stable machine-readable failure reason when `ok` is false. */
+  readonly reason?: string
   /** The structured output object when an output schema was requested and the turn produced one. */
   readonly structured: unknown | undefined
   /** The final text part (free-text turns). */
@@ -129,6 +133,13 @@ export type SubagentTurnResult = {
    * plan doc after the turn. Undefined when the runner does not create/expose a session (stubs).
    */
   readonly sessionID?: string
+  /**
+   * A durable source-control ref containing this turn's filesystem result. Event-driven DAG execution
+   * passes it to dependent turns so validation/review observes the exact upstream change.
+   */
+  readonly continuationRef?: string
+  /** Durable artifacts produced by the runner in addition to its child session. */
+  readonly artifacts?: ReadonlyArray<string>
 }
 
 export type SubagentTurnInput = {
@@ -144,6 +155,15 @@ export type SubagentTurnInput = {
    */
   readonly workspaceID?: string
   readonly directory?: string
+  /** Durable parent Session that owns every child turn and collaboration artifact for one V4 event. */
+  readonly parentSessionID?: string
+  /**
+   * Event-driven write turns fail closed when a dedicated worktree cannot be created. Read-only turns may
+   * deliberately degrade to the event directory.
+   */
+  readonly requiresWriteIsolation?: boolean
+  /** Durable git ref from an upstream DAG dependency. The isolated turn starts from this ref, not HEAD. */
+  readonly baseRef?: string
   /**
    * §F2 trace — the triggering event's correlationID. When present, the runner STAMPS it onto the child
    * session's `metadata.correlationID`. This is one HALF of the §F2 back-half: `Observability.trace` READS
@@ -422,10 +442,31 @@ export const makePlanBridge = (input: {
     if (childPlan == null) return // the worker never touched the plan this turn → nothing to mirror
     const doc = input.store.get(input.planDocId)
     if (!doc) return
-    // Write the worker's plan back into the goal plan doc. DocumentStore.update is a content-addressed
-    // no-op when the body is unchanged (INV-4), so a turn that changed nothing bumps NO version — which
-    // is exactly what the Controller's version-based idempotency + stall detection expect.
-    input.store.update(input.planDocId, JSON.stringify(childPlan))
+    let goalPlan: PlanDoc
+    try {
+      goalPlan = JSON.parse(doc.body) as PlanDoc
+    } catch {
+      return
+    }
+    const childSteps = new Map(childPlan.steps.map((step) => [step.step_id, step] as const))
+    const steps = goalPlan.steps.map((step) => {
+      const child = childSteps.get(step.step_id)
+      if (!child) return step
+      return {
+        ...step,
+        status: child.status,
+        evidence: child.evidence ?? step.evidence,
+        note: child.note ?? step.note,
+      }
+    })
+    const activeStepId =
+      childPlan.active_step_id && steps.some((step) => step.step_id === childPlan.active_step_id)
+        ? childPlan.active_step_id
+        : (steps.find((step) => step.status === "active")?.step_id ?? null)
+    // Goal workers may advance existing steps, attach runtime evidence, and explain blockers. They may
+    // not rewrite the goal, add/remove/re-title steps, or alter acceptance/assignment contracts.
+    // DocumentStore.update is content-addressed, so an unchanged restricted projection remains a no-op.
+    input.store.update(input.planDocId, JSON.stringify({ ...goalPlan, steps, active_step_id: activeStepId }))
   },
 })
 
@@ -441,7 +482,16 @@ export const renderStepPrompt = (input: {
   readonly goalId: string
   readonly sessionId: string
   readonly planDocId: string
+  readonly goal: string
   readonly activeStepId: string | null
+  readonly activeStep: {
+    readonly step_id: string
+    readonly title: string
+    readonly status: string
+    readonly acceptance?: string | null
+  } | null
+  /** Unmet criteria from the previous tick, supplied by the durable Goal Loop state. */
+  readonly graderFeedback?: readonly string[]
   /** §S1.3 — mid-run steering drained from the goal session's steer buffer, threaded into this turn. */
   readonly steer?: ReadonlyArray<PendingGoalSteer>
   /**
@@ -469,6 +519,15 @@ export const renderStepPrompt = (input: {
           ``,
         ]
       : []
+  const graderLines =
+    input.graderFeedback && input.graderFeedback.length > 0
+      ? [
+          `GRADER FEEDBACK FROM THE PREVIOUS TICK:`,
+          `Address every unmet criterion before claiming completion.`,
+          ...input.graderFeedback.map((gap) => `- ${gap}`),
+          ``,
+        ]
+      : []
   // P1 §3.3: the World State block rides the TAIL after the advance instruction. It is snapshot-diff
   // byte-stable across ticks, so it sits BEFORE the (short/volatile) budget notice to keep the most
   // volatile content last (near-end prompt-cache stability).
@@ -478,10 +537,18 @@ export const renderStepPrompt = (input: {
   const budgetLines = input.budgetNotice ? [``, `BUDGET NOTICE: ${input.budgetNotice}`] : []
   return [
     ...steerLines,
+    ...graderLines,
+    `Goal objective: ${input.goal}`,
     `Advance goal ${input.goalId}. Execute exactly ONE plan step of real progress this turn.`,
-    input.activeStepId
-      ? `The active step is "${input.activeStepId}". Complete it, then mark it done and set the next step active.`
+    input.activeStep
+      ? `The active step is "${input.activeStep.step_id}": ${input.activeStep.title}`
       : `No step is currently active. Read the plan, pick the next pending step, mark it active, and make progress.`,
+    ...(input.activeStep?.acceptance
+      ? [`Its frozen acceptance criterion is: ${input.activeStep.acceptance}`]
+      : []),
+    input.activeStep
+      ? `Do not rewrite the goal or plan structure. Complete this existing step, mark it done, and set the next existing step active.`
+      : `Do not rewrite the goal or plan structure.`,
     `Ground every "done" in a verifiable fact (a command you ran, a test that passed). Do NOT mark a step done to satisfy the gate.`,
     ...worldStateLines,
     ...budgetLines,
@@ -500,10 +567,18 @@ export type TaskSubagentRunnerDeps = {
   readonly sessions: Session.Interface
   readonly agents: Agent.Interface
   readonly sessionPrompt: SessionPrompt.Interface
-  /** The parent (goal) session; the child is parented here and inherits its deny rules + directory. */
+  /** The parent session; the child is parented here and inherits its deny rules + directory. */
   readonly parentSessionID: SessionID
-  /** The model the goal runs on (providerID/modelID) — mirrors the task tool inheriting the model. */
+  /** The model the child runs on (providerID/modelID) — mirrors the task tool inheriting the model. */
   readonly model: { readonly providerID: string; readonly modelID: string }
+  /**
+   * Whether this caller may honor the subagent's PLAN_WRITE_OWN_GOAL capability. Defaults to false so
+   * generic and panel callers cannot accidentally grant plan writes. Goal start/resume and the cold goal
+   * tick port must opt in explicitly.
+   */
+  readonly allowPlanWriteCapability?: boolean
+  /** Labels the child session by its actual role rather than always calling it a goal-loop turn. */
+  readonly purpose?: "goal-loop" | "panel" | "generic"
 }
 
 /**
@@ -525,7 +600,7 @@ export const makeTaskSubagentRunner = (deps: TaskSubagentRunnerDeps): SubagentTu
 
       const child = yield* deps.sessions.create({
         parentID: deps.parentSessionID,
-        title: `${input.agentType} (goal-loop)`,
+        title: `${input.agentType} (${deps.purpose ?? "generic"})`,
         agent: next.name,
         // §F2 trace back-half — stamp the correlationID onto the child session's metadata; Observability
         // .trace reads it back (json_extract) and appends this child as a "session" node, so the trace
@@ -536,11 +611,9 @@ export const makeTaskSubagentRunner = (deps: TaskSubagentRunnerDeps): SubagentTu
           parentSessionPermission: parent.permission ?? [],
           parentAgent,
           subagent: next,
-          // §E/§F.3: this is the flag-gated opt-in call site (makeTaskSubagentRunner is only reached
-          // through makeGoalLoopWiring, which returns null unless experimentalGoalLoop is on). Honoring
-          // the PLAN_WRITE_OWN_GOAL capability HERE — and nowhere else — makes the flag the structural
-          // gate for the §E relaxation.
-          allowPlanWriteCapability: true,
+          // §E/§F.3: capability-bearing agents receive plan-write only when this runner's caller explicitly
+          // opts in. Goal start/resume and cold goal ticks pass true; panel/generic callers default false.
+          allowPlanWriteCapability: deps.allowPlanWriteCapability ?? false,
         }),
       })
 
@@ -554,30 +627,54 @@ export const makeTaskSubagentRunner = (deps: TaskSubagentRunnerDeps): SubagentTu
         }
       }
 
-      const parts = yield* deps.sessionPrompt.resolvePromptParts(input.prompt)
-      const result = yield* deps.sessionPrompt.prompt({
-        messageID: MessageID.ascending(),
-        sessionID: child.id,
-        model: {
-          providerID: ProviderV2.ID.make(deps.model.providerID),
-          modelID: ModelV2.ID.make(deps.model.modelID),
-        },
-        agent: next.name,
-        ...(input.outputSchema
-          ? { format: new SessionV1.OutputFormatJsonSchema({ type: "json_schema", schema: input.outputSchema }) }
-          : {}),
-        parts,
-      })
-
-      const info = result.info
-      const structured =
-        info.role === "assistant" && input.outputSchema ? (info.structured as unknown | undefined) : undefined
-      const text = result.parts.findLast((p) => p.type === "text")?.text ?? ""
+      const model = {
+        providerID: ProviderV2.ID.make(deps.model.providerID),
+        modelID: ModelV2.ID.make(deps.model.modelID),
+      }
+      const text = input.outputSchema
+        ? yield* runSubagentPrompt({
+            ops: {
+              cancel: (sessionID) => deps.sessionPrompt.cancel(sessionID),
+              resolvePromptParts: (template) => deps.sessionPrompt.resolvePromptParts(template),
+              prompt: (promptInput) => deps.sessionPrompt.prompt(promptInput),
+            },
+            prompt: input.prompt,
+            sessionID: child.id,
+            model,
+            variant: undefined,
+            agent: next.name,
+            agentModeOverride: undefined,
+            outputSchema: input.outputSchema,
+            runID: `${deps.purpose ?? "generic"}:${child.id}`,
+            tools: {},
+            worktreeInfo: undefined,
+          })
+        : yield* Effect.gen(function* () {
+            const result = yield* deps.sessionPrompt.prompt({
+              messageID: MessageID.ascending(),
+              sessionID: child.id,
+              model,
+              agent: next.name,
+              parts: yield* deps.sessionPrompt.resolvePromptParts(input.prompt),
+            })
+            return result.parts.findLast((part) => part.type === "text")?.text ?? ""
+          })
+      const assistants = (yield* deps.sessions.messages({ sessionID: child.id })).filter(
+        (message): message is SessionV1.WithParts & { info: SessionV1.Assistant } =>
+          message.info.role === "assistant",
+      )
+      const structured = input.outputSchema
+        ? (assistants.findLast((message) => message.info.structured !== undefined)?.info.structured as
+            | unknown
+            | undefined)
+        : undefined
       // GROSS throughput (input+output+reasoning) — the pre-V4.0.1 figure, always populated.
-      const tokens =
-        info.role === "assistant"
-          ? Math.max(0, (info.tokens.input ?? 0) + (info.tokens.output ?? 0) + (info.tokens.reasoning ?? 0))
-          : 0
+      const tokens = assistants.reduce(
+        (total, message) =>
+          total +
+          Math.max(0, message.info.tokens.input + message.info.tokens.output + message.info.tokens.reasoning),
+        0,
+      )
       // V4.0.1 P2 §4.4 — the granular breakdown for the goal's NET-token ledger (used only under
       // budgetTokenScope "net"). `info.tokens.input` is already the cache-ADJUSTED (non-cached) input in
       // this codebase (session.ts:437 subtracts cache.read/write from the SDK's folded inputTokens), and
@@ -587,15 +684,24 @@ export const makeTaskSubagentRunner = (deps: TaskSubagentRunnerDeps): SubagentTu
       // non-cached input delta above the repeated stable prefix. `inputTokens` is reported as the FULL
       // billed input (non-cached input + cached prefix) so the core subtraction is symmetric; on a cache
       // miss (cache.read=0) carriedPrefixTokens is 0 and the full input counts (correct + monotonic).
-      const inputFull =
-        info.role === "assistant"
-          ? Math.max(0, (info.tokens.input ?? 0) + (info.tokens.cache?.read ?? 0) + (info.tokens.cache?.write ?? 0))
-          : 0
-      const outputNet =
-        info.role === "assistant" ? Math.max(0, (info.tokens.output ?? 0) + (info.tokens.reasoning ?? 0)) : 0
-      const carriedPrefix =
-        info.role === "assistant" ? Math.max(0, (info.tokens.cache?.read ?? 0) + (info.tokens.cache?.write ?? 0)) : 0
-      const cost = info.role === "assistant" && Number.isFinite(info.cost) ? info.cost : 0
+      const inputFull = assistants.reduce(
+        (total, message) =>
+          total +
+          Math.max(0, message.info.tokens.input + message.info.tokens.cache.read + message.info.tokens.cache.write),
+        0,
+      )
+      const outputNet = assistants.reduce(
+        (total, message) => total + Math.max(0, message.info.tokens.output + message.info.tokens.reasoning),
+        0,
+      )
+      const carriedPrefix = assistants.reduce(
+        (total, message) => total + Math.max(0, message.info.tokens.cache.read + message.info.tokens.cache.write),
+        0,
+      )
+      const cost = assistants.reduce(
+        (total, message) => total + (Number.isFinite(message.info.cost) ? message.info.cost : 0),
+        0,
+      )
       return {
         ok: true,
         structured,
@@ -774,4 +880,3 @@ export const liveRollback = (
     }).pipe(Effect.catchCause(() => Effect.void))
 
 export * as GoalLoopWiring from "./goal-loop-wiring"
-

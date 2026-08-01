@@ -49,7 +49,7 @@ import { Format } from "../../src/format"
 import { Reference } from "../../src/reference/reference"
 import { RepositoryCache } from "../../src/reference/repository-cache"
 import { testEffect } from "../lib/effect"
-import { TestInstance } from "../fixture/fixture"
+import { TestInstance, testInstanceStoreLayer } from "../fixture/fixture"
 import { TestLLMServer } from "../lib/llm-server"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { ProviderV2 } from "@deepagent-code/core/provider"
@@ -60,6 +60,7 @@ import { DocumentStore } from "@deepagent-code/core/deepagent/document-store"
 import { mkdtempSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
+import { TestContextFacades } from "../fixture/context-facades"
 
 void Log.init({ print: false })
 
@@ -202,6 +203,7 @@ function makePrompt(steering: boolean) {
   const todo = Todo.layer.pipe(Layer.provideMerge(deps))
   const steer = SessionSteer.layer.pipe(Layer.provideMerge(deps))
   const registry = ToolRegistry.layer.pipe(
+    Layer.provide(TestContextFacades.layer),
     Layer.provide(Skill.defaultLayer),
     Layer.provide(FetchHttpClient.layer),
     Layer.provide(CrossSpawnSpawner.defaultLayer),
@@ -225,6 +227,7 @@ function makePrompt(steering: boolean) {
   )
   const compact = SessionCompaction.layer.pipe(Layer.provide(flags), Layer.provideMerge(proc), Layer.provideMerge(deps))
   return SessionPrompt.layer.pipe(
+    Layer.provide(testInstanceStoreLayer),
     Layer.provide(SessionRevert.defaultLayer),
     Layer.provide(Image.defaultLayer),
     Layer.provide(Reference.defaultLayer),
@@ -270,7 +273,13 @@ const cfg = {
 }
 
 function providerCfg(url: string) {
-  return { ...cfg, provider: { ...cfg.provider, test: { ...cfg.provider.test, options: { ...cfg.provider.test.options, baseURL: url } } } }
+  return {
+    ...cfg,
+    provider: {
+      ...cfg.provider,
+      test: { ...cfg.provider.test, options: { ...cfg.provider.test.options, baseURL: url } },
+    },
+  }
 }
 
 const writeConfig = Effect.fn("test.writeConfig")(function* (dir: string, config: Partial<ConfigV1.Info>) {
@@ -315,35 +324,43 @@ const mkPrompt = (text: string): Prompt => Prompt.fromUserMessage({ text })
 
 // ── Unit: admit → pending (ordered) → markConsumed (consume-once) ───────────────────────────────────
 
-off.instance("admit buffers steers, pending returns them in send-order, markConsumed is consume-once", () =>
-  Effect.gen(function* () {
-    const steer = yield* SessionSteer.Service
-    const sessions = yield* Session.Service
-    const chat = yield* sessions.create({ title: "Steer unit" })
+off.instance(
+  "admit buffers steers, pending returns them in send-order, markConsumed is consume-once",
+  () =>
+    Effect.gen(function* () {
+      const steer = yield* SessionSteer.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({ title: "Steer unit" })
 
-    yield* steer.admit({ sessionID: chat.id, prompt: mkPrompt("first") })
-    yield* steer.admit({ sessionID: chat.id, prompt: mkPrompt("second") })
-    yield* steer.admit({ sessionID: chat.id, prompt: mkPrompt("third") })
+      yield* steer.admit({ sessionID: chat.id, prompt: mkPrompt("first") })
+      yield* steer.admit({ sessionID: chat.id, prompt: mkPrompt("second") })
+      yield* steer.admit({ sessionID: chat.id, prompt: mkPrompt("third") })
 
-    expect(yield* steer.hasPending(chat.id)).toBe(true)
+      expect(yield* steer.hasPending(chat.id)).toBe(true)
 
-    // pending is NON-consuming (persist-first read).
-    const drained = yield* steer.pending(chat.id)
-    expect(drained.map((d) => d.prompt.text)).toEqual(["first", "second", "third"])
-    // Monotonic send-order seq
-    expect(drained[0]!.seq).toBeLessThan(drained[1]!.seq)
-    expect(drained[1]!.seq).toBeLessThan(drained[2]!.seq)
-    // Reading did not consume — still pending.
-    expect(yield* steer.hasPending(chat.id)).toBe(true)
+      // pending is NON-consuming (persist-first read).
+      const drained = yield* steer.pending(chat.id)
+      expect(drained.map((d) => d.prompt.text)).toEqual(["first", "second", "third"])
+      // Monotonic send-order seq
+      expect(drained[0]!.seq).toBeLessThan(drained[1]!.seq)
+      expect(drained[1]!.seq).toBeLessThan(drained[2]!.seq)
+      // Reading did not consume — still pending.
+      expect(yield* steer.hasPending(chat.id)).toBe(true)
 
-    // markConsumed stamps them; a subsequent pending read yields nothing (consume-once).
-    yield* steer.markConsumed(chat.id, drained.map((d) => d.id))
-    expect(yield* steer.pending(chat.id)).toHaveLength(0)
-    expect(yield* steer.hasPending(chat.id)).toBe(false)
-    // markConsumed is idempotent (re-marking already-consumed ids is a no-op).
-    yield* steer.markConsumed(chat.id, drained.map((d) => d.id))
-    expect(yield* steer.hasPending(chat.id)).toBe(false)
-  }),
+      // markConsumed stamps them; a subsequent pending read yields nothing (consume-once).
+      yield* steer.markConsumed(
+        chat.id,
+        drained.map((d) => d.id),
+      )
+      expect(yield* steer.pending(chat.id)).toHaveLength(0)
+      expect(yield* steer.hasPending(chat.id)).toBe(false)
+      // markConsumed is idempotent (re-marking already-consumed ids is a no-op).
+      yield* steer.markConsumed(
+        chat.id,
+        drained.map((d) => d.id),
+      )
+      expect(yield* steer.hasPending(chat.id)).toBe(false)
+    }),
   { config: cfg },
 )
 
@@ -376,7 +393,11 @@ off.instance(
       expect(yield* steer.hasPending(chat.id, "goal_steer")).toBe(true)
 
       // Consuming ALL of the goal channel does NOT touch the steer channel (disjoint rows, no contention).
-      yield* steer.markConsumed(chat.id, goalRows.map((d) => d.id), "goal_steer")
+      yield* steer.markConsumed(
+        chat.id,
+        goalRows.map((d) => d.id),
+        "goal_steer",
+      )
       expect(yield* steer.pending(chat.id, "goal_steer")).toHaveLength(0)
       expect(yield* steer.hasPending(chat.id, "goal_steer")).toBe(false)
       // The parent chat steer is UNTOUCHED — the parent runLoop can still drain it normally.
@@ -384,53 +405,60 @@ off.instance(
       expect(yield* steer.hasPending(chat.id)).toBe(true)
 
       // Symmetrically, consuming the steer channel leaves any (re-admitted) goal_steer row untouched.
-      yield* steer.markConsumed(chat.id, steerRows.map((d) => d.id))
+      yield* steer.markConsumed(
+        chat.id,
+        steerRows.map((d) => d.id),
+      )
       expect(yield* steer.hasPending(chat.id)).toBe(false)
     }),
   { config: cfg },
 )
 
-off.instance("admit is idempotent on message id (no double-buffer)", () =>
-  Effect.gen(function* () {
-    const steer = yield* SessionSteer.Service
-    const sessions = yield* Session.Service
-    const chat = yield* sessions.create({ title: "Steer idempotent" })
-    const correlationID = SessionMessage.ID.create()
+off.instance(
+  "admit is idempotent on message id (no double-buffer)",
+  () =>
+    Effect.gen(function* () {
+      const steer = yield* SessionSteer.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({ title: "Steer idempotent" })
+      const correlationID = SessionMessage.ID.create()
 
-    const a = yield* steer.admit({ correlationID, sessionID: chat.id, prompt: mkPrompt("once") })
-    const b = yield* steer.admit({ correlationID, sessionID: chat.id, prompt: mkPrompt("once") })
-    expect(a.seq).toBe(b.seq)
+      const a = yield* steer.admit({ correlationID, sessionID: chat.id, prompt: mkPrompt("once") })
+      const b = yield* steer.admit({ correlationID, sessionID: chat.id, prompt: mkPrompt("once") })
+      expect(a.seq).toBe(b.seq)
 
-    const drained = yield* steer.pending(chat.id)
-    expect(drained).toHaveLength(1)
-    expect(drained[0]!.prompt.text).toBe("once")
-  }),
+      const drained = yield* steer.pending(chat.id)
+      expect(drained).toHaveLength(1)
+      expect(drained[0]!.prompt.text).toBe("once")
+    }),
   { config: cfg },
 )
 
 // ── Durability: consume-once survives a fresh pending/markConsumed cycle (simulating a new loop pass) ─
 
-off.instance("consume-once survives a fresh drain cycle (durable, no double-apply)", () =>
-  Effect.gen(function* () {
-    const steer = yield* SessionSteer.Service
-    const sessions = yield* Session.Service
-    const chat = yield* sessions.create({ title: "Steer durable" })
+off.instance(
+  "consume-once survives a fresh drain cycle (durable, no double-apply)",
+  () =>
+    Effect.gen(function* () {
+      const steer = yield* SessionSteer.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({ title: "Steer durable" })
 
-    const admitted = yield* steer.admit({
-      sessionID: chat.id,
-      prompt: mkPrompt("persisted"),
-    })
+      const admitted = yield* steer.admit({
+        sessionID: chat.id,
+        prompt: mkPrompt("persisted"),
+      })
 
-    // First loop pass reads then marks consumed.
-    const first = yield* steer.pending(chat.id)
-    expect(first).toHaveLength(1)
-    yield* steer.markConsumed(chat.id, [admitted.id])
+      // First loop pass reads then marks consumed.
+      const first = yield* steer.pending(chat.id)
+      expect(first).toHaveLength(1)
+      yield* steer.markConsumed(chat.id, [admitted.id])
 
-    // A subsequent loop pass (fresh pending call, as runLoop would issue) sees nothing — the row is
-    // durably stamped consumed. This is the "steer sent then applied; must not double-apply" guarantee.
-    const second = yield* steer.pending(chat.id)
-    expect(second).toHaveLength(0)
-  }),
+      // A subsequent loop pass (fresh pending call, as runLoop would issue) sees nothing — the row is
+      // durably stamped consumed. This is the "steer sent then applied; must not double-apply" guarantee.
+      const second = yield* steer.pending(chat.id)
+      expect(second).toHaveLength(0)
+    }),
   { config: cfg },
 )
 
@@ -548,6 +576,10 @@ on.instance(
         sessionID: chat.id,
         prompt: mkPrompt("STEERED-MESSAGE"),
       })
+
+      // Admission is durable before the active provider turn is released.
+      const pendingDuringActiveTurn = yield* steer.pending(chat.id)
+      expect(pendingDuringActiveTurn.map((item) => item.id)).toEqual([admitted.id])
 
       // Release the in-flight call; it completes (absorb-at-boundary, not abort), then the loop drains.
       yield* Deferred.succeed(gate, void 0)
@@ -739,13 +771,11 @@ on.instance(
       // the never-called GoalManager.steerGoal). A worklog audit doc must be written into the goal's
       // Document Graph, recording the human steer (length only, PII-light) with governance="steer".
       const goalStore = new DocumentStore(path.join(Global.Path.agent.data, "state", "goal", chat.id, "graph"))
-      const audits = goalStore
-        .list({ type: "worklog", scope: `run:${chat.id}` })
-        .map((ref) => goalStore.get(ref.id)!)
+      const audits = goalStore.list({ type: "worklog", scope: `run:${chat.id}` }).map((ref) => goalStore.get(ref.id)!)
       const steerAudit = audits.find((d) => d.extensions?.governance === "steer")
       expect(steerAudit).toBeDefined()
       expect(steerAudit?.extensions?.goal_id).toBe("g_" + chat.id)
-      expect(steerAudit?.body).toContain("\"textChars\": 13") // "GOAL-GUIDANCE".length
+      expect(steerAudit?.body).toContain('"textChars": 13') // "GOAL-GUIDANCE".length
     }),
   15_000,
 )
@@ -822,7 +852,12 @@ on.instance(
         permission: [{ permission: "*", pattern: "*", action: "allow" }],
       })
       yield* llm.text("first-answer")
-      yield* prompt.prompt({ sessionID: drained.id, agent: "build", model: ref, parts: [{ type: "text", text: "initial" }] })
+      yield* prompt.prompt({
+        sessionID: drained.id,
+        agent: "build",
+        model: ref,
+        parts: [{ type: "text", text: "initial" }],
+      })
       expect(yield* llm.calls).toBe(1)
       expect(yield* state.isBusy(drained.id)).toBe(false)
 
@@ -857,7 +892,12 @@ on.instance(
         permission: [{ permission: "*", pattern: "*", action: "allow" }],
       })
       yield* llm.text("first-answer-2")
-      yield* prompt.prompt({ sessionID: normal.id, agent: "build", model: ref, parts: [{ type: "text", text: "initial" }] })
+      yield* prompt.prompt({
+        sessionID: normal.id,
+        agent: "build",
+        model: ref,
+        parts: [{ type: "text", text: "initial" }],
+      })
       const before = yield* llm.calls
       yield* steer.admit({ sessionID: normal.id, prompt: mkPrompt("NOT-DRAINED") })
 

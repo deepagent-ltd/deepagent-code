@@ -7,6 +7,7 @@ import { join } from "node:path"
 import { getCACertificates, setDefaultCACertificates } from "node:tls"
 import type { Event } from "electron"
 import { app, BrowserWindow } from "electron"
+import { resolveDataPath } from "@deepagent-code/core/global-path"
 
 import { Deferred, Effect, Fiber } from "effect"
 import contextMenu from "electron-context-menu"
@@ -39,8 +40,8 @@ import {
 import { createWslServersController } from "./wsl/servers"
 import { registerWslIpcHandlers } from "./wsl/ipc"
 import { spawnWslSidecar } from "./wsl/sidecar"
-import { migrate } from "./migrate"
 import { initPowerSaveBlocker, stopPowerSaveBlocker } from "./power"
+import { desktopStoragePaths } from "./storage-path"
 import { createTray, destroyTray } from "./tray"
 
 const APP_NAMES: Record<string, string> = {
@@ -120,23 +121,31 @@ const main = Effect.gen(function* () {
 
     const root = process.env.DEEPAGENT_CODE_TEST_ROOT ?? join(tmpdir(), `deepagent-code-onboarding-${randomUUID()}`)
     if (!process.env.DEEPAGENT_CODE_TEST_ROOT) rmSync(root, { recursive: true, force: true })
-    ;["data", "config", "cache", "state", "desktop", "session"].forEach((dir) =>
-      mkdirSync(join(root, dir), { recursive: true }),
-    )
+    process.env.DEEPAGENT_CODE_TEST_HOME = root
+    delete process.env.DEEPAGENT_CODE_HOME
     process.env.DEEPAGENT_CODE_DB ??= ":memory:"
-    process.env.XDG_DATA_HOME = join(root, "data")
-    process.env.XDG_CONFIG_HOME = join(root, "config")
-    process.env.XDG_CACHE_HOME = join(root, "cache")
-    process.env.XDG_STATE_HOME = join(root, "state")
     return root
   })()
+  if (!onboardingTestRoot) delete process.env.DEEPAGENT_CODE_TEST_HOME
+  const dataRoot = resolveDataPath(process.env)
+  const storage = desktopStoragePaths(dataRoot, appId)
+  ;[
+    dataRoot,
+    join(dataRoot, "tmp"),
+    storage.root,
+    storage.session,
+    storage.cache,
+    storage.updater,
+    storage.logs,
+    storage.tmp,
+  ].forEach((dir) => mkdirSync(dir, { recursive: true }))
   app.setName(app.isPackaged ? APP_NAMES[CHANNEL] : "DeepAgent Code Dev")
   app.setAppUserModelId(appId)
-  app.setPath(
-    "userData",
-    onboardingTestRoot ? join(onboardingTestRoot, "desktop") : join(app.getPath("appData"), appId),
-  )
-  if (onboardingTestRoot) app.setPath("sessionData", join(onboardingTestRoot, "session"))
+  app.setPath("userData", storage.root)
+  app.setPath("sessionData", storage.session)
+  app.setPath("cache", storage.cache)
+  app.setPath("logs", storage.logs)
+  app.setPath("temp", storage.tmp)
   logger = initLogging()
   initCrashReporter()
 
@@ -192,7 +201,7 @@ const main = Effect.gen(function* () {
     return
   }
 
-  preferAppEnv(app.getPath("userData"))
+  preferAppEnv(dataRoot)
 
   app.on("second-instance", (_event: Event, argv: string[]) => {
     const urls = argv.filter((arg: string) => arg.startsWith("deepagent-code://"))
@@ -254,11 +263,10 @@ const main = Effect.gen(function* () {
 
   yield* Effect.promise(() => app.whenReady())
 
-  if (!TEST_ONBOARDING) migrate()
   app.setAsDefaultProtocolClient("deepagent-code")
   registerRendererProtocol()
   setDockIcon()
-  const updater = setupAutoUpdater(stopSidecars)
+  const updater = setupAutoUpdater(stopSidecars, storage.updater)
   registerIpcHandlers({
     killSidecar: () => killSidecar(),
     relaunch,
@@ -360,7 +368,6 @@ const main = Effect.gen(function* () {
     logger.log("spawning sidecar", { url })
     const { listener, health } = yield* Effect.promise(() =>
       spawnLocalServer(hostname, port, password, {
-        userDataPath: app.getPath("userData"),
         onStdout: (message) => writeLog("server", "stdout", { message }),
         onStderr: (message) => writeLog("server", "stderr", { message }, "warn"),
         onExit: (code) => writeLog("utility", "sidecar exited", { code }, "warn"),

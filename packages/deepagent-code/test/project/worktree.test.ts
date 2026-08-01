@@ -209,6 +209,30 @@ describe("Worktree", () => {
     )
 
     it.instance(
+      "createReady returns only after the checkout is populated",
+      () =>
+        Effect.gen(function* () {
+          const test = yield* TestInstance
+          const svc = yield* Worktree.Service
+          yield* Effect.promise(() => Bun.write(path.join(test.directory, "ready-fixture.txt"), "ready\n"))
+          yield* git(test.directory, ["add", "--", "ready-fixture.txt"])
+          yield* git(test.directory, ["commit", "-m", "test: add ready fixture"])
+
+          yield* Effect.acquireUseRelease(
+            svc.createReady({ name: "ready-checkout" }),
+            (info) =>
+              Effect.gen(function* () {
+                expect(yield* Effect.promise(() => Bun.file(path.join(info.directory, "ready-fixture.txt")).text())).toBe(
+                  "ready\n",
+                )
+              }),
+            (info) => svc.remove({ directory: info.directory }).pipe(Effect.asVoid),
+          )
+        }),
+      { git: true },
+    )
+
+    it.instance(
       "lists the active linked worktree but not the project checkout",
       () =>
         withCreatedWorktree(undefined, ({ info }) =>

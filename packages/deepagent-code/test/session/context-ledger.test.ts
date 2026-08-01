@@ -145,7 +145,7 @@ describe("carryOverToBridge (Stage 3 write side)", () => {
       const sessionID = "ses_cache" as unknown as SessionID
       const workspacePath = path.join(home, "ws")
 
-      // Warm the reader's cache FIRST (as code-index-trigger / the orchestrator do on first prompt) so
+      // Warm the reader's cache FIRST so
       // the cached instance predates the bridge write — the exact stale-cache condition.
       const cached = AgentGateway.DeepAgentKnowledgeSource.projectStoreFor(workspacePath).documentStore
       const projectId = DeepAgentDurableKnowledgeStore.projectIdForWorkspace(workspacePath)

@@ -3,6 +3,8 @@ import { which } from "@deepagent-code/core/util/which"
 import { PAP } from "@/profile/pap"
 import { Vocabulary } from "@/profile/vocabulary"
 import { RuntimeBase } from "@/runtime/base"
+import { Global } from "@deepagent-code/core/global"
+import path from "node:path"
 
 const log = Log.create({ service: "profile.vtune" })
 
@@ -88,9 +90,14 @@ function splitCsvRow(row: string): string[] {
   let inQuote = false
   for (let i = 0; i < row.length; i++) {
     const ch = row[i]!
-    if (ch === '"') { inQuote = !inQuote }
-    else if (ch === "," && !inQuote) { cols.push(cur); cur = "" }
-    else { cur += ch }
+    if (ch === '"') {
+      inQuote = !inQuote
+    } else if (ch === "," && !inQuote) {
+      cols.push(cur)
+      cur = ""
+    } else {
+      cur += ch
+    }
   }
   cols.push(cur)
   return cols
@@ -210,11 +217,14 @@ export class VtuneAdapter implements PAP.ProfileAdapter {
       log.info(msg)
       return Promise.reject(new Error(msg))
     }
-    const resultDir = `/tmp/deepagent-vtune-${Date.now()}`
+    const resultDir = path.join(Global.Path.tmp, `profile-vtune-${Date.now()}`)
     const args = [
-      "-collect", "hotspots",
-      "-knob", "sampling-mode=hw",
-      "-result-dir", resultDir,
+      "-collect",
+      "hotspots",
+      "-knob",
+      "sampling-mode=hw",
+      "-result-dir",
+      resultDir,
       "--",
       target.command,
       ...(target.args ?? []),
@@ -320,53 +330,62 @@ export class VtuneAdapter implements PAP.ProfileAdapter {
       const badSpec = getNative(nm, N.badSpeculation)
 
       return {
-        self_pct: selfPct !== undefined
-          ? PAP.present(selfPct, "pct", { nativeMetric: N.cpuTimeSelf, semantic: "exact" })
-          : PAP.missing("not_collected"),
+        self_pct:
+          selfPct !== undefined
+            ? PAP.present(selfPct, "pct", { nativeMetric: N.cpuTimeSelf, semantic: "exact" })
+            : PAP.missing("not_collected"),
 
-        cpi: cpiRate !== undefined
-          ? PAP.present(cpiRate, "ratio", { nativeMetric: N.cpiRate, semantic: "exact" })
-          : PAP.missing("not_collected"),
+        cpi:
+          cpiRate !== undefined
+            ? PAP.present(cpiRate, "ratio", { nativeMetric: N.cpiRate, semantic: "exact" })
+            : PAP.missing("not_collected"),
 
         // ipc = 1 / CPI Rate — PAP-derived.
-        ipc: cpiRate !== undefined && cpiRate > 0
-          ? PAP.present(1 / cpiRate, "ratio", {
-              nativeMetric: N.cpiRate,
-              semantic: "exact",
-              derived: true,
-              formula: "1 / CPI Rate",
-            })
-          : PAP.missing("not_collected"),
+        ipc:
+          cpiRate !== undefined && cpiRate > 0
+            ? PAP.present(1 / cpiRate, "ratio", {
+                nativeMetric: N.cpiRate,
+                semantic: "exact",
+                derived: true,
+                formula: "1 / CPI Rate",
+              })
+            : PAP.missing("not_collected"),
 
-        clockticks: clocks !== undefined
-          ? PAP.present(clocks, "count", { nativeMetric: N.clockticks, semantic: "exact" })
-          : PAP.missing("not_collected"),
+        clockticks:
+          clocks !== undefined
+            ? PAP.present(clocks, "count", { nativeMetric: N.clockticks, semantic: "exact" })
+            : PAP.missing("not_collected"),
 
-        instructions_retired: instr !== undefined
-          ? PAP.present(instr, "count", { nativeMetric: N.instructionsRetired, semantic: "exact" })
-          : PAP.missing("not_collected"),
+        instructions_retired:
+          instr !== undefined
+            ? PAP.present(instr, "count", { nativeMetric: N.instructionsRetired, semantic: "exact" })
+            : PAP.missing("not_collected"),
 
-        memory_bound_pct: memBound !== undefined
-          ? PAP.present(memBound, "pct", { nativeMetric: N.memoryBound, semantic: "exact" })
-          : PAP.missing("not_collected"),
+        memory_bound_pct:
+          memBound !== undefined
+            ? PAP.present(memBound, "pct", { nativeMetric: N.memoryBound, semantic: "exact" })
+            : PAP.missing("not_collected"),
 
-        dram_bound_pct: dramBound !== undefined
-          ? PAP.present(dramBound, "pct", { nativeMetric: N.dramBound, semantic: "exact" })
-          : PAP.missing("not_collected"),
+        dram_bound_pct:
+          dramBound !== undefined
+            ? PAP.present(dramBound, "pct", { nativeMetric: N.dramBound, semantic: "exact" })
+            : PAP.missing("not_collected"),
 
         // LLC Miss Ratio → cache_miss_rate (ratio 0–1 or already 0–100 depending on VTune version).
         // VTune reports LLC Miss Ratio as 0–100%, we normalize to 0–1 ratio.
-        cache_miss_rate: llcRatio !== undefined
-          ? PAP.present(llcRatio > 1 ? llcRatio / 100 : llcRatio, "ratio", {
-              nativeMetric: N.llcMissRatio,
-              semantic: "exact",
-              ...(llcRatio > 1 ? { conversion: "LLC Miss Ratio / 100" } : {}),
-            })
-          : PAP.missing("not_collected"),
+        cache_miss_rate:
+          llcRatio !== undefined
+            ? PAP.present(llcRatio > 1 ? llcRatio / 100 : llcRatio, "ratio", {
+                nativeMetric: N.llcMissRatio,
+                semantic: "exact",
+                ...(llcRatio > 1 ? { conversion: "LLC Miss Ratio / 100" } : {}),
+              })
+            : PAP.missing("not_collected"),
 
-        branch_misprediction_pct: badSpec !== undefined
-          ? PAP.present(badSpec, "pct", { nativeMetric: N.badSpeculation, semantic: "exact" })
-          : PAP.missing("not_collected"),
+        branch_misprediction_pct:
+          badSpec !== undefined
+            ? PAP.present(badSpec, "pct", { nativeMetric: N.badSpeculation, semantic: "exact" })
+            : PAP.missing("not_collected"),
       }
     }
 
