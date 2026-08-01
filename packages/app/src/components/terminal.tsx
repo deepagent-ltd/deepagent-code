@@ -12,6 +12,7 @@ import { useServer } from "@/context/server"
 import { terminalFontFamily, useSettings } from "@/context/settings"
 import { terminalFailure, type LocalPTY, type TerminalFailure, type TerminalStatus } from "@/context/terminal"
 import { disposeIfDisposable, getHoveredLinkText, setOptionIfSupported } from "@/utils/runtime-adapters"
+import { terminalInputWriter } from "@/utils/terminal-input-writer"
 import { terminalWriter } from "@/utils/terminal-writer"
 import { terminalWebSocketURL } from "@/utils/terminal-websocket-url"
 
@@ -439,11 +440,12 @@ export const Terminal = (props: TerminalProps) => {
         scheduleSize(size.cols, size.rows)
       })
       cleanups.push(() => disposeIfDisposable(onResize))
-      const onData = t.onData((data) => {
-        // When optimisticReady is active the buffering handler below takes over.
-        if (local.optimisticReady) return
-        if (ws?.readyState === WebSocket.OPEN) ws.send(data)
-      })
+      const input = terminalInputWriter(
+        (data) => ws?.send(data),
+        () => ws?.readyState === WebSocket.OPEN,
+        Boolean(local.optimisticReady),
+      )
+      const onData = t.onData(input.push)
       cleanups.push(() => disposeIfDisposable(onData))
       const onKey = t.onKey((key) => {
         if (key.key == "Enter") {
@@ -467,22 +469,8 @@ export const Terminal = (props: TerminalProps) => {
       // initialised instead of waiting for the full WebSocket handshake (which can
       // take 2-4 s). Input typed before the socket opens is buffered and flushed
       // once the connection is established.
-      let inputBuffer = local.optimisticReady ? "" : undefined
       if (local.optimisticReady) {
         markReady()
-        // Intercept onData to buffer keystrokes until the WebSocket is open.
-        const onDataOpt = t.onData((data) => {
-          if (ws?.readyState === WebSocket.OPEN) {
-            if (inputBuffer) {
-              ws.send(inputBuffer)
-              inputBuffer = undefined
-            }
-            ws.send(data)
-          } else {
-            inputBuffer = (inputBuffer ?? "") + data
-          }
-        })
-        cleanups.push(() => disposeIfDisposable(onDataOpt))
       }
 
       const once = { value: false }
@@ -591,6 +579,7 @@ export const Terminal = (props: TerminalProps) => {
           reportedReady = false
           lastSize = undefined
           scheduleSize(t.cols, t.rows)
+          input.flush()
           markReady()
         }
 

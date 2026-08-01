@@ -29,12 +29,11 @@ import { Reference } from "@/reference/reference"
 import { RepositoryCache } from "@/reference/repository-cache"
 
 // Appendix C / 形态一 (form 1): a NON-git directory hosts a working conversation.
-// This is the "global" project fallback path (ProjectV2.ID.global, worktree === "/").
-// The design doc calls this "有意处理,非 broken" — the worktree === "/" special case
-// intentionally skips the worktree boundary so the permission boundary collapses onto
-// the picked directory (containsPath in instance-context.ts). These regressions lock
-// that behavior: (a) the instance boots, (b) cwd tools work, (c) the permission
-// boundary is the picked directory, not the filesystem root.
+// This is the "global" project fallback path. Project persistence retains "/" as its
+// non-git sentinel, while InstanceStore binds the live instance worktree to the picked
+// directory. These regressions lock that split: (a) the instance boots, (b) cwd tools
+// and relative permission patterns use the picked directory, and (c) the permission
+// boundary is never the filesystem root.
 
 afterEach(async () => {
   await disposeAllInstances()
@@ -112,15 +111,16 @@ describe("Appendix C form 1 — non-git directory hosts a conversation", () => {
     }),
   )
 
-  it.live("boots an instance whose directory is the picked dir and worktree is the '/' sentinel", () =>
+  it.live("boots an instance whose directory and runtime worktree are the picked dir", () =>
     Effect.gen(function* () {
       const dir = yield* tmpdirScoped()
 
       const instance = yield* provideInstance(dir)(InstanceState.context)
 
       expect(instance.directory).toBe(dir)
-      expect(instance.worktree).toBe("/")
+      expect(instance.worktree).toBe(dir)
       expect(instance.project.id).toBe(ProjectV2.ID.global)
+      expect(instance.project.worktree).toBe("/")
     }),
   )
 
@@ -143,6 +143,7 @@ describe("Appendix C form 1 — non-git directory hosts a conversation", () => {
       yield* provideInstance(dir)(runRead({ filePath: path.join(dir, "inside.txt") }, next))
 
       expect(items.find((item) => item.permission === "external_directory")).toBeUndefined()
+      expect(items.find((item) => item.permission === "read")?.patterns).toEqual(["inside.txt"])
     }),
   )
 
@@ -187,7 +188,7 @@ describe("Appendix C form 1 — non-git directory hosts a conversation", () => {
   // directory shaped like <dataDir>/workspaces/<uuid>). This locks the end-to-end
   // security invariant for that form: the booted instance directory is the sandbox
   // (NOT "/" and NOT empty), and the permission boundary confines to the sandbox
-  // even though the global project's worktree is the "/" sentinel.
+  // while the persisted global project still carries the "/" sentinel.
   it.live("folder-less sandbox dir boots with directory === sandbox (never '/') and confines the boundary", () =>
     Effect.gen(function* () {
       const dataDir = yield* tmpdirScoped()
@@ -200,8 +201,9 @@ describe("Appendix C form 1 — non-git directory hosts a conversation", () => {
       expect(instance.directory).toBe(sandbox)
       expect(instance.directory).not.toBe("/")
       expect(instance.directory.length).toBeGreaterThan(0)
-      expect(instance.worktree).toBe("/")
+      expect(instance.worktree).toBe(sandbox)
       expect(instance.project.id).toBe(ProjectV2.ID.global)
+      expect(instance.project.worktree).toBe("/")
 
       // Read inside the sandbox: no external_directory ask.
       const inside = asks()

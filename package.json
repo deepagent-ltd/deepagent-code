@@ -19,7 +19,8 @@
     "prepare": "husky",
     "random": "echo 'Random script'",
     "sso": "aws sso login --sso-session=deepagent-code --no-browser",
-    "test": "bun run --cwd packages/app test && bun run --cwd packages/ui test"
+    "test": "bun run --cwd packages/app test && bun run --cwd packages/ui test",
+    "test:llm:all": "bun run script/run-live-llm-all.ts"
   },
   "workspaces": {
     "packages": [

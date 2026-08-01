@@ -30,6 +30,10 @@ export const Event = {
       event: Schema.Literals(["add", "change", "unlink"]),
     },
   }),
+  Overflow: EventV2.define({
+    type: "file.watcher.overflow",
+    schema: { reason: Schema.String },
+  }),
 }
 
 const watcher = lazy((): typeof import("@parcel/watcher") | undefined => {
@@ -100,7 +104,11 @@ export const layer = Layer.effect(
       Effect.promise(() => Promise.allSettled(subscriptions.map((subscription) => subscription.unsubscribe()))),
     )
 
-    const callback: ParcelWatcher.SubscribeCallback = (_error, updates) => {
+    const callback: ParcelWatcher.SubscribeCallback = (error, updates) => {
+      if (error) {
+        runFork(events.publish(Event.Overflow, { reason: "backend_error" }))
+        return
+      }
       for (const update of updates) {
         runFork(events.publish(Event.Updated, { file: update.path, event: normalizeEvent(update) }))
       }
@@ -114,7 +122,7 @@ export const layer = Layer.effect(
         Effect.catchCause((cause) => {
           log.error("failed to subscribe", { directory, cause: Cause.pretty(cause) })
           pending.then((subscription) => subscription.unsubscribe()).catch(() => {})
-          return Effect.void
+          return events.publish(Event.Overflow, { reason: "subscription_failed" })
         }),
       )
     }

@@ -245,6 +245,61 @@ describe("Config", () => {
     ),
   )
 
+  it.live("resolves environment and file references before migrating provider credentials", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((tmp) =>
+        Effect.gen(function* () {
+          const configFile = path.join(tmp.path, "deepagent-code.jsonc")
+          const keyFile = path.join(tmp.path, "provider.key")
+          yield* Effect.promise(() =>
+            Promise.all([
+              fs.writeFile(keyFile, "file-secret\n"),
+              fs.writeFile(
+                configFile,
+                `{
+                  "username": "{env:DEEPAGENT_CODE_CONFIG_TEST_USER}",
+                  "provider": {
+                    "custom": {
+                      "npm": "@ai-sdk/openai-compatible",
+                      "options": {
+                        "apiKey": "{file:provider.key}",
+                        "baseURL": "https://example.com/v1"
+                      },
+                      "models": { "model": {} }
+                    }
+                  }
+                }`,
+              ),
+            ]),
+          )
+
+          const previous = process.env.DEEPAGENT_CODE_CONFIG_TEST_USER
+          process.env.DEEPAGENT_CODE_CONFIG_TEST_USER = "reference-user"
+          try {
+            return yield* Effect.gen(function* () {
+              const config = yield* Config.Service
+              const document = (yield* config.entries()).find(
+                (entry) => entry.type === "document" && entry.path === configFile,
+              )
+
+              expect(document?.type).toBe("document")
+              if (document?.type !== "document") throw new Error("Expected project config document")
+              expect(document.info.username).toBe("reference-user")
+              expect(document.info.providers?.custom?.api?.settings).toEqual({ apiKey: "file-secret" })
+              expect(yield* Effect.promise(() => fs.readFile(configFile, "utf8"))).toContain("{file:provider.key}")
+            }).pipe(Effect.provide(testLayer(tmp.path)))
+          } finally {
+            if (previous === undefined) delete process.env.DEEPAGENT_CODE_CONFIG_TEST_USER
+            else process.env.DEEPAGENT_CODE_CONFIG_TEST_USER = previous
+          }
+        }),
+      ),
+    ),
+  )
+
   it.live("loads supported scalar and resource configuration", () =>
     Effect.acquireRelease(
       Effect.promise(() => tmpdir()),

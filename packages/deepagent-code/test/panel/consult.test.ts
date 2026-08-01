@@ -96,7 +96,9 @@ describe("consultPanel (§C standalone)", () => {
 
   test("defaults to all five core lenses when none specified", async () => {
     const seen = new Set<string>()
+    const prompts: string[] = []
     const runTurn: PanelTurnRunner = (input) => {
+      prompts.push(input.prompt)
       for (const lens of ["correctness", "security", "performance", "architecture", "repro"]) {
         if (input.prompt.toLowerCase().includes(lens)) seen.add(lens)
       }
@@ -106,5 +108,53 @@ describe("consultPanel (§C standalone)", () => {
       consultPanel({ question: "q", codeRefs: [], parentSessionID: "sess-4" }, deps(runTurn)),
     )
     expect(seen.size).toBe(5)
+    expect(prompts.every((prompt) => prompt.includes("<read>...</read> is not a tool call"))).toBe(true)
+  })
+
+  test("observes the exact structured opinions before arbitration", async () => {
+    const observed: Array<{ lens: string; round: number }> = []
+    const verdict = await Effect.runPromise(
+      consultPanel(
+        {
+          question: "q",
+          codeRefs: ["src/x.ts"],
+          parentSessionID: "sess-5",
+          lenses: ["correctness", "security"],
+        },
+        {
+          runTurn: runnerReturning({ security: reviewFor("block", true) }),
+          observeOpinion: ({ opinion, round }) =>
+            Effect.sync(() => {
+              observed.push({ lens: opinion.lens, round })
+            }),
+        },
+      ),
+    )
+    expect(observed.toSorted((a, b) => a.lens.localeCompare(b.lens))).toEqual([
+      { lens: "correctness", round: 1 },
+      { lens: "security", round: 1 },
+    ])
+    expect(verdict.decision).toBe("block")
+  })
+
+  test("an observer defect cannot drop an opinion or change the panel verdict", async () => {
+    const runTurn = runnerReturning({ security: reviewFor("block", true) })
+    const input = {
+      question: "q",
+      codeRefs: ["src/x.ts"],
+      parentSessionID: "sess-6",
+      lenses: ["correctness", "security"] as const,
+    }
+    const baseline = await Effect.runPromise(consultPanel(input, { runTurn }))
+    const verdict = await Effect.runPromise(
+      consultPanel(
+        input,
+        {
+          runTurn,
+          observeOpinion: () => Effect.die("observer failed"),
+        },
+      ),
+    )
+    expect(verdict).toEqual(baseline)
   })
 })

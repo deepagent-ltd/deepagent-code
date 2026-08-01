@@ -52,7 +52,7 @@ runs:
       id: cache
       uses: actions/cache@v4
       with:
-        path: ~/.deepagent-code/bin
+        path: ~/.deepagent/code/bin
         key: deepagent-code-${{ runner.os }}-${{ runner.arch }}-${{ steps.version.outputs.version }}
 
     - name: Install deepagent-code
@@ -62,7 +62,7 @@ runs:
 
     - name: Add deepagent-code to PATH
       shell: bash
-      run: echo "$HOME/.deepagent-code/bin" >> $GITHUB_PATH
+      run: echo "$HOME/.deepagent/code/bin" >> $GITHUB_PATH
 
     - name: Run deepagent-code
       shell: bash

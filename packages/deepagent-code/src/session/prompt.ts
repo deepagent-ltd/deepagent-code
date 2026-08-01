@@ -19,6 +19,7 @@ import { type Tool as AITool, tool, jsonSchema, streamText, type ModelMessage } 
 import type { JSONSchema7 } from "@ai-sdk/provider"
 import { SessionCompaction } from "./compaction"
 import {
+  isOverflow,
   overflowStatus,
   tokensUsed,
   softLandingDecision,
@@ -48,8 +49,10 @@ import { SessionProcessor } from "./processor"
 import { Tool } from "@/tool/tool"
 import { ToolInternal } from "@/tool/internal"
 import { Permission } from "@/permission"
+import { Question } from "@/question"
 import { SessionStatus } from "./status"
 import { LLM } from "./llm"
+import { LLMRequestPrep } from "./llm/request"
 import { AgentGateway } from "@deepagent-code/core/agent-gateway"
 import * as MultiRound from "./deepagent-multiround"
 import { runValidationCommands } from "../deepagent/validation-exec"
@@ -90,6 +93,11 @@ import { EventV2Bridge } from "@/event-v2-bridge"
 import { Database } from "@deepagent-code/core/database/database"
 import { SessionEvent } from "@deepagent-code/core/session/event"
 import { SessionMessage } from "@deepagent-code/core/session/message"
+import { SessionInput } from "@deepagent-code/core/session/input"
+import { ContextFederationRollout } from "@deepagent-code/core/context-federation/rollout"
+import { ContextFederationExecutionParity } from "@deepagent-code/core/context-federation/execution-parity"
+import { Hash } from "@deepagent-code/core/util/hash"
+import { SessionFederatedContext } from "@/context-federation/session-context-runtime"
 import { ModelV2 } from "@deepagent-code/core/model"
 import { ProviderV2 } from "@deepagent-code/core/provider"
 import {
@@ -109,11 +117,11 @@ import { SessionTools } from "./tools"
 import { LLMEvent } from "@deepagent-code/llm"
 import { ConversationLogWriter } from "./conversation-log-writer"
 import { collectVolatileFacts, refreshWorldState } from "./context-ledger"
-import { CodeIndexTrigger } from "./code-index-trigger"
 import { ToolSemanticFingerprint } from "@/tool/semantic-fingerprint"
 import { deliverTaskNotifications, recoverExpiredTaskRuns } from "@/tool/task-run"
 import { registerDisposer, registerInitializer } from "@/effect/instance-registry"
-import { InstanceRef } from "@/effect/instance-ref"
+import { EventRouteRef, InstanceRef } from "@/effect/instance-ref"
+import { InstanceStore } from "@/project/instance-store"
 
 // @ts-ignore
 globalThis.AI_SDK_LOG_WARNINGS = false
@@ -141,6 +149,18 @@ function buildStructuredOutputSystemPrompt(schema: Record<string, any>): string 
       ? `\nThe StructuredOutput tool requires these top-level fields: ${fields.join(", ")}. Use ONLY these exact field names.`
       : ""
   return `IMPORTANT: The user has requested structured output. You MUST use the StructuredOutput tool to provide your final response. Do NOT respond with plain text - you MUST call the StructuredOutput tool with your answer formatted according to the schema.${fieldHint}`
+}
+
+function buildStructuredOutputRuntimeTail(format: SessionV1.OutputFormat, finalizerMode: boolean): string {
+  if (format.type !== "json_schema") return ""
+  return [
+    buildStructuredOutputSystemPrompt(format.schema),
+    finalizerMode
+      ? "This is a bounded finalizer turn. Read the supplied research result and call StructuredOutput once. No research or other work is permitted."
+      : "",
+  ]
+    .filter(Boolean)
+    .join("\n")
 }
 
 function extractSchemaTopLevelFields(schema: Record<string, any>): string[] {
@@ -297,7 +317,9 @@ export const layer = Layer.effect(
     const plugin = yield* Plugin.Service
     const commands = yield* Command.Service
     const config = yield* Config.Service
+    const instances = yield* InstanceStore.Service
     const permission = yield* Permission.Service
+    const question = yield* Question.Service
     const fsys = yield* FSUtil.Service
     const mcp = yield* MCP.Service
     const lsp = yield* LSP.Service
@@ -317,12 +339,37 @@ export const layer = Layer.effect(
     const references = yield* Reference.Service
     const events = yield* EventV2Bridge.Service
     const flags = yield* RuntimeFlags.Service
+    const federation = Option.getOrUndefined(yield* Effect.serviceOption(SessionFederatedContext.Service))
+    const federationRollout = ContextFederationRollout.resolve(
+      {
+        contextFederationShadow: flags.contextFederationShadow,
+        locationIndexesV2Shadow: flags.locationIndexesV2Shadow,
+        contextProjectionV2: flags.contextProjectionV2,
+        contextQueryToolsV2: flags.contextQueryToolsV2,
+        coreV2ExecutionOwner: flags.coreV2ExecutionOwner,
+      },
+      { coreV2ParityVerified: ContextFederationExecutionParity.evaluate([]).verified },
+    )
     const database = yield* Database.Service
     const { db } = database
-    // V3.8 Phase 3: sessions that already had their one lightweight code-index pass this process, so a
-    // re-prompt does not re-walk the tree (content-sha gating makes re-indexing idempotent regardless,
-    // but this avoids the redundant fs walk entirely).
-    const indexedSessions = new Set<SessionID>()
+    const activeFederatedContexts = new Map<SessionID, SessionFederatedContext.Resolved>()
+    const settleFederatedActivity = (sessionID: SessionID, state: "settled" | "failed" | "interrupted") =>
+      Effect.gen(function* () {
+        const current = activeFederatedContexts.get(sessionID)
+        if (!current || !federation) return
+        yield* federation.settleActivity(current.selection, state).pipe(Effect.orDie)
+        activeFederatedContexts.delete(sessionID)
+      })
+    const rootSession = Effect.fn("SessionPrompt.rootSession")(function* (input: Session.Info) {
+      const seen = new Set<SessionID>()
+      let current = input
+      while (current.parentID) {
+        if (seen.has(current.id)) return yield* Effect.die(new Error(`Session parent cycle at ${current.id}`))
+        seen.add(current.id)
+        current = yield* sessions.get(current.parentID).pipe(Effect.orDie)
+      }
+      return current
+    })
     const ops = Effect.fn("SessionPrompt.ops")(function* () {
       return {
         cancel: (sessionID: SessionID) => cancel(sessionID),
@@ -334,6 +381,7 @@ export const layer = Layer.effect(
     const cancel = Effect.fn("SessionPrompt.cancel")(function* (sessionID: SessionID) {
       yield* elog.info("cancel", { sessionID })
       yield* state.cancel(sessionID)
+      yield* question.rejectSession(sessionID)
     })
 
     const resolveReferenceParts = Effect.fnUntraced(function* (template: string) {
@@ -1711,11 +1759,11 @@ export const layer = Layer.effect(
           synthetic: [] as string[],
         },
       )
-      // TODO(v2): Temporary dual-write while migrating session messages to v2 events.
-      if (flags.experimentalEventSystem) {
+      // Context selection and the dormant V2 projector share this durable input identity with V1.
+      if (flags.experimentalEventSystem || federationRollout.enabled.contextFederationShadow) {
         yield* events.publish(SessionEvent.Prompted, {
           sessionID: input.sessionID,
-          messageID: SessionMessage.ID.create(),
+          messageID: SessionMessage.ID.make(info.id),
           timestamp: DateTime.makeUnsafe(info.time.created),
           delivery: "steer",
           prompt: new Prompt({
@@ -1764,6 +1812,28 @@ export const layer = Layer.effect(
         }
       }
       const session = yield* sessions.get(input.sessionID).pipe(Effect.orDie)
+      const current = yield* InstanceState.context
+      const route = yield* EventRouteRef
+      const root = yield* rootSession(session)
+      if (
+        !route ||
+        FSUtil.resolve(route.directory) !== FSUtil.resolve(root.directory) ||
+        route.workspaceID !== root.workspaceID
+      ) {
+        const rootContext =
+          FSUtil.resolve(current.directory) === FSUtil.resolve(root.directory)
+            ? current
+            : yield* instances.load({ directory: root.directory })
+        return yield* prompt(input).pipe(
+          Effect.provideService(EventRouteRef, {
+            ...rootContext,
+            ...(root.workspaceID ? { workspaceID: root.workspaceID } : {}),
+          }),
+        )
+      }
+      if (FSUtil.resolve(session.directory) !== FSUtil.resolve(current.directory)) {
+        return yield* instances.provide({ directory: session.directory }, prompt(input))
+      }
       yield* revert.cleanup(session)
       const pipeline = yield* buildPromptPipelineSubmission(input)
       const message = yield* createUserMessage({
@@ -2025,9 +2095,9 @@ export const layer = Layer.effect(
     const steerPartID = (messageID: MessageID, suffix?: string) =>
       PartID.make("prt_" + messageID.slice("msg_".length) + (suffix ?? ""))
     const drainSteers = Effect.fn("SessionPrompt.drainSteers")(function* (sessionID: SessionID) {
-      if (!flags.v4Steering) return 0
+      if (!flags.v4Steering) return [] as SessionMessage.ID[]
       const pending = yield* steerBuffer.pending(sessionID)
-      if (pending.length === 0) return 0
+      if (pending.length === 0) return [] as SessionMessage.ID[]
       const current = yield* db
         .select({ agent: SessionTable.agent, model: SessionTable.model })
         .from(SessionTable)
@@ -2087,13 +2157,22 @@ export const layer = Layer.effect(
             type: "agent",
             name: agent.name,
           })
+        if (federationRollout.enabled.contextFederationShadow && !(yield* SessionInput.find(db, admitted.id))) {
+          yield* events.publish(SessionEvent.Prompted, {
+            sessionID,
+            messageID: admitted.id,
+            timestamp: DateTime.makeUnsafe(admitted.timeCreated),
+            delivery: "steer",
+            prompt: admitted.prompt,
+          })
+        }
         persisted.push(admitted.id)
         yield* elog.info("steer absorbed at boundary", { sessionID, messageID: info.id, seq: admitted.seq })
       }
       // Only AFTER every steer is durably in history do we mark them consumed. A crash before this leaves
       // them pending → re-materialized (idempotently) on the next drain. No loss, no double-apply.
       yield* steerBuffer.markConsumed(sessionID, persisted)
-      return pending.length
+      return persisted
     })
 
     // ── V4.0.1 P0: three-layer SOFT-LANDING compaction ─────────────────────────────────────────────
@@ -2234,6 +2313,12 @@ export const layer = Layer.effect(
         // of "module" for ResearchResult) and the AI SDK silently rejects them before execute().
         let structuredFailedAttempts = 0
         const session = yield* sessions.get(sessionID).pipe(Effect.orDie)
+        const sessionFederationRollout = ContextFederationRollout.resolveProject(federationRollout, session.projectID, {
+          stage: flags.contextFederationRolloutStage,
+          percentage: flags.contextFederationRolloutPercent,
+          internalProjectScopeKeys: flags.contextFederationInternalProjects,
+          killSwitch: flags.contextFederationKillSwitch,
+        })
 
         // V3.8 App-A C2.5 (Stage 5): the Conversation Log writer. Constructed ONCE per run so its
         // in-memory seq + seen-set persist across the loop's iterations (dedup by content identity).
@@ -2245,18 +2330,23 @@ export const layer = Layer.effect(
         // are detectable.  Reset implicitly on the next runLoop invocation (new variable).
         const toolSequenceTracker = new SessionProcessor.ToolSequenceTracker()
 
-        // V3.8 Phase 3 (v3.8.1 §B.3): fire ONE lightweight code-index pass for this workspace, the real
-        // trigger that finally puts code_symbol nodes on the graph (indexFiles had zero prod callers).
-        // Gated to once-per-session-per-process (indexedSessions) so re-prompts don't re-walk; forked
-        // into the run scope so it never blocks the turn; fully default-safe inside indexWorkspace.
-        // V3.9 §A: `lsp` enables the AST symbol pass (symbol nodes + imports/calls edges) over the
-        // content-sha-changed files; a language with no LSP client degrades to the file-level view.
-        // SEAM: incremental mtime-gated fs-walking is the remaining follow-up (see code-index-trigger.ts).
         const initialMessages = yield* MessageV2.filterCompactedEffect(sessionID).pipe(
           Effect.provideService(Database.Service, database),
         )
         const initialUser = MessageV2.latest(initialMessages).user
         const initialFinalizer = isStructuredFinalizer(initialUser?.metadata)
+        let activeContext: SessionFederatedContext.Resolved | undefined
+        let pendingContextInputIds: string[] = drainFirst || !initialUser ? [] : [initialUser.id]
+        if (federation && sessionFederationRollout.enabled.contextProjectionV2 && !initialFinalizer) {
+          const recovered = yield* federation.recover(sessionID).pipe(Effect.orDie)
+          if (recovered > 0) {
+            return yield* Effect.die(
+              new SessionFederatedContext.RuntimeError({
+                reason: `provider_attempt_resolution_required:${recovered}`,
+              }),
+            )
+          }
+        }
         const taskActivity = noninteractiveTaskActivity(initialUser?.metadata) || undefined
         const failTaskBudget = Effect.fn("SessionPrompt.failTaskBudget")(function* (
           assistant: SessionV1.Assistant,
@@ -2275,14 +2365,6 @@ export const layer = Layer.effect(
           yield* sessions.updateMessage(assistant)
           yield* slog.warn("subagent.research.failed", { reason: "budget_exhausted", budget, limit, used })
         })
-        if (!initialFinalizer && !indexedSessions.has(sessionID)) {
-          indexedSessions.add(sessionID)
-          yield* CodeIndexTrigger.indexWorkspace({ workspacePath: ctx.directory, fsys, lsp }).pipe(
-            Effect.asVoid,
-            Effect.forkIn(scope),
-          )
-        }
-
         while (true) {
           yield* status.set(sessionID, { type: "busy" })
           yield* slog.info("loop", { step })
@@ -2296,7 +2378,10 @@ export const layer = Layer.effect(
           // A drained steer's id (MessageID.ascending) sorts after the last assistant, which flips the
           // top-of-loop finish check (`lastUser.id < lastAssistant.id`) to keep looping — so a steer that
           // arrived after the model said "done" is naturally absorbed on this next pass.
-          if (step > 0 || drainFirst) yield* drainSteers(sessionID)
+          if (step > 0 || drainFirst) {
+            const absorbed = yield* drainSteers(sessionID)
+            pendingContextInputIds = [...pendingContextInputIds, ...absorbed]
+          }
 
           let msgs = yield* MessageV2.filterCompactedEffect(sessionID).pipe(
             Effect.provideService(Database.Service, database),
@@ -2401,6 +2486,10 @@ export const layer = Layer.effect(
           }
 
           step++
+          // Structured finalization deliberately starts a new provider prefix: it excludes research
+          // history and replaces the tool set with StructuredOutput. Do not compare that bounded
+          // request with the preceding research turn in the cache-break monitor.
+          if (step === 1 && finalizerMode) LLMRequestPrep.resetCacheHitOutcome(sessionID)
           if (lastAssistant && taskActivity?.maxSteps && step > taskActivity.maxSteps) {
             yield* failTaskBudget(lastAssistant, "steps", taskActivity.maxSteps, step - 1)
             break
@@ -2433,6 +2522,12 @@ export const layer = Layer.effect(
               overflow: task.overflow,
             })
             if (result === "stop") break
+            // Inject volatile state only after the compaction summary is durable. Injecting it when the
+            // compaction marker is created makes this synthetic user message the next iteration's lastUser,
+            // so compaction.process pairs the summary with the wrong parent and the marker never becomes a
+            // completed compaction boundary.
+            if (task.auto && flags.worldStateReinjection)
+              yield* injectWorldStateTail(sessionID, ctx.directory, lastUser.model, lastUser.agent)
             continue
           }
 
@@ -2444,7 +2539,15 @@ export const layer = Layer.effect(
           // compaction trigger is unchanged.
           if (!finalizerMode && lastFinished && lastFinished.summary !== true) {
             if (!flags.softLandingCompaction) {
-              if (yield* compaction.isOverflow({ tokens: lastFinished.tokens, model })) {
+              const cfg = yield* config.get()
+              if (
+                isOverflow({
+                  cfg,
+                  tokens: lastFinished.tokens,
+                  model,
+                  outputTokenMax: flags.outputTokenMax,
+                })
+              ) {
                 yield* compaction.create({ sessionID, agent: lastUser.agent, model: lastUser.model, auto: true })
                 continue
               }
@@ -2493,11 +2596,6 @@ export const layer = Layer.effect(
                 // recovers into the fresh window (the durable write is the世代 marker).
                 yield* writeSoftLandingState(sessionID, nextState)
                 yield* compaction.create({ sessionID, agent: lastUser.agent, model: lastUser.model, auto: true })
-                // P1 §3.3: re-inject the latest World State as a TAIL block right after the hard compaction
-                // so the model sees current file/env values, not the summary's (now-narrowed) stale ones.
-                // Ordered after compaction.create ⇒ higher message id ⇒ sits at the tail after the summary.
-                if (flags.worldStateReinjection)
-                  yield* injectWorldStateTail(sessionID, ctx.directory, lastUser.model, lastUser.agent)
                 continue
               }
               // action === "none": fallback already delivered this epoch (still under hard line), reminder
@@ -2617,31 +2715,12 @@ export const layer = Layer.effect(
             if (step === 1 && !finalizerMode)
               yield* summary.summarize({ sessionID, messageID: lastUser.id }).pipe(Effect.ignore, Effect.forkIn(scope))
 
-            if (step > 1 && lastFinished) {
-              for (const m of msgs) {
-                if (m.info.role !== "user" || m.info.id <= lastFinished.id) continue
-                for (const p of m.parts) {
-                  if (p.type !== "text" || p.ignored || p.synthetic) continue
-                  if (!p.text.trim()) continue
-                  p.text = [
-                    "<system-reminder>",
-                    "The user sent the following message:",
-                    p.text,
-                    "",
-                    "Please address this message and continue with your tasks.",
-                    "</system-reminder>",
-                  ].join("\n")
-                }
-              }
-            }
-
             if (!finalizerMode) yield* plugin.trigger("experimental.chat.messages.transform", {}, { messages: msgs })
 
-            // PR-1: Compute terminal boundary for reasoning model-view projection.
+            // PR-1: Compute the terminal boundary for cross-model reasoning projection.
             // The most recent settled assistant message (has finish, no pending tool calls)
-            // defines the boundary — reasoning from all messages at or before this ID is
-            // stripped from the model view. Provider replay constraints (signed thinking)
-            // only apply to the active continuation chain, not settled history.
+            // defines the boundary. Same-model reasoning remains append-only because removing
+            // signed thinking after settlement rewrites the provider prefix and busts its cache.
             let terminalBoundaryID: MessageID | undefined
             for (const msg of msgs) {
               if (msg.info.role !== "assistant") continue
@@ -2662,24 +2741,47 @@ export const layer = Layer.effect(
               model,
               { terminalBoundaryID },
             )
-            const system = finalizerMode
-              ? [
-                  buildStructuredOutputSystemPrompt(format.type === "json_schema" ? format.schema : {}),
-                  "This is a bounded finalizer turn. Read the supplied research result and call StructuredOutput once. No research or other work is permitted.",
-                ]
-              : yield* Effect.all([
-                  sys.skills(agent),
-                  sys.environment(model),
-                  instruction.system().pipe(Effect.orDie),
-                ]).pipe(
-                  Effect.map(([skills, env, instructions]) => [...env, ...instructions, ...(skills ? [skills] : [])]),
-                )
-            // P1: inject schema-aware prompt so the model knows the exact field names even
-            // during extended-thinking (xhigh) reasoning where the tool definition may not
-            // be immediately visible when the model starts generating its thinking tokens.
-            if (!finalizerMode && format.type === "json_schema")
-              system.push(buildStructuredOutputSystemPrompt(format.schema))
-            const result = yield* handle.process({
+            const system = yield* Effect.all([
+              sys.skills(agent),
+              sys.environment(model),
+              instruction.system().pipe(Effect.orDie),
+            ]).pipe(
+              Effect.map(([skills, env, instructions]) => [...env, ...instructions, ...(skills ? [skills] : [])]),
+            )
+            activeContext =
+              federation && sessionFederationRollout.enabled.contextFederationShadow && !finalizerMode
+                ? yield* federation
+                    .resolve({
+                      session,
+                      inputIds: pendingContextInputIds,
+                      query: msgs
+                        .filter((item) => pendingContextInputIds.includes(item.info.id))
+                        .flatMap((item) => item.parts)
+                        .filter(
+                          (part): part is SessionV1.TextPart =>
+                            part.type === "text" && !part.synthetic && !part.ignored,
+                        )
+                        .map((part) => part.text)
+                        .join("\n"),
+                      agent,
+                      model,
+                      ...(activeContext ? { current: activeContext.selection } : {}),
+                    })
+                    .pipe(Effect.orDie)
+                : undefined
+            if (activeContext) activeFederatedContexts.set(sessionID, activeContext)
+            pendingContextInputIds = []
+            const projectedContext =
+              sessionFederationRollout.enabled.contextProjectionV2 && activeContext?.selection.projection
+                ? activeContext.selection.projection
+                : ""
+            // Schema/finalizer guidance changes per request and must not enter the provider-cached
+            // system prefix. Keep it in the same ephemeral tail used for other volatile runtime
+            // context; the durable user prompt and the StructuredOutput tool remain the hard gates.
+            const runtimeTail = [buildStructuredOutputRuntimeTail(format, finalizerMode), projectedContext]
+              .filter(Boolean)
+              .join("\n\n")
+            const streamInput: LLM.StreamInput = {
               user: lastUser,
               agent,
               permission: session.permission,
@@ -2687,11 +2789,34 @@ export const layer = Layer.effect(
               parentSessionID: session.parentID,
               system,
               messages: [...modelMsgs, ...(isLastStep ? [{ role: "assistant" as const, content: MAX_STEPS }] : [])],
-              tools,
+              tools: isLastStep ? {} : tools,
               model,
               toolChoice: finalizerDecision?.toolChoice ?? (format.type === "json_schema" ? "required" : undefined),
               reasoning: finalizerDecision?.reasoning,
-            })
+              ...(runtimeTail ? { runtimeTail } : {}),
+              ...(projectedContext ? { federatedProjection: true, durableAttempt: true } : {}),
+              ...(!sessionFederationRollout.enabled.contextProjectionV2 && activeContext
+                ? {
+                    federatedShadow: activeContext.selection.selectedRefs.reduce(
+                      (counts, selected) => ({ ...counts, [selected.ref.graph]: counts[selected.ref.graph] + 1 }),
+                      { code: 0, knowledge: 0, memory: 0, documents: 0 },
+                    ),
+                  }
+                : {}),
+            }
+            const providerAttempt =
+              sessionFederationRollout.enabled.contextProjectionV2 && activeContext && federation
+                ? yield* federation
+                    .prepareProviderTurn({
+                      selection: activeContext.selection,
+                      envelope: activeContext.envelope,
+                      requestHash: providerRequestHash(streamInput),
+                      providerId: model.providerID,
+                      observedLocationMutationEpoch: activeContext.observedLocationMutationEpoch,
+                    })
+                    .pipe(Effect.orDie)
+                : undefined
+            const result = yield* handle.process(streamInput, providerAttempt)
 
             if (structured !== undefined) {
               handle.message.structured = structured
@@ -2797,10 +2922,6 @@ export const layer = Layer.effect(
                 auto: true,
                 overflow: !handle.message.finish,
               })
-              // P1 §3.3: re-inject the latest World State as a TAIL block right after this hard rollover
-              // (same responsibility-separation intent as the turn-start branch). Gated by the same flag.
-              if (flags.worldStateReinjection)
-                yield* injectWorldStateTail(sessionID, ctx.directory, lastUser.model, lastUser.agent)
             }
             return "continue" as const
           }).pipe(
@@ -2831,7 +2952,13 @@ export const layer = Layer.effect(
         yield* ConversationLogWriter.record(logWriter, finalMsgs)
 
         yield* compaction.prune({ sessionID }).pipe(Effect.ignore, Effect.forkIn(scope))
-        return yield* lastAssistant(sessionID)
+        const finalAssistant = yield* lastAssistant(sessionID)
+        if (activeContext)
+          yield* settleFederatedActivity(
+            sessionID,
+            finalAssistant.info.role === "assistant" && finalAssistant.info.error ? "failed" : "settled",
+          )
+        return finalAssistant
       },
     )
 
@@ -2935,10 +3062,35 @@ export const layer = Layer.effect(
     const loop: (input: LoopInput) => Effect.Effect<SessionV1.WithParts> = Effect.fn("SessionPrompt.loop")(function* (
       input: LoopInput,
     ) {
+      const session = yield* sessions.get(input.sessionID).pipe(Effect.orDie)
+      const current = yield* InstanceState.context
+      const route = yield* EventRouteRef
+      const root = yield* rootSession(session)
+      if (
+        !route ||
+        FSUtil.resolve(route.directory) !== FSUtil.resolve(root.directory) ||
+        route.workspaceID !== root.workspaceID
+      ) {
+        const rootContext =
+          FSUtil.resolve(current.directory) === FSUtil.resolve(root.directory)
+            ? current
+            : yield* instances.load({ directory: root.directory })
+        return yield* loop(input).pipe(
+          Effect.provideService(EventRouteRef, {
+            ...rootContext,
+            ...(root.workspaceID ? { workspaceID: root.workspaceID } : {}),
+          }),
+        )
+      }
+      if (FSUtil.resolve(session.directory) !== FSUtil.resolve(current.directory)) {
+        return yield* instances.provide({ directory: session.directory }, loop(input))
+      }
       return yield* state.ensureRunning(
         input.sessionID,
         lastAssistant(input.sessionID),
-        runLoop(input.sessionID, input.drainFirst ?? false),
+        runLoop(input.sessionID, input.drainFirst ?? false).pipe(
+          Effect.onInterrupt(() => settleFederatedActivity(input.sessionID, "interrupted")),
+        ),
       )
     })
 
@@ -3156,8 +3308,8 @@ export const defaultLayer = Layer.suspend(() =>
     Layer.provide(Permission.defaultLayer),
     Layer.provide(MCP.defaultLayer),
     Layer.provide(LSP.defaultLayer),
-    Layer.provide(ToolRegistry.defaultLayer),
-    Layer.provide(Truncate.defaultLayer),
+    Layer.provide(Layer.merge(SessionFederatedContext.defaultLayer, ToolRegistry.defaultLayer)),
+    Layer.provide(Truncate.configuredLayer),
     Layer.provide(Provider.defaultLayer),
     Layer.provide(Config.defaultLayer),
     Layer.provide(Instruction.defaultLayer),
@@ -3179,6 +3331,7 @@ export const defaultLayer = Layer.suspend(() =>
         CrossSpawnSpawner.defaultLayer,
         RuntimeFlags.defaultLayer,
         EventV2Bridge.defaultLayer,
+        Question.defaultLayer,
         SessionSteer.defaultLayer,
       ),
     ),
@@ -3344,9 +3497,48 @@ const projectIDForDirectory = (directory: string): string =>
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value)
 
+function providerRequestHash(input: LLM.StreamInput) {
+  return Hash.sha256(
+    stableJson({
+      sessionID: input.sessionID,
+      model: { providerID: input.model.providerID, id: input.model.id },
+      agent: input.agent.name,
+      system: input.system,
+      messages: input.messages,
+      runtimeTail: input.runtimeTail,
+      toolChoice: input.toolChoice,
+      reasoning: input.reasoning,
+      durableAttempt: input.durableAttempt,
+      tools: Object.entries(input.tools)
+        .toSorted(([a], [b]) => a.localeCompare(b))
+        .map(([name, definition]) => ({
+          name,
+          description: definition.description,
+          inputSchema: "inputSchema" in definition ? definition.inputSchema : undefined,
+        })),
+    }),
+  )
+}
+
+function stableJson(value: unknown, seen = new WeakSet<object>()): string {
+  if (value === null || value === undefined) return "null"
+  if (["string", "number", "boolean"].includes(typeof value)) return JSON.stringify(value)
+  if (typeof value === "function" || typeof value === "symbol") return "null"
+  if (Array.isArray(value)) return `[${value.map((item) => stableJson(item, seen)).join(",")}]`
+  if (typeof value !== "object") return JSON.stringify(String(value))
+  if (seen.has(value)) return JSON.stringify("[circular]")
+  seen.add(value)
+  const result = `{${Object.entries(value)
+    .filter((entry) => typeof entry[1] !== "function")
+    .toSorted(([a], [b]) => a.localeCompare(b))
+    .map(([key, item]) => `${JSON.stringify(key)}:${stableJson(item, seen)}`)
+    .join(",")}}`
+  seen.delete(value)
+  return result
+}
+
 /** @internal Exported for testing */
-/** @internal Exported for testing */
-export { buildStructuredOutputSystemPrompt, extractSchemaTopLevelFields }
+export { buildStructuredOutputRuntimeTail, buildStructuredOutputSystemPrompt, extractSchemaTopLevelFields }
 
 export function createStructuredOutputTool(input: {
   schema: Record<string, any>

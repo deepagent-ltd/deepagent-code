@@ -57,7 +57,7 @@ export const isOperationalEvent = (eventType: string): boolean => OPERATIONAL_EV
 // observation/oversight/trace only; they must NEVER re-trigger agent dispatch. They are still persisted
 // and delivered to the trace/oversight consumers (separate subscribers) — this only closes the
 // AGENT-DISPATCH loop. NOTE: `agent.push.*` (proactive push) is a DIFFERENT family and still routes.
-export const COORDINATION_EVENT_PREFIXES = ["agent.task."] as const
+export const COORDINATION_EVENT_PREFIXES = ["agent.task.", "agent.handoff."] as const
 export const isCoordinationEvent = (eventType: string): boolean =>
   COORDINATION_EVENT_PREFIXES.some((prefix) => eventType.startsWith(prefix))
 
@@ -107,10 +107,7 @@ export const matches = (triggerEvent: string, eventType: string): boolean => {
 }
 
 // The candidate agents whose triggers match this event, preserving registry order and de-duplicating.
-const matchingAgents = (
-  agents: ReadonlyArray<AgentDescriptor>,
-  eventType: string,
-): ReadonlyArray<AgentDescriptor> =>
+const matchingAgents = (agents: ReadonlyArray<AgentDescriptor>, eventType: string): ReadonlyArray<AgentDescriptor> =>
   agents.filter((agent) => (agent.triggers ?? []).some((t) => matches(t.event, eventType)))
 
 /**

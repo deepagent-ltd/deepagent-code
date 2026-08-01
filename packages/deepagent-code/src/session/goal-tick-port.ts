@@ -170,6 +170,8 @@ export const makeGoalTickPort =
         sessionPrompt: deps.sessionPrompt,
         parentSessionID: SessionID.make(sessionID),
         model,
+        allowPlanWriteCapability: true,
+        purpose: "goal-loop",
       })
       const runTurn: typeof baseRunner = (input) => withContext(baseRunner(input))
 

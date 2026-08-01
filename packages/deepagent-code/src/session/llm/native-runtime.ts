@@ -17,6 +17,7 @@ import {
   type LLMEvent,
 } from "@deepagent-code/llm"
 import type { LLMClientShape } from "@deepagent-code/llm/route"
+import { RequestExecutor } from "@deepagent-code/llm/route"
 import { LLMNative } from "./native-request"
 import { FreeformTools } from "./freeform-tools"
 
@@ -43,6 +44,7 @@ type StreamInput = {
   readonly headers: Record<string, string>
   readonly abort: AbortSignal
   readonly metadata?: Record<string, unknown>
+  readonly durableAttempt?: boolean
 }
 
 export function status(input: Pick<StreamInput, "model" | "provider" | "auth">): RuntimeStatus {
@@ -68,18 +70,19 @@ function statusWithFetch(
     return { type: "unsupported", reason: "OAuth auth requires a provider fetch override" }
   }
 
+  const options = { ...input.provider.options, ...input.model.options }
   const apiKey =
     input.auth?.type === "api"
       ? input.auth.key
-      : typeof input.provider.options.apiKey === "string"
-        ? input.provider.options.apiKey
+      : typeof options.apiKey === "string"
+        ? options.apiKey
         : input.provider.key
   if (!apiKey) return { type: "unsupported", reason: "API key is not configured" }
 
   return {
     type: "supported",
     apiKey,
-    baseURL: typeof input.provider.options.baseURL === "string" ? input.provider.options.baseURL : undefined,
+    baseURL: typeof options.baseURL === "string" ? options.baseURL : undefined,
   }
 }
 
@@ -158,7 +161,9 @@ export function stream(input: StreamInput): StreamResult {
 
   return {
     ...current,
-    stream: fetch ? stream.pipe(Stream.provideService(FetchHttpClient.Fetch, fetch)) : stream,
+    stream: (fetch ? stream.pipe(Stream.provideService(FetchHttpClient.Fetch, fetch)) : stream).pipe(
+      input.durableAttempt ? Stream.provideService(RequestExecutor.CurrentRetryLimit, 0) : (value) => value,
+    ),
   }
 }
 

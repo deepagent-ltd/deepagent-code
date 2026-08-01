@@ -32,7 +32,8 @@ type Active = {
 
 type State = {
   jobs: SynchronizedRef.SynchronizedRef<Map<string, Active>>
-  scope: Scope.Scope
+  executionScope: Scope.Closeable
+  cleanupScope: Scope.Closeable
 }
 
 type FinishResult = {
@@ -117,9 +118,14 @@ function errorText(error: unknown) {
  * those semantics.
  */
 export const make = Effect.gen(function* () {
+  const ownerScope = yield* Scope.Scope
   const state: State = {
     jobs: yield* SynchronizedRef.make(new Map()),
-    scope: yield* Scope.Scope,
+    // Execution and cleanup must be siblings. A cleanup fiber cannot be owned by the same scope
+    // whose child it is closing: parent shutdown would otherwise wait on a fiber that is itself
+    // waiting for a descendant of that parent, producing an order-dependent shutdown deadlock.
+    executionScope: yield* Scope.fork(ownerScope, "parallel"),
+    cleanupScope: yield* Scope.fork(ownerScope, "parallel"),
   }
 
   const settle = Effect.fn("BackgroundJob.settle")(function* (
@@ -164,7 +170,9 @@ export const make = Effect.gen(function* () {
     })
     if (result.info && result.done) yield* Deferred.succeed(result.done, result.info).pipe(Effect.ignore)
     if (result.scope) {
-      yield* Scope.close(result.scope, Exit.void).pipe(Effect.forkIn(state.scope, { startImmediately: true }))
+      yield* Scope.close(result.scope, Exit.void).pipe(
+        Effect.forkIn(state.cleanupScope, { startImmediately: true }),
+      )
     }
     return result.info
   })
@@ -213,7 +221,7 @@ export const make = Effect.gen(function* () {
             if (existing?.info.status === "running") {
               return [{ info: snapshot(existing) }, jobs] as readonly [StartResult, Map<string, Active>]
             }
-            const scope = yield* Scope.fork(state.scope, "parallel")
+            const scope = yield* Scope.fork(state.executionScope, "parallel")
             const token = {}
             const job = {
               info: {
@@ -338,7 +346,11 @@ export const make = Effect.gen(function* () {
     const result = yield* SynchronizedRef.modify(state.jobs, (jobs): readonly [FinishResult, Map<string, Active>] => {
       const job = jobs.get(id)
       if (!job) return [{}, jobs]
-      if (job.info.status !== "running") return [{ info: snapshot(job) }, jobs]
+      // A terminal snapshot can become visible before the job scope has finished closing because
+      // settle resolves `done` first and closes the scope from the registry's parent scope. Callers
+      // use cancel as the generation barrier before takeover, so they must also join that scope for
+      // an already-terminal job; otherwise the replacement can overlap the superseded fiber.
+      if (job.info.status !== "running") return [{ info: snapshot(job), scope: job.scope }, jobs]
       const next = {
         ...job,
         onPromote: undefined,

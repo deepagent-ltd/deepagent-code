@@ -68,6 +68,7 @@ export const DLQ_ALERT = "dlq.alert"
 // Runtime publishes this so the §D2 Approval Queue surfaces it for a human decision (rather than the
 // action being silently dropped).
 export const AGENT_TASK_NEEDS_HUMAN = "agent.task.needs_human"
+export const AGENT_HANDOFF_REQUESTED = "agent.handoff.requested"
 
 // The set of event types that represent a TERMINAL outcome requiring human attention — the Oversight
 // Approval Queue (§D2) is populated from these. Kept as a set so the wiring can test membership.
