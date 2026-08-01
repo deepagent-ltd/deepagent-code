@@ -350,6 +350,7 @@
       "version": "1.4.4",
       "dependencies": {
         "@deepagent-code/core": "workspace:*",
+        "@lydell/node-pty": "catalog:",
         "@zip.js/zip.js": "2.7.62",
         "effect": "catalog:",
         "electron-context-menu": "4.1.2",
@@ -357,6 +358,7 @@
         "electron-store": "^10",
         "electron-updater": "^6",
         "electron-window-state": "^5.0.3",
+        "jsonc-parser": "3.3.1",
         "marked": "^15",
       },
       "devDependencies": {
@@ -364,7 +366,6 @@
         "@deepagent-code/app": "workspace:*",
         "@deepagent-code/ui": "workspace:*",
         "@jridgewell/trace-mapping": "0.3.31",
-        "@lydell/node-pty": "catalog:",
         "@playwright/test": "catalog:",
         "@sentry/solid": "catalog:",
         "@sentry/vite-plugin": "catalog:",
