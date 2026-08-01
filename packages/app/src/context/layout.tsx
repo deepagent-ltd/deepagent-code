@@ -111,6 +111,7 @@ type SessionView = {
   rightPanelMode?:
     | "review"
     | "files"
+    | "context"
     | "worktree"
     | "subagents"
     | "browser"

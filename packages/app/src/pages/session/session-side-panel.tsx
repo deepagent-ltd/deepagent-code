@@ -42,6 +42,7 @@ import { SidePanelWorktree } from "@/pages/session/side-panel-worktree"
 import { SidePanelDebug } from "@/pages/session/side-panel-debug"
 import { SidePanelProfile } from "@/pages/session/side-panel-profile"
 import { SidePanelIM } from "@/pages/session/side-panel-im"
+import { SidePanelContext } from "@/pages/session/side-panel-context"
 import { SidePanelDockHeader, SidePanelTerminal, SidePanelDebugConsole } from "@/pages/session/side-panel-terminal"
 import { ProblemsPanel } from "@/pages/session/problems-panel"
 import { PanelErrorBoundary } from "@/pages/session/panel-error-boundary"
@@ -55,6 +56,7 @@ type RenderDiff = (SnapshotFileDiff & { file: string }) | VcsFileDiff
 type PanelMode =
   | "review"
   | "files"
+  | "context"
   | "subagents"
   | "im"
   | "browser"
@@ -103,6 +105,7 @@ const PANELS: readonly PanelDef[] = [
     bucket: "wide",
     keybind: "fileTree.toggle",
   },
+  { mode: "context", icon: "shield", titleKey: "session.context.title", group: "code", bucket: "narrow" },
   // Agents — subagents is now the unified "子Agent监督" entry (Phase 2: oversight merged in).
   { mode: "subagents", icon: "agent-tree", titleKey: "session.subagents.title", group: "agents", bucket: "narrow" },
   { mode: "im", icon: "bubble-5", titleKey: "session.tab.im", group: "agents", bucket: "narrow" },
@@ -668,6 +671,9 @@ export function SessionSidePanel(props: {
                       />
                     )}
                   />
+                </Match>
+                <Match when={isActive("context")}>
+                  <SidePanelContext onClose={closePanel} />
                 </Match>
                 <Match when={isActive("browser")}>
                   <SidePanelBrowser onClose={closePanel} />

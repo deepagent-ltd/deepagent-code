@@ -29,7 +29,7 @@
     },
     "packages/app": {
       "name": "@deepagent-code/app",
-      "version": "1.4.3",
+      "version": "1.4.4",
       "dependencies": {
         "@codemirror/autocomplete": "6",
         "@codemirror/commands": "6",
@@ -129,7 +129,7 @@
     },
     "packages/core": {
       "name": "@deepagent-code/core",
-      "version": "4.0.4-r8",
+      "version": "4.0.5",
       "bin": {
         "deepagent-code": "./bin/deepagent-code",
       },
@@ -295,8 +295,10 @@
         "google-auth-library": "10.5.0",
         "gray-matter": "4.0.3",
         "htmlparser2": "8.0.2",
+        "ignore": "7.0.5",
         "immer": "11.1.4",
         "jsonc-parser": "3.3.1",
+        "marked": "catalog:",
         "mime-types": "3.0.2",
         "minimatch": "10.2.3",
         "npm-package-arg": "13.0.2",
@@ -345,8 +347,9 @@
     },
     "packages/desktop": {
       "name": "@deepagent-code/desktop",
-      "version": "1.4.3",
+      "version": "1.4.4",
       "dependencies": {
+        "@deepagent-code/core": "workspace:*",
         "@zip.js/zip.js": "2.7.62",
         "effect": "catalog:",
         "electron-context-menu": "4.1.2",
@@ -3029,7 +3032,7 @@
 
     "get-tsconfig": ["get-tsconfig@4.14.0", "", { "dependencies": { "resolve-pkg-maps": "^1.0.0" } }, "sha512-yTb+8DXzDREzgvYmh6s9vHsSVCHeC0G3PI5bEXNBHtmshPnO+S5O7qgLEOn0I5QvMy6kpZN8K1NKGyilLb93wA=="],
 
-    "ghostty-web": ["ghostty-web@github:anomalyco/ghostty-web#513463a", {}, "anomalyco-ghostty-web-513463a", "sha512-GZR8LSmgGzViWnBJrqRI8MpAZRCJxhcr1Hi9Tyeh7YRooHZQjK9J97FQRD3tbBaM2wjq05gzGY2UEsG+JtZeBw=="],
+    "ghostty-web": ["ghostty-web@github:anomalyco/ghostty-web#83c0a07", {}, "anomalyco-ghostty-web-83c0a07", "sha512-Lf2v1agHkVUpMpHBWWuCZrhOEmcwwin5/Hboc9rZwQ7/CKkIh5rU1r1CvfLlhkMoFv+ed8z52RZ8hkzGZZj3MQ=="],
 
     "giget": ["giget@3.3.0", "", { "bin": { "giget": "dist/cli.mjs" } }, "sha512-gzi2D96p+AMfDcmJHGDj3KJ9NRiwvlFAU5yfa3ROwWZmFUjX4P43x3BcyRaOMMLto1vUo7C+86+MFhYTl6Ryiw=="],
 
