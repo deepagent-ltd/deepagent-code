@@ -8,11 +8,7 @@ mkdir -p .git/hooks
 
 cat > .git/hooks/pre-push << 'EOF'
 #!/bin/sh
-# Ensure dependencies are installed before typecheck
-if command -v bun >/dev/null 2>&1; then
-  bun install >/dev/null 2>&1 || true
-fi
-bun run typecheck
+bun run typecheck && exec bun run script/pre-push-live-llm.ts "$@"
 EOF
 
 chmod +x .git/hooks/pre-push

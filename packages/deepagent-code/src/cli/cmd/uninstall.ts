@@ -237,7 +237,7 @@ async function executeUninstall(method: Installation.Method, targets: RemovalTar
     prompts.log.info(`  rm "${targets.binary}"`)
 
     const binDir = path.dirname(targets.binary)
-    if (binDir.includes(".deepagent-code")) {
+    if (binDir.includes(path.join(".deepagent", "code"))) {
       prompts.log.info(`  rmdir "${binDir}" 2>/dev/null`)
     }
   }
@@ -288,7 +288,7 @@ async function getShellConfigFile(): Promise<string | null> {
     if (!exists) continue
 
     const content = await Filesystem.readText(file).catch(() => "")
-    if (content.includes("# deepagent-code") || content.includes(".deepagent-code/bin")) {
+    if (content.includes("# deepagent-code") || content.includes(".deepagent/code/bin")) {
       return file
     }
   }
@@ -313,14 +313,14 @@ async function cleanShellConfig(file: string) {
 
     if (skip) {
       skip = false
-      if (trimmed.includes(".deepagent-code/bin") || trimmed.includes("fish_add_path")) {
+      if (trimmed.includes(".deepagent/code/bin") || trimmed.includes("fish_add_path")) {
         continue
       }
     }
 
     if (
-      (trimmed.startsWith("export PATH=") && trimmed.includes(".deepagent-code/bin")) ||
-      (trimmed.startsWith("fish_add_path") && trimmed.includes(".deepagent-code"))
+      (trimmed.startsWith("export PATH=") && trimmed.includes(".deepagent/code/bin")) ||
+      (trimmed.startsWith("fish_add_path") && trimmed.includes(".deepagent/code"))
     ) {
       continue
     }

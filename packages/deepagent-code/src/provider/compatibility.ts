@@ -63,6 +63,25 @@ export function applyCompatibilityProviderOptions(model: CompatibilityModel, opt
   if (model.providerID === "google-vertex" && !model.api.npm.includes("@ai-sdk/openai-compatible")) {
     delete options.fetch
   }
+
+  if (
+    model.api.npm === "@ai-sdk/openai-compatible" &&
+    `${model.id ?? ""} ${model.api.id ?? ""}`.toLowerCase().includes("deepseek-v4")
+  ) {
+    const transformRequestBody = options.transformRequestBody
+    options.transformRequestBody = (input: Record<string, unknown>) => {
+      const body = typeof transformRequestBody === "function" ? transformRequestBody(input) : input
+      if (typeof body !== "object" || body === null || Array.isArray(body)) return body
+      const toolChoice = body.tool_choice
+      if (
+        toolChoice !== "required" &&
+        (typeof toolChoice !== "object" || toolChoice === null || Array.isArray(toolChoice))
+      ) {
+        return body
+      }
+      return { ...body, thinking: { type: "disabled" } }
+    }
+  }
 }
 
 export function stripsOpenAIItemMetadata(model: CompatibilityModel) {

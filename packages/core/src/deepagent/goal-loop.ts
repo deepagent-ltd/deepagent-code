@@ -4,6 +4,7 @@ import type { DocumentStore } from "./document-store"
 import {
   type PlanDoc,
   type PlanInput,
+  type PlanStep,
   buildCompletionReport,
   buildPlanFromInput,
   hasBlockedSteps,
@@ -362,7 +363,13 @@ export type StepExecutor = (input: {
   readonly goalId: string
   readonly sessionId: string
   readonly planDocId: string
+  /** Frozen goal text from the durable plan at this tick boundary. */
+  readonly goal: string
   readonly activeStepId: string | null
+  /** Frozen active-step contract from the durable plan at this tick boundary. */
+  readonly activeStep: PlanStep | null
+  /** Unmet criteria from the previous completed tick. Empty on the first tick. */
+  readonly graderFeedback: readonly string[]
   /**
    * V4.0.1 P2 §4.4 — the goal's budget so far (accumulated through PRIOR ticks; this tick's spend is not
    * yet folded in) + the goal's limits, so the wiring can thread a tiered cost soft-notice into this
@@ -422,6 +429,8 @@ type GoalRuntimeState = {
   readonly lastProcessedVersion: number | null
   readonly lastOutcome: TickOutcome | null
   readonly gaps: readonly string[]
+  /** Grader gaps supplied to the most recent executor turn. */
+  readonly lastDeliveredFeedback: readonly string[]
   // V4.0.1 P2 §4.5 — the token ACCOUNTING convention stamped at goal creation. Persisted so a restart (or
   // a mid-flight flag flip) never re-interprets an existing ledger: tick() picks the accumulation by THIS
   // marker, not the live flag. A state written before this field existed reads as undefined and is
@@ -500,6 +509,7 @@ const loadState = (deps: ControllerDeps, handle: GoalHandle): GoalRuntimeState |
       return {
         ...parsed,
         lastEvidenceCount: parsed.lastEvidenceCount ?? 0,
+        lastDeliveredFeedback: parsed.lastDeliveredFeedback ?? [],
         budgetTokenScope: parsed.budgetTokenScope ?? "gross",
       }
     } catch {
@@ -801,6 +811,7 @@ export const makeGoalLoop = (deps: ControllerDeps): GoalLoop => {
         lastProcessedVersion: null,
         lastOutcome: null,
         gaps: [],
+        lastDeliveredFeedback: [],
         // P2 §4.5: stamp the accounting convention ONCE, from the flag, at creation. tick() reads this
         // marker (never the live flag) so a later flag flip never re-interprets this goal's ledger.
         budgetTokenScope: deps.netTokenBudget === true ? "net" : "gross",
@@ -833,16 +844,20 @@ export const makeGoalLoop = (deps: ControllerDeps): GoalLoop => {
 
       const { plan, version } = readPlan(deps.store, state.planDocId)
 
-      // 幂等: dedup on the ENTRY plan version. A repeated tick that finds the plan STILL at the version
-      // we last processed replays the last outcome with NO side effects (no double execute / double
-      // budget). This makes a NO-PROGRESS replay idempotent. IMPORTANT (honesty about the guarantee): a
+      // 幂等: dedup on the ENTRY plan version plus the last grader feedback delivered to the executor. A
+      // same-version tick with NEW gaps must run once so the worker can act on the previous grader result;
+      // after those exact gaps have been delivered, another same-version tick replays the last outcome with
+      // NO side effects (no double execute / double budget). IMPORTANT (honesty about the guarantee): a
       // tick that DID advance the plan (bumped the version) and then crashes BEFORE persistState is NOT
       // covered — the re-tick sees the new version and executes again. Full crash-mid-tick idempotency
       // requires an idempotencyKey checkpoint, reserved for the V4.0 `goal.tick` event; within V3.9 the
       // dedup guarantees "a repeated no-progress tick has no side effects", not "every tick is exactly-
       // once under a mid-tick crash". The driver must therefore treat tick as at-least-once.
-      if (state.lastProcessedVersion === version && state.lastOutcome != null) {
-        // 幂等: a replay at the SAME version has NO side effects — never re-execute, never re-accrue
+      const hasUndeliveredFeedback =
+        state.gaps.length !== state.lastDeliveredFeedback.length ||
+        state.gaps.some((gap, index) => gap !== state.lastDeliveredFeedback[index])
+      if (state.lastProcessedVersion === version && state.lastOutcome != null && !hasUndeliveredFeedback) {
+        // 幂等: a replay at the SAME version with already-delivered feedback has NO side effects — never re-execute, never re-accrue
         // budget (ticks/tokens/cost). BUT a replay at an unchanged version is by definition a
         // NO-PROGRESS tick: if we just returned the recorded (non-terminal) outcome forever, an
         // executor that RUNS but leaves the plan-doc unchanged (no version bump) would bypass the
@@ -874,12 +889,17 @@ export const makeGoalLoop = (deps: ControllerDeps): GoalLoop => {
       // A DEFECT in the injected executor (it lives on `never`, but a wired port could still die) must
       // not escape tick's never-fail contract — degrade a defect to a critical result so the loop rolls
       // back rather than crashing the driver.
+      const activeStep = plan?.steps.find((step) => step.step_id === plan.active_step_id) ?? null
+      const deliveredFeedback = state.gaps
       const execResult = yield* deps
         .executor({
           goalId: state.goalId,
           sessionId: state.sessionId,
           planDocId: state.planDocId,
+          goal: plan?.goal ?? "",
           activeStepId: plan?.active_step_id ?? null,
+          activeStep,
+          graderFeedback: deliveredFeedback,
           // P2 §4.4: the budget-so-far (prior ticks) + limits, so the wiring can thread a tiered cost
           // soft-notice into THIS tick's step-prompt tail (budgetNotice). Read-only for the executor.
           ledger: state.ledger,
@@ -979,6 +999,7 @@ export const makeGoalLoop = (deps: ControllerDeps): GoalLoop => {
         lastProcessedVersion: version,
         lastOutcome: outcome,
         gaps: grader.gaps,
+        lastDeliveredFeedback: deliveredFeedback,
       }
 
       // 可观测: persist state + audit BEFORE side-effecting rollback so the trail is durable even if the

@@ -1,0 +1,191 @@
+{
+  "schemaVersion": "context-federation-golden.v1",
+  "repository": "deepagent-code",
+  "cases": [
+    {
+      "id": "single-code-session-execution",
+      "kind": "single_graph",
+      "query": "process local session execution coordinator wake session id",
+      "nodes": [
+        {
+          "id": "code-session-execution-local",
+          "graph": "code",
+          "docType": "code_symbol",
+          "description": "process local Session execution coordinator wakes by Session ID",
+          "source": {
+            "path": "packages/core/src/session/execution/local.ts",
+            "anchors": ["SessionRunCoordinator.make", "sessionID"]
+          }
+        }
+      ],
+      "edges": [],
+      "expectedNodeIds": ["code-session-execution-local"],
+      "expectedGraphs": ["code"]
+    },
+    {
+      "id": "single-knowledge-module-boundary",
+      "kind": "single_graph",
+      "query": "module boundary ownership dependency direction architecture",
+      "nodes": [
+        {
+          "id": "knowledge-architecture-boundary",
+          "graph": "knowledge",
+          "docType": "knowledge",
+          "description": "reviewed software architecture guidance for module boundaries ownership and dependency direction",
+          "source": {
+            "path": "packages/domain-packs/code/architecture/README.md",
+            "anchors": ["Module boundaries", "dependency direction"]
+          }
+        }
+      ],
+      "edges": [],
+      "expectedNodeIds": ["knowledge-architecture-boundary"],
+      "expectedGraphs": ["knowledge"]
+    },
+    {
+      "id": "single-memory-project-handoff",
+      "kind": "single_graph",
+      "query": "previous session project handoff goals decisions open next",
+      "nodes": [
+        {
+          "id": "memory-project-bridge",
+          "graph": "memory",
+          "docType": "memory",
+          "description": "validated project handoff memory with goals decisions open items and next actions",
+          "source": {
+            "path": "packages/core/src/deepagent/context/bridge.ts",
+            "anchors": ["Project Bridge", "renderHandoff"]
+          }
+        }
+      ],
+      "edges": [],
+      "expectedNodeIds": ["memory-project-bridge"],
+      "expectedGraphs": ["memory"]
+    },
+    {
+      "id": "single-documents-four-graph-contract",
+      "kind": "single_graph",
+      "query": "four graph federation code intelligence architecture contract",
+      "nodes": [
+        {
+          "id": "document-code-intelligence-contract",
+          "graph": "documents",
+          "docType": "design",
+          "description": "four graph federation and Code Intelligence architecture contract",
+          "source": {
+            "path": "docs/code-intelligence-architecture.md",
+            "anchors": ["四图联邦", "Code Intelligence"]
+          }
+        }
+      ],
+      "edges": [],
+      "expectedNodeIds": ["document-code-intelligence-contract"],
+      "expectedGraphs": ["documents"]
+    },
+    {
+      "id": "cross-requirement-design-code-test",
+      "kind": "cross_graph",
+      "query": "provider turn exactly one stream durable admission",
+      "nodes": [
+        {
+          "id": "requirement-one-provider-turn",
+          "graph": "documents",
+          "docType": "requirements",
+          "description": "each Provider turn performs exactly one explicit llm stream after durable admission",
+          "source": {
+            "path": "docs/code-intelligence-architecture.md",
+            "anchors": ["每个 Provider turn", "llm.stream(request)"]
+          }
+        },
+        {
+          "id": "design-session-runner",
+          "graph": "documents",
+          "docType": "design",
+          "description": "Session runner separates durable prompt admission from Provider execution",
+          "source": {
+            "path": "packages/core/src/session/runner/llm.ts",
+            "anchors": ["One provider turn", "llm.stream(request)"]
+          }
+        },
+        {
+          "id": "code-session-runner-stream",
+          "graph": "code",
+          "docType": "code_symbol",
+          "description": "SessionRunner runTurn invokes one provider stream for the request",
+          "source": {
+            "path": "packages/core/src/session/runner/llm.ts",
+            "anchors": ["runTurnAttempt", "llm.stream(request)"]
+          }
+        },
+        {
+          "id": "test-session-runner-request-count",
+          "graph": "documents",
+          "docType": "eval",
+          "description": "Session runner integration evidence asserts exactly one request",
+          "source": {
+            "path": "packages/core/test/session-runner.test.ts",
+            "anchors": ["starts a real runner turn", "requests).toHaveLength(1)"]
+          }
+        }
+      ],
+      "edges": [
+        { "from": "design-session-runner", "relation": "derived_from", "to": "requirement-one-provider-turn" },
+        { "from": "code-session-runner-stream", "relation": "implements", "to": "requirement-one-provider-turn" },
+        { "from": "code-session-runner-stream", "relation": "references", "to": "design-session-runner" },
+        { "from": "code-session-runner-stream", "relation": "validated_by", "to": "test-session-runner-request-count" }
+      ],
+      "seedNodeIds": ["requirement-one-provider-turn"],
+      "expectedNodeIds": [
+        "requirement-one-provider-turn",
+        "design-session-runner",
+        "code-session-runner-stream",
+        "test-session-runner-request-count"
+      ],
+      "expectedGraphs": ["code", "documents"]
+    },
+    {
+      "id": "cross-failure-memory-code",
+      "kind": "cross_graph",
+      "query": "IM graph context queried but not delivered to model",
+      "nodes": [
+        {
+          "id": "failure-im-context-drop",
+          "graph": "documents",
+          "docType": "failure_dossier",
+          "description": "IM four graph context is built but dropped before the model boundary",
+          "source": {
+            "path": "docs/code-intelligence-architecture.md",
+            "anchors": ["四个 bucket", "模型边界被丢弃"]
+          }
+        },
+        {
+          "id": "memory-im-context-boundary",
+          "graph": "memory",
+          "docType": "memory",
+          "description": "prior validated failure pattern says executor input context was ignored",
+          "source": {
+            "path": "packages/core/src/im/agent-executor.ts",
+            "anchors": ["context: AgentContext", "execute(input"]
+          }
+        },
+        {
+          "id": "code-server-agent-executor",
+          "graph": "code",
+          "docType": "code_symbol",
+          "description": "ServerAgentExecutor admits bounded IM conversation and current input through SessionPrompt",
+          "source": {
+            "path": "packages/deepagent-code/src/im/agent-executor-server.ts",
+            "anchors": ["IM conversation:", "class ServerAgentExecutor"]
+          }
+        }
+      ],
+      "edges": [
+        { "from": "failure-im-context-drop", "relation": "derived_from", "to": "memory-im-context-boundary" },
+        { "from": "memory-im-context-boundary", "relation": "references", "to": "code-server-agent-executor" }
+      ],
+      "seedNodeIds": ["failure-im-context-drop"],
+      "expectedNodeIds": ["failure-im-context-drop", "memory-im-context-boundary", "code-server-agent-executor"],
+      "expectedGraphs": ["code", "memory", "documents"]
+    }
+  ]
+}

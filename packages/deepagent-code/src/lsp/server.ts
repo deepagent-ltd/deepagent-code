@@ -1267,7 +1267,8 @@ export const JDTLS: Info = {
         }
       })(),
     )
-    const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "deepagent-code-jdtls-data"))
+    await fs.mkdir(Global.Path.tmp, { recursive: true })
+    const dataDir = await fs.mkdtemp(path.join(Global.Path.tmp, "jdtls-data-"))
     return {
       process: spawn(
         java,

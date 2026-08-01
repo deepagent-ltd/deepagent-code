@@ -1,0 +1,36 @@
+{
+  "schemaVersion": "context-federation-legacy-baseline.v1",
+  "capturedRevision": "dabfffc4868691e8250c05c450faaacdd63d49ad",
+  "capturedAt": "2026-07-26T00:00:00+08:00",
+  "command": "cd packages/core && bun run baseline:context-federation",
+  "measurement": {
+    "environment": "local-development-sample",
+    "iterationsPerCase": 25,
+    "queryP50Ms": 0.016,
+    "queryP95Ms": 0.033,
+    "firstEvidenceP95Ms": 0.829,
+    "providerCacheReadTokens": {
+      "status": "external_required",
+      "reason": "No credentialed Provider replay is stored in the repository"
+    }
+  },
+  "quality": {
+    "goldenCases": 6,
+    "passedCases": 6,
+    "expectedEvidence": 11,
+    "matchedEvidence": 11,
+    "citationAccuracy": 1
+  },
+  "legacyBehavior": {
+    "sessionScopedCodeIndexTrigger": true,
+    "codeIntelBackend": "lsp_only",
+    "codeIntelPermission": "lsp",
+    "graphQueryListsWholeStore": true,
+    "imFourGraphBucketsQueried": 4,
+    "imFourGraphBucketsDelivered": 0,
+    "imFourGraphBucketLossRate": 1,
+    "contextQueryRegistered": false,
+    "automaticFederatedProjectionBytes": 0,
+    "automaticFederatedRuntimeTailMessages": 0
+  }
+}

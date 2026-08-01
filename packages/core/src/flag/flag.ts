@@ -76,9 +76,6 @@ export const Flag = {
   get DEEPAGENT_CODE_TUI_CONFIG() {
     return process.env["DEEPAGENT_CODE_TUI_CONFIG"]
   },
-  get DEEPAGENT_CODE_CONFIG_DIR() {
-    return process.env["DEEPAGENT_CODE_CONFIG_DIR"]
-  },
   get DEEPAGENT_CODE_PURE() {
     return truthy("DEEPAGENT_CODE_PURE")
   },

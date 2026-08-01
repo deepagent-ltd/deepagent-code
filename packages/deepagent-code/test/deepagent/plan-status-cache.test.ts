@@ -4,9 +4,9 @@ import { Effect } from "effect"
 import { LLMRequestPrep } from "../../src/session/llm/request"
 import { SessionReminders } from "../../src/session/reminders"
 
-// Plan status is trusted runtime control. It must stay out of durable user history and travel in the
-// same privileged runtime system message as round context. The stable base system message remains
-// byte-identical even when the plan advances.
+// Plan status is trusted runtime control. It must stay out of durable history and travel in the same
+// ephemeral tail as round context. The stable system prompt assigns that tag its control semantics,
+// and the full system + durable-history prefix stays byte-identical when the plan advances.
 
 const plugin = {
   trigger: (_name: string, _input: unknown, output: unknown) => Effect.succeed(output),
@@ -88,21 +88,29 @@ function seedPlan(sessionID: string, doneCount: number, total: number, mutations
   for (let i = 0; i < mutations; i++) AgentGateway.DeepAgentSessionState.recordMutation(sessionID)
 }
 
-const runtimeSystem = (prepared: { messages: any[] }): string =>
+const runtimeContext = (prepared: { messages: any[] }): string =>
   prepared.messages.find(
-    (message) => message.role === "system" && typeof message.content === "string" && message.content.startsWith("<deepagent-round-context>"),
+    (message) =>
+      message.role === "user" &&
+      typeof message.content === "string" &&
+      message.content.startsWith("<deepagent-round-context>"),
   )?.content ?? ""
-
-const userHistory = (prepared: { messages: any[] }): string =>
-  prepared.messages
-    .filter((m) => m.role === "user")
-    .map((m) => (typeof m.content === "string" ? m.content : JSON.stringify(m.content)))
-    .join("\n")
 
 const stableMessages = (prepared: { messages: any[] }) =>
   prepared.messages.filter(
-    (message) => !(message.role === "system" && typeof message.content === "string" && message.content.startsWith("<deepagent-round-context>")),
+    (message) =>
+      !(
+        message.role === "user" &&
+        typeof message.content === "string" &&
+        message.content.startsWith("<deepagent-round-context>")
+      ),
   )
+
+const durableUserHistory = (prepared: { messages: any[] }): string =>
+  stableMessages(prepared)
+    .filter((message) => message.role === "user")
+    .map((message) => (typeof message.content === "string" ? message.content : JSON.stringify(message.content)))
+    .join("\n")
 
 describe("plan-status prompt-cache fix", () => {
   test("renderPlanStatus returns the snapshot text in high mode with a plan", () => {
@@ -137,12 +145,12 @@ describe("plan-status prompt-cache fix", () => {
     const sessionID = `ses_planstatus_noop_${crypto.randomUUID()}`
     seedPlan(sessionID, 0, 2, 0)
     const prepared = await prepare(sessionID, [{ role: "user", content: "fix one typo" }])
-    expect(runtimeSystem(prepared)).toBe("")
+    expect(runtimeContext(prepared)).toBe("")
     expect(JSON.stringify(prepared.messages.filter((message) => message.role === "user"))).not.toContain("plan-status")
     AgentGateway.configure({ enabled: false, agentMode: "high" })
   })
 
-  test("plan-status uses system authority, not user history", async () => {
+  test("plan-status stays in the ephemeral runtime tail, not durable history", async () => {
     AgentGateway.configure({ enabled: true, agentMode: "high" })
     const sessionID = `ses_planstatus_tail_${crypto.randomUUID()}`
     seedPlan(sessionID, 1, 3, 2)
@@ -154,9 +162,9 @@ describe("plan-status prompt-cache fix", () => {
       ],
       continueRound,
     )
-    expect(runtimeSystem(prepared)).toContain("<plan-status>")
-    expect(runtimeSystem(prepared)).toContain("Current plan (1/3 done)")
-    expect(userHistory(prepared)).not.toContain("<plan-status>")
+    expect(runtimeContext(prepared)).toContain("<plan-status>")
+    expect(runtimeContext(prepared)).toContain("Current plan (1/3 done)")
+    expect(durableUserHistory(prepared)).not.toContain("<plan-status>")
     AgentGateway.configure({ enabled: false, agentMode: "high" })
   })
 
@@ -179,33 +187,37 @@ describe("plan-status prompt-cache fix", () => {
     const stepB = await prepare(sessionID, history, continueRound)
 
     expect(JSON.stringify(stableMessages(stepB))).toBe(JSON.stringify(stableMessages(stepA)))
-    expect(runtimeSystem(stepA)).toContain("1/3 done")
-    expect(runtimeSystem(stepB)).toContain("2/3 done")
-    expect(stepA.messages.length).toBe(history.length + 1 /* stable system */ + 1 /* runtime system */)
+    expect(runtimeContext(stepA)).toContain("1/3 done")
+    expect(runtimeContext(stepB)).toContain("2/3 done")
+    expect(stepA.messages.at(-1)?.content).toBe(runtimeContext(stepA))
+    expect(stepA.messages.length).toBe(history.length + 1 /* stable system */ + 1 /* runtime tail */)
     AgentGateway.configure({ enabled: false, agentMode: "high" })
   })
 
-  test("plan-status shares one runtime system message with round context", async () => {
+  test("plan-status shares one runtime tail with round context", async () => {
     AgentGateway.configure({ enabled: true, agentMode: "high" })
     const sessionID = `ses_planstatus_single_tail_${crypto.randomUUID()}`
     seedPlan(sessionID, 1, 2, 1)
     const prepared = await prepare(sessionID, [{ role: "user", content: "do it" }], continueRound)
-    expect(runtimeSystem(prepared)).toContain("deepagent-round-context")
-    expect(runtimeSystem(prepared)).toContain("<plan-status>")
+    expect(runtimeContext(prepared)).toContain("deepagent-round-context")
+    expect(runtimeContext(prepared)).toContain("<plan-status>")
     const runtimeMessages = prepared.messages.filter(
-      (message) => message.role === "system" && typeof message.content === "string" && message.content.startsWith("<deepagent-round-context>"),
+      (message) =>
+        message.role === "user" &&
+        typeof message.content === "string" &&
+        message.content.startsWith("<deepagent-round-context>"),
     )
     expect(runtimeMessages).toHaveLength(1)
-    expect(prepared.messages.filter((message) => message.role === "user")).toHaveLength(1)
+    expect(prepared.messages.at(-1)).toBe(runtimeMessages[0])
     AgentGateway.configure({ enabled: false, agentMode: "high" })
   })
 })
 
 // V4.1 §S3.1 — the goal plan HOT-EDIT (§S2) cache contract. A user revising a running goal's plan
 // (loop.applyPlanEdit writes the durable doc; the next tick's seedChildPlan mirrors it into the
-// worker's plan-state that renderPlanStatus reads) changes only the runtime system message. It must
+// worker's plan-state that renderPlanStatus reads) changes only the ephemeral runtime tail. It must
 // never leak onto a durable user-history anchor.
-describe("V4.1 §S3.1 — goal plan hot-edit stays runtime-system scoped", () => {
+describe("V4.1 §S3.1 — goal plan hot-edit stays runtime-tail scoped", () => {
   // Apply a user plan revision the way the goal bridge surfaces it to the prompt on the next tick: the
   // reconciled PlanDoc is set into the session's plan-state (getPlan/setPlan), which is renderPlanStatus's
   // source of truth. Mirrors buildPlanFromInput → setPlan, the seedChildPlan path in goal-loop-wiring.
@@ -227,7 +239,7 @@ describe("V4.1 §S3.1 — goal plan hot-edit stays runtime-system scoped", () =>
     // Before the edit: a 3-step plan, first done.
     seedPlan(sessionID, 1, 3, 2)
     const before = await prepare(sessionID, history, continueRound)
-    expect(runtimeSystem(before)).toContain("Current plan (1/3 done)")
+    expect(runtimeContext(before)).toContain("Current plan (1/3 done)")
 
     // User hot-edits: re-open step 1 (done→pending), rename it, and drop a step — the exact structural
     // churn a running-goal edit produces. Reflected through the plan-state render path.
@@ -240,11 +252,11 @@ describe("V4.1 §S3.1 — goal plan hot-edit stays runtime-system scoped", () =>
     })
     const after = await prepare(sessionID, history, continueRound)
 
-    expect(runtimeSystem(after)).toContain("Current plan (0/2 done)")
-    expect(runtimeSystem(after)).toContain("reworked step")
+    expect(runtimeContext(after)).toContain("Current plan (0/2 done)")
+    expect(runtimeContext(after)).toContain("reworked step")
     expect(JSON.stringify(stableMessages(after))).toBe(JSON.stringify(stableMessages(before)))
     expect(after.messages.length).toBe(before.messages.length)
-    expect(userHistory(after)).not.toContain("reworked step")
+    expect(durableUserHistory(after)).not.toContain("reworked step")
     AgentGateway.configure({ enabled: false, agentMode: "high" })
   })
 
@@ -253,11 +265,15 @@ describe("V4.1 §S3.1 — goal plan hot-edit stays runtime-system scoped", () =>
     const sessionID = `ses_planedit_cachehit_${crypto.randomUUID()}`
     seedPlan(sessionID, 1, 3, 1)
     // Turn 1 baselines: cache write, no reads (first turn is always a write).
-    expect(() => LLMRequestPrep.recordCacheHitOutcome(sessionID, { input: 500, cache: { read: 0, write: 1180 } })).not.toThrow()
+    expect(LLMRequestPrep.recordCacheHitOutcome(sessionID, { input: 500, cache: { read: 0, write: 1180 } })).toBe(
+      "baseline",
+    )
 
     // Cache telemetry remains diagnostic-only across the plan edit.
     applyEdit(sessionID, { goal: "ship the feature", steps: [{ step_id: "step_1", title: "reworked", status: "pending" }] })
-    expect(() => LLMRequestPrep.recordCacheHitOutcome(sessionID, { input: 12, cache: { read: 1180, write: 0 } })).not.toThrow()
+    expect(LLMRequestPrep.recordCacheHitOutcome(sessionID, { input: 12, cache: { read: 1180, write: 0 } })).toBe(
+      "stable",
+    )
     AgentGateway.configure({ enabled: false, agentMode: "high" })
   })
 })
@@ -272,16 +288,35 @@ describe("recordCacheHitOutcome (response-side monitor)", () => {
   test("first call baselines without throwing; subsequent calls compare without throwing", () => {
     const sessionID = `ses_cachehit_${crypto.randomUUID()}`
     // Turn 1: cache write, zero reads (normal on the first turn) — baseline only.
-    expect(() => LLMRequestPrep.recordCacheHitOutcome(sessionID, tokens(500, 0, 1180))).not.toThrow()
+    expect(LLMRequestPrep.recordCacheHitOutcome(sessionID, tokens(500, 0, 1180))).toBe("baseline")
     // Turn 2: strong cache read (healthy) — no warning path, no throw.
-    expect(() => LLMRequestPrep.recordCacheHitOutcome(sessionID, tokens(12, 1180))).not.toThrow()
+    expect(LLMRequestPrep.recordCacheHitOutcome(sessionID, tokens(12, 1180))).toBe("stable")
     // Turn 3: collapsed hit ratio with a non-shrinking prompt (the break signature) — warns, never throws.
-    expect(() => LLMRequestPrep.recordCacheHitOutcome(sessionID, tokens(1180, 12))).not.toThrow()
+    expect(LLMRequestPrep.recordCacheHitOutcome(sessionID, tokens(1180, 12))).toBe("break")
+  })
+
+  test("keeps a stable cached prefix healthy while the uncached suffix grows", () => {
+    const sessionID = `ses_cachehit_suffix_${crypto.randomUUID()}`
+    expect(LLMRequestPrep.recordCacheHitOutcome(sessionID, tokens(128, 1152))).toBe("baseline")
+    expect(LLMRequestPrep.recordCacheHitOutcome(sessionID, tokens(396, 1152))).toBe("stable")
+  })
+
+  test("requires a material absolute cache-read drop as well as a ratio drop", () => {
+    const sessionID = `ses_cachehit_small_drop_${crypto.randomUUID()}`
+    expect(LLMRequestPrep.recordCacheHitOutcome(sessionID, tokens(128, 1152))).toBe("baseline")
+    expect(LLMRequestPrep.recordCacheHitOutcome(sessionID, tokens(500, 1100))).toBe("stable")
   })
 
   test("handles zero/empty usage safely", () => {
     const sessionID = `ses_cachehit_zero_${crypto.randomUUID()}`
-    expect(() => LLMRequestPrep.recordCacheHitOutcome(sessionID, tokens(0, 0, 0))).not.toThrow()
-    expect(() => LLMRequestPrep.recordCacheHitOutcome(sessionID, tokens(0, 0, 0))).not.toThrow()
+    expect(LLMRequestPrep.recordCacheHitOutcome(sessionID, tokens(0, 0, 0))).toBe("baseline")
+    expect(LLMRequestPrep.recordCacheHitOutcome(sessionID, tokens(0, 0, 0))).toBe("baseline")
+  })
+
+  test("resets at an intentional structured-finalizer request boundary", () => {
+    const sessionID = `ses_cachehit_finalizer_${crypto.randomUUID()}`
+    expect(LLMRequestPrep.recordCacheHitOutcome(sessionID, tokens(12, 1180))).toBe("baseline")
+    LLMRequestPrep.resetCacheHitOutcome(sessionID)
+    expect(LLMRequestPrep.recordCacheHitOutcome(sessionID, tokens(2214, 256))).toBe("baseline")
   })
 })

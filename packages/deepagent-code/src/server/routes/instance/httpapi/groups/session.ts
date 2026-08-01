@@ -25,6 +25,9 @@ import { described } from "./metadata"
 import { QueryBoolean } from "./query"
 import { ProviderV2 } from "@deepagent-code/core/provider"
 import { ModelV2 } from "@deepagent-code/core/model"
+import { GraphKind } from "@deepagent-code/core/context-federation/contract"
+import { GraphQueryStatus } from "@deepagent-code/core/context-federation/federation"
+import { Sensitivity } from "@deepagent-code/core/context-federation/authorization"
 
 const root = "/session"
 export const ListQuery = Schema.Struct({
@@ -98,6 +101,137 @@ export const RevertPayload = Schema.Struct(Struct.omit(SessionRevert.RevertInput
 export const PermissionResponsePayload = Schema.Struct({
   response: PermissionV1.Reply,
 })
+export const ContextEvidenceResult = Schema.Struct({
+  token: Schema.String,
+  graph: GraphKind,
+  revision: Schema.String,
+  sensitivity: Sensitivity,
+  freshness: Schema.Literals(["current", "historical", "expired", "superseded", "conflict", "unknown"]),
+  score: Schema.Finite,
+  reason: Schema.String,
+  provenance: Schema.Array(Schema.String),
+  relations: Schema.Array(
+    Schema.Struct({
+      relation: Schema.String,
+      token: Schema.String,
+      freshness: Schema.Literals(["exact", "rebound", "broken"]),
+    }),
+  ),
+})
+export const ContextArtifactResult = Schema.Union([
+  Schema.Struct({ status: Schema.Literal("available"), ref: Schema.String }),
+  Schema.Struct({
+    status: Schema.Literals(["degraded_unavailable", "expired", "unavailable"]),
+    reasonCode: Schema.String,
+  }),
+])
+export const ContextSelectionResult = Schema.Struct({
+  selectionId: Schema.String,
+  activityId: Schema.String,
+  activityState: Schema.Literals(["active", "settled", "failed", "interrupted"]),
+  revision: Schema.Int,
+  summary: Schema.Literals(["complete", "partial", "empty"]),
+  statuses: Schema.Array(GraphQueryStatus),
+  evidence: Schema.Array(ContextEvidenceResult),
+  tokenCount: Schema.Int,
+  stale: Schema.Boolean,
+  nextRevalidationAt: Schema.Int,
+  artifact: ContextArtifactResult,
+  createdAt: Schema.Int,
+})
+export const ContextAttemptResult = Schema.Struct({
+  attemptId: Schema.String,
+  activityId: Schema.String,
+  providerTurnSeq: Schema.Int,
+  selectionId: Schema.String,
+  providerId: Schema.String,
+  parentAttemptId: Schema.optional(Schema.String),
+  state: Schema.Literals([
+    "prepared",
+    "dispatching",
+    "streaming",
+    "settled",
+    "failed",
+    "indeterminate_after_crash",
+    "resolved_abandoned",
+    "resolved_settled",
+    "resolved_replayed",
+  ]),
+  createdAt: Schema.Int,
+  firstEventAt: Schema.optional(Schema.Int),
+  settledAt: Schema.optional(Schema.Int),
+  errorCode: Schema.optional(Schema.String),
+  ageMs: Schema.Int,
+  canAbandon: Schema.Boolean,
+  canSettle: Schema.Boolean,
+  canReplay: Schema.Boolean,
+  resolution: Schema.optional(
+    Schema.Struct({
+      decision: Schema.Literals(["abandoned", "settled", "replayed"]),
+      actorType: Schema.Literals(["user", "administrator", "system"]),
+      actorId: Schema.String,
+      riskAcknowledged: Schema.Boolean,
+      reason: Schema.String,
+      createdAt: Schema.Int,
+    }),
+  ),
+})
+export const ContextGraphMetricResult = Schema.Struct({
+  graph: GraphKind,
+  queries: Schema.Int,
+  candidates: Schema.Int,
+  selected: Schema.Int,
+  rejected: Schema.Int,
+  redacted: Schema.Int,
+  averageLatencyMs: Schema.Finite,
+  maxLatencyMs: Schema.Finite,
+  lastLatencyMs: Schema.Finite,
+  lastObservedAt: Schema.optional(Schema.Int),
+  status: Schema.optional(GraphQueryStatus),
+})
+export const ContextDiagnosticsResult = Schema.Struct({
+  sessionId: SessionID,
+  selections: Schema.Array(ContextSelectionResult),
+  attempts: Schema.Array(ContextAttemptResult),
+  metrics: Schema.Struct({
+    selections: Schema.Int,
+    tokens: Schema.Int,
+    shadow: Schema.Struct({
+      comparisons: Schema.Int,
+      legacyKnowledgeRefs: Schema.Int,
+      legacyMemoryRefs: Schema.Int,
+      federated: Schema.Struct({
+        code: Schema.Int,
+        knowledge: Schema.Int,
+        memory: Schema.Int,
+        documents: Schema.Int,
+      }),
+      knowledgeMemoryDelta: Schema.Int,
+    }),
+    graphs: Schema.Array(ContextGraphMetricResult),
+    alerts: Schema.Array(
+      Schema.Struct({
+        graph: GraphKind,
+        state: Schema.Literals([
+          "ready",
+          "cold",
+          "indexing",
+          "stale",
+          "degraded",
+          "unavailable",
+          "denied",
+          "not_queried",
+        ]),
+        reasonCode: Schema.String,
+      }),
+    ),
+  }),
+})
+export const ContextAttemptResolvePayload = Schema.Struct({
+  decision: Schema.Literals(["abandoned", "settled", "replayed"]),
+  reason: Schema.String,
+  riskAcknowledged: Schema.optional(Schema.Boolean),
+})
 
 export const SessionPaths = {
   list: root,
@@ -129,6 +263,8 @@ export const SessionPaths = {
   deleteMessage: `${root}/:sessionID/message/:messageID`,
   deletePart: `${root}/:sessionID/message/:messageID/part/:partID`,
   updatePart: `${root}/:sessionID/message/:messageID/part/:partID`,
+  contextDiagnostics: `${root}/:sessionID/context`,
+  contextAttemptResolve: `${root}/:sessionID/context/attempt/:attemptID/resolve`,
 } as const
 
 export const SessionApi = HttpApi.make("session")
@@ -508,6 +644,31 @@ export const SessionApi = HttpApi.make("session")
           OpenApi.annotations({
             identifier: "part.update",
             description: "Update a part in a message.",
+          }),
+        ),
+        HttpApiEndpoint.get("contextDiagnostics", SessionPaths.contextDiagnostics, {
+          params: { sessionID: SessionID },
+          query: WorkspaceRoutingQuery,
+          success: described(ContextDiagnosticsResult, "Session context diagnostics"),
+          error: [HttpApiError.BadRequest, ApiNotFoundError],
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "session.contextDiagnostics",
+            summary: "Get session context diagnostics",
+            description: "Inspect four-graph status, opaque evidence, audit availability, and provider attempts.",
+          }),
+        ),
+        HttpApiEndpoint.post("contextAttemptResolve", SessionPaths.contextAttemptResolve, {
+          params: { sessionID: SessionID, attemptID: Schema.String },
+          query: WorkspaceRoutingQuery,
+          payload: ContextAttemptResolvePayload,
+          success: described(ContextAttemptResult, "Resolved provider attempt"),
+          error: [HttpApiError.BadRequest, ApiNotFoundError],
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "session.contextAttemptResolve",
+            summary: "Resolve an indeterminate provider attempt",
+            description: "Apply an audited abandon, verified-settle, or risk-acknowledged replay decision.",
           }),
         ),
       )

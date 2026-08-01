@@ -1,15 +1,6 @@
 import { Context, Effect, Layer, Schema } from "effect"
 import type { AgentProgressPart } from "./agent-reply-sink"
 
-export const AgentContextItem = Schema.Struct({
-  id: Schema.String,
-  type: Schema.String,
-  description: Schema.String,
-  relevance: Schema.Number,
-  body: Schema.optional(Schema.Unknown),
-})
-export type AgentContextItem = Schema.Schema.Type<typeof AgentContextItem>
-
 export const AgentConversationMessage = Schema.Struct({
   id: Schema.String,
   sender_id: Schema.String,
@@ -19,17 +10,8 @@ export const AgentConversationMessage = Schema.Struct({
 })
 export type AgentConversationMessage = Schema.Schema.Type<typeof AgentConversationMessage>
 
-/**
- * Agent execution context built from multiple sources.
- */
+/** IM metadata admitted alongside the current message. Graph evidence is resolved by SessionPrompt. */
 export const AgentContext = Schema.Struct({
-  // V3.8 Phase 3 (v3.8.1 §B.4): tightened from Schema.optional(Schema.Unknown) to an optional
-  // AgentContextItem[] (same shape as the other three buckets) now that the code bucket is filled by
-  // real code_symbol traversal via UnifiedContextGraph. Kept optional for backward-compat.
-  code: Schema.optional(Schema.Array(AgentContextItem)),
-  knowledge: Schema.Array(AgentContextItem),
-  memory: Schema.Array(AgentContextItem),
-  documents: Schema.Array(AgentContextItem),
   conversation: Schema.Struct({
     groupID: Schema.String,
     recentMessages: Schema.Array(AgentConversationMessage),
@@ -62,9 +44,8 @@ export const AgentExecutionResult = Schema.Struct({
 export type AgentExecutionResult = Schema.Schema.Type<typeof AgentExecutionResult>
 
 /**
- * Agent context builder interface.
- * Builds context across code/knowledge/memory/documents. The live implementation routes through
- * UnifiedContextGraph (four-graph unification, V3.8.1 §B) with defect-safe degradation to empty.
+ * Agent context builder interface. It reads only IM conversation metadata; SessionPrompt owns
+ * all Code/Knowledge/Memory/Documents retrieval and projection.
  */
 export interface AgentContextBuilder {
   build(input: {

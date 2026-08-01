@@ -8,10 +8,6 @@ import {
 import type { AgentContext } from "../src/im/agent-executor"
 
 const emptyContext: AgentContext = {
-  code: undefined,
-  knowledge: [],
-  memory: [],
-  documents: [],
   conversation: { groupID: "g1", recentMessages: [] },
 }
 

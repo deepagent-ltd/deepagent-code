@@ -2,7 +2,7 @@
 
 The DeepAgent Code Desktop app, built with Electron.
 
-Current release: Desktop 1.4.3, powered by DeepAgent Core V4.0.4_r8.
+Current release: Desktop 1.4.4, powered by DeepAgent Core V4.0.5.
 
 ## Development
 
