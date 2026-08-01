@@ -14,7 +14,7 @@
     "predev": "bun ./scripts/predev.ts",
     "dev": "electron-vite dev",
     "prebuild": "bun ./scripts/prebuild.ts",
-    "build": "electron-vite build",
+    "build": "electron-vite build && bun ./scripts/audit-server-bundle.ts",
     "preview": "electron-vite preview",
     "test": "bun test ./src",
     "test:ci": "mkdir -p .artifacts/unit && bun test ./src --reporter=junit --reporter-outfile=.artifacts/unit/junit.xml",
@@ -37,6 +37,7 @@
   "main": "./out/main/index.js",
   "dependencies": {
     "@deepagent-code/core": "workspace:*",
+    "@lydell/node-pty": "catalog:",
     "@zip.js/zip.js": "2.7.62",
     "effect": "catalog:",
     "electron-context-menu": "4.1.2",
@@ -44,11 +45,11 @@
     "electron-store": "^10",
     "electron-updater": "^6",
     "electron-window-state": "^5.0.3",
+    "jsonc-parser": "3.3.1",
     "marked": "^15"
   },
   "devDependencies": {
     "@actions/artifact": "4.0.0",
-    "@lydell/node-pty": "catalog:",
     "@deepagent-code/app": "workspace:*",
     "@deepagent-code/ui": "workspace:*",
     "@jridgewell/trace-mapping": "0.3.31",
