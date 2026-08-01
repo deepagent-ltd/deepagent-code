@@ -18,7 +18,7 @@ const result = await Bun.build({
   outdir: "./dist/node",
   format: "esm",
   sourcemap: "linked",
-  external: ["jsonc-parser", "@lydell/node-pty"],
+  external: ["@lydell/node-pty", "jsonc-parser"],
   define: {
     DEEPAGENT_CODE_MODELS_DEV: generated.modelsData,
     DEEPAGENT_CODE_CHANNEL: `'${Script.channel}'`,
@@ -42,6 +42,12 @@ const unsupportedBunAPIs = [...new Set(source.match(/\bBun\.[A-Za-z_$][A-Za-z0-9
 )
 if (unsupportedBunAPIs.length > 0) {
   throw new Error(`Node server bundle contains Bun-only runtime APIs: ${unsupportedBunAPIs.join(", ")}`)
+}
+if (!source.includes('from "@lydell/node-pty"')) {
+  throw new Error("Node server bundle does not import the node-pty platform selector")
+}
+if (!source.includes('from "jsonc-parser"')) {
+  throw new Error("Node server bundle does not import the external jsonc-parser runtime dependency")
 }
 await Bun.write(
   bundle,
