@@ -50,6 +50,7 @@ type RunRuntimeInput = {
   ) => Promise<{ sessionID: string; sessionTitle?: string; agent?: string | undefined }>
   createSession?: (ctx: BootContext, input: CreateSessionInput) => Promise<ResolvedSession>
   files: RunInput["files"]
+  metadata?: Record<string, unknown>
   initialInput?: string
   thinking: boolean
   backgroundSubagents: boolean
@@ -69,6 +70,7 @@ type RunLocalInput = {
   model: RunInput["model"]
   variant: RunInput["variant"]
   files: RunInput["files"]
+  metadata?: Record<string, unknown>
   initialInput?: string
   thinking: boolean
   backgroundSubagents: boolean
@@ -595,6 +597,79 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
               })
             }
           },
+          onCompactSession: async () => {
+            await state.switching?.catch(() => {})
+            if (!state.model) return "select a model before compacting"
+            await ensureSession()
+            const result = await ctx.sdk.session.summarize({
+              sessionID: state.sessionID,
+              providerID: state.model.providerID,
+              modelID: state.model.modelID,
+            })
+            if (result.error) return "session compaction failed"
+            return "session compacted"
+          },
+          onSessionCommand: async (command) => {
+            await state.switching?.catch(() => {})
+            await ensureSession()
+            if (command === "share") {
+              const result = await ctx.sdk.session.share({ sessionID: state.sessionID })
+              return result.data?.share?.url ?? "session sharing failed"
+            }
+            if (command === "unshare") {
+              const result = await ctx.sdk.session.unshare({ sessionID: state.sessionID })
+              return result.error ? "session unshare failed" : "session unshared"
+            }
+            if (command === "fork") {
+              const result = await ctx.sdk.session.fork({ sessionID: state.sessionID })
+              if (!result.data?.id) return "session fork failed"
+              await footer.idle().catch(() => {})
+              await state.stream?.then((item) => item.handle.close()).catch(() => {})
+              state.stream = undefined
+              state.session = undefined
+              state.selectSubagent = undefined
+              state.sessionID = result.data.id
+              state.sessionTitle = result.data.title
+              state.shown = true
+              state.localRows = []
+              setRunSpanAttributes(span, { "session.id": state.sessionID })
+              footer.event({
+                type: "stream.subagent",
+                state: { tabs: [], details: {}, permissions: [], questions: [] },
+              })
+              footer.event({ type: "stream.view", view: { type: "prompt" } })
+              footer.append({
+                kind: "system",
+                text: `forked session ${state.sessionID}`,
+                phase: "final",
+                source: "system",
+              })
+              return `forked session ${state.sessionID}`
+            }
+
+            const [current, history] = await Promise.all([
+              ctx.sdk.session.get({ sessionID: state.sessionID }),
+              ctx.sdk.session.messages({ sessionID: state.sessionID }),
+            ])
+            const users = (history.data ?? []).filter(
+              (message) =>
+                message.info.role === "user" && !message.parts.some((part) => part.type === "compaction"),
+            )
+            const revert = current.data?.revert?.messageID
+            if (command === "undo") {
+              const message = users.findLast((item) => !revert || item.info.id < revert)
+              if (!message) return "nothing to undo"
+              const result = await ctx.sdk.session.revert({ sessionID: state.sessionID, messageID: message.info.id })
+              return result.error ? "session undo failed" : "session turn undone"
+            }
+
+            if (!revert) return "nothing to redo"
+            const next = users.find((item) => item.info.id > revert)
+            const result = next
+              ? await ctx.sdk.session.revert({ sessionID: state.sessionID, messageID: next.info.id })
+              : await ctx.sdk.session.unrevert({ sessionID: state.sessionID })
+            return result.error ? "session redo failed" : "session turn restored"
+          },
           onNewSession: createSession
             ? async () => {
                 try {
@@ -715,7 +790,10 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
                     agent: state.agent,
                     model: state.model,
                     variant: state.activeVariant,
-                    prompt,
+                    prompt: {
+                      ...prompt,
+                      metadata: input.metadata,
+                    },
                     files: input.files,
                     includeFiles,
                     onVisibleOutput: (anchor) => {
@@ -819,6 +897,7 @@ export async function runInteractiveLocalMode(input: RunLocalInput): Promise<voi
 
       return runInteractiveRuntime({
         files: input.files,
+        metadata: input.metadata,
         initialInput: input.initialInput,
         thinking: input.thinking,
         backgroundSubagents: input.backgroundSubagents,
@@ -878,6 +957,7 @@ export async function runInteractiveMode(
       runInteractiveRuntime(
         {
           files: input.files,
+          metadata: input.metadata,
           initialInput: input.initialInput,
           thinking: input.thinking,
           backgroundSubagents: input.backgroundSubagents,

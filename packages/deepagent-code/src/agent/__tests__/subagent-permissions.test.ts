@@ -382,4 +382,9 @@ describe("subagentIsWriteType", () => {
     const a = makeAgent("a", [])
     expect(subagentIsWriteType(a)).toBe(true)
   })
+
+  it("agent with a path-scoped write exception is write-type", () => {
+    const a = makeAgent("a", [makeRule("*", "deny"), makeRule("write", "allow", "output/**")])
+    expect(subagentIsWriteType(a)).toBe(true)
+  })
 })

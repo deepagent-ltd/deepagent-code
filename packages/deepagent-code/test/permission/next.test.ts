@@ -11,6 +11,8 @@ import { InstanceStore } from "../../src/project/instance-store"
 import { TestInstance, tmpdirScoped } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 import { MessageID, SessionID } from "../../src/session/schema"
+import { EventRouteRef, WorkspaceRef } from "../../src/effect/instance-ref"
+import { WorkspaceV2 } from "@deepagent-code/core/workspace"
 
 const events = EventV2Bridge.defaultLayer
 const noopBootstrap = Layer.succeed(InstanceBootstrap.Service, InstanceBootstrap.Service.of({ run: Effect.void }))
@@ -696,6 +698,60 @@ it.instance(
   { git: true },
 )
 
+it.instance(
+  "ask - bounded waits reject and clear unattended permission requests",
+  () =>
+    Effect.gen(function* () {
+      const events = yield* EventV2Bridge.Service
+      const replied = yield* Deferred.make<{
+        sessionID: SessionID
+        requestID: PermissionV1.ID
+        reply: PermissionV1.Reply
+      }>()
+      const unsub = yield* events.listen((event) => {
+        if (event.type === Permission.Event.Replied.type)
+          Deferred.doneUnsafe(
+            replied,
+            Effect.succeed(
+              event.data as { sessionID: SessionID; requestID: PermissionV1.ID; reply: PermissionV1.Reply },
+            ),
+          )
+        return Effect.void
+      })
+      yield* Effect.addFinalizer(() => unsub)
+
+      const id = PermissionV1.ID.make("per_bounded_wait")
+      const error = yield* fail(
+        ask({
+          id,
+          sessionID: SessionID.make("session_subagent"),
+          permission: "external_directory",
+          patterns: ["/data/model/*"],
+          metadata: {},
+          always: ["/data/model/*"],
+          ruleset: [],
+          timeoutMs: 25,
+        }),
+      )
+
+      expect(error).toBeInstanceOf(PermissionV1.RejectedError)
+      expect(yield* list()).toEqual([])
+      expect(
+        yield* Deferred.await(replied).pipe(
+          Effect.timeoutOrElse({
+            duration: "1 second",
+            orElse: () => Effect.fail(new Error("timed out waiting for synthetic permission rejection")),
+          }),
+        ),
+      ).toEqual({
+        sessionID: SessionID.make("session_subagent"),
+        requestID: id,
+        reply: "reject",
+      })
+    }),
+  { git: true },
+)
+
 // reply tests
 
 it.instance(
@@ -1014,6 +1070,96 @@ it.live("permission requests stay isolated by directory", () =>
 
     yield* Fiber.await(a)
     yield* Fiber.await(b)
+  }),
+)
+
+it.live("root session directory supervises parallel child worktree permissions", () =>
+  Effect.gen(function* () {
+    const parent = yield* tmpdirScoped({ git: true })
+    const childA = yield* tmpdirScoped({ git: true })
+    const childB = yield* tmpdirScoped({ git: true })
+    const unrelated = yield* tmpdirScoped({ git: true })
+    const store = yield* InstanceStore.Service
+    const events = yield* EventV2Bridge.Service
+    const parentContext = yield* store.load({ directory: parent })
+    const workspaceID = WorkspaceV2.ID.make("wrk_child_route")
+    const wrongWorkspaceID = WorkspaceV2.ID.make("wrk_child_route_wrong")
+    const eventRoute = { ...parentContext, workspaceID }
+    const askedAt = yield* Deferred.make<string[]>()
+    const eventDirectories: string[] = []
+    const eventWorkspaceIDs: Array<WorkspaceV2.ID | undefined> = []
+    const off = yield* events.listen((event) => {
+      if (event.type !== Permission.Event.Asked.type) return Effect.void
+      const request = event.data as PermissionV1.Request
+      if (!["per_child_route_a", "per_child_route_b"].includes(request.id)) return Effect.void
+      eventDirectories.push(event.location?.directory ?? "")
+      eventWorkspaceIDs.push(event.location?.workspaceID)
+      if (eventDirectories.length !== 2) return Effect.void
+      return Deferred.succeed(askedAt, eventDirectories).pipe(Effect.asVoid)
+    })
+    yield* Effect.addFinalizer(() => off)
+
+    const fiberA = yield* store
+      .provide(
+        { directory: childA },
+        ask({
+          id: PermissionV1.ID.make("per_child_route_a"),
+          sessionID: SessionID.make("session_child_route_a"),
+          permission: "bash",
+          patterns: ["ls"],
+          metadata: {},
+          always: [],
+          ruleset: [],
+        }).pipe(Effect.provideService(EventRouteRef, eventRoute)),
+      )
+      .pipe(Effect.forkScoped)
+    const fiberB = yield* store
+      .provide(
+        { directory: childB },
+        ask({
+          id: PermissionV1.ID.make("per_child_route_b"),
+          sessionID: SessionID.make("session_child_route_b"),
+          permission: "bash",
+          patterns: ["pwd"],
+          metadata: {},
+          always: [],
+          ruleset: [],
+        }).pipe(Effect.provideService(EventRouteRef, eventRoute)),
+      )
+      .pipe(Effect.forkScoped)
+
+    const parentPending = yield* store
+      .provide({ directory: parent }, waitForPending(2))
+      .pipe(Effect.provideService(WorkspaceRef, workspaceID))
+    expect(parentPending.map((item) => item.id).sort()).toEqual([
+      PermissionV1.ID.make("per_child_route_a"),
+      PermissionV1.ID.make("per_child_route_b"),
+    ])
+    expect(yield* store.provide({ directory: unrelated }, list())).toEqual([])
+    expect(
+      yield* store.provide({ directory: parent }, list()).pipe(Effect.provideService(WorkspaceRef, wrongWorkspaceID)),
+    ).toEqual([])
+    const wrongReply = yield* store
+      .provide({ directory: parent }, reply({ requestID: parentPending[0].id, reply: "once" }))
+      .pipe(Effect.provideService(WorkspaceRef, wrongWorkspaceID), Effect.exit)
+    expect(Exit.isFailure(wrongReply)).toBe(true)
+    if (Exit.isFailure(wrongReply)) expect(Cause.squash(wrongReply.cause)).toBeInstanceOf(PermissionV1.NotFoundError)
+    expect(yield* Deferred.await(askedAt)).toEqual([parentContext.directory, parentContext.directory])
+    expect(eventWorkspaceIDs).toEqual([workspaceID, workspaceID])
+
+    yield* Effect.forEach(
+      parentPending,
+      (request) =>
+        store
+          .provide({ directory: parent }, reply({ requestID: request.id, reply: "once" }))
+          .pipe(Effect.provideService(WorkspaceRef, workspaceID)),
+      { discard: true },
+    )
+    yield* Fiber.join(fiberA)
+    yield* Fiber.join(fiberB)
+    expect(
+      yield* store.provide({ directory: parent }, list()).pipe(Effect.provideService(WorkspaceRef, workspaceID)),
+    ).toEqual([])
   }),
 )
 

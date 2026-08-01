@@ -10,8 +10,6 @@ type ConfigInfo = {
 
 const bool = (value: unknown) => (typeof value === "boolean" ? value : undefined)
 
-const string = (value: unknown) => (typeof value === "string" && value.length > 0 ? value : undefined)
-
 const agentMode = (value: unknown): AgentMode | undefined =>
   value === "general" || value === "high" || value === "xhigh" || value === "max" || value === "ultra"
     ? value
@@ -44,11 +42,9 @@ export function gatewayConfig(config?: ConfigInfo): AgentGatewayConfig {
     enabled: true,
     agentMode: agentMode(options.agentMode) ?? envAgentMode() ?? "high",
     selfLearning: selfLearning(options.selfLearning) ?? envSelfLearning() ?? "manual",
-    // P0-0 single storage root: inject from Global.Path.agent (the one resolver that honors
-    // DEEPAGENT_CODE_HOME / TEST_HOME / legacy migration). baseDir roots durable memory/state;
-    // runsDir can be overridden independently. The gateway no longer self-resolves the home.
+    // Private runtime state is not configurable outside the canonical/test storage root.
     baseDir: Global.Path.agent.data,
-    runsDir: string(options.runsDir) ?? process.env.DEEPAGENT_RUNS_DIR ?? Global.Path.agent.runs,
+    runsDir: Global.Path.agent.runs,
     allowProviderExecutedTools:
       bool(options.allowProviderExecutedTools) ?? envBool("DEEPAGENT_ALLOW_PROVIDER_EXECUTED_TOOLS"),
     ...(allowlist ? { allowProviderExecutedToolNames: allowlist } : {}),

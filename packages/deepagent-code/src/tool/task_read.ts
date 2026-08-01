@@ -1,5 +1,4 @@
 import * as Tool from "./tool"
-import { MessageV2 } from "@/session/message-v2"
 import { Session } from "@/session/session"
 import { SessionV1 } from "@deepagent-code/core/v1/session"
 import { Effect, Schema } from "effect"
@@ -93,8 +92,9 @@ export const TaskReadTool = Tool.define(
         )
       }
 
-      // MessageV2.page applies the opaque cursor in storage and returns chronological items.
-      const result = yield* MessageV2.page({
+      // Session owns the database binding; using its page API avoids reading from an unrelated
+      // ambient Database service when this tool is composed into a larger runtime Layer.
+      const result = yield* sessions.messagesPage({
         sessionID: childSessionID,
         limit,
         before: params.before,

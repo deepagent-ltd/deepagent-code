@@ -106,15 +106,14 @@ export type PreviousResults = {
   readonly bestCandidate: CandidateRef | null
 }
 
-// PROMPT-CACHE CONTRACT (see docs/deepagent-cache-hit-fix-plan.md):
+// PROMPT-CACHE CONTRACT (see docs/llmrealtest-v2.md §11.2):
 // `buildSystemPrompt` MUST be byte-stable across every turn of a session — it becomes the cached
 // Anthropic prefix (cache_control breakpoint sits at the end of the system block, transform.ts
 // applyCaching). Anything that changes per-round (round number, previous-round results, token
 // budget, the concrete fan-out verdict) is a cache-buster: it invalidates the whole prefix AND all
 // history after it on every intra-turn call. All such volatile state lives in
-// `buildVolatileRoundContext` instead, which the caller sends as a separate system message. This may
-// reduce cross-round history cache reuse, but runtime control state must never masquerade as a new
-// user request.
+// `buildVolatileRoundContext` instead, which the caller appends as one ephemeral tagged tail. The
+// stable system prompt assigns that tag runtime-control semantics and requires silent application.
 export const buildSystemPrompt = (ctx: PromptContext): string => {
   const sections: string[] = []
 
@@ -158,8 +157,8 @@ export const buildSystemPrompt = (ctx: PromptContext): string => {
 }
 
 // Volatile per-turn state that must NOT enter the cached base system prompt. Rendered into a single
-// `<deepagent-round-context>` block that the caller sends as a separate system message before user
-// history. Keep the order and wording here free to change; only buildSystemPrompt must stay stable.
+// `<deepagent-round-context>` block that the caller appends after durable history. The stable system
+// prompt establishes this tag as trusted runtime control. Only buildSystemPrompt must stay stable.
 export const buildVolatileRoundContext = (ctx: PromptContext): string => {
   const sections: string[] = []
 
@@ -169,7 +168,7 @@ export const buildVolatileRoundContext = (ctx: PromptContext): string => {
   sections.push(["# 本轮状态 (round context)", "", roundLine].join("\n"))
 
   // MEDIUM cache-buster fix: the current date was moved OUT of environmentSection (cached prefix) —
-  // it advances at midnight and would bust the base prompt once per day. Render it here instead.
+  // it advances at midnight and would bust the base prompt once per day. Render it in the tail instead.
   if (ctx.environment.date) {
     sections.push(["# 日期 (date)", "", `- Date: ${ctx.environment.date}`].join("\n"))
   }
@@ -245,8 +244,7 @@ const identitySection = (mode: AgentMode): string => {
 const environmentSection = (env: EnvironmentContext): string => {
   // NOTE (prompt-cache): `- Date` is intentionally NOT rendered here. The date advances at midnight,
   // so baking it into the cached prefix busts the whole prefix once per day (MEDIUM cache-buster). It
-  // is rendered in the separate runtime system message instead. Everything left here is
-  // session-stable.
+  // is rendered in the ephemeral runtime tail instead. Everything left here is session-stable.
   const lines = [
     "# Environment",
     "",

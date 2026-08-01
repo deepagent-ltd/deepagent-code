@@ -49,7 +49,7 @@ test("clears cached distro probes when removing a WSL server", () => {
       {
         Debian: {
           distro: "Debian",
-          resolvedPath: "/home/luke/.deepagent-code/bin/deepagent-code",
+          resolvedPath: "/home/luke/.deepagent/code/bin/deepagent-code",
           version: "1.16.2",
           expectedVersion: "1.16.2",
           matchesDesktop: true,
@@ -161,7 +161,7 @@ function testControllerOptions() {
       await new Promise<void>((resolve) => {
         releaseDeepagentCodeResolve = resolve
       })
-      return "/home/me/.deepagent-code/bin/deepagent-code"
+      return "/home/me/.deepagent/code/bin/deepagent-code"
     },
   }
 }

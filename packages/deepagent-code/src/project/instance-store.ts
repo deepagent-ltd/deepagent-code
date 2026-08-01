@@ -5,7 +5,7 @@ import { InstanceRef } from "@/effect/instance-ref"
 import { disposeInstance as runDisposers, initializeInstance } from "@/effect/instance-registry"
 import { FSUtil } from "@deepagent-code/core/fs-util"
 import { Context, Deferred, Duration, Effect, Exit, Layer, Scope } from "effect"
-import { assertSafeInstanceRoot, type InstanceContext } from "./instance-context"
+import { assertSafeInstanceRoot, isFilesystemRoot, type InstanceContext } from "./instance-context"
 import { InstanceBootstrap } from "./bootstrap-service"
 import * as Project from "./project"
 
@@ -52,13 +52,13 @@ export const layer: Layer.Layer<Service, never, Project.Service | InstanceBootst
           input.project && input.worktree
             ? {
                 directory: input.directory,
-                worktree: input.worktree,
+                worktree: isFilesystemRoot(input.worktree) ? input.directory : input.worktree,
                 project: input.project,
               }
             : yield* project.fromDirectory(input.directory).pipe(
                 Effect.map((result) => ({
                   directory: input.directory,
-                  worktree: result.sandbox,
+                  worktree: isFilesystemRoot(result.sandbox) ? input.directory : result.sandbox,
                   project: result.project,
                 })),
               )

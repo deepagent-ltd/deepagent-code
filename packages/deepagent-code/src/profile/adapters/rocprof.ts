@@ -3,6 +3,8 @@ import { which } from "@deepagent-code/core/util/which"
 import { PAP } from "@/profile/pap"
 import { Vocabulary } from "@/profile/vocabulary"
 import { RuntimeBase } from "@/runtime/base"
+import { Global } from "@deepagent-code/core/global"
+import path from "node:path"
 
 const log = Log.create({ service: "profile.rocprof" })
 
@@ -85,9 +87,14 @@ function splitCsvRow(row: string): string[] {
   let inQuote = false
   for (let i = 0; i < row.length; i++) {
     const ch = row[i]!
-    if (ch === '"') { inQuote = !inQuote }
-    else if (ch === "," && !inQuote) { cols.push(cur); cur = "" }
-    else { cur += ch }
+    if (ch === '"') {
+      inQuote = !inQuote
+    } else if (ch === "," && !inQuote) {
+      cols.push(cur)
+      cur = ""
+    } else {
+      cur += ch
+    }
   }
   cols.push(cur)
   return cols
@@ -174,21 +181,22 @@ export class RocprofAdapter implements PAP.ProfileAdapter {
   async collect(target: PAP.ProfileTarget): Promise<PAP.NativeReportRef> {
     const bin = this.probe.locate("rocprofv3")
     if (!bin) {
-      const msg = "rocprofv3 (AMD ROCprofiler-SDK) is not installed or not on PATH. Install via ROCm: `sudo apt install rocprofiler-sdk`."
+      const msg =
+        "rocprofv3 (AMD ROCprofiler-SDK) is not installed or not on PATH. Install via ROCm: `sudo apt install rocprofiler-sdk`."
       log.info(msg)
       return Promise.reject(new Error(msg))
     }
-    const outDir = `/tmp/deepagent-rocprof-${Date.now()}`
-    const metrics = [
-      "GPUBusy", "MemUnitBusy", "VALUUtilization", "SALUBusy", "Wavefronts",
-      "L2CacheHit",
-    ]
+    const outDir = path.join(Global.Path.tmp, `profile-rocprof-${Date.now()}`)
+    const metrics = ["GPUBusy", "MemUnitBusy", "VALUUtilization", "SALUBusy", "Wavefronts", "L2CacheHit"]
     const args = [
       "--kernel-trace",
       "--hip-trace",
-      "--output-format", "csv",
-      "--output-directory", outDir,
-      "-M", metrics.join(","),
+      "--output-format",
+      "csv",
+      "--output-directory",
+      outDir,
+      "-M",
+      metrics.join(","),
       "--",
       target.command,
       ...(target.args ?? []),
@@ -220,8 +228,7 @@ export class RocprofAdapter implements PAP.ProfileAdapter {
     }))
 
     // nativeSummary: aggregate across all kernels (take first as representative).
-    const nativeSummary: Record<string, number | string> =
-      rows.length > 0 ? { ...rows[0]!.metrics } : {}
+    const nativeSummary: Record<string, number | string> = rows.length > 0 ? { ...rows[0]!.metrics } : {}
 
     return {
       adapterId: this.id,
@@ -256,71 +263,78 @@ export class RocprofAdapter implements PAP.ProfileAdapter {
       // Occupancy: Wavefronts / theoretical_max_per_CU → [0,100]%.
       // This is an approximation without knowing the exact CU count and hardware limit.
       const occupancyPct =
-        wavefronts !== undefined
-          ? Math.min(100, (wavefronts / this.maxWavefrontsPerCu) * 100)
-          : undefined
+        wavefronts !== undefined ? Math.min(100, (wavefronts / this.maxWavefrontsPerCu) * 100) : undefined
 
       const durNs = beginNs !== undefined && endNs !== undefined ? endNs - beginNs : undefined
 
       return {
         // GPUBusy → compute_throughput_pct: approximate (GPU-wide busy ≠ SM compute throughput).
-        compute_throughput_pct: gpuBusy !== undefined
-          ? PAP.present(gpuBusy, "pct", { nativeMetric: N.gpuBusy, semantic: "approximate" })
-          : PAP.missing("not_collected"),
+        compute_throughput_pct:
+          gpuBusy !== undefined
+            ? PAP.present(gpuBusy, "pct", { nativeMetric: N.gpuBusy, semantic: "approximate" })
+            : PAP.missing("not_collected"),
 
         // MemUnitBusy → memory_throughput_pct: approximate.
-        memory_throughput_pct: memUnitBusy !== undefined
-          ? PAP.present(memUnitBusy, "pct", { nativeMetric: N.memUnitBusy, semantic: "approximate" })
-          : PAP.missing("not_collected"),
+        memory_throughput_pct:
+          memUnitBusy !== undefined
+            ? PAP.present(memUnitBusy, "pct", { nativeMetric: N.memUnitBusy, semantic: "approximate" })
+            : PAP.missing("not_collected"),
 
         // MemUnitBusy → dram_bandwidth_pct: approximate (same metric, different intent).
-        dram_bandwidth_pct: memUnitBusy !== undefined
-          ? PAP.present(memUnitBusy, "pct", { nativeMetric: N.memUnitBusy, semantic: "approximate" })
-          : PAP.missing("not_collected"),
+        dram_bandwidth_pct:
+          memUnitBusy !== undefined
+            ? PAP.present(memUnitBusy, "pct", { nativeMetric: N.memUnitBusy, semantic: "approximate" })
+            : PAP.missing("not_collected"),
 
         // L2CacheHit is a hit-rate (%), NOT throughput. Semantically approximate.
-        l2_throughput_pct: l2CacheHit !== undefined
-          ? PAP.present(l2CacheHit, "pct", { nativeMetric: N.l2CacheHit, semantic: "approximate" })
-          : PAP.missing("not_collected"),
+        l2_throughput_pct:
+          l2CacheHit !== undefined
+            ? PAP.present(l2CacheHit, "pct", { nativeMetric: N.l2CacheHit, semantic: "approximate" })
+            : PAP.missing("not_collected"),
 
         // Wavefronts / theoretical max → occupancy %.
-        occupancy_pct: occupancyPct !== undefined
-          ? PAP.present(occupancyPct, "pct", {
-              nativeMetric: N.wavefronts,
-              semantic: "approximate",
-              derived: false,
-              conversion: `wavefronts / ${this.maxWavefrontsPerCu} * 100`,
-            })
-          : PAP.missing("not_collected"),
+        occupancy_pct:
+          occupancyPct !== undefined
+            ? PAP.present(occupancyPct, "pct", {
+                nativeMetric: N.wavefronts,
+                semantic: "approximate",
+                derived: false,
+                conversion: `wavefronts / ${this.maxWavefrontsPerCu} * 100`,
+              })
+            : PAP.missing("not_collected"),
 
         // VALUUtilization is exact.
-        valu_utilization_pct: valuUtil !== undefined
-          ? PAP.present(valuUtil, "pct", { nativeMetric: N.valuUtilization, semantic: "exact" })
-          : PAP.missing("not_collected"),
+        valu_utilization_pct:
+          valuUtil !== undefined
+            ? PAP.present(valuUtil, "pct", { nativeMetric: N.valuUtilization, semantic: "exact" })
+            : PAP.missing("not_collected"),
 
         // SALUBusy is AMD-native; has no ncu equivalent.
-        salu_busy_pct: saluBusy !== undefined
-          ? PAP.present(saluBusy, "pct", { nativeMetric: N.saluBusy, semantic: "exact" })
-          : PAP.missing("not_collected"),
+        salu_busy_pct:
+          saluBusy !== undefined
+            ? PAP.present(saluBusy, "pct", { nativeMetric: N.saluBusy, semantic: "exact" })
+            : PAP.missing("not_collected"),
 
         // duration_ns = EndNs - BeginNs.
-        duration_ns: durNs !== undefined
-          ? PAP.present(durNs, "ns", {
-              nativeMetric: [N.beginNs, N.endNs],
-              semantic: "exact",
-              conversion: "EndNs - BeginNs",
-            })
-          : PAP.missing("not_collected"),
+        duration_ns:
+          durNs !== undefined
+            ? PAP.present(durNs, "ns", {
+                nativeMetric: [N.beginNs, N.endNs],
+                semantic: "exact",
+                conversion: "EndNs - BeginNs",
+              })
+            : PAP.missing("not_collected"),
 
         // compute_bound: PAP-derived from GPUBusy > MemUnitBusy (both approximate).
-        compute_bound: gpuBusy !== undefined && memUnitBusy !== undefined
-          ? PAP.present(gpuBusy > memUnitBusy, "bool", {
-              nativeMetric: [N.gpuBusy, N.memUnitBusy],
-              semantic: "approximate",
-              derived: true,
-              formula: "GPUBusy > MemUnitBusy",
-            })
-          : PAP.missing("not_collected", "GPUBusy or MemUnitBusy metrics missing"),
+        compute_bound:
+          gpuBusy !== undefined && memUnitBusy !== undefined
+            ? PAP.present(gpuBusy > memUnitBusy, "bool", {
+                nativeMetric: [N.gpuBusy, N.memUnitBusy],
+                semantic: "approximate",
+                derived: true,
+                formula: "GPUBusy > MemUnitBusy",
+              })
+            : PAP.missing("not_collected", "GPUBusy or MemUnitBusy metrics missing"),
       }
     }
 
