@@ -116,16 +116,12 @@ jobs:
           p12-file-base64: ${{ secrets.APPLE_CERTIFICATE }}
           p12-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
 
-      - name: Prebuild
-        working-directory: packages/desktop
-        env:
-          DEEPAGENT_CODE_CHANNEL: ${{ github.event_name == 'push' && 'prod' || (github.event.inputs.channel || 'prod') }}
-        run: bun run prebuild
-
+      # bun run build invokes the package prebuild lifecycle before electron-vite.
       - name: Build renderer
         working-directory: packages/desktop
         env:
           DEEPAGENT_CODE_CHANNEL: ${{ github.event_name == 'push' && 'prod' || (github.event.inputs.channel || 'prod') }}
+          NODE_OPTIONS: --max-old-space-size=4096
         run: bun run build
 
       - name: Package
