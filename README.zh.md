@@ -14,7 +14,7 @@
   <a href="https://github.com/deepagent-ltd/deepagent-code-enterprise">Enterprise 版本</a>
 </p>
 
-<p align="center"><sub>桌面版 1.4.3 · DeepAgent Core V4.0.4_r8</sub></p>
+<p align="center"><sub>桌面版 1.4.4 · DeepAgent Core V4.0.5</sub></p>
 
 ---
 
@@ -83,7 +83,9 @@ Session V2 运行器在持久 Context Epoch 下从明确的 Context Source 装�
 
 ### 专业子智能体与 Expert Panel
 
-DeepAgent 可以把独立工作拆分给数量有界、相互隔离的 Worker。具备写权限的子智能体获得独立 worktree，只向父会话返回紧凑摘要和工件引用，完整执行记录仍可随时查看。
+DeepAgent 可以把独立工作拆分给数量有界、相互隔离的 Worker。委派运行会持久化自己的身份、generation、owner、lease、阶段、终态、结果和父会话投递，因此 exact retry 会恢复同一项工作，而不是静默启动另一个 Worker。具备写权限的子智能体获得独立 worktree，只向父会话返回紧凑摘要和工件引用，完整执行记录仍可随时查看。
+
+自动写协作走一条持久 Git/PR 路径。Worker 只提交其作用域内的改动；同一个普通 Reviewer Session 按精确 Worker SHA 逐项审阅，协调器在 Session 分支上串行执行 `--no-ff` merge，再由同一个 Senior Reviewer Session 审阅合并后的完整批次。恢复、超时、取消、接管、审阅反馈和清理都受 generation fence 保护，过期 Worker 无法结算或覆盖较新的工作。
 
 高风险决策可以召集 **Expert Panel**。正确性、安全、性能、架构与可复现性等专家视角审阅同一个冻结问题，进行最多三轮匿名辩论，再由确定性仲裁器生成裁定。少数派意见会被保留，无法安全达成一致时会失败关闭并交给人类。
 
@@ -91,18 +93,18 @@ DeepAgent 可以把独立工作拆分给数量有界、相互隔离的 Worker。
 
 项目 IM 把团队成员和智能体放进同一条讨论。@ 某个智能体即可启动有明确作用域的运行，使用项目上下文、流式展示进度、关联执行工件，并把答案留在发起任务的对话里。
 
-## DeepAgent Core V4.0.4_r8
+## DeepAgent Core V4.0.5
 
-桌面版 1.4.3 搭载 V4.0.4 合同的第八次可靠性修订。本次发布重点加固长任务和委派任务的关键边界，避免重复执行、模糊终态或局部界面故障演变为整页崩溃：
+桌面版 1.4.4 搭载持久上下文与协作版本。它把 Session V2、联邦上下文、委派执行、Git/PR 审阅和人类监督连接起来，同时不把持久权威退回到进程内 Agent loop：
 
-- **持久化子智能体执行：** TaskRun 的准入、generation、owner、lease、结算与父会话投递均持久化。exact retry 会归并到原始运行，终态通过事务 CAS 结算，租约式 outbox 可在不重复执行 provider work 的前提下恢复完成通知。
-- **两阶段结构化终结：** 研究和结构化输出分为独立阶段。finalizer 是次数有界的单轮执行；在 provider 支持时关闭 thinking，只暴露 `StructuredOutput`，不混入历史 task 或 compaction 内容，也不存在空结果成功路径。
-- **失败关闭的模型与工具边界：** provider capability 决策不再静默放宽 required tool choice；无效工具输入在执行前被拒绝；provider、schema、permission、interruption、timeout 与 doom-loop 保留不同且可恢复的终态原因。
-- **语义级无进展保护：** shell 使用语义 fingerprint；无进展预算同时比较有界结果、工作区状态与计划进度，不能再靠改写命令描述绕过循环检测。
-- **故障隔离的监督面板：** 子智能体控件使用合法的 sibling interaction，展示真实终态，并由局部 ErrorBoundary、重试/关闭、持久 mode 校验、同 build quarantine 与 build 变化后的恢复机制保护。
-- **发布级验证：** 受影响的 Core、运行时、App 与 Desktop 路径已覆盖 exact retry、故障注入、production Chromium、Electron 冷启动和 source-map smoke。
+- **持久上下文与执行：** prompt 准入、Context Epoch 选择、AgentExecution claim、lease、generation、资源锁、token debit、终态 metadata 和 handoff 都在调度 provider work 前持久化。
+- **完整多 Agent Git/PR 协作：** 写 Worker 使用 canonical 隔离 worktree，只提交作用域内改动，并进入绑定精确 SHA 的 PR queue。普通 Reviewer 逐项审阅，协调器串行执行 `--no-ff` merge，再由 Senior Reviewer 完成批次复审。
+- **受 generation fence 保护的监督：** 恢复、取消、超时、接管、审阅反馈和清理复用持久 Session 身份，同时阻止过期 Worker 结算较新的工作。
+- **唯一私有文件数据根：** Core、CLI、Desktop、WSL、数据库、日志、缓存和临时文件统一位于 `~/.deepagent/code/`；普通环境变量不能重定向生产写入。
+- **缓存安全的真实模型验证：** 稳定 prompt prefix 与易变 tail 分离，finalizer 和 compaction 使用隔离基线；DeepSeek 矩阵覆盖 sandbox 工具、缓存保持、并行 Worker、PR 闭环、恢复、强度继承与 EVAL 评分。
+- **发布级验证：** 确定性状态机测试、跨进程 ownership 测试、真实模型 suite、packaged sidecar 检查、Desktop UI 覆盖和 source-map smoke 共同验证生产入口。
 
-V4.0.4_r8 同时保留此前 V4.0.4 各修订建立的持久文档、可靠事件投递、知识治理、worktree 隔离与安全凭据边界。
+V4.0.5 保留 V4.0 系列建立的持久文档、可靠事件投递、知识治理、安全凭据边界以及失败关闭的 provider/tool 合同。
 
 ## 安装
 
@@ -177,6 +179,8 @@ deepagent auth list
 通过应用/CLI 添加的官方供应商密钥单独存放在 `~/.deepagent/code/auth.json`，不在配置文件里。
 完整参考（Base URL 覆盖、请求头、逐模型配置、网关）见
 [供应商文档](https://deepagent-code.ai/docs/providers/)。
+
+DeepAgent Code 的所有私有文件数据都位于 `~/.deepagent/code/`，包括配置、凭据引用、数据库、桌面状态、日志、缓存和临时文件；原生 secret 值仍由操作系统凭据存储保管。测试使用显式隔离的数据根，普通环境变量不能重定向生产存储。
 
 ## 快速示例
 
@@ -279,6 +283,7 @@ bun run --cwd packages/deepagent-code dev import-history --from codex --dry-run
 
 - [供应商与模型](https://deepagent-code.ai/docs/providers/)
 - [架构与设计](design/README.md)
+- [真实 LLM 测试指南](design/real-llm-testing.md)
 - [安全策略](SECURITY.md)
 - [隐私策略](PRIVACY.md)
 - [贡献指南](CONTRIBUTING.md)

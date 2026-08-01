@@ -1,34 +1,40 @@
 import { app, dialog, shell } from "electron"
 import pkg from "electron-updater"
+import type { AppAdapter } from "electron-updater/out/AppAdapter"
+import { join } from "node:path"
 import { UPDATER_ENABLED } from "./constants"
 import { createUpdaterController, type UpdaterBackend, type UpdaterReadyRecord } from "./updater-controller"
 import { getLogger } from "./logging"
 import { getStore } from "./store"
 
-const { autoUpdater } = pkg
+const { MacUpdater, NsisUpdater } = pkg
 const key = "ready"
 const releaseURL = "https://api.github.com/repos/deepagent-ltd/deepagent-code/releases/latest"
 
-export function setupAutoUpdater(stop: () => Promise<void>) {
+export function setupAutoUpdater(stop: () => Promise<void>, updaterCache: string) {
   const logger = getLogger()
-  autoUpdater.logger = logger
-  autoUpdater.channel = "latest"
-  autoUpdater.allowPrerelease = false
-  autoUpdater.allowDowngrade = true
-  autoUpdater.autoDownload = false
-  autoUpdater.autoInstallOnAppQuit = false
-  logger.log("auto updater configured", {
-    channel: autoUpdater.channel,
-    allowPrerelease: autoUpdater.allowPrerelease,
-    allowDowngrade: autoUpdater.allowDowngrade,
-    currentVersion: app.getVersion(),
-  })
+  const autoUpdater = process.platform === "linux" ? undefined : platformUpdater(updaterCache)
+  if (autoUpdater) {
+    autoUpdater.logger = logger
+    autoUpdater.channel = "latest"
+    autoUpdater.allowPrerelease = false
+    autoUpdater.allowDowngrade = true
+    autoUpdater.autoDownload = false
+    autoUpdater.autoInstallOnAppQuit = false
+    logger.log("auto updater configured", {
+      channel: autoUpdater.channel,
+      allowPrerelease: autoUpdater.allowPrerelease,
+      allowDowngrade: autoUpdater.allowDowngrade,
+      currentVersion: app.getVersion(),
+      cache: updaterCache,
+    })
+  }
 
   const store = getStore("deepagent-code.updater")
   return createUpdaterController({
     enabled: UPDATER_ENABLED,
     currentVersion: app.getVersion(),
-    backend: process.platform === "linux" ? linuxDebUpdater(app.getVersion()) : autoUpdater,
+    backend: autoUpdater ?? linuxDebUpdater(app.getVersion()),
     persistence: {
       get() {
         const value = store.get(key)
@@ -44,6 +50,40 @@ export function setupAutoUpdater(stop: () => Promise<void>) {
     stop,
     log: (message, data) => logger.log(message, data),
   })
+}
+
+function platformUpdater(updaterCache: string) {
+  const adapter = {
+    get version() {
+      return app.getVersion()
+    },
+    get name() {
+      return app.getName()
+    },
+    get isPackaged() {
+      return app.isPackaged === true
+    },
+    get appUpdateConfigPath() {
+      return join(
+        this.isPackaged ? process.resourcesPath : app.getAppPath(),
+        this.isPackaged ? "app-update.yml" : "dev-app-update.yml",
+      )
+    },
+    get userDataPath() {
+      return app.getPath("userData")
+    },
+    get baseCachePath() {
+      return updaterCache
+    },
+    whenReady: () => app.whenReady(),
+    relaunch: () => app.relaunch(),
+    quit: () => app.quit(),
+    onQuit: (handler) => app.once("quit", (_event, exitCode) => handler(exitCode)),
+  } satisfies AppAdapter
+
+  if (process.platform === "darwin") return new MacUpdater(undefined, adapter)
+  if (process.platform === "win32") return new NsisUpdater(undefined, adapter)
+  throw new Error(`Unsupported auto-update platform: ${process.platform}`)
 }
 
 export async function showUpdaterDialog(controller: ReturnType<typeof setupAutoUpdater>, alertOnFail: boolean) {

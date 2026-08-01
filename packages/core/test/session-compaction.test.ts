@@ -23,7 +23,10 @@ test("buildPrompt narrow=true uses the four-bucket template and forbids file/env
   const narrow = SessionCompaction.buildPrompt({ context: [], narrow: true })
   expect(narrow).toContain("## Progress & Key Decisions")
   expect(narrow).toContain("## Data References")
-  expect(narrow).toContain("Do NOT record file contents")
+  expect(narrow).toContain("Except for designated durable values, do NOT record file contents")
+  expect(narrow).toContain("HIGHEST PRIORITY: preserve every value the user explicitly designated as a durable fact")
+  expect(narrow).toContain("A designation may refer indirectly to a value")
+  expect(narrow).toContain("verify that no designated durable value was omitted")
   // The narrowed template drops the legacy "Relevant Files" / "Critical Context" content buckets.
   expect(narrow).not.toContain("## Relevant Files")
   expect(narrow).not.toContain("## Critical Context")

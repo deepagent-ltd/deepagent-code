@@ -79,11 +79,8 @@ export type RunManifest = {
 
 export const DEEPAGENT_CODE_TEST_HOME_ENV = "DEEPAGENT_CODE_TEST_HOME"
 
-// Single storage-root contract (P2-F): delegate to the shared pure resolver (core/global-path.ts),
-// the SAME computation Global.Path.data uses. DEEPAGENT_CODE_HOME wins; otherwise
-// <DEEPAGENT_CODE_TEST_HOME ?? os.homedir()>/.deepagent/code. There is no longer a second
-// independent resolver — both this and Global.Path call resolveDataPath, so they cannot diverge for
-// any env combination ([storage-root-dual-resolver]).
+// Delegate to the same resolver as Global.Path.data. Production is fixed to ~/.deepagent/code;
+// DEEPAGENT_CODE_HOME is accepted only alongside the explicit test-home boundary.
 export const resolveDeepAgentCodeHome = (env: NodeJS.ProcessEnv = process.env): string => resolveDataPath(env)
 
 const safeSegment = (name: string, value: string): string => {

@@ -98,6 +98,11 @@ export type RunPanelOptions = {
   readonly runPanelist: PanelistRunner
   /** Optional archiver; when absent, opinions are not archived (still valid, just no projection). */
   readonly archive?: PanelArchiver
+  /** Read-only observer for the exact final opinion set passed to the deterministic Arbiter. */
+  readonly observeFinalOpinions?: (input: {
+    readonly opinions: readonly PanelOpinion[]
+    readonly rounds: number
+  }) => Effect.Effect<void, unknown>
   /** Parent session id — the key for the TaskConcurrency semaphore (bounds real parallelism). */
   readonly parentSessionID: string
   /** Per-panelist timeout; a slower panelist is treated as absent. Default 5 minutes. */
@@ -218,6 +223,9 @@ export const runPanel = (opts: RunPanelOptions): Effect.Effect<PanelVerdict> =>
 
     // Degenerate case: no lenses to convene ⇒ nothing survives ⇒ Arbiter escalates (never silent).
     if (specs.length === 0) {
+      if (opts.observeFinalOpinions) {
+        yield* opts.observeFinalOpinions({ opinions: [], rounds: 0 }).pipe(Effect.catchCause(() => Effect.void))
+      }
       return arbitrate([], policy, 0)
     }
 
@@ -254,6 +262,11 @@ export const runPanel = (opts: RunPanelOptions): Effect.Effect<PanelVerdict> =>
       prevDistribution = distribution
     }
 
+    if (opts.observeFinalOpinions) {
+      yield* opts
+        .observeFinalOpinions({ opinions: currentOpinions, rounds: roundsRun })
+        .pipe(Effect.catchCause(() => Effect.void))
+    }
     return arbitrate(currentOpinions, policy, roundsRun)
   })
 

@@ -73,6 +73,7 @@ const homes: string[] = []
 beforeEach(async () => {
   home = await mkdtemp(path.join(tmpdir(), "dacode-cli-test-"))
   homes.push(home)
+  process.env.DEEPAGENT_CODE_TEST_HOME = home
   process.env.DEEPAGENT_CODE_HOME = home
   delete process.env.DEEPAGENT_GATEWAY_URL
   daemon.calls = 0
@@ -80,6 +81,7 @@ beforeEach(async () => {
 
 afterAll(async () => {
   delete process.env.DEEPAGENT_CODE_HOME
+  delete process.env.DEEPAGENT_CODE_TEST_HOME
   server.stop()
   await Promise.all(homes.map((dir) => rm(dir, { recursive: true, force: true })))
 })

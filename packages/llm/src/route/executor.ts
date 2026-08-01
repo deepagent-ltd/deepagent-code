@@ -38,6 +38,11 @@ const BASE_DELAY_MS = 500
 const MAX_DELAY_MS = 10_000
 const REDACTED = "<redacted>"
 
+/** Per-request transport retry budget. Durable provider attempts override this to zero. */
+export const CurrentRetryLimit = Context.Reference<number>("@deepagent-code/LLM/RequestExecutor/CurrentRetryLimit", {
+  defaultValue: () => MAX_RETRIES,
+})
+
 // One source of truth for what counts as a sensitive name across headers,
 // URL query keys, and field names embedded inside request/response bodies.
 //
@@ -400,7 +405,10 @@ export const layer: Layer.Layer<Service, never, HttpClient.HttpClient> = Layer.e
           .pipe(Effect.mapError(toHttpError(redactedNames)), Effect.flatMap(statusError(request, redactedNames)))
       })
     return Service.of({
-      execute: (request) => retryStatusFailures(executeOnce(request)),
+      execute: (request) =>
+        Effect.gen(function* () {
+          return yield* retryStatusFailures(executeOnce(request), yield* CurrentRetryLimit)
+        }),
     })
   }),
 )
