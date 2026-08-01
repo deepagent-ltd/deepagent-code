@@ -65,7 +65,7 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-INSTALL_DIR=$HOME/.deepagent-code/bin
+INSTALL_DIR=$HOME/.deepagent/code/bin
 mkdir -p "$INSTALL_DIR"
 
 # If --binary is provided, skip all download/detection logic
@@ -274,7 +274,8 @@ download_with_progress() {
         exec 4>/dev/null
     fi
 
-    local tmp_dir=${TMPDIR:-/tmp}
+    local tmp_dir="$HOME/.deepagent/code/tmp"
+    mkdir -p "$tmp_dir"
     local basename="${tmp_dir}/deepagent_code_install_$$"
     local tracefile="${basename}.trace"
 
@@ -326,7 +327,7 @@ download_with_progress() {
 
 download_and_install() {
     print_message info "\n${MUTED}Installing ${NC}deepagent-code ${MUTED}version: ${NC}$specific_version"
-    local tmp_dir="${TMPDIR:-/tmp}/deepagent_code_install_$$"
+    local tmp_dir="$HOME/.deepagent/code/tmp/deepagent_code_install_$$"
     mkdir -p "$tmp_dir"
 
     if [[ "$os" == "windows" ]] || ! [ -t 2 ] || ! download_with_progress "$url" "$tmp_dir/$filename"; then

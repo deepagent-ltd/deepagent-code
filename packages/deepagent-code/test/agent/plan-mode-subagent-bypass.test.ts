@@ -211,3 +211,66 @@ it.effect("subagent inherits parent session deny rules as hard runtime ceilings"
     expect(Permission.evaluate("bash", "git status", effective).action).toBe("deny")
   }),
 )
+
+it.effect("subagent preserves parent session allowlist entries only within its own capabilities", () =>
+  Effect.sync(() => {
+    const reviewer = testAgent({
+      name: "reviewer",
+      mode: "subagent",
+      permission: {
+        "*": "deny",
+        read: "allow",
+      },
+    })
+    const effective = Permission.merge(
+      reviewer.permission,
+      deriveSubagentSessionPermission({
+        parentSessionPermission: [
+          { permission: "*", pattern: "*", action: "deny" },
+          { permission: "read", pattern: "*", action: "deny" },
+          { permission: "read", pattern: "/fixtures/seed.txt", action: "allow" },
+          { permission: "task", pattern: "worker", action: "allow" },
+          { permission: "edit", pattern: "/fixtures/result.txt", action: "allow" },
+        ],
+        parentAgent: undefined,
+        subagent: reviewer,
+      }),
+    )
+
+    expect(Permission.evaluate("read", "/fixtures/seed.txt", effective).action).toBe("allow")
+    expect(Permission.evaluate("read", "/fixtures/other.txt", effective).action).toBe("deny")
+    expect(Permission.evaluate("task", "worker", effective).action).toBe("deny")
+    expect(Permission.evaluate("edit", "/fixtures/result.txt", effective).action).toBe("deny")
+  }),
+)
+
+it.effect("subagent preserves a parent edit allowlist after its deny-all rule", () =>
+  Effect.sync(() => {
+    const controller = testAgent({
+      name: "controller",
+      mode: "primary",
+      permission: {
+        edit: {
+          "*": "deny",
+          "result.txt": "allow",
+        },
+      },
+    })
+    const executor = testAgent({
+      name: "executor",
+      mode: "subagent",
+      permission: { edit: "allow" },
+    })
+    const effective = Permission.merge(
+      executor.permission,
+      deriveSubagentSessionPermission({
+        parentSessionPermission: [],
+        parentAgent: controller,
+        subagent: executor,
+      }),
+    )
+
+    expect(Permission.evaluate("edit", "result.txt", effective).action).toBe("allow")
+    expect(Permission.evaluate("edit", "other.txt", effective).action).toBe("deny")
+  }),
+)

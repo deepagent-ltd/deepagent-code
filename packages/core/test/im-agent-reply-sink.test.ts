@@ -72,10 +72,6 @@ describe("IM AgentReplySink", () => {
   const FakeContextBuilderLive = Layer.succeed(AgentContextBuilderService, {
     build: (): Effect.Effect<AgentContext, never, never> =>
       Effect.succeed({
-        code: undefined,
-        knowledge: [],
-        memory: [],
-        documents: [],
         conversation: { groupID: "", recentMessages: [] },
       }),
   })

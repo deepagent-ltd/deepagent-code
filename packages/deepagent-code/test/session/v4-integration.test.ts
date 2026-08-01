@@ -7,13 +7,17 @@ import { DeepAgentEventBus } from "@deepagent-code/core/deepagent/deepagent-even
 import { Scheduler } from "@deepagent-code/core/deepagent/scheduler"
 import { Observability } from "@deepagent-code/core/deepagent/observability"
 import { ApprovalQueue } from "@deepagent-code/core/deepagent/approval-queue"
+import { AgentExecution } from "@deepagent-code/core/deepagent/agent-execution"
+import { SecurityResolvers } from "@deepagent-code/core/deepagent/security-resolvers"
+import { TaskPartitioner } from "@deepagent-code/core/deepagent/task-partitioner"
 import { LMNEvents } from "@deepagent-code/core/deepagent/lmn-events"
 import { DeepAgentEvent } from "@deepagent-code/core/deepagent/deepagent-event"
 import { Database } from "@deepagent-code/core/database/database"
 import { AgentListProviderService } from "@deepagent-code/core/im/agent-list-provider"
 import type { AgentDescriptor } from "@deepagent-code/core/im/mention-parser"
 import { RuntimeFlags } from "../../src/effect/runtime-flags"
-import { testEffect } from "../lib/effect"
+import { AgentHandoffConsumer } from "../../src/session/agent-handoff-consumer"
+import { pollWithTimeout, testEffect } from "../lib/effect"
 
 // V4.0 §I — END-TO-END integration. Wires the real chain across all waves over one in-memory DB:
 //   publish(event) → EventDispatcher.handle (§A4 flag+registry+route) → MultiAgentRuntime.dispatch
@@ -50,7 +54,16 @@ let runnerOk = true
 const runner: SubagentTurnRunner = (input) =>
   Effect.sync(() => {
     ran.push(input.agentType)
-    return { ok: runnerOk, structured: undefined, text: "fixed", tokensUsed: 100, cost: 0 }
+    return {
+      ok: runnerOk,
+      structured: undefined,
+      text: "fixed",
+      tokensUsed: 100,
+      cost: 0,
+      ...(input.requiresWriteIsolation
+        ? { continuationRef: "agent/v4-e2e", artifacts: ["git-ref:agent/v4-e2e"] }
+        : {}),
+    }
   })
 
 const makeLayer = (flags?: Partial<RuntimeFlags.Info>) => {
@@ -66,9 +79,15 @@ const makeLayer = (flags?: Partial<RuntimeFlags.Info>) => {
     Scheduler.layerWith({ now }),
     Observability.layerWith({ now }),
     ApprovalQueue.layerWith({ now }),
+    AgentExecution.layerWith({ now }),
   ).pipe(Layer.provideMerge(database))
   // MultiAgentRuntime is the REAL DispatchPort the dispatcher hands routed events to.
-  const runtime = MultiAgentRuntime.layerWith({ runner }).pipe(Layer.provide(core), Layer.provide(registry))
+  const runtime = Layer.unwrap(
+    Effect.gen(function* () {
+      const execution = yield* AgentExecution.Service
+      return MultiAgentRuntime.layerWith({ runner, execution, now })
+    }),
+  ).pipe(Layer.provide(core), Layer.provide(registry))
   return { core, flagsLayer, runtime, database }
 }
 
@@ -196,6 +215,135 @@ describe("V4.0 end-to-end (§I/§J)", () => {
       // route the scheduler-published event through the runtime.
       yield* dispatcher.handle(recent[0])
       expect(ran).toEqual(["CodeFixAgent", "CodeFixAgent"])
+    }),
+  )
+})
+
+describe("V4.1 durable handoff end-to-end", () => {
+  const agents: AgentDescriptor[] = [
+    { ...fixer, id: "agent_a", name: "agent_a", displayName: "Agent A" },
+    { ...fixer, id: "agent_b", name: "agent_b", displayName: "Agent B" },
+  ]
+  const agentLayer = Layer.succeed(AgentListProviderService, {
+    listAgents: () => Effect.succeed(agents),
+    findByTrigger: () => Effect.succeed(agents),
+    findByCapability: () => Effect.succeed(agents),
+  })
+  const securityLayer = Layer.succeed(SecurityResolvers.Service, {
+    resolveTrustedSources: () => Effect.succeed(["ci"]),
+    actorHasWorkspacePermission: () => Effect.succeed(true),
+    runtimeAllowsOperation: () => Effect.succeed(true),
+  })
+  const flagsLayer = RuntimeFlags.layer({ v4MultiAgentRuntime: true })
+  const database = Database.layerFromPath(":memory:")
+  const core = Layer.mergeAll(
+    DeepAgentEventBus.layerWith({ now }),
+    Scheduler.layerWith({ now }),
+    Observability.layerWith({ now }),
+    ApprovalQueue.layerWith({ now }),
+    AgentExecution.layerWith({ now }),
+  ).pipe(Layer.provideMerge(database))
+  let failed = false
+  const handoffRuns: Array<{ readonly agent: string; readonly baseRef?: string }> = []
+  const handoffRunner: SubagentTurnRunner = (input) =>
+    Effect.sync(() => {
+      handoffRuns.push({ agent: input.agentType, ...(input.baseRef ? { baseRef: input.baseRef } : {}) })
+      if (!failed && input.agentType === "agent_a") {
+        failed = true
+        return {
+          ok: false,
+          reason: "runner_failed",
+          structured: undefined,
+          text: "partial",
+          tokensUsed: 13,
+          cost: 0,
+          continuationRef: "agent/partial",
+        }
+      }
+      return {
+        ok: true,
+        structured: undefined,
+        text: "completed",
+        tokensUsed: 17,
+        cost: 0,
+        ...(input.requiresWriteIsolation
+          ? { continuationRef: "agent/completed", artifacts: ["git-ref:agent/completed"] }
+          : {}),
+      }
+    })
+  const runtime = Layer.unwrap(
+    Effect.gen(function* () {
+      const execution = yield* AgentExecution.Service
+      const security = yield* SecurityResolvers.Service
+      return MultiAgentRuntime.layerWith({
+        runner: handoffRunner,
+        execution,
+        now,
+        trustedSourcesFor: (event) => security.resolveTrustedSources(event.workspaceID),
+        actorHasPermission: (event, agent) =>
+          security.actorHasWorkspacePermission({ workspaceID: event.workspaceID, agentID: agent.id }),
+        runtimeAllowed: (event, agent, capability) =>
+          security.runtimeAllowsOperation({ workspaceID: event.workspaceID, agent, capability }),
+      })
+    }),
+  ).pipe(Layer.provide(core), Layer.provide(agentLayer), Layer.provide(securityLayer))
+  const consumer = AgentHandoffConsumer.layerWith({ runLoop: true }).pipe(
+    Layer.provide(core),
+    Layer.provide(agentLayer),
+    Layer.provide(securityLayer),
+    Layer.provide(flagsLayer),
+  )
+  const dispatcher = Layer.unwrap(
+    Effect.gen(function* () {
+      const multiAgent = yield* MultiAgentRuntime.Service
+      return EventDispatcher.layerWith({ dispatchPort: { dispatch: multiAgent.dispatch }, runLoops: false, now })
+    }),
+  ).pipe(Layer.provide(runtime), Layer.provide(core), Layer.provide(agentLayer), Layer.provide(flagsLayer))
+  const handoffLayer = Layer.mergeAll(core, runtime, consumer, dispatcher, flagsLayer)
+  const it = testEffect(handoffLayer)
+
+  it.live("failure transfers continuation to the target agent and retry completes the original delivery", () =>
+    Effect.gen(function* () {
+      setNow(10_000)
+      failed = false
+      handoffRuns.length = 0
+      const bus = yield* DeepAgentEventBus.Service
+      const eventDispatcher = yield* EventDispatcher.Service
+      const execution = yield* AgentExecution.Service
+      yield* bus
+        .subscribe({ group: EventDispatcher.DISPATCH_GROUP })
+        .pipe(Stream.take(1), Stream.runCollect, Effect.forkScoped)
+      yield* Effect.yieldNow
+      const event = yield* bus.publish(ciEvent({ idempotencyKey: "handoff-e2e" }))
+      yield* eventDispatcher.handle(event)
+
+      const firstTask = TaskPartitioner.partition(event, { stableIDPrefix: event.id }).subtasks[0]?.id
+      if (!firstTask) return yield* Effect.die("ci.failure partition did not produce its fix task")
+      const transferred = yield* pollWithTimeout(
+        execution
+          .get({ workspaceID: event.workspaceID, eventID: event.id, taskID: firstTask })
+          .pipe(Effect.map((record) => (record?.status === "available" ? record : undefined))),
+        "handoff consumer did not make the task available to its target",
+      )
+      expect(transferred.assignedAgentID).toBe("agent_b")
+      expect(transferred.continuationRef).toBe("agent/partial")
+
+      expect(yield* eventDispatcher.pumpRetries(Number.MAX_SAFE_INTEGER)).toBeGreaterThan(0)
+      expect(handoffRuns.slice(0, 2)).toEqual([
+        { agent: "agent_a" },
+        { agent: "agent_b", baseRef: "agent/partial" },
+      ])
+      expect((yield* bus.dueRetries(Number.MAX_SAFE_INTEGER)).map((delivery) => delivery.eventID)).not.toContain(
+        event.id,
+      )
+      expect(
+        yield* execution.tokensUsed({
+          workspaceID: event.workspaceID,
+          agentID: "agent_a",
+          at: 10_000,
+          windowMs: 3_600_000,
+        }),
+      ).toBe(30)
     }),
   )
 })

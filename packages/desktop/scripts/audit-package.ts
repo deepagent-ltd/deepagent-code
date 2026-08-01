@@ -12,19 +12,17 @@ const forbiddenNames = new Set([
 
 const forbiddenExtensions = [".dat", ".db", ".db-shm", ".db-wal", ".sqlite", ".log", ".jsonl"]
 const absoluteHome = /(?:\/Users\/[^/\s]+|\/home\/[^/\s]+|[A-Za-z]:\\Users\\[^\\\s]+)/
-const runtimeDataPath =
-  /(?:Library\/Application Support\/ai\.deepagent-code|\.deepagent\/code|AppData\\Roaming\\ai\.deepagent-code)/
+const runtimeDataPath = /\.deepagent\/code/
 const textExtensions = new Set([".cjs", ".js", ".json", ".md", ".mjs", ".plist", ".txt", ".xml", ".yaml", ".yml"])
 
 async function files(directory: string): Promise<string[]> {
   return (
     await Promise.all(
-      (await readdir(directory, { withFileTypes: true }).catch(() => []))
-        .map((entry) => {
-          const file = path.join(directory, entry.name)
-          if (entry.isSymbolicLink()) return [file]
-          return entry.isDirectory() ? files(file) : [file]
-        }),
+      (await readdir(directory, { withFileTypes: true }).catch(() => [])).map((entry) => {
+        const file = path.join(directory, entry.name)
+        if (entry.isSymbolicLink()) return [file]
+        return entry.isDirectory() ? files(file) : [file]
+      }),
     )
   ).flat()
 }

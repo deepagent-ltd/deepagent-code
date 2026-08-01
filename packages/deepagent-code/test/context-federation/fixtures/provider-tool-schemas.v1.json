@@ -1,0 +1,39 @@
+{
+  "schemaVersion": "context-federation-provider-tool-baseline.v1",
+  "protocols": ["openai-responses", "openai-compatible-chat", "anthropic-messages", "gemini", "bedrock-converse"],
+  "legacy": {
+    "contextQueryPresent": false,
+    "codeIntel": {
+      "schemaVersion": 1,
+      "hashes": {
+        "openai-responses": "3a79b289f597c894820922ce62be27d2282b50b43e3c0387361ee39d495b4b2b",
+        "openai-compatible-chat": "3a79b289f597c894820922ce62be27d2282b50b43e3c0387361ee39d495b4b2b",
+        "anthropic-messages": "3a79b289f597c894820922ce62be27d2282b50b43e3c0387361ee39d495b4b2b",
+        "gemini": "3a79b289f597c894820922ce62be27d2282b50b43e3c0387361ee39d495b4b2b",
+        "bedrock-converse": "3a79b289f597c894820922ce62be27d2282b50b43e3c0387361ee39d495b4b2b"
+      }
+    }
+  },
+  "target": {
+    "codeIntel": {
+      "schemaVersion": 2,
+      "hashes": {
+        "openai-responses": "16e550219a61e6714e01dcb5b4e11355ad441403638eddf338089d94ee424663",
+        "openai-compatible-chat": "16e550219a61e6714e01dcb5b4e11355ad441403638eddf338089d94ee424663",
+        "anthropic-messages": "16e550219a61e6714e01dcb5b4e11355ad441403638eddf338089d94ee424663",
+        "gemini": "16e550219a61e6714e01dcb5b4e11355ad441403638eddf338089d94ee424663",
+        "bedrock-converse": "16e550219a61e6714e01dcb5b4e11355ad441403638eddf338089d94ee424663"
+      }
+    },
+    "contextQuery": {
+      "schemaVersion": 1,
+      "hashes": {
+        "openai-responses": "617bd804004b7d3baaa15fcf274201a804c50d42c87fce231f509139d1f0ba2d",
+        "openai-compatible-chat": "617bd804004b7d3baaa15fcf274201a804c50d42c87fce231f509139d1f0ba2d",
+        "anthropic-messages": "617bd804004b7d3baaa15fcf274201a804c50d42c87fce231f509139d1f0ba2d",
+        "gemini": "617bd804004b7d3baaa15fcf274201a804c50d42c87fce231f509139d1f0ba2d",
+        "bedrock-converse": "617bd804004b7d3baaa15fcf274201a804c50d42c87fce231f509139d1f0ba2d"
+      }
+    }
+  }
+}

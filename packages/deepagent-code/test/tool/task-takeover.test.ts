@@ -1,7 +1,7 @@
-import { afterEach, describe, expect } from "bun:test"
+import { describe, expect } from "bun:test"
 import { SessionV1 } from "@deepagent-code/core/v1/session"
 import { Database } from "@deepagent-code/core/database/database"
-import { Cause, Effect, Exit, Layer } from "effect"
+import { Cause, Effect, Exit, Layer, Option } from "effect"
 import { mkdir } from "node:fs/promises"
 import { Agent } from "../../src/agent/agent"
 import { BackgroundJob } from "@/background/job"
@@ -18,14 +18,10 @@ import { Truncate } from "@/tool/truncate"
 import { ToolRegistry } from "@/tool/registry"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Worktree } from "@/worktree"
-import { disposeAllInstances } from "../fixture/fixture"
+import { TaskConcurrency } from "@/tool/task-concurrency"
 import { pollWithTimeout, testEffect } from "../lib/effect"
 import { ProviderV2 } from "@deepagent-code/core/provider"
 import { ModelV2 } from "@deepagent-code/core/model"
-
-afterEach(async () => {
-  await disposeAllInstances()
-})
 
 const ref = {
   providerID: ProviderV2.ID.make("test"),
@@ -44,7 +40,7 @@ const layer = (flags: Partial<RuntimeFlags.Info> = {}) =>
     SessionStatus.defaultLayer,
     Truncate.defaultLayer,
     ToolRegistry.defaultLayer,
-    Database.defaultLayer,
+    Database.layerFromPath(":memory:"),
     RuntimeFlags.layer(flags),
   )
 
@@ -53,6 +49,17 @@ const layer = (flags: Partial<RuntimeFlags.Info> = {}) =>
 const wt = { created: [] as string[], removed: [] as string[], safeRemoved: [] as string[] }
 const worktreeMock = Layer.mock(Worktree.Service, {
   create: () =>
+    Effect.promise(async () => {
+      const directory = `/tmp/dac-takeover-wt-${wt.created.length}`
+      await mkdir(directory, { recursive: true })
+      wt.created.push(directory)
+      return {
+        name: `dac-takeover-wt-${wt.created.length}`,
+        branch: `deepagent-code/dac-takeover-wt-${wt.created.length}`,
+        directory,
+      }
+    }),
+  createReady: () =>
     Effect.promise(async () => {
       const directory = `/tmp/dac-takeover-wt-${wt.created.length}`
       await mkdir(directory, { recursive: true })
@@ -85,7 +92,7 @@ const e2e = testEffect(
   Layer.mergeAll(layer({ subagentTimeoutMs: 50, subagentTakeoverLimit: 2, subagentOutputMaxChars: 10 }), worktreeMock),
 )
 const bounded = testEffect(layer({ subagentOutputMaxChars: 10 }))
-const off = testEffect(layer())
+const off = testEffect(layer({ subagentTimeoutMs: undefined, subagentOutputMaxChars: undefined }))
 
 const resetWorktreeLog = () => {
   wt.created.length = 0
@@ -192,6 +199,7 @@ describe("tool.task takeover (v4.0.4 block1 1a+1b)", () => {
       const jobs = yield* BackgroundJob.Service
       expect((yield* jobs.get(calls[0]!))?.status).toBe("cancelled")
       expect((yield* jobs.get(calls[1]!))?.status).toBe("completed")
+      expect(TaskConcurrency.activeSessionLimiters()).toBe(0)
 
       const sessions = yield* Session.Service
       expect(subagentState((yield* sessions.get(calls[0]!)).metadata)).toBe("cancelled")
@@ -213,10 +221,19 @@ describe("tool.task takeover (v4.0.4 block1 1a+1b)", () => {
           return Effect.succeed(reply(input, "ok after retry"))
         })
 
-        const result = yield* def.execute(
-          { description: "inspect bug", prompt: "look into the cache key path", subagent_type: "general" },
-          execCtx(chat, assistant, promptOps),
-        )
+        const completed = yield* def
+          .execute(
+            { description: "inspect bug", prompt: "look into the cache key path", subagent_type: "general" },
+            execCtx(chat, assistant, promptOps),
+          )
+          .pipe(Effect.timeoutOption("5 seconds"))
+        if (Option.isNone(completed)) {
+          const jobs = yield* BackgroundJob.Service.pipe(Effect.flatMap((service) => service.list()))
+          return yield* Effect.fail(
+            new Error(`Crash takeover stalled after ${calls.length} prompt call(s): ${JSON.stringify(jobs)}`),
+          )
+        }
+        const result = completed.value
 
         expect(result.output).toContain(`state="completed"`)
         expect(result.output).toContain("ok after retry")
@@ -282,11 +299,11 @@ describe("tool.task takeover (v4.0.4 block1 1a+1b)", () => {
 
       expect(Exit.isFailure(exit)).toBe(true)
       expect(Exit.isFailure(exit) ? Cause.pretty(exit.cause) : "").toContain("[timeout]")
-      // one worktree per attempt (same fork base, fresh name), the first is force-recycled on
-      // takeover, the last is teardown-safed when the limit is reached.
+      // One worktree per attempt (same fork base, fresh name). The superseded first attempt is
+      // force-recycled; the final explicit worktree stays available for recovery.
       expect(wt.created).toHaveLength(2)
       expect(wt.removed).toEqual([wt.created[0]])
-      expect(wt.safeRemoved).toEqual([wt.created[1]])
+      expect(wt.safeRemoved).toEqual([])
     }),
   )
 
@@ -360,7 +377,7 @@ describe("tool.task takeover (v4.0.4 block1 1a+1b)", () => {
       expect(injected[0]).toContain("takeover")
       expect(wt.created).toHaveLength(2)
       expect(wt.removed).toEqual([wt.created[0]])
-      expect(wt.safeRemoved).toEqual([wt.created[1]])
+      expect(wt.safeRemoved).toEqual([])
     }),
   )
 
@@ -395,7 +412,7 @@ describe("tool.task takeover (v4.0.4 block1 1a+1b)", () => {
       expect(calls[0]).not.toBe(calls[1])
       expect(wt.created).toHaveLength(2)
       expect(wt.removed).toEqual([wt.created[0]])
-      expect(wt.safeRemoved).toEqual([wt.created[1]])
+      expect(wt.safeRemoved).toEqual([])
     }),
   )
 })
