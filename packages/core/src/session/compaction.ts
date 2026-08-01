@@ -73,8 +73,11 @@ const NARROW_SUMMARY_TEMPLATE = `Output exactly the Markdown structure shown ins
 </template>
 
 Rules:
+- HIGHEST PRIORITY: preserve every value the user explicitly designated as a durable fact, release proof, invariant, credential-free token, or exact evidence. This rule overrides every volatile-state rule below.
+- A designation may refer indirectly to a value from an earlier assistant message or tool result (for example, "the exact release proof from the file"). Resolve that reference from the conversation and copy the complete value verbatim under "Progress & Key Decisions" or "Constraints & Preferences".
+- Before returning, verify that no designated durable value was omitted, paraphrased, replaced with a placeholder, or reduced to only a file/reference description.
 - Summarize ONLY the four sections above: progress+decisions, constraints+preferences, next steps, data references.
-- Do NOT record file contents, environment values, or diagnostics snapshots — the system re-injects their latest values automatically. Recording them here would only go stale.
+- Except for designated durable values, do NOT record file contents, environment values, or diagnostics snapshots — the system re-injects their latest values automatically. Recording them here would only go stale.
 - Under "Data References" record just the reference (path / identifier / link) and why it matters, never the content itself.
 - Keep every section, even when empty. Use terse bullets, not prose paragraphs.
 - Preserve exact file paths, commands, error strings, and identifiers when known.

@@ -1,6 +1,6 @@
 import { Effect, Fiber, Layer, ManagedRuntime } from "effect"
 import * as Context from "effect/Context"
-import { InstanceRef, WorkspaceRef } from "./instance-ref"
+import { EventRouteRef, InstanceRef, WorkspaceRef, type EventRoute } from "./instance-ref"
 import * as Observability from "@deepagent-code/core/effect/observability"
 import { WorkspaceContext } from "@/control-plane/workspace-context"
 import type { InstanceContext } from "@/project/instance-context"
@@ -8,14 +8,16 @@ import { memoMap } from "@deepagent-code/core/effect/memo-map"
 
 type Refs = {
   instance?: InstanceContext
+  eventRoute?: EventRoute
   workspace?: string
 }
 
 export function attachWith<A, E, R>(effect: Effect.Effect<A, E, R>, refs: Refs): Effect.Effect<A, E, R> {
-  if (!refs.instance && !refs.workspace) return effect
-  if (!refs.instance) return effect.pipe(Effect.provideService(WorkspaceRef, refs.workspace))
-  if (!refs.workspace) return effect.pipe(Effect.provideService(InstanceRef, refs.instance))
-  return effect.pipe(
+  const routed = refs.eventRoute ? effect.pipe(Effect.provideService(EventRouteRef, refs.eventRoute)) : effect
+  if (!refs.instance && !refs.workspace) return routed
+  if (!refs.instance) return routed.pipe(Effect.provideService(WorkspaceRef, refs.workspace))
+  if (!refs.workspace) return routed.pipe(Effect.provideService(InstanceRef, refs.instance))
+  return routed.pipe(
     Effect.provideService(InstanceRef, refs.instance),
     Effect.provideService(WorkspaceRef, refs.workspace),
   )
@@ -26,6 +28,7 @@ export function attach<A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<A
   const fiber = Fiber.getCurrent()
   return attachWith(effect, {
     instance: fiber ? Context.getReferenceUnsafe(fiber.context, InstanceRef) : undefined,
+    eventRoute: fiber ? Context.getReferenceUnsafe(fiber.context, EventRouteRef) : undefined,
     workspace: workspace ?? (fiber ? Context.getReferenceUnsafe(fiber.context, WorkspaceRef) : undefined),
   })
 }

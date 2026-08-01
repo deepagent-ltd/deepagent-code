@@ -2,9 +2,9 @@ import type { Plugin } from "@deepagent-code/plugin"
 import { rename, writeFile } from "node:fs/promises"
 import { randomInt } from "node:crypto"
 import { setTimeout as sleep } from "node:timers/promises"
+import { DEBUG_WORKSPACE_DATA_FILE } from "./debug-workspace-path"
 
-const DEV_DATA_FILE = "/tmp/deepagent-code-workspace-dev-data.json"
-const DEV_DATA_TEMP_FILE = `${DEV_DATA_FILE}.tmp`
+const DEV_DATA_TEMP_FILE = `${DEBUG_WORKSPACE_DATA_FILE}.tmp`
 
 async function waitForHealth(port: number) {
   const url = `http://127.0.0.1:${port}/global/health`
@@ -40,7 +40,7 @@ async function writeDebugData(port: number, id: string, env: Record<string, stri
     ),
   )
 
-  await rename(DEV_DATA_TEMP_FILE, DEV_DATA_FILE)
+  await rename(DEV_DATA_TEMP_FILE, DEBUG_WORKSPACE_DATA_FILE)
 }
 
 export const DebugWorkspacePlugin: Plugin = async ({ experimental_workspace }) => {

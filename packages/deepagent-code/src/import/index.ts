@@ -5,6 +5,7 @@ import { SessionProjector } from "@deepagent-code/core/session/projector"
 import { ProjectV2 } from "@deepagent-code/core/project"
 import { Git } from "@deepagent-code/core/git"
 import { FSUtil } from "@deepagent-code/core/fs-util"
+import { resolveDataPath } from "@deepagent-code/core/global-path"
 import { copyFileSync, existsSync, mkdirSync } from "node:fs"
 import { homedir } from "node:os"
 import { dirname, join } from "node:path"
@@ -17,9 +18,9 @@ import type { ImportOptions, ImportReport, ImportScope, ImportSource, SessionImp
 import { ALL_SCOPES } from "./types"
 import type { SourceSession } from "./ir"
 
-const DEFAULT_DB_PATH = join(homedir(), ".local", "share", "deepagent-code", "deepagent-code-local.db")
-const DEFAULT_DATA_ROOT = process.env.DEEPAGENT_CODE_HOME || join(homedir(), ".deepagent", "code")
-const DEFAULT_CONFIG_DIR = join(homedir(), ".config", "deepagent-code")
+const DEFAULT_DATA_ROOT = resolveDataPath(process.env)
+const DEFAULT_DB_PATH = join(DEFAULT_DATA_ROOT, "deepagent-code-local.db")
+const DEFAULT_CONFIG_DIR = DEFAULT_DATA_ROOT
 
 function defaultSourcePath(source: ImportSource): string {
   return join(homedir(), source === "codex" ? ".codex" : ".claude")
@@ -55,7 +56,12 @@ export async function runImport(options: ImportOptions): Promise<ImportReport> {
   for (const skip of parsed.skipped) warnings.push(`skipped: ${skip}`)
 
   if (options.dryRun) {
-    report.sessions = parsed.sessions.map((s) => ({ sourceId: s.sourceId, targetId: "(dry-run)", turns: s.turns.length, reimport: false }))
+    report.sessions = parsed.sessions.map((s) => ({
+      sourceId: s.sourceId,
+      targetId: "(dry-run)",
+      turns: s.turns.length,
+      reimport: false,
+    }))
     report.elapsedMs = Date.now() - started
     return report
   }

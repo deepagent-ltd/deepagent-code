@@ -60,4 +60,21 @@ describe("session tool input validation", () => {
     expect(result).toEqual({ success: true, value: input })
     if (result.success) expect(result.value).toBe(input)
   })
+
+  test("maps MCP error results to durable tool failures", () => {
+    expect(
+      SessionTools.mcpResultError("fixture_failure", {
+        isError: true,
+        content: [
+          { type: "image" },
+          { type: "text", text: "fixture rejected" },
+          { type: "text", text: "no side effect" },
+        ],
+      })?.message,
+    ).toBe("fixture rejected\n\nno side effect")
+    expect(SessionTools.mcpResultError("fixture_success", { content: [{ type: "text", text: "ok" }] })).toBeUndefined()
+    expect(SessionTools.mcpResultError("fixture_empty", { isError: true, content: [] })?.message).toBe(
+      "MCP tool fixture_empty returned an error",
+    )
+  })
 })

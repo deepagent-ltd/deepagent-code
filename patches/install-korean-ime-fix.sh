@@ -18,8 +18,8 @@ ORANGE='\033[38;5;214m'
 MUTED='\033[0;2m'
 NC='\033[0m'
 
-DEEPAGENT_CODE_DIR="${DEEPAGENT_CODE_DIR:-$HOME/.deepagent-code}"
-DEEPAGENT_CODE_SRC="${DEEPAGENT_CODE_SRC:-$HOME/.deepagent-code-src}"
+DEEPAGENT_CODE_DIR="${DEEPAGENT_CODE_DIR:-$HOME/.deepagent/code}"
+DEEPAGENT_CODE_SRC="${DEEPAGENT_CODE_SRC:-$HOME/.deepagent/code/src/korean-ime-fix}"
 FORK_REPO="${FORK_REPO:-https://github.com/claudianus/deepagent-code.git}"
 FORK_BRANCH="${FORK_BRANCH:-fix-zhipuai-coding-plan-thinking}"
 

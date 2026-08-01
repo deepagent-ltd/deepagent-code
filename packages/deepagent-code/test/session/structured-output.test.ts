@@ -520,6 +520,29 @@ describe("structured-output.buildStructuredOutputSystemPrompt", () => {
   })
 })
 
+describe("structured-output.buildStructuredOutputRuntimeTail", () => {
+  test("keeps schema and bounded finalizer guidance in one ephemeral tail", () => {
+    const result = SessionPrompt.buildStructuredOutputRuntimeTail(
+      {
+        type: "json_schema",
+        schema: {
+          type: "object",
+          properties: { findings: { type: "array" }, verdict: { type: "string" } },
+        },
+        retryCount: 1,
+      },
+      true,
+    )
+
+    expect(result).toContain("findings, verdict")
+    expect(result).toContain("bounded finalizer turn")
+  })
+
+  test("text turns add no volatile structured-output tail", () => {
+    expect(SessionPrompt.buildStructuredOutputRuntimeTail({ type: "text" }, false)).toBe("")
+  })
+})
+
 // P0: extractSchemaTopLevelFields — utility that drives both the system-prompt injection
 // and the retry-cap corrective hint.
 describe("structured-output.extractSchemaTopLevelFields", () => {

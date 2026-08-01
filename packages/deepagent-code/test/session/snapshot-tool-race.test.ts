@@ -24,7 +24,7 @@ import { SessionSummary } from "../../src/session/summary"
 import { MessageV2 } from "../../src/session/message-v2"
 import { SessionV1 } from "@deepagent-code/core/v1/session"
 import * as Log from "@deepagent-code/core/util/log"
-import { provideTmpdirServer } from "../fixture/fixture"
+import { provideTmpdirServer, testInstanceStoreLayer } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 import { TestLLMServer } from "../lib/llm-server"
 
@@ -67,6 +67,7 @@ import { Format } from "../../src/format"
 import { Reference } from "../../src/reference/reference"
 import { RepositoryCache } from "../../src/reference/repository-cache"
 import { RuntimeFlags } from "@/effect/runtime-flags"
+import { TestContextFacades } from "../fixture/context-facades"
 
 void Log.init({ print: false })
 
@@ -192,6 +193,7 @@ function makeHttp() {
   const question = Question.layer.pipe(Layer.provideMerge(deps))
   const todo = Todo.layer.pipe(Layer.provideMerge(deps))
   const registry = ToolRegistry.layer.pipe(
+    Layer.provide(TestContextFacades.layer),
     Layer.provide(Skill.defaultLayer),
     Layer.provide(FetchHttpClient.layer),
     Layer.provide(CrossSpawnSpawner.defaultLayer),
@@ -226,6 +228,7 @@ function makeHttp() {
     TestLLMServer.layer,
     SessionSummary.defaultLayer,
     SessionPrompt.layer.pipe(
+      Layer.provide(testInstanceStoreLayer),
       Layer.provide(SessionRevert.defaultLayer),
       Layer.provide(Image.defaultLayer),
       Layer.provide(Reference.defaultLayer),

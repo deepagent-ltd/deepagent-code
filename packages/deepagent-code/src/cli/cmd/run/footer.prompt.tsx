@@ -432,6 +432,17 @@ export function createPromptState(input: PromptInput): PromptState {
         description: "compose in your external editor",
       } satisfies SlashOption,
       { kind: "slash", name: "new", display: "/new", description: "start a new session" } satisfies SlashOption,
+      {
+        kind: "slash",
+        name: "compact",
+        display: "/compact",
+        description: "compact the current session context",
+      } satisfies SlashOption,
+      { kind: "slash", name: "undo", display: "/undo", description: "undo the latest session turn" } satisfies SlashOption,
+      { kind: "slash", name: "redo", display: "/redo", description: "restore an undone session turn" } satisfies SlashOption,
+      { kind: "slash", name: "fork", display: "/fork", description: "fork and switch to a new session" } satisfies SlashOption,
+      { kind: "slash", name: "share", display: "/share", description: "share the current session" } satisfies SlashOption,
+      { kind: "slash", name: "unshare", display: "/unshare", description: "stop sharing the current session" } satisfies SlashOption,
       { kind: "slash", name: "exit", display: "/exit", description: "close DeepAgent Code" } satisfies SlashOption,
     ]
     const hidden = new Set(builtins.map((item) => item.name))

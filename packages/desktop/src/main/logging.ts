@@ -4,7 +4,7 @@ import { app, crashReporter, dialog, netLog, shell } from "electron"
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { ZipWriter, BlobWriter, BlobReader } from "@zip.js/zip.js"
 import { dirname, join } from "node:path"
-import { homedir } from "node:os"
+import { resolveDataPath } from "@deepagent-code/core/global-path"
 
 const MAX_LOG_AGE_DAYS = 7
 const TAIL_LINES = 1000
@@ -182,17 +182,7 @@ function manifest(cutoff: number) {
 }
 
 function serverLogRoots() {
-  const xdgData = process.env.XDG_DATA_HOME || join(homedir(), ".local", "share")
-  return [
-    ...new Set([
-      // V3.2.1 the real core log directory (~/.deepagent/code/log). This was missing — neither of
-      // the legacy roots below match it, so exported bundles never contained the server logs that
-      // matter for troubleshooting. Keep the legacy roots for backward compatibility / dedup.
-      join(process.env.DEEPAGENT_CODE_HOME || join(homedir(), ".deepagent", "code"), "log"),
-      join(xdgData, "deepagent-code", "log"),
-      join(app.getPath("userData"), "deepagent-code", "log"),
-    ]),
-  ]
+  return [join(resolveDataPath(process.env), "log")]
 }
 
 type Entry = { name: string; path?: string; data?: Buffer }

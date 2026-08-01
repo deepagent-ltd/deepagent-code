@@ -364,7 +364,7 @@ jobs:
           persist-credentials: false
 
       - name: Run deepagent-code
-        uses: lessweb/deepagent-code/github@latest${envStr}
+        uses: deepagent-ltd/deepagent-code/github@github-v1.4.4${envStr}
         with:
           model: ${provider}/${model}`,
         )
