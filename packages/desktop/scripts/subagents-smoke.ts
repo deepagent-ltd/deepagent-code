@@ -8,6 +8,7 @@ import { _electron as electron, type ElectronApplication, type Page } from "@pla
 const root = await realpath(await mkdtemp(join(tmpdir(), "deepagent-code-subagents-smoke-")))
 const workspace = join(root, "workspace")
 const main = resolve("out/main/index.js")
+const packagedExecutable = process.env.DEEPAGENT_CODE_DESKTOP_EXECUTABLE
 await mkdir(workspace, { recursive: true })
 
 const env = Object.fromEntries(
@@ -40,7 +41,13 @@ const api = (page: Page) => page.evaluate(() => (window as unknown as { api: Des
 let activeApp: ElectronApplication | undefined
 
 async function launch() {
-  const app = await electron.launch({ args: [main], env, timeout: 30_000 })
+  const started = performance.now()
+  const app = await electron.launch({
+    args: packagedExecutable ? [] : [main],
+    ...(packagedExecutable ? { executablePath: packagedExecutable } : {}),
+    env,
+    timeout: 30_000,
+  })
   activeApp = app
   console.log(
     "Electron main launched",
@@ -51,7 +58,11 @@ async function launch() {
   )
   const page = await app.firstWindow({ timeout: 30_000 })
   await page.waitForFunction(() => Boolean((window as unknown as { api?: DesktopAPI }).api))
-  return { app, page }
+  const server = await api(page)
+  const startupMs = Math.round(performance.now() - started)
+  console.log("Electron startup ready", { packaged: Boolean(packagedExecutable), startupMs })
+  if (packagedExecutable) assert.equal(startupMs < 20_000, true, `packaged startup took ${startupMs}ms`)
+  return { app, page, server }
 }
 
 async function close(app: ElectronApplication) {
@@ -87,9 +98,8 @@ async function listSessions(server: Awaited<ReturnType<typeof api>>) {
 
 try {
   const first = await launch()
-  const server = await api(first.page)
-  const parent = await createSession(server, { title: "Cold-start parent" })
-  const child = await createSession(server, {
+  const parent = await createSession(first.server, { title: "Cold-start parent" })
+  const child = await createSession(first.server, {
     title: "Cold-start researcher",
     parentID: parent.id,
     metadata: {
@@ -104,7 +114,7 @@ try {
       },
     },
   })
-  const firstSessions = await listSessions(server)
+  const firstSessions = await listSessions(first.server)
   assert.equal(
     firstSessions.some((session) => session.id === parent.id),
     true,
@@ -146,7 +156,7 @@ try {
   second.page.on("console", (message) => {
     if (message.type() === "error") consoleErrors.push(message.text())
   })
-  const sessions = await listSessions(await api(second.page))
+  const sessions = await listSessions(second.server)
   assert.equal(
     sessions.some((session) => session.id === parent.id),
     true,
