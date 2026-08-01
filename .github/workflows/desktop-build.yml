@@ -142,6 +142,14 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: npx electron-builder ${{ matrix.platform_flag }} --publish never --config electron-builder.config.ts
 
+      - name: Smoke test packaged macOS app
+        if: matrix.group == 'mac'
+        working-directory: packages/desktop
+        run: |
+          executable=$(find dist/mac-arm64 -maxdepth 4 -type f -path '*/Contents/MacOS/DeepAgent Code*' -perm +111 -print -quit)
+          test -n "$executable"
+          DEEPAGENT_CODE_DESKTOP_EXECUTABLE="$executable" bun run test:subagents-cold-start
+
       - name: Upload package artifacts
         uses: actions/upload-artifact@v4
         with:
