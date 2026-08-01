@@ -1,7 +1,7 @@
 import { sentryVitePlugin } from "@sentry/vite-plugin"
 import { defineConfig } from "electron-vite"
 import appPlugin from "@deepagent-code/app/vite"
-import * as fs from "node:fs/promises"
+import { copyFile, cp, mkdir, readdir, rm } from "node:fs/promises"
 
 const DEEPAGENT_CODE_SERVER_DIST = "../deepagent-code/dist/node"
 const DOMAIN_PACKS_DIST = "../domain-packs"
@@ -12,8 +12,6 @@ const channel = (() => {
   if (process.env.DEEPAGENT_CODE_CHANNEL === "latest") return "prod"
   return "dev"
 })()
-
-const nodePtyPkg = `@lydell/node-pty-${process.platform}-${process.arch}`
 
 const sentry =
   process.env.SENTRY_AUTH_TOKEN && process.env.SENTRY_ORG && process.env.SENTRY_PROJECT
@@ -32,7 +30,7 @@ const sentry =
       })
     : false
 
-export default defineConfig({
+export default defineConfig(({ command }) => ({
   main: {
     define: {
       "import.meta.env.DEEPAGENT_CODE_CHANNEL": JSON.stringify(channel),
@@ -41,32 +39,29 @@ export default defineConfig({
       rollupOptions: {
         input: { index: "src/main/index.ts", sidecar: "src/main/sidecar.ts" },
       },
-      externalizeDeps: { include: [nodePtyPkg] },
+      externalizeDeps: { include: ["@lydell/node-pty"] },
     },
     plugins: [
-      {
-        name: "deepagent-code:node-pty-narrower",
-        enforce: "pre",
-        resolveId(s) {
-          if (s === "@lydell/node-pty") return nodePtyPkg
-        },
-      },
       {
         name: "deepagent-code:virtual-server-module",
         enforce: "pre",
         resolveId(id) {
-          if (id === "virtual:deepagent-code-server") return this.resolve(`${DEEPAGENT_CODE_SERVER_DIST}/node.js`)
+          if (id !== "virtual:deepagent-code-server") return
+          if (command === "build") return { id: "./chunks/node.js", external: true }
+          return this.resolve(`${DEEPAGENT_CODE_SERVER_DIST}/node.js`)
         },
       },
       {
         name: "deepagent-code:copy-server-assets",
         async writeBundle() {
-          for (const l of await fs.readdir(DEEPAGENT_CODE_SERVER_DIST)) {
-            if (!l.endsWith(".wasm")) continue
-            await fs.writeFile(`./out/main/chunks/${l}`, await fs.readFile(`${DEEPAGENT_CODE_SERVER_DIST}/${l}`))
+          await mkdir("./out/main/chunks", { recursive: true })
+          for (const file of await readdir(DEEPAGENT_CODE_SERVER_DIST)) {
+            if (!file.endsWith(".wasm") && (command !== "build" || (file !== "node.js" && file !== "node.js.map")))
+              continue
+            await copyFile(`${DEEPAGENT_CODE_SERVER_DIST}/${file}`, `./out/main/chunks/${file}`)
           }
-          await fs.rm("./out/main/domain-packs", { recursive: true, force: true })
-          await fs.cp(DOMAIN_PACKS_DIST, "./out/main/domain-packs", { recursive: true })
+          await rm("./out/main/domain-packs", { recursive: true, force: true })
+          await cp(DOMAIN_PACKS_DIST, "./out/main/domain-packs", { recursive: true })
         },
       },
     ],
@@ -95,4 +90,4 @@ export default defineConfig({
       },
     },
   },
-})
+}))
