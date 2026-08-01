@@ -4,6 +4,7 @@ import { Effect } from "effect"
 import { LLMRequestPrep } from "../../src/session/llm/request"
 import { ToolProvenance } from "../../src/tool/provenance"
 import { ToolInternal } from "../../src/tool/internal"
+import { GlobalBus, type GlobalEvent } from "../../src/bus/global"
 
 const plugin = {
   trigger: (_name: string, _input: unknown, output: unknown) => Effect.succeed(output),
@@ -50,10 +51,23 @@ const model = (providerID: string, modelID: string) =>
 
 const roundContext = (prepared: { messages: any[] }): string => {
   const message = prepared.messages.find(
-    (item) => item.role === "system" && typeof item.content === "string" && item.content.startsWith("<deepagent-round-context>"),
+    (item) =>
+      item.role === "user" && typeof item.content === "string" && item.content.startsWith("<deepagent-round-context>"),
   )
   return message?.content ?? ""
 }
+
+const bashCall = (id: string, command: string) =>
+  ({
+    role: "assistant",
+    content: [{ type: "tool-call", toolCallId: id, toolName: "bash", input: { command } }],
+  }) as any
+
+const bashResult = (id: string, output: string) =>
+  ({
+    role: "tool",
+    content: [{ type: "tool-result", toolCallId: id, toolName: "bash", output: { type: "text", value: output } }],
+  }) as any
 
 async function prepare(
   providerID: string,
@@ -64,6 +78,7 @@ async function prepare(
     metadata?: Record<string, unknown>
     runtimeTail?: string
     federatedProjection?: boolean
+    assembledRequestFingerprint?: boolean
   } = {},
 ) {
   return Effect.runPromise(
@@ -84,7 +99,11 @@ async function prepare(
       provider: { id: providerID, options: {} } as any,
       auth: undefined,
       plugin,
-      flags: { outputTokenMax: 32_000, client: "test" } as any,
+      flags: {
+        outputTokenMax: 32_000,
+        client: "test",
+        assembledRequestFingerprint: options.assembledRequestFingerprint ?? false,
+      } as any,
       isWorkflow: false,
       runtimeTail: options.runtimeTail,
       federatedProjection: options.federatedProjection,
@@ -93,6 +112,128 @@ async function prepare(
 }
 
 describe("DeepAgent request prep", () => {
+  test("emits opt-in assembled request fingerprint without raw request data", async () => {
+    AgentGateway.configure({ enabled: false, agentMode: "general" })
+    const secret = "secret-value-that-must-not-escape"
+    const events: GlobalEvent[] = []
+    const listener = (event: GlobalEvent) => events.push(structuredClone(event))
+    GlobalBus.on("event", listener)
+    try {
+      const prepared = await prepare("deepseek", "deepseek-chat", "ses_request_fingerprint", {
+        assembledRequestFingerprint: true,
+        messages: [{ role: "user", content: secret }],
+        runtimeTail: secret,
+      })
+      const event = events.find((item) => item.payload?.type === "session.request.assembled-fingerprint")
+      expect(event).toBeDefined()
+      expect(event?.payload.properties).toMatchObject({
+        sessionID: "ses_request_fingerprint",
+        requestID: "msg_deepagent_request_prep",
+        providerID: "deepseek",
+        modelID: "deepseek-chat",
+        counts: {
+          system: prepared.system.length,
+          messages: prepared.messages.length,
+          tools: Object.keys(prepared.tools).length,
+          headers: Object.keys(prepared.headers).length,
+        },
+      })
+      expect(event?.payload.properties).toMatchObject({
+        validationFingerprints: [],
+        counts: {
+          validations: 0,
+          validationFingerprints: 0,
+          validationDuplicates: 0,
+        },
+      })
+      expect(event?.payload.properties).not.toHaveProperty("hashes")
+      expect(JSON.stringify(event)).not.toContain(secret)
+      expect(JSON.stringify(event)).not.toContain(prepared.system[0])
+    } finally {
+      GlobalBus.off("event", listener)
+    }
+  })
+
+  test("emits redacted stable validation fingerprint multiplicities", async () => {
+    AgentGateway.configure({ enabled: true, agentMode: "high" })
+    const secretCommand = "bun run test"
+    const secretOutput = "secret validation output"
+    const events: GlobalEvent[] = []
+    const listener = (event: GlobalEvent) => events.push(structuredClone(event))
+    GlobalBus.on("event", listener)
+    try {
+      await prepare("deepseek", "deepseek-chat", "ses_request_validation_fingerprints", {
+        assembledRequestFingerprint: true,
+        messages: [
+          bashCall("validation-1", secretCommand),
+          bashResult("validation-1", `${secretOutput}\nexit code: 1`),
+          bashCall("validation-2", secretCommand),
+          bashResult("validation-2", `${secretOutput}\nexit code: 0`),
+          bashCall("validation-3", secretCommand),
+          bashResult("validation-3", `${secretOutput}\nexit code: 1`),
+          bashCall("diagnostic", "git status"),
+          bashResult("diagnostic", "clean\nexit code: 0"),
+        ],
+      })
+      const properties = events.find(
+        (item) => item.payload?.type === "session.request.assembled-fingerprint",
+      )?.payload.properties
+      expect(properties).toMatchObject({
+        counts: {
+          validations: 3,
+          validationFingerprints: 2,
+          validationDuplicates: 1,
+        },
+      })
+      expect(properties.validationFingerprints).toHaveLength(2)
+      expect(properties.validationFingerprints.map((item: { count: number }) => item.count).sort()).toEqual([1, 2])
+      for (const item of properties.validationFingerprints) {
+        expect(item.fingerprint).toMatch(/^[a-f0-9]{64}$/)
+      }
+      expect(JSON.stringify(properties.validationFingerprints)).not.toContain(secretCommand)
+      expect(JSON.stringify(properties.validationFingerprints)).not.toContain(secretOutput)
+    } finally {
+      GlobalBus.off("event", listener)
+    }
+  })
+
+  test("does not emit assembled request fingerprint by default", async () => {
+    AgentGateway.configure({ enabled: false, agentMode: "general" })
+    const events: GlobalEvent[] = []
+    const listener = (event: GlobalEvent) => events.push(event)
+    GlobalBus.on("event", listener)
+    try {
+      await prepare("deepseek", "deepseek-chat", "ses_request_fingerprint_default")
+      expect(events.some((item) => item.payload?.type === "session.request.assembled-fingerprint")).toBe(false)
+    } finally {
+      GlobalBus.off("event", listener)
+    }
+  })
+
+  test("assembled request validation counts are deterministic for the same prepared request", async () => {
+    AgentGateway.configure({ enabled: false, agentMode: "general" })
+    const events: GlobalEvent[] = []
+    const listener = (event: GlobalEvent) => {
+      if (event.payload?.type === "session.request.assembled-fingerprint") events.push(structuredClone(event))
+    }
+    GlobalBus.on("event", listener)
+    try {
+      const options = {
+        assembledRequestFingerprint: true,
+        messages: [{ role: "user", content: "same input" }],
+      }
+      await prepare("deepseek", "deepseek-chat", "ses_request_fingerprint_stable", options)
+      await prepare("deepseek", "deepseek-chat", "ses_request_fingerprint_stable", options)
+      expect(events).toHaveLength(2)
+      expect(events[0]?.payload.properties.validationFingerprints).toEqual(
+        events[1]?.payload.properties.validationFingerprints,
+      )
+      expect(events[0]?.payload.properties.counts).toEqual(events[1]?.payload.properties.counts)
+    } finally {
+      GlobalBus.off("event", listener)
+    }
+  })
+
   test("keeps marked internal tools while applying agent permission denies", async () => {
     AgentGateway.configure({ enabled: false, agentMode: "general" })
     const structuredOutput = {} as any
@@ -213,11 +354,11 @@ describe("DeepAgent request prep", () => {
     AgentGateway.configure({ enabled: false, agentMode: "high" })
   })
 
-  // Prompt-cache split (docs/deepagent-cache-hit-fix-plan.md): the non-DeepAgent path no longer inlines
+  // Prompt-cache split (docs/llmrealtest-v2.md §11.2): the non-DeepAgent path no longer inlines
   // a per-turn fan-out VERDICT into the system prompt — that was request-text-derived and busted the
   // cache. The system block now carries only the STABLE, mode-derived generic guidance, so it is
   // byte-identical regardless of the request. (The DeepAgent path surfaces the concrete verdict via the
-  // separate runtime system context instead.)
+  // tagged runtime tail instead.)
   test("§5b system prompt carries only stable orchestration guidance, no per-turn verdict (non-DeepAgent, high)", async () => {
     AgentGateway.configure({ enabled: false, agentMode: "high" })
     const complex = await prepare("deepseek", "deepseek-v4-flash", "ses_orch_decision_complex", {
@@ -361,6 +502,39 @@ describe("DeepAgent request prep", () => {
     expect(roundContext(round2)).toContain("第 2 轮")
   })
 
+  test("volatile round changes preserve the full durable request prefix", async () => {
+    AgentGateway.configure({ enabled: true, agentMode: "high" })
+    const sessionID = `ses_deepagent_history_prefix_${crypto.randomUUID()}`
+    const round2 = await prepare("deepagent", "deepseek-deepseek-v4-flash", sessionID, {
+      metadata: { deepagent: { round_control: { action: "continue" } } },
+      messages: [
+        { role: "user", content: "first" },
+        { role: "assistant", content: "done" },
+        { role: "user", content: "continue" },
+      ],
+    })
+    const round3 = await prepare("deepagent", "deepseek-deepseek-v4-flash", sessionID, {
+      metadata: { deepagent: { round_control: { action: "continue" } } },
+      messages: [
+        { role: "user", content: "first" },
+        { role: "assistant", content: "done" },
+        { role: "user", content: "continue" },
+        { role: "assistant", content: "worked" },
+        { role: "user", content: "continue again" },
+      ],
+    })
+    const stableRound2 = round2.messages.slice(0, -1)
+
+    expect(roundContext(round2)).toContain("第 2 轮")
+    expect(roundContext(round3)).toContain("第 3 轮")
+    expect(round2.messages.at(-1)?.role).toBe("user")
+    expect(round3.messages.at(-1)?.role).toBe("user")
+    expect(
+      round2.messages.some((message) => message.role === "system" && message.content === roundContext(round2)),
+    ).toBe(false)
+    expect(round3.messages.slice(0, stableRound2.length)).toStrictEqual(stableRound2)
+  })
+
   for (const action of ["stop", "escalate"]) {
     test(`terminal round control "${action}" does NOT advance rounds`, async () => {
       AgentGateway.configure({ enabled: true, agentMode: "high" })
@@ -465,20 +639,6 @@ describe("DeepAgent request prep", () => {
 // does not stay "failed" forever.
 describe("extractValidationResults (S41-2)", () => {
   const validationCommands = ["bun run typecheck", "bun run lint", "bun run test"]
-
-  const bashCall = (id: string, command: string) =>
-    ({
-      role: "assistant",
-      content: [{ type: "tool-call", toolCallId: id, toolName: "bash", input: { command } }],
-    }) as any
-
-  const bashResult = (id: string, output: string) =>
-    ({
-      role: "tool",
-      content: [
-        { type: "tool-result", toolCallId: id, toolName: "bash", output: { type: "text", value: output } },
-      ],
-    }) as any
 
   test("ignores diagnostic bash outputs that merely mention errors", () => {
     const results = LLMRequestPrep.extractValidationResults(

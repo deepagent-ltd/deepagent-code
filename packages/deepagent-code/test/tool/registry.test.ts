@@ -40,6 +40,8 @@ import { ModelV2 } from "@deepagent-code/core/model"
 import { DebugService } from "@/debug/service"
 import { RuntimeBase } from "@/runtime/base"
 import { Worktree } from "@/worktree"
+import { CodeIntelFacade } from "@/code-intelligence/facade"
+import { ContextQueryFacade } from "@/context-federation/context-query-facade"
 
 const node = CrossSpawnSpawner.defaultLayer
 const configLayer = TestConfig.layer({
@@ -85,6 +87,8 @@ const registryLayer = (opts: RegistryLayerOptions = {}) =>
           Database.defaultLayer,
           Search.defaultLayer,
           Truncate.defaultLayer,
+          Layer.succeed(CodeIntelFacade.Service, CodeIntelFacade.Service.of({ execute: () => Effect.die("unused") })),
+          Layer.succeed(ContextQueryFacade.Service, ContextQueryFacade.Service.of({ execute: () => Effect.die("unused") })),
         ),
       ),
     )
@@ -127,12 +131,63 @@ const withBrokenPlugin = testEffect(
 const itNoCodeIntel = testEffect(
   Layer.mergeAll(registryLayer({ flags: { codeIntelTool: false } }), node, Agent.defaultLayer),
 )
+const itContextToolsV2 = testEffect(
+  Layer.mergeAll(registryLayer({ flags: {
+    contextFederationShadow: true,
+    locationIndexesV2Shadow: true,
+    contextProjectionV2: true,
+    contextQueryToolsV2: true,
+  } }), node, Agent.defaultLayer),
+)
+const itContextToolsV2Internal = testEffect(
+  Layer.mergeAll(registryLayer({ flags: {
+    contextFederationShadow: true,
+    locationIndexesV2Shadow: true,
+    contextProjectionV2: true,
+    contextQueryToolsV2: true,
+    contextFederationRolloutStage: "internal",
+    contextFederationInternalProjects: ["project_scope_internal"],
+  } }), node, Agent.defaultLayer),
+)
+const itContextToolsV2Killed = testEffect(
+  Layer.mergeAll(registryLayer({ flags: {
+    contextFederationShadow: true,
+    locationIndexesV2Shadow: true,
+    contextProjectionV2: true,
+    contextQueryToolsV2: true,
+    contextFederationKillSwitch: true,
+  } }), node, Agent.defaultLayer),
+)
 
 afterEach(async () => {
   await disposeAllInstances()
 })
 
 describe("tool.registry", () => {
+  it.instance("exposes pr_finalize only to primary agents", () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      const agents = yield* Agent.Service
+      const build = yield* agents.get("build")
+      const reviewer = yield* agents.get("reviewer")
+
+      expect(
+        (yield* registry.tools({
+          providerID: ProviderV2.ID.make("deepagent-code"),
+          modelID: ModelV2.ID.make("test"),
+          agent: build,
+        })).map((tool) => tool.id),
+      ).toContain("pr_finalize")
+      expect(
+        (yield* registry.tools({
+          providerID: ProviderV2.ID.make("deepagent-code"),
+          modelID: ModelV2.ID.make("test"),
+          agent: reviewer,
+        })).map((tool) => tool.id),
+      ).not.toContain("pr_finalize")
+    }),
+  )
+
   it.instance("exposes task_status (v4.0.4 block1 1c: read-only subagent status view)", () =>
     Effect.gen(function* () {
       const registry = yield* ToolRegistry.Service
@@ -639,6 +694,59 @@ describe("tool.registry", () => {
       const ids = yield* registry.ids()
       expect(ids).not.toContain("code_intel")
       expect(ids).toContain("grep")
+    }),
+  )
+
+  itContextToolsV2.instance("registers exactly the two public context tools at the v2 rollout stage", () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      const ids = yield* registry.ids()
+      expect(ids.filter((id) => id === "code_intel")).toHaveLength(1)
+      expect(ids.filter((id) => id === "context_query")).toHaveLength(1)
+      expect(ids).not.toContain("code_graph")
+      expect(ids).not.toContain("knowledge_graph")
+      expect(ids).not.toContain("memory_graph")
+      expect(ids).not.toContain("document_graph")
+    }),
+  )
+
+  itContextToolsV2Internal.instance("scopes v2 context tools to the selected Project cohort", () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      const agents = yield* Agent.Service
+      const agent = yield* agents.defaultInfo()
+      const internal = yield* registry.tools({
+        providerID: ProviderV2.ID.make("deepagent-code"),
+        modelID: ModelV2.ID.make("test"),
+        agent,
+        projectScopeKey: "project_scope_internal",
+      })
+      const external = yield* registry.tools({
+        providerID: ProviderV2.ID.make("deepagent-code"),
+        modelID: ModelV2.ID.make("test"),
+        agent,
+        projectScopeKey: "project_scope_external",
+      })
+
+      expect(internal.map((tool) => tool.id)).toContain("context_query")
+      expect(external.map((tool) => tool.id)).not.toContain("context_query")
+      expect(external.filter((tool) => tool.id === "code_intel")).toHaveLength(1)
+    }),
+  )
+
+  itContextToolsV2Killed.instance("removes active context tools immediately under the kill switch", () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      const agents = yield* Agent.Service
+      const tools = yield* registry.tools({
+        providerID: ProviderV2.ID.make("deepagent-code"),
+        modelID: ModelV2.ID.make("test"),
+        agent: yield* agents.defaultInfo(),
+        projectScopeKey: "project_scope_internal",
+      })
+
+      expect(tools.map((tool) => tool.id)).not.toContain("context_query")
+      expect(tools.filter((tool) => tool.id === "code_intel")).toHaveLength(1)
     }),
   )
 

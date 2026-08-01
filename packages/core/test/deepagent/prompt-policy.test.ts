@@ -3,7 +3,7 @@ import { buildSystemPrompt, buildVolatileRoundContext, type PromptContext } from
 import type { ActivationDecision } from "../../src/deepagent/activation-policy"
 import type { RoundState } from "../../src/deepagent/round-state"
 
-// Prompt-cache regression guard (docs/deepagent-cache-hit-fix-plan.md). The DeepAgent system prompt is
+// Prompt-cache regression guard (docs/llmrealtest-v2.md §11.2). The DeepAgent system prompt is
 // the cached Anthropic prefix; it MUST be byte-stable across turns of a session. Per-turn volatile
 // state (round, stage, previous-round results, budget, fan-out verdict) belongs in the tail-appended
 // volatile round context, never in buildSystemPrompt.

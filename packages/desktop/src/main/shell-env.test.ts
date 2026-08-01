@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 
-import { isNushell, mergeShellEnv, parseShellEnv, resolveUserShell } from "./shell-env"
+import { isNushell, mergeShellEnv, parseShellEnv, resolveUserShell, shouldLoadShellEnv } from "./shell-env"
 
 describe("shell env", () => {
   test("parseShellEnv supports null-delimited pairs", () => {
@@ -46,5 +46,10 @@ describe("shell env", () => {
     expect(isNushell("/opt/homebrew/bin/nu")).toBe(true)
     expect(isNushell("C:\\Program Files\\nu.exe")).toBe(true)
     expect(isNushell("/bin/zsh")).toBe(false)
+  })
+
+  test("allows isolated runtimes to prevent login shell environment expansion", () => {
+    expect(shouldLoadShellEnv("1")).toBe(false)
+    expect(shouldLoadShellEnv(undefined)).toBe(true)
   })
 })

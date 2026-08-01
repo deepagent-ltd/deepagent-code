@@ -1223,6 +1223,7 @@ function createLayer(input: StreamInput) {
             agent: next.agent,
             model: next.model,
             variant: next.variant,
+            metadata: next.prompt.metadata,
             parts: [
               ...(next.includeFiles ? next.files : []),
               { type: "text" as const, text: next.prompt.text },

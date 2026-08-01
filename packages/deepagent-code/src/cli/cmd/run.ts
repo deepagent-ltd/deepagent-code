@@ -11,7 +11,8 @@ import type { PermissionV1 } from "@deepagent-code/core/v1/permission"
 //
 // Also supports `--command` for slash-command execution, `--format json` for
 // raw event streaming, `--continue` / `--session` for session resumption,
-// and `--fork` for forking before continuing.
+// `--fork` for forking before continuing, and `--goal --agent loop` for a
+// scriptable Goal Loop lifecycle that exits only after a terminal goal event.
 import type { Argv } from "yargs"
 import path from "path"
 import { pathToFileURL } from "url"
@@ -23,6 +24,7 @@ import { Filesystem } from "@/util/filesystem"
 import { createOpencodeClient, type OpencodeClient, type ToolPart } from "@deepagent-code/sdk/v2"
 import { FormatError, FormatUnknownError } from "../error"
 import { INTERACTIVE_INPUT_ERROR, resolveInteractiveStdin } from "./run/runtime.stdin"
+import { backgroundTask, createBackgroundSessions, createSessionTree, questionAnswers } from "./run/noninteractive"
 
 type ModelInput = Parameters<OpencodeClient["session"]["prompt"]>[0]["model"]
 
@@ -140,6 +142,11 @@ export const RunCommand = effectCmd({
         describe: "the command to run, use message for args",
         type: "string",
       })
+      .option("goal", {
+        describe: "start the message or existing goal+plan.md as a Goal Loop (requires --agent loop)",
+        type: "boolean",
+        default: false,
+      })
       .option("continue", {
         alias: ["c"],
         describe: "continue the last session",
@@ -233,6 +240,11 @@ export const RunCommand = effectCmd({
         describe: "auto-approve permissions that are not explicitly denied (dangerous!)",
         default: false,
       })
+      .option("question-answer", {
+        type: "string",
+        array: true,
+        describe: "answer unattended Question prompts in order; repeat once per question (otherwise auto-reject)",
+      })
       .option("demo", {
         type: "boolean",
         default: false,
@@ -269,6 +281,26 @@ export const RunCommand = effectCmd({
         die("--interactive cannot be used with --command")
       }
 
+      if (args.goal && args.interactive) {
+        die("--goal cannot be used with --interactive")
+      }
+
+      if (args.goal && args.command) {
+        die("--goal cannot be used with --command")
+      }
+
+      if (args.goal && args.file) {
+        die("--goal does not accept --file; put durable inputs in the goal workspace")
+      }
+
+      if (args.goal && args.agent !== "loop") {
+        die("--goal requires --agent loop")
+      }
+
+      if (args.goal && (args.continue || args.session || args.fork)) {
+        die("--goal starts a fresh loop session and cannot be used with --continue, --session, or --fork")
+      }
+
       if (args.demo && !args.interactive) {
         die("--demo requires --interactive")
       }
@@ -302,7 +334,7 @@ export const RunCommand = effectCmd({
 
       const replay = args.replay || args["replay-limit"] !== undefined
 
-      const root = Filesystem.resolve(process.env.PWD ?? process.cwd())
+      const root = Filesystem.resolve(process.cwd())
       const directory = (() => {
         if (!args.dir) return args.attach ? undefined : root
         if (args.attach) return args.dir
@@ -352,7 +384,7 @@ export const RunCommand = effectCmd({
       message = resolveRunInput(message, piped) ?? ""
       const initialInput = resolveRunInput(rawMessage, piped)
 
-      if (message.trim().length === 0 && !args.command && !args.interactive) {
+      if (message.trim().length === 0 && !args.command && !args.interactive && !args.goal) {
         UI.error("You must provide a message or a command")
         process.exit(1)
       }
@@ -451,8 +483,13 @@ export const RunCommand = effectCmd({
         }
 
         const name = title()
+        const goalModel = args.goal ? pick(args.model) : undefined
         const result = await sdk.session.create({
           title: name,
+          agent: args.goal ? args.agent : undefined,
+          model: goalModel
+            ? { providerID: goalModel.providerID, id: goalModel.modelID, variant: args.variant }
+            : undefined,
           permission: [...rules],
         })
         const id = result.data?.id
@@ -609,6 +646,13 @@ export const RunCommand = effectCmd({
           process.exit(1)
         }
         const sessionID = sess.id
+        const background = createBackgroundSessions()
+        let releaseGoalStart = () => {}
+        const goalStartReady = args.goal
+          ? new Promise<void>((resolve) => {
+              releaseGoalStart = resolve
+            })
+          : Promise.resolve()
 
         function emit(type: string, data: Record<string, unknown>) {
           if (args.format === "json") {
@@ -625,12 +669,27 @@ export const RunCommand = effectCmd({
           return false
         }
 
+        async function persistedAssistantError(client: OpencodeClient) {
+          // Some providers publish the terminal session.error immediately after
+          // the idle transition. Give durable message projection one short turn
+          // before deciding the subprocess exit code.
+          await Bun.sleep(100)
+          const result = await client.session.messages({ sessionID }).catch(() => undefined)
+          const message = result?.data?.findLast((item) => item.info.role === "assistant")
+          return message?.info.role === "assistant" ? message.info.error : undefined
+        }
+
         // Consume one subscribed event stream for the active session and mirror it
         // to stdout/UI. `client` is passed explicitly because attach mode may
         // rebind the SDK to the session's directory after the subscription is
         // created, and replies issued from inside the loop must use that client.
         async function loop(client: OpencodeClient, events: Awaited<ReturnType<typeof sdk.event.subscribe>>) {
           const toggles = new Map<string, boolean>()
+          const goalMode = args.goal === true
+          const sessions = createSessionTree(sessionID, async (candidate) => {
+            const result = await client.session.get({ sessionID: candidate }).catch(() => undefined)
+            return result?.data
+          })
           let error: string | undefined
 
           for await (const event of events.stream) {
@@ -647,9 +706,32 @@ export const RunCommand = effectCmd({
               toggles.set("start", true)
             }
 
+            if (
+              event.type === "message.updated" &&
+              event.properties.sessionID === sessionID &&
+              event.properties.info.role === "assistant"
+            ) {
+              background.parentAssistant(event.properties.info.id)
+            }
+
             if (event.type === "message.part.updated") {
               const part = event.properties.part
-              if (part.sessionID !== sessionID) continue
+              const task = backgroundTask(part)
+              if (part.sessionID === sessionID && task) {
+                sessions.track(task.sessionID)
+                background.admit(task.sessionID, task.messageID)
+              }
+              if (part.sessionID !== sessionID) {
+                if (
+                  goalMode &&
+                  (await sessions.contains(part.sessionID)) &&
+                  part.type === "tool" &&
+                  (part.state.status === "completed" || part.state.status === "error")
+                ) {
+                  emit("goal_tool_use", { part })
+                }
+                continue
+              }
 
               if (part.type === "tool" && (part.state.status === "completed" || part.state.status === "error")) {
                 if (emit("tool_use", { part })) continue
@@ -710,43 +792,92 @@ export const RunCommand = effectCmd({
 
             if (event.type === "session.error") {
               const props = event.properties
-              if (props.sessionID !== sessionID || !props.error) continue
+              if (!props.sessionID) continue
+              if (!(await sessions.contains(props.sessionID)) || !props.error) continue
               let err = String(props.error.name)
               if ("data" in props.error && props.error.data && "message" in props.error.data) {
                 err = String(props.error.data.message)
               }
               error = error ? error + EOL + err : err
+              process.exitCode = 1
+              if (props.sessionID !== sessionID) background.settle(props.sessionID)
               if (emit("error", { error: props.error })) continue
               UI.error(err)
+            }
+
+            if (event.type === "goal.updated" && event.properties.sessionID === sessionID) {
+              await goalStartReady
+              const phase = event.properties.phase
+              if (!emit("goal", { goal: event.properties })) {
+                UI.println(`goal ${event.properties.goalId}: ${phase}`)
+              }
+              if (["done", "needs_human", "rolled_back", "stopped"].includes(phase)) {
+                emit("session_terminal", { reason: "goal", phase, goalId: event.properties.goalId })
+                if (phase !== "done") process.exitCode = 1
+                break
+              }
+            }
+
+            if (
+              event.type === "session.status" &&
+              event.properties.sessionID !== sessionID &&
+              event.properties.status.type === "idle" &&
+              background.has(event.properties.sessionID)
+            ) {
+              background.settle(event.properties.sessionID)
             }
 
             if (
               event.type === "session.status" &&
               event.properties.sessionID === sessionID &&
-              event.properties.status.type === "idle"
+              event.properties.status.type === "idle" &&
+              !goalMode &&
+              !background.pending()
             ) {
               break
             }
 
             if (event.type === "permission.asked") {
               const permission = event.properties
-              if (permission.sessionID !== sessionID) continue
+              if (!(await sessions.contains(permission.sessionID))) continue
 
               if (args["dangerously-skip-permissions"]) {
                 await client.permission.reply({
                   requestID: permission.id,
                   reply: "once",
                 })
+                emit("permission", { request: permission, reply: "once" })
               } else {
-                UI.println(
-                  UI.Style.TEXT_WARNING_BOLD + "!",
-                  UI.Style.TEXT_NORMAL +
-                    `permission requested: ${permission.permission} (${permission.patterns.join(", ")}); auto-rejecting`,
-                )
                 await client.permission.reply({
                   requestID: permission.id,
                   reply: "reject",
                 })
+                if (!emit("permission", { request: permission, reply: "reject" })) {
+                  UI.println(
+                    UI.Style.TEXT_WARNING_BOLD + "!",
+                    UI.Style.TEXT_NORMAL +
+                      `permission requested: ${permission.permission} (${permission.patterns.join(", ")}); auto-rejecting`,
+                  )
+                }
+              }
+            }
+
+            if (event.type === "question.asked") {
+              const question = event.properties
+              if (!(await sessions.contains(question.sessionID))) continue
+              const answers = questionAnswers(question.questions.length, args["question-answer"])
+              if (answers) {
+                await client.question.reply({ requestID: question.id, answers })
+                emit("question", { request: question, answers })
+                continue
+              }
+
+              await client.question.reject({ requestID: question.id })
+              if (!emit("question", { request: question, rejected: true })) {
+                UI.println(
+                  UI.Style.TEXT_WARNING_BOLD + "!",
+                  UI.Style.TEXT_NORMAL + "question requested without matching --question-answer values; auto-rejecting",
+                )
               }
             }
           }
@@ -762,9 +893,10 @@ export const RunCommand = effectCmd({
 
         if (!args.interactive) {
           const events = await client.event.subscribe()
-          loop(client, events).catch((e) => {
+          const loopTask = loop(client, events).catch((e) => {
             console.error(e)
-            process.exit(1)
+            process.exitCode = 1
+            return String(e)
           })
 
           if (args.command) {
@@ -779,7 +911,31 @@ export const RunCommand = effectCmd({
             if (result.error) {
               if (!emit("error", { error: result.error })) UI.error(formatRunError(result.error))
               process.exitCode = 1
+              return
             }
+            if (await loopTask) process.exitCode = 1
+            return
+          }
+
+          if (args.goal) {
+            const result = await client.deepagent.goal
+              .start({
+                sessionID,
+                ...(message.trim() ? { objective: message.trim() } : {}),
+              })
+              .catch((error) => ({ data: undefined, error }))
+            if (result.error || !result.data) {
+              const error = result.error ?? "Goal start returned no data"
+              if (!emit("error", { error })) UI.error(formatRunError(error))
+              process.exitCode = 1
+              releaseGoalStart()
+              await events.stream.return?.(undefined).catch(() => undefined)
+              await loopTask
+              return
+            }
+            emit("goal_start", { goal: result.data })
+            releaseGoalStart()
+            if (await loopTask) process.exitCode = 1
             return
           }
 
@@ -793,6 +949,22 @@ export const RunCommand = effectCmd({
           })
           if (result.error) {
             if (!emit("error", { error: result.error })) UI.error(formatRunError(result.error))
+            process.exitCode = 1
+            return
+          }
+          if (result.data?.info.error) {
+            if (!emit("error", { error: result.data.info.error })) UI.error(formatRunError(result.data.info.error))
+            process.exitCode = 1
+          }
+          if (result.data?.info.finish === "unknown") {
+            const incomplete = "Model stream ended without a successful finish reason"
+            if (!emit("error", { error: incomplete })) UI.error(incomplete)
+            process.exitCode = 1
+          }
+          if (await loopTask) process.exitCode = 1
+          const responseError = await persistedAssistantError(client)
+          if (responseError) {
+            if (!emit("error", { error: responseError })) UI.error(formatRunError(responseError))
             process.exitCode = 1
           }
           return

@@ -112,8 +112,8 @@ export const carryOverToBridge = (input: { sessionID: SessionID; workspacePath: 
     // DocumentStore hydrates its in-memory Map ONCE at construction and never re-reads disk, and no
     // invalidateCache fires after this write — so writing through a fresh openProjectStore instance
     // (as this used to) persisted to disk but left the long-lived cached read instance stale, making
-    // the bridge invisible in-process (code-index-trigger warms that cache on a session's first
-    // prompt). Reusing projectStoreFor mutates the exact instance the reader holds AND persists to
+    // the bridge invisible in-process when that reader already exists. Reusing projectStoreFor mutates
+    // the exact instance the reader holds AND persists to
     // disk in one shot. Fall back to a fresh store only when knowledge-source is unconfigured — the
     // read side would return nothing then anyway, but disk persistence is still preserved for a
     // later cold-cache process.

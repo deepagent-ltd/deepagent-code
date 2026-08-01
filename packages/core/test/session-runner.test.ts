@@ -1787,6 +1787,10 @@ describe("SessionRunnerLLM", () => {
           ],
         },
       ])
+      expect(yield* session.get(sessionID)).toMatchObject({
+        cost: 0,
+        tokens: { input: 8, output: 3, reasoning: 1, cache: { read: 2, write: 0 } },
+      })
     }),
   )
 

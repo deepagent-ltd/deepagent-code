@@ -546,9 +546,9 @@ export const layer = Layer.effect(
             return Effect.succeed({} as Info)
           }),
         )
-      // Seed the default global config with the schema for editor completion, but avoid writing when the user
-      // explicitly routes config through env-provided paths or content.
-      if (!Flag.DEEPAGENT_CODE_CONFIG && !Flag.DEEPAGENT_CODE_CONFIG_DIR && !Flag.DEEPAGENT_CODE_CONFIG_CONTENT) {
+      // Seed the default global config with the schema for editor completion, but avoid writing when config
+      // is supplied directly through an explicit file or inline content.
+      if (!Flag.DEEPAGENT_CODE_CONFIG && !Flag.DEEPAGENT_CODE_CONFIG_CONTENT) {
         // Consolidate any legacy config.json / deepagent-code.json into the single canonical
         // deepagent-code.jsonc and remove the old files, so there is one config file to edit.
         // Best-effort: a failure here must not block config loading (we still merge all names below).
@@ -741,14 +741,10 @@ export const layer = Layer.effect(
 
         const directories = yield* ConfigPaths.directories(ctx.directory, ctx.worktree)
 
-        if (Flag.DEEPAGENT_CODE_CONFIG_DIR) {
-          log.debug("loading config from DEEPAGENT_CODE_CONFIG_DIR", { path: Flag.DEEPAGENT_CODE_CONFIG_DIR })
-        }
-
         const deps: Fiber.Fiber<void>[] = []
 
         for (const dir of directories) {
-          if (dir.endsWith(".deepagent-code") || dir === Flag.DEEPAGENT_CODE_CONFIG_DIR) {
+          if (dir.endsWith(".deepagent-code")) {
             for (const file of ["deepagent-code.json", "deepagent-code.jsonc"]) {
               const source = path.join(dir, file)
               log.debug(`loading config from ${source}`)

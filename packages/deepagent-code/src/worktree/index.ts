@@ -197,6 +197,8 @@ export interface Interface {
   readonly makeWorktreeInfo: (options?: { name?: string; detached?: boolean }) => Effect.Effect<Info, Error>
   readonly createFromInfo: (info: Info, startCommand?: string) => Effect.Effect<void, Error>
   readonly create: (input?: CreateInput) => Effect.Effect<Info, Error>
+  /** Creates a worktree whose checkout and Instance bootstrap are complete before returning. */
+  readonly createReady: (input?: CreateInput) => Effect.Effect<Info, Error>
   readonly list: () => Effect.Effect<(Omit<Info, "branch"> & { branch?: string })[], Error>
   readonly remove: (input: RemoveInput) => Effect.Effect<boolean, Error>
   readonly reset: (input: ResetInput) => Effect.Effect<boolean, Error>
@@ -353,7 +355,7 @@ export const layer: Layer.Layer<
           workspace: workspaceID,
           payload: { type: Event.Failed.type, properties: { message } },
         })
-        return
+        return false
       }
 
       const booted = yield* store.load({ directory: info.directory }).pipe(
@@ -372,7 +374,7 @@ export const layer: Layer.Layer<
           }),
         ),
       )
-      if (!booted) return
+      if (!booted) return false
 
       GlobalBus.emit("event", {
         directory: info.directory,
@@ -384,7 +386,11 @@ export const layer: Layer.Layer<
         },
       })
 
-      yield* runStartScripts(info.directory, { projectID, extra })
+      yield* runStartScripts(info.directory, { projectID, extra }).pipe(
+        Effect.catchCause((cause) => Effect.sync(() => log.error("worktree start task failed", { cause }))),
+        Effect.forkIn(scope),
+      )
+      return true
     })
 
     const createFromInfo = Effect.fn("Worktree.createFromInfo")(function* (info: Info, startCommand?: string) {
@@ -399,6 +405,15 @@ export const layer: Layer.Layer<
       const info = yield* makeWorktreeInfo({ name: input?.name })
       yield* createFromInfo(info, input?.startCommand)
       return info
+    })
+
+    const createReady = Effect.fn("Worktree.createReady")(function* (input?: CreateInput) {
+      const info = yield* makeWorktreeInfo({ name: input?.name })
+      yield* setup(info)
+      if (yield* boot(info, input?.startCommand)) return info
+      return yield* new CreateFailedError({
+        message: `Worktree bootstrap failed; preserved for recovery at ${info.directory}`,
+      })
     })
 
     const canonical = Effect.fnUntraced(function* (input: string) {
@@ -877,6 +892,7 @@ export const layer: Layer.Layer<
       makeWorktreeInfo,
       createFromInfo,
       create,
+      createReady,
       list,
       remove,
       reset,

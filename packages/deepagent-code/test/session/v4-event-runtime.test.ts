@@ -18,6 +18,7 @@ import type { SessionPrompt } from "../../src/session/prompt"
 import { SessionID } from "../../src/session/schema"
 import { ProviderV2 } from "@deepagent-code/core/provider"
 import { ModelV2 } from "@deepagent-code/core/model"
+import type { LocationIndexCoordinator } from "../../src/location-index/coordinator"
 import { it as baseIt, testEffect, pollWithTimeout } from "../lib/effect"
 
 // V4.0 — proves the production event-runtime layer BUILDS and starts its scoped daemons without error
@@ -32,6 +33,39 @@ import { it as baseIt, testEffect, pollWithTimeout } from "../lib/effect"
 // tears down cleanly, and that the bus it shares is the one events land on.
 
 const database = Database.layerFromPath(":memory:")
+
+describe("V4EventRuntime CodeGraph conflict evidence", () => {
+  baseIt.effect("resolves only requested-file symbols from the Location snapshot", () =>
+    Effect.gen(function* () {
+      const coordinator = {
+        searchCode: ({ query }: { query: string }) => Effect.succeed({
+          revision: undefined,
+          hits: [
+            {
+              entity: {},
+              file: { path: query },
+              symbol: { symbolPath: "run" },
+              score: 1,
+            },
+            {
+              entity: {},
+              file: { path: "src/unrelated.ts" },
+              symbol: { symbolPath: "ignore" },
+              score: 1,
+            },
+          ],
+        }),
+      } as unknown as LocationIndexCoordinator.Interface
+
+      const symbols = yield* V4EventRuntime.resolveCodeGraphSymbols({
+        coordinator,
+        canonicalRoot: "/repo",
+        files: ["/repo/src/a.ts", "./src/b.ts"],
+      })
+      expect(symbols).toEqual(["src/a.ts#run", "src/b.ts#run"])
+    }),
+  )
+})
 
 describe("V4EventRuntime.layer", () => {
   // We can't build the full layer here (it requires the session stack), but we CAN assert the exported
@@ -63,18 +97,26 @@ describe("V4EventRuntime.layer", () => {
 // Durable group lifecycle: registration must be reconciled when flags change, and scope release must
 // unregister only the groups this runtime owns so later publishes cannot leave an offline backlog.
 describe("V4EventRuntime durable consumer-group lifecycle", () => {
-  const staleRuntimeGroups = ["event-dispatcher", "goal-tick-consumer", "panel-convener", "wiki-archiver", "supervisor-notifier"]
+  const staleRuntimeGroups = [
+    "event-dispatcher",
+    "goal-tick-consumer",
+    "panel-convener",
+    "wiki-archiver",
+    "supervisor-notifier",
+    "agent-handoff",
+  ]
   const externalGroup = "other-feature-consumer"
 
   const registration = (flags: Partial<RuntimeFlags.Info>) =>
     V4EventRuntime.consumerRegistrationLayer.pipe(Layer.provide(RuntimeFlags.layer(flags)))
 
-  const fullRuntimeFlagsOff: Partial<RuntimeFlags.Info> = {
+  const fullRuntimeFlagsOff = {
     v4MultiAgentRuntime: false,
     v4EventDrivenIm: false,
     v4PanelAutoConvene: false,
     v4EventDrivenArchive: false,
     v4AgentPushEnabled: false,
+    v4GoalTickEventDriven: false,
   }
 
   const publish = (key: string): DeepAgentEvent.PublishInput => ({
@@ -85,6 +127,68 @@ describe("V4EventRuntime durable consumer-group lifecycle", () => {
     priority: "normal",
     payload: {},
   })
+
+  baseIt.effect("goal-tick-only mode activates daemon setup and registers only the tick group", () =>
+    Effect.gen(function* () {
+      const flags = { ...fullRuntimeFlagsOff, v4GoalTickEventDriven: true }
+      expect(V4EventRuntime.anyV4DaemonEnabled(flags)).toBe(true)
+      expect(V4EventRuntime.goalTickConsumerEnabled(flags)).toBe(true)
+
+      const busScope = yield* Scope.make()
+      const busContext = yield* Layer.build(
+        DeepAgentEventBus.layer.pipe(Layer.provideMerge(Database.layerFromPath(":memory:"))),
+      ).pipe(Scope.provide(busScope))
+      const bus = Context.get(busContext, DeepAgentEventBus.Service)
+      const registrationScope = yield* Scope.make()
+      yield* Layer.build(registration(flags)).pipe(
+        Scope.provide(registrationScope),
+        Effect.provide(busContext),
+      )
+
+      const goalTick = yield* bus.publish({
+        type: "goal.tick.requested",
+        source: "system",
+        workspaceID: "wrk_1",
+        idempotencyKey: "goal-tick-only",
+        priority: "normal",
+        payload: {},
+      })
+      const unrelated = yield* bus.publish(publish("goal-tick-only-unrelated"))
+      const due = yield* bus.dueRetries(Number.MAX_SAFE_INTEGER)
+      expect(
+        due.some(
+          (delivery) => delivery.eventID === goalTick.id && delivery.subscriptionGroup === "goal-tick-consumer",
+        ),
+      ).toBe(true)
+      expect(due.some((delivery) => delivery.eventID === unrelated.id && staleRuntimeGroups.includes(delivery.subscriptionGroup))).toBe(false)
+
+      yield* Scope.close(registrationScope, Exit.void)
+      yield* Scope.close(busScope, Exit.void)
+    }),
+  )
+
+  baseIt.effect("all-off mode leaves daemon setup and goal-tick consumer disabled", () =>
+    Effect.sync(() => {
+      expect(V4EventRuntime.anyV4DaemonEnabled(fullRuntimeFlagsOff)).toBe(false)
+      expect(V4EventRuntime.goalTickConsumerEnabled(fullRuntimeFlagsOff)).toBe(false)
+    }),
+  )
+
+  baseIt.effect("multi-agent mode still activates the goal-tick consumer", () =>
+    Effect.sync(() => {
+      const flags = { ...fullRuntimeFlagsOff, v4MultiAgentRuntime: true }
+      expect(V4EventRuntime.anyV4DaemonEnabled(flags)).toBe(true)
+      expect(V4EventRuntime.goalTickConsumerEnabled(flags)).toBe(true)
+    }),
+  )
+
+  baseIt.effect("multi-agent and goal-tick mode keeps the goal-tick consumer active", () =>
+    Effect.sync(() => {
+      const flags = { ...fullRuntimeFlagsOff, v4MultiAgentRuntime: true, v4GoalTickEventDriven: true }
+      expect(V4EventRuntime.anyV4DaemonEnabled(flags)).toBe(true)
+      expect(V4EventRuntime.goalTickConsumerEnabled(flags)).toBe(true)
+    }),
+  )
 
   baseIt.effect("enabled runtime registers its groups; a subsequent disabled startup removes only those historical groups", () =>
     Effect.gen(function* () {
@@ -734,10 +838,15 @@ describe("V4EventRuntime makeEventTurnRunner worktree isolation (§C3.2 / P4.5a)
         instanceStore: fakeStore,
         defaultModel,
         createWorktree: () => Promise.resolve(WT),
-        cleanupWorktree: (wt) => Promise.resolve(void cleaned.push(wt.directory)),
+        cleanupWorktree: (wt) => {
+          cleaned.push(wt.directory)
+          return Promise.resolve({ continuationRef: wt.branch, artifacts: [`git-ref:${wt.branch}`] })
+        },
       })
       const result = yield* runner({ agentType: "reviewer", prompt: "do it", directory: "/tmp/event-turn-wt" })
       expect(result.ok).toBe(true)
+      expect(result.continuationRef).toBe(WT.branch)
+      expect(result.artifacts).toEqual([`git-ref:${WT.branch}`])
       // the child session ran in the ISOLATED worktree directory, NOT the event directory.
       expect(dirs.at(-1)).toBe(WT.directory)
       // cleanup ran on settle for exactly that worktree.
@@ -756,13 +865,102 @@ describe("V4EventRuntime makeEventTurnRunner worktree isolation (§C3.2 / P4.5a)
         instanceStore: fakeStore,
         defaultModel,
         createWorktree: () => Promise.resolve(null), // not a git repo / add failed → fall back
-        cleanupWorktree: () => Promise.resolve(void cleanupCalls++),
+        cleanupWorktree: () => {
+          cleanupCalls++
+          return Promise.resolve(null)
+        },
       })
       const result = yield* runner({ agentType: "reviewer", prompt: "do it", directory: "/tmp/event-turn-wt" })
       expect(result.ok).toBe(true)
       // ran in the EVENT directory (fallback), and cleanup was never invoked (no worktree existed).
       expect(dirs.at(-1)).toBe("/tmp/event-turn-wt")
       expect(cleanupCalls).toBe(0)
+    }),
+  )
+
+  baseIt.effect("write turn + unavailable isolation → fails closed without creating a shared-dir session", () =>
+    Effect.gen(function* () {
+      const dirs: string[] = []
+      const runner = V4EventRuntime.makeEventTurnRunner({
+        sessions: makeSessions(dirs),
+        agents: fakeAgents,
+        sessionPrompt: okPrompt,
+        instanceStore: fakeStore,
+        defaultModel,
+        createWorktree: () => Promise.resolve(null),
+      })
+      const result = yield* runner({
+        agentType: "fixer",
+        prompt: "edit it",
+        directory: "/tmp/event-turn-wt",
+        requiresWriteIsolation: true,
+      })
+      expect(result.ok).toBe(false)
+      expect(result.reason).toBe("isolation_unavailable")
+      expect(dirs).toEqual([])
+    }),
+  )
+
+  baseIt.effect("passes an upstream continuation ref to worktree creation", () =>
+    Effect.gen(function* () {
+      const bases: (string | undefined)[] = []
+      const WT = {
+        directory: "/tmp/isolated-worktree-base",
+        branch: "agent/test-base",
+        repoRoot: "/tmp/event-turn-wt",
+        baseSha: "upstream-sha",
+      }
+      const runner = V4EventRuntime.makeEventTurnRunner({
+        sessions: makeSessions([]),
+        agents: fakeAgents,
+        sessionPrompt: okPrompt,
+        instanceStore: fakeStore,
+        defaultModel,
+        createWorktree: (input) => {
+          bases.push(input.baseRef)
+          return Promise.resolve(WT)
+        },
+        cleanupWorktree: () =>
+          Promise.resolve({ continuationRef: WT.branch, artifacts: [`git-ref:${WT.branch}`] }),
+      })
+      const result = yield* runner({
+        agentType: "tester",
+        prompt: "verify it",
+        directory: "/tmp/event-turn-wt",
+        baseRef: "agent/fixer-upstream",
+        requiresWriteIsolation: true,
+      })
+      expect(result.ok).toBe(true)
+      expect(bases).toEqual(["agent/fixer-upstream"])
+    }),
+  )
+
+  baseIt.effect("write turn + unprovable cleanup → fails instead of publishing a lost continuation", () =>
+    Effect.gen(function* () {
+      const WT = {
+        directory: "/tmp/isolated-worktree-unpreserved",
+        branch: "agent/unpreserved",
+        repoRoot: "/tmp/event-turn-wt",
+        baseSha: "upstream-sha",
+      }
+      const runner = V4EventRuntime.makeEventTurnRunner({
+        sessions: makeSessions([]),
+        agents: fakeAgents,
+        sessionPrompt: okPrompt,
+        instanceStore: fakeStore,
+        defaultModel,
+        createWorktree: () => Promise.resolve(WT),
+        cleanupWorktree: () => Promise.resolve(null),
+      })
+      const result = yield* runner({
+        agentType: "fixer",
+        prompt: "edit it",
+        directory: "/tmp/event-turn-wt",
+        requiresWriteIsolation: true,
+      })
+      expect(result.ok).toBe(false)
+      expect(result.reason).toBe("isolation_preservation_failed")
+      expect(result.continuationRef).toBeUndefined()
     }),
   )
 
@@ -787,7 +985,10 @@ describe("V4EventRuntime makeEventTurnRunner worktree isolation (§C3.2 / P4.5a)
         instanceStore: fakeStore,
         defaultModel,
         createWorktree: () => Promise.resolve(WT),
-        cleanupWorktree: (wt) => Promise.resolve(void cleaned.push(wt.directory)),
+        cleanupWorktree: (wt) => {
+          cleaned.push(wt.directory)
+          return Promise.resolve({ continuationRef: wt.branch, artifacts: [`git-ref:${wt.branch}`] })
+        },
       })
       const result = yield* runner({
         agentType: "reviewer",
@@ -839,7 +1040,10 @@ describe("V4EventRuntime makeEventTurnRunner worktree isolation (§C3.2 / P4.5a)
           await createGate // hold acquire in-flight until the test opens the gate
           return WT
         },
-        cleanupWorktree: (wt) => Promise.resolve(void cleaned.push(wt.directory)),
+        cleanupWorktree: (wt) => {
+          cleaned.push(wt.directory)
+          return Promise.resolve({ continuationRef: wt.branch, artifacts: [`git-ref:${wt.branch}`] })
+        },
       })
 
       const fiber = yield* Effect.forkChild(
@@ -873,15 +1077,16 @@ describe("V4EventRuntime makeEventTurnRunner threads real token usage (§E2 / P4
   const CTX = { directory: "/tmp/event-turn-tokens" } as unknown as InstanceContext
   const fakeStore = { load: () => Effect.succeed(CTX) } as unknown as InstanceStore.Interface
   const fakeAgents = { get: () => Effect.succeed({ name: "reviewer" }) } as unknown as Agent.Interface
-  const fakeSessions = {
-    create: () => Effect.succeed({ id: SessionID.make("ses_tokens_root") }),
-  } as unknown as Session.Interface
   const defaultModel = () =>
     Effect.succeed({ providerID: ProviderV2.ID.make("anthropic"), modelID: ModelV2.ID.make("claude") })
 
   // A prompt returning the REAL WithParts shape: an assistant message with a known token breakdown +
   // cost, and the final text as a text part (not a flattened top-level field).
-  const makeRunner = (promptResult: unknown) => {
+  const makeRunner = (promptResult: unknown, persistedMessages: ReadonlyArray<unknown> = [promptResult]) => {
+    const fakeSessions = {
+      create: () => Effect.succeed({ id: SessionID.make("ses_tokens_root") }),
+      messages: () => Effect.succeed(persistedMessages),
+    } as unknown as Session.Interface
     const fakePrompt = {
       resolvePromptParts: () => Effect.succeed([{ type: "text", text: "hi" }]),
       prompt: () => Effect.succeed(promptResult),
@@ -911,6 +1116,23 @@ describe("V4EventRuntime makeEventTurnRunner threads real token usage (§E2 / P4
       expect(result.tokensUsed).toBe(150)
       expect(result.cost).toBe(0.0123)
       expect(result.text).toBe("reviewed")
+    }),
+  )
+
+  baseIt.effect("counts every persisted provider turn in a tool-using child Session", () =>
+    Effect.gen(function* () {
+      const final = {
+        info: { role: "assistant", tokens: { input: 50, output: 20, reasoning: 5 }, cost: 0.02 },
+        parts: [{ type: "text", text: "done" }],
+      }
+      const runner = makeRunner(final, [
+        { info: { role: "user" } },
+        { info: { role: "assistant", tokens: { input: 100, output: 40, reasoning: 10 }, cost: 0.01 } },
+        final,
+      ])
+      const result = yield* runner({ agentType: "reviewer", prompt: "do it", workspaceID: "/tmp/event-turn-tokens" })
+      expect(result.tokensUsed).toBe(225)
+      expect(result.cost).toBe(0.03)
     }),
   )
 

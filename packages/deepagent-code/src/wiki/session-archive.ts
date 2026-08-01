@@ -19,9 +19,9 @@ import { WikiSearchIndex } from "./search-index"
  * V3.9 §B — production wiring for the Wiki projection.
  *
  * `openWikiGraph` assembles the read-only DocumentStore union a WikiService/WikiSearchIndex projects
- * over — the SAME union the retriever / graph-query walk (§B.1: no new storage), plus the session's
- * own run-scoped context + run-graph stores so a session's plan/worklog/diagnosis/decision trajectory
- * is projectable as an execution archive (§B.6).
+ * over — the same durable union returned by the Knowledge source (§B.1: no new storage), plus the
+ * session's own run-scoped context + run-graph stores so a session's
+ * plan/worklog/diagnosis/decision trajectory is projectable as an execution archive (§B.6).
  *
  * `archiveSessionOnCompletion` is the §B.6 session-completion trigger. It is invoked from the existing
  * completion path (persistSuggestion in session/prompt.ts) gated by flags.experimentalWiki. It is

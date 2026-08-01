@@ -46,6 +46,30 @@ describe("I33-3 subagentIsWriteType", () => {
     expect(subagentIsWriteType(agent(rules))).toBe(true)
   })
 
+  test("path-scoped write allow after a global deny ⇒ WRITE-type", () => {
+    const rules = [
+      { permission: "*", pattern: "*", action: "deny" as const },
+      { permission: "write", pattern: "output/result.txt", action: "allow" as const },
+    ]
+    expect(subagentIsWriteType(agent(rules))).toBe(true)
+  })
+
+  test("path-scoped ask after a global deny ⇒ WRITE-type", () => {
+    const rules = [
+      { permission: "*", pattern: "*", action: "deny" as const },
+      { permission: "edit", pattern: "generated/**", action: "ask" as const },
+    ]
+    expect(subagentIsWriteType(agent(rules))).toBe(true)
+  })
+
+  test("path-scoped allow before a later global deny ⇒ READ-ONLY", () => {
+    const rules = [
+      { permission: "write", pattern: "output/result.txt", action: "allow" as const },
+      { permission: "*", pattern: "*", action: "deny" as const },
+    ]
+    expect(subagentIsWriteType(agent(rules))).toBe(false)
+  })
+
   test("last matching rule wins: a later deny overrides an earlier allow ⇒ that tool denied", () => {
     // edit allow then edit deny ⇒ edit resolves deny; with all others denied too ⇒ read-only.
     const rules = [

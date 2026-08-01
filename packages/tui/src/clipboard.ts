@@ -1,8 +1,10 @@
 import { execFile, spawn } from "node:child_process"
 import { readFile, rm } from "node:fs/promises"
-import { platform, release, tmpdir } from "node:os"
+import { platform, release } from "node:os"
 import path from "node:path"
 import { promisify } from "node:util"
+import { randomUUID } from "node:crypto"
+import { Global } from "@deepagent-code/core/global"
 
 const exec = promisify(execFile)
 
@@ -28,7 +30,7 @@ function writeOsc52(text: string) {
 
 export async function read() {
   if (platform() === "darwin") {
-    const file = path.join(tmpdir(), "deepagent-code-clipboard.png")
+    const file = path.join(Global.Path.tmp, `clipboard-${randomUUID()}.png`)
     try {
       await exec("osascript", [
         "-e",

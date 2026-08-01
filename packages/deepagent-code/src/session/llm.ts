@@ -195,6 +195,14 @@ export type StreamInput = {
   retries?: number
   toolChoice?: "auto" | "required" | "none"
   reasoning?: "inherit" | "disabled"
+  /** One ephemeral request-tail payload assembled with round/plan context. Never persisted in history. */
+  runtimeTail?: string
+  /** The federated resolver owns Knowledge/Memory projection for this turn. */
+  federatedProjection?: boolean
+  /** Aggregate-only shadow evidence. It is observed locally and never sent to the Provider. */
+  federatedShadow?: Readonly<Record<"code" | "knowledge" | "memory" | "documents", number>>
+  /** A durable attempt owns retry safety for this request; provider-internal retries must stay disabled. */
+  durableAttempt?: boolean
 }
 
 export type StreamRequest = StreamInput & {
@@ -614,7 +622,7 @@ const live: Layer.Layer<
           maxOutputTokens: prepared.params.maxOutputTokens,
           abortSignal: input.abort,
           headers: prepared.headers,
-          maxRetries: providerMaxRetries ?? input.retries ?? 0,
+          maxRetries: input.durableAttempt ? 0 : providerMaxRetries ?? input.retries ?? 0,
           messages: prepared.messages,
           model: wrapLanguageModel({
             model: language,

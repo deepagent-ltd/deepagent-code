@@ -1,5 +1,14 @@
 # Changelog
 
+## Desktop 1.4.4 / DeepAgent Core V4.0.5 - Durable context and collaboration
+
+- Persist AgentExecution claims, leases, generations, resource locks, token debits, terminal metadata, and handoffs for event-driven multi-Agent work.
+- Complete the production `task` and `pr_finalize` path with canonical worktrees, SHA-bound reviews, serialized `--no-ff` merges, Senior Reviewer closure, resume, takeover, and cleanup fencing.
+- Connect federated context, Location-owned code/document indexes, Context Epoch selection, and durable Session continuation without bridging through an in-memory orchestration loop.
+- Unify private filesystem storage for Core, CLI, Desktop, WSL, databases, logs, caches, and temporary files under `~/.deepagent/code/` while keeping native secret values in the OS credential store.
+- Expand the DeepSeek real-LLM matrix to cover prompt-cache retention, sandboxed Python verifiers, parallel workers, complete Git/PR collaboration, V4 event runtime, strength inheritance, resume/takeover, and autonomous EVAL scoring.
+- Release Desktop 1.4.4 with application version displays, updater metadata, Desktop release tags, and GitHub Action references aligned to the published versions.
+
 ## Desktop 1.4.3 / DeepAgent Core V4.0.4_r8 - Production reliability release
 
 - Persist the complete TaskRun lifecycle, including exact-retry admission, generation, owner/lease fencing, phase changes, terminal compare-and-set, result references, and a leased notification outbox.
