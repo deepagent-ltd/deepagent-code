@@ -425,13 +425,13 @@ export const toModelMessagesEffect = Effect.fnUntraced(function* (
             })
         }
         if (part.type === "reasoning") {
-          // PR-1: Only include reasoning for active (non-settled) assistant messages.
-          // A settled message has id <= terminalBoundaryID (the most recent terminal
-          // assistant in history). This applies to both same-model (signed thinking)
-          // and cross-model (text conversion), satisfying provider replay constraints.
+          // Same-model reasoning is part of the append-only provider prefix. Removing it when a
+          // later terminal message settles rewrites history and invalidates the prompt cache.
+          // Cross-model projection has no reusable provider cache and can still drop settled
+          // reasoning to avoid feeding another model's chain of thought back as ordinary text.
           const isActive = !options?.terminalBoundaryID || msg.info.id > options.terminalBoundaryID
-          if (!isActive) continue
           if (differentModel) {
+            if (!isActive) continue
             if (part.text.trim().length > 0)
               assistantMessage.parts.push({
                 type: "text",

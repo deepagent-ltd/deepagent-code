@@ -3,6 +3,8 @@ import { which } from "@deepagent-code/core/util/which"
 import { PAP } from "@/profile/pap"
 import { Vocabulary } from "@/profile/vocabulary"
 import { RuntimeBase } from "@/runtime/base"
+import { Global } from "@deepagent-code/core/global"
+import path from "node:path"
 
 const log = Log.create({ service: "profile.ncu" })
 
@@ -53,7 +55,12 @@ export const ncuMapping: PAP.MetricMapping = {
     // activity, not all vector ALU paths. §P1A-V 映射原则 2.
     { neutral: "valu_utilization_pct", native: N.valuUtilization, semantic: "approximate" },
     // ncu has NO direct scalar ALU busy metric — salu_busy_pct is AMD-native. §P1A-V 表1.
-    { neutral: "salu_busy_pct", native: null, reason: "metric_not_in_this_profiler", detail: "ncu has no scalar ALU busy metric; SALUBusy is AMD-native" },
+    {
+      neutral: "salu_busy_pct",
+      native: null,
+      reason: "metric_not_in_this_profiler",
+      detail: "ncu has no scalar ALU busy metric; SALUBusy is AMD-native",
+    },
     { neutral: "duration_ns", native: N.duration, semantic: "exact" },
     // compute_bound is PAP-derived: compute throughput > memory throughput by threshold.
     {
@@ -104,9 +111,14 @@ function splitCsvRow(row: string): string[] {
   let inQuote = false
   for (let i = 0; i < row.length; i++) {
     const ch = row[i]!
-    if (ch === '"') { inQuote = !inQuote }
-    else if (ch === "," && !inQuote) { cols.push(cur); cur = "" }
-    else { cur += ch }
+    if (ch === '"') {
+      inQuote = !inQuote
+    } else if (ch === "," && !inQuote) {
+      cols.push(cur)
+      cur = ""
+    } else {
+      cur += ch
+    }
   }
   cols.push(cur)
   return cols
@@ -119,7 +131,10 @@ export class NcuAdapter implements PAP.ProfileAdapter {
   readonly vendor = "nvidia" as const
   readonly domain = "gpu_kernel" as const
   readonly privileges: readonly RuntimeBase.PrivilegeSpec[] = [
-    { kind: "gpu_performance_counter", reason: "ncu needs GPU hardware performance counters (requires NVIDIA driver permission or admin)" },
+    {
+      kind: "gpu_performance_counter",
+      reason: "ncu needs GPU hardware performance counters (requires NVIDIA driver permission or admin)",
+    },
   ]
   readonly mapping = ncuMapping
 
@@ -132,11 +147,14 @@ export class NcuAdapter implements PAP.ProfileAdapter {
       log.info(msg)
       return Promise.reject(new Error(msg))
     }
-    const outPath = `/tmp/deepagent-ncu-${Date.now()}`
+    const outPath = path.join(Global.Path.tmp, `profile-ncu-${Date.now()}`)
     const args = [
-      "--set", "full",
-      "--target-processes", "all",
-      "-o", outPath,
+      "--set",
+      "full",
+      "--target-processes",
+      "all",
+      "-o",
+      outPath,
       "--",
       target.command,
       ...(target.args ?? []),
@@ -173,7 +191,9 @@ export class NcuAdapter implements PAP.ProfileAdapter {
       const { Process } = await import("@/util/process")
       const result = await Process.run([bin, "--import", report.path, "--csv"], { nothrow: true })
       if (result.code !== 0) {
-        return Promise.reject(new Error(`ncu --import failed (code ${result.code}): ${result.stderr.toString().trim()}`))
+        return Promise.reject(
+          new Error(`ncu --import failed (code ${result.code}): ${result.stderr.toString().trim()}`),
+        )
       }
       csvText = result.stdout.toString()
     }
@@ -193,9 +213,7 @@ export class NcuAdapter implements PAP.ProfileAdapter {
 
     // Build a summary from the first (or aggregated) kernel's metrics.
     const firstKernel = hotspots[0]
-    const nativeSummary: Record<string, number | string> = firstKernel
-      ? { ...firstKernel.nativeMetrics }
-      : {}
+    const nativeSummary: Record<string, number | string> = firstKernel ? { ...firstKernel.nativeMetrics } : {}
 
     return {
       adapterId: this.id,
@@ -229,40 +247,50 @@ export class NcuAdapter implements PAP.ProfileAdapter {
     const valuPct = getNative(ns, N.valuUtilization)
     const durationRaw = getNative(ns, N.duration)
 
-    summary["compute_throughput_pct"] = computePct !== undefined
-      ? PAP.present(computePct, "pct", { nativeMetric: N.computeThroughput, semantic: "exact" })
-      : PAP.missing("not_collected")
+    summary["compute_throughput_pct"] =
+      computePct !== undefined
+        ? PAP.present(computePct, "pct", { nativeMetric: N.computeThroughput, semantic: "exact" })
+        : PAP.missing("not_collected")
 
-    summary["memory_throughput_pct"] = memPct !== undefined
-      ? PAP.present(memPct, "pct", { nativeMetric: N.memoryThroughput, semantic: "exact" })
-      : PAP.missing("not_collected")
+    summary["memory_throughput_pct"] =
+      memPct !== undefined
+        ? PAP.present(memPct, "pct", { nativeMetric: N.memoryThroughput, semantic: "exact" })
+        : PAP.missing("not_collected")
 
-    summary["dram_bandwidth_pct"] = dramPct !== undefined
-      ? PAP.present(dramPct, "pct", { nativeMetric: N.dramBandwidth, semantic: "exact" })
-      : PAP.missing("not_collected")
+    summary["dram_bandwidth_pct"] =
+      dramPct !== undefined
+        ? PAP.present(dramPct, "pct", { nativeMetric: N.dramBandwidth, semantic: "exact" })
+        : PAP.missing("not_collected")
 
-    summary["l2_throughput_pct"] = l2Pct !== undefined
-      ? PAP.present(l2Pct, "pct", { nativeMetric: N.l2Throughput, semantic: "exact" })
-      : PAP.missing("not_collected")
+    summary["l2_throughput_pct"] =
+      l2Pct !== undefined
+        ? PAP.present(l2Pct, "pct", { nativeMetric: N.l2Throughput, semantic: "exact" })
+        : PAP.missing("not_collected")
 
-    summary["occupancy_pct"] = occPct !== undefined
-      ? PAP.present(occPct, "pct", { nativeMetric: N.occupancy, semantic: "exact" })
-      : PAP.missing("not_collected")
+    summary["occupancy_pct"] =
+      occPct !== undefined
+        ? PAP.present(occPct, "pct", { nativeMetric: N.occupancy, semantic: "exact" })
+        : PAP.missing("not_collected")
 
-    summary["valu_utilization_pct"] = valuPct !== undefined
-      ? PAP.present(valuPct, "pct", {
-          nativeMetric: N.valuUtilization,
-          semantic: "approximate", // FMA pipe ≠ all vector ALU paths
-        })
-      : PAP.missing("not_collected")
+    summary["valu_utilization_pct"] =
+      valuPct !== undefined
+        ? PAP.present(valuPct, "pct", {
+            nativeMetric: N.valuUtilization,
+            semantic: "approximate", // FMA pipe ≠ all vector ALU paths
+          })
+        : PAP.missing("not_collected")
 
     // salu_busy_pct: ncu has no scalar ALU busy metric — honest null.
-    summary["salu_busy_pct"] = PAP.missing("metric_not_in_this_profiler", "ncu has no scalar ALU busy metric; SALUBusy is AMD-native")
+    summary["salu_busy_pct"] = PAP.missing(
+      "metric_not_in_this_profiler",
+      "ncu has no scalar ALU busy metric; SALUBusy is AMD-native",
+    )
 
     // duration_ns: ncu reports in nanoseconds (gpu__time_duration.sum unit = ns).
-    summary["duration_ns"] = durationRaw !== undefined
-      ? PAP.present(durationRaw, "ns", { nativeMetric: N.duration, semantic: "exact" })
-      : PAP.missing("not_collected")
+    summary["duration_ns"] =
+      durationRaw !== undefined
+        ? PAP.present(durationRaw, "ns", { nativeMetric: N.duration, semantic: "exact" })
+        : PAP.missing("not_collected")
 
     // compute_bound: PAP-derived boolean — compute throughput strictly exceeds memory.
     if (computePct !== undefined && memPct !== undefined) {
@@ -294,40 +322,52 @@ export class NcuAdapter implements PAP.ProfileAdapter {
       const selfPct =
         h.self_pct ?? (totalDurationNs > 0 && durForSelf !== undefined ? (durForSelf / totalDurationNs) * 100 : 0)
       const metrics: Record<string, PAP.MetricValue> = {
-        compute_throughput_pct: cPct !== undefined
-          ? PAP.present(cPct, "pct", { nativeMetric: N.computeThroughput, semantic: "exact" })
-          : PAP.missing("not_collected"),
-        memory_throughput_pct: mPct !== undefined
-          ? PAP.present(mPct, "pct", { nativeMetric: N.memoryThroughput, semantic: "exact" })
-          : PAP.missing("not_collected"),
+        compute_throughput_pct:
+          cPct !== undefined
+            ? PAP.present(cPct, "pct", { nativeMetric: N.computeThroughput, semantic: "exact" })
+            : PAP.missing("not_collected"),
+        memory_throughput_pct:
+          mPct !== undefined
+            ? PAP.present(mPct, "pct", { nativeMetric: N.memoryThroughput, semantic: "exact" })
+            : PAP.missing("not_collected"),
         dram_bandwidth_pct: (() => {
           const v = getNative(nm, N.dramBandwidth)
-          return v !== undefined ? PAP.present(v, "pct", { nativeMetric: N.dramBandwidth, semantic: "exact" }) : PAP.missing("not_collected")
+          return v !== undefined
+            ? PAP.present(v, "pct", { nativeMetric: N.dramBandwidth, semantic: "exact" })
+            : PAP.missing("not_collected")
         })(),
         l2_throughput_pct: (() => {
           const v = getNative(nm, N.l2Throughput)
-          return v !== undefined ? PAP.present(v, "pct", { nativeMetric: N.l2Throughput, semantic: "exact" }) : PAP.missing("not_collected")
+          return v !== undefined
+            ? PAP.present(v, "pct", { nativeMetric: N.l2Throughput, semantic: "exact" })
+            : PAP.missing("not_collected")
         })(),
         occupancy_pct: (() => {
           const v = getNative(nm, N.occupancy)
-          return v !== undefined ? PAP.present(v, "pct", { nativeMetric: N.occupancy, semantic: "exact" }) : PAP.missing("not_collected")
+          return v !== undefined
+            ? PAP.present(v, "pct", { nativeMetric: N.occupancy, semantic: "exact" })
+            : PAP.missing("not_collected")
         })(),
         valu_utilization_pct: (() => {
           const v = getNative(nm, N.valuUtilization)
-          return v !== undefined ? PAP.present(v, "pct", { nativeMetric: N.valuUtilization, semantic: "approximate" }) : PAP.missing("not_collected")
+          return v !== undefined
+            ? PAP.present(v, "pct", { nativeMetric: N.valuUtilization, semantic: "approximate" })
+            : PAP.missing("not_collected")
         })(),
         salu_busy_pct: PAP.missing("metric_not_in_this_profiler", "ncu has no scalar ALU busy metric"),
-        duration_ns: dur !== undefined
-          ? PAP.present(dur, "ns", { nativeMetric: N.duration, semantic: "exact" })
-          : PAP.missing("not_collected"),
-        compute_bound: (cPct !== undefined && mPct !== undefined)
-          ? PAP.present(cPct > mPct, "bool", {
-              nativeMetric: [N.computeThroughput, N.memoryThroughput],
-              semantic: "exact",
-              derived: true,
-              formula: "compute_throughput_pct > memory_throughput_pct",
-            })
-          : PAP.missing("not_collected", "compute or memory throughput missing"),
+        duration_ns:
+          dur !== undefined
+            ? PAP.present(dur, "ns", { nativeMetric: N.duration, semantic: "exact" })
+            : PAP.missing("not_collected"),
+        compute_bound:
+          cPct !== undefined && mPct !== undefined
+            ? PAP.present(cPct > mPct, "bool", {
+                nativeMetric: [N.computeThroughput, N.memoryThroughput],
+                semantic: "exact",
+                derived: true,
+                formula: "compute_throughput_pct > memory_throughput_pct",
+              })
+            : PAP.missing("not_collected", "compute or memory throughput missing"),
       }
       return {
         kernel: h.name,
@@ -351,5 +391,4 @@ export class NcuAdapter implements PAP.ProfileAdapter {
   }
 }
 
-export const makeNcuAdapter = (probe: NcuBinaryProbe = defaultNcuProbe): PAP.ProfileAdapter =>
-  new NcuAdapter(probe)
+export const makeNcuAdapter = (probe: NcuBinaryProbe = defaultNcuProbe): PAP.ProfileAdapter => new NcuAdapter(probe)

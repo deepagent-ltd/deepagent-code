@@ -184,8 +184,8 @@ const loadState = Effect.fn("TuiConfig.loadState")(function* (ctx: { directory: 
       acc.plugin_origins = plugins
     })
 
-  // Every config dir we may read from: global config dir, any `.deepagent-code`
-  // folders between cwd and home, and DEEPAGENT_CODE_CONFIG_DIR.
+  // Every config dir we may read from: global config dir and project-owned `.deepagent-code`
+  // folders between cwd and home.
   const directories = yield* ConfigPaths.directories(ctx.directory)
   yield* Effect.promise(() => migrateTuiConfig({ directories, cwd: ctx.directory }))
 
@@ -213,15 +213,11 @@ const loadState = Effect.fn("TuiConfig.loadState")(function* (ctx: { directory: 
     yield* mergeFile(acc, file)
   }
 
-  // 4. `.deepagent-code` directories (and DEEPAGENT_CODE_CONFIG_DIR) discovered while
-  // walking up the tree. Also returned below so callers can install plugin
-  // dependencies from each location.
-  const dirs = unique(directories).filter(
-    (dir) => dir.endsWith(".deepagent-code") || dir === Flag.DEEPAGENT_CODE_CONFIG_DIR,
-  )
+  // 4. Project-owned `.deepagent-code` directories discovered while walking up the tree. Also
+  // returned below so callers can install plugin dependencies from each location.
+  const dirs = unique(directories).filter((dir) => dir.endsWith(".deepagent-code"))
 
   for (const dir of dirs) {
-    if (!dir.endsWith(".deepagent-code") && dir !== Flag.DEEPAGENT_CODE_CONFIG_DIR) continue
     for (const file of ConfigPaths.fileInDirectory(dir, "tui")) {
       yield* mergeFile(acc, file)
     }

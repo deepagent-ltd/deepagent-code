@@ -1163,6 +1163,112 @@ describe("session.message-v2.toModelMessage", () => {
     ])
   })
 
+  test("preserves settled same-model reasoning so a new user turn keeps the cached prefix", async () => {
+    const anthropicModel: Provider.Model = {
+      ...model,
+      id: ModelV2.ID.make("kimi-k3"),
+      providerID: ProviderV2.ID.make("kimi-for-coding"),
+      api: {
+        id: "kimi-k3",
+        url: "https://api.kimi.com/coding/v1",
+        npm: "@ai-sdk/anthropic",
+      },
+      capabilities: {
+        ...model.capabilities,
+        reasoning: true,
+      },
+    }
+    const firstUserID = "msg_001"
+    const reasoningID = "msg_002"
+    const terminalID = "msg_003"
+    const input: SessionV1.WithParts[] = [
+      {
+        info: userInfo(firstUserID),
+        parts: [{ ...basePart(firstUserID, "p1"), type: "text", text: "start" }] as SessionV1.Part[],
+      },
+      {
+        info: assistantInfo(reasoningID, firstUserID, undefined, {
+          providerID: anthropicModel.providerID,
+          modelID: anthropicModel.id,
+        }),
+        parts: [
+          {
+            ...basePart(reasoningID, "p2"),
+            type: "reasoning",
+            text: "signed reasoning",
+            time: { start: 0, end: 1 },
+            metadata: { anthropic: { signature: "stable-signature" } },
+          },
+          { ...basePart(reasoningID, "p3"), type: "text", text: "working" },
+        ] as SessionV1.Part[],
+      },
+    ]
+    const active = await MessageV2.toModelMessages(input, anthropicModel, {
+      terminalBoundaryID: MessageID.make("msg_000"),
+    })
+    const settled = await MessageV2.toModelMessages(
+      [
+        ...input,
+        {
+          info: assistantInfo(terminalID, firstUserID, undefined, {
+            providerID: anthropicModel.providerID,
+            modelID: anthropicModel.id,
+          }),
+          parts: [{ ...basePart(terminalID, "p4"), type: "text", text: "done" }] as SessionV1.Part[],
+        },
+        {
+          info: userInfo("msg_004"),
+          parts: [{ ...basePart("msg_004", "p5"), type: "text", text: "continue" }] as SessionV1.Part[],
+        },
+      ],
+      anthropicModel,
+      { terminalBoundaryID: MessageID.make(terminalID) },
+    )
+
+    expect(settled.slice(0, active.length)).toStrictEqual(active)
+    expect(settled[1]).toMatchObject({
+      role: "assistant",
+      content: [
+        {
+          type: "reasoning",
+          text: "signed reasoning",
+          providerOptions: { anthropic: { signature: "stable-signature" } },
+        },
+        { type: "text", text: "working" },
+      ],
+    })
+  })
+
+  test("still drops settled reasoning when projecting history to a different model", async () => {
+    const assistantID = "msg_002"
+    const input: SessionV1.WithParts[] = [
+      {
+        info: assistantInfo(assistantID, "msg_001", undefined, {
+          providerID: "other-provider",
+          modelID: "other-model",
+        }),
+        parts: [
+          {
+            ...basePart(assistantID, "p1"),
+            type: "reasoning",
+            text: "other model reasoning",
+            time: { start: 0, end: 1 },
+          },
+          { ...basePart(assistantID, "p2"), type: "text", text: "answer" },
+        ] as SessionV1.Part[],
+      },
+    ]
+
+    expect(
+      await MessageV2.toModelMessages(input, model, { terminalBoundaryID: MessageID.make(assistantID) }),
+    ).toStrictEqual([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "answer" }],
+      },
+    ])
+  })
+
   test("splits assistant messages on step-start boundaries", async () => {
     const assistantID = "m-assistant"
 

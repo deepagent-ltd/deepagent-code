@@ -1,7 +1,10 @@
-import os from "node:os"
 import path from "node:path"
+import { mkdir } from "node:fs/promises"
 import { buffer } from "node:stream/consumers"
+import { Global } from "@deepagent-code/core/global"
+import { DEFAULT_WORKER_IDENTITY } from "@/agent/collaboration-identity"
 import { Process } from "@/util/process"
+import { Filesystem } from "@/util/filesystem"
 
 // V4.0 §C3.2 (P4.5a) — PHYSICAL per-agent worktree isolation for the event-driven turn runner.
 //
@@ -17,12 +20,10 @@ import { Process } from "@/util/process"
 // temp-dir worktrees created + torn down inside one dispatch turn — and the SubagentTurnRunner effect has
 // no service (R) channel to require a service through.
 //
-// FAIL-SAFE CONTRACT: createAgentWorktree returns null on ANY failure (not a git repo, git missing, add
-// failed) — the caller then FALLS BACK to running in the event directory (the prior behavior), never
-// failing the turn. cleanupAgentWorktree preserves the agent's work: uncommitted changes are committed to
-// the branch (so results are recoverable) BEFORE the working dir is removed; a branch with committed work
-// is KEPT; a genuinely-clean turn removes both the worktree and its throwaway branch. If work exists but
-// could not be committed, the worktree dir is LEFT ON DISK (recoverable) rather than force-removed.
+// FAIL-SAFE CONTRACT: createAgentWorktree returns null on ANY failure. The caller decides whether a
+// read-only turn may degrade to the event directory or a write turn must fail closed. Cleanup returns a
+// durable continuation ref only after it has proved the branch state recoverable. Uncertain git state is
+// never force-removed.
 
 export type AgentWorktree = {
   /** The isolated working directory the agent turn should run in. */
@@ -33,6 +34,13 @@ export type AgentWorktree = {
   readonly repoRoot: string
   /** The commit HEAD pointed at when the worktree was created (the recoverability baseline). */
   readonly baseSha: string
+}
+
+export type AgentWorktreeCleanup = {
+  /** Ref dependent agent turns must use as their base. A clean turn continues from baseSha. */
+  readonly continuationRef: string
+  /** Source-control artifacts suitable for AgentCoordinationEvent persistence. */
+  readonly artifacts: ReadonlyArray<string>
 }
 
 const GIT_TIMEOUT_MS = 30_000
@@ -96,6 +104,8 @@ const randomSuffix = (): string => Math.random().toString(36).slice(2, 10)
 export const createAgentWorktree = async (input: {
   readonly eventDirectory: string
   readonly label: string
+  /** Optional upstream dependency ref. Omitted means the repository's current HEAD. */
+  readonly baseRef?: string
 }): Promise<AgentWorktree | null> => {
   // 1) Only a real git repo can host a worktree. rev-parse --show-toplevel resolves the repo root and
   //    simultaneously proves the directory is inside a work tree. Any failure ⇒ fall back.
@@ -106,14 +116,15 @@ export const createAgentWorktree = async (input: {
 
   // 2) Capture the baseline commit so cleanup can tell "the agent produced recoverable work" (branch
   //    advanced past base) from "nothing happened" (delete the throwaway branch).
-  const head = await git(["rev-parse", "HEAD"], repoRoot)
+  const head = await git(["rev-parse", input.baseRef ?? "HEAD"], repoRoot)
   if (!head || head.code !== 0) return null
   const baseSha = head.stdout.trim()
   if (!baseSha) return null
 
   const rand = randomSuffix()
   const branch = `agent/${slugifyLabel(input.label)}-${rand}`
-  const directory = path.join(os.tmpdir(), `deepagent-agent-wt-${rand}`)
+  const directory = path.join(Global.Path.agent.tmp, `worktree-${rand}`)
+  await mkdir(Global.Path.agent.tmp, { recursive: true })
 
   // 3) Create the worktree on a NEW branch checked out from the current HEAD. This physically clones the
   //    working tree into an isolated directory — the whole point of §C3.2.
@@ -125,7 +136,7 @@ export const createAgentWorktree = async (input: {
     return null
   }
 
-  return { directory, branch, repoRoot, baseSha }
+  return { directory: Filesystem.resolve(directory), branch, repoRoot: Filesystem.resolve(repoRoot), baseSha }
 }
 
 /**
@@ -137,35 +148,50 @@ export const createAgentWorktree = async (input: {
  *   - If work exists but could NOT be committed, the worktree dir is LEFT ON DISK (recoverable) rather
  *     than force-removed — losing work is worse than leaking a temp dir.
  */
-export const cleanupAgentWorktree = async (wt: AgentWorktree): Promise<void> => {
-  // Detect uncommitted work.
+export const cleanupAgentWorktree = async (wt: AgentWorktree): Promise<AgentWorktreeCleanup | null> => {
+  // Detect uncommitted work. An unreadable status is uncertain state: leave everything recoverable.
   const status = await git(["status", "--porcelain"], wt.directory)
-  const hasUncommitted = status != null && status.code === 0 && status.stdout.trim().length > 0
+  if (!status || status.code !== 0) return null
+  const hasUncommitted = status.stdout.trim().length > 0
 
-  let commitFailed = false
   if (hasUncommitted) {
     const add = await git(["add", "-A"], wt.directory)
     const commit =
       add && add.code === 0
-        ? await git(["commit", "--no-verify", "-m", "agent turn work (auto-preserved)"], wt.directory)
+        ? await git(
+            [
+              "-c",
+              `user.name=${DEFAULT_WORKER_IDENTITY.name}`,
+              "-c",
+              `user.email=${DEFAULT_WORKER_IDENTITY.email}`,
+              "commit",
+              "--no-gpg-sign",
+              "--no-verify",
+              "-m",
+              "agent turn work (auto-preserved)",
+            ],
+            wt.directory,
+          )
         : null
-    commitFailed = !commit || commit.code !== 0
+    if (!commit || commit.code !== 0) return null
   }
-
-  // If we could not preserve uncommitted work, DO NOT force-remove — leave the tree on disk so the work
-  // is recoverable. Keep the branch too.
-  if (hasUncommitted && commitFailed) return
 
   // Does the branch hold recoverable commits (advanced past baseline)?
   const ahead = await git(["rev-list", "--count", `${wt.baseSha}..${wt.branch}`], wt.repoRoot)
+  if (!ahead || ahead.code !== 0) return null
   const hasWork = ahead != null && ahead.code === 0 && Number(ahead.stdout.trim()) > 0
 
   // Remove the working directory (its work, if any, is now committed on the branch).
-  await git(["worktree", "remove", "--force", wt.directory], wt.repoRoot)
+  const removed = await git(["worktree", "remove", "--force", wt.directory], wt.repoRoot)
 
-  // Delete the throwaway branch ONLY when it carries no recoverable work.
-  if (!hasWork) {
+  // Delete the throwaway branch ONLY when it carries no recoverable work and the worktree was removed.
+  if (!hasWork && removed?.code === 0) {
     await git(["branch", "-D", wt.branch], wt.repoRoot)
+  }
+
+  return {
+    continuationRef: hasWork ? wt.branch : wt.baseSha,
+    artifacts: hasWork ? [`git-ref:${wt.branch}`] : [`git-ref:${wt.baseSha}`],
   }
 }
 
