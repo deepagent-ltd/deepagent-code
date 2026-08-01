@@ -1,7 +1,7 @@
 import { mkdirSync, readdirSync, readFileSync, existsSync } from "node:fs"
 import { createHash } from "node:crypto"
 import path from "node:path"
-import { writeFileAtomic, writeFileExclusive } from "./atomic-write"
+import { writeFileAtomic, writeFileExclusive, writeRecoverableFileExclusive } from "./atomic-write"
 
 // V3 Document System (docs/28): the bedrock. All persistent state is a typed-document
 // graph — small files, content-addressed, append-only with a supersede chain, bidirectional
@@ -368,6 +368,26 @@ export class DocumentStore {
     return next
   }
 
+  // Trusted built-in corpus files are recoverable from the packaged domain packs. New seeds can
+  // therefore skip per-file fsync while retaining atomic visibility; updates still use the normal
+  // append-only durable path so shipped corpus revisions preserve version history.
+  seedActive(input: CreateDocInput): Doc {
+    const cur = this.findLogical(input)
+    if (cur) {
+      const doc = this.upsert(input)
+      if (doc.status !== "active") this.setStatus(doc.id, "active")
+      return this.get(doc.id)!
+    }
+
+    const id = this.allocateId(input.type, input.domain ?? null, input.idSlug, input.description)
+    let doc = { ...this.docFromInput(id, 1, input), status: "active" as const }
+    this.assertKnowledgeConfidence(doc)
+    this.assertLinkTargets(doc.links)
+    doc = { ...doc, hash: computeHash(doc) }
+    this.persistRecoverable(doc)
+    return doc
+  }
+
   update(id: string, body: string, links?: readonly DocLink[]): Doc {
     const cur = this.get(id)
     if (!cur) throw new Error(`update: unknown doc ${id}`)
@@ -604,6 +624,20 @@ export class DocumentStore {
         return
       }
       throw new DocumentConflictError(doc.id, doc.version, existing?.hash ?? "<unreadable>", doc.hash)
+    }
+    this.indexDoc(doc)
+  }
+  private persistRecoverable(doc: Doc): void {
+    const dir = path.join(this.root, "docs", doc.type)
+    mkdirSync(dir, { recursive: true })
+    const file = path.join(dir, `${idToFile(doc.id)}@v${doc.version}.json`)
+    try {
+      writeRecoverableFileExclusive(file, JSON.stringify(doc, null, 2))
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException)?.code !== "EEXIST") throw error
+      const existing = this.readVersionFile(file)
+      if (!existing || existing.hash !== doc.hash)
+        throw new DocumentConflictError(doc.id, doc.version, existing?.hash ?? "<unreadable>", doc.hash)
     }
     this.indexDoc(doc)
   }

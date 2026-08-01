@@ -1,4 +1,14 @@
-import { closeSync, fsyncSync, mkdirSync, openSync, renameSync, rmSync, writeSync } from "node:fs"
+import {
+  closeSync,
+  fsyncSync,
+  linkSync,
+  mkdirSync,
+  openSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+  writeSync,
+} from "node:fs"
 import { randomUUID } from "node:crypto"
 import path from "node:path"
 
@@ -66,6 +76,20 @@ export const writeFileExclusive = (file: string, content: string): void => {
       }
     }
     throw error
+  }
+}
+
+// Built-in domain-pack seeds are immutable packaged inputs and can be regenerated after a crash.
+// Keep each visible file atomic, but avoid two fsyncs per seed during first-run corpus installation.
+export const writeRecoverableFileExclusive = (file: string, content: string): void => {
+  const dir = path.dirname(file)
+  mkdirSync(dir, { recursive: true })
+  const tmp = path.join(dir, `.${path.basename(file)}.seed-${process.pid}-${randomUUID()}`)
+  try {
+    writeFileSync(tmp, content, "utf8")
+    linkSync(tmp, file)
+  } finally {
+    rmSync(tmp, { force: true })
   }
 }
 
