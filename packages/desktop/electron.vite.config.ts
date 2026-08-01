@@ -39,7 +39,7 @@ export default defineConfig(({ command }) => ({
       rollupOptions: {
         input: { index: "src/main/index.ts", sidecar: "src/main/sidecar.ts" },
       },
-      externalizeDeps: { include: ["@lydell/node-pty"] },
+      externalizeDeps: { exclude: ["@deepagent-code/core"], include: ["@lydell/node-pty"] },
     },
     plugins: [
       {
