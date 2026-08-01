@@ -7,8 +7,7 @@ const cache = new Map<string, Store>()
 
 // We cannot instantiate the electron-store at module load time because
 // module import hoisting causes this to run before app.setPath("userData", ...)
-// in index.ts has executed, which would result in files being written to the default directory
-// (e.g. bad: %APPDATA%\@deepagent-code\desktop\deepagentCode.settings vs good: %APPDATA%\ai.deepagent-code.desktop.dev\deepagentCode.settings).
+// in index.ts has executed, which would result in files being written outside the canonical root.
 export function getStore(name = SETTINGS_STORE) {
   const cached = cache.get(name)
   if (cached) return cached

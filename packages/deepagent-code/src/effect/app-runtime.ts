@@ -95,7 +95,7 @@ export const AppLayer = Layer.mergeAll(
   MCP.defaultLayer,
   McpAuth.defaultLayer,
   Command.defaultLayer,
-  Truncate.defaultLayer,
+  Truncate.configuredLayer,
   ToolRegistry.defaultLayer,
   Format.defaultLayer,
   Project.defaultLayer,

@@ -306,7 +306,7 @@ export async function resolveWslDeepagentCode(distro: string, opts?: RunWslOptio
   return firstLine(
     (
       await runWslSh(
-        'if [ -x "$HOME/.deepagent-code/bin/deepagent-code" ]; then printf "%s\\n" "$HOME/.deepagent-code/bin/deepagent-code"; fi',
+        'if [ -x "$HOME/.deepagent/code/bin/deepagent-code" ]; then printf "%s\\n" "$HOME/.deepagent/code/bin/deepagent-code"; fi',
         distro,
         opts,
       )

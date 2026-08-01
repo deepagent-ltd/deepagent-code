@@ -1,5 +1,6 @@
 import path from "path"
 import * as Log from "@deepagent-code/core/util/log"
+import { Global } from "@deepagent-code/core/global"
 import { PAP } from "@/profile/pap"
 
 const log = Log.create({ service: "profile.service" })
@@ -136,15 +137,15 @@ export namespace ProfileService {
   const GPU_LATENCY_OCCUPANCY_MAX = 33
 
   // CPU thresholds
-  const CPU_MEMORY_CACHE_MISS_THRESHOLD = 0.1    // ratio: > 10% miss rate → memory-bound
-  const CPU_COMPUTE_IPC_THRESHOLD = 2.0           // ipc > 2.0 → compute-bound
-  const CPU_COMPUTE_CACHE_MAX = 0.05              // cache_miss_rate < 5% (paired with high ipc)
-  const CPU_LATENCY_BRANCH_THRESHOLD = 10         // branch_misprediction_pct > 10% → latency
+  const CPU_MEMORY_CACHE_MISS_THRESHOLD = 0.1 // ratio: > 10% miss rate → memory-bound
+  const CPU_COMPUTE_IPC_THRESHOLD = 2.0 // ipc > 2.0 → compute-bound
+  const CPU_COMPUTE_CACHE_MAX = 0.05 // cache_miss_rate < 5% (paired with high ipc)
+  const CPU_LATENCY_BRANCH_THRESHOLD = 10 // branch_misprediction_pct > 10% → latency
 
   // GPU timeline thresholds
-  const TIMELINE_MEMORY_COPY_THRESHOLD = 30       // mem_copy_pct > 30% → memory-bound
-  const TIMELINE_API_OVERHEAD_THRESHOLD = 40      // api_overhead_pct > 40% → latency
-  const TIMELINE_COMPUTE_KERNEL_THRESHOLD = 80    // kernel_total_pct > 80% → compute-bound
+  const TIMELINE_MEMORY_COPY_THRESHOLD = 30 // mem_copy_pct > 30% → memory-bound
+  const TIMELINE_API_OVERHEAD_THRESHOLD = 40 // api_overhead_pct > 40% → latency
+  const TIMELINE_COMPUTE_KERNEL_THRESHOLD = 80 // kernel_total_pct > 80% → compute-bound
 
   // —— helpers ———————————————————————————————————————————————————————————————
 
@@ -205,7 +206,11 @@ export namespace ProfileService {
       const detail = buildGpuDetail({ computePct, memPct, dramPct, occPct })
       return { bound: "memory", detail: `memory-bound (${detail})`, derived: true }
     }
-    if (memPct !== undefined && memPct >= GPU_MEMORY_BOUND_THRESHOLD && (computePct === undefined || computePct < GPU_COMPUTE_BOUND_THRESHOLD)) {
+    if (
+      memPct !== undefined &&
+      memPct >= GPU_MEMORY_BOUND_THRESHOLD &&
+      (computePct === undefined || computePct < GPU_COMPUTE_BOUND_THRESHOLD)
+    ) {
       const detail = buildGpuDetail({ computePct, memPct, dramPct, occPct })
       return { bound: "memory", detail: `memory-bound (${detail})`, derived: true }
     }
@@ -215,15 +220,14 @@ export namespace ProfileService {
     }
     // No clear dominant limiter
     const detail = buildGpuDetail({ computePct, memPct, dramPct, occPct })
-    return { bound: "balanced", detail: `balanced (${detail || "no dominant bottleneck from available metrics"})`, derived: true }
+    return {
+      bound: "balanced",
+      detail: `balanced (${detail || "no dominant bottleneck from available metrics"})`,
+      derived: true,
+    }
   }
 
-  function buildGpuDetail(m: {
-    computePct?: number
-    memPct?: number
-    dramPct?: number
-    occPct?: number
-  }): string {
+  function buildGpuDetail(m: { computePct?: number; memPct?: number; dramPct?: number; occPct?: number }): string {
     const parts: string[] = []
     if (m.computePct !== undefined) parts.push(`compute_throughput_pct=${m.computePct.toFixed(1)}%`)
     if (m.memPct !== undefined) parts.push(`memory_throughput_pct=${m.memPct.toFixed(1)}%`)
@@ -272,7 +276,9 @@ export namespace ProfileService {
   function rooflineCpu(summary: Record<string, PAP.MetricValue>, hotspots: PAP.Hotspot[]): RooflineResult {
     // Try summary first; fall back to aggregate from top hotspot
     const ipc = numericMetric(summary, "ipc") ?? (hotspots[0] ? numericMetric(hotspots[0]!.metrics, "ipc") : undefined)
-    const cacheMiss = numericMetric(summary, "cache_miss_rate") ?? (hotspots[0] ? numericMetric(hotspots[0]!.metrics, "cache_miss_rate") : undefined)
+    const cacheMiss =
+      numericMetric(summary, "cache_miss_rate") ??
+      (hotspots[0] ? numericMetric(hotspots[0]!.metrics, "cache_miss_rate") : undefined)
     const memBound = numericMetric(summary, "memory_bound_pct")
     const dramBound = numericMetric(summary, "dram_bound_pct")
     const branchMisp = numericMetric(summary, "branch_misprediction_pct")
@@ -292,7 +298,11 @@ export namespace ProfileService {
     }
 
     // Compute-bound: high IPC + low cache miss
-    if (ipc !== undefined && ipc >= CPU_COMPUTE_IPC_THRESHOLD && (cacheMiss === undefined || cacheMiss < CPU_COMPUTE_CACHE_MAX)) {
+    if (
+      ipc !== undefined &&
+      ipc >= CPU_COMPUTE_IPC_THRESHOLD &&
+      (cacheMiss === undefined || cacheMiss < CPU_COMPUTE_CACHE_MAX)
+    ) {
       const parts = [`ipc=${ipc.toFixed(2)}`]
       if (cacheMiss !== undefined) parts.push(`cache_miss_rate=${(cacheMiss * 100).toFixed(1)}%`)
       return { bound: "compute", detail: `compute-bound (${parts.join(", ")})`, derived: true }
@@ -302,7 +312,11 @@ export namespace ProfileService {
     if (branchMisp !== undefined && branchMisp >= CPU_LATENCY_BRANCH_THRESHOLD) {
       const parts = [`branch_misprediction_pct=${branchMisp.toFixed(1)}%`]
       if (ipc !== undefined) parts.push(`ipc=${ipc.toFixed(2)}`)
-      return { bound: "latency", detail: `latency-bound (${parts.join(", ")}; branch mispredictions cause pipeline stalls)`, derived: true }
+      return {
+        bound: "latency",
+        detail: `latency-bound (${parts.join(", ")}; branch mispredictions cause pipeline stalls)`,
+        derived: true,
+      }
     }
 
     const parts: string[] = []
@@ -440,10 +454,7 @@ export namespace ProfileService {
    * such a metric silently mixes an exact and an approximate quantity, so callers
    * should treat it with the emitted caveat rather than as a clean measurement.
    */
-  function collectSemanticWarnings(
-    profileA: PAP.NormalizedProfile,
-    profileB: PAP.NormalizedProfile,
-  ): string[] {
+  function collectSemanticWarnings(profileA: PAP.NormalizedProfile, profileB: PAP.NormalizedProfile): string[] {
     const warnings: string[] = []
     const semanticOf = (m: PAP.MetricValue | undefined): PAP.Semantic | undefined =>
       m && PAP.isPresent(m) ? m.provenance.semantic : undefined
@@ -527,12 +538,15 @@ export namespace ProfileService {
           })
         }
       } catch (e) {
-        log.warn("ProfileService: failed to load compare_to; skipping diff", { path: options.compare_to, error: String(e) })
+        log.warn("ProfileService: failed to load compare_to; skipping diff", {
+          path: options.compare_to,
+          error: String(e),
+        })
       }
     }
 
     // Write artifact
-    const artifactDir = options?.artifactDir ?? (await import("os")).tmpdir()
+    const artifactDir = options?.artifactDir ?? path.join(Global.Path.agent.artifacts, "profile")
     const artifactPath = path.join(artifactDir, "PROFILE_RESULT.json")
 
     const artifact: ProfileArtifact = {

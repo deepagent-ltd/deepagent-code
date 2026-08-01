@@ -1,6 +1,6 @@
 // Opencode publish boundary for core events. Attach routed instance location
 // so direct EventV2 consumers can isolate directory/workspace streams.
-import { InstanceRef, WorkspaceRef } from "@/effect/instance-ref"
+import { EventRouteRef, InstanceRef, WorkspaceRef } from "@/effect/instance-ref"
 import { GlobalBus } from "@/bus/global"
 import { EventV2 } from "@deepagent-code/core/event"
 import { Location } from "@deepagent-code/core/location"
@@ -21,9 +21,10 @@ export const layer = Layer.effect(
     const publish: EventV2.Interface["publish"] = (definition, data, options) =>
       Effect.gen(function* () {
         if (options?.location) return yield* events.publish(definition, data, options)
-        const ctx = yield* InstanceRef
+        const route = yield* EventRouteRef
+        const ctx = route ?? (yield* InstanceRef)
         if (!ctx) return yield* events.publish(definition, data, options)
-        const workspaceID = yield* WorkspaceRef
+        const workspaceID = route?.workspaceID ?? (yield* WorkspaceRef)
         return yield* events.publish(definition, data, {
           ...options,
           location: new Location.Info({

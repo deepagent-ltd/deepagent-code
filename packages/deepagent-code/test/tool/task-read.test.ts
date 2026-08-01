@@ -12,6 +12,7 @@ import { Database } from "@deepagent-code/core/database/database"
 import { MessageID, PartID, SessionID } from "../../src/session/schema"
 import { ModelV2 } from "@deepagent-code/core/model"
 import { ProviderV2 } from "@deepagent-code/core/provider"
+import { SessionV1 } from "@deepagent-code/core/v1/session"
 import { TaskReadTool } from "../../src/tool/task_read"
 import { Truncate } from "@/tool/truncate"
 import { ToolRegistry } from "@/tool/registry"
@@ -74,6 +75,59 @@ const addTextMessage = (sessionID: SessionID, text: string, created = Date.now()
 const readTexts = (output: string) => [...output.matchAll(/<message[^>]*>\s*([^<]+?)\s*<\/message>/g)].map((match) => match[1])
 
 describe("tool.task_read", () => {
+  it.instance("preserves completed child tool output", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const parent = yield* sessions.create({ title: "Parent" })
+      const child = yield* sessions.create({ parentID: parent.id, agent: "researcher", title: "Research" })
+      const marker = `child-${crypto.randomUUID()}`
+      const user = yield* sessions.updateMessage({
+        id: MessageID.ascending(),
+        role: "user",
+        sessionID: child.id,
+        agent: "researcher",
+        model: { providerID: ProviderV2.ID.make("test"), modelID: ModelV2.ID.make("test") },
+        time: { created: Date.now() },
+      })
+      const assistant: SessionV1.Assistant = {
+        id: MessageID.ascending(),
+        role: "assistant",
+        parentID: user.id,
+        sessionID: child.id,
+        mode: "subagent",
+        agent: "researcher",
+        cost: 0,
+        path: { cwd: "/tmp", root: "/tmp" },
+        tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+        modelID: ModelV2.ID.make("test"),
+        providerID: ProviderV2.ID.make("test"),
+        time: { created: Date.now() },
+      }
+      yield* sessions.updateMessage(assistant)
+      yield* sessions.updatePart({
+        id: PartID.ascending(),
+        sessionID: child.id,
+        messageID: assistant.id,
+        type: "tool",
+        callID: "call-read",
+        tool: "read",
+        state: {
+          status: "completed",
+          input: { filePath: "fixtures/research.txt" },
+          output: marker,
+          title: "Read",
+          metadata: {},
+          time: { start: Date.now(), end: Date.now() },
+        },
+      })
+
+      const tool = yield* TaskReadTool
+      const result = yield* (yield* tool.init()).execute({ task_id: child.id, limit: 100 }, execCtx(parent.id))
+
+      expect(result.output).toContain(`<tool name="read" state="completed">${marker}</tool>`)
+    }),
+  )
+
   it.instance("pages 203 child messages through storage cursors without duplicates", () =>
     Effect.gen(function* () {
       const sessions = yield* Session.Service

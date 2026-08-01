@@ -5,6 +5,8 @@ import os from "node:os"
 import path from "node:path"
 import { spawn } from "node:child_process"
 import type { Stream } from "node:stream"
+import { randomUUID } from "node:crypto"
+import { Global } from "@deepagent-code/core/global"
 import { resolveZedDbPath, resolveZedSelection } from "./editor-zed"
 
 type EditorStdio = "inherit" | "pipe" | "ignore" | number | Stream
@@ -26,7 +28,7 @@ export function normalizePromptContent(content: string) {
 export async function openEditor(input: { value: string; renderer: CliRenderer; cwd?: string; stdin?: EditorStdio }) {
   const editor = process.env.VISUAL || process.env.EDITOR
   if (!editor) return
-  const file = path.join(os.tmpdir(), `${Date.now()}.md`)
+  const file = path.join(Global.Path.tmp, `editor-${randomUUID()}.md`)
   await writeFile(file, input.value)
   input.renderer.suspend()
   input.renderer.currentRenderBuffer.clear()

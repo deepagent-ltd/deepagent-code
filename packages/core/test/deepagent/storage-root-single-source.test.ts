@@ -3,14 +3,19 @@ import { resolveDeepAgentCodeHome } from "../../src/deepagent/workspace"
 
 // P0-0 guard: the DeepAgent storage root must be a SINGLE source of truth. resolveDeepAgentCodeHome
 // (used by the control plane) must compute the identical root as core's Global.Path resolution for
-// every env combination — DEEPAGENT_CODE_HOME wins, else <DEEPAGENT_CODE_TEST_HOME ?? homedir>/
-// .deepagent/code. Previously this resolver ignored TEST_HOME while Global honored it, so tests
-// wrote durable data into the real user home. These cases lock the contract.
+// every env combination. Production is fixed to ~/.deepagent/code; tests may use an isolated home
+// and may choose an exact data root only inside that explicit test boundary.
 describe("P0-0 storage root single source", () => {
   const homedir = require("node:os").homedir() as string
   const path = require("node:path") as typeof import("node:path")
 
-  test("DEEPAGENT_CODE_HOME takes precedence over everything", () => {
+  test("DEEPAGENT_CODE_HOME is ignored outside an explicit test boundary", () => {
+    expect(resolveDeepAgentCodeHome({ DEEPAGENT_CODE_HOME: "/explicit/home" })).toBe(
+      path.resolve(homedir, ".deepagent", "code"),
+    )
+  })
+
+  test("DEEPAGENT_CODE_HOME may choose the exact root inside a test boundary", () => {
     expect(
       resolveDeepAgentCodeHome({ DEEPAGENT_CODE_HOME: "/explicit/home", DEEPAGENT_CODE_TEST_HOME: "/test/home" }),
     ).toBe(path.resolve("/explicit/home"))

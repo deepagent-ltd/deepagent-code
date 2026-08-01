@@ -18,7 +18,7 @@ interface Bucket {
 }
 
 // Named `Service` (not `RateLimiter`) to mirror the core self-barreled-class idiom (Scheduler.Service,
-// GraphQuery.Service, DeepAgentEventBus.Service) — a class named `RateLimiter` would collide with the
+// DeepAgentEventBus.Service) — a class named `RateLimiter` would collide with the
 // `export * as RateLimiter` barrel. Callers use `RateLimiter.Service`.
 export class Service {
   private buckets = new Map<string, Bucket>()
