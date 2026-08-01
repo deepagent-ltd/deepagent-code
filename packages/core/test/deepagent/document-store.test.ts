@@ -174,6 +174,26 @@ describe("V3 DocumentStore", () => {
 // overwrites the same version atomically (temp+fsync+rename). These tests pin the CAS + durability
 // behavior that H32-1 (v4.0.4) builds on.
 describe("F30-1 DocumentStore CAS + atomic durability", () => {
+  test("recoverable built-in seeds retain active status and exclusive-create CAS", () => {
+    const h1 = new DocumentStore(root)
+    const h2 = new DocumentStore(root)
+    const input = {
+      type: "strategy" as const,
+      scope: "durable",
+      body: "trusted built-in strategy",
+      description: "built-in strategy",
+      idSlug: "built-in-strategy",
+      confidence: { evidence_strength: "strong" as const, support_count: 1 },
+      provenance: { source: "human" as const },
+    }
+    const first = h1.seedActive(input)
+    const concurrent = h2.seedActive(input)
+    expect(first.status).toBe("active")
+    expect(concurrent.hash).toBe(first.hash)
+    expect(new DocumentStore(root).get(first.id)).toEqual(first)
+    expect(readdirSync(path.join(root, "docs", "strategy"))).toEqual([`${first.id.replaceAll(":", "__")}@v1.json`])
+  })
+
   test("normal single-writer flow is unchanged (create + updates land byte-identically)", () => {
     const a = store.create(design("v1"))
     const a2 = store.update(a.id, "v2")
