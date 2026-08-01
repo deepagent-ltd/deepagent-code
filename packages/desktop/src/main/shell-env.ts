@@ -93,6 +93,10 @@ export function loadShellEnv(shell: string, logger: ShellEnvLogger) {
   return null
 }
 
+export function shouldLoadShellEnv(disabled = process.env.DEEPAGENT_CODE_DISABLE_SHELL_ENV) {
+  return disabled !== "1"
+}
+
 export function mergeShellEnv(shell: Record<string, string> | null, env: Record<string, string>) {
   return {
     ...shell,

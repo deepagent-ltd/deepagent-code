@@ -148,6 +148,56 @@ describe("run runtime queue", () => {
     ])
   })
 
+  test("treats /compact as a local session command", async () => {
+    const ui = footer()
+    const seen: string[] = []
+    let compacted = 0
+    const task = runPromptQueue({
+      footer: ui.api,
+      onCompactSession: async () => {
+        compacted += 1
+        return "session compacted"
+      },
+      run: async (input) => {
+        seen.push(input.text)
+        ui.api.close()
+      },
+    })
+
+    ui.submit("/compact")
+    ui.submit("continue")
+    await task
+
+    expect(compacted).toBe(1)
+    expect(seen).toEqual(["continue"])
+    expect(ui.events).toContainEqual({
+      type: "stream.patch",
+      patch: { phase: "idle", status: "session compacted" },
+    })
+  })
+
+  test("dispatches GUI-compatible session commands locally", async () => {
+    const ui = footer()
+    const commands: string[] = []
+    const task = runPromptQueue({
+      footer: ui.api,
+      onSessionCommand: async (command) => {
+        commands.push(command)
+        return `${command} complete`
+      },
+      run: async (input) => {
+        expect(input.text).toBe("continue")
+        ui.api.close()
+      },
+    })
+
+    for (const command of ["undo", "redo", "fork", "share", "unshare"]) ui.submit(`/${command}`)
+    ui.submit("continue")
+    await task
+
+    expect(commands).toEqual(["undo", "redo", "fork", "share", "unshare"])
+  })
+
   test("shell mode submits /exit as a shell command", async () => {
     const ui = footer()
     const seen: RunPrompt[] = []

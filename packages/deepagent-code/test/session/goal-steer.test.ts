@@ -114,7 +114,19 @@ const goalSteerPort = (
 })
 
 describe("§S1.3 renderStepPrompt — mid-run steering threads into the step prompt (cache-safe tail)", () => {
-  const base = { goalId: "g1", sessionId: GOAL_SESSION, planDocId: "plan-doc", activeStepId: "step_1" as string | null }
+  const base = {
+    goalId: "g1",
+    sessionId: GOAL_SESSION,
+    planDocId: "plan-doc",
+    goal: "reach goal",
+    activeStepId: "step_1" as string | null,
+    activeStep: {
+      step_id: "step_1",
+      title: "do the next step",
+      status: "active",
+      acceptance: null,
+    },
+  }
 
   test("no steer ⇒ prompt is unchanged (base behaviour)", () => {
     const withEmpty = renderStepPrompt({ ...base, steer: [] })

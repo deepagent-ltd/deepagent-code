@@ -1,12 +1,11 @@
 import { describe, expect, test } from "bun:test"
 import fs from "fs/promises"
-import os from "os"
 import path from "path"
 import { Global } from "@deepagent-code/core/global"
 
 describe("global paths", () => {
-  test("tmp path is under the system temp directory", () => {
-    expect(Global.Path.tmp).toBe(path.join(os.tmpdir(), "deepagent-code"))
+  test("tmp path is under the private data root", () => {
+    expect(Global.Path.tmp).toBe(path.join(Global.Path.data, "tmp"))
     expect(Global.make().tmp).toBe(Global.Path.tmp)
   })
 
@@ -21,6 +20,20 @@ describe("global paths", () => {
 
   test("config shares the data root after unification", () => {
     expect(Global.Path.config).toBe(Global.Path.data)
+  })
+
+  test("every private runtime path stays under the data root", () => {
+    const paths = [
+      Global.Path.cache,
+      Global.Path.config,
+      Global.Path.state,
+      Global.Path.tmp,
+      Global.Path.bin,
+      Global.Path.log,
+      Global.Path.repos,
+      ...Object.values(Global.Path.agent),
+    ]
+    expect(paths.every((item) => item === Global.Path.data || item.startsWith(Global.Path.data + path.sep))).toBe(true)
   })
 
   test("config directory is created on module load", async () => {

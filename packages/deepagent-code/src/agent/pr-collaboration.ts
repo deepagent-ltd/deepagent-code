@@ -2,13 +2,20 @@ import { Effect } from "effect"
 import { Git } from "@/git"
 import { PRQueue } from "./pr-queue"
 import type { ReviewVerdictContract } from "@/collaboration/review-contract"
+import { DEFAULT_WORKER_IDENTITY } from "./collaboration-identity"
+import { KeyedMutex } from "@deepagent-code/core/effect/keyed-mutex"
+import { FSUtil } from "@deepagent-code/core/fs-util"
 
-export const DEFAULT_WORKER_IDENTITY = {
-  name: "coauthor-deepagent",
-  email: "coauthor@deepagent.ltd",
-} as const satisfies Git.CommitIdentity
+export { DEFAULT_WORKER_IDENTITY } from "./collaboration-identity"
 
-export type CollaborationStatus = "admitted" | "committed" | "queued" | "merged" | "merge-conflict" | "merge-failed"
+export type CollaborationStatus =
+  | "admitted"
+  | "committed"
+  | "queued"
+  | "changes-requested"
+  | "merged"
+  | "merge-conflict"
+  | "merge-failed"
 
 export interface CollaborationState {
   readonly id: string
@@ -28,7 +35,14 @@ export type AdmissionResult =
   | { readonly type: "admitted"; readonly state: CollaborationState }
   | {
       readonly type: "rejected"
-      readonly reason: "not-a-repository" | "detached-head" | "protected-target" | "missing-head" | "dirty-parent"
+      readonly reason:
+        | "not-a-repository"
+        | "detached-head"
+        | "protected-target"
+        | "missing-head"
+        | "dirty-parent"
+        | "invalid-continuation"
+        | "no-changes"
       readonly paths?: readonly string[]
     }
 
@@ -38,7 +52,7 @@ export type CommitResult =
 
 export type MergeResult =
   | { readonly type: "merged"; readonly state: CollaborationState }
-  | { readonly type: "rejected"; readonly reason: "not-committed" | "senior-approval-required" }
+  | { readonly type: "rejected"; readonly reason: "not-committed" | "reviewer-approval-required" }
   | { readonly type: "review-needed"; readonly state: CollaborationState }
   | { readonly type: "conflict"; readonly state: CollaborationState; readonly abortSucceeded: boolean }
   | { readonly type: "failed"; readonly state: CollaborationState; readonly abortSucceeded: boolean }
@@ -60,6 +74,17 @@ export interface CollaborationCoordinator {
     readonly message: string
     readonly identity?: Git.CommitIdentity
   }) => Effect.Effect<CommitResult, PRQueue.PRQueueError, Git.Service | PRQueue.Service>
+  readonly admitCommitted: (input: {
+    readonly id: string
+    readonly parentID: string
+    readonly workerID: string
+    readonly reviewerID: string
+    readonly parentDirectory: string
+    readonly workerDirectory: string
+    readonly workerCommit: string
+    readonly cleanupRequired?: boolean
+    readonly metadata?: Record<string, unknown>
+  }) => Effect.Effect<AdmissionResult, PRQueue.PRQueueError, Git.Service | PRQueue.Service>
   readonly mergeApproved: (input: {
     readonly id: string
     readonly parentDirectory: string
@@ -67,7 +92,45 @@ export interface CollaborationCoordinator {
   }) => Effect.Effect<MergeResult, PRQueue.PRQueueError, Git.Service | PRQueue.Service>
 }
 
-const protectedTarget = (branch: string) => branch === "main"
+const protectedTarget = (branch: string, defaultBranch?: string) =>
+  ["main", "master", "dev", defaultBranch].includes(branch)
+const mergeLocks = KeyedMutex.makeUnsafe<string>()
+const sessionBranchLocks = KeyedMutex.makeUnsafe<string>()
+
+export const ensureSessionBranch = Effect.fn("PRCollaboration.ensureSessionBranch")(function* (input: {
+  readonly git: Git.Interface
+  readonly directory: string
+  readonly sessionID: string
+}) {
+  return yield* sessionBranchLocks.withLock(FSUtil.resolve(input.directory))(
+    Effect.gen(function* () {
+      const repository = yield* input.git.repository(input.directory)
+      if (!repository) return false
+      const status = yield* input.git.porcelainStatus(input.directory)
+      if (!status?.clean) {
+        return yield* Effect.fail(
+          new Error(
+            `Write-subagent collaboration requires a clean parent checkout; preserve or commit these paths first: ${status?.paths.join(", ") || "unknown"}`,
+          ),
+        )
+      }
+      const current = yield* input.git.branch(input.directory)
+      if (!current) return yield* Effect.fail(new Error("Write-subagent collaboration requires an attached branch"))
+      const defaultBranch = yield* input.git.defaultBranch(input.directory)
+      if (!["main", "master", "dev", defaultBranch?.name].includes(current)) return true
+      const branch = `deepagent-code/session-${input.sessionID}`
+      const switched = yield* input.git.run(["switch", "-c", branch], { cwd: input.directory })
+      if (switched.exitCode === 0) return true
+      const resumed = yield* input.git.run(["switch", branch], { cwd: input.directory })
+      if (resumed.exitCode === 0) return true
+      return yield* Effect.fail(
+        new Error(
+          `Unable to create or resume session branch ${branch}: ${resumed.stderr.toString("utf8").trim() || switched.stderr.toString("utf8").trim() || `git exited ${resumed.exitCode}`}`,
+        ),
+      )
+    }),
+  )
+})
 
 const collaborationState = (entry: PRQueue.Entry): CollaborationState | undefined => {
   const metadata = entry.metadata
@@ -91,11 +154,13 @@ const collaborationState = (entry: PRQueue.Entry): CollaborationState | undefine
       ? "merged"
       : entry.status === "conflicted"
         ? "merge-conflict"
-        : entry.status === "merging"
-          ? "queued"
-          : entry.workerHead
+        : entry.status === "changes_requested"
+          ? "changes-requested"
+          : entry.status === "merging"
             ? "queued"
-            : "admitted"
+            : entry.workerHead
+              ? "queued"
+              : "admitted"
 
   return {
     id: entry.id,
@@ -107,7 +172,7 @@ const collaborationState = (entry: PRQueue.Entry): CollaborationState | undefine
     ...(entry.workerHead ? { workerCommit: entry.workerHead } : {}),
     status,
     ...(entry.mergeDiagnostic ? { mergeDiagnostic: entry.mergeDiagnostic } : {}),
-    cleanupRequired: status !== "merged",
+    cleanupRequired: metadata.cleanupRequired !== false && status !== "merged",
   }
 }
 
@@ -124,6 +189,7 @@ const queueMetadata = (input: {
   repositoryRoot: input.repositoryRoot,
   targetBranch: input.targetBranch,
   parentHead: input.parentHead,
+  batchBaseHead: input.parentHead,
   workerDirectory: input.workerDirectory,
 })
 
@@ -135,15 +201,18 @@ export const coordinator: CollaborationCoordinator = {
       const repository = yield* git.repository(input.parentDirectory)
       if (!repository) return { type: "rejected", reason: "not-a-repository" } as const
 
-      const [targetBranch, parentHead, status] = yield* Effect.all([
+      const [targetBranch, defaultBranch, parentHead, status] = yield* Effect.all([
         git.branch(input.parentDirectory),
+        git.defaultBranch(input.parentDirectory),
         git.resolveRef(input.parentDirectory),
         git.porcelainStatus(input.parentDirectory),
       ])
       if (!targetBranch) return { type: "rejected", reason: "detached-head" } as const
-      if (protectedTarget(targetBranch)) return { type: "rejected", reason: "protected-target" } as const
+      if (protectedTarget(targetBranch, defaultBranch?.name))
+        return { type: "rejected", reason: "protected-target" } as const
       if (!parentHead) return { type: "rejected", reason: "missing-head" } as const
-      if (!status || !status.clean) return { type: "rejected", reason: "dirty-parent", paths: status?.paths ?? [] } as const
+      if (!status || !status.clean)
+        return { type: "rejected", reason: "dirty-parent", paths: status?.paths ?? [] } as const
 
       const entry = yield* queue.create({
         id: input.id,
@@ -165,27 +234,97 @@ export const coordinator: CollaborationCoordinator = {
       return { type: "admitted", state } as const
     }),
 
+  admitCommitted: (input) =>
+    Effect.gen(function* () {
+      const git = yield* Git.Service
+      const queue = yield* PRQueue.Service
+      const repository = yield* git.repository(input.parentDirectory)
+      if (!repository) return { type: "rejected", reason: "not-a-repository" } as const
+
+      const [targetBranch, defaultBranch, parentHead, status, workerCommit] = yield* Effect.all([
+        git.branch(input.parentDirectory),
+        git.defaultBranch(input.parentDirectory),
+        git.resolveRef(input.parentDirectory),
+        git.porcelainStatus(input.parentDirectory),
+        git.resolveRef(input.parentDirectory, input.workerCommit),
+      ])
+      if (!targetBranch) return { type: "rejected", reason: "detached-head" } as const
+      if (protectedTarget(targetBranch, defaultBranch?.name))
+        return { type: "rejected", reason: "protected-target" } as const
+      if (!parentHead) return { type: "rejected", reason: "missing-head" } as const
+      if (!status?.clean) return { type: "rejected", reason: "dirty-parent", paths: status?.paths ?? [] } as const
+      if (!workerCommit) return { type: "rejected", reason: "invalid-continuation" } as const
+
+      const existing = yield* queue.get(input.id)
+      if (existing) {
+        const state = collaborationState(existing)
+        if (
+          state &&
+          existing.parentID === input.parentID &&
+          existing.workerID === input.workerID &&
+          existing.reviewerID === input.reviewerID &&
+          existing.workerHead === workerCommit
+        ) {
+          return { type: "admitted", state } as const
+        }
+        return { type: "rejected", reason: "invalid-continuation" } as const
+      }
+
+      const range = yield* git.commitRange(input.parentDirectory, parentHead, workerCommit)
+      if (!range || range.commits.length === 0 || range.paths.length === 0) {
+        return { type: "rejected", reason: "no-changes" } as const
+      }
+      const entry = yield* queue.create({
+        id: input.id,
+        parentID: input.parentID,
+        workerID: input.workerID,
+        reviewerID: input.reviewerID,
+        sha: workerCommit,
+        workerHead: workerCommit,
+        findings: range.paths,
+        metadata: queueMetadata({
+          parentDirectory: input.parentDirectory,
+          repositoryRoot: repository.root,
+          targetBranch,
+          parentHead,
+          workerDirectory: input.workerDirectory,
+          metadata: { ...input.metadata, cleanupRequired: input.cleanupRequired ?? false },
+        }),
+      })
+      const queued = yield* queue.claimForReview(entry.parentID, entry.id)
+      const state = queued && collaborationState(queued)
+      if (!state) return yield* Effect.die("PR queue entry lacks collaboration metadata")
+      return { type: "admitted", state: { ...state, status: "queued" } } as const
+    }),
+
   commitWorker: (input) =>
     Effect.gen(function* () {
       const git = yield* Git.Service
       const queue = yield* PRQueue.Service
       const entry = yield* queue.get(input.id)
       const state = entry && collaborationState(entry)
-      if (!entry || !state || entry.workerID !== input.workerID || entry.status !== "draft" || entry.workerHead)
+      if (
+        !entry ||
+        !state ||
+        entry.workerID !== input.workerID ||
+        !["draft", "changes_requested"].includes(entry.status)
+      )
         return { type: "rejected", reason: "not-admitted" } as const
-      if (input.paths.length === 0) return { type: "rejected", reason: "no-changes" } as const
-
-      const commit = yield* git.commitScoped(state.workerDirectory, {
-        paths: [...new Set(input.paths)],
-        message: input.message,
-        author: input.identity ?? DEFAULT_WORKER_IDENTITY,
-      })
-      if (commit.exitCode !== 0) return { type: "rejected", reason: "commit-failed" } as const
+      if (input.paths.length > 0) {
+        const commit = yield* git.commitScoped(state.workerDirectory, {
+          paths: [...new Set(input.paths)],
+          message: input.message,
+          author: input.identity ?? DEFAULT_WORKER_IDENTITY,
+        })
+        if (commit.exitCode !== 0) return { type: "rejected", reason: "commit-failed" } as const
+      }
 
       const workerCommit = yield* git.resolveRef(state.workerDirectory)
-      if (!workerCommit || workerCommit === state.parentHead) return { type: "rejected", reason: "no-changes" } as const
+      if (!workerCommit || workerCommit === entry.workerHead || workerCommit === state.parentHead)
+        return { type: "rejected", reason: "no-changes" } as const
       const range = yield* git.commitRange(state.workerDirectory, state.parentHead, workerCommit)
-      if (!range || range.commits.length === 0 || range.paths.length === 0) return { type: "rejected", reason: "no-changes" } as const
+      if (!range || range.commits.length === 0 || range.paths.length === 0)
+        return { type: "rejected", reason: "no-changes" } as const
 
       const submitted = yield* queue.resubmit({
         id: entry.id,
@@ -195,7 +334,7 @@ export const coordinator: CollaborationCoordinator = {
         findings: range.paths,
       })
       if (!submitted) return { type: "rejected", reason: "not-admitted" } as const
-      const queued = yield* queue.claimForReview(entry.parentID)
+      const queued = yield* queue.claimForReview(entry.parentID, entry.id)
       if (!queued || queued.id !== entry.id) return { type: "rejected", reason: "not-admitted" } as const
       const resultState = collaborationState(queued)
       if (!resultState) return yield* Effect.die("PR queue entry lacks collaboration metadata")
@@ -203,65 +342,85 @@ export const coordinator: CollaborationCoordinator = {
     }),
 
   mergeApproved: (input) =>
-    Effect.gen(function* () {
-      const git = yield* Git.Service
-      const queue = yield* PRQueue.Service
-      const entry = yield* queue.get(input.id)
-      const state = entry && collaborationState(entry)
-      if (!entry || !state || !entry.workerHead || entry.status !== "approved")
-        return { type: "rejected", reason: "not-committed" } as const
-      if (
-        input.approval.reviewer.role !== "senior-reviewer" ||
-        input.approval.verdict !== "approve" ||
-        input.approval.implementationCommitSha !== entry.workerHead
-      )
-        return { type: "rejected", reason: "senior-approval-required" } as const
+    mergeLocks.withLock(FSUtil.resolve(input.parentDirectory))(
+      Effect.gen(function* () {
+        const git = yield* Git.Service
+        const queue = yield* PRQueue.Service
+        const entry = yield* queue.get(input.id)
+        const state = entry && collaborationState(entry)
+        if (!entry || !state || !entry.workerHead || entry.status !== "approved")
+          return { type: "rejected", reason: "not-committed" } as const
+        if (
+          input.approval.reviewer.id !== entry.reviewerID ||
+          input.approval.reviewer.role !== "reviewer" ||
+          input.approval.verdict !== "approve" ||
+          input.approval.implementationCommitSha !== entry.workerHead
+        )
+          return { type: "rejected", reason: "reviewer-approval-required" } as const
 
-      const currentParentHead = yield* git.resolveRef(input.parentDirectory)
-      if (currentParentHead !== state.parentHead) {
-        return {
-          type: "review-needed",
-          state: {
-            ...state,
-            status: "queued",
-            mergeDiagnostic: `Parent HEAD advanced since admission (expected ${state.parentHead}, found ${currentParentHead ?? "missing"}); review and rebase required.`,
-          },
-        } as const
-      }
+        const currentParentHead = yield* git.resolveRef(input.parentDirectory)
+        if (currentParentHead !== state.parentHead) {
+          const diagnostic = `Parent HEAD advanced since admission (expected ${state.parentHead}, found ${currentParentHead ?? "missing"}); review and rebase required.`
+          if (currentParentHead) {
+            yield* queue.refreshBaseline({
+              id: entry.id,
+              parentID: entry.parentID,
+              parentHead: currentParentHead,
+              diagnostic,
+            })
+          }
+          return {
+            type: "review-needed",
+            state: {
+              ...state,
+              status: "queued",
+              mergeDiagnostic: diagnostic,
+            },
+          } as const
+        }
 
-      const merging = yield* queue.claimMerge({ id: entry.id, parentID: entry.parentID })
-      if (!merging) return { type: "rejected", reason: "not-committed" } as const
+        const merging = yield* queue.claimMerge({ id: entry.id, parentID: entry.parentID })
+        if (!merging) return { type: "rejected", reason: "not-committed" } as const
 
-      const merge = yield* git.mergeInto(input.parentDirectory, merging.workerHead ?? merging.sha)
-      if (merge.type === "merged") {
-        const completed = yield* queue.completeMerge({ id: merging.id, parentID: merging.parentID })
-        const mergedState = completed && collaborationState(completed)
-        if (!mergedState) return yield* Effect.die("PR queue entry lacks collaboration metadata")
-        return { type: "merged", state: mergedState } as const
-      }
-      if (merge.type === "conflict") {
+        const merge = yield* git.mergeInto(input.parentDirectory, merging.workerHead ?? merging.sha)
+        if (merge.type === "merged") {
+          const completed = yield* queue.completeMerge({
+            id: merging.id,
+            parentID: merging.parentID,
+            parentHead: merge.commit,
+          })
+          const mergedState = completed && collaborationState(completed)
+          if (!mergedState) return yield* Effect.die("PR queue entry lacks collaboration metadata")
+          return { type: "merged", state: mergedState } as const
+        }
+        if (merge.type === "conflict") {
+          const aborted = yield* git.abortMerge(input.parentDirectory)
+          const conflicted = yield* queue.bounceMerge({
+            id: merging.id,
+            parentID: merging.parentID,
+            diagnostic: merge.diagnostic,
+          })
+          const conflictState = conflicted && collaborationState(conflicted)
+          if (!conflictState) return yield* Effect.die("PR queue entry lacks collaboration metadata")
+          return {
+            type: "conflict",
+            state: { ...conflictState, conflictPaths: merge.paths },
+            abortSucceeded: aborted.exitCode === 0,
+          } as const
+        }
         const aborted = yield* git.abortMerge(input.parentDirectory)
-        const conflicted = yield* queue.conflictMerge({
+        const failed = yield* queue.conflictMerge({
           id: merging.id,
           parentID: merging.parentID,
           diagnostic: merge.diagnostic,
         })
-        const conflictState = conflicted && collaborationState(conflicted)
-        if (!conflictState) return yield* Effect.die("PR queue entry lacks collaboration metadata")
-        return { type: "conflict", state: { ...conflictState, conflictPaths: merge.paths }, abortSucceeded: aborted.exitCode === 0 } as const
-      }
-      const aborted = yield* git.abortMerge(input.parentDirectory)
-      const failed = yield* queue.conflictMerge({
-        id: merging.id,
-        parentID: merging.parentID,
-        diagnostic: merge.diagnostic,
-      })
-      const failedState = failed && collaborationState(failed)
-      if (!failedState) return yield* Effect.die("PR queue entry lacks collaboration metadata")
-      return {
-        type: "failed",
-        state: { ...failedState, status: "merge-failed" },
-        abortSucceeded: aborted.exitCode === 0,
-      } as const
-    }),
+        const failedState = failed && collaborationState(failed)
+        if (!failedState) return yield* Effect.die("PR queue entry lacks collaboration metadata")
+        return {
+          type: "failed",
+          state: { ...failedState, status: "merge-failed" },
+          abortSucceeded: aborted.exitCode === 0,
+        } as const
+      }),
+    ),
 }

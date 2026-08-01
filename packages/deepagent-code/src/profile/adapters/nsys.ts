@@ -3,6 +3,8 @@ import { which } from "@deepagent-code/core/util/which"
 import { PAP } from "@/profile/pap"
 import { Vocabulary } from "@/profile/vocabulary"
 import { RuntimeBase } from "@/runtime/base"
+import { Global } from "@deepagent-code/core/global"
+import path from "node:path"
 
 const log = Log.create({ service: "profile.nsys" })
 
@@ -53,7 +55,8 @@ export const nsysMapping: PAP.MetricMapping = {
       neutral: "api_overhead_pct",
       native: null,
       reason: "not_collected",
-      detail: "nsys stats reports API time only as a per-report normalized percentage; no valid GPU/wall-total denominator",
+      detail:
+        "nsys stats reports API time only as a per-report normalized percentage; no valid GPU/wall-total denominator",
     },
   ],
 }
@@ -74,9 +77,14 @@ function splitCsvRow(row: string): string[] {
   let inQuote = false
   for (let i = 0; i < row.length; i++) {
     const ch = row[i]!
-    if (ch === '"') { inQuote = !inQuote }
-    else if (ch === "," && !inQuote) { cols.push(cur); cur = "" }
-    else { cur += ch }
+    if (ch === '"') {
+      inQuote = !inQuote
+    } else if (ch === "," && !inQuote) {
+      cols.push(cur)
+      cur = ""
+    } else {
+      cur += ch
+    }
   }
   cols.push(cur)
   return cols
@@ -118,7 +126,11 @@ export function parseGpukernsum(csv: string): NsysKernelRow[] {
     const line = lines[i]!
     if (line.toLowerCase().includes("time (%)") || line.toLowerCase().includes("time(%)")) {
       headerIdx = i
-      headers.push(...splitCsvRow(line).map(cleanField).map((h) => h.toLowerCase()))
+      headers.push(
+        ...splitCsvRow(line)
+          .map(cleanField)
+          .map((h) => h.toLowerCase()),
+      )
       break
     }
   }
@@ -154,7 +166,11 @@ export function parseGpumemtimesum(csv: string): NsysMemRow[] {
     const line = lines[i]!
     if (line.toLowerCase().includes("time (%)") || line.toLowerCase().includes("time(%)")) {
       headerIdx = i
-      headers.push(...splitCsvRow(line).map(cleanField).map((h) => h.toLowerCase()))
+      headers.push(
+        ...splitCsvRow(line)
+          .map(cleanField)
+          .map((h) => h.toLowerCase()),
+      )
       break
     }
   }
@@ -188,7 +204,11 @@ export function parseCudaapisum(csv: string): NsysApiRow[] {
     const line = lines[i]!
     if (line.toLowerCase().includes("time (%)") || line.toLowerCase().includes("time(%)")) {
       headerIdx = i
-      headers.push(...splitCsvRow(line).map(cleanField).map((h) => h.toLowerCase()))
+      headers.push(
+        ...splitCsvRow(line)
+          .map(cleanField)
+          .map((h) => h.toLowerCase()),
+      )
       break
     }
   }
@@ -257,19 +277,13 @@ export class NsysAdapter implements PAP.ProfileAdapter {
   async collect(target: PAP.ProfileTarget): Promise<PAP.NativeReportRef> {
     const bin = this.probe.locate("nsys")
     if (!bin) {
-      const msg = "nsys (NVIDIA Nsight Systems) is not installed or not on PATH. Install it via the NVIDIA CUDA Toolkit."
+      const msg =
+        "nsys (NVIDIA Nsight Systems) is not installed or not on PATH. Install it via the NVIDIA CUDA Toolkit."
       log.info(msg)
       return Promise.reject(new Error(msg))
     }
-    const outPath = `/tmp/deepagent-nsys-${Date.now()}`
-    const args = [
-      "profile",
-      "-o", outPath,
-      "--force-overwrite", "true",
-      "--",
-      target.command,
-      ...(target.args ?? []),
-    ]
+    const outPath = path.join(Global.Path.tmp, `profile-nsys-${Date.now()}`)
+    const args = ["profile", "-o", outPath, "--force-overwrite", "true", "--", target.command, ...(target.args ?? [])]
     log.info("nsys collect", { command: bin, args })
     const exportCommand = `${bin} stats --report gpukernsum,gpumemtimesum,cudaapisum --format csv -o stdout ${outPath}.nsys-rep`
 
@@ -302,7 +316,10 @@ export class NsysAdapter implements PAP.ProfileAdapter {
       // Run each report type and concatenate with section headers for our multi-section parser.
       const sections: string[] = []
       for (const report_type of ["gpukernsum", "gpumemtimesum", "cudaapisum"]) {
-        const r = await Process.run([bin, "stats", "--report", report_type, "--format", "csv", "-o", "stdout", report.path], { nothrow: true })
+        const r = await Process.run(
+          [bin, "stats", "--report", report_type, "--format", "csv", "-o", "stdout", report.path],
+          { nothrow: true },
+        )
         sections.push(`=== REPORT: ${report_type} ===\n${r.stdout.toString()}`)
       }
       text = sections.join("\n")
@@ -375,22 +392,24 @@ export class NsysAdapter implements PAP.ProfileAdapter {
     const memCopyPct = getNative(ns, N.memCopyTimePct)
 
     const summary: Record<string, PAP.MetricValue> = {
-      kernel_total_pct: kernelPct !== undefined
-        ? PAP.present(kernelPct, "pct", {
-            nativeMetric: N.kernelTimePct,
-            semantic: "exact",
-            derived: true,
-            formula: "kernel_ns_total / (kernel_ns_total + mem_ns_total) * 100",
-          })
-        : PAP.missing("not_collected"),
-      mem_copy_pct: memCopyPct !== undefined
-        ? PAP.present(memCopyPct, "pct", {
-            nativeMetric: N.memCopyTimePct,
-            semantic: "exact",
-            derived: true,
-            formula: "mem_ns_total / (kernel_ns_total + mem_ns_total) * 100",
-          })
-        : PAP.missing("not_collected"),
+      kernel_total_pct:
+        kernelPct !== undefined
+          ? PAP.present(kernelPct, "pct", {
+              nativeMetric: N.kernelTimePct,
+              semantic: "exact",
+              derived: true,
+              formula: "kernel_ns_total / (kernel_ns_total + mem_ns_total) * 100",
+            })
+          : PAP.missing("not_collected"),
+      mem_copy_pct:
+        memCopyPct !== undefined
+          ? PAP.present(memCopyPct, "pct", {
+              nativeMetric: N.memCopyTimePct,
+              semantic: "exact",
+              derived: true,
+              formula: "mem_ns_total / (kernel_ns_total + mem_ns_total) * 100",
+            })
+          : PAP.missing("not_collected"),
       // Host-side CUDA/HIP API time overlaps GPU execution and nsys reports it only as a
       // per-report internal percentage, not as a share of any GPU/wall total we can access
       // here. Reporting a number would be fabricated; honest null + reason instead.
@@ -428,5 +447,4 @@ export class NsysAdapter implements PAP.ProfileAdapter {
   }
 }
 
-export const makeNsysAdapter = (probe: NsysBinaryProbe = defaultNsysProbe): PAP.ProfileAdapter =>
-  new NsysAdapter(probe)
+export const makeNsysAdapter = (probe: NsysBinaryProbe = defaultNsysProbe): PAP.ProfileAdapter => new NsysAdapter(probe)

@@ -2,7 +2,7 @@
 
 DeepAgent Code is a document-centered AI coding agent. This package contains the CLI/server runtime used by the terminal and desktop applications.
 
-The current product release is Desktop 1.4.3 with DeepAgent Core V4.0.4_r8.
+The current product release is Desktop 1.4.4 with DeepAgent Core V4.0.5.
 
 DeepAgent Code keeps the opencode runtime foundation and adds the DeepAgent control plane:
 

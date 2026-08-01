@@ -34,6 +34,8 @@ export type RunPrompt = {
   messageID?: string
   partID?: string
   text: string
+  /** Optional message metadata forwarded through the normal session prompt path. */
+  metadata?: Record<string, unknown>
   parts: RunPromptPart[]
   mode?: "shell"
   command?: {
@@ -66,6 +68,7 @@ export type RunInput = {
   model: PromptModel | undefined
   variant: string | undefined
   files: RunFilePart[]
+  metadata?: Record<string, unknown>
   initialInput?: string
   thinking: boolean
   backgroundSubagents: boolean

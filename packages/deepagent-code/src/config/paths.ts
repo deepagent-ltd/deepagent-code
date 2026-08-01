@@ -36,7 +36,6 @@ export const directories = Effect.fn("ConfigPaths.directories")(function* (direc
       start: Global.Path.home,
       stop: Global.Path.home,
     })),
-    ...(Flag.DEEPAGENT_CODE_CONFIG_DIR ? [Flag.DEEPAGENT_CODE_CONFIG_DIR] : []),
   ])
 })
 

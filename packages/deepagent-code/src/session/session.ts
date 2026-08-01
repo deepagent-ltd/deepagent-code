@@ -44,11 +44,13 @@ import { Identifier } from "@/id/id"
 import type { Provider } from "@/provider/provider"
 import { Permission } from "@/permission"
 import { Global } from "@deepagent-code/core/global"
-import { Effect, Layer, Option, Context, Schema, Types } from "effect"
-import { NonNegativeInt, optionalOmitUndefined } from "@deepagent-code/core/schema"
+import { DateTime, Effect, Layer, Option, Context, Schema, Types } from "effect"
+import { AbsolutePath, NonNegativeInt, optionalOmitUndefined } from "@deepagent-code/core/schema"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { ProviderV2 } from "@deepagent-code/core/provider"
 import { ModelV2 } from "@deepagent-code/core/model"
+import { Location } from "@deepagent-code/core/location"
+import { SessionEvent } from "@deepagent-code/core/session/event"
 
 const log = Log.create({ service: "session" })
 const runtime = makeRuntime(Database.Service, Database.defaultLayer)
@@ -519,8 +521,15 @@ export interface Interface {
   readonly setSummary: (input: { sessionID: SessionID; summary: Info["summary"] }) => Effect.Effect<void>
   readonly setShare: (input: { sessionID: SessionID; share: Info["share"] }) => Effect.Effect<void>
   readonly setWorkspace: (input: { sessionID: SessionID; workspaceID: Info["workspaceID"] }) => Effect.Effect<void>
+  /** Relocates a durable Session after a managed worktree has replaced its original checkout. */
+  readonly setDirectory: (input: { sessionID: SessionID; directory: string }) => Effect.Effect<void>
   readonly diff: (sessionID: SessionID) => Effect.Effect<Snapshot.FileDiff[]>
   readonly messages: (input: { sessionID: SessionID; limit?: number }) => Effect.Effect<SessionV1.WithParts[], NotFound>
+  readonly messagesPage: (input: {
+    sessionID: SessionID
+    limit: number
+    before?: string
+  }) => Effect.Effect<{ items: SessionV1.WithParts[]; more: boolean; cursor?: string }, NotFound>
   readonly children: (parentID: SessionID) => Effect.Effect<Info[]>
   readonly remove: (sessionID: SessionID) => Effect.Effect<void, NotFound>
   readonly updateMessage: <T extends SessionV1.Info>(msg: T) => Effect.Effect<T>
@@ -818,7 +827,7 @@ export const layer: Layer.Layer<
         input.isolate === "worktree" ? yield* Effect.serviceOption(Worktree.Service) : Option.none<Worktree.Interface>()
       const worktreeInfo =
         input.isolate === "worktree" && Option.isSome(worktreeOpt)
-          ? yield* worktreeOpt.value.create({ name: `fork-${Identifier.ascending("session")}` }).pipe(
+          ? yield* worktreeOpt.value.createReady({ name: `fork-${Identifier.ascending("session")}` }).pipe(
               Effect.catchTag("WorktreeNotGitError", () => Effect.succeed(undefined)),
               Effect.orDie,
             )
@@ -960,6 +969,22 @@ export const layer: Layer.Layer<
       yield* patch(input.sessionID, { metadata: input.metadata, time: { updated: Date.now() } }).pipe(Effect.orDie)
     })
 
+    const setDirectory = Effect.fn("Session.setDirectory")(function* (input: {
+      sessionID: SessionID
+      directory: string
+    }) {
+      const current = yield* get(input.sessionID).pipe(Effect.orDie)
+      if (current.directory === input.directory) return
+      yield* events.publish(SessionEvent.Moved, {
+        sessionID: input.sessionID,
+        location: Location.Ref.make({
+          directory: AbsolutePath.make(input.directory),
+          ...(current.workspaceID ? { workspaceID: current.workspaceID } : {}),
+        }),
+        timestamp: yield* DateTime.now,
+      })
+    })
+
     const setPermission = Effect.fn("Session.setPermission")(function* (input: {
       sessionID: SessionID
       permission: PermissionV1.Ruleset
@@ -1010,20 +1035,19 @@ export const layer: Layer.Layer<
       return [] as Snapshot.FileDiff[]
     })
 
+    const messagesPage: Interface["messagesPage"] = (input) =>
+      MessageV2.page(input).pipe(Effect.provideService(Database.Service, database))
+
     const messages: Interface["messages"] = Effect.fn("Session.messages")(function* (input) {
       if (input.limit) {
-        return (yield* MessageV2.page({ sessionID: input.sessionID, limit: input.limit }).pipe(
-          Effect.provideService(Database.Service, database),
-        )).items
+        return (yield* messagesPage({ sessionID: input.sessionID, limit: input.limit })).items
       }
 
       const size = 50
       const result = [] as SessionV1.WithParts[]
       let before: string | undefined
       while (true) {
-        const page = yield* MessageV2.page({ sessionID: input.sessionID, limit: size, before }).pipe(
-          Effect.provideService(Database.Service, database),
-        )
+        const page = yield* messagesPage({ sessionID: input.sessionID, limit: size, before })
         if (page.items.length === 0) break
         for (let i = page.items.length - 1; i >= 0; i--) {
           const item = page.items[i]
@@ -1105,8 +1129,10 @@ export const layer: Layer.Layer<
       setSummary,
       setShare,
       setWorkspace,
+      setDirectory,
       diff,
       messages,
+      messagesPage,
       children,
       remove,
       updateMessage,

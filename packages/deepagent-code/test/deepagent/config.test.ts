@@ -5,7 +5,7 @@ import path from "node:path"
 import { gatewayConfig, reviewRunsDir } from "../../src/deepagent/config"
 
 describe("DeepAgent Code config", () => {
-  test("uses DEEPAGENT_CODE_HOME/runs by default and enables runtime by default", () => {
+  test("uses the isolated canonical root and enables runtime by default", () => {
     const home = mkdtempSync(path.join(tmpdir(), "deepagent-code-config-"))
     const previous = process.env.DEEPAGENT_CODE_HOME
     const previousRuns = process.env.DEEPAGENT_RUNS_DIR
@@ -23,17 +23,21 @@ describe("DeepAgent Code config", () => {
     }
   })
 
-  test("keeps explicit runsDir above environment defaults", () => {
+  test("ignores runsDir overrides outside the canonical root", () => {
     const home = mkdtempSync(path.join(tmpdir(), "deepagent-code-config-"))
     const previous = process.env.DEEPAGENT_CODE_HOME
+    const previousRuns = process.env.DEEPAGENT_RUNS_DIR
     try {
       process.env.DEEPAGENT_CODE_HOME = home
+      process.env.DEEPAGENT_RUNS_DIR = "/environment/runs"
       expect(gatewayConfig({ provider: { deepagent: { options: { runsDir: "/explicit/runs" } } } }).runsDir).toBe(
-        "/explicit/runs",
+        path.join(home, "runs"),
       )
     } finally {
       if (previous === undefined) delete process.env.DEEPAGENT_CODE_HOME
       else process.env.DEEPAGENT_CODE_HOME = previous
+      if (previousRuns === undefined) delete process.env.DEEPAGENT_RUNS_DIR
+      else process.env.DEEPAGENT_RUNS_DIR = previousRuns
       rmSync(home, { recursive: true, force: true })
     }
   })

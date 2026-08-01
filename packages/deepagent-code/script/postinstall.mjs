@@ -127,7 +127,9 @@ function installPackage(name) {
   const version = packageJson.optionalDependencies?.[name]
   if (!version) return
 
-  const temp = fs.mkdtempSync(path.join(os.tmpdir(), "deepagent-code-install-"))
+  const root = path.join(os.homedir(), ".deepagent", "code", "tmp", "install")
+  fs.mkdirSync(root, { recursive: true })
+  const temp = fs.mkdtempSync(path.join(root, "package-"))
   try {
     const result = childProcess.spawnSync(
       "npm",
