@@ -1,7 +1,7 @@
 import { describe, expect } from "bun:test"
 import { SessionV1 } from "@deepagent-code/core/v1/session"
 import { Database } from "@deepagent-code/core/database/database"
-import { Cause, Effect, Exit, Layer, Option } from "effect"
+import { Cause, Effect, Exit, Fiber, Layer, Option } from "effect"
 import { mkdir } from "node:fs/promises"
 import { Agent } from "../../src/agent/agent"
 import { BackgroundJob } from "@/background/job"
@@ -152,17 +152,31 @@ function reply(input: SessionPrompt.PromptInput, text: string): SessionV1.WithPa
   }
 }
 
+function failedReply(input: SessionPrompt.PromptInput, error: SessionV1.Assistant["error"]): SessionV1.WithParts {
+  const result = reply(input, "")
+  if (result.info.role !== "assistant") throw new Error("expected an assistant reply")
+  result.info.finish = "error"
+  result.info.error = error
+  result.parts = []
+  return result
+}
+
 const stubOps = (prompt: TaskPromptOps["prompt"]): TaskPromptOps => ({
   cancel: () => Effect.void,
   resolvePromptParts: (template) => Effect.succeed([{ type: "text" as const, text: template }]),
   prompt,
 })
 
-const execCtx = (chat: { id: SessionID }, assistant: { id: MessageID }, promptOps: TaskPromptOps) => ({
+const execCtx = (
+  chat: { id: SessionID },
+  assistant: { id: MessageID },
+  promptOps: TaskPromptOps,
+  abort = new AbortController().signal,
+) => ({
   sessionID: chat.id,
   messageID: assistant.id,
   agent: "build",
-  abort: new AbortController().signal,
+  abort,
   extra: { promptOps },
   messages: [],
   metadata: () => Effect.void,
@@ -274,6 +288,80 @@ describe("tool.task takeover (v4.0.4 block1 1a+1b)", () => {
 
       const sessions = yield* Session.Service
       expect(subagentState((yield* sessions.get(calls[1]!)).metadata)).toBe("error")
+    }),
+  )
+
+  takeover.instance("legacy token budget errors settle as terminal errors without takeover", () =>
+    Effect.gen(function* () {
+      const { chat, assistant } = yield* seed()
+      const tool = yield* TaskTool
+      const def = yield* tool.init()
+      const calls: SessionID[] = []
+      const promptOps = stubOps((input) => {
+        calls.push(input.sessionID)
+        return Effect.succeed(
+          failedReply(
+            input,
+            new SessionV1.TaskBudgetExceededError({
+              message: "legacy token budget reached",
+              budget: "tokens",
+              limit: 200_000,
+              used: 200_001,
+            }).toObject(),
+          ),
+        )
+      })
+
+      const exit = yield* def
+        .execute(
+          { description: "inspect bug", prompt: "look into the cache key path", subagent_type: "general" },
+          execCtx(chat, assistant, promptOps),
+        )
+        .pipe(Effect.exit)
+
+      expect(Exit.isFailure(exit)).toBe(true)
+      expect(Exit.isFailure(exit) ? Cause.pretty(exit.cause) : "").toContain("[budget_exhausted]")
+      expect(calls).toHaveLength(1)
+
+      const jobs = yield* BackgroundJob.Service
+      expect((yield* jobs.get(calls[0]!))?.status).toBe("error")
+      const sessions = yield* Session.Service
+      expect(subagentState((yield* sessions.get(calls[0]!)).metadata)).toBe("error")
+    }),
+  )
+
+  takeover.instance("foreground abort cancels the job without relying on child-session cancellation", () =>
+    Effect.gen(function* () {
+      const { chat, assistant } = yield* seed()
+      const tool = yield* TaskTool
+      const def = yield* tool.init()
+      const calls: SessionID[] = []
+      const abort = new AbortController()
+      const promptOps = stubOps((input) => {
+        calls.push(input.sessionID)
+        return Effect.never
+      })
+      const fiber = yield* def
+        .execute(
+          { description: "inspect bug", prompt: "look into the cache key path", subagent_type: "general" },
+          execCtx(chat, assistant, promptOps, abort.signal),
+        )
+        .pipe(Effect.forkChild)
+
+      yield* pollWithTimeout(
+        Effect.sync(() => (calls.length === 1 ? true : undefined)),
+        "foreground task never started",
+      )
+      abort.abort()
+      const exit = yield* Fiber.await(fiber)
+
+      expect(Exit.isFailure(exit)).toBe(true)
+      expect(Exit.isFailure(exit) ? Cause.pretty(exit.cause) : "").toContain("Task interrupted by the user")
+      expect(calls).toHaveLength(1)
+      const jobs = yield* BackgroundJob.Service
+      expect((yield* jobs.get(calls[0]!))?.status).toBe("cancelled")
+      const sessions = yield* Session.Service
+      expect(subagentState((yield* sessions.get(calls[0]!)).metadata)).toBe("interrupted")
     }),
   )
 

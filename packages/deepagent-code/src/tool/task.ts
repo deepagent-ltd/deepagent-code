@@ -103,16 +103,16 @@ export function resolveOutputSchema(
 
 const FINALIZER_ATTEMPTS = 2
 const FINALIZER_RAW_RESULT_MAX_CHARS = 80_000
+// Token usage is provider- and cache-dependent, so it is deliberately not a hard task boundary. The
+// step, wall-time, no-progress, and output bounds remain the operational safety limits.
 export const DEFAULT_SUBAGENT_RESEARCH_BUDGET = {
   maxSteps: 64,
-  maxTokens: 200_000,
   maxWallMs: 30 * 60_000,
   maxNoProgress: 6,
 } as const
 
 export type SubagentResearchBudget = {
   readonly maxSteps: number
-  readonly maxTokens: number
   readonly maxWallMs: number
   readonly maxNoProgress: number
 }
@@ -258,6 +258,11 @@ function terminalReason(error: string | undefined): SubagentTerminalReason {
   if (code === "assistant_error") return code
   if (code === "budget_exhausted") return code
   return "runtime_error"
+}
+
+function isTakeoverEligible(reason: string) {
+  const terminal = terminalReason(reason)
+  return terminal !== "budget_exhausted" && terminal !== "doom_loop"
 }
 
 function projectSubagentRun(sessions: Session.Interface, run: DurableTaskRun, continueActive = false) {
@@ -600,9 +605,17 @@ export function runSubagentPrompt(input: SubagentPromptInput): Effect.Effect<str
       run_id: input.runID,
       child_session_id: input.sessionID,
       max_steps: budget.maxSteps,
-      max_tokens: budget.maxTokens,
       max_wall_ms: budget.maxWallMs,
     })
+    const leafInstruction =
+      input.tools.task === false
+        ? [
+            {
+              type: "text" as const,
+              text: "You are a leaf subagent. Do not call task or task_status and do not delegate further; perform the assigned work directly with the tools available in this session.",
+            },
+          ]
+        : []
     const research = yield* input.ops
       .prompt({
         messageID: MessageID.ascending(),
@@ -618,7 +631,6 @@ export function runSubagentPrompt(input: SubagentPromptInput): Effect.Effect<str
               started_at: startedAt,
               budget: {
                 max_steps: budget.maxSteps,
-                max_tokens: budget.maxTokens,
                 max_wall_ms: budget.maxWallMs,
                 max_no_progress: budget.maxNoProgress,
               },
@@ -627,18 +639,21 @@ export function runSubagentPrompt(input: SubagentPromptInput): Effect.Effect<str
           },
         },
         tools: input.tools,
-        parts: input.worktreeInfo
-          ? [
-              {
-                type: "text" as const,
-                text:
-                  `You are running in an ISOLATED git worktree at ${input.worktreeInfo.directory} (branch ${input.worktreeInfo.branch ?? "detached"}). ` +
-                  `You inherited context from the parent session, but your working directory is this worktree. ` +
-                  `Re-read files before editing (do not trust remembered paths/contents), and know your changes stay isolated until merged back.`,
-              },
-              ...parts,
-            ]
-          : parts,
+        parts: [
+          ...(input.worktreeInfo
+            ? [
+                {
+                  type: "text" as const,
+                  text:
+                    `You are running in an ISOLATED git worktree at ${input.worktreeInfo.directory} (branch ${input.worktreeInfo.branch ?? "detached"}). ` +
+                    `You inherited context from the parent session, but your working directory is this worktree. ` +
+                    `Re-read files before editing (do not trust remembered paths/contents), and know your changes stay isolated until merged back.`,
+                },
+              ]
+            : []),
+          ...leafInstruction,
+          ...parts,
+        ],
       })
       .pipe(
         Effect.timeout(Duration.millis(budget.maxWallMs)),
@@ -1109,7 +1124,6 @@ export const TaskTool = Tool.define(
       const agentMaxConcurrency = next.limits?.maxConcurrency
       const researchBudget: SubagentResearchBudget = {
         maxSteps: flags.subagentResearchStepLimit ?? DEFAULT_SUBAGENT_RESEARCH_BUDGET.maxSteps,
-        maxTokens: flags.subagentResearchTokenLimit ?? DEFAULT_SUBAGENT_RESEARCH_BUDGET.maxTokens,
         maxWallMs: flags.subagentResearchWallMs ?? DEFAULT_SUBAGENT_RESEARCH_BUDGET.maxWallMs,
         maxNoProgress: flags.subagentNoProgressLimit ?? DEFAULT_SUBAGENT_RESEARCH_BUDGET.maxNoProgress,
       }
@@ -1525,7 +1539,13 @@ export const TaskTool = Tool.define(
         const driveForeground = (b: AttemptBundle, takeovers: number): Effect.Effect<AttemptResult, unknown> =>
           Effect.gen(function* () {
             const runCancel = yield* EffectBridge.make()
-            const cancel = ops.cancel(b.nextSession.id)
+            const cancel = Effect.all(
+              [
+                background.cancel(b.nextSession.id).pipe(Effect.ignore),
+                ops.cancel(b.nextSession.id).pipe(Effect.ignore),
+              ],
+              { concurrency: "unbounded", discard: true },
+            )
             const onAbort = () => runCancel.fork(cancel)
             const outcome = yield* Effect.acquireUseRelease(
               Effect.sync(() => {
@@ -1549,7 +1569,7 @@ export const TaskTool = Tool.define(
               (_, exit) =>
                 Effect.gen(function* () {
                   if (Exit.hasInterrupts(exit))
-                    yield* Effect.all([cancel, background.cancel(b.nextSession.id)], { discard: true })
+                    yield* cancel
                 }).pipe(
                   Effect.ensuring(
                     Effect.sync(() => {
@@ -1604,6 +1624,12 @@ export const TaskTool = Tool.define(
                     `Call task_read({ task_id: "${b.nextSession.id}" }) before retrying or duplicating the task.`,
                 ),
               )
+            }
+            if (!isTakeoverEligible(outcome.reason)) {
+              const reason = terminalReason(outcome.reason)
+              yield* b.markFinished("error", reason, { error: { code: reason, message: outcome.reason } })
+              yield* b.teardownWorktree(false)
+              return yield* Effect.fail(new Error(outcome.reason))
             }
             if (takeovers >= takeoverLimit) {
               yield* background.cancel(b.nextSession.id).pipe(Effect.ignore)
@@ -1691,6 +1717,24 @@ export const TaskTool = Tool.define(
             if (!waited.timedOut && status === "cancelled") {
               yield* b.markFinished("cancelled", "parent_interrupted")
               yield* b.teardownWorktree(false)
+              return
+            }
+            if (!waited.timedOut && status === "error" && !isTakeoverEligible(waited.info?.error ?? "")) {
+              const error = waited.info?.error ?? "Task failed"
+              const reason = terminalReason(error)
+              const text = `The subagent stopped without retry because its execution budget or loop guard was exhausted: ${error}`
+              yield* b.markFinished("error", reason, {
+                error: { code: reason, message: error },
+                notifyText: renderOutput({
+                  sessionID: b.nextSession.id,
+                  state: "error",
+                  summary: `Background task stopped: ${params.description}`,
+                  text,
+                  maxChars: flags.subagentOutputMaxChars,
+                }),
+              })
+              yield* b.teardownWorktree(false)
+              yield* b.inject("error", text, takeovers)
               return
             }
             if (takeovers >= takeoverLimit) {
@@ -2082,7 +2126,13 @@ export const TaskTool = Tool.define(
       }
 
       const runCancel = yield* EffectBridge.make()
-      const cancel = ops.cancel(nextSession.id)
+      const cancel = Effect.all(
+        [
+          background.cancel(nextSession.id).pipe(Effect.ignore),
+          ops.cancel(nextSession.id).pipe(Effect.ignore),
+        ],
+        { concurrency: "unbounded", discard: true },
+      )
 
       function onAbort() {
         runCancel.fork(cancel)
@@ -2132,7 +2182,7 @@ export const TaskTool = Tool.define(
         (_, exit) =>
           Effect.gen(function* () {
             if (Exit.hasInterrupts(exit)) {
-              yield* Effect.all([cancel, background.cancel(nextSession.id)], { discard: true })
+              yield* cancel
               yield* teardownWorktree(false)
             }
           }).pipe(

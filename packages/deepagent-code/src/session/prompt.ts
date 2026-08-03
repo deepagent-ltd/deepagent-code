@@ -198,7 +198,6 @@ function noninteractiveTaskActivity(metadata: unknown) {
     interactive: false as const,
     startedAt: positive(activity.started_at),
     maxSteps: positive(activity.budget.max_steps),
-    maxTokens: positive(activity.budget.max_tokens),
     maxWallMs: positive(activity.budget.max_wall_ms),
     maxNoProgress: positive(activity.budget.max_no_progress),
   }
@@ -2350,7 +2349,7 @@ export const layer = Layer.effect(
         const taskActivity = noninteractiveTaskActivity(initialUser?.metadata) || undefined
         const failTaskBudget = Effect.fn("SessionPrompt.failTaskBudget")(function* (
           assistant: SessionV1.Assistant,
-          budget: "steps" | "tokens" | "wall_time",
+          budget: "steps" | "wall_time",
           limit: number,
           used: number,
         ) {
@@ -2400,22 +2399,7 @@ export const layer = Layer.effect(
           const lastAssistantMsg = msgs.findLast(
             (msg) => msg.info.role === "assistant" && msg.info.id === lastAssistant?.id,
           )
-          const tokenUsage = taskActivity
-            ? msgs
-                .filter(
-                  (item): item is SessionV1.WithParts & { info: SessionV1.Assistant } =>
-                    item.info.role === "assistant" && (!initialUser || item.info.id > initialUser.id),
-                )
-                .reduce(
-                  (sum, item) => sum + item.info.tokens.input + item.info.tokens.output + item.info.tokens.reasoning,
-                  0,
-                )
-            : 0
           const elapsed = taskActivity?.startedAt ? Math.max(0, Date.now() - taskActivity.startedAt) : 0
-          if (lastAssistant && taskActivity?.maxTokens && tokenUsage >= taskActivity.maxTokens) {
-            yield* failTaskBudget(lastAssistant, "tokens", taskActivity.maxTokens, tokenUsage)
-            break
-          }
           if (lastAssistant && taskActivity?.maxWallMs && elapsed >= taskActivity.maxWallMs) {
             yield* failTaskBudget(lastAssistant, "wall_time", taskActivity.maxWallMs, elapsed)
             break

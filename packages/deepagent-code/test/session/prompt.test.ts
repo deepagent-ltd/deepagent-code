@@ -1224,7 +1224,7 @@ it.instance("agent step limit removes tools from the final provider turn", () =>
   }),
 )
 
-it.instance("non-interactive task token budget fails even when the provider stops naturally", () =>
+it.instance("legacy non-interactive token metadata does not hard-stop a provider turn", () =>
   Effect.gen(function* () {
     const { llm } = yield* useServerConfig(providerCfg)
     const prompt = yield* SessionPrompt.Service
@@ -1249,7 +1249,7 @@ it.instance("non-interactive task token budget fails even when the provider stop
 
     const result = yield* prompt.loop({ sessionID: session.id })
     expect(result.info.role).toBe("assistant")
-    if (result.info.role === "assistant") expect(result.info.error?.name).toBe("TaskBudgetExceededError")
+    if (result.info.role === "assistant") expect(result.info.error).toBeUndefined()
     expect(yield* llm.calls).toBe(1)
   }),
 )
@@ -1272,7 +1272,7 @@ it.instance("non-interactive task step budget prevents another provider turn", (
           task_activity: {
             interactive: false,
             started_at: Date.now(),
-            budget: { max_steps: 1, max_tokens: 10_000, max_wall_ms: 60_000, max_no_progress: 2 },
+            budget: { max_steps: 1, max_wall_ms: 60_000, max_no_progress: 2 },
           },
         },
       },
