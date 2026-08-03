@@ -60,5 +60,6 @@ export const migrations = (
     import("./migration/20260726073000_context_links"),
     import("./migration/20260726080000_location_change_journal"),
     import("./migration/20260731000000_agent_execution"),
+    import("./migration/20260803000000_subagent_control_plane_l1"),
   ])
 ).map((module) => module.default) satisfies DatabaseMigration.Migration[]

@@ -36,6 +36,7 @@ import { downgradeOneLevel, type AgentMode } from "@deepagent-code/core/deepagen
 import { ModelV2 } from "@deepagent-code/core/model"
 import { ProviderV2 } from "@deepagent-code/core/provider"
 import { TaskConcurrency } from "./task-concurrency"
+import { TaskDispatcher } from "@/session/task-dispatcher"  // L10: durable queue
 import Ajv from "ajv"
 import { KeyedMutex } from "@deepagent-code/core/effect/keyed-mutex"
 import { Log } from "@deepagent-code/core/util/log"
@@ -52,6 +53,11 @@ import {
   markTaskResearchCompleted,
   renewTaskRunLease,
   settleTaskRun,
+  // L10 (subagent-control-plane-design.zh-CN.md §14 L10):
+  // spawnTaskTakeover is already gated by takeoverLimit=0 when subagentControlPlane!="legacy" (L0).
+  // When subagentControlPlane="durable" becomes the default, this import and its call sites
+  // (lines ~1661, ~1776) must be removed along with the surrounding takeover branch.
+  // At that point, all automatic takeover is replaced by recovery_required + explicit user resume.
   spawnTaskTakeover,
   startTaskRun,
   type ErrorData,
@@ -878,6 +884,13 @@ const BACKGROUND_UPDATED = [
   "Work on non-overlapping tasks, or briefly tell the user what you sent and end your response.",
 ].join("\n")
 
+// L10: durable dispatch — returned when background task is enqueued to the durable queue
+const BACKGROUND_DISPATCHED = [
+  "Background task has been enqueued in the durable control plane.",
+  "It will be picked up and executed automatically. You will be notified when it finishes.",
+  "DO NOT duplicate this task or poll for status — use task_status to check on it.",
+].join("\n")
+
 const BaseParameterFields = {
   description: Schema.String.annotate({ description: "A short (3-5 words) description of the task" }),
   prompt: Schema.String.annotate({ description: "The task for the agent to perform" }),
@@ -1176,6 +1189,106 @@ export const TaskTool = Tool.define(
           ),
         )
       }
+
+      // -----------------------------------------------------------------------
+      // L10: Durable control plane routing
+      // Design: subagent-control-plane-design.zh-CN.md §13.3, §10.1, §10.2
+      // -----------------------------------------------------------------------
+      if (flags.subagentControlPlane !== "legacy") {
+        // Move admitted → queued so the dispatcher can pick it up
+        if (admission.runCreated || admission.run.state === "admitted") {
+          yield* TaskDispatcher.enqueueRun({
+            runID: admission.run.runID,
+            runVersion: admission.run.version,
+          }).pipe(Effect.provideService(Database.Service, database), Effect.ignore)
+        }
+
+        if (runInBackground) {
+          // Background durable: return immediately; delivery daemon notifies parent
+          return {
+            title: params.description,
+            metadata: {
+              parentSessionId: ctx.sessionID,
+              sessionId: admission.run.childSessionID,
+              subagentType: params.subagent_type,
+              model,
+              background: true,
+              jobId: admission.run.childSessionID,
+            },
+            output: renderOutput({
+              sessionID: admission.run.childSessionID,
+              state: "running",
+              summary: `Background task enqueued: ${params.description}`,
+              text: BACKGROUND_DISPATCHED,
+              maxChars: flags.subagentOutputMaxChars,
+            }),
+          }
+        }
+
+        // Foreground durable: poll task_run.state until terminal
+        const pollMs = 500
+        const maxWaitMs = flags.subagentTimeoutMs ?? 1_800_000
+        const maxPolls = Math.ceil(maxWaitMs / pollMs) + 1
+
+        let polledRun: DurableTaskRun | undefined
+        for (let i = 0; i <= maxPolls; i++) {
+          const cur = yield* getTaskRun(admission.run.runID).pipe(
+            Effect.provideService(Database.Service, database),
+          )
+          if (cur && isTerminal(cur)) { polledRun = cur; break }
+          if (i < maxPolls) yield* Effect.sleep(Duration.millis(pollMs))
+        }
+
+        const terminalRun =
+          polledRun ??
+          (yield* getTaskRun(admission.run.runID).pipe(
+            Effect.provideService(Database.Service, database),
+            Effect.flatMap((r) =>
+              r
+                ? Effect.succeed(r)
+                : Effect.die(new Error(`Durable run ${admission.run.runID} vanished`)),
+            ),
+          ))
+
+        if (terminalRun.state === "completed") {
+          return {
+            title: params.description,
+            metadata: {
+              parentSessionId: ctx.sessionID,
+              sessionId: terminalRun.childSessionID,
+              subagentType: params.subagent_type,
+              model,
+            },
+            output: renderOutput({
+              sessionID: terminalRun.childSessionID,
+              state: "completed",
+              summary: params.description,
+              text: terminalRun.output ?? "",
+              maxChars: flags.subagentOutputMaxChars,
+            }),
+          }
+        }
+
+        return yield* Effect.fail(
+          taskError({
+            code: terminalRun.state ?? "unknown",
+            message:
+              terminalRun.error?.message ??
+              `Subagent settled as ${terminalRun.state}${terminalRun.reason ? `: ${terminalRun.reason}` : ""}. ` +
+                `Call task_read({ task_id: "${terminalRun.childSessionID}" }) to inspect partial work.`,
+            sessionID: terminalRun.childSessionID,
+            phase: "research",
+            attempts: terminalRun.startAttempts ?? 1,
+          }),
+        )
+      }
+      // -----------------------------------------------------------------------
+      // End L10 — legacy path continues below
+      // -----------------------------------------------------------------------
+      // -----------------------------------------------------------------------
+      // End L10 durable routing — legacy path continues below
+      // -----------------------------------------------------------------------
+
       const shouldProvision =
         admission.runCreated || (admission.exactRetry && ["admitted", "provisioning"].includes(admission.run.state))
       const claimedRun = shouldProvision
@@ -1289,9 +1402,17 @@ export const TaskTool = Tool.define(
       // may still set it to undefined to exercise the unsupervised path. Timeout and takeover are an
       // inseparable unit: a timed-out/failed attempt is cancelled before a fresh child session respawns
       // from the same fork base. Retries are bounded by subagentTakeoverLimit (default 2).
+      //
+      // L0 (subagent-control-plane-design.zh-CN.md): when subagentControlPlane is not "legacy",
+      // automatic takeover is permanently disabled — takeoverLimit is forced to 0 so every error/timeout
+      // settles the run terminally instead of spawning a replacement child. This is the first step
+      // toward the durable control plane where owner loss produces recovery_required instead.
       if (flags.subagentTimeoutMs !== undefined) {
         const timeoutMs = flags.subagentTimeoutMs
-        const takeoverLimit = flags.subagentTakeoverLimit ?? 2
+        const takeoverLimit =
+          flags.subagentControlPlane !== "legacy"
+            ? 0 // non-legacy: zero retries; every failure is terminal (no replacement child)
+            : (flags.subagentTakeoverLimit ?? 2)
 
         // A fresh attempt gets its own worktree (same fork base as the discarded one) and a brand-new
         // child session; the resumed session (task_id) is only reused by the FIRST attempt.
