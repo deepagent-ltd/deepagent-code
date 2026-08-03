@@ -1,4 +1,4 @@
-import { sqliteTable, text, integer, index, primaryKey, real, uniqueIndex } from "drizzle-orm/sqlite-core"
+import { sqliteTable, text, integer, index, primaryKey, real, uniqueIndex, type AnySQLiteColumn } from "drizzle-orm/sqlite-core"
 import * as DatabasePath from "../database/path"
 import { ProjectTable } from "../project/sql"
 import type { SessionMessage } from "./message"
@@ -224,6 +224,7 @@ export const SessionContextEpochTable = sqliteTable("session_context_epoch", {
 export const TaskRunTable = sqliteTable(
   "task_run",
   {
+    // ── Core identity ──────────────────────────────────────────────────────
     run_id: text().primaryKey(),
     root_run_id: text(),
     request_hash: text().notNull(),
@@ -236,10 +237,24 @@ export const TaskRunTable = sqliteTable(
     child_session_id: text().$type<SessionSchema.ID>().notNull(),
     generation: integer().notNull(),
     delivery_mode: text().$type<"foreground" | "background">().notNull(),
-    phase: text().$type<"admission" | "research" | "finalize" | "settled">().notNull(),
+    phase: text()
+      .$type<"admission" | "research" | "finalize" | "settled" | "queue" | "provision">()
+      .notNull(),
     state: text()
       .$type<
-        "admitted" | "provisioning" | "researching" | "finalizing" | "completed" | "error" | "cancelled" | "interrupted"
+        | "admitted"
+        | "provisioning"
+        | "researching"
+        | "finalizing"
+        | "completed"
+        | "error"
+        | "cancelled"
+        | "interrupted"
+        | "queued"
+        | "running"
+        | "failed"
+        | "closed"
+        | "recovery_required"
       >()
       .notNull(),
     reason: text(),
@@ -253,6 +268,80 @@ export const TaskRunTable = sqliteTable(
     time_created: integer().notNull(),
     time_updated: integer().notNull(),
     time_settled: integer(),
+    // ── Run graph / lineage (L2) ───────────────────────────────────────────
+    parent_run_id: text().references((): AnySQLiteColumn => TaskRunTable.run_id, { onDelete: "cascade" }),
+    continuation_of_run_id: text().references((): AnySQLiteColumn => TaskRunTable.run_id, { onDelete: "cascade" }),
+    depth: integer().notNull().default(1),
+    // ── Origin identity ────────────────────────────────────────────────────
+    origin_kind: text().$type<"task_tool" | "goal_role">().notNull().default("task_tool"),
+    origin_key: text(),
+    // ── Modes (immutable at admission) ─────────────────────────────────────
+    effective_delivery_mode: text().$type<"foreground" | "background">().notNull().default("foreground"),
+    promoted_at: integer(),
+    session_mode: text().$type<"new" | "resume">().notNull().default("new"),
+    context_mode: text().$type<"fresh" | "fork">().notNull().default("fresh"),
+    context_cutoff_message_id: text().$type<MessageID>(),
+    // ── Capability / workspace policy (frozen at admission) ────────────────
+    mutation_capability: text().$type<"read_only" | "write">().notNull().default("write"),
+    tool_capability_hash: text().notNull().default("legacy-unknown"),
+    workspace_mode: text().$type<"shared" | "worktree">().notNull().default("shared"),
+    workspace_owner: text().$type<"parent" | "run" | "caller" | "goal">().notNull().default("parent"),
+    workspace_visibility: text().$type<"live" | "base_commit">().notNull().default("live"),
+    parent_dirty_policy: text().$type<"allow_live" | "exclude" | "reject">().notNull().default("allow_live"),
+    workspace_operation_key: text(),
+    workspace_revision: integer(),
+    execution_spec: text({ mode: "json" }).$type<Record<string, unknown>>(),
+    // ── Lifecycle / CAS ────────────────────────────────────────────────────
+    version: integer().notNull().default(0),
+    control_state: text().$type<"open" | "close_requested" | "closed">().notNull().default("open"),
+    input_state: text()
+      .$type<"pending" | "admitting" | "ready" | "conflict" | "outcome_unknown" | "legacy">()
+      .notNull()
+      .default("legacy"),
+    child_message_id: text().$type<MessageID>(),
+    input_admission_started_at: integer(),
+    child_input_materialized_hash: text(),
+    child_input_part_count: integer(),
+    execution_started_at: integer(),
+    finalizer_started_at: integer(),
+    interrupt_requested_at: integer(),
+    interrupt_reason: text(),
+    close_requested_at: integer(),
+    close_reason: text(),
+    claim_generation: integer().notNull().default(0),
+    start_attempts: integer().notNull().default(0),
+    available_at: integer().notNull().default(0),
+    priority: integer().notNull().default(0),
+    queue_reason: text(),
+    // ── Workspace provisioning receipts ────────────────────────────────────
+    workspace_preflight_state: text().$type<"legacy" | "pending" | "ready" | "failed">().notNull().default("legacy"),
+    workspace_preflight_at: integer(),
+    workspace_repository_root: text(),
+    workspace_base_commit: text(),
+    workspace_parent_branch: text(),
+    workspace_target_branch: text(),
+    workspace_status_hash: text(),
+    workspace_preflight_error_code: text(),
+    workspace_branch_state: text().$type<"none" | "admitting" | "ready" | "conflict">().notNull().default("none"),
+    workspace_branch_started_at: integer(),
+    worktree_directory: text(),
+    worktree_branch: text(),
+    worktree_state: text().$type<"none" | "admitting" | "ready" | "conflict">().notNull().default("none"),
+    worktree_started_at: integer(),
+    pr_operation_key: text(),
+    pr_started_at: integer(),
+    pr_id: text(),
+    // ── Goal-specific identity columns ─────────────────────────────────────
+    goal_id: text(),
+    goal_tick_seq: integer(),
+    goal_role: text(),
+    goal_ordinal: integer(),
+    // ── Result enrichment ──────────────────────────────────────────────────
+    result_hash: text(),
+    usage: text({ mode: "json" }).$type<Record<string, unknown>>(),
+    progress_seq: integer().notNull().default(0),
+    last_progress_at: integer(),
+    finalizer_input_message_id: text().$type<MessageID>(),
   },
   (table) => [
     uniqueIndex("task_run_child_generation_idx").on(table.child_session_id, table.generation),
@@ -261,6 +350,8 @@ export const TaskRunTable = sqliteTable(
       .where(sql`${table.state} IN ('admitted', 'provisioning', 'researching', 'finalizing')`),
     index("task_run_parent_state_idx").on(table.parent_session_id, table.state, table.time_updated),
     index("task_run_root_idx").on(table.root_run_id),
+    index("task_run_queue_idx").on(table.state, table.available_at, table.priority, table.time_created, table.generation),
+    index("task_run_goal_idx").on(table.goal_id, table.goal_tick_seq, table.goal_role, table.goal_ordinal),
   ],
 )
 
@@ -305,7 +396,18 @@ export const TaskNotificationOutboxTable = sqliteTable(
         text: string
       }>()
       .notNull(),
-    status: text().$type<"pending" | "delivering" | "delivered" | "dead">().notNull(),
+    status: text()
+      .$type<
+        | "pending"
+        | "delivering"
+        | "delivered"
+        | "dead"
+        | "admitting"
+        | "admitted"
+        | "processing"
+        | "response_recovery_required"
+      >()
+      .notNull(),
     attempts: integer().notNull().default(0),
     available_at: integer().notNull(),
     lease_owner: text(),
@@ -314,6 +416,40 @@ export const TaskNotificationOutboxTable = sqliteTable(
     time_created: integer().notNull(),
     time_updated: integer().notNull(),
     time_delivered: integer(),
+    // ── New columns (L1) ───────────────────────────────────────────────────
+    event_kind: text().$type<"terminal" | "progress" | "notification">().notNull().default("terminal"),
+    correlation_id: text(),
+    payload_hash: text(),
+    parent_input_message_id: text().$type<MessageID>(),
+    response_message_id: text().$type<MessageID>(),
+    response_started_at: integer(),
+    time_admitted: integer(),
   },
-  (table) => [index("task_notification_outbox_due_idx").on(table.status, table.available_at, table.lease_expires_at)],
+  (table) => [
+    index("task_notification_outbox_due_idx").on(table.status, table.available_at, table.lease_expires_at),
+    uniqueIndex("task_notification_outbox_parent_processing_idx")
+      .on(table.parent_session_id)
+      .where(sql`${table.status} = 'processing'`),
+  ],
+)
+
+export const TaskRunEventTable = sqliteTable(
+  "task_run_event",
+  {
+    event_id: text().primaryKey(),
+    run_id: text()
+      .notNull()
+      .references(() => TaskRunTable.run_id, { onDelete: "cascade" }),
+    version: integer().notNull(),
+    type: text().notNull(),
+    from_state: text(),
+    to_state: text(),
+    reason: text(),
+    data: text({ mode: "json" }).$type<unknown>(),
+    time_created: integer().notNull(),
+  },
+  (table) => [
+    uniqueIndex("task_run_event_run_version_idx").on(table.run_id, table.version),
+    index("task_run_event_time_idx").on(table.time_created, table.event_id),
+  ],
 )

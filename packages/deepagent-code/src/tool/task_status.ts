@@ -1,6 +1,9 @@
 import * as Tool from "./tool"
 import { BackgroundJob } from "@/background/job"
 import { Session } from "@/session/session"
+import { Database } from "@deepagent-code/core/database/database"
+import { TaskRunTable } from "@deepagent-code/core/session/sql"
+import { and, eq, max } from "drizzle-orm"
 import { Effect, Schema } from "effect"
 import type { SessionID } from "@/session/schema"
 
@@ -46,6 +49,7 @@ export const TaskStatusTool = Tool.define(
   Effect.gen(function* () {
     const background = yield* BackgroundJob.Service
     const sessions = yield* Session.Service
+    const { db } = yield* Database.Service  // L10: hoist for durable run overlay
 
     const run = Effect.fn("TaskStatusTool.execute")(function* (
       _params: Schema.Schema.Type<typeof Parameters>,
@@ -57,6 +61,25 @@ export const TaskStatusTool = Tool.define(
       const children = yield* sessions.children(ctx.sessionID as SessionID).pipe(
         Effect.catchCause(() => Effect.succeed([] as Session.Info[])),
       )
+
+      // L10: Layer 1b — durable task_run rows keyed by child_session_id
+      const durableRuns = yield* db
+        .select({
+          child_session_id: TaskRunTable.child_session_id,
+          state: TaskRunTable.state,
+          control_state: TaskRunTable.control_state,
+          mutation_capability: TaskRunTable.mutation_capability,
+          workspace_mode: TaskRunTable.workspace_mode,
+          input_state: TaskRunTable.input_state,
+          worktree_directory: TaskRunTable.worktree_directory,
+          generation: max(TaskRunTable.generation),
+        })
+        .from(TaskRunTable)
+        .where(eq(TaskRunTable.parent_session_id, ctx.sessionID))
+        .groupBy(TaskRunTable.child_session_id)
+        .all()
+        .pipe(Effect.orDie)
+      const runByChild = new Map(durableRuns.map((r) => [r.child_session_id, r]))
 
       // Layer 2: live BackgroundJob overlay (process-local, advisory).
       const liveJobs = yield* background.list().pipe(

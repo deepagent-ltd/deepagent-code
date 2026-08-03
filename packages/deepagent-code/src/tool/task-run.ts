@@ -2,10 +2,11 @@ import { Database } from "@deepagent-code/core/database/database"
 import {
   TaskAdmissionTable,
   TaskNotificationOutboxTable,
+  TaskRunEventTable,
   TaskRunTable,
   SessionTable,
 } from "@deepagent-code/core/session/sql"
-import { and, asc, eq, gt, inArray, isNull, lte, max, or, sql } from "drizzle-orm"
+import { and, asc, eq, gt, inArray, isNull, lt, lte, max, ne, or, sql } from "drizzle-orm"
 import { Cause, Data, Effect } from "effect"
 import { Identifier } from "@/id/id"
 import { MessageID, SessionID } from "@/session/schema"
@@ -20,10 +21,22 @@ export type State =
   | "error"
   | "cancelled"
   | "interrupted"
-export type Phase = "admission" | "research" | "finalize" | "settled"
+  | "queued"
+  | "running"
+  | "failed"
+  | "closed"
+  | "recovery_required"
+export type Phase = "admission" | "research" | "finalize" | "settled" | "queue" | "provision"
 export type DeliveryMode = "foreground" | "background"
 export type ErrorData = { code: string; message: string; data?: Record<string, unknown> }
 export type NotificationPayload = { agent: string; variant?: string; text: string }
+
+export type ControlState = "open" | "close_requested" | "closed"
+export type OriginKind = "task_tool" | "goal_role"
+export type InputState = "pending" | "admitting" | "ready" | "conflict" | "outcome_unknown" | "legacy"
+export type MutationCapability = "read_only" | "write"
+export type WorkspaceMode = "shared" | "worktree"
+export type WorkspaceOwner = "parent" | "run" | "caller" | "goal"
 
 export type Run = {
   runID: string
@@ -48,6 +61,34 @@ export type Run = {
   timeCreated: number
   timeUpdated: number
   timeSettled?: number
+  // L1 new fields (all optional for backward compat with pre-migration rows)
+  version: number
+  controlState: ControlState
+  originKind: OriginKind
+  originKey?: string
+  depth: number
+  mutationCapability: MutationCapability
+  workspaceMode: WorkspaceMode
+  workspaceOwner: WorkspaceOwner
+  inputState: InputState
+  startAttempts: number
+  claimGeneration: number
+  availableAt: number
+  // L3d: child input admission
+  childMessageID?: MessageID
+  executionSpec?: { readonly prompt?: { readonly text?: string } } | null
+}
+
+export type RunEvent = {
+  eventId: string
+  runId: string
+  version: number
+  type: string
+  fromState?: string
+  toState?: string
+  reason?: string
+  data?: unknown
+  timeCreated: number
 }
 
 export type Admission = {
@@ -114,6 +155,19 @@ const fromRow = (row: typeof TaskRunTable.$inferSelect): Run => ({
   timeCreated: row.time_created,
   timeUpdated: row.time_updated,
   timeSettled: row.time_settled ?? undefined,
+  // L1 fields with safe fallbacks for pre-migration rows
+  version: row.version ?? 0,
+  controlState: (row.control_state as ControlState | null) ?? "open",
+  originKind: (row.origin_kind as OriginKind | null) ?? "task_tool",
+  originKey: row.origin_key ?? undefined,
+  depth: row.depth ?? 1,
+  mutationCapability: (row.mutation_capability as MutationCapability | null) ?? "write",
+  workspaceMode: (row.workspace_mode as WorkspaceMode | null) ?? "shared",
+  workspaceOwner: (row.workspace_owner as WorkspaceOwner | null) ?? "parent",
+  inputState: (row.input_state as InputState | null) ?? "legacy",
+  startAttempts: row.start_attempts ?? 0,
+  claimGeneration: row.claim_generation ?? 0,
+  availableAt: row.available_at ?? 0,
 })
 
 const admissionKey = (input: { parentSessionID: SessionID; parentMessageID: MessageID; toolCallID: string }) =>
@@ -896,3 +950,651 @@ export function deliverTaskNotifications(input: {
 }
 
 export const isTerminal = (run: Run) => terminalStates.includes(run.state)
+
+// ---------------------------------------------------------------------------
+// L2: Run graph, ancestor guard and recursive close
+// Design: subagent-control-plane-design.zh-CN.md §6.2, §6.9, §6.10
+// ---------------------------------------------------------------------------
+
+export class AncestorClosedError extends Data.TaggedError("TaskRun.AncestorClosedError")<{
+  readonly closedRunID: string
+  readonly controlState: ControlState
+}> {}
+
+export class RecoveryNotRequiredError extends Data.TaggedError("TaskRun.RecoveryNotRequiredError")<{
+  readonly runID: string
+  readonly actualState: State
+}> {}
+
+/**
+ * Check that all ancestors of the calling parent run have control_state = "open".
+ * Fails with AncestorClosedError if any ancestor is close_requested or closed.
+ * Top-level calls (no parent admission row) succeed immediately.
+ *
+ * Depth is bounded to 3 by design (§1.3 invariant 6), so iterative walk is fine.
+ */
+export function checkAncestorControl(input: {
+  parentSessionID: SessionID
+  parentMessageID: MessageID
+  toolCallID: string
+}) {
+  return Effect.gen(function* () {
+    const { db } = yield* Database.Service
+    const key = `${input.parentSessionID} ${input.parentMessageID} ${input.toolCallID}`
+
+    // Find parent run via admission record
+    const admission = yield* db
+      .select({ run_id: TaskAdmissionTable.run_id })
+      .from(TaskAdmissionTable)
+      .where(eq(TaskAdmissionTable.admission_key, key))
+      .get()
+      .pipe(Effect.orDie)
+    if (!admission) return // top-level: no parent → nothing to check
+
+    // Walk ancestor chain (bounded by MAX_FORK_DEPTH = 3)
+    let currentID: string | null = admission.run_id
+    while (currentID !== null) {
+      const row: { run_id: string; parent_run_id: string | null; control_state: string } | undefined = yield* db
+        .select({
+          run_id: TaskRunTable.run_id,
+          parent_run_id: TaskRunTable.parent_run_id,
+          control_state: TaskRunTable.control_state,
+        })
+        .from(TaskRunTable)
+        .where(eq(TaskRunTable.run_id, currentID))
+        .get()
+        .pipe(Effect.orDie)
+      if (!row) break
+      if (row.control_state !== "open") {
+        return yield* Effect.fail(
+          new AncestorClosedError({
+            closedRunID: row.run_id,
+            controlState: row.control_state as ControlState,
+          }),
+        )
+      }
+      currentID = row.parent_run_id ?? null
+    }
+  })
+}
+
+/**
+ * Atomically close a run subtree in a single IMMEDIATE transaction.
+ *
+ * Collects rootRunID + all descendants (via parent_run_id BFS) + any
+ * same-child higher-generation queued continuations, then for each:
+ *   admitted / queued / recovery_required  →  state = "closed" (terminal)
+ *   provisioning / running / finalizing    →  control_state = "close_requested"
+ *   already closed                         →  skip
+ *
+ * Each state change writes a matching task_run_event in the same transaction.
+ * Design §6.9.
+ */
+export function requestClose(input: {
+  rootRunID: string
+  reason: string
+  now?: number
+}) {
+  return Effect.gen(function* () {
+    const { db } = yield* Database.Service
+    const now = input.now ?? Date.now()
+
+    return yield* Effect.uninterruptible(
+      db.transaction(
+        (tx) =>
+          Effect.gen(function* () {
+            // Iterative BFS to collect all runs in the subtree.
+            // Depth is bounded (design §1.3 invariant 6), so this terminates quickly.
+            const visited = new Set<string>([input.rootRunID])
+            const queue = [input.rootRunID]
+
+            while (queue.length > 0) {
+              const batch = queue.splice(0)
+              const children = yield* tx
+                .select({ run_id: TaskRunTable.run_id })
+                .from(TaskRunTable)
+                .where(inArray(TaskRunTable.parent_run_id, batch))
+                .all()
+                .pipe(Effect.orDie)
+              for (const c of children) {
+                if (!visited.has(c.run_id)) {
+                  visited.add(c.run_id)
+                  queue.push(c.run_id)
+                }
+              }
+            }
+
+            // Collect all rows at once for processing
+            const rows = yield* tx
+              .select({
+                run_id: TaskRunTable.run_id,
+                child_session_id: TaskRunTable.child_session_id,
+                generation: TaskRunTable.generation,
+                state: TaskRunTable.state,
+                control_state: TaskRunTable.control_state,
+                version: TaskRunTable.version,
+              })
+              .from(TaskRunTable)
+              .where(inArray(TaskRunTable.run_id, [...visited]))
+              .all()
+              .pipe(Effect.orDie)
+
+            // Also find same-child higher-generation queued continuations
+            const sessionIDs = [...new Set(rows.map((r) => r.child_session_id))]
+            const maxGenBySession = new Map<string, number>()
+            for (const r of rows) {
+              const cur = maxGenBySession.get(r.child_session_id) ?? 0
+              if (r.generation > cur) maxGenBySession.set(r.child_session_id, r.generation)
+            }
+            const continuations = yield* tx
+              .select({
+                run_id: TaskRunTable.run_id,
+                child_session_id: TaskRunTable.child_session_id,
+                generation: TaskRunTable.generation,
+                state: TaskRunTable.state,
+                control_state: TaskRunTable.control_state,
+                version: TaskRunTable.version,
+              })
+              .from(TaskRunTable)
+              .where(
+                and(
+                  inArray(TaskRunTable.child_session_id, sessionIDs),
+                  inArray(TaskRunTable.state, ["admitted", "queued"] as State[]),
+                ),
+              )
+              .all()
+              .pipe(Effect.orDie)
+            for (const c of continuations) {
+              if (!visited.has(c.run_id)) rows.push(c)
+            }
+
+            const changed: Array<{ runID: string; oldState: State; newState: State }> = []
+            const immediateTerminal: State[] = ["admitted", "queued", "recovery_required"]
+            const activeStates: State[] = ["provisioning", "running", "researching", "finalizing"]
+
+            for (const row of rows) {
+              if (row.control_state === "closed") continue
+
+              const oldState = row.state as State
+
+              if (immediateTerminal.includes(oldState)) {
+                // Settle immediately
+                const updated = yield* tx
+                  .update(TaskRunTable)
+                  .set({
+                    control_state: "closed",
+                    state: "closed",
+                    phase: "settled",
+                    close_requested_at: now,
+                    close_reason: input.reason,
+                    version: row.version + 1,
+                    time_updated: now,
+                    time_settled: now,
+                  })
+                  .where(and(eq(TaskRunTable.run_id, row.run_id), eq(TaskRunTable.version, row.version)))
+                  .returning({ run_id: TaskRunTable.run_id, version: TaskRunTable.version })
+                  .get()
+                  .pipe(Effect.orDie)
+                if (updated) {
+                  yield* tx
+                    .insert(TaskRunEventTable)
+                    .values({
+                      event_id: Identifier.ascending("event"),
+                      run_id: row.run_id,
+                      version: updated.version,
+                      type: "run_closed",
+                      from_state: oldState,
+                      to_state: "closed",
+                      reason: input.reason,
+                      time_created: now,
+                    })
+                    .run()
+                    .pipe(Effect.orDie)
+                  changed.push({ runID: row.run_id, oldState, newState: "closed" })
+                }
+              } else if (activeStates.includes(oldState)) {
+                // Mark close intent; executor settles when it finishes
+                const updated = yield* tx
+                  .update(TaskRunTable)
+                  .set({
+                    control_state: "close_requested",
+                    close_requested_at: now,
+                    close_reason: input.reason,
+                    version: row.version + 1,
+                    time_updated: now,
+                  })
+                  .where(
+                    and(
+                      eq(TaskRunTable.run_id, row.run_id),
+                      eq(TaskRunTable.version, row.version),
+                      ne(TaskRunTable.control_state, "closed"),
+                    ),
+                  )
+                  .returning({ run_id: TaskRunTable.run_id, version: TaskRunTable.version })
+                  .get()
+                  .pipe(Effect.orDie)
+                if (updated) {
+                  yield* tx
+                    .insert(TaskRunEventTable)
+                    .values({
+                      event_id: Identifier.ascending("event"),
+                      run_id: row.run_id,
+                      version: updated.version,
+                      type: "close_requested",
+                      from_state: oldState,
+                      to_state: oldState,
+                      reason: input.reason,
+                      time_created: now,
+                    })
+                    .run()
+                    .pipe(Effect.orDie)
+                  changed.push({ runID: row.run_id, oldState, newState: oldState })
+                }
+              }
+            }
+
+            return changed as ReadonlyArray<{ runID: string; oldState: State; newState: State }>
+          }),
+        { behavior: "immediate" },
+      ),
+    )
+  })
+}
+
+/**
+ * Resolve a recovery_required run via explicit host/user action.
+ * The only two valid resolutions are "failed" and "closed" (design §6.10).
+ * Closes all descendants in the same transaction.
+ */
+export function resolveRecovery(input: {
+  runID: string
+  resolution: "failed" | "closed"
+  reason: string
+  now?: number
+}) {
+  return Effect.gen(function* () {
+    const { db } = yield* Database.Service
+    const now = input.now ?? Date.now()
+
+    return yield* Effect.uninterruptible(
+      db.transaction(
+        (tx) =>
+          Effect.gen(function* () {
+            const current = yield* tx
+              .select()
+              .from(TaskRunTable)
+              .where(eq(TaskRunTable.run_id, input.runID))
+              .get()
+              .pipe(Effect.orDie)
+            if (!current || current.state !== "recovery_required") {
+              return yield* Effect.fail(
+                new RecoveryNotRequiredError({
+                  runID: input.runID,
+                  actualState: (current?.state ?? "absent") as State,
+                }),
+              )
+            }
+
+            const updated = yield* tx
+              .update(TaskRunTable)
+              .set({
+                state: input.resolution,
+                phase: "settled",
+                control_state: "closed",
+                close_requested_at: now,
+                close_reason: input.reason,
+                version: current.version + 1,
+                time_updated: now,
+                time_settled: now,
+              })
+              .where(and(eq(TaskRunTable.run_id, input.runID), eq(TaskRunTable.version, current.version)))
+              .returning()
+              .get()
+              .pipe(Effect.orDie)
+
+            if (!updated) {
+              return yield* Effect.die(
+                new Error(
+                  `resolveRecovery CAS lost for run ${input.runID} — concurrent mutation won the version race`,
+                ),
+              )
+            }
+
+            yield* tx
+              .insert(TaskRunEventTable)
+              .values({
+                event_id: Identifier.ascending("event"),
+                run_id: input.runID,
+                version: updated.version,
+                type: "recovery_resolved",
+                from_state: "recovery_required",
+                to_state: input.resolution,
+                reason: input.reason,
+                time_created: now,
+              })
+              .run()
+              .pipe(Effect.orDie)
+
+            return fromRow(updated)
+          }),
+        { behavior: "immediate" },
+      ),
+    )
+  }).pipe(
+    // After settling the run, close descendants (separate transaction to avoid nested tx)
+    Effect.tap((run) =>
+      requestClose({ rootRunID: run.runID, reason: `parent_resolved:${input.reason}`, now: input.now }).pipe(
+        Effect.ignore,
+      ),
+    ),
+  )
+}
+
+// ---------------------------------------------------------------------------
+// L6: Interrupt, shutdown and reconciliation
+// Design: subagent-control-plane-design.zh-CN.md §6.8, §11
+// ---------------------------------------------------------------------------
+
+/**
+ * Request interrupt for a run.
+ * - admitted/queued: immediately settled as "cancelled"
+ * - provisioning/running/finalizing: writes interrupt intent; executor settles it
+ * - already terminal: no-op
+ * Design §6.8
+ */
+export function requestInterrupt(input: {
+  runID: string
+  reason: string
+  now?: number
+}) {
+  return Effect.gen(function* () {
+    const { db } = yield* Database.Service
+    const now = input.now ?? Date.now()
+
+    return yield* Effect.uninterruptible(
+      db.transaction(
+        (tx) =>
+          Effect.gen(function* () {
+            const run = yield* tx
+              .select()
+              .from(TaskRunTable)
+              .where(eq(TaskRunTable.run_id, input.runID))
+              .get()
+              .pipe(Effect.orDie)
+            if (!run) return yield* Effect.die(new Error(`requestInterrupt: run ${input.runID} not found`))
+
+            const terminalStates: State[] = [
+              "completed", "failed", "cancelled", "interrupted", "closed",
+            ]
+            if (terminalStates.includes(run.state as State)) {
+              return fromRow(run) // already terminal
+            }
+
+            const immediateCancel: State[] = ["admitted", "queued"]
+            if (immediateCancel.includes(run.state as State)) {
+              const updated = yield* tx
+                .update(TaskRunTable)
+                .set({
+                  state: "cancelled",
+                  phase: "settled",
+                  control_state: "closed",
+                  interrupt_requested_at: now,
+                  interrupt_reason: input.reason,
+                  version: run.version + 1,
+                  time_updated: now,
+                  time_settled: now,
+                })
+                .where(and(eq(TaskRunTable.run_id, input.runID), eq(TaskRunTable.version, run.version)))
+                .returning()
+                .get()
+                .pipe(Effect.orDie)
+              if (updated) {
+                yield* tx
+                  .insert(TaskRunEventTable)
+                  .values({
+                    event_id: Identifier.ascending("event"),
+                    run_id: input.runID,
+                    version: updated.version,
+                    type: "run_settled",
+                    from_state: run.state,
+                    to_state: "cancelled",
+                    reason: input.reason,
+                    time_created: now,
+                  })
+                  .run()
+                  .pipe(Effect.orDie)
+                return fromRow(updated)
+              }
+              return fromRow(run)
+            }
+
+            // active run — write interrupt intent; executor will settle
+            const updated = yield* tx
+              .update(TaskRunTable)
+              .set({
+                interrupt_requested_at: now,
+                interrupt_reason: input.reason,
+                version: run.version + 1,
+                time_updated: now,
+              })
+              .where(and(eq(TaskRunTable.run_id, input.runID), eq(TaskRunTable.version, run.version)))
+              .returning()
+              .get()
+              .pipe(Effect.orDie)
+            if (updated) {
+              yield* tx
+                .insert(TaskRunEventTable)
+                .values({
+                  event_id: Identifier.ascending("event"),
+                  run_id: input.runID,
+                  version: updated.version,
+                  type: "interrupt_requested",
+                  from_state: run.state,
+                  to_state: run.state,
+                  reason: input.reason,
+                  time_created: now,
+                })
+                .run()
+                .pipe(Effect.orDie)
+              return fromRow(updated)
+            }
+            return fromRow(run)
+          }),
+        { behavior: "immediate" },
+      ),
+    )
+  })
+}
+
+/**
+ * Classify runs for a directory on process startup.
+ * Called before new admissions are accepted (design §11.1).
+ * - provisioning + input_state=admitting → recovery_required(input_admission_outcome_unknown)
+ * - provisioning + input_state=ready/pending + no execution_started_at → re-enqueue to queued
+ * - running/finalizing or execution_started_at set → recovery_required(execution_owner_lost)
+ */
+export function classifyOnStartup(input: {
+  directory: string
+  now?: number
+}) {
+  return Effect.gen(function* () {
+    const { db } = yield* Database.Service
+    const now = input.now ?? Date.now()
+
+    const candidates = yield* db
+      .select({ run: TaskRunTable })
+      .from(TaskRunTable)
+      .innerJoin(SessionTable, eq(SessionTable.id, TaskRunTable.parent_session_id))
+      .where(
+        and(
+          eq(SessionTable.directory, input.directory),
+          inArray(TaskRunTable.state, ["provisioning", "running", "researching", "finalizing"]),
+        ),
+      )
+      .all()
+      .pipe(Effect.orDie)
+
+    let classified = 0
+    let requeued = 0
+
+    for (const { run } of candidates) {
+      const canRequeue =
+        run.state === "provisioning" &&
+        (run.input_state === "ready" || run.input_state === "pending") &&
+        !run.execution_started_at
+
+      if (canRequeue) {
+        const updated = yield* db
+          .update(TaskRunTable)
+          .set({
+            state: "queued",
+            phase: "queue",
+            execution_owner: null,
+            lease_expires_at: null,
+            available_at: now,
+            version: (run.version ?? 0) + 1,
+            time_updated: now,
+          })
+          .where(and(eq(TaskRunTable.run_id, run.run_id), eq(TaskRunTable.version, run.version ?? 0)))
+          .returning({ run_id: TaskRunTable.run_id, version: TaskRunTable.version })
+          .get()
+          .pipe(Effect.orDie)
+        if (updated) {
+          yield* db
+            .insert(TaskRunEventTable)
+            .values({
+              event_id: Identifier.ascending("event"),
+              run_id: run.run_id,
+              version: updated.version,
+              type: "run_requeued_on_startup",
+              from_state: run.state,
+              to_state: "queued",
+              reason: "safe_requeue",
+              time_created: now,
+            })
+            .run()
+            .pipe(Effect.orDie)
+          requeued++
+        }
+      } else {
+        const reason =
+          run.input_state === "admitting"
+            ? "input_admission_outcome_unknown"
+            : "execution_owner_lost"
+        const updated = yield* db
+          .update(TaskRunTable)
+          .set({
+            state: "recovery_required",
+            execution_owner: null,
+            lease_expires_at: null,
+            version: (run.version ?? 0) + 1,
+            time_updated: now,
+          })
+          .where(and(eq(TaskRunTable.run_id, run.run_id), eq(TaskRunTable.version, run.version ?? 0)))
+          .returning({ run_id: TaskRunTable.run_id, version: TaskRunTable.version })
+          .get()
+          .pipe(Effect.orDie)
+        if (updated) {
+          yield* db
+            .insert(TaskRunEventTable)
+            .values({
+              event_id: Identifier.ascending("event"),
+              run_id: run.run_id,
+              version: updated.version,
+              type: "recovery_required",
+              from_state: run.state,
+              to_state: "recovery_required",
+              reason,
+              time_created: now,
+            })
+            .run()
+            .pipe(Effect.orDie)
+          classified++
+        }
+      }
+    }
+
+    return { classified, requeued }
+  })
+}
+
+/**
+ * Ordered shutdown: signal interrupt for active runs, classify provisioning runs.
+ * Called before closing the process (design §11.3).
+ */
+export function orderedShutdown(input: {
+  directory: string
+  now?: number
+}) {
+  return Effect.gen(function* () {
+    const { db } = yield* Database.Service
+    const now = input.now ?? Date.now()
+
+    const candidates = yield* db
+      .select({ run_id: TaskRunTable.run_id, state: TaskRunTable.state,
+                version: TaskRunTable.version, input_state: TaskRunTable.input_state,
+                execution_started_at: TaskRunTable.execution_started_at })
+      .from(TaskRunTable)
+      .innerJoin(SessionTable, eq(SessionTable.id, TaskRunTable.parent_session_id))
+      .where(
+        and(
+          eq(SessionTable.directory, input.directory),
+          inArray(TaskRunTable.state, [
+            "provisioning", "running", "researching", "finalizing",
+          ]),
+        ),
+      )
+      .all()
+      .pipe(Effect.orDie)
+
+    let signalled = 0
+    for (const run of candidates) {
+      const isActive = (["running", "researching", "finalizing"] as State[]).includes(run.state as State)
+      const canRequeue =
+        run.state === "provisioning" &&
+        run.input_state === "ready" &&
+        !run.execution_started_at
+
+      if (canRequeue) {
+        yield* requestInterrupt({ runID: run.run_id, reason: "shutdown_interrupt", now }).pipe(Effect.ignore)
+      } else if (isActive) {
+        yield* requestInterrupt({ runID: run.run_id, reason: "shutdown_interrupt", now }).pipe(Effect.ignore)
+        signalled++
+      } else {
+        // provisioning, not safe to requeue — classify as recovery_required
+        const updated = yield* db
+          .update(TaskRunTable)
+          .set({
+            state: "recovery_required",
+            execution_owner: null,
+            lease_expires_at: null,
+            version: (run.version ?? 0) + 1,
+            time_updated: now,
+          })
+          .where(and(eq(TaskRunTable.run_id, run.run_id), eq(TaskRunTable.version, run.version ?? 0)))
+          .returning({ run_id: TaskRunTable.run_id, version: TaskRunTable.version })
+          .get()
+          .pipe(Effect.orDie)
+        if (updated) {
+          yield* db
+            .insert(TaskRunEventTable)
+            .values({
+              event_id: Identifier.ascending("event"),
+              run_id: run.run_id,
+              version: updated.version,
+              type: "recovery_required",
+              from_state: run.state,
+              to_state: "recovery_required",
+              reason: "shutdown_owner_lost",
+              time_created: now,
+            })
+            .run()
+            .pipe(Effect.orDie)
+        }
+      }
+    }
+
+    return { signalled }
+  })
+}
+

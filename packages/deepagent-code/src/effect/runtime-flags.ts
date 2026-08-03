@@ -61,6 +61,20 @@ export class Service extends ConfigService.Service<Service>()("@deepagent-code/R
   // v4.0.4 块1: 单个子 Agent 任务被 takeover(超时/崩溃后重生)的最大次数。达上限仍失败则上报主 Agent。
   // 默认 undefined ⇒ 代码内回退到 2。防无限接管。
   subagentTakeoverLimit: positiveInteger("DEEPAGENT_CODE_SUBAGENT_TAKEOVER_LIMIT"),
+  // Subagent control plane rollout gate (L0 design, subagent-control-plane-design.zh-CN.md §13.3).
+  //
+  //  "legacy"  — preserve current task.ts behavior including automatic takeover on timeout/crash
+  //              (default; no behavior change for existing deployments).
+  //  "shadow"  — durable coordinator records expected lifecycle events alongside the legacy helper;
+  //              takeover is disabled (zero takeover limit); execution still driven by legacy path.
+  //  "durable" — all lifecycle owned by the durable TaskCoordinator (L4+); takeover permanently
+  //              removed; SessionPrompt driven through LegacySubagentExecutor.
+  //
+  // Automatic takeover is permanently disabled for any value other than "legacy". Once set to
+  // "durable" it MUST NOT be rolled back to re-enable takeover (design §13.4).
+  subagentControlPlane: Config.string("DEEPAGENT_CODE_SUBAGENT_CONTROL_PLANE").pipe(
+    Config.withDefault("legacy"),
+  ),
   // Parent injection is bounded by default. The complete result remains durable in the child Session
   // and the truncated envelope carries the task_read recovery pointer.
   subagentOutputMaxChars: positiveIntegerWithDefault(

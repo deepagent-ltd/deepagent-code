@@ -118,7 +118,11 @@ import { LLMEvent } from "@deepagent-code/llm"
 import { ConversationLogWriter } from "./conversation-log-writer"
 import { collectVolatileFacts, refreshWorldState } from "./context-ledger"
 import { ToolSemanticFingerprint } from "@/tool/semantic-fingerprint"
-import { deliverTaskNotifications, recoverExpiredTaskRuns } from "@/tool/task-run"
+import { deliverTaskNotifications, recoverExpiredTaskRuns, classifyOnStartup } from "@/tool/task-run"
+// L10: durable control plane daemons
+import { TaskDispatcher } from "@/session/task-dispatcher"
+import { LegacySubagentExecutor } from "@/session/task-executor"
+import { TaskDelivery } from "@/session/task-delivery"
 import { registerDisposer, registerInitializer } from "@/effect/instance-registry"
 import { EventRouteRef, InstanceRef } from "@/effect/instance-ref"
 import { InstanceStore } from "@/project/instance-store"
@@ -3258,12 +3262,86 @@ export const layer = Layer.effect(
       notificationWorkers.delete(directory)
       return Effect.runPromise(Fiber.interrupt(worker).pipe(Effect.asVoid))
     })
+
+    // L10: durable control plane — TaskDispatcher daemon.
+    // Background task notification delivery (outbox) is handled by the existing notificationWorkers
+    // which already poll the same task_notification_outbox table. No separate delivery daemon needed.
+    // TaskDelivery.startDeliveryLoop is available for future standalone wiring.
+    const durableWorkers = new Map<string, Fiber.Fiber<void, never>>()
+    const startDurableWorkers = registerInitializer((ctx) =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          if (flags.subagentControlPlane === "legacy") return
+          if (durableWorkers.has(ctx.directory)) return
+
+          const ownerToken = `durable-cp:${process.pid}:${randomUUID()}`
+
+          // Classify lost runs on startup (safe requeue or recovery_required)
+          yield* classifyOnStartup({ directory: ctx.directory }).pipe(
+            Effect.provideService(Database.Service, database),
+            Effect.catchCause((cause) =>
+              Effect.sync(() =>
+                log.error("durable-cp: classifyOnStartup failed", {
+                  directory: ctx.directory,
+                  cause: Cause.pretty(cause),
+                }),
+              ),
+            ),
+          )
+
+          // Dispatcher daemon: claims queued runs and drives them via the captured `loop` closure.
+          // Using the closure avoids a circular SessionPrompt.Service dependency since we are
+          // inside the factory. InstanceRef is provided via `ctx`.
+          const dispatchFiber = yield* TaskDispatcher.startDispatchLoop({
+            ownerToken,
+            intervalMs: 500,
+            onClaimed: (claim) =>
+              loop({ sessionID: claim.childSessionID as any }).pipe(
+                Effect.provideService(InstanceRef, ctx),
+                Effect.ignore,
+                Effect.catchCause(() => Effect.void),
+              ),
+          }).pipe(
+            Effect.provideService(Database.Service, database),
+            Effect.catchCause((cause) =>
+              Effect.logError("durable-cp: dispatch loop crashed", { cause: Cause.pretty(cause) }),
+            ),
+            Effect.asVoid,
+            Effect.forkIn(scope),
+          )
+
+          durableWorkers.set(ctx.directory, dispatchFiber)
+          log.info("durable-cp: dispatcher started", {
+            directory: ctx.directory,
+            mode: flags.subagentControlPlane,
+          })
+        }).pipe(
+          Effect.provideService(Database.Service, database),
+          Effect.provideService(Scope.Scope, scope),
+          Effect.provideService(InstanceRef, ctx),
+        ),
+      ),
+    )
+    const stopDurableWorkers = registerDisposer((directory) => {
+      const fiber = durableWorkers.get(directory)
+      if (!fiber) return Promise.resolve()
+      durableWorkers.delete(directory)
+      return Effect.runPromise(Fiber.interrupt(fiber).pipe(Effect.asVoid))
+    })
     yield* Effect.addFinalizer(() =>
       Effect.gen(function* () {
         startNotificationWorker()
         stopNotificationWorker()
         yield* Effect.forEach(notificationWorkers.values(), Fiber.interrupt, { discard: true })
         notificationWorkers.clear()
+        startDurableWorkers()
+        stopDurableWorkers()
+        yield* Effect.forEach(
+          [...durableWorkers.values()].flat(),
+          Fiber.interrupt,
+          { discard: true },
+        )
+        durableWorkers.clear()
       }),
     )
 
