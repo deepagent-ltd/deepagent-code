@@ -68,7 +68,6 @@ export class Service extends ConfigService.Service<Service>()("@deepagent-code/R
     DEFAULT_SUBAGENT_OUTPUT_MAX_CHARS,
   ),
   subagentResearchStepLimit: positiveInteger("DEEPAGENT_CODE_SUBAGENT_RESEARCH_STEP_LIMIT"),
-  subagentResearchTokenLimit: positiveInteger("DEEPAGENT_CODE_SUBAGENT_RESEARCH_TOKEN_LIMIT"),
   subagentResearchWallMs: positiveInteger("DEEPAGENT_CODE_SUBAGENT_RESEARCH_WALL_MS"),
   subagentNoProgressLimit: positiveInteger("DEEPAGENT_CODE_SUBAGENT_NO_PROGRESS_LIMIT"),
   subagentPermissionTimeoutMs: positiveInteger("DEEPAGENT_CODE_SUBAGENT_PERMISSION_TIMEOUT_MS"),

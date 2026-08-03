@@ -536,7 +536,11 @@ describe("tool.task", () => {
       expect(yield* Effect.promise(() => cancelled.promise)).toBe(input.sessionID)
 
       const exit = yield* Fiber.await(fiber)
-      expect(Exit.isSuccess(exit)).toBe(true)
+      expect(Exit.isFailure(exit)).toBe(true)
+      const jobs = yield* BackgroundJob.Service
+      expect((yield* jobs.get(input.sessionID))?.status).toBe("cancelled")
+      const sessions = yield* Session.Service
+      expect((yield* sessions.get(input.sessionID)).metadata?.deepagent?.subagent?.state).toBe("interrupted")
     }),
   )
 
