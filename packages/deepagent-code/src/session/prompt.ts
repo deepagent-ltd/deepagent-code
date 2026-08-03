@@ -3289,17 +3289,24 @@ export const layer = Layer.effect(
             ),
           )
 
-          // Dispatcher daemon: claims queued runs and drives them via the captured `loop` closure.
-          // Using the closure avoids a circular SessionPrompt.Service dependency since we are
-          // inside the factory. InstanceRef is provided via `ctx`.
+          // Dispatcher daemon: claims queued runs and drives them through LegacySubagentExecutor.
+          // The loopFn is injected via closure (loop + InstanceRef provided via ctx), avoiding the
+          // circular SessionPrompt.Service dependency while preserving full CAS state management,
+          // lease renewal, interrupt check, and background outbox creation.
           const dispatchFiber = yield* TaskDispatcher.startDispatchLoop({
             ownerToken,
             intervalMs: 500,
             onClaimed: (claim) =>
-              loop({ sessionID: claim.childSessionID as any }).pipe(
-                Effect.provideService(InstanceRef, ctx),
+              LegacySubagentExecutor.runFromClaim({
+                claim,
+                ownerToken,
+                loopFn: (sessionID) =>
+                  loop({ sessionID }).pipe(
+                    Effect.provideService(InstanceRef, ctx),
+                  ) as any,
+              }).pipe(
+                Effect.provideService(Database.Service, database),
                 Effect.ignore,
-                Effect.catchCause(() => Effect.void),
               ),
           }).pipe(
             Effect.provideService(Database.Service, database),
