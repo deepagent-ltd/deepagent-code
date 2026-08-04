@@ -387,4 +387,37 @@ describe("subagentIsWriteType", () => {
     const a = makeAgent("a", [makeRule("*", "deny"), makeRule("write", "allow", "output/**")])
     expect(subagentIsWriteType(a)).toBe(true)
   })
+
+  // BUG-001-405 Fix-A regression: researcher profile must be read-only
+  it("researcher profile (star-deny + read/grep/glob/list/webfetch/websearch/code_intel, NO bash) is read-only", () => {
+    const researcherPermissions: PermissionV1.Rule[] = [
+      makeRule("*", "deny"),
+      makeRule("grep", "allow"),
+      makeRule("glob", "allow"),
+      makeRule("list", "allow"),
+      // bash intentionally absent — matches the Fix-A change in agent.ts
+      makeRule("webfetch", "allow"),
+      makeRule("websearch", "allow"),
+      makeRule("read", "allow"),
+      makeRule("code_intel", "allow"),
+      makeRule("context_query", "allow"),
+      makeRule("task", "deny"),
+    ]
+    const researcher = makeAgent("researcher", researcherPermissions)
+    expect(subagentIsWriteType(researcher)).toBe(false)
+  })
+
+  // Verify that adding bash back would flip the result (documents why bash must stay absent)
+  it("researcher profile WITH bash:allow is write-type (confirms Fix-A necessity)", () => {
+    const withBash: PermissionV1.Rule[] = [
+      makeRule("*", "deny"),
+      makeRule("grep", "allow"),
+      makeRule("glob", "allow"),
+      makeRule("list", "allow"),
+      makeRule("bash", "allow"), // ← the bug: this made researcher a writer
+      makeRule("read", "allow"),
+      makeRule("task", "deny"),
+    ]
+    expect(subagentIsWriteType(makeAgent("researcher-buggy", withBash))).toBe(true)
+  })
 })

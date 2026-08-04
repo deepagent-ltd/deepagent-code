@@ -25,7 +25,7 @@ import { EffectBridge } from "@/effect/bridge"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Database } from "@deepagent-code/core/database/database"
 import { TaskRunTable, SessionTable } from "@deepagent-code/core/session/sql"
-import { eq } from "drizzle-orm"
+import { and, eq } from "drizzle-orm"
 import { Worktree } from "@/worktree"
 import { Git } from "@/git"
 import { DEFAULT_WORKER_IDENTITY } from "../agent/collaboration-identity"
@@ -1142,12 +1142,21 @@ export const TaskTool = Tool.define(
         ? yield* getActiveTaskRunByChild(session.id).pipe(Effect.provideService(Database.Service, database))
         : undefined
       const activeJob = activeRun ? yield* background.get(activeRun.childSessionID) : undefined
+      // P0-8: find the active task run for the PARENT session (ctx.sessionID) so we can link the new
+      // child run into the causal graph with the correct parent_run_id and root_run_id.
+      // Only exists when the parent session is itself a subagent (depth > 1).
+      const parentActiveRun = yield* getActiveTaskRunByChild(ctx.sessionID).pipe(
+        Effect.provideService(Database.Service, database),
+        Effect.orElseSucceed(() => undefined),
+      )
       const admission = yield* admitTaskRun({
         parentSessionID: ctx.sessionID,
         parentMessageID: ctx.messageID,
         toolCallID,
         childSessionID: session?.id,
         joinRunID: activeRun?.runID,
+        // P0-8: propagate parent run ID for causal graph linkage + ancestor-open check
+        parentRunID: parentActiveRun?.runID,
         request: params,
         deliveryMode: runInBackground ? "background" : "foreground",
         // L3d: freeze the execution spec so prepare() can build the V1 message without re-reading params
@@ -1155,8 +1164,56 @@ export const TaskTool = Tool.define(
       }).pipe(Effect.provideService(Database.Service, database))
 
       // B-9 (P1-14): branch provisioning now happens after successful admission only
+      // BUG-001-405 Fix-B: if ensureSessionBranch fails (e.g. dirty workspace), settle the
+      // already-admitted task_run row so it doesn't linger in "admitted" state forever.
+      // The durable path has its own version-fenced settle below (L3b); this covers the legacy path.
+      //
+      // Design notes (per adversarial review):
+      //   - P1-1: DB settle uses catchCause+logWarning so a DB error never swallows the original
+      //     workspace cause. Effect.orDie would short-circuit before Effect.failCause(cause) runs.
+      //   - P1-2: WHERE clause adds a version CAS so a concurrent executor that already advanced
+      //     the version does not get its state overwritten (0-row update is safe — just log).
+      //   - P1-3: researcher no longer has bash; git history queries (git log/blame/diff) are not
+      //     covered by the current read-only tool set. TODO: add git_log/git_diff structured tools
+      //     (tracked as follow-up; see BUG-001-405 §4 Fix-A notes).
       if (admission.runCreated && params.isolation !== "worktree" && subagentIsWriteType(next) && git && queue) {
-        yield* ensureSessionBranch({ git, directory: parent.directory, sessionID: parent.id })
+        yield* ensureSessionBranch({ git, directory: parent.directory, sessionID: parent.id }).pipe(
+          Effect.catchCause((cause) =>
+            Effect.gen(function* () {
+              // Settle the admitted run to failed so retries see a terminal state.
+              // Ignore DB errors — a settle failure must not shadow the original workspace error.
+              yield* database.db
+                .update(TaskRunTable)
+                .set({
+                  state: "failed",
+                  phase: "settled",
+                  control_state: "closed",
+                  reason: "workspace_preflight_dirty",
+                  version: admission.run.version + 1,
+                  time_updated: Date.now(),
+                  time_settled: Date.now(),
+                })
+                .where(
+                  and(
+                    eq(TaskRunTable.run_id, admission.run.runID),
+                    eq(TaskRunTable.version, admission.run.version),
+                  ),
+                )
+                .run()
+                .pipe(
+                  // P1-1: if the settle itself errors, log and discard — never let it shadow the
+                  // original workspace Cause that we are about to re-throw.
+                  Effect.catchCause((dbErr) =>
+                    Effect.logWarning("BUG-001-405 Fix-B: settle failed, ignoring", {
+                      runID: admission.run.runID,
+                      dbErr: String(dbErr),
+                    }),
+                  ),
+                )
+              return yield* Effect.failCause(cause)
+            }),
+          ),
+        )
       }
 
       const executionOwner =
@@ -1197,12 +1254,20 @@ export const TaskTool = Tool.define(
       // L3a: Freeze mutation_capability at admission time (design §2.2.1)
       // L3b: Workspace preflight — automatic writers must reject dirty workspaces (design §3.2, §15.3.3)
       // -----------------------------------------------------------------------
-      const isReadOnly =
-        params.isolation !== "worktree" &&
-        !subagentIsWriteType(next)
+      // BUG-001-405 Fix-D: separate capability classification from isolation policy.
+      //   agentIsWriteCapable — does the agent's permission ruleset allow file mutation?
+      //     Drives mutation_capability in the DB and the preflight dirty-workspace check.
+      //
+      // The old single `isReadOnly` mixed in params.isolation, so an explicitly isolated
+      // read-only agent appeared write-capable and triggered a spurious workspace check.
+      // The two concepts are orthogonal and must be tested independently:
+      //   capability  → agentIsWriteCapable (below)
+      //   isolation   → params.isolation === "worktree" || agentIsWriteCapable
+      //                 (computed at the worktree-provisioning call site when that is wired up)
+      const agentIsWriteCapable = subagentIsWriteType(next)
       if (admission.runCreated && flags.subagentControlPlane === "durable") {
         // 6D: Freeze mutation_capability in the DB so the executor sees the correct value
-        const mutCap: "read_only" | "write" = isReadOnly ? "read_only" : "write"
+        const mutCap: "read_only" | "write" = agentIsWriteCapable ? "write" : "read_only"
         yield* database.db
           .update(TaskRunTable)
           .set({ mutation_capability: mutCap, time_updated: Date.now() })
@@ -1212,7 +1277,9 @@ export const TaskTool = Tool.define(
 
         // C-2 (P0-7): Preflight — automatic writers must not start in a dirty workspace.
         // Use version-fenced settle so only the admitted (unowned) run can be terminated here.
-        if (!isReadOnly && git) {
+        // BUG-001-405 Fix-D: use agentIsWriteCapable (pure capability) not the old isReadOnly
+        // (which mixed in the isolation policy and could produce wrong results).
+        if (agentIsWriteCapable && git) {
           const gitStatus = yield* git.porcelainStatus(parent.directory)
           const isDirty = gitStatus != null && !gitStatus.clean
           if (isDirty) {
