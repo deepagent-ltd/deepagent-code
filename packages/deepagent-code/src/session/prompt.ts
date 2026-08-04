@@ -1,6 +1,5 @@
 import { PermissionV1 } from "@deepagent-code/core/v1/permission"
 import path from "path"
-import fs from "node:fs"
 import { randomUUID } from "node:crypto"
 import { SessionV1 } from "@deepagent-code/core/v1/session"
 import os from "os"
@@ -128,6 +127,13 @@ import { TaskDelivery } from "@/session/task-delivery"
 import { registerDisposer, registerInitializer } from "@/effect/instance-registry"
 import { EventRouteRef, InstanceRef } from "@/effect/instance-ref"
 import { InstanceStore } from "@/project/instance-store"
+import {
+  acquireDurableExecutorLease,
+  releaseDurableExecutorLease,
+  releaseDurableExecutorReservation,
+  reserveDurableExecutor,
+  type DurableExecutorLease,
+} from "./durable-executor-lock"
 
 // @ts-ignore
 globalThis.AI_SDK_LOG_WARNINGS = false
@@ -3270,65 +3276,24 @@ export const layer = Layer.effect(
     // runLoop closure, so TaskDelivery stays independent of SessionPrompt.Service and cannot form a
     // circular layer dependency.
     const durableWorkers = new Map<string, ReadonlyArray<Fiber.Fiber<void, never>>>()
-    // Phase 6I: lock paths + lock contents for cross-process epoch assertion
-    const lockPaths = new Map<string, string>()
-    const lockContents = new Map<string, string>() // directory → our written content (for token-fenced unlink)
-    const startDurableWorkers = registerInitializer((ctx) =>
-      Effect.runPromise(
+    const durableLeases = new Map<string, DurableExecutorLease>()
+    const unregisterDurableInitializer = registerInitializer((ctx) => {
+      // Reserve synchronously: multiple Service instances are registered globally and may otherwise
+      // race through asynchronous startup in the same process.
+      if (flags.subagentControlPlane !== "durable") return Promise.resolve()
+      if (durableWorkers.has(ctx.directory)) return Promise.resolve()
+      if (!reserveDurableExecutor(ctx.directory)) return Promise.resolve()
+
+      return Effect.runPromise(
         Effect.gen(function* () {
           // A-2 (P0-4): only start daemon in "durable" mode — shadow mode must NOT run daemon
-          if (flags.subagentControlPlane !== "durable") return
-          if (durableWorkers.has(ctx.directory)) return
-
-          // Phase 6I / A-2: atomic O_EXCL lock — fail-closed if another live process owns it.
-          // Using O_EXCL (flag:"wx") provides an atomic create: if the file already exists the
-          // write throws EEXIST rather than silently overwriting, eliminating the TOCTOU window.
-          const lockPath = path.join(ctx.directory, ".deepagent-executor.lock")
-          lockPaths.set(ctx.directory, lockPath)
-          const lockContent = `${process.pid}\n${Date.now()}\n${flags.subagentControlPlane}\n`
-
-          const acquired = yield* Effect.sync(() => {
-            for (let attempt = 0; attempt < 2; attempt++) {
-              try {
-                // Attempt O_EXCL atomic create
-                fs.writeFileSync(lockPath, lockContent, { flag: "wx" })
-                return true // we own the lock
-              } catch (e: any) {
-                if (e?.code !== "EEXIST") {
-                  // Non-EEXIST error (e.g. permission) — fail-closed
-                  return false
-                }
-                // EEXIST: another process may own the lock — check liveness
-                try {
-                  const existing = fs.readFileSync(lockPath, "utf-8")
-                  const [existingPidStr] = existing.split("\n")
-                  const existingPid = parseInt(existingPidStr, 10)
-                  if (!isNaN(existingPid) && existingPid !== process.pid) {
-                    let alive = false
-                    try {
-                      process.kill(existingPid, 0)
-                      alive = true
-                    } catch {
-                      /* dead */
-                    }
-                    if (alive) return false // live owner — fail-closed
-                    // Dead owner: remove stale lock and retry O_EXCL
-                    try {
-                      fs.unlinkSync(lockPath)
-                    } catch {
-                      /* already gone */
-                    }
-                    // fall through to retry loop
-                  }
-                } catch {
-                  return false
-                }
-              }
-            }
-            return false
-          })
-
-          if (!acquired) {
+          const lease = yield* Effect.sync(() =>
+            acquireDurableExecutorLease({
+              directory: ctx.directory,
+              mode: flags.subagentControlPlane,
+            }),
+          )
+          if (!lease) {
             yield* Effect.logWarning(
               "durable-cp: failed to acquire executor lock, another process owns it — fail-closed",
               {
@@ -3338,7 +3303,7 @@ export const layer = Layer.effect(
             )
             return // A-2: fail-closed
           }
-          lockContents.set(ctx.directory, lockContent)
+          durableLeases.set(ctx.directory, lease)
 
           const ownerToken = `durable-cp:${process.pid}:${randomUUID()}`
 
@@ -3405,9 +3370,7 @@ export const layer = Layer.effect(
                       item,
                       ownerToken: deliveryOwner,
                       driveParentLoop: () =>
-                        runLoop(item.parentSessionID).pipe(
-                          Effect.provideService(InstanceRef, ctx),
-                        ),
+                        runLoop(item.parentSessionID).pipe(Effect.provideService(InstanceRef, ctx)),
                     }).pipe(
                       Effect.provideService(Database.Service, database),
                       Effect.tap((result) => Ref.set(delivered, result)),
@@ -3443,45 +3406,52 @@ export const layer = Layer.effect(
           Effect.provideService(Scope.Scope, scope),
           Effect.provideService(InstanceRef, ctx),
         ),
-      ),
-    )
-    const stopDurableWorkers = registerDisposer((directory) => {
+      )
+        .catch((error) => {
+          const lease = durableLeases.get(ctx.directory)
+          durableLeases.delete(ctx.directory)
+          if (lease) releaseDurableExecutorLease(lease)
+          throw error
+        })
+        .finally(() => {
+          if (!durableWorkers.has(ctx.directory) && !durableLeases.has(ctx.directory)) {
+            releaseDurableExecutorReservation(ctx.directory)
+          }
+        })
+    })
+    const disposeDurableWorkers = (directory: string) => {
       const fibers = durableWorkers.get(directory)
-      if (!fibers) return Promise.resolve()
+      const lease = durableLeases.get(directory)
+      // Another registered Service may own the process reservation. A non-owner must not release it.
+      if (!fibers && !lease) return Promise.resolve()
       durableWorkers.delete(directory)
-      // A-2 (P0-4): token-fenced release — only unlink if we own the lock
-      const lockPath = lockPaths.get(directory)
-      const ourContent = lockContents.get(directory)
-      lockPaths.delete(directory)
-      lockContents.delete(directory)
-      if (lockPath && ourContent) {
-        try {
-          const current = fs.readFileSync(lockPath, "utf-8")
-          if (current === ourContent) fs.unlinkSync(lockPath)
-          // else: another process replaced our lock — do not delete it
-        } catch {
-          /* already gone or unreadable — safe to ignore */
-        }
-      }
+      durableLeases.delete(directory)
       return Effect.runPromise(
         orderedShutdown({ directory }).pipe(
-            Effect.provideService(Database.Service, database),
-            Effect.catchCause(() => Effect.void),
-            Effect.flatMap(() => Effect.forEach(fibers, Fiber.interrupt, { discard: true })),
+          Effect.provideService(Database.Service, database),
+          Effect.catchCause(() => Effect.void),
+          Effect.flatMap(() => Effect.forEach(fibers ?? [], Fiber.interrupt, { discard: true })),
+          Effect.ensuring(
+            Effect.sync(() => {
+              if (lease) releaseDurableExecutorLease(lease)
+              else releaseDurableExecutorReservation(directory)
+            }),
+          ),
           Effect.asVoid,
         ),
       )
-    })
+    }
+    const unregisterDurableDisposer = registerDisposer(disposeDurableWorkers)
     yield* Effect.addFinalizer(() =>
       Effect.gen(function* () {
         startNotificationWorker()
         stopNotificationWorker()
         yield* Effect.forEach(notificationWorkers.values(), Fiber.interrupt, { discard: true })
         notificationWorkers.clear()
-        startDurableWorkers()
-        stopDurableWorkers()
-        yield* Effect.forEach([...durableWorkers.values()].flat(), Fiber.interrupt, { discard: true })
-        durableWorkers.clear()
+        unregisterDurableInitializer()
+        unregisterDurableDisposer()
+        const directories = new Set([...durableWorkers.keys(), ...durableLeases.keys()])
+        yield* Effect.promise(() => Promise.all([...directories].map(disposeDurableWorkers)))
       }),
     )
 
