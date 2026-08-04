@@ -24,7 +24,7 @@ import { Cause, Duration, Effect, Exit, Fiber, Option, Schedule, Schema, Scope }
 import { EffectBridge } from "@/effect/bridge"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Database } from "@deepagent-code/core/database/database"
-import { TaskRunTable } from "@deepagent-code/core/session/sql"
+import { TaskRunTable, SessionTable } from "@deepagent-code/core/session/sql"
 import { eq } from "drizzle-orm"
 import { Worktree } from "@/worktree"
 import { Git } from "@/git"
@@ -56,12 +56,6 @@ import {
   renewTaskRunLease,
   settleTaskRun,
   transitionToAdmitting,
-  // L10 (subagent-control-plane-design.zh-CN.md §14 L10):
-  // spawnTaskTakeover is already gated by takeoverLimit=0 when subagentControlPlane!="legacy" (L0).
-  // When subagentControlPlane="durable" becomes the default, this import and its call sites
-  // (lines ~1661, ~1776) must be removed along with the surrounding takeover branch.
-  // At that point, all automatic takeover is replaced by recovery_required + explicit user resume.
-  spawnTaskTakeover,
   startTaskRun,
   type ErrorData,
   type Run as DurableTaskRun,
@@ -157,8 +151,7 @@ type SubagentTerminalReason =
   | "assistant_error"
   | "human"
   | "parent_interrupted"
-  | "timeout"
-  | "takeover"
+  | "attempt_timeout"
   | "budget_exhausted"
   | "execution_lease_expired"
   | "runtime_error"
@@ -933,12 +926,12 @@ export const Parameters = Schema.Struct({
 
 function renderOutput(input: {
   sessionID: SessionID
-  state: "running" | "completed" | "error"
+  state: "running" | "completed" | "error" | "interrupted"
   summary?: string
   text: string
   maxChars?: number
 }) {
-  const tag = input.state === "error" ? "task_error" : "task_result"
+  const tag = input.state === "error" || input.state === "interrupted" ? "task_error" : "task_result"
   // I33-4 (v4.0.4 块1 1e): when a bound is configured, the parent receives a bounded excerpt with a
   // pointer to the subagent session (full text stays queryable there) instead of the full text.
   // maxChars === undefined ⇒ byte-identical to the pre-flag behavior.
@@ -975,8 +968,6 @@ function withPRSubmission(output: string, pr: SubmittedPR | undefined) {
   ].join("\n")
 }
 
-// v4.0.4 块1 (1a+1b): the per-attempt bundle the takeover drivers thread through spawn → drive →
-// recycle. Each takeover respawn mints a fresh one (new child session, new worktree).
 type AttemptMetadata = Record<string, unknown> & {
   readonly parentSessionId: SessionID
   readonly sessionId: SessionID
@@ -999,7 +990,7 @@ interface AttemptBundle {
     reason?: SubagentTerminalReason,
     details?: SettlementDetails,
   ) => Effect.Effect<void, unknown>
-  readonly inject: (state: "completed" | "error", text: string, takeovers: number) => Effect.Effect<unknown, unknown>
+  readonly inject: (state: "completed" | "error" | "interrupted", text: string) => Effect.Effect<unknown, unknown>
   readonly automaticWriteIsolation: boolean
   readonly submitWorktree: () => Effect.Effect<SubmittedPR | undefined, unknown>
   readonly teardownWorktree: (force: boolean) => Effect.Effect<unknown, unknown>
@@ -1144,9 +1135,9 @@ export const TaskTool = Tool.define(
         maxWallMs: flags.subagentResearchWallMs ?? DEFAULT_SUBAGENT_RESEARCH_BUDGET.maxWallMs,
         maxNoProgress: flags.subagentNoProgressLimit ?? DEFAULT_SUBAGENT_RESEARCH_BUDGET.maxNoProgress,
       }
-      if (params.isolation !== "worktree" && subagentIsWriteType(next) && git && queue) {
-        yield* ensureSessionBranch({ git, directory: parent.directory, sessionID: parent.id })
-      }
+      // B-9 (P1-14): ensureSessionBranch moved AFTER admitTaskRun.
+      // Branch creation is a Git side effect that must not precede admission — if admission
+      // fails (conflict, DB error) there must be no orphaned branch with no ledger entry.
       const activeRun = session
         ? yield* getActiveTaskRunByChild(session.id).pipe(Effect.provideService(Database.Service, database))
         : undefined
@@ -1162,6 +1153,12 @@ export const TaskTool = Tool.define(
         // L3d: freeze the execution spec so prepare() can build the V1 message without re-reading params
         executionSpec: { prompt: { text: params.prompt ?? params.description ?? "" } },
       }).pipe(Effect.provideService(Database.Service, database))
+
+      // B-9 (P1-14): branch provisioning now happens after successful admission only
+      if (admission.runCreated && params.isolation !== "worktree" && subagentIsWriteType(next) && git && queue) {
+        yield* ensureSessionBranch({ git, directory: parent.directory, sessionID: parent.id })
+      }
+
       const executionOwner =
         activeJob?.status === "running" &&
         activeRun?.executionOwner !== undefined &&
@@ -1211,22 +1208,40 @@ export const TaskTool = Tool.define(
           .set({ mutation_capability: mutCap, time_updated: Date.now() })
           .where(eq(TaskRunTable.run_id, admission.run.runID))
           .run()
-          .pipe(Effect.ignore)
+          .pipe(Effect.orDie)
 
-        // 6E: Preflight — automatic writers must not start in a dirty workspace
+        // C-2 (P0-7): Preflight — automatic writers must not start in a dirty workspace.
+        // Use version-fenced settle so only the admitted (unowned) run can be terminated here.
         if (!isReadOnly && git) {
           const gitStatus = yield* git.porcelainStatus(parent.directory)
           const isDirty = gitStatus != null && !gitStatus.clean
           if (isDirty) {
-            yield* settleTaskRun({
-              run: admission.run,
-              owner: executionOwner,
-              state: "failed",
-              reason: "workspace_preflight_dirty: parent workspace has uncommitted changes",
-            }).pipe(
-              Effect.provideService(Database.Service, database),
-              Effect.ignore,
-            )
+            // version-fenced settle on the newly admitted run (no execution_owner yet)
+            yield* database.db.transaction(
+              (tx) =>
+                Effect.gen(function* () {
+                  const row = yield* tx
+                    .update(TaskRunTable)
+                    .set({
+                      state: "failed",
+                      phase: "settled",
+                      control_state: "closed",
+                      reason: "workspace_preflight_dirty",
+                      version: admission.run.version + 1,
+                      time_updated: Date.now(),
+                      time_settled: Date.now(),
+                    })
+                    .where(
+                      eq(TaskRunTable.run_id, admission.run.runID),
+                    )
+                    .returning({ run_id: TaskRunTable.run_id })
+                    .get()
+                    .pipe(Effect.orDie)
+                  // If CAS row is missing, admission race — still return preflight error
+                  return row
+                }),
+              { behavior: "immediate" } as any,
+            ).pipe(Effect.ignore)
             return yield* Effect.fail(
               taskError({
                 code: "workspace_dirty",
@@ -1253,6 +1268,35 @@ export const TaskTool = Tool.define(
         if (admission.runCreated || admission.run.state === "admitted") {
           // L3d: Input projection — only for newly created or admitted runs without input yet
           if (admission.run.inputState !== "ready") {
+            // B-1 (P0-1): ensure child session row exists before writing the V1 message row.
+            // message.session_id is a FK on the session table — inserting it before the session
+            // row causes FOREIGN KEY constraint failed. The child session is created here as a
+            // stub; its agent/title/full metadata is filled in when the loop actually starts.
+            if (!session) {
+              const childSID = admission.run.childSessionID as string
+              const existingChild = yield* database.db
+                .select({ id: SessionTable.id })
+                .from(SessionTable)
+                .where(eq(SessionTable.id as any, childSID as any))
+                .get()
+                .pipe(Effect.orElseSucceed(() => undefined))
+              if (!existingChild) {
+                yield* database.db
+                  .insert(SessionTable)
+                  .values({
+                    id: admission.run.childSessionID as any,
+                    project_id: parent.projectID as any,
+                    slug: `durable-child-${(admission.run.childSessionID as string).replace(/[^a-z0-9]/gi, "-").slice(0, 32)}`,
+                    directory: parent.directory as any,
+                    title: params.description ?? "Durable task",
+                    version: "durable",
+                  } as any)
+                  .onConflictDoNothing()
+                  .run()
+                  .pipe(Effect.orDie)
+              }
+            }
+
             // Step 1: CAS admitted → admitting (marks projection start; idempotent if already admitting)
             const admittingRun = yield* transitionToAdmitting({
               runID: admission.run.runID,
@@ -1487,26 +1531,14 @@ export const TaskTool = Tool.define(
               .pipe(Effect.asVoid),
         }).pipe(Effect.provideService(Database.Service, database), Effect.asVoid)
 
-      // v4.0.4 块1 (1a+1b): production supplies a finite timeout; explicit compatibility and test layers
-      // may still set it to undefined to exercise the unsupervised path. Timeout and takeover are an
-      // inseparable unit: a timed-out/failed attempt is cancelled before a fresh child session respawns
-      // from the same fork base. Retries are bounded by subagentTakeoverLimit (default 2).
-      //
-      // L0 (subagent-control-plane-design.zh-CN.md): when subagentControlPlane is not "legacy",
-      // automatic takeover is permanently disabled — takeoverLimit is forced to 0 so every error/timeout
-      // settles the run terminally instead of spawning a replacement child. This is the first step
-      // toward the durable control plane where owner loss produces recovery_required instead.
+      // A finite attempt wall limit prevents a hung child from blocking the parent forever. Expiry
+      // interrupts the same child and preserves its transcript/worktree for explicit recovery. Provider
+      // work is never replayed automatically because timeout is not evidence that its side effects are safe.
       if (flags.subagentTimeoutMs !== undefined) {
         const timeoutMs = flags.subagentTimeoutMs
-        const takeoverLimit =
-          flags.subagentControlPlane !== "legacy"
-            ? 0 // non-legacy: zero retries; every failure is terminal (no replacement child)
-            : (flags.subagentTakeoverLimit ?? 2)
 
-        // A fresh attempt gets its own worktree (same fork base as the discarded one) and a brand-new
-        // child session; the resumed session (task_id) is only reused by the FIRST attempt.
-        const spawnAttempt = Effect.fn("TaskTool.spawnAttempt")(function* (first: boolean, runState: DurableTaskRun) {
-          const resumed = first ? admittedSession : undefined
+        const spawnAttempt = Effect.fn("TaskTool.spawnAttempt")(function* (runState: DurableTaskRun) {
+          const resumed = admittedSession
           const isolate = !resumed && (params.isolation === "worktree" || subagentIsWriteType(next))
           const worktreeOpt =
             isolate || resumedWorktreeInfo
@@ -1555,7 +1587,6 @@ export const TaskTool = Tool.define(
             nextSession: Session.Info
           },
           runState: DurableTaskRun,
-          takeovers: number,
           allowExtend: boolean,
         ) {
           const activeRunState = yield* activateRun(runState)
@@ -1651,17 +1682,14 @@ export const TaskTool = Tool.define(
           })
 
           const inject = Effect.fn("TaskTool.injectBackgroundResult")(function* (
-            _state: "completed" | "error",
+            _state: "completed" | "error" | "interrupted",
             _text: string,
-            _doneTakeovers: number,
           ) {
             yield* dispatchNotifications()
           })
 
-          // 1d: worktree teardown hangs off the completion points. Explicit isolation is caller-owned
-          // and stays available for inspection/merge even when Git ignores the produced files.
-          // Automatic isolation uses fail-closed safeRemove; takeover recycling force-removes because
-          // the old attempt is explicitly superseded by the redo from the same fork base.
+          // Explicit isolation is caller-owned. Automatic isolation is only removed through safeRemove
+          // after a normal terminal path; timeout never calls this helper, so partial work is preserved.
           const automaticWriteIsolation = params.isolation !== "worktree" && !!a.worktreeInfo
           const teardownWorktree = Effect.fn("TaskTool.teardownWorktree")(function* (force: boolean) {
             if (!a.worktreeInfo || (!automaticWriteIsolation && !force)) return
@@ -1725,7 +1753,7 @@ export const TaskTool = Tool.define(
                   title: params.description,
                   metadata: { ...metadata, background: true, jobId: a.nextSession.id },
                 }),
-                driveBackground(bundle, takeovers),
+                driveBackground(bundle),
               ],
               { discard: true },
             ),
@@ -1746,7 +1774,7 @@ export const TaskTool = Tool.define(
           }),
         })
 
-        const driveForeground = (b: AttemptBundle, takeovers: number): Effect.Effect<AttemptResult, unknown> =>
+        const driveForeground = (b: AttemptBundle): Effect.Effect<AttemptResult, unknown> =>
           Effect.gen(function* () {
             const runCancel = yield* EffectBridge.make()
             const cancel = Effect.all(
@@ -1770,9 +1798,9 @@ export const TaskTool = Tool.define(
                       .pipe(Effect.map((info) => ({ info, timedOut: false }))),
                   )
                   if (result.info?.metadata?.background === true) return { kind: "promoted" as const }
-                  if (result.timedOut) return { kind: "retry" as const, reason: `timed out after ${timeoutMs}ms` }
+                  if (result.timedOut) return { kind: "timeout" as const }
                   if (result.info?.status === "error")
-                    return { kind: "retry" as const, reason: result.info.error ?? "Task failed" }
+                    return { kind: "error" as const, reason: result.info.error ?? "Task failed" }
                   if (result.info?.status === "cancelled") return { kind: "cancelled" as const }
                   return { kind: "completed" as const, output: result.info?.output ?? "" }
                 }),
@@ -1797,7 +1825,7 @@ export const TaskTool = Tool.define(
                     yield* b.markFinished("error", "runtime_error", {
                       error: { code: "runtime_error", message: String(diagnostic) },
                     })
-                    yield* b.inject("error", `PR submission failed: ${String(diagnostic)}`, takeovers)
+                    yield* b.inject("error", `PR submission failed: ${String(diagnostic)}`)
                     yield* b.teardownWorktree(false)
                     return yield* Effect.fail(new Error(`PR submission failed: ${String(diagnostic)}`))
                   }),
@@ -1835,51 +1863,40 @@ export const TaskTool = Tool.define(
                 ),
               )
             }
-            if (!isTakeoverEligible(outcome.reason)) {
+            if (outcome.kind === "error") {
               const reason = terminalReason(outcome.reason)
-              yield* b.markFinished("error", reason, { error: { code: reason, message: outcome.reason } })
-              yield* b.teardownWorktree(false)
-              return yield* Effect.fail(new Error(outcome.reason))
-            }
-            if (takeovers >= takeoverLimit) {
-              yield* background.cancel(b.nextSession.id).pipe(Effect.ignore)
-              const reason = outcome.reason.startsWith("timed out") ? "timeout" : terminalReason(outcome.reason)
               yield* b.markFinished("error", reason, { error: { code: reason, message: outcome.reason } })
               yield* b.teardownWorktree(false)
               return yield* Effect.fail(
                 taskError({
                   code: reason,
-                  message: `The subagent failed after ${takeovers} bounded takeover attempt(s). Last failure: ${outcome.reason}`,
+                  message: `The subagent failed and was not automatically retried: ${outcome.reason}`,
                   sessionID: b.nextSession.id,
                   phase: outcome.reason.includes("Phase: finalize") ? "finalize" : "research",
-                  attempts: takeovers + 1,
                 }),
               )
             }
-            yield* background.cancel(b.nextSession.id).pipe(Effect.ignore)
-            yield* b.markFinished("cancelled", "takeover")
-            yield* b.teardownWorktree(true)
-            const childSessionID = SessionID.create()
-            const takeoverRun = yield* spawnTaskTakeover({ root: admission.run, childSessionID }).pipe(
-              Effect.provideService(Database.Service, database),
+            yield* cancel
+            taskLog.warn("subagent.attempt_timeout", {
+              run_id: admission.run.runID,
+              child_session_id: b.nextSession.id,
+              timeout_ms: timeoutMs,
+              automatic_retry: false,
+            })
+            yield* b.markFinished("interrupted", "attempt_timeout", {
+              error: { code: "attempt_timeout", message: `timed out after ${timeoutMs}ms` },
+            })
+            return yield* Effect.fail(
+              taskError({
+                code: "attempt_timeout",
+                message: `The subagent attempt timed out after ${timeoutMs}ms. Automatic retry is disabled.`,
+                sessionID: b.nextSession.id,
+                phase: "research",
+              }),
             )
-            const claimedTakeover = yield* claimTaskProvisioning({ run: takeoverRun, owner: executionOwner }).pipe(
-              Effect.provideService(Database.Service, database),
-            )
-            if (!claimedTakeover)
-              return yield* Effect.die(new Error(`Takeover run ${takeoverRun.runID} lost its provisioning claim`))
-            const next = yield* startAttempt(
-              yield* spawnAttempt(false, claimedTakeover),
-              claimedTakeover,
-              takeovers + 1,
-              false,
-            )
-            if (next.kind === "extended")
-              return yield* Effect.die(new Error("unreachable: extend on a fresh takeover attempt"))
-            return yield* driveForeground(next.bundle, takeovers + 1)
           })
 
-        const driveBackground = (b: AttemptBundle, takeovers: number): Effect.Effect<void> =>
+        const driveBackground = (b: AttemptBundle): Effect.Effect<void> =>
           Effect.gen(function* () {
             const waited = yield* background.wait({ id: b.nextSession.id, timeout: timeoutMs })
             const status = waited.info?.status
@@ -1899,7 +1916,7 @@ export const TaskTool = Tool.define(
                         maxChars: flags.subagentOutputMaxChars,
                       }),
                     })
-                    yield* b.inject("error", text, takeovers)
+                    yield* b.inject("error", text)
                     yield* b.teardownWorktree(false)
                     return yield* Effect.fail(new Error(text))
                   }),
@@ -1914,25 +1931,51 @@ export const TaskTool = Tool.define(
                   notifyText: renderOutput({
                     sessionID: b.nextSession.id,
                     state: "completed",
-                    summary: `Background task completed: ${params.description}${takeovers === 0 ? "" : ` (after ${takeovers} takeover${takeovers === 1 ? "" : "s"})`}`,
+                    summary: `Background task completed: ${params.description}`,
                     text: output,
                     maxChars: flags.subagentOutputMaxChars,
                   }),
                 },
               )
               if (!pr) yield* b.teardownWorktree(b.automaticWriteIsolation)
-              yield* b.inject("completed", output, takeovers)
+              yield* b.inject("completed", output)
               return
             }
             if (!waited.timedOut && status === "cancelled") {
-              yield* b.markFinished("cancelled", "parent_interrupted")
+              yield* b.markFinished("interrupted", "parent_interrupted")
               yield* b.teardownWorktree(false)
               return
             }
-            if (!waited.timedOut && status === "error" && !isTakeoverEligible(waited.info?.error ?? "")) {
+            if (waited.timedOut) {
+              yield* background.cancel(b.nextSession.id).pipe(Effect.ignore)
+              const text = `The subagent attempt timed out after ${timeoutMs}ms. Automatic retry is disabled. Partial work is preserved in subagent session ${b.nextSession.id}. Call task_read({ task_id: "${b.nextSession.id}" }) before continuing.`
+              taskLog.warn("subagent.attempt_timeout", {
+                run_id: admission.run.runID,
+                child_session_id: b.nextSession.id,
+                timeout_ms: timeoutMs,
+                automatic_retry: false,
+                background: true,
+              })
+              yield* b.markFinished("interrupted", "attempt_timeout", {
+                error: { code: "attempt_timeout", message: `timed out after ${timeoutMs}ms` },
+                notifyText: renderOutput({
+                  sessionID: b.nextSession.id,
+                  state: "interrupted",
+                  summary: `Background task interrupted: ${params.description}`,
+                  text,
+                  maxChars: flags.subagentOutputMaxChars,
+                }),
+              })
+              yield* b.inject("interrupted", text)
+              return
+            }
+            if (status === "error") {
               const error = waited.info?.error ?? "Task failed"
               const reason = terminalReason(error)
-              const text = `The subagent stopped without retry because its execution budget or loop guard was exhausted: ${error}`
+              const guarded = reason === "budget_exhausted" || reason === "doom_loop"
+              const text = guarded
+                ? `The subagent stopped because its execution budget or loop guard was exhausted: ${error}`
+                : `The subagent failed and was not automatically retried: ${error}`
               yield* b.markFinished("error", reason, {
                 error: { code: reason, message: error },
                 notifyText: renderOutput({
@@ -1944,58 +1987,13 @@ export const TaskTool = Tool.define(
                 }),
               })
               yield* b.teardownWorktree(false)
-              yield* b.inject("error", text, takeovers)
+              yield* b.inject("error", text)
               return
             }
-            if (takeovers >= takeoverLimit) {
-              yield* background.cancel(b.nextSession.id).pipe(Effect.ignore)
-              const reason = waited.timedOut ? `timed out after ${timeoutMs}ms` : (waited.info?.error ?? "Task failed")
-              yield* b.markFinished("error", waited.timedOut ? "timeout" : terminalReason(waited.info?.error), {
-                error: {
-                  code: waited.timedOut ? "timeout" : terminalReason(waited.info?.error),
-                  message: reason,
-                },
-                notifyText: renderOutput({
-                  sessionID: b.nextSession.id,
-                  state: "error",
-                  summary: `Background task failed: ${params.description}`,
-                  text: `The subagent was retried ${takeovers} time(s) after timeout/crash and still did not complete. Last failure: ${reason}. The half-finished attempt was cancelled and its worktree discarded.`,
-                  maxChars: flags.subagentOutputMaxChars,
-                }),
-              })
-              yield* b.teardownWorktree(false)
-              yield* b.inject(
-                "error",
-                `The subagent was retried ${takeovers} time(s) after timeout/crash and still did not complete. Last failure: ${reason}. The half-finished attempt was cancelled and its worktree discarded.`,
-                takeovers,
-              )
-              return
-            }
-            yield* background.cancel(b.nextSession.id).pipe(Effect.ignore)
-            yield* b.markFinished("cancelled", "takeover")
-            yield* b.teardownWorktree(true)
-            const childSessionID = SessionID.create()
-            const takeoverRun = yield* spawnTaskTakeover({ root: admission.run, childSessionID }).pipe(
-              Effect.provideService(Database.Service, database),
-            )
-            const claimedTakeover = yield* claimTaskProvisioning({ run: takeoverRun, owner: executionOwner }).pipe(
-              Effect.provideService(Database.Service, database),
-            )
-            if (!claimedTakeover)
-              return yield* Effect.die(new Error(`Takeover run ${takeoverRun.runID} lost its provisioning claim`))
-            const next = yield* startAttempt(
-              yield* spawnAttempt(false, claimedTakeover),
-              claimedTakeover,
-              takeovers + 1,
-              false,
-            )
-            if (next.kind === "extended")
-              return yield* Effect.die(new Error("unreachable: extend on a fresh takeover attempt"))
-            yield* driveBackground(next.bundle, takeovers + 1)
           }).pipe(Effect.forkIn(scope, { startImmediately: true }), Effect.asVoid)
 
         const initialRun = claimedRun ?? admission.run
-        const started = yield* startAttempt(yield* spawnAttempt(true, initialRun), initialRun, 0, true)
+        const started = yield* startAttempt(yield* spawnAttempt(initialRun), initialRun, true)
         if (started.kind === "extended") {
           return {
             title: params.description,
@@ -2010,10 +2008,10 @@ export const TaskTool = Tool.define(
           }
         }
         if (runInBackground) {
-          yield* driveBackground(started.bundle, 0)
+          yield* driveBackground(started.bundle)
           return backgroundResult(started.bundle)
         }
-        return yield* driveForeground(started.bundle, 0)
+        return yield* driveForeground(started.bundle)
       }
 
       // U5: per-subagent worktree isolation. When isolation:"worktree" and this is a fresh subagent

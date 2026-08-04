@@ -54,17 +54,12 @@ export class Service extends ConfigService.Service<Service>()("@deepagent-code/R
   // by default. NOTE: this is local, non-durable (process restart loses live jobs); cross-restart
   // recovery + remote/cloud agents are deferred to V3.4 (S1 §10). Disable with =false.
   experimentalBackgroundSubagents: stableOn("DEEPAGENT_CODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS"),
-  // Attempt wall limit. A provider/tool that never returns cannot leave the parent blocked forever:
-  // expiry cancels the old fiber and starts a bounded takeover from the same fork point. Missing,
-  // malformed, zero, and negative values all fail closed to the production default.
+  // Attempt wall limit. Expiry interrupts the same child and preserves partial work for explicit
+  // recovery. It never starts a replacement child or replays provider/tool work automatically.
   subagentTimeoutMs: positiveIntegerWithDefault("DEEPAGENT_CODE_SUBAGENT_TIMEOUT_MS", DEFAULT_SUBAGENT_TIMEOUT_MS),
-  // v4.0.4 块1: 单个子 Agent 任务被 takeover(超时/崩溃后重生)的最大次数。达上限仍失败则上报主 Agent。
-  // 默认 undefined ⇒ 代码内回退到 2。防无限接管。
-  subagentTakeoverLimit: positiveInteger("DEEPAGENT_CODE_SUBAGENT_TAKEOVER_LIMIT"),
   // Subagent control plane rollout gate (L0 design, subagent-control-plane-design.zh-CN.md §13.3).
   //
-  //  "legacy"  — preserve current task.ts behavior including automatic takeover on timeout/crash
-  //              (default; no behavior change for existing deployments).
+  //  "legacy"  — keep the current SessionPrompt execution path without automatic takeover.
   //  "shadow"  — RESERVED for future use. Legacy lifecycle authority remains; durable coordinator
   //              records non-authoritative comparison artifacts only. Currently routes identically
   //              to "legacy". DO NOT use in production until §4 cutover protocol is implemented.

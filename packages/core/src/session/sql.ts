@@ -347,7 +347,7 @@ export const TaskRunTable = sqliteTable(
     uniqueIndex("task_run_child_generation_idx").on(table.child_session_id, table.generation),
     uniqueIndex("task_run_child_active_idx")
       .on(table.child_session_id)
-      .where(sql`${table.state} IN ('admitted', 'provisioning', 'researching', 'finalizing')`),
+      .where(sql`${table.state} IN ('admitted', 'provisioning', 'running', 'researching', 'finalizing')`),
     index("task_run_parent_state_idx").on(table.parent_session_id, table.state, table.time_updated),
     index("task_run_root_idx").on(table.root_run_id),
     index("task_run_queue_idx").on(table.state, table.available_at, table.priority, table.time_created, table.generation),

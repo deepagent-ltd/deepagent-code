@@ -163,6 +163,8 @@ export function admitParentInput(input: {
     const notificationText = input.item.payload.text
 
     // Write synthetic parent input message
+    // C-4 (P1-2): read the UPDATE result to detect owner loss; on 0 rows → return undefined
+    let ownerLost = false
     yield* db.transaction(
       (tx) =>
         Effect.gen(function* () {
@@ -176,7 +178,8 @@ export function admitParentInput(input: {
               data: {
                 role: "user",
                 providerID: "task_notification",
-                metadata: JSON.stringify({
+                // C-4 (P1-2): metadata is already an object — do NOT JSON.stringify here.
+                metadata: {
                   deepagent: {
                     task_notification: {
                       run_id: input.item.runID,
@@ -185,7 +188,7 @@ export function admitParentInput(input: {
                       payload_hash: input.item.payloadHash,
                     },
                   },
-                }),
+                },
               } as any,
             })
             .onConflictDoNothing()
@@ -206,7 +209,8 @@ export function admitParentInput(input: {
             .run()
             .pipe(Effect.orDie)
 
-          yield* tx
+          // C-4 (P1-2): check affected rows to detect stale owner
+          const outboxUpdated = yield* tx
             .update(TaskNotificationOutboxTable)
             .set({
               status: "admitted",
@@ -220,12 +224,25 @@ export function admitParentInput(input: {
                 eq(TaskNotificationOutboxTable.lease_owner, input.ownerToken),
               ),
             )
-            .run()
+            .returning({ id: TaskNotificationOutboxTable.id })
+            .get()
             .pipe(Effect.orDie)
+          if (!outboxUpdated) ownerLost = true
         }),
+    ).pipe(
+      Effect.catchCause(() =>
+        Effect.sync(() => { ownerLost = true }),
+      ),
     )
 
-    return messageID
+    if (ownerLost) {
+      yield* Effect.logWarning("admitParentInput: owner lease lost or transaction failed", {
+        id: input.item.id,
+      })
+      return undefined as MessageID | undefined
+    }
+
+    return messageID as MessageID | undefined
   })
 }
 

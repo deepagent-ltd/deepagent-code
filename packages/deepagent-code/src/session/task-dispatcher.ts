@@ -163,8 +163,54 @@ export function claimRun(input: {
       .pipe(Effect.orDie)
 
     for (const candidate of candidates) {
-      // Skip if pre-start attempts exhausted
-      if ((candidate.start_attempts ?? 0) >= maxPrestart) continue
+      // B-5 (P1-5): exhausted pre-start attempts → atomic terminal transition to "failed"
+      // instead of silently skipping (which leaves the row queued forever).
+      if ((candidate.start_attempts ?? 0) >= maxPrestart) {
+        const exhaustedNow = input.now ?? Date.now()
+        yield* db.transaction(
+          (tx) =>
+            Effect.gen(function* () {
+              const row = yield* tx
+                .update(TaskRunTable)
+                .set({
+                  state: "failed",
+                  phase: "settled",
+                  control_state: "closed",
+                  reason: "prestart_attempts_exhausted",
+                  version: candidate.version + 1,
+                  time_updated: exhaustedNow,
+                  time_settled: exhaustedNow,
+                })
+                .where(
+                  and(
+                    eq(TaskRunTable.run_id, candidate.run_id),
+                    eq(TaskRunTable.version, candidate.version),
+                    eq(TaskRunTable.state, "queued"),
+                  ),
+                )
+                .returning({ run_id: TaskRunTable.run_id, version: TaskRunTable.version })
+                .get()
+                .pipe(Effect.orDie)
+              if (!row) return
+              yield* tx
+                .insert(TaskRunEventTable)
+                .values({
+                  event_id: Identifier.ascending("event"),
+                  run_id: candidate.run_id,
+                  version: row.version,
+                  type: "run_settled",
+                  from_state: "queued",
+                  to_state: "failed",
+                  reason: "prestart_attempts_exhausted",
+                  time_created: exhaustedNow,
+                })
+                .run()
+                .pipe(Effect.orDie)
+            }),
+          { behavior: "immediate" },
+        ).pipe(Effect.ignore)
+        continue
+      }
 
       // Skip if same child already has an active run
       const activeForChild = yield* db

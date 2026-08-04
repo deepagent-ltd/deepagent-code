@@ -3280,45 +3280,61 @@ export const layer = Layer.effect(
     // existing deliverTaskNotifications pattern), or (b) a SessionPrompt.Service shim constructed
     // from local closures with loop wrapped to provide InstanceRef. Deferred to a follow-up.
     const durableWorkers = new Map<string, Fiber.Fiber<void, never>>()
-    // Phase 6I: lock paths for cross-process epoch assertion
+    // Phase 6I: lock paths + lock contents for cross-process epoch assertion
     const lockPaths = new Map<string, string>()
+    const lockContents = new Map<string, string>() // directory → our written content (for token-fenced unlink)
     const startDurableWorkers = registerInitializer((ctx) =>
       Effect.runPromise(
         Effect.gen(function* () {
-          if (flags.subagentControlPlane === "legacy") return
+          // A-2 (P0-4): only start daemon in "durable" mode — shadow mode must NOT run daemon
+          if (flags.subagentControlPlane !== "durable") return
           if (durableWorkers.has(ctx.directory)) return
 
-          // Phase 6I: cross-process mode epoch assertion via lock file
-          // Prevents two processes from running a durable executor for the same directory.
+          // Phase 6I / A-2: atomic O_EXCL lock — fail-closed if another live process owns it.
+          // Using O_EXCL (flag:"wx") provides an atomic create: if the file already exists the
+          // write throws EEXIST rather than silently overwriting, eliminating the TOCTOU window.
           const lockPath = path.join(ctx.directory, ".deepagent-executor.lock")
           lockPaths.set(ctx.directory, lockPath)
           const lockContent = `${process.pid}\n${Date.now()}\n${flags.subagentControlPlane}\n`
-          try {
-            let existingContent: string | undefined
-            try { existingContent = fs.readFileSync(lockPath, "utf-8") } catch { /* file does not exist */ }
-            if (existingContent) {
-              const [existingPidStr] = existingContent.split("\n")
-              const existingPid = parseInt(existingPidStr, 10)
-              if (!isNaN(existingPid) && existingPid !== process.pid) {
-                let alive = false
-                try { process.kill(existingPid, 0); alive = true } catch { /* process is dead */ }
-                if (alive) {
-                  yield* Effect.logWarning("durable-cp: another process owns executor for this directory", {
-                    directory: ctx.directory,
-                    existingPid,
-                    ourPid: process.pid,
-                  })
-                  return // skip — another live process already owns this directory
+
+          const acquired = yield* Effect.sync(() => {
+            for (let attempt = 0; attempt < 2; attempt++) {
+              try {
+                // Attempt O_EXCL atomic create
+                fs.writeFileSync(lockPath, lockContent, { flag: "wx" })
+                return true // we own the lock
+              } catch (e: any) {
+                if (e?.code !== "EEXIST") {
+                  // Non-EEXIST error (e.g. permission) — fail-closed
+                  return false
                 }
+                // EEXIST: another process may own the lock — check liveness
+                try {
+                  const existing = fs.readFileSync(lockPath, "utf-8")
+                  const [existingPidStr] = existing.split("\n")
+                  const existingPid = parseInt(existingPidStr, 10)
+                  if (!isNaN(existingPid) && existingPid !== process.pid) {
+                    let alive = false
+                    try { process.kill(existingPid, 0); alive = true } catch { /* dead */ }
+                    if (alive) return false // live owner — fail-closed
+                    // Dead owner: remove stale lock and retry O_EXCL
+                    try { fs.unlinkSync(lockPath) } catch { /* already gone */ }
+                    // fall through to retry loop
+                  }
+                } catch { return false }
               }
             }
-            fs.writeFileSync(lockPath, lockContent, { flag: "w" })
-          } catch (e) {
-            yield* Effect.logWarning("durable-cp: could not write epoch lock file, proceeding without cross-process guard", {
+            return false
+          })
+
+          if (!acquired) {
+            yield* Effect.logWarning("durable-cp: failed to acquire executor lock, another process owns it — fail-closed", {
               directory: ctx.directory,
-              error: String(e),
+              ourPid: process.pid,
             })
+            return // A-2: fail-closed
           }
+          lockContents.set(ctx.directory, lockContent)
 
           const ownerToken = `durable-cp:${process.pid}:${randomUUID()}`
 
@@ -3380,11 +3396,17 @@ export const layer = Layer.effect(
       const fiber = durableWorkers.get(directory)
       if (!fiber) return Promise.resolve()
       durableWorkers.delete(directory)
-      // Phase 6I: release the cross-process epoch lock
+      // A-2 (P0-4): token-fenced release — only unlink if we own the lock
       const lockPath = lockPaths.get(directory)
+      const ourContent = lockContents.get(directory)
       lockPaths.delete(directory)
-      if (lockPath) {
-        try { fs.unlinkSync(lockPath) } catch { /* already gone */ }
+      lockContents.delete(directory)
+      if (lockPath && ourContent) {
+        try {
+          const current = fs.readFileSync(lockPath, "utf-8")
+          if (current === ourContent) fs.unlinkSync(lockPath)
+          // else: another process replaced our lock — do not delete it
+        } catch { /* already gone or unreadable — safe to ignore */ }
       }
       return Effect.runPromise(
         orderedShutdown({ directory })

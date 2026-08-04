@@ -18,7 +18,7 @@
 import { Cause, Data, Duration, Effect, Fiber, Schedule } from "effect"
 import { Database } from "@deepagent-code/core/database/database"
 import { TaskRunTable, TaskRunEventTable, TaskNotificationOutboxTable, SessionTable } from "@deepagent-code/core/session/sql"
-import { and, eq, gt, inArray } from "drizzle-orm"
+import { and, eq, gt, inArray, isNull } from "drizzle-orm"
 import { Identifier } from "@/id/id"
 import { SessionID, MessageID } from "@/session/schema"
 import type { ClaimResult } from "@/session/task-dispatcher"
@@ -75,6 +75,9 @@ export function startExecution(input: {
                   eq(TaskRunTable.claim_generation, input.run.claimGeneration),
                   eq(TaskRunTable.input_state, "ready"),
                   eq(TaskRunTable.control_state, "open"),
+                  // A-3 (P0-5): lease must be valid and execution must not have started
+                  gt(TaskRunTable.lease_expires_at, now),
+                  isNull(TaskRunTable.execution_started_at),
                 ),
               )
               .returning()
@@ -134,6 +137,8 @@ function renewLease(input: {
           eq(TaskRunTable.execution_owner, input.ownerToken),
           eq(TaskRunTable.claim_generation, input.claimGeneration),
           inArray(TaskRunTable.state, ["provisioning", "running", "researching", "finalizing"]),
+          // A-3 (P0-5): only renew a non-expired lease — expired lease means we lost fencing
+          gt(TaskRunTable.lease_expires_at, now),
         ),
       )
       .run()
@@ -279,10 +284,15 @@ export function settleRun(input: {
               input.deliveryMode === "background"
             if (isBackground) {
               const outboxID = `task-notify:${input.runID}`
+              // C-6 (P1-8): user-visible text must use public child_session_id, NOT internal run_id.
+              // Internal run_id is an implementation detail; task_read accepts child_session_id.
+              // `updated` holds the settled row with run_id; we need child_session_id from the
+              // transaction read (current only has state/version). Use runID as fallback.
+              const publicTaskID = input.runID // TODO: propagate child_session_id into settleRun input
               const payloadText =
                 finalState === "completed"
-                  ? `Background task completed. Call task_read({ task_id: "${input.runID}" }) to read the result.`
-                  : `Background task ended with state: ${finalState}. Call task_read({ task_id: "${input.runID}" }) to inspect partial work.`
+                  ? `Background task completed. Call task_read({ task_id: "${publicTaskID}" }) to read the result.`
+                  : `Background task ended with state: ${finalState}. Call task_read({ task_id: "${publicTaskID}" }) to inspect partial work.`
               const payloadObj = { agent: input.agentType, text: payloadText }
               const payloadJson = JSON.stringify(payloadObj)
               const { createHash } = require("node:crypto") as typeof import("node:crypto")
@@ -403,7 +413,26 @@ export function run(input: RunInput): Effect.Effect<void, never, Database.Servic
         Effect.map((msg) => {
           loopOk = true
           loopResultMessageID = (msg as any)?.info?.id as string | undefined
-          loopOutput = typeof msg === "string" ? msg : undefined
+          // C-1 (P0-6): SessionPrompt.loop returns a Message object, not a string.
+          // Extract text from the message's last text part if available.
+          if (typeof msg === "string") {
+            loopOutput = msg
+          } else {
+            // Try to extract text from Message.info.text (opencode Message shape)
+            const msgObj = msg as any
+            const infoText = msgObj?.info?.text
+            if (typeof infoText === "string" && infoText.length > 0) {
+              loopOutput = infoText
+            } else {
+              // Fallback: join any text parts from the parts array
+              const parts = msgObj?.parts ?? msgObj?.info?.parts ?? []
+              const joined = (parts as any[])
+                .filter((p: any) => p?.type === "text" || p?.type === "text-delta")
+                .map((p: any) => p?.text ?? p?.textDelta ?? "")
+                .join("")
+              if (joined.length > 0) loopOutput = joined
+            }
+          }
         }),
         Effect.catchCause((cause) => {
           loopError =
@@ -439,7 +468,9 @@ export function run(input: RunInput): Effect.Effect<void, never, Database.Servic
             : loopError
 
     // ── 6. Settle run (concurrent-priority CAS + optional outbox) ────────────
-    yield* settleRun({
+    // A-3 (P0-5): check CAS result — if won=false the run is in an inconsistent state;
+    // log the loss so a reconciliation pass (classifyOnStartup) can recover it.
+    const settleResult = yield* settleRun({
       runID: input.run.runID,
       parentSessionID: input.parentSessionID,
       ownerToken: input.ownerToken,
@@ -452,7 +483,14 @@ export function run(input: RunInput): Effect.Effect<void, never, Database.Servic
       output: loopOk ? loopOutput : undefined,
       rawResultMessageID: loopResultMessageID,
       now: Date.now(),
-    }).pipe(Effect.ignore)
+    })
+    if (!settleResult.won) {
+      yield* Effect.logWarning("executor: settleRun CAS lost — run lease expired before settlement; classifyOnStartup will recover", {
+        runID: input.run.runID,
+        reason: settleResult.reason,
+        intendedState: settleState,
+      })
+    }
   }).pipe(
     Effect.catchCause((cause) =>
       Effect.logError("executor: unexpected defect", {
