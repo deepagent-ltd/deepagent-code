@@ -243,6 +243,10 @@ const modelCommands = new Map<string, DispatcherCommand>([
     "ext:legacy-session:intelligence-draft-confirmation",
     command("packages/deepagent-code", "bun", "run", "test:llm-ext:intelligence-draft"),
   ],
+  [
+    "live:legacy-session:subagent-control-plane",
+    command("packages/deepagent-code", "bun", "run", "test:llm-live:subagent-control-plane"),
+  ],
 ])
 
 // Registration is not qualification. A LIVE suite enters this set only after its committed harness,

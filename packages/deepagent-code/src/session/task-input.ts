@@ -215,7 +215,7 @@ export function projectExact(input: {
                 data: {
                   role: "user",
                   providerID: "task",
-                  metadata: JSON.stringify({
+                  metadata: {
                     deepagent: {
                       task_admission: {
                         run_id: input.runID,
@@ -223,7 +223,7 @@ export function projectExact(input: {
                         request_hash: null,
                       },
                     },
-                  }),
+                  },
                 } as any,
               })
               .onConflictDoNothing()
