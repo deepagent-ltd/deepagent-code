@@ -396,6 +396,7 @@ describe("subagentIsWriteType", () => {
       makeRule("glob", "allow"),
       makeRule("list", "allow"),
       // bash intentionally absent — matches the Fix-A change in agent.ts
+      makeRule("git_read", "allow"),
       makeRule("webfetch", "allow"),
       makeRule("websearch", "allow"),
       makeRule("read", "allow"),

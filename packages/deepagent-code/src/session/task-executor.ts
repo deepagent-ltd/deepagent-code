@@ -193,6 +193,9 @@ export function settleRun(input: {
   readonly reason: string
   readonly output?: string
   readonly rawResultMessageID?: string
+  // P1-8: the stable public identity for user-facing task_read calls is child_session_id,
+  // not the internal run_id. Pass this from RunInput so the outbox payload is correct.
+  readonly childSessionID?: string
   readonly now?: number
 }) {
   return Effect.gen(function* () {
@@ -286,9 +289,7 @@ export function settleRun(input: {
               const outboxID = `task-notify:${input.runID}`
               // C-6 (P1-8): user-visible text must use public child_session_id, NOT internal run_id.
               // Internal run_id is an implementation detail; task_read accepts child_session_id.
-              // `updated` holds the settled row with run_id; we need child_session_id from the
-              // transaction read (current only has state/version). Use runID as fallback.
-              const publicTaskID = input.runID // TODO: propagate child_session_id into settleRun input
+              const publicTaskID = input.childSessionID ?? input.runID
               const payloadText =
                 finalState === "completed"
                   ? `Background task completed. Call task_read({ task_id: "${publicTaskID}" }) to read the result.`
@@ -482,6 +483,7 @@ export function run(input: RunInput): Effect.Effect<void, never, Database.Servic
       reason: settleReason,
       output: loopOk ? loopOutput : undefined,
       rawResultMessageID: loopResultMessageID,
+      childSessionID: input.childSessionID.toString(),
       now: Date.now(),
     })
     if (!settleResult.won) {
@@ -557,6 +559,7 @@ export function runFromClaim(input: {
       originKey: row.origin_key ?? undefined,
       depth: row.depth ?? 1,
       mutationCapability: (row.mutation_capability ?? "write") as any,
+      toolCapabilityHash: row.tool_capability_hash ?? "legacy-unknown",
       workspaceMode: (row.workspace_mode ?? "shared") as any,
       workspaceOwner: (row.workspace_owner ?? "parent") as any,
       inputState: (row.input_state ?? "legacy") as any,

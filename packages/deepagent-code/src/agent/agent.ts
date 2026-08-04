@@ -306,7 +306,8 @@ export const layer = Layer.effect(
           // it caused researcher to be classified as a writer → clean-workspace gate blocked every
           // researcher task in a dirty repo. researcher/reviewer are read-only roles and must not
           // carry generic bash. Structured read tools (grep/glob/list/read/code_intel) are
-          // sufficient for all research use cases.
+          // sufficient for all research use cases. git_read covers git-history queries
+          // (git log/diff/blame/show/etc.) without triggering write-type detection.
           researcher: {
             name: "researcher",
             permission: Permission.merge(
@@ -317,6 +318,7 @@ export const layer = Layer.effect(
                 glob: "allow",
                 list: "allow",
                 // bash intentionally omitted — see BUG-001-405 Fix-A comment above
+                git_read: "allow",
                 webfetch: "allow",
                 websearch: "allow",
                 read: "allow",

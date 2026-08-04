@@ -25,7 +25,7 @@ import { EffectBridge } from "@/effect/bridge"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Database } from "@deepagent-code/core/database/database"
 import { TaskRunTable, SessionTable } from "@deepagent-code/core/session/sql"
-import { and, eq } from "drizzle-orm"
+import { and, desc, eq } from "drizzle-orm"
 import { Worktree } from "@/worktree"
 import { Git } from "@/git"
 import { DEFAULT_WORKER_IDENTITY } from "../agent/collaboration-identity"
@@ -39,6 +39,10 @@ import { ModelV2 } from "@deepagent-code/core/model"
 import { ProviderV2 } from "@deepagent-code/core/provider"
 import { TaskConcurrency } from "./task-concurrency"
 import { TaskDispatcher } from "@/session/task-dispatcher"  // L10: durable queue
+import { SessionToolCapability, type ToolCapabilitySnapshot } from "@/session/tool-capability"  // P0-10
+import { ToolRegistry } from "@/tool/registry"  // P0-10
+import { MCP } from "@/mcp"  // P0-10
+import { Plugin } from "@/plugin"  // P0-10
 import Ajv from "ajv"
 import { KeyedMutex } from "@deepagent-code/core/effect/keyed-mutex"
 import { Log } from "@deepagent-code/core/util/log"
@@ -47,6 +51,7 @@ import {
   admitTaskRun,
   claimTaskProvisioning,
   deliverTaskNotifications,
+  failAdmittedTaskRun,
   getActiveTaskRunByChild,
   getTaskRun,
   isTerminal,
@@ -448,6 +453,78 @@ export function projectRecoveredSubagentRun(sessions: Session.Interface, run: Du
             },
           },
         },
+      })
+    }),
+  )
+}
+
+/**
+ * P1-11: Project a durable executor's terminal state into the child session metadata.
+ *
+ * Called from the dispatcher's onClaimed callback (prompt.ts) after
+ * LegacySubagentExecutor.runFromClaim completes (or fails). Looks up the
+ * most-recently settled TaskRun row for the given child session and writes
+ * `deepagent.subagent.{finished, state, reason, settled_at}` so the parent's
+ * task-status polling sees a terminal state without depending on the legacy
+ * in-process settlement path.
+ *
+ * Idempotent: if `subagent.finished === true` for the matching run, it no-ops.
+ */
+export function projectDurableSettledRun(sessions: Session.Interface, childSessionID: SessionID) {
+  return subagentSettlementLocks.withLock(childSessionID)(
+    Effect.gen(function* () {
+      const database = yield* Database.Service
+      // Find the highest-generation settled run for this child session.
+      const row = yield* database.db
+        .select({
+          run_id: TaskRunTable.run_id,
+          generation: TaskRunTable.generation,
+          state: TaskRunTable.state,
+          reason: TaskRunTable.reason,
+          time_settled: TaskRunTable.time_settled,
+        })
+        .from(TaskRunTable)
+        .where(and(
+          eq(TaskRunTable.child_session_id as any, childSessionID as any),
+          eq(TaskRunTable.phase, "settled"),
+        ))
+        .orderBy(desc(TaskRunTable.generation))
+        .limit(1)
+        .get()
+        .pipe(Effect.orElseSucceed(() => undefined))
+      if (!row) return
+      const current = yield* sessions.get(childSessionID).pipe(Effect.catchCause(() => Effect.succeed(undefined)))
+      if (!current) return
+      const { deepagent, subagent } = subagentMetadata(current.metadata)
+      // Guard: only update if run_id matches and not already finished
+      if (subagent.run_id !== row.run_id || subagent.finished === true) return
+      const terminalStates = ["completed", "error", "cancelled", "interrupted"] as const
+      type TerminalState = typeof terminalStates[number]
+      const state: TerminalState = (terminalStates as ReadonlyArray<string>).includes(row.state)
+        ? (row.state as TerminalState)
+        : "error"
+      yield* sessions.setMetadata({
+        sessionID: childSessionID,
+        metadata: {
+          ...current.metadata,
+          deepagent: {
+            ...deepagent,
+            subagent: {
+              ...subagent,
+              finished: true,
+              state,
+              phase: "settled",
+              settled_at: row.time_settled ?? Date.now(),
+              reason: row.reason ?? "unknown",
+            },
+          },
+        },
+      })
+      taskLog.info("subagent.durable-settled-projected", {
+        run_id: row.run_id,
+        child_session_id: childSessionID,
+        state,
+        reason: row.reason,
       })
     }),
   )
@@ -1014,6 +1091,10 @@ export const TaskTool = Tool.define(
     const database = yield* Database.Service
     const git = Option.getOrUndefined(yield* Effect.serviceOption(Git.Service))
     const queue = Option.getOrUndefined(yield* Effect.serviceOption(PRQueue.Service))
+    // P0-10: optional capability services — present when TaskTool runs inside the full session context
+    const toolRegistrySvc = Option.getOrUndefined(yield* Effect.serviceOption(ToolRegistry.Service))
+    const mcpSvc = Option.getOrUndefined(yield* Effect.serviceOption(MCP.Service))
+    const pluginSvc = Option.getOrUndefined(yield* Effect.serviceOption(Plugin.Service))
 
     const run = Effect.fn("TaskTool.execute")(function* (
       params: Schema.Schema.Type<typeof Parameters>,
@@ -1135,6 +1216,22 @@ export const TaskTool = Tool.define(
         maxWallMs: flags.subagentResearchWallMs ?? DEFAULT_SUBAGENT_RESEARCH_BUDGET.maxWallMs,
         maxNoProgress: flags.subagentNoProgressLimit ?? DEFAULT_SUBAGENT_RESEARCH_BUDGET.maxNoProgress,
       }
+      let capSnap: ToolCapabilitySnapshot | undefined
+      if (toolRegistrySvc && mcpSvc && pluginSvc) {
+        capSnap = yield* SessionToolCapability.snapshot().pipe(
+          Effect.provideService(ToolRegistry.Service, toolRegistrySvc),
+          Effect.provideService(MCP.Service, mcpSvc),
+          Effect.provideService(Plugin.Service, pluginSvc),
+        )
+      }
+      const agentIsWriteCapable = capSnap
+        ? capSnap.tools.some(
+            (tool) =>
+              capSnap.enabledToolIDs.includes(tool.toolID) &&
+              tool.workspaceMutation === "possible" &&
+              evaluatePermission(tool.toolID, "*", next.permission).action === "allow",
+          ) || capSnap.interceptors.some((hook) => hook.taskReachable && hook.workspaceMutation === "possible")
+        : subagentIsWriteType(next)
       // B-9 (P1-14): ensureSessionBranch moved AFTER admitTaskRun.
       // Branch creation is a Git side effect that must not precede admission — if admission
       // fails (conflict, DB error) there must be no orphaned branch with no ledger entry.
@@ -1159,6 +1256,8 @@ export const TaskTool = Tool.define(
         parentRunID: parentActiveRun?.runID,
         request: params,
         deliveryMode: runInBackground ? "background" : "foreground",
+        mutationCapability: agentIsWriteCapable ? "write" : "read_only",
+        toolCapabilityHash: capSnap?.hash ?? "static-write-type",
         // L3d: freeze the execution spec so prepare() can build the V1 message without re-reading params
         executionSpec: { prompt: { text: params.prompt ?? params.description ?? "" } },
       }).pipe(Effect.provideService(Database.Service, database))
@@ -1176,37 +1275,22 @@ export const TaskTool = Tool.define(
       //   - P1-3: researcher no longer has bash; git history queries (git log/blame/diff) are not
       //     covered by the current read-only tool set. TODO: add git_log/git_diff structured tools
       //     (tracked as follow-up; see BUG-001-405 §4 Fix-A notes).
-      if (admission.runCreated && params.isolation !== "worktree" && subagentIsWriteType(next) && git && queue) {
+      if (admission.runCreated && params.isolation !== "worktree" && agentIsWriteCapable && git && queue) {
         yield* ensureSessionBranch({ git, directory: parent.directory, sessionID: parent.id }).pipe(
           Effect.catchCause((cause) =>
             Effect.gen(function* () {
-              // Settle the admitted run to failed so retries see a terminal state.
-              // Ignore DB errors — a settle failure must not shadow the original workspace error.
-              yield* database.db
-                .update(TaskRunTable)
-                .set({
-                  state: "failed",
-                  phase: "settled",
-                  control_state: "closed",
-                  reason: "workspace_preflight_dirty",
-                  version: admission.run.version + 1,
-                  time_updated: Date.now(),
-                  time_settled: Date.now(),
-                })
-                .where(
-                  and(
-                    eq(TaskRunTable.run_id, admission.run.runID),
-                    eq(TaskRunTable.version, admission.run.version),
-                  ),
-                )
-                .run()
+              const diagnostic = String(Cause.squash(cause))
+              yield* failAdmittedTaskRun({
+                run: admission.run,
+                reason: "workspace_preflight_failed",
+                error: { code: "workspace_preflight_failed", message: diagnostic },
+              })
                 .pipe(
-                  // P1-1: if the settle itself errors, log and discard — never let it shadow the
-                  // original workspace Cause that we are about to re-throw.
+                  Effect.provideService(Database.Service, database),
                   Effect.catchCause((dbErr) =>
-                    Effect.logWarning("BUG-001-405 Fix-B: settle failed, ignoring", {
+                    Effect.logWarning("Failed to settle task after workspace preflight error", {
                       runID: admission.run.runID,
-                      dbErr: String(dbErr),
+                      cause: Cause.pretty(dbErr),
                     }),
                   ),
                 )
@@ -1264,17 +1348,7 @@ export const TaskTool = Tool.define(
       //   capability  → agentIsWriteCapable (below)
       //   isolation   → params.isolation === "worktree" || agentIsWriteCapable
       //                 (computed at the worktree-provisioning call site when that is wired up)
-      const agentIsWriteCapable = subagentIsWriteType(next)
       if (admission.runCreated && flags.subagentControlPlane === "durable") {
-        // 6D: Freeze mutation_capability in the DB so the executor sees the correct value
-        const mutCap: "read_only" | "write" = agentIsWriteCapable ? "write" : "read_only"
-        yield* database.db
-          .update(TaskRunTable)
-          .set({ mutation_capability: mutCap, time_updated: Date.now() })
-          .where(eq(TaskRunTable.run_id, admission.run.runID))
-          .run()
-          .pipe(Effect.orDie)
-
         // C-2 (P0-7): Preflight — automatic writers must not start in a dirty workspace.
         // Use version-fenced settle so only the admitted (unowned) run can be terminated here.
         // BUG-001-405 Fix-D: use agentIsWriteCapable (pure capability) not the old isReadOnly
@@ -1283,32 +1357,14 @@ export const TaskTool = Tool.define(
           const gitStatus = yield* git.porcelainStatus(parent.directory)
           const isDirty = gitStatus != null && !gitStatus.clean
           if (isDirty) {
-            // version-fenced settle on the newly admitted run (no execution_owner yet)
-            yield* database.db.transaction(
-              (tx) =>
-                Effect.gen(function* () {
-                  const row = yield* tx
-                    .update(TaskRunTable)
-                    .set({
-                      state: "failed",
-                      phase: "settled",
-                      control_state: "closed",
-                      reason: "workspace_preflight_dirty",
-                      version: admission.run.version + 1,
-                      time_updated: Date.now(),
-                      time_settled: Date.now(),
-                    })
-                    .where(
-                      eq(TaskRunTable.run_id, admission.run.runID),
-                    )
-                    .returning({ run_id: TaskRunTable.run_id })
-                    .get()
-                    .pipe(Effect.orDie)
-                  // If CAS row is missing, admission race — still return preflight error
-                  return row
-                }),
-              { behavior: "immediate" } as any,
-            ).pipe(Effect.ignore)
+            yield* failAdmittedTaskRun({
+              run: admission.run,
+              reason: "workspace_preflight_dirty",
+              error: {
+                code: "workspace_dirty",
+                message: "Automatic writer tasks require a clean workspace.",
+              },
+            }).pipe(Effect.provideService(Database.Service, database))
             return yield* Effect.fail(
               taskError({
                 code: "workspace_dirty",

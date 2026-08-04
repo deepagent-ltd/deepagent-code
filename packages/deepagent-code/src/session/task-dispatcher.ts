@@ -13,11 +13,12 @@
  *   - same child_session_id never has two active (provisioning/running/finalizing) runs
  */
 
-import { Data, Effect, Schedule, Scope, pipe } from "effect"
+import { Data, Effect, Schedule } from "effect"
 import { Database } from "@deepagent-code/core/database/database"
 import { TaskRunTable, TaskRunEventTable, SessionTable } from "@deepagent-code/core/session/sql"
 import { and, asc, desc, eq, gt, inArray, isNull, lte, ne, or, sql } from "drizzle-orm"
 import { Identifier } from "@/id/id"
+import type { SessionID } from "@/session/schema"
 import { TaskConcurrency } from "@/tool/task-concurrency"
 import type { Run } from "@/tool/task-run"
 
@@ -102,9 +103,9 @@ export function enqueueRun(input: {
 export type ClaimResult = {
   readonly runID: string
   readonly childSessionID: string
+  readonly parentSessionID: SessionID
   readonly claimGeneration: number
   readonly leaseExpiresAt: number
-  readonly releaseConcurrency: () => void
 }
 
 // ---------------------------------------------------------------------------
@@ -117,15 +118,16 @@ export type ClaimResult = {
  *
  * Steps:
  *   1. Read candidate rows from task_run (queued, past available_at, no active sibling)
- *   2. Acquire TaskConcurrency permit for the parent session
- *   3. CAS: queued → provisioning, increment claim_generation, set owner + lease
- *   4. If CAS lost (race): release permit, try next candidate
+ *   2. CAS: queued → provisioning, increment claim_generation, set owner + lease
+ *   3. If CAS is lost, try the next candidate
  *
- * Returns undefined if no claimable run is available.
+ * The production dispatch loop invokes this only while holding a TaskConcurrency permit.
+ * Direct callers are responsible for their own execution-capacity policy.
  */
 export function claimRun(input: {
   readonly ownerToken: string
   readonly directory: string
+  readonly parentSessionID?: SessionID
   readonly leaseMs?: number
   readonly maxPrestartAttempts?: number
   readonly now?: number
@@ -152,6 +154,7 @@ export function claimRun(input: {
       .where(
         and(
           eq(SessionTable.directory, input.directory),
+          input.parentSessionID ? eq(TaskRunTable.parent_session_id, input.parentSessionID) : undefined,
           eq(TaskRunTable.state, "queued"),
           eq(TaskRunTable.control_state, "open"),
           lte(TaskRunTable.available_at, now),
@@ -226,85 +229,71 @@ export function claimRun(input: {
         .pipe(Effect.orDie)
       if (activeForChild) continue
 
-      // Try to acquire concurrency permit and CAS claim in one scoped Effect
-      let releaseRef: (() => void) | undefined
+      const newClaimGen = (candidate.claim_generation ?? 0) + 1
 
-      const claimed = yield* TaskConcurrency.withTaskSlot({
-        parentSessionID: candidate.parent_session_id,
-        subagentType: "task",
-        caps: undefined,
-        effect: Effect.gen(function* () {
-          releaseRef = () => {} // permit is held by the outer withTaskSlot scope
+      // Wrap CAS + event in one IMMEDIATE transaction so a crash between the two
+      // cannot leave the run in provisioning without an audit event (design §1.3 #24).
+      const claimed = yield* db.transaction(
+        (tx) =>
+          Effect.gen(function* () {
+            const updated = yield* tx
+              .update(TaskRunTable)
+              .set({
+                state: "provisioning",
+                phase: "provision",
+                claim_generation: newClaimGen,
+                start_attempts: sql`${TaskRunTable.start_attempts} + 1`,
+                execution_owner: input.ownerToken,
+                lease_expires_at: now + leaseMs,
+                version: candidate.version + 1,
+                time_updated: now,
+              })
+              .where(
+                and(
+                  eq(TaskRunTable.run_id, candidate.run_id),
+                  eq(TaskRunTable.version, candidate.version),
+                  eq(TaskRunTable.state, "queued"),
+                  eq(TaskRunTable.control_state, "open"),
+                ),
+              )
+              .returning({
+                run_id: TaskRunTable.run_id,
+                version: TaskRunTable.version,
+                claim_generation: TaskRunTable.claim_generation,
+                lease_expires_at: TaskRunTable.lease_expires_at,
+                child_session_id: TaskRunTable.child_session_id,
+              })
+              .get()
+              .pipe(Effect.orDie)
 
-          const newClaimGen = (candidate.claim_generation ?? 0) + 1
+            if (!updated) return undefined
 
-          // Wrap CAS + event in one IMMEDIATE transaction so a crash between the two
-          // cannot leave the run in provisioning without an audit event (design §1.3 #24).
-          const result = yield* db.transaction(
-            (tx) =>
-              Effect.gen(function* () {
-                const updated = yield* tx
-                  .update(TaskRunTable)
-                  .set({
-                    state: "provisioning",
-                    phase: "provision",
-                    claim_generation: newClaimGen,
-                    start_attempts: sql`${TaskRunTable.start_attempts} + 1`,
-                    execution_owner: input.ownerToken,
-                    lease_expires_at: now + leaseMs,
-                    version: candidate.version + 1,
-                    time_updated: now,
-                  })
-                  .where(
-                    and(
-                      eq(TaskRunTable.run_id, candidate.run_id),
-                      eq(TaskRunTable.version, candidate.version),
-                      eq(TaskRunTable.state, "queued"),
-                      eq(TaskRunTable.control_state, "open"),
-                    ),
-                  )
-                  .returning({
-                    run_id: TaskRunTable.run_id,
-                    version: TaskRunTable.version,
-                    claim_generation: TaskRunTable.claim_generation,
-                    lease_expires_at: TaskRunTable.lease_expires_at,
-                    child_session_id: TaskRunTable.child_session_id,
-                  })
-                  .get()
-                  .pipe(Effect.orDie)
+            yield* tx
+              .insert(TaskRunEventTable)
+              .values({
+                event_id: Identifier.ascending("event"),
+                run_id: candidate.run_id,
+                version: updated.version,
+                type: "run_claimed",
+                from_state: "queued",
+                to_state: "provisioning",
+                time_created: now,
+              })
+              .run()
+              .pipe(Effect.orDie)
 
-                if (!updated) return undefined
-
-                yield* tx
-                  .insert(TaskRunEventTable)
-                  .values({
-                    event_id: Identifier.ascending("event"),
-                    run_id: candidate.run_id,
-                    version: updated.version,
-                    type: "run_claimed",
-                    from_state: "queued",
-                    to_state: "provisioning",
-                    time_created: now,
-                  })
-                  .run()
-                  .pipe(Effect.orDie)
-
-                return updated
-              }),
-            { behavior: "immediate" },
-          )
-
-          return result
-        }),
-      }).pipe(Effect.orElseSucceed(() => undefined))
+            return updated
+          }),
+        { behavior: "immediate" },
+      ).pipe(Effect.orElseSucceed(() => undefined))
 
       if (claimed) {
         return {
           runID: claimed.run_id,
           childSessionID: claimed.child_session_id,
+          parentSessionID: candidate.parent_session_id,
           claimGeneration: claimed.claim_generation ?? 1,
           leaseExpiresAt: claimed.lease_expires_at ?? now + leaseMs,
-          releaseConcurrency: releaseRef ?? (() => {}),
         } satisfies ClaimResult
       }
     }
@@ -322,6 +311,9 @@ export function claimRun(input: {
  * Process-local dispatcher daemon.
  * Runs claimRun on a fixed interval until the Scope closes.
  * Does NOT start execution — callers provide the executor callback.
+ *
+ * A non-blocking capacity permit is acquired before claim and held for the full executor
+ * lifecycle. A full limiter leaves the row queued and does not accumulate waiting fibers.
  */
 export function startDispatchLoop(input: {
   readonly ownerToken: string
@@ -331,14 +323,40 @@ export function startDispatchLoop(input: {
   readonly onClaimed: (claim: ClaimResult) => Effect.Effect<void, never, never>
 }) {
   const tick = Effect.gen(function* () {
-    const claim = yield* claimRun({
-      ownerToken: input.ownerToken,
-      directory: input.directory,
-      maxPrestartAttempts: input.maxPrestartAttempts,
-    }).pipe(Effect.orElseSucceed(() => undefined as ClaimResult | undefined))
-    if (claim) {
-      yield* input.onClaimed(claim).pipe(Effect.forkScoped, Effect.asVoid)
-    }
+    const { db } = yield* Database.Service
+    const candidate = yield* db
+      .select({ parentSessionID: TaskRunTable.parent_session_id })
+      .from(TaskRunTable)
+      .innerJoin(SessionTable, eq(SessionTable.id, TaskRunTable.parent_session_id))
+      .where(
+        and(
+          eq(SessionTable.directory, input.directory),
+          eq(TaskRunTable.state, "queued"),
+          eq(TaskRunTable.control_state, "open"),
+          lte(TaskRunTable.available_at, Date.now()),
+        ),
+      )
+      .orderBy(desc(TaskRunTable.priority), asc(TaskRunTable.time_created), asc(TaskRunTable.generation))
+      .get()
+      .pipe(Effect.orDie)
+    if (!candidate) return
+
+    const claimAndExecute = Effect.gen(function* () {
+      const claim = yield* claimRun({
+        ownerToken: input.ownerToken,
+        directory: input.directory,
+        parentSessionID: candidate.parentSessionID,
+        maxPrestartAttempts: input.maxPrestartAttempts,
+      }).pipe(Effect.orElseSucceed(() => undefined as ClaimResult | undefined))
+      if (claim) yield* input.onClaimed(claim)
+    })
+
+    yield* TaskConcurrency.withTaskSlotIfAvailable({
+        parentSessionID: candidate.parentSessionID,
+        subagentType: "task",
+        caps: undefined,
+        effect: claimAndExecute,
+      }).pipe(Effect.forkScoped, Effect.asVoid)
   })
 
   return Effect.repeat(

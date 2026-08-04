@@ -46,6 +46,7 @@ import { InstanceBootstrap } from "@/project/bootstrap-service"
 import * as Truncate from "./truncate"
 import { ApplyPatchTool } from "./apply_patch"
 import { ApplyPatchChunkTool } from "./apply_patch_chunk"
+import { GitReadTool } from "./git_read"
 import { Glob } from "@deepagent-code/core/util/glob"
 import path from "path"
 import { pathToFileURL } from "url"
@@ -162,6 +163,7 @@ const layerWithFacades: Layer.Layer<
     const greptool = yield* GrepTool
     const patchtool = yield* ApplyPatchTool
     const patchchunk = yield* ApplyPatchChunkTool
+    const gitreadtool = yield* GitReadTool
     const skilltool = yield* SkillTool
     const rollout = ContextFederationRollout.resolve(
       {
@@ -306,6 +308,7 @@ const layerWithFacades: Layer.Layer<
           plan: Tool.init(plan),
           planwrite: Tool.init(planwrite),
           query_log: Tool.init(querylog),
+          git_read: Tool.init(gitreadtool),
         })
 
         return {
@@ -329,6 +332,7 @@ const layerWithFacades: Layer.Layer<
             tool.skill,
             tool.patch,
             tool.patch_chunk,
+            tool.git_read,
             tool.planwrite,
             ...(flags.experimentalLspTool ? [tool.lsp] : []),
             ...(flags.codeIntelTool ? [tool.code_intel] : []),

@@ -84,7 +84,7 @@ import {
 } from "effect"
 import * as EffectLogger from "@deepagent-code/core/effect/logger"
 import { InstanceState } from "@/effect/instance-state"
-import { projectRecoveredSubagentRun, TaskTool, type TaskPromptOps } from "@/tool/task"
+import { projectDurableSettledRun, projectRecoveredSubagentRun, TaskTool, type TaskPromptOps } from "@/tool/task"
 import { SessionRunState } from "./run-state"
 import { SessionSteer } from "./steer"
 import { writeGovernanceAudit } from "./goal-governance-audit"
@@ -3368,6 +3368,14 @@ export const layer = Layer.effect(
                     Effect.provideService(InstanceRef, ctx),
                   ) as any,
               }).pipe(
+                // P1-11: project durable terminal state into session metadata so
+                // task-status polling terminates without the legacy in-process path.
+                Effect.ensuring(
+                  projectDurableSettledRun(sessions, SessionID.make(claim.childSessionID as string)).pipe(
+                    Effect.provideService(Database.Service, database),
+                    Effect.ignore,
+                  ),
+                ),
                 Effect.provideService(Database.Service, database),
                 Effect.ignore,
               ),

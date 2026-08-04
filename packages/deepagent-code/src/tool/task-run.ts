@@ -41,6 +41,8 @@ export type WorkspaceOwner = "parent" | "run" | "caller" | "goal"
 export type Run = {
   runID: string
   rootRunID?: string
+  parentRunID?: string
+  continuationOfRunID?: string
   requestHash: string
   parentSessionID: SessionID
   parentMessageID: MessageID
@@ -68,6 +70,7 @@ export type Run = {
   originKey?: string
   depth: number
   mutationCapability: MutationCapability
+  toolCapabilityHash: string
   workspaceMode: WorkspaceMode
   workspaceOwner: WorkspaceOwner
   inputState: InputState
@@ -109,7 +112,7 @@ export type OutboxItem = {
 
 export class AdmissionConflict extends Data.TaggedError("TaskRun.AdmissionConflict")<{
   readonly admissionKey: string
-  readonly reason: "request" | "delivery" | "child" | "join"
+  readonly reason: "request" | "delivery" | "child" | "join" | "ancestor_closed"
 }> {}
 
 class ConcurrentAdmission extends Data.TaggedError("TaskRun.ConcurrentAdmission")<{
@@ -146,6 +149,8 @@ export const requestHash = (value: unknown) => Hash.sha256(canonicalJson(value))
 const fromRow = (row: typeof TaskRunTable.$inferSelect): Run => ({
   runID: row.run_id,
   rootRunID: row.root_run_id ?? undefined,
+  parentRunID: row.parent_run_id ?? undefined,
+  continuationOfRunID: row.continuation_of_run_id ?? undefined,
   requestHash: row.request_hash,
   parentSessionID: SessionID.make(row.parent_session_id),
   parentMessageID: MessageID.ascending(row.parent_message_id),
@@ -173,6 +178,7 @@ const fromRow = (row: typeof TaskRunTable.$inferSelect): Run => ({
   originKey: row.origin_key ?? undefined,
   depth: row.depth ?? 1,
   mutationCapability: (row.mutation_capability as MutationCapability | null) ?? "write",
+  toolCapabilityHash: row.tool_capability_hash ?? "legacy-unknown",
   workspaceMode: (row.workspace_mode as WorkspaceMode | null) ?? "shared",
   workspaceOwner: (row.workspace_owner as WorkspaceOwner | null) ?? "parent",
   inputState: (row.input_state as InputState | null) ?? "legacy",
@@ -194,8 +200,13 @@ export function admitTaskRun(input: {
   toolCallID: string
   childSessionID?: SessionID
   joinRunID?: string
+  // P0-8: causal run graph — the run_id of the parent session's currently-active task run.
+  // When provided the new run is linked as a child; ancestor-open check is enforced.
+  parentRunID?: string
   request: unknown
   deliveryMode: DeliveryMode
+  mutationCapability?: MutationCapability
+  toolCapabilityHash?: string
   now?: number
   // L3d: frozen execution specification written once at admit time; consumed by prepare()
   executionSpec?: unknown
@@ -265,29 +276,74 @@ export function admitTaskRun(input: {
               : undefined
           if (conflictingActive) return yield* Effect.fail(new AdmissionConflict({ admissionKey: key, reason: "join" }))
 
+          // P0-8: ancestor-open check + causal graph resolution.
+          // When the parent session is itself a subagent run (depth > 1), parentRunID identifies its
+          // active task_run. We must refuse admission if the ancestor is already closed/terminal,
+          // and we must propagate the real root_run_id down the chain (invariant 16).
+          let resolvedRootRunID: string | undefined
+          if (input.parentRunID) {
+            const parentRun = yield* tx
+              .select({
+                run_id: TaskRunTable.run_id,
+                root_run_id: TaskRunTable.root_run_id,
+                control_state: TaskRunTable.control_state,
+                state: TaskRunTable.state,
+              })
+              .from(TaskRunTable)
+              .where(eq(TaskRunTable.run_id, input.parentRunID))
+              .get()
+              .pipe(Effect.orDie)
+
+            if (!parentRun)
+              return yield* Effect.fail(new AdmissionConflict({ admissionKey: key, reason: "ancestor_closed" }))
+
+            const parentIsTerminal = (terminalStates as ReadonlyArray<string>).includes(parentRun.state)
+            const parentIsClosed = parentRun.control_state === "closed"
+            if (parentIsTerminal || parentIsClosed)
+              return yield* Effect.fail(new AdmissionConflict({ admissionKey: key, reason: "ancestor_closed" }))
+
+            // Propagate root: if the parent itself has a root, use it; otherwise the parent IS the root.
+            resolvedRootRunID = parentRun.root_run_id ?? input.parentRunID
+          }
+
           const insertedRun = joined
             ? undefined
             : yield* Effect.gen(function* () {
                 for (let retry = 0; retry < 4; retry++) {
+                  // P1-6: fetch both max generation AND the run_id of the latest run so we can write
+                  // continuation_of_run_id for reruns of the same child session (§1.3 #8).
                   const latest = yield* tx
-                    .select({ generation: max(TaskRunTable.generation) })
+                    .select({ generation: TaskRunTable.generation, run_id: TaskRunTable.run_id })
                     .from(TaskRunTable)
                     .where(eq(TaskRunTable.child_session_id, childSessionID))
+                    .orderBy(desc(TaskRunTable.generation))
                     .get()
                     .pipe(Effect.orDie)
                   const runID = Identifier.ascending("job")
+                  const newGeneration = (latest?.generation ?? 0) + 1
+                  // P0-8: root_run_id — if this run has a parent ancestor chain use the resolved root;
+                  // otherwise this run IS the root (depth=1, no parentRunID supplied).
+                  const rootRunID = resolvedRootRunID ?? runID
+                  // P1-6: continuation_of_run_id — only set when re-running an existing child session
+                  const continuationOfRunID = latest?.run_id ?? null
                   const inserted = yield* tx
                     .insert(TaskRunTable)
                     .values({
                       run_id: runID,
-                      root_run_id: runID,
+                      root_run_id: rootRunID,
+                      // P0-8: parent_run_id links this run to its direct parent in the task tree
+                      parent_run_id: input.parentRunID ?? null,
+                      // P1-6: continuation_of_run_id links sequential reruns of the same child session
+                      continuation_of_run_id: newGeneration > 1 ? continuationOfRunID : null,
                       request_hash: hash,
                       parent_session_id: input.parentSessionID,
                       parent_message_id: input.parentMessageID,
                       tool_call_id: input.toolCallID,
                       child_session_id: childSessionID,
-                      generation: (latest?.generation ?? 0) + 1,
+                      generation: newGeneration,
                       delivery_mode: input.deliveryMode,
+                      mutation_capability: input.mutationCapability ?? "write",
+                      tool_capability_hash: input.toolCapabilityHash ?? "legacy-unknown",
                       phase: "admission",
                       state: "admitted",
                       // L3d: freeze the execution spec at admit time so prepare() can read it
@@ -302,7 +358,25 @@ export function admitTaskRun(input: {
                     .returning()
                     .get()
                     .pipe(Effect.orDie)
-                  if (inserted) return inserted
+                  if (inserted) {
+                    // P0-9: co-transactional run_admitted event — every state transition must have a
+                    // matching event so the audit log is complete (design §1.3 #24).
+                    yield* tx
+                      .insert(TaskRunEventTable)
+                      .values({
+                        event_id: Identifier.ascending("event"),
+                        run_id: inserted.run_id,
+                        version: 0,
+                        type: "run_admitted",
+                        from_state: null,
+                        to_state: "admitted",
+                        reason: "initial_admission",
+                        time_created: now,
+                      })
+                      .run()
+                      .pipe(Effect.orDie)
+                    return inserted
+                  }
                 }
                 return yield* Effect.die("TaskRun.admit could not allocate a unique child generation")
               })
@@ -338,6 +412,75 @@ export function admitTaskRun(input: {
         ),
       )
     return yield* attempt(4)
+  })
+}
+
+/**
+ * Settle a newly admitted, unowned run after a pre-execution failure.
+ * The row transition and audit event share one transaction and are fenced by
+ * generation, version, state, control state, and absence of an execution owner.
+ */
+export function failAdmittedTaskRun(input: {
+  run: Run
+  reason: string
+  error: ErrorData
+  now?: number
+}) {
+  return Effect.gen(function* () {
+    const { db } = yield* Database.Service
+    const now = input.now ?? Date.now()
+
+    return yield* db.transaction(
+      (tx) =>
+        Effect.gen(function* () {
+          const updated = yield* tx
+            .update(TaskRunTable)
+            .set({
+              state: "failed",
+              phase: "settled",
+              control_state: "closed",
+              reason: input.reason,
+              error: input.error,
+              version: input.run.version + 1,
+              time_updated: now,
+              time_settled: now,
+            })
+            .where(
+              and(
+                eq(TaskRunTable.run_id, input.run.runID),
+                eq(TaskRunTable.generation, input.run.generation),
+                eq(TaskRunTable.version, input.run.version),
+                eq(TaskRunTable.state, "admitted"),
+                eq(TaskRunTable.control_state, "open"),
+                isNull(TaskRunTable.execution_owner),
+              ),
+            )
+            .returning()
+            .get()
+            .pipe(Effect.orDie)
+
+          if (!updated) return undefined
+
+          yield* tx
+            .insert(TaskRunEventTable)
+            .values({
+              event_id: Identifier.ascending("event"),
+              run_id: updated.run_id,
+              version: updated.version,
+              type: "run_settled",
+              from_state: "admitted",
+              to_state: "failed",
+              reason: input.reason,
+              data: input.error,
+              time_created: now,
+            })
+            .run()
+            .pipe(Effect.orDie)
+
+          return fromRow(updated)
+        }),
+      { behavior: "immediate" },
+    )
   })
 }
 
@@ -1066,7 +1209,7 @@ export function checkAncestorControl(input: {
   return Effect.gen(function* () {
     const { db } = yield* Database.Service
     // Must match the admissionKey format: NUL-delimited (same as admissionKey() function above)
-    const key = `${input.parentSessionID} ${input.parentMessageID} ${input.toolCallID}`
+    const key = `${input.parentSessionID}\u0000${input.parentMessageID}\u0000${input.toolCallID}`
 
     // Find parent run via admission record
     const admission = yield* db
