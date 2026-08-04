@@ -16,11 +16,10 @@
 import { Data, Effect, Schedule } from "effect"
 import { Database } from "@deepagent-code/core/database/database"
 import { TaskRunTable, TaskRunEventTable, SessionTable } from "@deepagent-code/core/session/sql"
-import { and, asc, desc, eq, gt, inArray, isNull, lte, ne, or, sql } from "drizzle-orm"
+import { and, asc, desc, eq, inArray, lte, sql } from "drizzle-orm"
 import { Identifier } from "@/id/id"
 import type { SessionID } from "@/session/schema"
 import { TaskConcurrency } from "@/tool/task-concurrency"
-import type { Run } from "@/tool/task-run"
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -40,11 +39,7 @@ export class DispatcherCapacityExceeded extends Data.TaggedError("TaskDispatcher
  * Transition a run from "admitted" to "queued".
  * Safe to call multiple times — if CAS lost, returns undefined (no error).
  */
-export function enqueueRun(input: {
-  readonly runID: string
-  readonly runVersion: number
-  readonly now?: number
-}) {
+export function enqueueRun(input: { readonly runID: string; readonly runVersion: number; readonly now?: number }) {
   return Effect.gen(function* () {
     const { db } = yield* Database.Service
     const now = input.now ?? Date.now()
@@ -170,48 +165,50 @@ export function claimRun(input: {
       // instead of silently skipping (which leaves the row queued forever).
       if ((candidate.start_attempts ?? 0) >= maxPrestart) {
         const exhaustedNow = input.now ?? Date.now()
-        yield* db.transaction(
-          (tx) =>
-            Effect.gen(function* () {
-              const row = yield* tx
-                .update(TaskRunTable)
-                .set({
-                  state: "failed",
-                  phase: "settled",
-                  control_state: "closed",
-                  reason: "prestart_attempts_exhausted",
-                  version: candidate.version + 1,
-                  time_updated: exhaustedNow,
-                  time_settled: exhaustedNow,
-                })
-                .where(
-                  and(
-                    eq(TaskRunTable.run_id, candidate.run_id),
-                    eq(TaskRunTable.version, candidate.version),
-                    eq(TaskRunTable.state, "queued"),
-                  ),
-                )
-                .returning({ run_id: TaskRunTable.run_id, version: TaskRunTable.version })
-                .get()
-                .pipe(Effect.orDie)
-              if (!row) return
-              yield* tx
-                .insert(TaskRunEventTable)
-                .values({
-                  event_id: Identifier.ascending("event"),
-                  run_id: candidate.run_id,
-                  version: row.version,
-                  type: "run_settled",
-                  from_state: "queued",
-                  to_state: "failed",
-                  reason: "prestart_attempts_exhausted",
-                  time_created: exhaustedNow,
-                })
-                .run()
-                .pipe(Effect.orDie)
-            }),
-          { behavior: "immediate" },
-        ).pipe(Effect.ignore)
+        yield* db
+          .transaction(
+            (tx) =>
+              Effect.gen(function* () {
+                const row = yield* tx
+                  .update(TaskRunTable)
+                  .set({
+                    state: "failed",
+                    phase: "settled",
+                    control_state: "closed",
+                    reason: "prestart_attempts_exhausted",
+                    version: candidate.version + 1,
+                    time_updated: exhaustedNow,
+                    time_settled: exhaustedNow,
+                  })
+                  .where(
+                    and(
+                      eq(TaskRunTable.run_id, candidate.run_id),
+                      eq(TaskRunTable.version, candidate.version),
+                      eq(TaskRunTable.state, "queued"),
+                    ),
+                  )
+                  .returning({ run_id: TaskRunTable.run_id, version: TaskRunTable.version })
+                  .get()
+                  .pipe(Effect.orDie)
+                if (!row) return
+                yield* tx
+                  .insert(TaskRunEventTable)
+                  .values({
+                    event_id: Identifier.ascending("event"),
+                    run_id: candidate.run_id,
+                    version: row.version,
+                    type: "run_settled",
+                    from_state: "queued",
+                    to_state: "failed",
+                    reason: "prestart_attempts_exhausted",
+                    time_created: exhaustedNow,
+                  })
+                  .run()
+                  .pipe(Effect.orDie)
+              }),
+            { behavior: "immediate" },
+          )
+          .pipe(Effect.ignore)
         continue
       }
 
@@ -233,59 +230,61 @@ export function claimRun(input: {
 
       // Wrap CAS + event in one IMMEDIATE transaction so a crash between the two
       // cannot leave the run in provisioning without an audit event (design §1.3 #24).
-      const claimed = yield* db.transaction(
-        (tx) =>
-          Effect.gen(function* () {
-            const updated = yield* tx
-              .update(TaskRunTable)
-              .set({
-                state: "provisioning",
-                phase: "provision",
-                claim_generation: newClaimGen,
-                start_attempts: sql`${TaskRunTable.start_attempts} + 1`,
-                execution_owner: input.ownerToken,
-                lease_expires_at: now + leaseMs,
-                version: candidate.version + 1,
-                time_updated: now,
-              })
-              .where(
-                and(
-                  eq(TaskRunTable.run_id, candidate.run_id),
-                  eq(TaskRunTable.version, candidate.version),
-                  eq(TaskRunTable.state, "queued"),
-                  eq(TaskRunTable.control_state, "open"),
-                ),
-              )
-              .returning({
-                run_id: TaskRunTable.run_id,
-                version: TaskRunTable.version,
-                claim_generation: TaskRunTable.claim_generation,
-                lease_expires_at: TaskRunTable.lease_expires_at,
-                child_session_id: TaskRunTable.child_session_id,
-              })
-              .get()
-              .pipe(Effect.orDie)
+      const claimed = yield* db
+        .transaction(
+          (tx) =>
+            Effect.gen(function* () {
+              const updated = yield* tx
+                .update(TaskRunTable)
+                .set({
+                  state: "provisioning",
+                  phase: "provision",
+                  claim_generation: newClaimGen,
+                  start_attempts: sql`${TaskRunTable.start_attempts} + 1`,
+                  execution_owner: input.ownerToken,
+                  lease_expires_at: now + leaseMs,
+                  version: candidate.version + 1,
+                  time_updated: now,
+                })
+                .where(
+                  and(
+                    eq(TaskRunTable.run_id, candidate.run_id),
+                    eq(TaskRunTable.version, candidate.version),
+                    eq(TaskRunTable.state, "queued"),
+                    eq(TaskRunTable.control_state, "open"),
+                  ),
+                )
+                .returning({
+                  run_id: TaskRunTable.run_id,
+                  version: TaskRunTable.version,
+                  claim_generation: TaskRunTable.claim_generation,
+                  lease_expires_at: TaskRunTable.lease_expires_at,
+                  child_session_id: TaskRunTable.child_session_id,
+                })
+                .get()
+                .pipe(Effect.orDie)
 
-            if (!updated) return undefined
+              if (!updated) return undefined
 
-            yield* tx
-              .insert(TaskRunEventTable)
-              .values({
-                event_id: Identifier.ascending("event"),
-                run_id: candidate.run_id,
-                version: updated.version,
-                type: "run_claimed",
-                from_state: "queued",
-                to_state: "provisioning",
-                time_created: now,
-              })
-              .run()
-              .pipe(Effect.orDie)
+              yield* tx
+                .insert(TaskRunEventTable)
+                .values({
+                  event_id: Identifier.ascending("event"),
+                  run_id: candidate.run_id,
+                  version: updated.version,
+                  type: "run_claimed",
+                  from_state: "queued",
+                  to_state: "provisioning",
+                  time_created: now,
+                })
+                .run()
+                .pipe(Effect.orDie)
 
-            return updated
-          }),
-        { behavior: "immediate" },
-      ).pipe(Effect.orElseSucceed(() => undefined))
+              return updated
+            }),
+          { behavior: "immediate" },
+        )
+        .pipe(Effect.orElseSucceed(() => undefined))
 
       if (claimed) {
         return {
@@ -315,14 +314,13 @@ export function claimRun(input: {
  * A non-blocking capacity permit is acquired before claim and held for the full executor
  * lifecycle. A full limiter leaves the row queued and does not accumulate waiting fibers.
  */
-export function startDispatchLoop(input: {
+export function dispatchRunIfCapacity(input: {
   readonly ownerToken: string
   readonly directory: string
-  readonly intervalMs?: number
   readonly maxPrestartAttempts?: number
   readonly onClaimed: (claim: ClaimResult) => Effect.Effect<void, never, never>
 }) {
-  const tick = Effect.gen(function* () {
+  return Effect.gen(function* () {
     const { db } = yield* Database.Service
     const candidate = yield* db
       .select({ parentSessionID: TaskRunTable.parent_session_id })
@@ -351,18 +349,25 @@ export function startDispatchLoop(input: {
       if (claim) yield* input.onClaimed(claim)
     })
 
-    yield* TaskConcurrency.withTaskSlotIfAvailable({
-        parentSessionID: candidate.parentSessionID,
-        subagentType: "task",
-        caps: undefined,
-        effect: claimAndExecute,
-      }).pipe(Effect.forkScoped, Effect.asVoid)
+    return yield* TaskConcurrency.withTaskSlotIfAvailable({
+      parentSessionID: candidate.parentSessionID,
+      subagentType: "task",
+      caps: undefined,
+      effect: claimAndExecute,
+    })
   })
+}
 
-  return Effect.repeat(
-    tick,
-    Schedule.fixed(input.intervalMs ?? 500),
-  ).pipe(Effect.asVoid)
+export function startDispatchLoop(input: {
+  readonly ownerToken: string
+  readonly directory: string
+  readonly intervalMs?: number
+  readonly maxPrestartAttempts?: number
+  readonly onClaimed: (claim: ClaimResult) => Effect.Effect<void, never, never>
+}) {
+  const tick = dispatchRunIfCapacity(input).pipe(Effect.forkScoped, Effect.asVoid)
+
+  return Effect.repeat(tick, Schedule.fixed(input.intervalMs ?? 500)).pipe(Effect.asVoid)
 }
 
 export * as TaskDispatcher from "./task-dispatcher"

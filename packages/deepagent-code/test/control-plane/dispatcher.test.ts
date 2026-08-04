@@ -3,8 +3,8 @@
  * DET-QUEUE-01 (partial): classifyOnStartup skips runs with non-expired leases
  */
 import { describe, expect } from "bun:test"
-import { Effect, Layer } from "effect"
-import { eq } from "drizzle-orm"
+import { Effect, Fiber, Layer } from "effect"
+import { eq, inArray } from "drizzle-orm"
 import { Database } from "@deepagent-code/core/database/database"
 import { ProjectV2 } from "@deepagent-code/core/project"
 import { ProjectTable } from "@deepagent-code/core/project/sql"
@@ -13,7 +13,7 @@ import { SessionTable, TaskRunTable } from "@deepagent-code/core/session/sql"
 import { CrossSpawnSpawner } from "@deepagent-code/core/cross-spawn-spawner"
 import { SessionID, MessageID } from "../../src/session/schema"
 import { classifyOnStartup } from "../../src/tool/task-run"
-import { enqueueRun } from "../../src/session/task-dispatcher"
+import { dispatchRunIfCapacity, enqueueRun } from "../../src/session/task-dispatcher"
 import { testEffect } from "../lib/effect"
 
 const database = Layer.mergeAll(Database.layerFromPath(":memory:"), CrossSpawnSpawner.defaultLayer)
@@ -130,6 +130,41 @@ describe("DET-FENCE-01: enqueueRun CAS", () => {
         .pipe(Effect.orDie)
       // State must remain admitted — the CAS miss must not modify the row
       expect(row?.state).toBe("admitted")
+    }),
+  )
+})
+
+describe("DET-CAPACITY-01: dispatcher holds capacity across execution", () => {
+  it.live("leaves excess work queued instead of claiming rows into permit waiters", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const runIDs = Array.from({ length: 5 }, (_, index) => `run_capacity_${index}`)
+      for (const [index, runID] of runIDs.entries()) {
+        yield* insertAdmittedRun(runID, `ses_child_capacity_${index}`)
+        yield* enqueueRun({ runID, runVersion: 0 })
+      }
+
+      const dispatches = []
+      for (let index = 0; index < 5; index++) {
+        dispatches.push(
+          yield* dispatchRunIfCapacity({
+            ownerToken: "dispatcher-capacity-test",
+            directory: DIRECTORY,
+            onClaimed: () => Effect.sleep("250 millis"),
+          }).pipe(Effect.forkChild),
+        )
+        yield* Effect.sleep("20 millis")
+      }
+      yield* Effect.all(dispatches.map(Fiber.join), { concurrency: "unbounded" })
+      const { db } = yield* Database.Service
+      const rows = yield* db
+        .select({ state: TaskRunTable.state })
+        .from(TaskRunTable)
+        .where(inArray(TaskRunTable.run_id, runIDs))
+        .all()
+        .pipe(Effect.orDie)
+      expect(rows.filter((row) => row.state === "provisioning")).toHaveLength(4)
+      expect(rows.filter((row) => row.state === "queued")).toHaveLength(1)
     }),
   )
 })

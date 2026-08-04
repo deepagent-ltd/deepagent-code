@@ -15,14 +15,21 @@
  *      下次启动时识别 execution_started_at IS NOT NULL → recovery_required（§11.2 已实现）
  */
 
-import { Cause, Data, Duration, Effect, Fiber, Schedule } from "effect"
+import { Cause, Data, Duration, Effect, Schedule } from "effect"
 import { Database } from "@deepagent-code/core/database/database"
-import { TaskRunTable, TaskRunEventTable, TaskNotificationOutboxTable, SessionTable } from "@deepagent-code/core/session/sql"
+import {
+  TaskRunTable,
+  TaskRunEventTable,
+  TaskNotificationOutboxTable,
+  SessionTable,
+} from "@deepagent-code/core/session/sql"
 import { and, eq, gt, inArray, isNull } from "drizzle-orm"
 import { Identifier } from "@/id/id"
 import { SessionID, MessageID } from "@/session/schema"
 import type { ClaimResult } from "@/session/task-dispatcher"
 import type { Run } from "@/tool/task-run"
+import { SessionV1 } from "@deepagent-code/core/v1/session"
+import { Hash } from "@deepagent-code/core/util/hash"
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -88,7 +95,8 @@ export function startExecution(input: {
               return yield* Effect.fail(
                 new ExecutorClaimLostError({
                   runID: input.run.runID,
-                  reason: "CAS provisioning→running failed: claim expired, wrong generation, control changed, or input not ready",
+                  reason:
+                    "CAS provisioning→running failed: claim expired, wrong generation, control changed, or input not ready",
                 }),
               )
             }
@@ -119,7 +127,7 @@ export function startExecution(input: {
 // renewLease — heartbeat while loop is running
 // ---------------------------------------------------------------------------
 
-function renewLease(input: {
+export function renewLease(input: {
   readonly runID: string
   readonly ownerToken: string
   readonly claimGeneration: number
@@ -128,7 +136,7 @@ function renewLease(input: {
   return Effect.gen(function* () {
     const { db } = yield* Database.Service
     const now = Date.now()
-    yield* db
+    const updated = yield* db
       .update(TaskRunTable)
       .set({ lease_expires_at: now + input.leaseMs, time_updated: now })
       .where(
@@ -141,8 +149,93 @@ function renewLease(input: {
           gt(TaskRunTable.lease_expires_at, now),
         ),
       )
-      .run()
+      .returning({ runID: TaskRunTable.run_id })
+      .get()
       .pipe(Effect.orDie)
+    if (!updated) {
+      return yield* Effect.fail(
+        new ExecutorClaimLostError({
+          runID: input.runID,
+          reason: "lease renewal fence lost",
+        }),
+      )
+    }
+    return updated
+  })
+}
+
+export function markLeaseLostRecovery(input: {
+  readonly runID: string
+  readonly ownerToken: string
+  readonly claimGeneration: number
+  readonly reason: string
+  readonly now?: number
+}) {
+  return Effect.gen(function* () {
+    const { db } = yield* Database.Service
+    const now = input.now ?? Date.now()
+    return yield* db.transaction(
+      (tx) =>
+        Effect.gen(function* () {
+          const current = yield* tx
+            .select({ state: TaskRunTable.state, version: TaskRunTable.version })
+            .from(TaskRunTable)
+            .where(
+              and(
+                eq(TaskRunTable.run_id, input.runID),
+                eq(TaskRunTable.execution_owner, input.ownerToken),
+                eq(TaskRunTable.claim_generation, input.claimGeneration),
+                inArray(TaskRunTable.state, ["running", "researching", "finalizing"]),
+              ),
+            )
+            .get()
+            .pipe(Effect.orDie)
+          if (!current) return false
+
+          const updated = yield* tx
+            .update(TaskRunTable)
+            .set({
+              state: "recovery_required",
+              reason: "execution_lease_lost",
+              error: { code: "execution_lease_lost", message: input.reason },
+              execution_owner: null,
+              lease_expires_at: null,
+              version: current.version + 1,
+              time_updated: now,
+            })
+            .where(
+              and(
+                eq(TaskRunTable.run_id, input.runID),
+                eq(TaskRunTable.execution_owner, input.ownerToken),
+                eq(TaskRunTable.claim_generation, input.claimGeneration),
+                eq(TaskRunTable.state, current.state),
+                eq(TaskRunTable.version, current.version),
+              ),
+            )
+            .returning({ version: TaskRunTable.version })
+            .get()
+            .pipe(Effect.orDie)
+          if (!updated) return false
+
+          yield* tx
+            .insert(TaskRunEventTable)
+            .values({
+              event_id: Identifier.ascending("event"),
+              run_id: input.runID,
+              version: updated.version,
+              type: "execution_recovery_required",
+              from_state: current.state,
+              to_state: "recovery_required",
+              reason: "execution_lease_lost",
+              data: { message: input.reason },
+              time_created: now,
+            })
+            .run()
+            .pipe(Effect.orDie)
+          return true
+        }),
+      { behavior: "immediate" },
+    )
   })
 }
 
@@ -160,16 +253,11 @@ function checkInterrupt(runID: string, ownerToken: string) {
         control_state: TaskRunTable.control_state,
       })
       .from(TaskRunTable)
-      .where(
-        and(
-          eq(TaskRunTable.run_id, runID),
-          eq(TaskRunTable.execution_owner, ownerToken),
-        ),
-      )
+      .where(and(eq(TaskRunTable.run_id, runID), eq(TaskRunTable.execution_owner, ownerToken)))
       .get()
       .pipe(Effect.orDie)
     return {
-      interrupted: !!(row?.interrupt_requested_at),
+      interrupted: !!row?.interrupt_requested_at,
       closed: row?.control_state === "closed" || row?.control_state === "close_requested",
       reason: row?.interrupt_reason ?? "human_interrupted",
     }
@@ -245,9 +333,9 @@ export function settleRun(input: {
                 phase: "settled",
                 control_state: "closed",
                 output: input.output,
-                raw_result_message_id: input.rawResultMessageID
-                  ? MessageID.make(input.rawResultMessageID)
-                  : null,
+                raw_result_message_id: input.rawResultMessageID ? MessageID.make(input.rawResultMessageID) : null,
+                reason: input.reason,
+                error: finalState === "completed" ? null : { code: finalState, message: input.reason },
                 execution_owner: null,
                 lease_expires_at: null,
                 version: current.version + 1,
@@ -258,6 +346,10 @@ export function settleRun(input: {
                 and(
                   eq(TaskRunTable.run_id, input.runID),
                   eq(TaskRunTable.version, current.version),
+                  eq(TaskRunTable.execution_owner, input.ownerToken),
+                  eq(TaskRunTable.claim_generation, input.claimGeneration),
+                  eq(TaskRunTable.state, current.state),
+                  gt(TaskRunTable.lease_expires_at, now),
                 ),
               )
               .returning({ run_id: TaskRunTable.run_id, version: TaskRunTable.version })
@@ -282,9 +374,7 @@ export function settleRun(input: {
               .pipe(Effect.orDie)
 
             // Background delivery: create notification outbox row (§3.7)
-            const isBackground =
-              current.effective_delivery_mode === "background" ||
-              input.deliveryMode === "background"
+            const isBackground = current.effective_delivery_mode === "background" || input.deliveryMode === "background"
             if (isBackground) {
               const outboxID = `task-notify:${input.runID}`
               // C-6 (P1-8): user-visible text must use public child_session_id, NOT internal run_id.
@@ -295,9 +385,7 @@ export function settleRun(input: {
                   ? `Background task completed. Call task_read({ task_id: "${publicTaskID}" }) to read the result.`
                   : `Background task ended with state: ${finalState}. Call task_read({ task_id: "${publicTaskID}" }) to inspect partial work.`
               const payloadObj = { agent: input.agentType, text: payloadText }
-              const payloadJson = JSON.stringify(payloadObj)
-              const { createHash } = require("node:crypto") as typeof import("node:crypto")
-              const payloadHashVal = createHash("sha256").update(payloadJson).digest("hex")
+              const payloadHashVal = Hash.sha256(JSON.stringify(payloadObj))
               yield* tx
                 .insert(TaskNotificationOutboxTable)
                 .values({
@@ -305,7 +393,7 @@ export function settleRun(input: {
                   run_id: input.runID,
                   event_kind: "terminal",
                   correlation_id: outboxID,
-                  message_id: MessageID.ascending(),
+                  message_id: MessageID.ascending(`msg_task_notify_${Hash.sha256(outboxID).slice(0, 24)}`),
                   parent_session_id: input.parentSessionID as any,
                   directory: input.directory,
                   payload: payloadObj,
@@ -349,8 +437,8 @@ export type RunInput = {
   readonly directory: string
   readonly agentType: string
   readonly leaseMs?: number
-  /** Injected execution function. Must be Effect<unknown, unknown, never> (all services pre-provided). */
-  readonly loopFn: (sessionID: SessionID) => Effect.Effect<unknown, unknown, never>
+  /** Injected execution function. All services must be pre-provided by the caller. */
+  readonly loopFn: (sessionID: SessionID) => Effect.Effect<SessionV1.WithParts, unknown, never>
 }
 
 /**
@@ -386,78 +474,85 @@ export function run(input: RunInput): Effect.Effect<void, never, Database.Servic
     )
     if (!startResult) return
 
-    // ── 2. Lease renewal — background fiber ──────────────────────────────────
-    // Renews lease every leaseMs/3 so it doesn't expire during long runs.
-    const renewInterval = Math.max(5_000, Math.floor(leaseMs / 3))
-    const renewalFiber = yield* renewLease({
+    // ── 2. Provider execution races the lease guard ──────────────────────────
+    // Losing the heartbeat fence interrupts the provider fiber immediately. A stale owner must
+    // never keep producing tools or provider output after another process may take ownership.
+    const renewInterval = Math.max(10, Math.floor(leaseMs / 3))
+    const loopOutcome = input.loopFn(input.childSessionID).pipe(
+      Effect.map((message) => {
+        if (message.info.role !== "assistant") {
+          return { ok: false as const, messageID: undefined, error: "provider returned a non-assistant message" }
+        }
+        if (message.info.error) {
+          return {
+            ok: false as const,
+            messageID: message.info.id,
+            error: `${message.info.error.name}: ${JSON.stringify(message.info.error.data)}`,
+          }
+        }
+        const text = message.parts
+          .filter(
+            (part): part is SessionV1.TextPart =>
+              part.type === "text" && part.synthetic !== true && part.ignored !== true,
+          )
+          .map((part) => part.text)
+          .join("\n")
+          .trim()
+        const output =
+          text || (message.info.structured === undefined ? undefined : JSON.stringify(message.info.structured))
+        if (!output) {
+          return { ok: false as const, messageID: message.info.id, error: "assistant output is empty" }
+        }
+        return { ok: true as const, messageID: message.info.id, output }
+      }),
+      Effect.catchCause((cause) =>
+        Effect.succeed({
+          ok: false as const,
+          messageID: undefined,
+          error: Cause.squash(cause) instanceof Error ? String(Cause.squash(cause)) : Cause.pretty(cause),
+        }),
+      ),
+    )
+    const heartbeat = renewLease({
       runID: input.run.runID,
       ownerToken: input.ownerToken,
       claimGeneration: input.claimGeneration,
       leaseMs,
     }).pipe(
       Effect.repeat(Schedule.fixed(Duration.millis(renewInterval))),
-      Effect.provideService(Database.Service, yield* Database.Service),
-      Effect.catchCause(() => Effect.void),
-      Effect.forkDetach,
+      Effect.flatMap(() => Effect.never),
     )
-
-    // ── 3. Call loopFn (opaque legacy activity) ───────────────────────────────
-    // The process crashing here → classifyOnStartup sees execution_started_at IS NOT NULL
-    // → recovery_required (§11.2). We never auto-replay after this point.
-    let loopResultMessageID: string | undefined
-    let loopOutput: string | undefined
-    let loopOk = false
-    let loopError = "loop_error"
-    yield* input
-      .loopFn(input.childSessionID)
-      .pipe(
-        Effect.map((msg) => {
-          loopOk = true
-          loopResultMessageID = (msg as any)?.info?.id as string | undefined
-          // C-1 (P0-6): SessionPrompt.loop returns a Message object, not a string.
-          // Extract text from the message's last text part if available.
-          if (typeof msg === "string") {
-            loopOutput = msg
-          } else {
-            // Try to extract text from Message.info.text (opencode Message shape)
-            const msgObj = msg as any
-            const infoText = msgObj?.info?.text
-            if (typeof infoText === "string" && infoText.length > 0) {
-              loopOutput = infoText
-            } else {
-              // Fallback: join any text parts from the parts array
-              const parts = msgObj?.parts ?? msgObj?.info?.parts ?? []
-              const joined = (parts as any[])
-                .filter((p: any) => p?.type === "text" || p?.type === "text-delta")
-                .map((p: any) => p?.text ?? p?.textDelta ?? "")
-                .join("")
-              if (joined.length > 0) loopOutput = joined
-            }
-          }
-        }),
-        Effect.catchCause((cause) => {
-          loopError =
-            Cause.squash(cause) instanceof Error
-              ? (Cause.squash(cause) as Error).message
-              : "loop_error"
-          return Effect.void
-        }),
+    const outcome = yield* Effect.raceFirst(loopOutcome, heartbeat).pipe(
+      Effect.map((result) => ({ _tag: "loop" as const, result })),
+      Effect.catchCause((cause) => Effect.succeed({ _tag: "lease_lost" as const, reason: Cause.pretty(cause) })),
+    )
+    if (outcome._tag === "lease_lost") {
+      yield* markLeaseLostRecovery({
+        runID: input.run.runID,
+        ownerToken: input.ownerToken,
+        claimGeneration: input.claimGeneration,
+        reason: outcome.reason,
+      }).pipe(
+        Effect.catchCause((cause) =>
+          Effect.logError("executor: failed to persist lease-loss recovery state", {
+            runID: input.run.runID,
+            cause: Cause.pretty(cause),
+          }).pipe(Effect.as(false)),
+        ),
       )
+      return
+    }
 
-    // ── 4. Stop lease renewal ─────────────────────────────────────────────────
-    yield* Fiber.interrupt(renewalFiber).pipe(Effect.ignore)
-
-    // ── 5. Check interrupt intent ─────────────────────────────────────────────
+    // ── 3. Check interrupt intent ─────────────────────────────────────────────
     const interruptStatus = yield* checkInterrupt(input.run.runID, input.ownerToken)
 
-    const settleState =
-      interruptStatus.closed
-        ? ("closed" as const)
-        : interruptStatus.interrupted && !loopOk
-          ? ("interrupted" as const)
-          : loopOk
-            ? ("completed" as const)
-            : ("failed" as const)
+    const settleState = interruptStatus.closed
+      ? ("closed" as const)
+      : interruptStatus.interrupted && !outcome.result.ok
+        ? ("interrupted" as const)
+        : outcome.result.ok
+          ? ("completed" as const)
+          : ("failed" as const)
 
     const settleReason =
       settleState === "completed"
@@ -466,7 +561,9 @@ export function run(input: RunInput): Effect.Effect<void, never, Database.Servic
           ? (interruptStatus.reason ?? "human_interrupted")
           : settleState === "closed"
             ? "close_requested"
-            : loopError
+            : outcome.result.ok
+              ? "loop_error"
+              : outcome.result.error
 
     // ── 6. Settle run (concurrent-priority CAS + optional outbox) ────────────
     // A-3 (P0-5): check CAS result — if won=false the run is in an inconsistent state;
@@ -481,17 +578,20 @@ export function run(input: RunInput): Effect.Effect<void, never, Database.Servic
       agentType: input.agentType,
       state: settleState,
       reason: settleReason,
-      output: loopOk ? loopOutput : undefined,
-      rawResultMessageID: loopResultMessageID,
+      output: outcome.result.ok ? outcome.result.output : undefined,
+      rawResultMessageID: outcome.result.messageID,
       childSessionID: input.childSessionID.toString(),
       now: Date.now(),
     })
     if (!settleResult.won) {
-      yield* Effect.logWarning("executor: settleRun CAS lost — run lease expired before settlement; classifyOnStartup will recover", {
-        runID: input.run.runID,
-        reason: settleResult.reason,
-        intendedState: settleState,
-      })
+      yield* Effect.logWarning(
+        "executor: settleRun CAS lost — run lease expired before settlement; classifyOnStartup will recover",
+        {
+          runID: input.run.runID,
+          reason: settleResult.reason,
+          intendedState: settleState,
+        },
+      )
     }
   }).pipe(
     Effect.catchCause((cause) =>
@@ -512,7 +612,7 @@ export function runFromClaim(input: {
   readonly claim: ClaimResult
   readonly ownerToken: string
   readonly leaseMs?: number
-  readonly loopFn: (sessionID: SessionID) => Effect.Effect<unknown, unknown, never>
+  readonly loopFn: (sessionID: SessionID) => Effect.Effect<SessionV1.WithParts, unknown, never>
 }): Effect.Effect<void, never, Database.Service> {
   return Effect.gen(function* () {
     const { db } = yield* Database.Service

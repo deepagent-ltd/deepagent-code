@@ -1,50 +1,43 @@
 /**
- * TaskDelivery — background task notification delivery.
+ * Durable background-task notification delivery.
  *
- * Design: subagent-control-plane-design.zh-CN.md §3.7
- *
- * Three durable phases per outbox item:
- *   1. reserve_parent_turn — claim the outbox item
- *   2. admit_parent_input  — write stable parent synthetic user message
- *   3. drive_parent_loop   — run parent SessionPrompt.loop and record response receipt
- *
- * Invariants:
- *   - correlation_id is the stable idempotency key per run
- *   - outbox ack must not precede assistant response receipt
- *   - response_started_at after commit: if process dies, enters response_recovery_required
- *   - never re-calls provider after response receipt exists
+ * The caller owns the parent SessionRunState reservation and injects the dedicated runLoop
+ * callback. This module owns only the durable outbox/input/receipt protocol.
  */
 
 import { Cause, Data, Effect, Schedule } from "effect"
 import { Database } from "@deepagent-code/core/database/database"
 import {
-  TaskNotificationOutboxTable,
   MessageTable,
   PartTable,
+  SessionTable,
+  TaskNotificationOutboxTable,
 } from "@deepagent-code/core/session/sql"
 import { Hash } from "@deepagent-code/core/util/hash"
-import { and, eq, isNull, lte, or } from "drizzle-orm"
-import { Identifier } from "@/id/id"
+import { ModelV2 } from "@deepagent-code/core/model"
+import { ProviderV2 } from "@deepagent-code/core/provider"
+import { SessionV1 } from "@deepagent-code/core/v1/session"
+import { and, asc, desc, eq, gt, inArray, isNull, lte, or } from "drizzle-orm"
 import { MessageID, PartID, SessionID } from "@/session/schema"
-import { SessionPrompt } from "./prompt"
-
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
 
 export type OutboxItem = {
   readonly id: string
   readonly runID: string
   readonly correlationID: string
+  readonly messageID: MessageID
   readonly parentSessionID: SessionID
   readonly directory: string
-  readonly payload: { readonly agent: string; readonly text: string; variant?: string }
+  readonly payload: { readonly agent: string; readonly text: string; readonly variant?: string }
   readonly payloadHash: string
+  readonly attempts: number
+  readonly timeCreated: number
 }
 
-// ---------------------------------------------------------------------------
-// claimOutboxItem — lease an outbox item for delivery
-// ---------------------------------------------------------------------------
+export class DeliveryConflictError extends Data.TaggedError("TaskDelivery.Conflict")<{
+  readonly id: string
+  readonly reason: string
+  readonly fatal: boolean
+}> {}
 
 export function claimOutboxItem(input: {
   readonly ownerToken: string
@@ -55,7 +48,14 @@ export function claimOutboxItem(input: {
   return Effect.gen(function* () {
     const { db } = yield* Database.Service
     const now = input.now ?? Date.now()
-    const leaseUntil = now + (input.leaseMs ?? 30_000)
+    const expired = or(
+      isNull(TaskNotificationOutboxTable.lease_expires_at),
+      lte(TaskNotificationOutboxTable.lease_expires_at, now),
+    )
+    const claimable = or(
+      eq(TaskNotificationOutboxTable.status, "pending"),
+      and(inArray(TaskNotificationOutboxTable.status, ["admitting", "admitted"]), expired),
+    )
 
     return yield* db.transaction(
       (tx) =>
@@ -67,65 +67,47 @@ export function claimOutboxItem(input: {
               and(
                 eq(TaskNotificationOutboxTable.directory, input.directory),
                 lte(TaskNotificationOutboxTable.available_at, now),
-                or(
-                  eq(TaskNotificationOutboxTable.status, "pending"),
-                  and(
-                    eq(TaskNotificationOutboxTable.status, "admitting"),
-                    or(
-                      isNull(TaskNotificationOutboxTable.lease_expires_at),
-                      lte(TaskNotificationOutboxTable.lease_expires_at, now),
-                    ),
-                  ),
-                ),
+                claimable,
               ),
             )
+            .orderBy(asc(TaskNotificationOutboxTable.time_created), asc(TaskNotificationOutboxTable.id))
             .limit(1)
             .get()
             .pipe(Effect.orDie)
-
-          if (!candidate) return undefined
-
-          // Skip items already with response recovery needed
-          if (candidate.status === "response_recovery_required") return undefined
+          if (!candidate) return
 
           const updated = yield* tx
             .update(TaskNotificationOutboxTable)
             .set({
               status: "admitting",
               lease_owner: input.ownerToken,
-              lease_expires_at: leaseUntil,
-              attempts: (candidate.attempts ?? 0) + 1,
+              lease_expires_at: now + (input.leaseMs ?? 30_000),
+              attempts: candidate.attempts + 1,
               time_updated: now,
             })
             .where(
               and(
                 eq(TaskNotificationOutboxTable.id, candidate.id),
-                or(
-                  eq(TaskNotificationOutboxTable.status, "pending"),
-                  and(
-                    eq(TaskNotificationOutboxTable.status, "admitting"),
-                    or(
-                      isNull(TaskNotificationOutboxTable.lease_expires_at),
-                      lte(TaskNotificationOutboxTable.lease_expires_at, now),
-                    ),
-                  ),
-                ),
+                eq(TaskNotificationOutboxTable.attempts, candidate.attempts),
+                claimable,
               ),
             )
             .returning()
             .get()
             .pipe(Effect.orDie)
-
-          if (!updated) return undefined
+          if (!updated) return
 
           return {
             id: updated.id,
             runID: updated.run_id,
             correlationID: updated.correlation_id ?? updated.id,
+            messageID: MessageID.make(updated.message_id),
             parentSessionID: SessionID.make(updated.parent_session_id),
             directory: updated.directory,
-            payload: updated.payload as OutboxItem["payload"],
+            payload: updated.payload,
             payloadHash: updated.payload_hash ?? Hash.sha256(JSON.stringify(updated.payload)),
+            attempts: updated.attempts,
+            timeCreated: updated.time_created,
           } satisfies OutboxItem
         }),
       { behavior: "immediate" },
@@ -133,9 +115,39 @@ export function claimOutboxItem(input: {
   })
 }
 
-// ---------------------------------------------------------------------------
-// admitParentInput — write stable synthetic parent user message
-// ---------------------------------------------------------------------------
+export function releaseOutboxClaim(input: {
+  readonly item: OutboxItem
+  readonly ownerToken: string
+  readonly delayMs?: number
+  readonly now?: number
+}) {
+  return Effect.gen(function* () {
+    const { db } = yield* Database.Service
+    const now = input.now ?? Date.now()
+    const updated = yield* db
+      .update(TaskNotificationOutboxTable)
+      .set({
+        status: "pending",
+        available_at: now + (input.delayMs ?? 1_000),
+        lease_owner: null,
+        lease_expires_at: null,
+        time_updated: now,
+      })
+      .where(
+        and(
+          eq(TaskNotificationOutboxTable.id, input.item.id),
+          eq(TaskNotificationOutboxTable.status, "admitting"),
+          eq(TaskNotificationOutboxTable.lease_owner, input.ownerToken),
+          eq(TaskNotificationOutboxTable.attempts, input.item.attempts),
+          isNull(TaskNotificationOutboxTable.response_started_at),
+        ),
+      )
+      .returning({ id: TaskNotificationOutboxTable.id })
+      .get()
+      .pipe(Effect.orDie)
+    return updated !== undefined
+  })
+}
 
 export function admitParentInput(input: {
   readonly item: OutboxItem
@@ -145,113 +157,203 @@ export function admitParentInput(input: {
   return Effect.gen(function* () {
     const { db } = yield* Database.Service
     const now = input.now ?? Date.now()
-
-    // Check if already admitted (exact replay)
-    const existing = yield* db
-      .select({ parent_input_message_id: TaskNotificationOutboxTable.parent_input_message_id })
-      .from(TaskNotificationOutboxTable)
-      .where(eq(TaskNotificationOutboxTable.id, input.item.id))
-      .get()
-      .pipe(Effect.orDie)
-
-    if (existing?.parent_input_message_id) {
-      return MessageID.make(existing.parent_input_message_id)
-    }
-
-    const messageID = MessageID.ascending()
-    const partID = PartID.ascending()
-    const notificationText = input.item.payload.text
-
-    // Write synthetic parent input message
-    // C-4 (P1-2): read the UPDATE result to detect owner loss; on 0 rows → return undefined
-    let ownerLost = false
-    yield* db.transaction(
+    return yield* db.transaction(
       (tx) =>
         Effect.gen(function* () {
-          yield* tx
-            .insert(MessageTable)
-            .values({
-              id: messageID,
-              session_id: input.item.parentSessionID as any,
-              time_created: now,
-              time_updated: now,
-              data: {
-                role: "user",
-                providerID: "task_notification",
-                // C-4 (P1-2): metadata is already an object — do NOT JSON.stringify here.
-                metadata: {
-                  deepagent: {
-                    task_notification: {
-                      run_id: input.item.runID,
-                      outbox_id: input.item.id,
-                      correlation_id: input.item.correlationID,
-                      payload_hash: input.item.payloadHash,
-                    },
-                  },
+          const outbox = yield* tx
+            .select()
+            .from(TaskNotificationOutboxTable)
+            .where(
+              and(
+                eq(TaskNotificationOutboxTable.id, input.item.id),
+                eq(TaskNotificationOutboxTable.status, "admitting"),
+                eq(TaskNotificationOutboxTable.lease_owner, input.ownerToken),
+                eq(TaskNotificationOutboxTable.attempts, input.item.attempts),
+                gt(TaskNotificationOutboxTable.lease_expires_at, now),
+              ),
+            )
+            .get()
+            .pipe(Effect.orDie)
+          if (!outbox) {
+            return yield* Effect.fail(
+              new DeliveryConflictError({ id: input.item.id, reason: "input admission fence lost", fatal: false }),
+            )
+          }
+
+          const parent = yield* tx
+            .select({ agent: SessionTable.agent, model: SessionTable.model })
+            .from(SessionTable)
+            .where(eq(SessionTable.id, input.item.parentSessionID))
+            .get()
+            .pipe(Effect.orDie)
+          if (!parent) {
+            return yield* Effect.fail(
+              new DeliveryConflictError({ id: input.item.id, reason: "parent session is missing", fatal: true }),
+            )
+          }
+
+          const history = parent.model
+            ? []
+            : yield* tx
+                .select({ data: MessageTable.data })
+                .from(MessageTable)
+                .where(eq(MessageTable.session_id, input.item.parentSessionID))
+                .orderBy(desc(MessageTable.time_created), desc(MessageTable.id))
+                .all()
+                .pipe(Effect.orDie)
+          const model = parent.model
+            ? { providerID: parent.model.providerID, modelID: parent.model.id, variant: parent.model.variant }
+            : history.map((row) => modelFromMessage(row.data)).find((item) => item !== undefined)
+          if (!model) {
+            return yield* Effect.fail(
+              new DeliveryConflictError({
+                id: input.item.id,
+                reason: "parent session model is unavailable",
+                fatal: true,
+              }),
+            )
+          }
+
+          const messageData = {
+            role: "user" as const,
+            time: { created: input.item.timeCreated },
+            agent: parent.agent ?? input.item.payload.agent,
+            model: {
+              providerID: ProviderV2.ID.make(model.providerID),
+              modelID: ModelV2.ID.make(model.modelID),
+              ...(input.item.payload.variant ?? model.variant
+                ? { variant: input.item.payload.variant ?? model.variant }
+                : {}),
+            },
+            metadata: {
+              deepagent: {
+                task_notification: {
+                  run_id: input.item.runID,
+                  outbox_id: input.item.id,
+                  correlation_id: input.item.correlationID,
+                  payload_hash: input.item.payloadHash,
                 },
-              } as any,
-            })
-            .onConflictDoNothing()
-            .run()
+              },
+            },
+          } satisfies Omit<SessionV1.User, "id" | "sessionID">
+          const partID = PartID.ascending(`prt_task_notify_${Hash.sha256(input.item.messageID).slice(0, 24)}`)
+          const partData = {
+            type: "text" as const,
+            text: input.item.payload.text,
+            synthetic: true,
+          } satisfies Omit<SessionV1.TextPart, "id" | "messageID" | "sessionID">
+          const existingMessage = yield* tx
+            .select()
+            .from(MessageTable)
+            .where(eq(MessageTable.id, input.item.messageID))
+            .get()
             .pipe(Effect.orDie)
-
-          yield* tx
-            .insert(PartTable)
-            .values({
-              id: partID,
-              message_id: messageID,
-              session_id: input.item.parentSessionID as any,
-              time_created: now,
-              time_updated: now,
-              data: { type: "text", text: notificationText, synthetic: true } as any,
-            })
-            .onConflictDoNothing()
-            .run()
+          const existingPart = yield* tx
+            .select()
+            .from(PartTable)
+            .where(eq(PartTable.id, partID))
+            .get()
             .pipe(Effect.orDie)
+          const exactMessage =
+            existingMessage?.session_id === input.item.parentSessionID &&
+            existingMessage.time_created === input.item.timeCreated &&
+            JSON.stringify(existingMessage.data) === JSON.stringify(messageData)
+          const exactPart =
+            existingPart?.message_id === input.item.messageID &&
+            existingPart.session_id === input.item.parentSessionID &&
+            existingPart.time_created === input.item.timeCreated &&
+            JSON.stringify(existingPart.data) === JSON.stringify(partData)
+          if ((existingMessage && !exactMessage) || (existingPart && !exactPart) || Boolean(existingMessage) !== Boolean(existingPart)) {
+            return yield* Effect.fail(
+              new DeliveryConflictError({
+                id: input.item.id,
+                reason: "stable parent input IDs contain a conflicting envelope",
+                fatal: true,
+              }),
+            )
+          }
 
-          // C-4 (P1-2): check affected rows to detect stale owner
-          const outboxUpdated = yield* tx
+          if (!existingMessage) {
+            yield* tx
+              .insert(MessageTable)
+              .values({
+                id: input.item.messageID,
+                session_id: input.item.parentSessionID,
+                time_created: input.item.timeCreated,
+                time_updated: input.item.timeCreated,
+                data: messageData,
+              })
+              .run()
+              .pipe(Effect.orDie)
+            yield* tx
+              .insert(PartTable)
+              .values({
+                id: partID,
+                message_id: input.item.messageID,
+                session_id: input.item.parentSessionID,
+                time_created: input.item.timeCreated,
+                time_updated: input.item.timeCreated,
+                data: partData,
+              })
+              .run()
+              .pipe(Effect.orDie)
+          }
+
+          const updated = yield* tx
             .update(TaskNotificationOutboxTable)
             .set({
               status: "admitted",
-              parent_input_message_id: messageID,
-              time_admitted: now,
+              parent_input_message_id: input.item.messageID,
+              time_admitted: outbox.time_admitted ?? now,
               time_updated: now,
             })
             .where(
               and(
                 eq(TaskNotificationOutboxTable.id, input.item.id),
+                eq(TaskNotificationOutboxTable.status, "admitting"),
                 eq(TaskNotificationOutboxTable.lease_owner, input.ownerToken),
+                eq(TaskNotificationOutboxTable.attempts, input.item.attempts),
+                gt(TaskNotificationOutboxTable.lease_expires_at, now),
               ),
             )
             .returning({ id: TaskNotificationOutboxTable.id })
             .get()
             .pipe(Effect.orDie)
-          if (!outboxUpdated) ownerLost = true
+          if (!updated) {
+            return yield* Effect.fail(
+              new DeliveryConflictError({
+                id: input.item.id,
+                reason: "owner lost while committing parent input",
+                fatal: false,
+              }),
+            )
+          }
+          return input.item.messageID
         }),
-    ).pipe(
-      Effect.catchCause(() =>
-        Effect.sync(() => { ownerLost = true }),
-      ),
+      { behavior: "immediate" },
     )
-
-    if (ownerLost) {
-      yield* Effect.logWarning("admitParentInput: owner lease lost or transaction failed", {
-        id: input.item.id,
-      })
-      return undefined as MessageID | undefined
-    }
-
-    return messageID as MessageID | undefined
   })
 }
 
-// ---------------------------------------------------------------------------
-// acknowledgeDelivery — mark outbox item as delivered after response receipt
-// ---------------------------------------------------------------------------
+export function findResponseReceipt(input: { readonly parentSessionID: SessionID; readonly parentInputID: MessageID }) {
+  return Effect.gen(function* () {
+    const { db } = yield* Database.Service
+    const rows = yield* db
+      .select({ id: MessageTable.id, data: MessageTable.data })
+      .from(MessageTable)
+      .where(eq(MessageTable.session_id, input.parentSessionID))
+      .orderBy(desc(MessageTable.time_created), desc(MessageTable.id))
+      .all()
+      .pipe(Effect.orDie)
+    const receipt = rows.find(
+      (row) => isTerminalAssistantReceipt(row.data, input.parentInputID),
+    )
+    return receipt ? MessageID.make(receipt.id) : undefined
+  })
+}
 
 export function acknowledgeDelivery(input: {
-  readonly id: string
+  readonly item: OutboxItem
   readonly ownerToken: string
   readonly responseMessageID: MessageID
   readonly now?: number
@@ -259,7 +361,6 @@ export function acknowledgeDelivery(input: {
   return Effect.gen(function* () {
     const { db } = yield* Database.Service
     const now = input.now ?? Date.now()
-
     const updated = yield* db
       .update(TaskNotificationOutboxTable)
       .set({
@@ -267,124 +368,330 @@ export function acknowledgeDelivery(input: {
         response_message_id: input.responseMessageID,
         lease_owner: null,
         lease_expires_at: null,
+        last_error: null,
         time_delivered: now,
         time_updated: now,
       })
       .where(
         and(
-          eq(TaskNotificationOutboxTable.id, input.id),
+          eq(TaskNotificationOutboxTable.id, input.item.id),
+          inArray(TaskNotificationOutboxTable.status, ["admitted", "processing"]),
           eq(TaskNotificationOutboxTable.lease_owner, input.ownerToken),
+          eq(TaskNotificationOutboxTable.attempts, input.item.attempts),
+          eq(TaskNotificationOutboxTable.parent_input_message_id, input.item.messageID),
+          gt(TaskNotificationOutboxTable.lease_expires_at, now),
         ),
       )
       .returning({ id: TaskNotificationOutboxTable.id })
       .get()
       .pipe(Effect.orDie)
-
     return updated !== undefined
   })
 }
 
-// ---------------------------------------------------------------------------
-// deliverOne — full delivery lifecycle for one outbox item
-// Design §3.7
-// ---------------------------------------------------------------------------
-
-export function deliverOne(input: {
+export function renewProcessingLease(input: {
   readonly item: OutboxItem
   readonly ownerToken: string
-}): Effect.Effect<boolean, never, Database.Service | SessionPrompt.Service> {
+  readonly leaseMs?: number
+  readonly now?: number
+}) {
   return Effect.gen(function* () {
-    const sessionPrompt = yield* SessionPrompt.Service
-    const now = Date.now()
-
-    // Phase 2: admit parent input message
-    const parentInputID = yield* admitParentInput({
-      item: input.item,
-      ownerToken: input.ownerToken,
-      now,
-    }).pipe(Effect.orElseSucceed(() => undefined as MessageID | undefined))
-
-    if (!parentInputID) return false
-
-    // Mark response started (before calling provider)
-    yield* (yield* Database.Service).db
+    const { db } = yield* Database.Service
+    const now = input.now ?? Date.now()
+    const updated = yield* db
       .update(TaskNotificationOutboxTable)
       .set({
-        status: "processing",
-        response_started_at: Date.now(),
+        lease_expires_at: now + (input.leaseMs ?? 30_000),
+        time_updated: now,
+      })
+      .where(
+        and(
+          eq(TaskNotificationOutboxTable.id, input.item.id),
+          eq(TaskNotificationOutboxTable.status, "processing"),
+          eq(TaskNotificationOutboxTable.lease_owner, input.ownerToken),
+          eq(TaskNotificationOutboxTable.attempts, input.item.attempts),
+          gt(TaskNotificationOutboxTable.lease_expires_at, now),
+        ),
+      )
+      .returning({ id: TaskNotificationOutboxTable.id })
+      .get()
+      .pipe(Effect.orDie)
+    if (updated) return
+    return yield* Effect.fail(
+      new DeliveryConflictError({
+        id: input.item.id,
+        reason: "processing lease fence lost",
+        fatal: false,
+      }),
+    )
+  })
+}
+
+function markResponseRecovery(input: {
+  readonly item: OutboxItem
+  readonly ownerToken: string
+  readonly error: string
+}) {
+  return Effect.gen(function* () {
+    const { db } = yield* Database.Service
+    yield* db
+      .update(TaskNotificationOutboxTable)
+      .set({
+        status: "response_recovery_required",
+        last_error: input.error.slice(0, 4_000),
+        lease_owner: null,
+        lease_expires_at: null,
         time_updated: Date.now(),
       })
       .where(
         and(
           eq(TaskNotificationOutboxTable.id, input.item.id),
+          eq(TaskNotificationOutboxTable.status, "processing"),
           eq(TaskNotificationOutboxTable.lease_owner, input.ownerToken),
+          eq(TaskNotificationOutboxTable.attempts, input.item.attempts),
         ),
       )
       .run()
       .pipe(Effect.orDie)
+  })
+}
 
-    // Phase 3: drive parent loop and record response
-    const loopResult = yield* sessionPrompt
-      .loop({ sessionID: input.item.parentSessionID })
-      .pipe(
-        Effect.map((msg) => ({ ok: true as const, responseID: msg.info.id })),
-        Effect.catchCause((cause) =>
-          Effect.logWarning("TaskDelivery: parent loop failed", {
-            outboxID: input.item.id,
-            cause: Cause.pretty(cause),
-          }).pipe(Effect.as({ ok: false as const, responseID: undefined })),
+function markInputConflict(input: {
+  readonly item: OutboxItem
+  readonly ownerToken: string
+  readonly error: string
+}) {
+  return Effect.gen(function* () {
+    const { db } = yield* Database.Service
+    yield* db
+      .update(TaskNotificationOutboxTable)
+      .set({
+        status: "dead",
+        last_error: input.error.slice(0, 4_000),
+        lease_owner: null,
+        lease_expires_at: null,
+        time_updated: Date.now(),
+      })
+      .where(
+        and(
+          eq(TaskNotificationOutboxTable.id, input.item.id),
+          inArray(TaskNotificationOutboxTable.status, ["admitting", "admitted"]),
+          eq(TaskNotificationOutboxTable.lease_owner, input.ownerToken),
+          eq(TaskNotificationOutboxTable.attempts, input.item.attempts),
+          isNull(TaskNotificationOutboxTable.response_started_at),
         ),
       )
+      .run()
+      .pipe(Effect.orDie)
+  })
+}
 
-    if (!loopResult.ok) {
-      // Mark response_recovery_required — do NOT retry automatically
-      yield* (yield* Database.Service).db
-        .update(TaskNotificationOutboxTable)
-        .set({ status: "response_recovery_required", time_updated: Date.now() })
-        .where(eq(TaskNotificationOutboxTable.id, input.item.id))
-        .run()
-        .pipe(Effect.orDie)
-      return false
+export function deliverOne(input: {
+  readonly item: OutboxItem
+  readonly ownerToken: string
+  readonly driveParentLoop: () => Effect.Effect<SessionV1.WithParts, unknown, never>
+  readonly leaseMs?: number
+}) {
+  return Effect.gen(function* () {
+    const parentInputID = yield* admitParentInput({ item: input.item, ownerToken: input.ownerToken })
+    const existingReceipt = yield* findResponseReceipt({
+      parentSessionID: input.item.parentSessionID,
+      parentInputID,
+    })
+    if (existingReceipt) {
+      return yield* acknowledgeDelivery({
+        item: input.item,
+        ownerToken: input.ownerToken,
+        responseMessageID: existingReceipt,
+      })
     }
 
-    // Phase 3 complete: acknowledge delivery
-    yield* acknowledgeDelivery({
-      id: input.item.id,
-      ownerToken: input.ownerToken,
-      responseMessageID: loopResult.responseID,
-    })
+    const now = Date.now()
+    const started = yield* (yield* Database.Service).db
+      .update(TaskNotificationOutboxTable)
+      .set({ status: "processing", response_started_at: now, time_updated: now })
+      .where(
+        and(
+          eq(TaskNotificationOutboxTable.id, input.item.id),
+          eq(TaskNotificationOutboxTable.status, "admitted"),
+          eq(TaskNotificationOutboxTable.lease_owner, input.ownerToken),
+          eq(TaskNotificationOutboxTable.attempts, input.item.attempts),
+          gt(TaskNotificationOutboxTable.lease_expires_at, now),
+          isNull(TaskNotificationOutboxTable.response_started_at),
+        ),
+      )
+      .returning({ id: TaskNotificationOutboxTable.id })
+      .get()
+      .pipe(Effect.orDie)
+    if (!started) return false
 
-    return true
+    const leaseMs = input.leaseMs ?? 30_000
+    const parentLoop = input.driveParentLoop().pipe(
+      Effect.map((response) => ({ ok: true as const, response })),
+    )
+    const heartbeat = renewProcessingLease({
+      item: input.item,
+      ownerToken: input.ownerToken,
+      leaseMs,
+    }).pipe(
+      Effect.repeat(Schedule.fixed(Math.max(10, Math.floor(leaseMs / 3)))),
+      Effect.flatMap(() => Effect.never),
+    )
+    const responseResult = yield* Effect.raceFirst(parentLoop, heartbeat).pipe(
+      Effect.catchCause((cause) => Effect.succeed({ ok: false as const, error: Cause.pretty(cause) })),
+    )
+    if (!responseResult.ok) {
+      yield* markResponseRecovery({
+        item: input.item,
+        ownerToken: input.ownerToken,
+        error: responseResult.error,
+      })
+      return false
+    }
+    const response = responseResult.response
+    const persistedReceipt = yield* findResponseReceipt({
+      parentSessionID: input.item.parentSessionID,
+      parentInputID,
+    })
+    const validReceipt =
+      response.info.role === "assistant" &&
+      response.info.sessionID === input.item.parentSessionID &&
+      response.info.parentID === parentInputID &&
+      (response.info.time.completed !== undefined || response.info.error !== undefined) &&
+      persistedReceipt === response.info.id
+    if (!validReceipt) {
+      yield* markResponseRecovery({
+        item: input.item,
+        ownerToken: input.ownerToken,
+        error: "parent loop did not persist the exact terminal receipt for the admitted notification",
+      })
+      return false
+    }
+    return yield* acknowledgeDelivery({
+      item: input.item,
+      ownerToken: input.ownerToken,
+      responseMessageID: response.info.id,
+    })
   }).pipe(
+    Effect.catchTag("TaskDelivery.Conflict", (error) =>
+      error.fatal
+        ? markInputConflict({
+            item: input.item,
+            ownerToken: input.ownerToken,
+            error: error.reason,
+          }).pipe(
+            Effect.andThen(
+              Effect.logError("TaskDelivery: input conflict", { id: error.id, reason: error.reason }),
+            ),
+            Effect.as(false),
+          )
+        : Effect.logWarning("TaskDelivery: claim lost before provider start", {
+            id: error.id,
+            reason: error.reason,
+          }).pipe(Effect.as(false)),
+    ),
     Effect.catchCause((cause) =>
-      Effect.logError("TaskDelivery: deliverOne error", { cause: Cause.pretty(cause) }).pipe(
-        Effect.as(false),
-      ),
+      Effect.logError("TaskDelivery: delivery defect", {
+        id: input.item.id,
+        cause: Cause.pretty(cause),
+      }).pipe(Effect.as(false)),
     ),
   )
 }
 
-// ---------------------------------------------------------------------------
-// startDeliveryLoop — daemon that drains the notification outbox
-// ---------------------------------------------------------------------------
+export function reconcileExpiredProcessing(input: { readonly directory: string; readonly now?: number }) {
+  return Effect.gen(function* () {
+    const { db } = yield* Database.Service
+    const now = input.now ?? Date.now()
+    const rows = yield* db
+      .select()
+      .from(TaskNotificationOutboxTable)
+      .where(
+        and(
+          eq(TaskNotificationOutboxTable.directory, input.directory),
+          eq(TaskNotificationOutboxTable.status, "processing"),
+          or(isNull(TaskNotificationOutboxTable.lease_expires_at), lte(TaskNotificationOutboxTable.lease_expires_at, now)),
+        ),
+      )
+      .all()
+      .pipe(Effect.orDie)
+    return yield* Effect.forEach(
+      rows,
+      (row) =>
+        Effect.gen(function* () {
+          const receipt = row.parent_input_message_id
+            ? yield* findResponseReceipt({
+                parentSessionID: SessionID.make(row.parent_session_id),
+                parentInputID: MessageID.make(row.parent_input_message_id),
+              })
+            : undefined
+          yield* db
+            .update(TaskNotificationOutboxTable)
+            .set({
+              status: receipt ? "delivered" : "response_recovery_required",
+              response_message_id: receipt ?? null,
+              lease_owner: null,
+              lease_expires_at: null,
+              ...(receipt ? { time_delivered: now } : { last_error: "response receipt is ambiguous after owner loss" }),
+              time_updated: now,
+            })
+            .where(
+              and(
+                eq(TaskNotificationOutboxTable.id, row.id),
+                eq(TaskNotificationOutboxTable.status, "processing"),
+                eq(TaskNotificationOutboxTable.attempts, row.attempts),
+                or(
+                  isNull(TaskNotificationOutboxTable.lease_expires_at),
+                  lte(TaskNotificationOutboxTable.lease_expires_at, now),
+                ),
+              ),
+            )
+            .run()
+            .pipe(Effect.orDie)
+        }),
+      { discard: true },
+    )
+  })
+}
 
 export function startDeliveryLoop(input: {
   readonly ownerToken: string
   readonly directory: string
+  readonly deliver: (item: OutboxItem) => Effect.Effect<boolean, never, Database.Service>
   readonly intervalMs?: number
 }) {
-  const tick = Effect.gen(function* () {
-    const item = yield* claimOutboxItem({
-      ownerToken: input.ownerToken,
-      directory: input.directory,
-    }).pipe(Effect.orElseSucceed(() => undefined as OutboxItem | undefined))
-
-    if (item) {
-      yield* deliverOne({ item, ownerToken: input.ownerToken }).pipe(Effect.ignore)
-    }
-  })
-
+  const tick = reconcileExpiredProcessing({ directory: input.directory }).pipe(
+    Effect.andThen(
+      claimOutboxItem({ ownerToken: input.ownerToken, directory: input.directory }).pipe(
+        Effect.flatMap((item) => (item ? input.deliver(item) : Effect.void)),
+      ),
+    ),
+    Effect.catchCause((cause) =>
+      Effect.logError("TaskDelivery: worker tick failed", { cause: Cause.pretty(cause) }),
+    ),
+  )
   return Effect.repeat(tick, Schedule.fixed(input.intervalMs ?? 1_000)).pipe(Effect.asVoid)
+}
+
+function modelFromMessage(data: unknown) {
+  if (!data || typeof data !== "object" || !("role" in data) || data.role !== "user" || !("model" in data)) return
+  if (!data.model || typeof data.model !== "object") return
+  if (!("providerID" in data.model) || typeof data.model.providerID !== "string") return
+  if (!("modelID" in data.model) || typeof data.model.modelID !== "string") return
+  return {
+    providerID: data.model.providerID,
+    modelID: data.model.modelID,
+    ...("variant" in data.model && typeof data.model.variant === "string" ? { variant: data.model.variant } : {}),
+  }
+}
+
+function isTerminalAssistantReceipt(data: unknown, parentInputID: MessageID) {
+  if (!data || typeof data !== "object") return false
+  if (!("role" in data) || data.role !== "assistant") return false
+  if (!("parentID" in data) || data.parentID !== parentInputID) return false
+  if ("error" in data && data.error !== undefined) return true
+  if (!("time" in data) || !data.time || typeof data.time !== "object") return false
+  return "completed" in data.time && data.time.completed !== undefined
 }
 
 export * as TaskDelivery from "./task-delivery"

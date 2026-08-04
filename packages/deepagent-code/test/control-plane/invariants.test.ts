@@ -12,23 +12,16 @@
  */
 import { describe, expect } from "bun:test"
 import { Effect, Layer } from "effect"
-import { and, eq, inArray } from "drizzle-orm"
+import { eq } from "drizzle-orm"
 import { Database } from "@deepagent-code/core/database/database"
 import { ProjectV2 } from "@deepagent-code/core/project"
 import { ProjectTable } from "@deepagent-code/core/project/sql"
 import { AbsolutePath } from "@deepagent-code/core/schema"
-import { SessionTable, TaskRunTable, TaskRunEventTable } from "@deepagent-code/core/session/sql"
+import { SessionTable, TaskRunTable } from "@deepagent-code/core/session/sql"
 import { CrossSpawnSpawner } from "@deepagent-code/core/cross-spawn-spawner"
 import { SessionID, MessageID } from "../../src/session/schema"
-import {
-  admitTaskRun,
-  getTaskRun,
-  isTerminal,
-  isQuiescent,
-  classifyOnStartup,
-  spawnTaskTakeover,
-} from "../../src/tool/task-run"
-import { startExecution, settleRun } from "../../src/session/task-executor"
+import { admitTaskRun, getTaskRun, isTerminal, isQuiescent, classifyOnStartup } from "../../src/tool/task-run"
+import { startExecution } from "../../src/session/task-executor"
 import { testEffect } from "../lib/effect"
 
 const database = Layer.mergeAll(Database.layerFromPath(":memory:"), CrossSpawnSpawner.defaultLayer)
@@ -301,22 +294,17 @@ describe("CP-NO-REPLACE-01 (invariant 15): recovery_required is NOT terminal", (
       // Must be recovery_required — not automatically re-queued (provider may have done work)
       expect(row?.state).toBe("recovery_required")
       expect(isTerminal(row as any)).toBe(false) // not terminal
-      expect(isQuiescent(row as any)).toBe(true)  // quiescent
+      expect(isQuiescent(row as any)).toBe(true) // quiescent
     }),
   )
 })
 
 // ── Invariant 16: no automatic takeover in production ────────────────────────
 
-describe("CP-NO-TAKEOVER-01 (invariant 16): takeover limit=0 disables automatic replacement", () => {
-  it.effect("spawnTaskTakeover exists but takeover is guarded by subagentTakeoverLimit", () =>
+describe("CP-NO-TAKEOVER-01 (invariant 16): recovery never creates an automatic replacement", () => {
+  it.effect("startup classification only marks the existing run recovery_required", () =>
     Effect.gen(function* () {
       // Invariant 16: automatic takeover must not occur.
-      // spawnTaskTakeover() is the implementation of replacement; the production guard is
-      // subagentTakeoverLimit = 0 in RuntimeFlags (or the absence of the legacy path).
-      // This test statically verifies the function signature exists (it is gated in task.ts)
-      // and that spawnTaskTakeover is never called from classifyOnStartup.
-      expect(typeof spawnTaskTakeover).toBe("function")
       // classifyOnStartup must never create a new run — it only reclassifies existing ones.
       // We verify by counting runs before and after a classify call with a stale running run.
       yield* setup
@@ -364,19 +352,11 @@ describe("CP-NO-TAKEOVER-01 (invariant 16): takeover limit=0 disables automatic 
         .run()
         .pipe(Effect.orDie)
 
-      const countBefore = yield* db
-        .select({ c: TaskRunTable.run_id })
-        .from(TaskRunTable)
-        .all()
-        .pipe(Effect.orDie)
+      const countBefore = yield* db.select({ c: TaskRunTable.run_id }).from(TaskRunTable).all().pipe(Effect.orDie)
       // Run classify twice (second call is idempotent — already recovery_required)
       yield* classifyOnStartup({ directory: DIRECTORY }).pipe(Effect.ignore)
       yield* classifyOnStartup({ directory: DIRECTORY }).pipe(Effect.ignore)
-      const countAfter = yield* db
-        .select({ c: TaskRunTable.run_id })
-        .from(TaskRunTable)
-        .all()
-        .pipe(Effect.orDie)
+      const countAfter = yield* db.select({ c: TaskRunTable.run_id }).from(TaskRunTable).all().pipe(Effect.orDie)
 
       // classifyOnStartup must NOT create any new runs (no replacement/takeover)
       expect(countAfter.length).toBe(countBefore.length)

@@ -1,5 +1,5 @@
 /**
- * git_read — read-only Git operations for researcher/explore subagents.
+ * git_read: read-only Git operations for researcher/explore subagents.
  *
  * Permission name: "git_read" (intentionally absent from EDIT_CLASS_PERMISSIONS,
  * so subagentIsWriteType() returns false for agents that only hold this permission —
@@ -20,28 +20,28 @@ import * as Tool from "./tool"
 // Read-only git subcommand allowlist
 // ---------------------------------------------------------------------------
 const ALLOWED_SUBCOMMANDS = new Set([
-  "log",          // commit history
-  "diff",         // diffs between commits, branches, files
-  "show",         // show commit/tag/tree/blob content
-  "blame",        // line-by-line attribution
-  "annotate",     // alias for blame
-  "status",       // working tree status (query only)
-  "branch",       // list branches
-  "tag",          // list tags
-  "remote",       // list/show remotes
-  "describe",     // describe a commit by nearest tag
-  "shortlog",     // summarized commit history
-  "reflog",       // reference log
-  "ls-files",     // list tracked/untracked files in index
-  "ls-tree",      // list contents of a tree object
-  "cat-file",     // show type, size, or content of a git object
-  "rev-parse",    // parse revision/object identifiers
-  "rev-list",     // list commit objects reachable from a given commit
+  "log", // commit history
+  "diff", // diffs between commits, branches, files
+  "show", // show commit/tag/tree/blob content
+  "blame", // line-by-line attribution
+  "annotate", // alias for blame
+  "status", // working tree status (query only)
+  "branch", // list branches
+  "tag", // list tags
+  "remote", // list/show remotes
+  "describe", // describe a commit by nearest tag
+  "shortlog", // summarized commit history
+  "reflog", // reference log
+  "ls-files", // list tracked/untracked files in index
+  "ls-tree", // list contents of a tree object
+  "cat-file", // show type, size, or content of a git object
+  "rev-parse", // parse revision/object identifiers
+  "rev-list", // list commit objects reachable from a given commit
   "for-each-ref", // iterate over refs with custom formatting
-  "grep",         // search in working tree / tracked blobs
-  "name-rev",     // find symbolic names for revisions
-  "merge-base",   // find the common ancestor of two commits
-  "stash",        // stash list/show only (validated below)
+  "grep", // search in working tree / tracked blobs
+  "name-rev", // find symbolic names for revisions
+  "merge-base", // find the common ancestor of two commits
+  "stash", // stash list/show only (validated below)
 ])
 
 const MAX_OUTPUT_BYTES = 100_000 // ~100 kB
@@ -72,10 +72,10 @@ export function validateReadOnlyGitArgs(args: readonly string[]): string | undef
   if (!rawSubcommand) return "no git subcommand specified"
 
   const subcommand = rawSubcommand.toLowerCase()
-  if (!ALLOWED_SUBCOMMANDS.has(subcommand)) return `git subcommand \"${rawSubcommand}\" is not permitted`
+  if (!ALLOWED_SUBCOMMANDS.has(subcommand)) return `git subcommand "${rawSubcommand}" is not permitted`
 
   const unsafe = rest.find((arg) => FILE_WRITING_OR_EXECUTING_ARGS.some((pattern) => pattern.test(arg)))
-  if (unsafe) return `argument \"${unsafe}\" can write a file or execute a configured program`
+  if (unsafe) return `argument "${unsafe}" can write a file or execute a configured program`
 
   if (subcommand === "branch") {
     const mutating = rest.find((arg) =>
@@ -83,7 +83,7 @@ export function validateReadOnlyGitArgs(args: readonly string[]): string | undef
         arg,
       ),
     )
-    if (mutating) return `git branch argument \"${mutating}\" is mutating`
+    if (mutating) return `git branch argument "${mutating}" is mutating`
     const queryMode = rest.some((arg) =>
       /^(?:--list|-l|-a|--all|-r|--remotes|-v|-vv|--show-current|--contains|--no-contains|--merged|--no-merged|--points-at|--format|--sort|--column|--no-column)(?:=|$)/u.test(
         arg,
@@ -98,7 +98,7 @@ export function validateReadOnlyGitArgs(args: readonly string[]): string | undef
         arg,
       ),
     )
-    if (mutating) return `git tag argument \"${mutating}\" is mutating`
+    if (mutating) return `git tag argument "${mutating}" is mutating`
     const queryMode = rest.some((arg) =>
       /^(?:--list|-l|-n|--contains|--no-contains|--merged|--no-merged|--points-at|--format|--sort|--column|--no-column)(?:=|$)/u.test(
         arg,
@@ -110,13 +110,13 @@ export function validateReadOnlyGitArgs(args: readonly string[]): string | undef
   if (subcommand === "remote") {
     const mode = rest[0]
     if (mode && !["-v", "--verbose", "get-url", "show"].includes(mode)) {
-      return `git remote mode \"${mode}\" is not read-only`
+      return `git remote mode "${mode}" is not read-only`
     }
   }
 
   if (subcommand === "reflog") {
     const mode = rest.find((arg) => !arg.startsWith("-"))
-    if (mode && !["show", "exists"].includes(mode)) return `git reflog mode \"${mode}\" is mutating`
+    if (mode && !["show", "exists"].includes(mode)) return `git reflog mode "${mode}" is mutating`
   }
 
   if (subcommand === "stash") {

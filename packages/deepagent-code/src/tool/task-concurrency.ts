@@ -51,14 +51,16 @@ const withOnePermit = <A, E, R>(
         : { semaphore: Semaphore.makeUnsafe(width), width, users: 0 }
     if (entry !== current) registry.set(key, entry)
     entry.users++
-    return entry.semaphore.withPermits(1)(effect).pipe(
-      Effect.ensuring(
-        Effect.sync(() => {
-          entry.users--
-          if (entry.users === 0 && registry.get(key) === entry) registry.delete(key)
-        }),
-      ),
-    )
+    return entry.semaphore
+      .withPermits(1)(effect)
+      .pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            entry.users--
+            if (entry.users === 0 && registry.get(key) === entry) registry.delete(key)
+          }),
+        ),
+      )
   })
 
 /** Run immediately when a permit is available; return Option.none without queueing otherwise. */
@@ -67,7 +69,7 @@ const withOnePermitIfAvailable = <A, E, R>(
   key: string,
   width: number,
   effect: Effect.Effect<A, E, R>,
-) =>
+): Effect.Effect<Option.Option<A>, E, R> =>
   Effect.suspend(() => {
     const current = registry.get(key)
     const entry =
@@ -76,14 +78,16 @@ const withOnePermitIfAvailable = <A, E, R>(
         : { semaphore: Semaphore.makeUnsafe(width), width, users: 0 }
     if (entry !== current) registry.set(key, entry)
     entry.users++
-    return entry.semaphore.withPermitsIfAvailable(1)(effect).pipe(
-      Effect.ensuring(
-        Effect.sync(() => {
-          entry.users--
-          if (entry.users === 0 && registry.get(key) === entry) registry.delete(key)
-        }),
-      ),
-    )
+    return entry.semaphore
+      .withPermitsIfAvailable(1)(effect)
+      .pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            entry.users--
+            if (entry.users === 0 && registry.get(key) === entry) registry.delete(key)
+          }),
+        ),
+      )
   })
 
 /**
@@ -128,7 +132,7 @@ export const withTaskSlotIfAvailable = <A, E, R>(input: {
   readonly agentMaxConcurrency?: number
   readonly caps?: Orchestration.OrchestrationCaps
   readonly effect: Effect.Effect<A, E, R>
-}) => {
+}): Effect.Effect<Option.Option<A>, E, R> => {
   const { maxConcurrency } = Orchestration.resolveCaps(input.caps)
   const agentLimit =
     input.agentMaxConcurrency != null && Number.isFinite(input.agentMaxConcurrency) && input.agentMaxConcurrency > 0

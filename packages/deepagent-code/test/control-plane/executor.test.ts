@@ -9,8 +9,8 @@
  * Design refs: §5 (stale callback), §6.4 (start fence), §6.7 (settle priority), §1.3 #24 (events)
  */
 import { describe, expect } from "bun:test"
-import { Effect, Layer } from "effect"
-import { and, eq, inArray } from "drizzle-orm"
+import { Effect, Fiber, Layer } from "effect"
+import { eq } from "drizzle-orm"
 import { Database } from "@deepagent-code/core/database/database"
 import { ProjectV2 } from "@deepagent-code/core/project"
 import { ProjectTable } from "@deepagent-code/core/project/sql"
@@ -18,7 +18,8 @@ import { AbsolutePath } from "@deepagent-code/core/schema"
 import { SessionTable, TaskRunTable, TaskRunEventTable } from "@deepagent-code/core/session/sql"
 import { CrossSpawnSpawner } from "@deepagent-code/core/cross-spawn-spawner"
 import { SessionID, MessageID } from "../../src/session/schema"
-import { startExecution, settleRun, ExecutorClaimLostError } from "../../src/session/task-executor"
+import { SessionV1 } from "@deepagent-code/core/v1/session"
+import { run as runExecutor, startExecution, settleRun } from "../../src/session/task-executor"
 import { testEffect } from "../lib/effect"
 
 const database = Layer.mergeAll(Database.layerFromPath(":memory:"), CrossSpawnSpawner.defaultLayer)
@@ -110,6 +111,12 @@ const insertProvisioningRun = (
       .run()
       .pipe(Effect.orDie)
   })
+
+const assistantMessage = (id: string, text: string) =>
+  ({
+    info: { id, role: "assistant" },
+    parts: [{ type: "text", text, synthetic: false, ignored: false }],
+  }) as unknown as SessionV1.WithParts
 
 // ── startExecution ────────────────────────────────────────────────────────────
 
@@ -299,6 +306,129 @@ describe("DET-FENCE-01 settleRun CAS + lease fence", () => {
         .pipe(Effect.orDie)
       expect(row?.state).toBe("running") // unchanged
       expect(row?.version).toBe(1) // version not bumped
+    }),
+  )
+})
+
+describe("DET-EXEC-01 executor lifecycle", () => {
+  it.live("persists the assistant text and raw result message before terminal completion", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const runID = "run_executor_success"
+      const childSessionID = SessionID.make("ses_exec_success")
+      yield* insertProvisioningRun(runID, childSessionID)
+
+      yield* runExecutor({
+        run: { runID, version: 0, claimGeneration: CLAIM_GEN } as any,
+        ownerToken: OWNER,
+        claimGeneration: CLAIM_GEN,
+        childSessionID,
+        parentSessionID: PARENT_SID,
+        deliveryMode: "foreground",
+        directory: DIRECTORY,
+        agentType: "researcher",
+        leaseMs: 300,
+        loopFn: () => Effect.succeed(assistantMessage("msg_executor_success", "verified result")),
+      })
+
+      const { db } = yield* Database.Service
+      const row = yield* db
+        .select({
+          state: TaskRunTable.state,
+          output: TaskRunTable.output,
+          messageID: TaskRunTable.raw_result_message_id,
+        })
+        .from(TaskRunTable)
+        .where(eq(TaskRunTable.run_id, runID))
+        .get()
+        .pipe(Effect.orDie)
+      expect(row).toMatchObject({
+        state: "completed",
+        output: "verified result",
+        messageID: "msg_executor_success",
+      })
+    }),
+  )
+
+  it.live("interrupts a live provider activity when its lease fence is lost", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const runID = "run_executor_lease_lost"
+      const childSessionID = SessionID.make("ses_exec_lease_lost")
+      yield* insertProvisioningRun(runID, childSessionID)
+
+      const execution = yield* runExecutor({
+        run: { runID, version: 0, claimGeneration: CLAIM_GEN } as any,
+        ownerToken: OWNER,
+        claimGeneration: CLAIM_GEN,
+        childSessionID,
+        parentSessionID: PARENT_SID,
+        deliveryMode: "foreground",
+        directory: DIRECTORY,
+        agentType: "researcher",
+        leaseMs: 60,
+        loopFn: () => Effect.never,
+      }).pipe(Effect.forkChild)
+
+      const { db } = yield* Database.Service
+      yield* Effect.sleep("10 millis")
+      yield* db
+        .update(TaskRunTable)
+        .set({ lease_expires_at: Date.now() - 1 })
+        .where(eq(TaskRunTable.run_id, runID))
+        .run()
+        .pipe(Effect.orDie)
+      yield* Fiber.join(execution)
+
+      const row = yield* db
+        .select({ state: TaskRunTable.state, reason: TaskRunTable.reason })
+        .from(TaskRunTable)
+        .where(eq(TaskRunTable.run_id, runID))
+        .get()
+        .pipe(Effect.orDie)
+      expect(row).toMatchObject({ state: "recovery_required", reason: "execution_lease_lost" })
+
+      const events = yield* db
+        .select({ type: TaskRunEventTable.type })
+        .from(TaskRunEventTable)
+        .where(eq(TaskRunEventTable.run_id, runID))
+        .all()
+        .pipe(Effect.orDie)
+      expect(events.some((event) => event.type === "execution_recovery_required")).toBe(true)
+    }),
+  )
+
+  it.live("persists the provider failure for the parent instead of returning a generic terminal state", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const runID = "run_executor_provider_failure"
+      const childSessionID = SessionID.make("ses_exec_provider_failure")
+      yield* insertProvisioningRun(runID, childSessionID)
+
+      yield* runExecutor({
+        run: { runID, version: 0, claimGeneration: CLAIM_GEN } as any,
+        ownerToken: OWNER,
+        claimGeneration: CLAIM_GEN,
+        childSessionID,
+        parentSessionID: PARENT_SID,
+        deliveryMode: "foreground",
+        directory: DIRECTORY,
+        agentType: "researcher",
+        leaseMs: 300,
+        loopFn: () => Effect.fail(new Error("injected provider failure")),
+      })
+
+      const { db } = yield* Database.Service
+      const row = yield* db
+        .select({ state: TaskRunTable.state, reason: TaskRunTable.reason, error: TaskRunTable.error })
+        .from(TaskRunTable)
+        .where(eq(TaskRunTable.run_id, runID))
+        .get()
+        .pipe(Effect.orDie)
+      expect(row?.state).toBe("failed")
+      expect(row?.reason).toContain("injected provider failure")
+      expect(row?.error).toMatchObject({ code: "failed" })
+      expect(row?.error?.message).toContain("injected provider failure")
     }),
   )
 })

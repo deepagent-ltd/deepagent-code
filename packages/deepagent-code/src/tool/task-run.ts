@@ -6,11 +6,12 @@ import {
   TaskRunTable,
   SessionTable,
 } from "@deepagent-code/core/session/sql"
-import { and, asc, desc, eq, gt, inArray, isNull, lt, lte, max, ne, or, sql } from "drizzle-orm"
+import { and, asc, desc, eq, gt, inArray, isNull, lte, max, ne, or, sql } from "drizzle-orm"
 import { Cause, Data, Effect } from "effect"
 import { Identifier } from "@/id/id"
 import { MessageID, SessionID } from "@/session/schema"
 import { Hash } from "@deepagent-code/core/util/hash"
+import type { PermissionV1 } from "@deepagent-code/core/v1/permission"
 
 export type State =
   | "admitted"
@@ -79,7 +80,18 @@ export type Run = {
   availableAt: number
   // L3d: child input admission
   childMessageID?: MessageID
-  executionSpec?: { readonly prompt?: { readonly text?: string }; readonly [key: string]: unknown } | null
+  executionSpec?: {
+    readonly prompt?: { readonly text?: string }
+    readonly agent?: string
+    readonly model?: {
+      readonly providerID: string
+      readonly modelID: string
+      readonly variant?: string
+    }
+    readonly tools?: Record<string, boolean>
+    readonly permission?: PermissionV1.Ruleset
+    readonly [key: string]: unknown
+  } | null
 }
 
 export type RunEvent = {
@@ -121,7 +133,11 @@ class ConcurrentAdmission extends Data.TaggedError("TaskRun.ConcurrentAdmission"
 
 // terminalStates: states where no further execution can occur and the run is durably settled
 const terminalStates: ReadonlyArray<State> = [
-  "completed", "failed", "cancelled", "interrupted", "closed",
+  "completed",
+  "failed",
+  "cancelled",
+  "interrupted",
+  "closed",
   "error", // legacy vocabulary — kept for backward-compat queries against pre-L1 rows
 ]
 // C-5 (P1-7): recovery_required is NOT terminal — it is a quiescent nonterminal state that
@@ -130,7 +146,12 @@ const terminalStates: ReadonlyArray<State> = [
 const quiescentStates: ReadonlyArray<State> = ["recovery_required"]
 // activeStates: states where a run may be executing or waiting to execute
 const activeStates: ReadonlyArray<State> = [
-  "admitted", "queued", "provisioning", "running", "researching", "finalizing",
+  "admitted",
+  "queued",
+  "provisioning",
+  "running",
+  "researching",
+  "finalizing",
 ]
 
 const canonicalJson = (value: unknown): string => {
@@ -185,10 +206,9 @@ const fromRow = (row: typeof TaskRunTable.$inferSelect): Run => ({
   startAttempts: row.start_attempts ?? 0,
   claimGeneration: row.claim_generation ?? 0,
   availableAt: row.available_at ?? 0,
+  childMessageID: row.child_message_id ? MessageID.ascending(row.child_message_id) : undefined,
   // L3d: parse execution_spec JSON (drizzle mode:"json" auto-parses on read)
-  executionSpec: row.execution_spec
-    ? (row.execution_spec as Run["executionSpec"])
-    : undefined,
+  executionSpec: row.execution_spec ? (row.execution_spec as Run["executionSpec"]) : undefined,
 })
 
 const admissionKey = (input: { parentSessionID: SessionID; parentMessageID: MessageID; toolCallID: string }) =>
@@ -340,6 +360,7 @@ export function admitTaskRun(input: {
                       parent_message_id: input.parentMessageID,
                       tool_call_id: input.toolCallID,
                       child_session_id: childSessionID,
+                      child_message_id: MessageID.ascending(),
                       generation: newGeneration,
                       delivery_mode: input.deliveryMode,
                       mutation_capability: input.mutationCapability ?? "write",
@@ -348,9 +369,7 @@ export function admitTaskRun(input: {
                       state: "admitted",
                       // L3d: freeze the execution spec at admit time so prepare() can read it
                       execution_spec:
-                        input.executionSpec !== undefined
-                          ? (input.executionSpec as Record<string, unknown>)
-                          : null,
+                        input.executionSpec !== undefined ? (input.executionSpec as Record<string, unknown>) : null,
                       time_created: now,
                       time_updated: now,
                     })
@@ -420,12 +439,7 @@ export function admitTaskRun(input: {
  * The row transition and audit event share one transaction and are fenced by
  * generation, version, state, control state, and absence of an execution owner.
  */
-export function failAdmittedTaskRun(input: {
-  run: Run
-  reason: string
-  error: ErrorData
-  now?: number
-}) {
+export function failAdmittedTaskRun(input: { run: Run; reason: string; error: ErrorData; now?: number }) {
   return Effect.gen(function* () {
     const { db } = yield* Database.Service
     const now = input.now ?? Date.now()
@@ -1259,11 +1273,7 @@ export function checkAncestorControl(input: {
  * Each state change writes a matching task_run_event in the same transaction.
  * Design §6.9.
  */
-export function requestClose(input: {
-  rootRunID: string
-  reason: string
-  now?: number
-}) {
+export function requestClose(input: { rootRunID: string; reason: string; now?: number }) {
   return Effect.gen(function* () {
     const { db } = yield* Database.Service
     const now = input.now ?? Date.now()
@@ -1483,9 +1493,7 @@ export function resolveRecovery(input: {
 
             if (!updated) {
               return yield* Effect.die(
-                new Error(
-                  `resolveRecovery CAS lost for run ${input.runID} — concurrent mutation won the version race`,
-                ),
+                new Error(`resolveRecovery CAS lost for run ${input.runID} — concurrent mutation won the version race`),
               )
             }
 
@@ -1518,14 +1526,21 @@ export function resolveRecovery(input: {
                 .all()
                 .pipe(Effect.orDie)
               for (const c of children) {
-                if (!visited.has(c.run_id)) { visited.add(c.run_id); bfsQueue.push(c.run_id) }
+                if (!visited.has(c.run_id)) {
+                  visited.add(c.run_id)
+                  bfsQueue.push(c.run_id)
+                }
               }
             }
             const descendantIDs = [...visited].filter((id) => id !== updated.run_id)
             if (descendantIDs.length > 0) {
               const descendants = yield* tx
-                .select({ run_id: TaskRunTable.run_id, state: TaskRunTable.state,
-                          control_state: TaskRunTable.control_state, version: TaskRunTable.version })
+                .select({
+                  run_id: TaskRunTable.run_id,
+                  state: TaskRunTable.state,
+                  control_state: TaskRunTable.control_state,
+                  version: TaskRunTable.version,
+                })
                 .from(TaskRunTable)
                 .where(inArray(TaskRunTable.run_id, descendantIDs))
                 .all()
@@ -1538,31 +1553,70 @@ export function resolveRecovery(input: {
                 if (immediateTerminal.includes(oldState)) {
                   const upd = yield* tx
                     .update(TaskRunTable)
-                    .set({ state: "closed", phase: "settled", control_state: "closed",
-                           close_requested_at: now, close_reason: closeReason,
-                           version: desc.version + 1, time_updated: now, time_settled: now })
+                    .set({
+                      state: "closed",
+                      phase: "settled",
+                      control_state: "closed",
+                      close_requested_at: now,
+                      close_reason: closeReason,
+                      version: desc.version + 1,
+                      time_updated: now,
+                      time_settled: now,
+                    })
                     .where(and(eq(TaskRunTable.run_id, desc.run_id), eq(TaskRunTable.version, desc.version)))
                     .returning({ run_id: TaskRunTable.run_id, version: TaskRunTable.version })
-                    .get().pipe(Effect.orDie)
-                  if (upd) yield* tx.insert(TaskRunEventTable).values({
-                    event_id: Identifier.ascending("event"), run_id: desc.run_id,
-                    version: upd.version, type: "run_closed",
-                    from_state: oldState, to_state: "closed", reason: closeReason, time_created: now,
-                  }).run().pipe(Effect.orDie)
+                    .get()
+                    .pipe(Effect.orDie)
+                  if (upd)
+                    yield* tx
+                      .insert(TaskRunEventTable)
+                      .values({
+                        event_id: Identifier.ascending("event"),
+                        run_id: desc.run_id,
+                        version: upd.version,
+                        type: "run_closed",
+                        from_state: oldState,
+                        to_state: "closed",
+                        reason: closeReason,
+                        time_created: now,
+                      })
+                      .run()
+                      .pipe(Effect.orDie)
                 } else if (activeDesc.includes(oldState)) {
                   const upd = yield* tx
                     .update(TaskRunTable)
-                    .set({ control_state: "close_requested", close_requested_at: now,
-                           close_reason: closeReason, version: desc.version + 1, time_updated: now })
-                    .where(and(eq(TaskRunTable.run_id, desc.run_id), eq(TaskRunTable.version, desc.version),
-                               ne(TaskRunTable.control_state, "closed")))
+                    .set({
+                      control_state: "close_requested",
+                      close_requested_at: now,
+                      close_reason: closeReason,
+                      version: desc.version + 1,
+                      time_updated: now,
+                    })
+                    .where(
+                      and(
+                        eq(TaskRunTable.run_id, desc.run_id),
+                        eq(TaskRunTable.version, desc.version),
+                        ne(TaskRunTable.control_state, "closed"),
+                      ),
+                    )
                     .returning({ run_id: TaskRunTable.run_id, version: TaskRunTable.version })
-                    .get().pipe(Effect.orDie)
-                  if (upd) yield* tx.insert(TaskRunEventTable).values({
-                    event_id: Identifier.ascending("event"), run_id: desc.run_id,
-                    version: upd.version, type: "close_requested",
-                    from_state: oldState, to_state: oldState, reason: closeReason, time_created: now,
-                  }).run().pipe(Effect.orDie)
+                    .get()
+                    .pipe(Effect.orDie)
+                  if (upd)
+                    yield* tx
+                      .insert(TaskRunEventTable)
+                      .values({
+                        event_id: Identifier.ascending("event"),
+                        run_id: desc.run_id,
+                        version: upd.version,
+                        type: "close_requested",
+                        from_state: oldState,
+                        to_state: oldState,
+                        reason: closeReason,
+                        time_created: now,
+                      })
+                      .run()
+                      .pipe(Effect.orDie)
                 }
               }
             }
@@ -1587,11 +1641,7 @@ export function resolveRecovery(input: {
  * - already terminal: no-op
  * Design §6.8
  */
-export function requestInterrupt(input: {
-  runID: string
-  reason: string
-  now?: number
-}) {
+export function requestInterrupt(input: { runID: string; reason: string; now?: number }) {
   return Effect.gen(function* () {
     const { db } = yield* Database.Service
     const now = input.now ?? Date.now()
@@ -1608,9 +1658,7 @@ export function requestInterrupt(input: {
               .pipe(Effect.orDie)
             if (!run) return yield* Effect.die(new Error(`requestInterrupt: run ${input.runID} not found`))
 
-            const terminalStates: State[] = [
-              "completed", "failed", "cancelled", "interrupted", "closed",
-            ]
+            const terminalStates: State[] = ["completed", "failed", "cancelled", "interrupted", "closed"]
             if (terminalStates.includes(run.state as State)) {
               return fromRow(run) // already terminal
             }
@@ -1698,10 +1746,7 @@ export function requestInterrupt(input: {
  * - provisioning + input_state=ready/pending + no execution_started_at → re-enqueue to queued
  * - running/finalizing or execution_started_at set → recovery_required(execution_owner_lost)
  */
-export function classifyOnStartup(input: {
-  directory: string
-  now?: number
-}) {
+export function classifyOnStartup(input: { directory: string; now?: number }) {
   return Effect.gen(function* () {
     const { db } = yield* Database.Service
     const now = input.now ?? Date.now()
@@ -1716,10 +1761,7 @@ export function classifyOnStartup(input: {
           inArray(TaskRunTable.state, ["admitted", "queued", "provisioning", "running", "researching", "finalizing"]),
           // Only classify runs whose lease has expired or was never set.
           // Runs with a valid non-expired lease belong to a healthy process in another PID — skip them.
-          or(
-            isNull(TaskRunTable.lease_expires_at),
-            lte(TaskRunTable.lease_expires_at, now),
-          ),
+          or(isNull(TaskRunTable.lease_expires_at), lte(TaskRunTable.lease_expires_at, now)),
         ),
       )
       .all()
@@ -1821,10 +1863,7 @@ export function classifyOnStartup(input: {
         )
         if (updated) requeued++
       } else {
-        const reason =
-          run.input_state === "admitting"
-            ? "input_admission_outcome_unknown"
-            : "execution_owner_lost"
+        const reason = run.input_state === "admitting" ? "input_admission_outcome_unknown" : "execution_owner_lost"
         // B-6 (P1-4): same IMMEDIATE transaction for recovery_required
         const updated = yield* db.transaction(
           (tx) =>
@@ -1873,26 +1912,25 @@ export function classifyOnStartup(input: {
  * Ordered shutdown: signal interrupt for active runs, classify provisioning runs.
  * Called before closing the process (design §11.3).
  */
-export function orderedShutdown(input: {
-  directory: string
-  now?: number
-}) {
+export function orderedShutdown(input: { directory: string; now?: number }) {
   return Effect.gen(function* () {
     const { db } = yield* Database.Service
     const now = input.now ?? Date.now()
 
     const candidates = yield* db
-      .select({ run_id: TaskRunTable.run_id, state: TaskRunTable.state,
-                version: TaskRunTable.version, input_state: TaskRunTable.input_state,
-                execution_started_at: TaskRunTable.execution_started_at })
+      .select({
+        run_id: TaskRunTable.run_id,
+        state: TaskRunTable.state,
+        version: TaskRunTable.version,
+        input_state: TaskRunTable.input_state,
+        execution_started_at: TaskRunTable.execution_started_at,
+      })
       .from(TaskRunTable)
       .innerJoin(SessionTable, eq(SessionTable.id, TaskRunTable.parent_session_id))
       .where(
         and(
           eq(SessionTable.directory, input.directory),
-          inArray(TaskRunTable.state, [
-            "provisioning", "running", "researching", "finalizing",
-          ]),
+          inArray(TaskRunTable.state, ["provisioning", "running", "researching", "finalizing"]),
         ),
       )
       .all()
@@ -1901,10 +1939,7 @@ export function orderedShutdown(input: {
     let signalled = 0
     for (const run of candidates) {
       const isActive = (["running", "researching", "finalizing"] as State[]).includes(run.state as State)
-      const canRequeue =
-        run.state === "provisioning" &&
-        run.input_state === "ready" &&
-        !run.execution_started_at
+      const canRequeue = run.state === "provisioning" && run.input_state === "ready" && !run.execution_started_at
 
       if (canRequeue) {
         yield* requestInterrupt({ runID: run.run_id, reason: "shutdown_interrupt", now }).pipe(Effect.ignore)
@@ -1973,12 +2008,7 @@ export function closeTask(input: {
         control_state: TaskRunTable.control_state,
       })
       .from(TaskRunTable)
-      .where(
-        and(
-          eq(TaskRunTable.child_session_id, input.childSessionID),
-          eq(TaskRunTable.control_state, "open"),
-        ),
-      )
+      .where(and(eq(TaskRunTable.child_session_id, input.childSessionID), eq(TaskRunTable.control_state, "open")))
       .orderBy(desc(TaskRunTable.generation))
       .get()
       .pipe(Effect.orDie)

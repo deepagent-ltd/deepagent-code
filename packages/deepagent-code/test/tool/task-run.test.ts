@@ -3,7 +3,12 @@ import { Database } from "@deepagent-code/core/database/database"
 import { ProjectV2 } from "@deepagent-code/core/project"
 import { ProjectTable } from "@deepagent-code/core/project/sql"
 import { AbsolutePath } from "@deepagent-code/core/schema"
-import { SessionTable, TaskNotificationOutboxTable, TaskRunTable } from "@deepagent-code/core/session/sql"
+import {
+  SessionTable,
+  TaskNotificationOutboxTable,
+  TaskRunEventTable,
+  TaskRunTable,
+} from "@deepagent-code/core/session/sql"
 import { Effect, Layer } from "effect"
 import { count, eq } from "drizzle-orm"
 import { MessageID, SessionID } from "../../src/session/schema"
@@ -12,6 +17,7 @@ import {
   admitTaskRun,
   claimTaskNotifications,
   claimTaskProvisioning,
+  failAdmittedTaskRun,
   getActiveTaskRunByChild,
   markTaskFinalized,
   markTaskFinalizing,
@@ -59,6 +65,7 @@ const admit = (input?: {
   callID?: string
   childSessionID?: SessionID
   joinRunID?: string
+  parentRunID?: string
   request?: unknown
   deliveryMode?: "foreground" | "background"
   now?: number
@@ -69,6 +76,7 @@ const admit = (input?: {
     toolCallID: input?.callID ?? "call-1",
     childSessionID: input?.childSessionID,
     joinRunID: input?.joinRunID,
+    parentRunID: input?.parentRunID,
     request: input?.request ?? { prompt: "research", subagent_type: "researcher" },
     deliveryMode: input?.deliveryMode ?? "foreground",
     now: input?.now,
@@ -107,6 +115,82 @@ describe("TaskRun durable store", () => {
         admit({ messageID, callID: "call-exact", deliveryMode: "background" }),
       )
       expect(deliveryConflict.reason).toBe("delivery")
+    }),
+  )
+
+  it.effect("preflight failure settles the admitted run and audit event exactly once", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const admission = yield* admit({ messageID: MessageID.ascending("msg_preflight_failure") })
+      const failed = yield* failAdmittedTaskRun({
+        run: admission.run,
+        reason: "workspace_preflight_dirty",
+        error: { code: "workspace_dirty", message: "dirty checkout" },
+        now: 123,
+      })
+
+      expect(failed).toMatchObject({
+        state: "failed",
+        phase: "settled",
+        controlState: "closed",
+        reason: "workspace_preflight_dirty",
+        version: admission.run.version + 1,
+        timeSettled: 123,
+      })
+      expect(
+        yield* failAdmittedTaskRun({
+          run: admission.run,
+          reason: "workspace_preflight_dirty",
+          error: { code: "workspace_dirty", message: "duplicate" },
+          now: 124,
+        }),
+      ).toBeUndefined()
+
+      const { db } = yield* Database.Service
+      const events = yield* db
+        .select()
+        .from(TaskRunEventTable)
+        .where(eq(TaskRunEventTable.run_id, admission.run.runID))
+        .all()
+        .pipe(Effect.orDie)
+      expect(events.filter((event) => event.type === "run_settled")).toHaveLength(1)
+      expect(events.find((event) => event.type === "run_settled")).toMatchObject({
+        from_state: "admitted",
+        to_state: "failed",
+        reason: "workspace_preflight_dirty",
+      })
+    }),
+  )
+
+  it.effect("admission records the causal run graph and rejects a closed parent", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const parentRun = yield* admit({
+        messageID: MessageID.ascending("msg_causal_parent"),
+        callID: "call-causal-parent",
+      })
+      const childRun = yield* admit({
+        messageID: MessageID.ascending("msg_causal_child"),
+        callID: "call-causal-child",
+        parentRunID: parentRun.run.runID,
+      })
+
+      expect(childRun.run.parentRunID).toBe(parentRun.run.runID)
+      expect(childRun.run.rootRunID).toBe(parentRun.run.runID)
+
+      yield* failAdmittedTaskRun({
+        run: parentRun.run,
+        reason: "parent_closed",
+        error: { code: "parent_closed", message: "parent is no longer open" },
+      })
+      const rejected = yield* Effect.flip(
+        admit({
+          messageID: MessageID.ascending("msg_causal_rejected"),
+          callID: "call-causal-rejected",
+          parentRunID: parentRun.run.runID,
+        }),
+      )
+      expect(rejected.reason).toBe("ancestor_closed")
     }),
   )
 
@@ -220,6 +304,7 @@ describe("TaskRun durable store", () => {
       })
       expect(second.run.generation).toBe(first.run.generation + 1)
       expect(second.run.runID).not.toBe(first.run.runID)
+      expect(second.run.continuationOfRunID).toBe(first.run.runID)
     }),
   )
 

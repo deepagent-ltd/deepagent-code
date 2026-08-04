@@ -1086,7 +1086,7 @@ describe("tool.task", () => {
   )
 
   automaticWorktree.instance(
-    "keeps a successful sibling isolated while a concurrent worker exhausts bounded takeover",
+    "keeps both worktrees available when one concurrent worker fails without replay",
     () =>
       Effect.gen(function* () {
         const directory = (yield* TestInstance).directory
@@ -1120,7 +1120,7 @@ describe("tool.task", () => {
                     Effect.gen(function* () {
                       const child = yield* sessions.get(input.sessionID)
                       children.push(child.id)
-                      if (!fail) yield* Effect.promise(() => Bun.write(path.join(child.directory, file), `${file}\n`))
+                      yield* Effect.promise(() => Bun.write(path.join(child.directory, file), `${file}\n`))
                       started++
                       if (started === 2) yield* Deferred.succeed(bothStarted, undefined)
                       yield* Deferred.await(bothStarted)
@@ -1142,21 +1142,27 @@ describe("tool.task", () => {
 
         expect(Exit.isFailure(failed)).toBe(true)
         expect(Exit.isSuccess(succeeded)).toBe(true)
-        expect(children).toHaveLength(4)
+        expect(children).toHaveLength(2)
         const childStates = yield* Effect.forEach(children, (childID) =>
           sessions
             .get(childID)
             .pipe(Effect.map((child) => ({ childID, state: child.metadata?.deepagent?.subagent?.state }))),
         )
-        expect(childStates.map((child) => child.state).sort()).toEqual(["cancelled", "cancelled", "completed", "error"])
+        expect(childStates.map((child) => child.state).sort()).toEqual(["completed", "error"])
         const successfulChild = childStates.find((child) => child.state === "completed")
         if (!successfulChild) return yield* Effect.die("successful sibling session is missing")
+        const failedChild = childStates.find((child) => child.state === "error")
+        if (!failedChild) return yield* Effect.die("failed sibling session is missing")
         const queued = (yield* queue.list()).filter((entry) => entry.parentID === chat.id)
         expect(queued).toHaveLength(1)
         expect(queued[0]?.workerID).toBe(successfulChild.childID)
         expect(yield* Effect.promise(() => Bun.file(path.join(directory, "successful.txt")).exists())).toBe(false)
         expect(yield* Effect.promise(() => Bun.file(path.join(directory, "failed.txt")).exists())).toBe(false)
-        expect(yield* worktree.list()).toHaveLength(1)
+        const failedSession = yield* sessions.get(failedChild.childID)
+        expect(yield* Effect.promise(() => Bun.file(path.join(failedSession.directory, "failed.txt")).exists())).toBe(
+          true,
+        )
+        expect(yield* worktree.list()).toHaveLength(2)
       }),
     { git: true },
     15_000,

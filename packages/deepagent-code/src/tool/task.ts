@@ -24,7 +24,7 @@ import { Cause, Duration, Effect, Exit, Fiber, Option, Schedule, Schema, Scope }
 import { EffectBridge } from "@/effect/bridge"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Database } from "@deepagent-code/core/database/database"
-import { TaskRunTable, SessionTable } from "@deepagent-code/core/session/sql"
+import { TaskRunTable } from "@deepagent-code/core/session/sql"
 import { and, desc, eq } from "drizzle-orm"
 import { Worktree } from "@/worktree"
 import { Git } from "@/git"
@@ -38,11 +38,11 @@ import { downgradeOneLevel, type AgentMode } from "@deepagent-code/core/deepagen
 import { ModelV2 } from "@deepagent-code/core/model"
 import { ProviderV2 } from "@deepagent-code/core/provider"
 import { TaskConcurrency } from "./task-concurrency"
-import { TaskDispatcher } from "@/session/task-dispatcher"  // L10: durable queue
-import { SessionToolCapability, type ToolCapabilitySnapshot } from "@/session/tool-capability"  // P0-10
-import { ToolRegistry } from "@/tool/registry"  // P0-10
-import { MCP } from "@/mcp"  // P0-10
-import { Plugin } from "@/plugin"  // P0-10
+import { TaskDispatcher } from "@/session/task-dispatcher" // L10: durable queue
+import { SessionToolCapability, type ToolCapabilitySnapshot } from "@/session/tool-capability" // P0-10
+import { ToolRegistry } from "@/tool/registry" // P0-10
+import { MCP } from "@/mcp" // P0-10
+import { Plugin } from "@/plugin" // P0-10
 import Ajv from "ajv"
 import { KeyedMutex } from "@deepagent-code/core/effect/keyed-mutex"
 import { Log } from "@deepagent-code/core/util/log"
@@ -54,6 +54,7 @@ import {
   failAdmittedTaskRun,
   getActiveTaskRunByChild,
   getTaskRun,
+  isQuiescent,
   isTerminal,
   markTaskFinalized,
   markTaskFinalizing,
@@ -268,11 +269,6 @@ function terminalReason(error: string | undefined): SubagentTerminalReason {
   return "runtime_error"
 }
 
-function isTakeoverEligible(reason: string) {
-  const terminal = terminalReason(reason)
-  return terminal !== "budget_exhausted" && terminal !== "doom_loop"
-}
-
 function projectSubagentRun(sessions: Session.Interface, run: DurableTaskRun, continueActive = false) {
   const sessionID = run.childSessionID
   return subagentSettlementLocks.withLock(sessionID)(
@@ -484,10 +480,7 @@ export function projectDurableSettledRun(sessions: Session.Interface, childSessi
           time_settled: TaskRunTable.time_settled,
         })
         .from(TaskRunTable)
-        .where(and(
-          eq(TaskRunTable.child_session_id as any, childSessionID as any),
-          eq(TaskRunTable.phase, "settled"),
-        ))
+        .where(and(eq(TaskRunTable.child_session_id as any, childSessionID as any), eq(TaskRunTable.phase, "settled")))
         .orderBy(desc(TaskRunTable.generation))
         .limit(1)
         .get()
@@ -499,7 +492,7 @@ export function projectDurableSettledRun(sessions: Session.Interface, childSessi
       // Guard: only update if run_id matches and not already finished
       if (subagent.run_id !== row.run_id || subagent.finished === true) return
       const terminalStates = ["completed", "error", "cancelled", "interrupted"] as const
-      type TerminalState = typeof terminalStates[number]
+      type TerminalState = (typeof terminalStates)[number]
       const state: TerminalState = (terminalStates as ReadonlyArray<string>).includes(row.state)
         ? (row.state as TerminalState)
         : "error"
@@ -1180,6 +1173,18 @@ export const TaskTool = Tool.define(
       }
       // childDepth is used by BOTH the takeover path and the default path when writing metadata.
       const childDepth = parentDepth + 1
+      const childPermission = [
+        ...deriveSubagentSessionPermission({
+          parentSessionPermission: parent.permission ?? [],
+          parentAgent,
+          subagent: next,
+        }),
+        ...filterPrimaryToolsForSubagent(cfg.experimental?.primary_tools).map((item) => ({
+          pattern: "*",
+          action: "allow" as const,
+          permission: item,
+        })),
+      ]
 
       // Runtime tool calls always carry callID. Direct programmatic callers (primarily tests and
       // embedded integrations) predate that contract, so give those invocations a unique identity;
@@ -1229,7 +1234,7 @@ export const TaskTool = Tool.define(
             (tool) =>
               capSnap.enabledToolIDs.includes(tool.toolID) &&
               tool.workspaceMutation === "possible" &&
-              evaluatePermission(tool.toolID, "*", next.permission).action === "allow",
+              evaluatePermission(tool.toolID, "*", childPermission).action === "allow",
           ) || capSnap.interceptors.some((hook) => hook.taskReachable && hook.workspaceMutation === "possible")
         : subagentIsWriteType(next)
       // B-9 (P1-14): ensureSessionBranch moved AFTER admitTaskRun.
@@ -1259,46 +1264,22 @@ export const TaskTool = Tool.define(
         mutationCapability: agentIsWriteCapable ? "write" : "read_only",
         toolCapabilityHash: capSnap?.hash ?? "static-write-type",
         // L3d: freeze the execution spec so prepare() can build the V1 message without re-reading params
-        executionSpec: { prompt: { text: params.prompt ?? params.description ?? "" } },
+        executionSpec: {
+          prompt: { text: params.prompt ?? params.description ?? "" },
+          agent: next.name,
+          model: {
+            providerID: model.providerID,
+            modelID: model.modelID,
+            ...(variant ? { variant } : {}),
+          },
+          ...(capSnap
+            ? {
+                tools: Object.fromEntries(capSnap.enabledToolIDs.toSorted().map((toolID) => [toolID, true] as const)),
+              }
+            : {}),
+          permission: childPermission,
+        },
       }).pipe(Effect.provideService(Database.Service, database))
-
-      // B-9 (P1-14): branch provisioning now happens after successful admission only
-      // BUG-001-405 Fix-B: if ensureSessionBranch fails (e.g. dirty workspace), settle the
-      // already-admitted task_run row so it doesn't linger in "admitted" state forever.
-      // The durable path has its own version-fenced settle below (L3b); this covers the legacy path.
-      //
-      // Design notes (per adversarial review):
-      //   - P1-1: DB settle uses catchCause+logWarning so a DB error never swallows the original
-      //     workspace cause. Effect.orDie would short-circuit before Effect.failCause(cause) runs.
-      //   - P1-2: WHERE clause adds a version CAS so a concurrent executor that already advanced
-      //     the version does not get its state overwritten (0-row update is safe — just log).
-      //   - P1-3: researcher no longer has bash; git history queries (git log/blame/diff) are not
-      //     covered by the current read-only tool set. TODO: add git_log/git_diff structured tools
-      //     (tracked as follow-up; see BUG-001-405 §4 Fix-A notes).
-      if (admission.runCreated && params.isolation !== "worktree" && agentIsWriteCapable && git && queue) {
-        yield* ensureSessionBranch({ git, directory: parent.directory, sessionID: parent.id }).pipe(
-          Effect.catchCause((cause) =>
-            Effect.gen(function* () {
-              const diagnostic = String(Cause.squash(cause))
-              yield* failAdmittedTaskRun({
-                run: admission.run,
-                reason: "workspace_preflight_failed",
-                error: { code: "workspace_preflight_failed", message: diagnostic },
-              })
-                .pipe(
-                  Effect.provideService(Database.Service, database),
-                  Effect.catchCause((dbErr) =>
-                    Effect.logWarning("Failed to settle task after workspace preflight error", {
-                      runID: admission.run.runID,
-                      cause: Cause.pretty(dbErr),
-                    }),
-                  ),
-                )
-              return yield* Effect.failCause(cause)
-            }),
-          ),
-        )
-      }
 
       const executionOwner =
         activeJob?.status === "running" &&
@@ -1380,6 +1361,32 @@ export const TaskTool = Tool.define(
         }
       }
 
+      // Branch creation is the first workspace side effect. It must happen only after durable
+      // admission and the dirty-workspace preflight have both succeeded.
+      if (admission.runCreated && params.isolation !== "worktree" && agentIsWriteCapable && git && queue) {
+        yield* ensureSessionBranch({ git, directory: parent.directory, sessionID: parent.id }).pipe(
+          Effect.catchCause((cause) =>
+            Effect.gen(function* () {
+              const diagnostic = String(Cause.squash(cause))
+              yield* failAdmittedTaskRun({
+                run: admission.run,
+                reason: "workspace_preflight_failed",
+                error: { code: "workspace_preflight_failed", message: diagnostic },
+              }).pipe(
+                Effect.provideService(Database.Service, database),
+                Effect.catchCause((dbErr) =>
+                  Effect.logWarning("Failed to settle task after workspace preflight error", {
+                    runID: admission.run.runID,
+                    cause: Cause.pretty(dbErr),
+                  }),
+                ),
+              )
+              return yield* Effect.failCause(cause)
+            }),
+          ),
+        )
+      }
+
       // -----------------------------------------------------------------------
       // L10: Durable control plane routing
       // Design: subagent-control-plane-design.zh-CN.md §13.3, §10.1, §10.2
@@ -1391,33 +1398,55 @@ export const TaskTool = Tool.define(
         if (admission.runCreated || admission.run.state === "admitted") {
           // L3d: Input projection — only for newly created or admitted runs without input yet
           if (admission.run.inputState !== "ready") {
-            // B-1 (P0-1): ensure child session row exists before writing the V1 message row.
-            // message.session_id is a FK on the session table — inserting it before the session
-            // row causes FOREIGN KEY constraint failed. The child session is created here as a
-            // stub; its agent/title/full metadata is filled in when the loop actually starts.
-            if (!session) {
-              const childSID = admission.run.childSessionID as string
-              const existingChild = yield* database.db
-                .select({ id: SessionTable.id })
-                .from(SessionTable)
-                .where(eq(SessionTable.id as any, childSID as any))
-                .get()
-                .pipe(Effect.orElseSucceed(() => undefined))
-              if (!existingChild) {
-                yield* database.db
-                  .insert(SessionTable)
-                  .values({
-                    id: admission.run.childSessionID as any,
-                    project_id: parent.projectID as any,
-                    slug: `durable-child-${(admission.run.childSessionID as string).replace(/[^a-z0-9]/gi, "-").slice(0, 32)}`,
-                    directory: parent.directory as any,
-                    title: params.description ?? "Durable task",
-                    version: "durable",
-                  } as any)
-                  .onConflictDoNothing()
-                  .run()
-                  .pipe(Effect.orDie)
+            const frozenAgent = admission.run.executionSpec?.agent ?? next.name
+            const frozenModel = admission.run.executionSpec?.model ?? {
+              providerID: model.providerID,
+              modelID: model.modelID,
+              ...(variant ? { variant } : {}),
+            }
+            const frozenPermission = admission.run.executionSpec?.permission ?? childPermission
+            const existingChild =
+              session ??
+              (yield* sessions
+                .get(admission.run.childSessionID)
+                .pipe(Effect.catchTag("NotFoundError", () => Effect.succeed(undefined))))
+
+            if (existingChild) {
+              const exactAdoption =
+                existingChild.parentID === ctx.sessionID &&
+                existingChild.directory === parent.directory &&
+                existingChild.agent === frozenAgent &&
+                existingChild.model?.providerID === frozenModel.providerID &&
+                existingChild.model.id === frozenModel.modelID &&
+                existingChild.model.variant === frozenModel.variant &&
+                JSON.stringify(existingChild.permission ?? []) === JSON.stringify(frozenPermission)
+              if (!exactAdoption) {
+                yield* failAdmittedTaskRun({
+                  run: admission.run,
+                  reason: "child_session_conflict",
+                  error: {
+                    code: "child_session_conflict",
+                    message: `Child session ${admission.run.childSessionID} exists with a conflicting durable identity.`,
+                  },
+                }).pipe(Effect.provideService(Database.Service, database))
+                return yield* Effect.fail(
+                  new Error(`Child session ${admission.run.childSessionID} conflicts with the frozen execution spec`),
+                )
               }
+            } else {
+              yield* sessions.create({
+                id: admission.run.childSessionID,
+                parentID: ctx.sessionID,
+                title: params.description + ` (@${frozenAgent} subagent)`,
+                agent: frozenAgent,
+                model: {
+                  id: ModelV2.ID.make(frozenModel.modelID),
+                  providerID: ProviderV2.ID.make(frozenModel.providerID),
+                  ...(frozenModel.variant ? { variant: frozenModel.variant } : {}),
+                },
+                metadata: { deepagent: { [SUBAGENT_DEPTH_META_KEY]: childDepth } },
+                permission: frozenPermission,
+              })
             }
 
             // Step 1: CAS admitted → admitting (marks projection start; idempotent if already admitting)
@@ -1435,15 +1464,7 @@ export const TaskTool = Tool.define(
                 prepared,
                 runID: admission.run.runID,
                 expectedRunVersion: admittingRun.version,
-              }).pipe(
-                Effect.provideService(Database.Service, database),
-                Effect.catchTag("LegacyTaskInput.InputProjectionConflict", (err) =>
-                  Effect.logWarning("durable: input projection conflict — settling as failed", {
-                    runID: admission.run.runID,
-                    reason: err.reason,
-                  }),
-                ),
-              )
+              }).pipe(Effect.provideService(Database.Service, database))
             }
           }
 
@@ -1488,10 +1509,11 @@ export const TaskTool = Tool.define(
 
         let polledRun: DurableTaskRun | undefined
         for (let i = 0; i <= maxPolls; i++) {
-          const cur = yield* getTaskRun(admission.run.runID).pipe(
-            Effect.provideService(Database.Service, database),
-          )
-          if (cur && isTerminal(cur)) { polledRun = cur; break }
+          const cur = yield* getTaskRun(admission.run.runID).pipe(Effect.provideService(Database.Service, database))
+          if (cur && (isTerminal(cur) || isQuiescent(cur))) {
+            polledRun = cur
+            break
+          }
           if (i < maxPolls) yield* Effect.sleep(Duration.millis(pollMs))
         }
 
@@ -1687,18 +1709,7 @@ export const TaskTool = Tool.define(
               metadata: {
                 deepagent: { [SUBAGENT_DEPTH_META_KEY]: childDepth },
               },
-              permission: [
-                ...deriveSubagentSessionPermission({
-                  parentSessionPermission: parent.permission ?? [],
-                  parentAgent,
-                  subagent: next,
-                }),
-                ...filterPrimaryToolsForSubagent(cfg.experimental?.primary_tools).map((item) => ({
-                  pattern: "*",
-                  action: "allow" as const,
-                  permission: item,
-                })),
-              ],
+              permission: childPermission,
             }))
           return { worktree: Option.getOrUndefined(worktreeOpt), worktreeInfo, nextSession }
         })
@@ -1929,8 +1940,7 @@ export const TaskTool = Tool.define(
                 }),
               (_, exit) =>
                 Effect.gen(function* () {
-                  if (Exit.hasInterrupts(exit))
-                    yield* cancel
+                  if (Exit.hasInterrupts(exit)) yield* cancel
                 }).pipe(
                   Effect.ensuring(
                     Effect.sync(() => {
@@ -2176,21 +2186,7 @@ export const TaskTool = Tool.define(
           metadata: {
             deepagent: { [SUBAGENT_DEPTH_META_KEY]: childDepth },
           },
-          permission: [
-            ...deriveSubagentSessionPermission({
-              parentSessionPermission: parent.permission ?? [],
-              parentAgent,
-              subagent: next,
-            }),
-            // §E: primary_tools is a PRIMARY-agent escape hatch; on a SUBAGENT it must NOT be able to
-            // force-allow the capability-governed permissions (plan/todowrite) and thereby bypass the
-            // plan-write capability gate. Filter those out; every other primary_tool passes through.
-            ...filterPrimaryToolsForSubagent(cfg.experimental?.primary_tools).map((item) => ({
-              pattern: "*",
-              action: "allow" as const,
-              permission: item,
-            })),
-          ],
+          permission: childPermission,
         }))
 
       const metadata = {
@@ -2458,10 +2454,7 @@ export const TaskTool = Tool.define(
 
       const runCancel = yield* EffectBridge.make()
       const cancel = Effect.all(
-        [
-          background.cancel(nextSession.id).pipe(Effect.ignore),
-          ops.cancel(nextSession.id).pipe(Effect.ignore),
-        ],
+        [background.cancel(nextSession.id).pipe(Effect.ignore), ops.cancel(nextSession.id).pipe(Effect.ignore)],
         { concurrency: "unbounded", discard: true },
       )
 

@@ -23,7 +23,7 @@ import { Data, Effect } from "effect"
 import { Database } from "@deepagent-code/core/database/database"
 import { MessageTable, PartTable, TaskRunTable, TaskRunEventTable } from "@deepagent-code/core/session/sql"
 import { Hash } from "@deepagent-code/core/util/hash"
-import { and, eq } from "drizzle-orm"
+import { and, eq, inArray } from "drizzle-orm"
 import { MessageID, PartID } from "@/session/schema"
 import { Identifier } from "@/id/id"
 import type { Run } from "@/tool/task-run"
@@ -43,7 +43,14 @@ export type PreparedPart = {
 
 export type PreparedMessageData = {
   readonly role: "user"
-  readonly providerID: string
+  readonly time: { readonly created: number }
+  readonly agent: string
+  readonly model: {
+    readonly providerID: string
+    readonly modelID: string
+    readonly variant?: string
+  }
+  readonly tools?: Record<string, boolean>
   readonly metadata: Record<string, unknown>
 }
 
@@ -80,12 +87,28 @@ export class InputProjectionConflictError extends Data.TaggedError("LegacyTaskIn
  */
 export function prepare(run: Run) {
   return Effect.sync(() => {
-    const now = Date.now()
+    const now = run.timeCreated
     const messageID = run.childMessageID ?? MessageID.ascending()
     const sessionID = run.childSessionID as string
     const promptText = run.executionSpec?.prompt?.text ?? ""
-
-    const partID = PartID.ascending()
+    const agent = typeof run.executionSpec?.agent === "string" ? run.executionSpec.agent : "build"
+    const modelCandidate = run.executionSpec?.model
+    const model =
+      modelCandidate &&
+      typeof modelCandidate === "object" &&
+      "providerID" in modelCandidate &&
+      typeof modelCandidate.providerID === "string" &&
+      "modelID" in modelCandidate &&
+      typeof modelCandidate.modelID === "string"
+        ? {
+            providerID: modelCandidate.providerID,
+            modelID: modelCandidate.modelID,
+            ...("variant" in modelCandidate && typeof modelCandidate.variant === "string"
+              ? { variant: modelCandidate.variant }
+              : {}),
+          }
+        : { providerID: "task", modelID: "task" }
+    const partID = PartID.ascending(`prt_task_${Hash.sha256(messageID).slice(0, 24)}`)
     const textPart: PreparedPart = {
       partID,
       messageID,
@@ -95,11 +118,16 @@ export function prepare(run: Run) {
       timeCreated: now,
     }
 
-    // B-1 (P0-2): canonical message data — exactly what projectExact will write to DB.
-    // Do NOT include time/agent/model here; they are not stored in the MessageTable.data column.
     const messageData: PreparedMessageData = {
       role: "user" as const,
-      providerID: "task",
+      time: { created: now },
+      agent,
+      model: {
+        providerID: model.providerID,
+        modelID: model.modelID,
+        ...(typeof model.variant === "string" ? { variant: model.variant } : {}),
+      },
+      ...(run.executionSpec?.tools ? { tools: run.executionSpec.tools } : {}),
       metadata: {
         deepagent: {
           task_admission: {
@@ -111,20 +139,18 @@ export function prepare(run: Run) {
       } as Record<string, unknown>,
     }
 
-    // Hash covers exactly what is written to DB — no extra stringify of metadata.
-    const hashInput = JSON.stringify({
-      messageID,
-      sessionID,
-      messageData,
-      parts: [{ partID, type: "text", text: promptText }],
-    })
-
     return {
       messageID,
       sessionID,
       prompt: promptText,
       parts: [textPart],
-      materializedHash: Hash.sha256(hashInput),
+      materializedHash: materializedHash({
+        messageID,
+        sessionID,
+        timeCreated: now,
+        messageData,
+        parts: [textPart],
+      }),
       partCount: 1,
       timeCreated: now,
       messageData,
@@ -178,11 +204,55 @@ export function projectExact(input: {
               return yield* Effect.die(new Error(`projectExact: run ${input.runID} not found`))
             }
 
+            const verifyEnvelope = Effect.fnUntraced(function* () {
+              const message = yield* tx
+                .select()
+                .from(MessageTable)
+                .where(eq(MessageTable.id, input.prepared.messageID))
+                .get()
+                .pipe(Effect.orDie)
+              const parts = yield* tx
+                .select()
+                .from(PartTable)
+                .where(
+                  inArray(
+                    PartTable.id,
+                    input.prepared.parts.map((part) => part.partID),
+                  ),
+                )
+                .all()
+                .pipe(Effect.orDie)
+              if (!message || parts.length !== input.prepared.partCount) return false
+              return (
+                message.session_id === input.prepared.sessionID &&
+                materializedHash({
+                  messageID: message.id,
+                  sessionID: message.session_id,
+                  timeCreated: message.time_created,
+                  messageData: message.data,
+                  parts: parts
+                    .map((part) => ({
+                      partID: part.id,
+                      messageID: part.message_id,
+                      sessionID: part.session_id,
+                      type:
+                        typeof part.data === "object" && part.data && "type" in part.data
+                          ? String(part.data.type)
+                          : "unknown",
+                      data: part.data,
+                      timeCreated: part.time_created,
+                    }))
+                    .sort((a, b) => a.partID.localeCompare(b.partID)),
+                }) === input.prepared.materializedHash
+              )
+            })
+
             // 2. Check for exact replay (already admitted)
             if (run.inputState === "ready") {
               if (
                 run.existingHash === input.prepared.materializedHash &&
-                run.existingCount === input.prepared.partCount
+                run.existingCount === input.prepared.partCount &&
+                (yield* verifyEnvelope())
               ) {
                 return { exactReplay: true }
               }
@@ -213,7 +283,6 @@ export function projectExact(input: {
             }
 
             // 3. Insert the V1 message row
-            // B-1 (P0-2): use prepared.messageData directly so the content exactly matches the hash
             const now = input.prepared.timeCreated
             yield* tx
               .insert(MessageTable)
@@ -229,20 +298,32 @@ export function projectExact(input: {
               .pipe(Effect.orDie)
 
             // 4. Insert all part rows
-            for (const part of input.prepared.parts) {
-              yield* tx
-                .insert(PartTable)
-                .values({
-                  id: part.partID,
-                  message_id: part.messageID,
-                  session_id: part.sessionID as any,
-                  time_created: part.timeCreated,
-                  time_updated: part.timeCreated,
-                  data: part.data as any,
-                })
-                .onConflictDoNothing()
-                .run()
-                .pipe(Effect.orDie)
+            yield* Effect.forEach(
+              input.prepared.parts,
+              (part) =>
+                tx
+                  .insert(PartTable)
+                  .values({
+                    id: part.partID,
+                    message_id: part.messageID,
+                    session_id: part.sessionID as any,
+                    time_created: part.timeCreated,
+                    time_updated: part.timeCreated,
+                    data: part.data as any,
+                  })
+                  .onConflictDoNothing()
+                  .run()
+                  .pipe(Effect.orDie),
+              { discard: true },
+            )
+
+            if (!(yield* verifyEnvelope())) {
+              return yield* Effect.fail(
+                new InputProjectionConflictError({
+                  runID: input.runID,
+                  reason: "target message/part IDs already exist with a partial or conflicting envelope",
+                }),
+              )
             }
 
             // 5. CAS task_run: admitting → ready
@@ -296,8 +377,88 @@ export function projectExact(input: {
           }),
         { behavior: "immediate" },
       ),
+    ).pipe(
+      Effect.catchTag("LegacyTaskInput.InputProjectionConflict", (error) =>
+        markProjectionConflict({
+          runID: input.runID,
+          expectedRunVersion: input.expectedRunVersion,
+          reason: error.reason,
+        }).pipe(Effect.andThen(Effect.fail(error))),
+      ),
     )
   })
+}
+
+function markProjectionConflict(input: {
+  readonly runID: string
+  readonly expectedRunVersion: number
+  readonly reason: string
+}) {
+  return Effect.gen(function* () {
+    const { db } = yield* Database.Service
+    const now = Date.now()
+    return yield* db.transaction(
+      (tx) =>
+        Effect.gen(function* () {
+          const updated = yield* tx
+            .update(TaskRunTable)
+            .set({
+              state: "recovery_required",
+              input_state: "conflict",
+              reason: "input_projection_conflict",
+              error: { code: "input_projection_conflict", message: input.reason },
+              version: input.expectedRunVersion + 1,
+              time_updated: now,
+            })
+            .where(
+              and(
+                eq(TaskRunTable.run_id, input.runID),
+                eq(TaskRunTable.version, input.expectedRunVersion),
+                eq(TaskRunTable.state, "admitted"),
+                inArray(TaskRunTable.input_state, ["admitting", "ready"]),
+              ),
+            )
+            .returning({ version: TaskRunTable.version })
+            .get()
+            .pipe(Effect.orDie)
+          if (!updated) return false
+
+          yield* tx
+            .insert(TaskRunEventTable)
+            .values({
+              event_id: Identifier.ascending("event"),
+              run_id: input.runID,
+              version: updated.version,
+              type: "input_projection_conflict",
+              from_state: "admitted",
+              to_state: "recovery_required",
+              reason: input.reason,
+              time_created: now,
+            })
+            .run()
+            .pipe(Effect.orDie)
+          return true
+        }),
+      { behavior: "immediate" },
+    )
+  })
+}
+
+function materializedHash(input: {
+  readonly messageID: string
+  readonly sessionID: string
+  readonly timeCreated: number
+  readonly messageData: unknown
+  readonly parts: ReadonlyArray<{
+    readonly partID: string
+    readonly messageID: string
+    readonly sessionID: string
+    readonly type: string
+    readonly data: unknown
+    readonly timeCreated: number
+  }>
+}) {
+  return Hash.sha256(JSON.stringify(input))
 }
 
 export * as LegacyTaskInput from "./task-input"

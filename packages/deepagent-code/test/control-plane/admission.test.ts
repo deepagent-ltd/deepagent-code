@@ -29,7 +29,7 @@ import {
 } from "@deepagent-code/core/session/sql"
 import { CrossSpawnSpawner } from "@deepagent-code/core/cross-spawn-spawner"
 import { SessionID, MessageID } from "../../src/session/schema"
-import { admitTaskRun, AdmissionConflict, transitionToAdmitting } from "../../src/tool/task-run"
+import { admitTaskRun, transitionToAdmitting } from "../../src/tool/task-run"
 import { prepare, projectExact, InputProjectionConflictError } from "../../src/session/task-input"
 import { testEffect } from "../lib/effect"
 
@@ -208,7 +208,11 @@ describe("DET-ADM-01: prepare() + projectExact()", () => {
       expect(admittingRun).toBeTruthy()
       expect(admittingRun?.inputState).toBe("admitting")
 
-      const prepared = yield* prepare({ ...admission.run, version: admittingRun!.version, inputState: "admitting" as const })
+      const prepared = yield* prepare({
+        ...admission.run,
+        version: admittingRun!.version,
+        inputState: "admitting" as const,
+      })
       const result = yield* projectExact({
         prepared,
         runID: admission.run.runID,
@@ -293,7 +297,11 @@ describe("DET-ADM-01: prepare() + projectExact()", () => {
       })
       expect(admittingRun).toBeTruthy()
 
-      const prepared = yield* prepare({ ...admission.run, version: admittingRun!.version, inputState: "admitting" as const })
+      const prepared = yield* prepare({
+        ...admission.run,
+        version: admittingRun!.version,
+        inputState: "admitting" as const,
+      })
       yield* projectExact({ prepared, runID: admission.run.runID, expectedRunVersion: admittingRun!.version })
 
       // Second call with same data → exact replay (input_state already 'ready')
@@ -303,6 +311,86 @@ describe("DET-ADM-01: prepare() + projectExact()", () => {
         expectedRunVersion: admittingRun!.version + 1, // version after first projection
       })
       expect(replay.exactReplay).toBe(true)
+    }),
+  )
+
+  it.effect("projectExact rejects a replay when the materialized envelope was altered", () =>
+    Effect.gen(function* () {
+      yield* setup
+
+      const admission = yield* admitTaskRun({
+        parentSessionID: PARENT_SID,
+        parentMessageID: MessageID.ascending("msg_replay_tampered") as any,
+        toolCallID: "tc_replay_tampered",
+        request: { description: "tampered replay test" },
+        deliveryMode: "foreground",
+        executionSpec: { prompt: { text: "Original prompt." } },
+      })
+
+      const { db } = yield* Database.Service
+      yield* db
+        .insert(SessionTable)
+        .values({
+          id: admission.run.childSessionID,
+          project_id: ProjectV2.ID.global,
+          slug: "proj-child-tampered",
+          directory: DIRECTORY,
+          title: "child-proj-tampered",
+          version: "test",
+        })
+        .onConflictDoNothing()
+        .run()
+        .pipe(Effect.orDie)
+
+      const admittingRun = yield* transitionToAdmitting({
+        runID: admission.run.runID,
+        version: admission.run.version,
+      })
+      const prepared = yield* prepare(admittingRun!)
+      yield* projectExact({ prepared, runID: admission.run.runID, expectedRunVersion: admittingRun!.version })
+      yield* db
+        .update(PartTable)
+        .set({ data: { type: "text", text: "Altered after projection." } as any })
+        .where(eq(PartTable.id, prepared.parts[0]!.partID))
+        .run()
+        .pipe(Effect.orDie)
+
+      const conflict = yield* Effect.flip(
+        projectExact({
+          prepared,
+          runID: admission.run.runID,
+          expectedRunVersion: admittingRun!.version + 1,
+        }),
+      )
+      expect(conflict).toBeInstanceOf(InputProjectionConflictError)
+      expect(conflict.reason).toContain("hash/count mismatch")
+
+      const conflictedRun = yield* db
+        .select({
+          state: TaskRunTable.state,
+          inputState: TaskRunTable.input_state,
+          reason: TaskRunTable.reason,
+        })
+        .from(TaskRunTable)
+        .where(eq(TaskRunTable.run_id, admission.run.runID))
+        .get()
+        .pipe(Effect.orDie)
+      expect(conflictedRun?.state).toBe("recovery_required")
+      expect(conflictedRun?.inputState).toBe("conflict")
+      expect(conflictedRun?.reason).toBe("input_projection_conflict")
+
+      const recoveryEvent = yield* db
+        .select({ type: TaskRunEventTable.type, toState: TaskRunEventTable.to_state })
+        .from(TaskRunEventTable)
+        .where(
+          and(
+            eq(TaskRunEventTable.run_id, admission.run.runID),
+            eq(TaskRunEventTable.type, "input_projection_conflict"),
+          ),
+        )
+        .get()
+        .pipe(Effect.orDie)
+      expect(recoveryEvent).toEqual({ type: "input_projection_conflict", toState: "recovery_required" })
     }),
   )
 
@@ -328,9 +416,7 @@ describe("DET-ADM-01: prepare() + projectExact()", () => {
         expectedRunVersion: 0,
       }).pipe(
         Effect.map(() => "ok" as const),
-        Effect.catchTag("LegacyTaskInput.InputProjectionConflict", () =>
-          Effect.succeed("conflict" as const),
-        ),
+        Effect.catchTag("LegacyTaskInput.InputProjectionConflict", () => Effect.succeed("conflict" as const)),
       )
       expect(result).toBe("conflict")
     }),

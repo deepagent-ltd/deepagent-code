@@ -77,6 +77,7 @@ import {
   Latch,
   Layer,
   Option,
+  Ref,
   Schedule,
   Schema,
   Scope,
@@ -2734,9 +2735,7 @@ export const layer = Layer.effect(
               sys.skills(agent),
               sys.environment(model),
               instruction.system().pipe(Effect.orDie),
-            ]).pipe(
-              Effect.map(([skills, env, instructions]) => [...env, ...instructions, ...(skills ? [skills] : [])]),
-            )
+            ]).pipe(Effect.map(([skills, env, instructions]) => [...env, ...instructions, ...(skills ? [skills] : [])]))
             activeContext =
               federation && sessionFederationRollout.enabled.contextFederationShadow && !finalizerMode
                 ? yield* federation
@@ -3267,19 +3266,10 @@ export const layer = Layer.effect(
       return Effect.runPromise(Fiber.interrupt(worker).pipe(Effect.asVoid))
     })
 
-    // L10: durable control plane — TaskDispatcher daemon.
-    // Background task notification delivery (outbox) is handled by the existing notificationWorkers
-    // which already poll the same task_notification_outbox table. No separate delivery daemon needed
-    // in durable mode because the same outbox table is shared.
-    //
-    // Phase 6H (deferred): TaskDelivery.startDeliveryLoop cannot be directly wired from inside this
-    // layer because it requires SessionPrompt.Service, which creates a circular dependency — we are
-    // the layer that builds SessionPrompt.Service. Additionally, deliverOne calls sessionPrompt.loop
-    // without providing InstanceState.context (required by loop at line ~3054). Proper wiring would
-    // need either (a) a refactored startDeliveryLoop that accepts a deliverFn callback (like the
-    // existing deliverTaskNotifications pattern), or (b) a SessionPrompt.Service shim constructed
-    // from local closures with loop wrapped to provide InstanceRef. Deferred to a follow-up.
-    const durableWorkers = new Map<string, Fiber.Fiber<void, never>>()
+    // Durable dispatcher and delivery share the topology-lock lifetime. Delivery receives the local
+    // runLoop closure, so TaskDelivery stays independent of SessionPrompt.Service and cannot form a
+    // circular layer dependency.
+    const durableWorkers = new Map<string, ReadonlyArray<Fiber.Fiber<void, never>>>()
     // Phase 6I: lock paths + lock contents for cross-process epoch assertion
     const lockPaths = new Map<string, string>()
     const lockContents = new Map<string, string>() // directory → our written content (for token-fenced unlink)
@@ -3315,23 +3305,37 @@ export const layer = Layer.effect(
                   const existingPid = parseInt(existingPidStr, 10)
                   if (!isNaN(existingPid) && existingPid !== process.pid) {
                     let alive = false
-                    try { process.kill(existingPid, 0); alive = true } catch { /* dead */ }
+                    try {
+                      process.kill(existingPid, 0)
+                      alive = true
+                    } catch {
+                      /* dead */
+                    }
                     if (alive) return false // live owner — fail-closed
                     // Dead owner: remove stale lock and retry O_EXCL
-                    try { fs.unlinkSync(lockPath) } catch { /* already gone */ }
+                    try {
+                      fs.unlinkSync(lockPath)
+                    } catch {
+                      /* already gone */
+                    }
                     // fall through to retry loop
                   }
-                } catch { return false }
+                } catch {
+                  return false
+                }
               }
             }
             return false
           })
 
           if (!acquired) {
-            yield* Effect.logWarning("durable-cp: failed to acquire executor lock, another process owns it — fail-closed", {
-              directory: ctx.directory,
-              ourPid: process.pid,
-            })
+            yield* Effect.logWarning(
+              "durable-cp: failed to acquire executor lock, another process owns it — fail-closed",
+              {
+                directory: ctx.directory,
+                ourPid: process.pid,
+              },
+            )
             return // A-2: fail-closed
           }
           lockContents.set(ctx.directory, lockContent)
@@ -3363,10 +3367,7 @@ export const layer = Layer.effect(
               LegacySubagentExecutor.runFromClaim({
                 claim,
                 ownerToken,
-                loopFn: (sessionID) =>
-                  loop({ sessionID }).pipe(
-                    Effect.provideService(InstanceRef, ctx),
-                  ) as any,
+                loopFn: (sessionID) => loop({ sessionID }).pipe(Effect.provideService(InstanceRef, ctx)),
               }).pipe(
                 // P1-11: project durable terminal state into session metadata so
                 // task-status polling terminates without the legacy in-process path.
@@ -3388,8 +3389,52 @@ export const layer = Layer.effect(
             Effect.forkIn(scope),
           )
 
-          durableWorkers.set(ctx.directory, dispatchFiber)
-          log.info("durable-cp: dispatcher started", {
+          const deliveryOwner = `${ownerToken}:delivery`
+          const deliveryFiber = yield* TaskDelivery.startDeliveryLoop({
+            ownerToken: deliveryOwner,
+            directory: ctx.directory,
+            intervalMs: 500,
+            deliver: (item) =>
+              Effect.gen(function* () {
+                const delivered = yield* Ref.make(false)
+                yield* state
+                  .startShell(
+                    item.parentSessionID,
+                    lastAssistant(item.parentSessionID),
+                    TaskDelivery.deliverOne({
+                      item,
+                      ownerToken: deliveryOwner,
+                      driveParentLoop: () =>
+                        runLoop(item.parentSessionID).pipe(
+                          Effect.provideService(InstanceRef, ctx),
+                        ),
+                    }).pipe(
+                      Effect.provideService(Database.Service, database),
+                      Effect.tap((result) => Ref.set(delivered, result)),
+                      Effect.flatMap(() => lastAssistant(item.parentSessionID)),
+                    ),
+                  )
+                  .pipe(
+                    Effect.catchTag("SessionBusyError", () =>
+                      TaskDelivery.releaseOutboxClaim({
+                        item,
+                        ownerToken: deliveryOwner,
+                      }).pipe(Effect.asVoid),
+                    ),
+                  )
+                return yield* Ref.get(delivered)
+              }),
+          }).pipe(
+            Effect.provideService(Database.Service, database),
+            Effect.catchCause((cause) =>
+              Effect.logError("durable-cp: delivery loop crashed", { cause: Cause.pretty(cause) }),
+            ),
+            Effect.asVoid,
+            Effect.forkIn(scope),
+          )
+
+          durableWorkers.set(ctx.directory, [dispatchFiber, deliveryFiber])
+          log.info("durable-cp: dispatcher and delivery started", {
             directory: ctx.directory,
             mode: flags.subagentControlPlane,
           })
@@ -3401,8 +3446,8 @@ export const layer = Layer.effect(
       ),
     )
     const stopDurableWorkers = registerDisposer((directory) => {
-      const fiber = durableWorkers.get(directory)
-      if (!fiber) return Promise.resolve()
+      const fibers = durableWorkers.get(directory)
+      if (!fibers) return Promise.resolve()
       durableWorkers.delete(directory)
       // A-2 (P0-4): token-fenced release — only unlink if we own the lock
       const lockPath = lockPaths.get(directory)
@@ -3414,16 +3459,17 @@ export const layer = Layer.effect(
           const current = fs.readFileSync(lockPath, "utf-8")
           if (current === ourContent) fs.unlinkSync(lockPath)
           // else: another process replaced our lock — do not delete it
-        } catch { /* already gone or unreadable — safe to ignore */ }
+        } catch {
+          /* already gone or unreadable — safe to ignore */
+        }
       }
       return Effect.runPromise(
-        orderedShutdown({ directory })
-          .pipe(
+        orderedShutdown({ directory }).pipe(
             Effect.provideService(Database.Service, database),
             Effect.catchCause(() => Effect.void),
-            Effect.flatMap(() => Fiber.interrupt(fiber)),
-            Effect.asVoid,
-          )
+            Effect.flatMap(() => Effect.forEach(fibers, Fiber.interrupt, { discard: true })),
+          Effect.asVoid,
+        ),
       )
     })
     yield* Effect.addFinalizer(() =>
@@ -3434,11 +3480,7 @@ export const layer = Layer.effect(
         notificationWorkers.clear()
         startDurableWorkers()
         stopDurableWorkers()
-        yield* Effect.forEach(
-          [...durableWorkers.values()].flat(),
-          Fiber.interrupt,
-          { discard: true },
-        )
+        yield* Effect.forEach([...durableWorkers.values()].flat(), Fiber.interrupt, { discard: true })
         durableWorkers.clear()
       }),
     )
