@@ -45,4 +45,3 @@ describe("git_read argument boundary", () => {
     })
   }
 })
-
