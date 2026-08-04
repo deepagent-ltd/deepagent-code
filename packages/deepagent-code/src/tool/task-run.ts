@@ -116,11 +116,15 @@ class ConcurrentAdmission extends Data.TaggedError("TaskRun.ConcurrentAdmission"
   readonly admissionKey: string
 }> {}
 
-// terminalStates: all states where no further execution can occur
+// terminalStates: states where no further execution can occur and the run is durably settled
 const terminalStates: ReadonlyArray<State> = [
-  "completed", "failed", "cancelled", "interrupted", "closed", "recovery_required",
+  "completed", "failed", "cancelled", "interrupted", "closed",
   "error", // legacy vocabulary — kept for backward-compat queries against pre-L1 rows
 ]
+// C-5 (P1-7): recovery_required is NOT terminal — it is a quiescent nonterminal state that
+// can only be resolved by explicit user/host action (continue/accept/cancel).
+// Foreground polls must not treat it as a settled result.
+const quiescentStates: ReadonlyArray<State> = ["recovery_required"]
 // activeStates: states where a run may be executing or waiting to execute
 const activeStates: ReadonlyArray<State> = [
   "admitted", "queued", "provisioning", "running", "researching", "finalizing",
@@ -341,29 +345,56 @@ export function admitTaskRun(input: {
  * L3d: CAS transition for a run from "admitted" to "admitting" (input_state).
  * This marks the start of the input projection workflow.
  * Returns the updated Run on success, undefined if the CAS missed (concurrent actor).
+ *
+ * B-3 (P0-9): UPDATE and event INSERT are in the same IMMEDIATE transaction so a process
+ * crash between the two cannot leave the run in a state without an audit event.
  */
 export function transitionToAdmitting(input: { runID: string; version: number; now?: number }) {
   return Effect.gen(function* () {
     const { db } = yield* Database.Service
     const now = input.now ?? Date.now()
-    const updated = yield* db
-      .update(TaskRunTable)
-      .set({
-        input_state: "admitting",
-        version: input.version + 1,
-        time_updated: now,
-      })
-      .where(
-        and(
-          eq(TaskRunTable.run_id, input.runID),
-          eq(TaskRunTable.version, input.version),
-          eq(TaskRunTable.state, "admitted"),
-        ),
-      )
-      .returning()
-      .get()
-      .pipe(Effect.orDie)
-    return updated ? fromRow(updated) : undefined
+    return yield* db.transaction(
+      (tx) =>
+        Effect.gen(function* () {
+          const updated = yield* tx
+            .update(TaskRunTable)
+            .set({
+              input_state: "admitting",
+              version: input.version + 1,
+              time_updated: now,
+            })
+            .where(
+              and(
+                eq(TaskRunTable.run_id, input.runID),
+                eq(TaskRunTable.version, input.version),
+                eq(TaskRunTable.state, "admitted"),
+              ),
+            )
+            .returning()
+            .get()
+            .pipe(Effect.orDie)
+          if (!updated) return undefined
+
+          // B-3 (P0-9): co-transactional event for input admission start
+          yield* tx
+            .insert(TaskRunEventTable)
+            .values({
+              event_id: Identifier.ascending("event"),
+              run_id: input.runID,
+              version: updated.version,
+              type: "input_admitting",
+              from_state: "admitted",
+              to_state: "admitted",
+              reason: "input_projection_started",
+              time_created: now,
+            })
+            .run()
+            .pipe(Effect.orDie)
+
+          return fromRow(updated)
+        }),
+      { behavior: "immediate" },
+    )
   })
 }
 
@@ -1002,6 +1033,8 @@ export function deliverTaskNotifications(input: {
 }
 
 export const isTerminal = (run: Run) => terminalStates.includes(run.state)
+// C-5 (P1-7): isQuiescent covers recovery_required — it is not terminal, not active
+export const isQuiescent = (run: Run) => quiescentStates.includes(run.state)
 
 // ---------------------------------------------------------------------------
 // L2: Run graph, ancestor guard and recursive close
@@ -1553,10 +1586,12 @@ export function classifyOnStartup(input: {
     let requeued = 0
 
     for (const { run } of candidates) {
-      // admitted + ready: was admitted and enqueued but process died before dispatcher picked it up
+      // B-6 (P1-3): admitted + ready/legacy/pending → safe to re-enqueue
+      // "pending" represents admission that created the run row but process died before
+      // input projection started — no provider activity occurred, safe to re-enqueue.
       const canEnqueue =
         run.state === "admitted" &&
-        (run.input_state === "ready" || run.input_state === "legacy")
+        (run.input_state === "ready" || run.input_state === "legacy" || run.input_state === "pending")
 
       // provisioning/queued without execution started: safe to re-enqueue
       const canRequeue =
@@ -1565,105 +1600,125 @@ export function classifyOnStartup(input: {
         !run.execution_started_at
 
       if (canEnqueue) {
-        // Re-enqueue admitted runs — safe, loop was never called
-        const updated = yield* db
-          .update(TaskRunTable)
-          .set({
-            state: "queued",
-            phase: "queue",
-            available_at: now,
-            version: (run.version ?? 0) + 1,
-            time_updated: now,
-          })
-          .where(and(eq(TaskRunTable.run_id, run.run_id), eq(TaskRunTable.version, run.version ?? 0)))
-          .returning({ run_id: TaskRunTable.run_id, version: TaskRunTable.version })
-          .get()
-          .pipe(Effect.orDie)
-        if (updated) {
-          yield* db
-            .insert(TaskRunEventTable)
-            .values({
-              event_id: Identifier.ascending("event"),
-              run_id: run.run_id,
-              version: updated.version,
-              type: "run_requeued_on_startup",
-              from_state: run.state,
-              to_state: "queued",
-              reason: "admitted_enqueue_recovery",
-              time_created: now,
-            })
-            .run()
-            .pipe(Effect.orDie)
-          requeued++
-        }
+        // B-6 (P1-4): UPDATE + event in same IMMEDIATE transaction — crash-safe
+        const updated = yield* db.transaction(
+          (tx) =>
+            Effect.gen(function* () {
+              const row = yield* tx
+                .update(TaskRunTable)
+                .set({
+                  state: "queued",
+                  phase: "queue",
+                  available_at: now,
+                  version: (run.version ?? 0) + 1,
+                  time_updated: now,
+                })
+                .where(and(eq(TaskRunTable.run_id, run.run_id), eq(TaskRunTable.version, run.version ?? 0)))
+                .returning({ run_id: TaskRunTable.run_id, version: TaskRunTable.version })
+                .get()
+                .pipe(Effect.orDie)
+              if (!row) return undefined
+              yield* tx
+                .insert(TaskRunEventTable)
+                .values({
+                  event_id: Identifier.ascending("event"),
+                  run_id: run.run_id,
+                  version: row.version,
+                  type: "run_requeued_on_startup",
+                  from_state: run.state,
+                  to_state: "queued",
+                  reason: "admitted_enqueue_recovery",
+                  time_created: now,
+                })
+                .run()
+                .pipe(Effect.orDie)
+              return row
+            }),
+          { behavior: "immediate" },
+        )
+        if (updated) requeued++
       } else if (canRequeue) {
-        const updated = yield* db
-          .update(TaskRunTable)
-          .set({
-            state: "queued",
-            phase: "queue",
-            execution_owner: null,
-            lease_expires_at: null,
-            available_at: now,
-            version: (run.version ?? 0) + 1,
-            time_updated: now,
-          })
-          .where(and(eq(TaskRunTable.run_id, run.run_id), eq(TaskRunTable.version, run.version ?? 0)))
-          .returning({ run_id: TaskRunTable.run_id, version: TaskRunTable.version })
-          .get()
-          .pipe(Effect.orDie)
-        if (updated) {
-          yield* db
-            .insert(TaskRunEventTable)
-            .values({
-              event_id: Identifier.ascending("event"),
-              run_id: run.run_id,
-              version: updated.version,
-              type: "run_requeued_on_startup",
-              from_state: run.state,
-              to_state: "queued",
-              reason: "safe_requeue",
-              time_created: now,
-            })
-            .run()
-            .pipe(Effect.orDie)
-          requeued++
-        }
+        // B-6 (P1-4): same IMMEDIATE transaction for requeue
+        const updated = yield* db.transaction(
+          (tx) =>
+            Effect.gen(function* () {
+              const row = yield* tx
+                .update(TaskRunTable)
+                .set({
+                  state: "queued",
+                  phase: "queue",
+                  execution_owner: null,
+                  lease_expires_at: null,
+                  available_at: now,
+                  version: (run.version ?? 0) + 1,
+                  time_updated: now,
+                })
+                .where(and(eq(TaskRunTable.run_id, run.run_id), eq(TaskRunTable.version, run.version ?? 0)))
+                .returning({ run_id: TaskRunTable.run_id, version: TaskRunTable.version })
+                .get()
+                .pipe(Effect.orDie)
+              if (!row) return undefined
+              yield* tx
+                .insert(TaskRunEventTable)
+                .values({
+                  event_id: Identifier.ascending("event"),
+                  run_id: run.run_id,
+                  version: row.version,
+                  type: "run_requeued_on_startup",
+                  from_state: run.state,
+                  to_state: "queued",
+                  reason: "safe_requeue",
+                  time_created: now,
+                })
+                .run()
+                .pipe(Effect.orDie)
+              return row
+            }),
+          { behavior: "immediate" },
+        )
+        if (updated) requeued++
       } else {
         const reason =
           run.input_state === "admitting"
             ? "input_admission_outcome_unknown"
             : "execution_owner_lost"
-        const updated = yield* db
-          .update(TaskRunTable)
-          .set({
-            state: "recovery_required",
-            execution_owner: null,
-            lease_expires_at: null,
-            version: (run.version ?? 0) + 1,
-            time_updated: now,
-          })
-          .where(and(eq(TaskRunTable.run_id, run.run_id), eq(TaskRunTable.version, run.version ?? 0)))
-          .returning({ run_id: TaskRunTable.run_id, version: TaskRunTable.version })
-          .get()
-          .pipe(Effect.orDie)
-        if (updated) {
-          yield* db
-            .insert(TaskRunEventTable)
-            .values({
-              event_id: Identifier.ascending("event"),
-              run_id: run.run_id,
-              version: updated.version,
-              type: "recovery_required",
-              from_state: run.state,
-              to_state: "recovery_required",
-              reason,
-              time_created: now,
-            })
-            .run()
-            .pipe(Effect.orDie)
-          classified++
-        }
+        // B-6 (P1-4): same IMMEDIATE transaction for recovery_required
+        const updated = yield* db.transaction(
+          (tx) =>
+            Effect.gen(function* () {
+              const row = yield* tx
+                .update(TaskRunTable)
+                .set({
+                  state: "recovery_required",
+                  execution_owner: null,
+                  lease_expires_at: null,
+                  version: (run.version ?? 0) + 1,
+                  time_updated: now,
+                })
+                .where(and(eq(TaskRunTable.run_id, run.run_id), eq(TaskRunTable.version, run.version ?? 0)))
+                .returning({ run_id: TaskRunTable.run_id, version: TaskRunTable.version })
+                .get()
+                .pipe(Effect.orDie)
+              if (!row) return undefined
+              yield* tx
+                .insert(TaskRunEventTable)
+                .values({
+                  event_id: Identifier.ascending("event"),
+                  run_id: run.run_id,
+                  version: row.version,
+                  type: "recovery_required",
+                  from_state: run.state,
+                  to_state: "recovery_required",
+                  reason,
+                  time_created: now,
+                })
+                .run()
+                .pipe(Effect.orDie)
+              return row
+            }),
+          { behavior: "immediate" },
+        )
+        if (updated) classified++
       }
     }
 
@@ -1803,4 +1858,3 @@ export function closeTask(input: {
     return { closed: true, runID: run.run_id } as const
   })
 }
-

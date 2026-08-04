@@ -41,6 +41,12 @@ export type PreparedPart = {
   readonly timeCreated: number
 }
 
+export type PreparedMessageData = {
+  readonly role: "user"
+  readonly providerID: string
+  readonly metadata: Record<string, unknown>
+}
+
 export type PreparedTaskInput = {
   readonly messageID: MessageID
   readonly sessionID: string
@@ -49,6 +55,8 @@ export type PreparedTaskInput = {
   readonly materializedHash: string
   readonly partCount: number
   readonly timeCreated: number
+  /** B-1 (P0-2): canonical message data — used in both hash and INSERT to ensure they match */
+  readonly messageData: PreparedMessageData
 }
 
 export class InputProjectionConflictError extends Data.TaggedError("LegacyTaskInput.InputProjectionConflict")<{
@@ -66,8 +74,9 @@ export class InputProjectionConflictError extends Data.TaggedError("LegacyTaskIn
  * This is a pure in-memory operation — no V1 rows are written, no provider is contacted,
  * no plugin hooks are executed.
  *
- * In a full implementation this would run the prompt reference/image transformation pipeline.
- * For now it creates a minimal user message envelope from the run's stored execution_spec.
+ * B-1 (P0-2): messageData is constructed once here and used in BOTH the hash and the INSERT
+ * in projectExact, eliminating the hash/content mismatch. The hash now covers only what
+ * actually gets written to the DB (no extra time/agent/model fields).
  */
 export function prepare(run: Run) {
   return Effect.sync(() => {
@@ -86,28 +95,27 @@ export function prepare(run: Run) {
       timeCreated: now,
     }
 
-    const messageData = {
+    // B-1 (P0-2): canonical message data — exactly what projectExact will write to DB.
+    // Do NOT include time/agent/model here; they are not stored in the MessageTable.data column.
+    const messageData: PreparedMessageData = {
       role: "user" as const,
-      time: now,
-      agent: "task",
-      model: "task-admission",
       providerID: "task",
       metadata: {
         deepagent: {
           task_admission: {
             run_id: run.runID,
-            origin_key: run.originKey,
+            origin_key: run.originKey ?? null,
             request_hash: run.requestHash,
           },
         },
       } as Record<string, unknown>,
     }
 
-    // Compute canonical hash: message data + all parts (sorted by part ID)
+    // Hash covers exactly what is written to DB — no extra stringify of metadata.
     const hashInput = JSON.stringify({
       messageID,
       sessionID,
-      messageData: { ...messageData, metadata: JSON.stringify(messageData.metadata) },
+      messageData,
       parts: [{ partID, type: "text", text: promptText }],
     })
 
@@ -119,6 +127,7 @@ export function prepare(run: Run) {
       materializedHash: Hash.sha256(hashInput),
       partCount: 1,
       timeCreated: now,
+      messageData,
     } satisfies PreparedTaskInput
   })
 }
@@ -204,6 +213,7 @@ export function projectExact(input: {
             }
 
             // 3. Insert the V1 message row
+            // B-1 (P0-2): use prepared.messageData directly so the content exactly matches the hash
             const now = input.prepared.timeCreated
             yield* tx
               .insert(MessageTable)
@@ -212,19 +222,7 @@ export function projectExact(input: {
                 session_id: input.prepared.sessionID as any,
                 time_created: now,
                 time_updated: now,
-                data: {
-                  role: "user",
-                  providerID: "task",
-                  metadata: {
-                    deepagent: {
-                      task_admission: {
-                        run_id: input.runID,
-                        origin_key: null,
-                        request_hash: null,
-                      },
-                    },
-                  },
-                } as any,
+                data: input.prepared.messageData as any,
               })
               .onConflictDoNothing()
               .run()

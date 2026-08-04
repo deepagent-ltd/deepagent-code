@@ -224,7 +224,8 @@ export default {
           directory TEXT NOT NULL,
           payload TEXT NOT NULL,
           status TEXT NOT NULL CHECK (status IN (
-            'pending', 'admitting', 'processing', 'delivering', 'delivered', 'dead'
+            'pending', 'admitting', 'admitted', 'processing', 'delivering', 'delivered', 'dead',
+            'response_recovery_required'
           )),
           attempts INTEGER NOT NULL DEFAULT 0,
           available_at INTEGER NOT NULL,
@@ -280,7 +281,7 @@ export default {
       yield* tx.run(`
         CREATE UNIQUE INDEX task_run_child_active_idx
         ON task_run (child_session_id)
-        WHERE state IN ('admitted', 'queued', 'provisioning', 'running', 'researching', 'finalizing')
+        WHERE state IN ('admitted', 'provisioning', 'running', 'researching', 'finalizing')
       `)
       yield* tx.run(`
         CREATE INDEX task_run_parent_state_idx

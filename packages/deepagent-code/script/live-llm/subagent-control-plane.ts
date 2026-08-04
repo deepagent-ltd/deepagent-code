@@ -59,11 +59,12 @@ if (!cp01Done.some((t) => t.name === "task_status")) {
 }
 
 // DB-oracle: task_status reads from task_run.state (L10 durable overlay in task_status.ts).
-// "[terminé]" in the output means task_run.state = "completed" — not model imagination.
+// D-2 (P1-10): production outputs English "completed" state, not French "[terminé]".
+// Accept either so this harness works after the string alignment fix.
 const statusOut01 = cp01Done.find((t) => t.name === "task_status")?.output ?? ""
-if (!statusOut01.includes("[terminé]")) {
+if (!statusOut01.includes("completed") && !statusOut01.includes("[terminé]")) {
   throw new Error(
-    `REAL-CP-01: task_status DB-oracle did not report [terminé]. Output: ${statusOut01.slice(0, 300)}`,
+    `REAL-CP-01: task_status DB-oracle did not report completed state. Output: ${statusOut01.slice(0, 300)}`,
   )
 }
 
@@ -180,10 +181,11 @@ if (!cp02Done.some((t) => t.name === "task_status")) {
 // DB-oracle: task_run.state sourced via task_status L10 durable overlay.
 // "completed" in task_status means the run_settled event was committed to task_run_event,
 // which is only written after execution_started, which follows run_claimed, run_queued.
+// D-2 (P1-10): accept both "completed" and "[terminé]" for forward/backward compat.
 const statusOut02 = cp02Done.find((t) => t.name === "task_status")?.output ?? ""
-if (!statusOut02.includes("[terminé]")) {
+if (!statusOut02.includes("completed") && !statusOut02.includes("[terminé]")) {
   throw new Error(
-    `REAL-CP-02: task_status DB-oracle did not report [terminé]. Output: ${statusOut02.slice(0, 300)}`,
+    `REAL-CP-02: task_status DB-oracle did not report completed state. Output: ${statusOut02.slice(0, 300)}`,
   )
 }
 

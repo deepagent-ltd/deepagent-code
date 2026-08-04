@@ -29,7 +29,7 @@ import {
 } from "@deepagent-code/core/session/sql"
 import { CrossSpawnSpawner } from "@deepagent-code/core/cross-spawn-spawner"
 import { SessionID, MessageID } from "../../src/session/schema"
-import { admitTaskRun, AdmissionConflict } from "../../src/tool/task-run"
+import { admitTaskRun, AdmissionConflict, transitionToAdmitting } from "../../src/tool/task-run"
 import { prepare, projectExact, InputProjectionConflictError } from "../../src/session/task-input"
 import { testEffect } from "../lib/effect"
 
@@ -182,8 +182,9 @@ describe("DET-ADM-01: prepare() + projectExact()", () => {
         executionSpec: { prompt: { text: "Find the bug in foo.ts." } },
       })
 
-      // Insert the child session row so message(session_id) FK constraint is satisfied.
-      // In production the child session is created by SessionPrompt before input projection.
+      // D-1 (P1-9): use transitionToAdmitting() production path instead of raw UPDATE bypass.
+      // The child session must exist before the message FK write — create it here as the
+      // production durable path does (task.ts durable block creates the child session).
       const { db } = yield* Database.Service
       yield* db
         .insert(SessionTable)
@@ -199,19 +200,19 @@ describe("DET-ADM-01: prepare() + projectExact()", () => {
         .run()
         .pipe(Effect.orDie)
 
-      // Transition to admitting state first (normally done by transitionToAdmitting or durable path)
-      yield* db
-        .update(TaskRunTable)
-        .set({ input_state: "admitting", version: 1 })
-        .where(eq(TaskRunTable.run_id, admission.run.runID))
-        .run()
-        .pipe(Effect.orDie)
+      // Use transitionToAdmitting() — the production entry point for this transition.
+      const admittingRun = yield* transitionToAdmitting({
+        runID: admission.run.runID,
+        version: admission.run.version,
+      })
+      expect(admittingRun).toBeTruthy()
+      expect(admittingRun?.inputState).toBe("admitting")
 
-      const prepared = yield* prepare({ ...admission.run, version: 1, inputState: "admitting" as const })
+      const prepared = yield* prepare({ ...admission.run, version: admittingRun!.version, inputState: "admitting" as const })
       const result = yield* projectExact({
         prepared,
         runID: admission.run.runID,
-        expectedRunVersion: 1,
+        expectedRunVersion: admittingRun!.version,
       })
       expect(result.exactReplay).toBe(false)
 
@@ -284,21 +285,22 @@ describe("DET-ADM-01: prepare() + projectExact()", () => {
         .onConflictDoNothing()
         .run()
         .pipe(Effect.orDie)
-      yield* db
-        .update(TaskRunTable)
-        .set({ input_state: "admitting", version: 1 })
-        .where(eq(TaskRunTable.run_id, admission.run.runID))
-        .run()
-        .pipe(Effect.orDie)
 
-      const prepared = yield* prepare({ ...admission.run, version: 1, inputState: "admitting" as const })
-      yield* projectExact({ prepared, runID: admission.run.runID, expectedRunVersion: 1 })
+      // D-1: use production transitionToAdmitting() path instead of raw UPDATE bypass
+      const admittingRun = yield* transitionToAdmitting({
+        runID: admission.run.runID,
+        version: admission.run.version,
+      })
+      expect(admittingRun).toBeTruthy()
+
+      const prepared = yield* prepare({ ...admission.run, version: admittingRun!.version, inputState: "admitting" as const })
+      yield* projectExact({ prepared, runID: admission.run.runID, expectedRunVersion: admittingRun!.version })
 
       // Second call with same data → exact replay (input_state already 'ready')
       const replay = yield* projectExact({
         prepared,
         runID: admission.run.runID,
-        expectedRunVersion: 2, // version after first projection
+        expectedRunVersion: admittingRun!.version + 1, // version after first projection
       })
       expect(replay.exactReplay).toBe(true)
     }),

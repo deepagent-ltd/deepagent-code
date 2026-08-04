@@ -280,28 +280,25 @@ describe("DET-FENCE-01 settleRun CAS + lease fence", () => {
         .run()
         .pipe(Effect.orDie)
 
+      // D-1 (P1-9): explicitly pass a WRONG claimGeneration token so the fence is actually tested.
+      // The correct generation is CLAIM_GEN (1); we pass 999 which must cause won=false.
+      const wrongGen = 999
       const result = yield* settleRun({
         ...settleParams("run_settle_badgen"),
-        // Use wrong generation — this tests the claim_generation fence
-      } as any).pipe(
-        // Override claimGeneration to wrong value
-        Effect.flatMap(() =>
-          settleRun({
-            ...settleParams("run_settle_badgen"),
-            ownerToken: OWNER,
-          }),
-        ),
-        Effect.catchCause(() => Effect.succeed({ won: false as const, reason: "error" as const })),
-      )
-      // State should still be running (not settled by stale call)
+        claimGeneration: wrongGen, // wrong generation — CAS must reject this
+      })
+      // Wrong generation must produce won=false
+      expect(result.won).toBe(false)
+
+      // Row state must be unchanged — wrong generation settle must not modify state
       const row = yield* db
-        .select({ state: TaskRunTable.state })
+        .select({ state: TaskRunTable.state, version: TaskRunTable.version })
         .from(TaskRunTable)
         .where(eq(TaskRunTable.run_id, "run_settle_badgen"))
         .get()
         .pipe(Effect.orDie)
-      // If first settle won, second is idempotent; if first had wrong gen it would be claim_lost
-      expect(["running", "completed"]).toContain(row?.state ?? "unknown")
+      expect(row?.state).toBe("running") // unchanged
+      expect(row?.version).toBe(1) // version not bumped
     }),
   )
 })
