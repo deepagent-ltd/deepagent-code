@@ -21,10 +21,11 @@
 
 import { Data, Effect } from "effect"
 import { Database } from "@deepagent-code/core/database/database"
-import { MessageTable, PartTable, TaskRunTable } from "@deepagent-code/core/session/sql"
+import { MessageTable, PartTable, TaskRunTable, TaskRunEventTable } from "@deepagent-code/core/session/sql"
 import { Hash } from "@deepagent-code/core/util/hash"
 import { and, eq } from "drizzle-orm"
 import { MessageID, PartID } from "@/session/schema"
+import { Identifier } from "@/id/id"
 import type { Run } from "@/tool/task-run"
 
 // ---------------------------------------------------------------------------
@@ -85,28 +86,28 @@ export function prepare(run: Run) {
       timeCreated: now,
     }
 
-    // Inject task admission metadata into the message
-    const metadataStr = JSON.stringify({
-      deepagent: {
-        task_admission: {
-          run_id: run.runID,
-          origin_key: run.originKey,
-          request_hash: run.requestHash,
-        },
-      },
-    })
-
     const messageData = {
       role: "user" as const,
+      time: now,
+      agent: "task",
+      model: "task-admission",
       providerID: "task",
-      metadata: metadataStr,
+      metadata: {
+        deepagent: {
+          task_admission: {
+            run_id: run.runID,
+            origin_key: run.originKey,
+            request_hash: run.requestHash,
+          },
+        },
+      } as Record<string, unknown>,
     }
 
     // Compute canonical hash: message data + all parts (sorted by part ID)
     const hashInput = JSON.stringify({
       messageID,
       sessionID,
-      messageData,
+      messageData: { ...messageData, metadata: JSON.stringify(messageData.metadata) },
       parts: [{ partID, type: "text", text: promptText }],
     })
 
@@ -276,6 +277,22 @@ export function projectExact(input: {
                 }),
               )
             }
+
+            // Co-transactional event for input admission (design §1.3 #24)
+            yield* tx
+              .insert(TaskRunEventTable)
+              .values({
+                event_id: Identifier.ascending("event"),
+                run_id: input.runID,
+                version: run.version + 1,
+                type: "input_admitted",
+                from_state: "admitting",
+                to_state: "admitting",
+                reason: `hash=${input.prepared.materializedHash} parts=${input.prepared.partCount}`,
+                time_created: input.prepared.timeCreated,
+              })
+              .run()
+              .pipe(Effect.orDie)
 
             return { exactReplay: false }
           }),

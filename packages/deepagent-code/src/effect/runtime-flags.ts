@@ -77,11 +77,12 @@ export class Service extends ConfigService.Service<Service>()("@deepagent-code/R
   // sharing the same database is prohibited (design §4.4).
   subagentControlPlane: Config.string("DEEPAGENT_CODE_SUBAGENT_CONTROL_PLANE").pipe(
     Config.withDefault("legacy"),
-    // Config.validate does not exist in this version of Effect; use Config.map and fail closed
-    // to "legacy" for any unrecognised value (design §13.4: unknown → legacy).
-    Config.map((value): "legacy" | "shadow" | "durable" =>
-      value === "legacy" || value === "shadow" || value === "durable" ? value : "legacy",
-    ),
+    Config.map((value): "legacy" | "shadow" | "durable" => {
+      if (value === "legacy" || value === "shadow" || value === "durable") return value
+      throw new Error(
+        `Invalid DEEPAGENT_CODE_SUBAGENT_CONTROL_PLANE="${value}". Must be one of: legacy, shadow, durable. Refusing to start with unknown mode.`
+      )
+    }),
   ),
   // Parent injection is bounded by default. The complete result remains durable in the child Session
   // and the truncated envelope carries the task_read recovery pointer.

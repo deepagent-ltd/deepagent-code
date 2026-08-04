@@ -18,7 +18,7 @@
 import { Cause, Data, Duration, Effect, Fiber, Schedule } from "effect"
 import { Database } from "@deepagent-code/core/database/database"
 import { TaskRunTable, TaskRunEventTable, TaskNotificationOutboxTable, SessionTable } from "@deepagent-code/core/session/sql"
-import { and, eq } from "drizzle-orm"
+import { and, eq, gt, inArray } from "drizzle-orm"
 import { Identifier } from "@/id/id"
 import { SessionID, MessageID } from "@/session/schema"
 import type { ClaimResult } from "@/session/task-dispatcher"
@@ -133,6 +133,7 @@ function renewLease(input: {
           eq(TaskRunTable.run_id, input.runID),
           eq(TaskRunTable.execution_owner, input.ownerToken),
           eq(TaskRunTable.claim_generation, input.claimGeneration),
+          inArray(TaskRunTable.state, ["provisioning", "running", "researching", "finalizing"]),
         ),
       )
       .run()
@@ -212,6 +213,8 @@ export function settleRun(input: {
                   eq(TaskRunTable.run_id, input.runID),
                   eq(TaskRunTable.execution_owner, input.ownerToken),
                   eq(TaskRunTable.claim_generation, input.claimGeneration),
+                  inArray(TaskRunTable.state, ["provisioning", "running", "researching", "finalizing"]),
+                  gt(TaskRunTable.lease_expires_at, now),
                 ),
               )
               .get()

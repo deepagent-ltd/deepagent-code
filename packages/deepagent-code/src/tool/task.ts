@@ -1221,7 +1221,7 @@ export const TaskTool = Tool.define(
             yield* settleTaskRun({
               run: admission.run,
               owner: executionOwner,
-              state: "error",
+              state: "failed",
               reason: "workspace_preflight_dirty: parent workspace has uncommitted changes",
             }).pipe(
               Effect.provideService(Database.Service, database),

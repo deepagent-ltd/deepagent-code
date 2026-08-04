@@ -663,7 +663,7 @@ function updateActive(
 export function settleTaskRun(input: {
   run: Run
   owner: string
-  state: Extract<State, "completed" | "error" | "cancelled" | "interrupted">
+  state: Extract<State, "completed" | "error" | "failed" | "cancelled" | "interrupted">
   reason: string
   output?: string
   error?: ErrorData
