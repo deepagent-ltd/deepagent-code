@@ -24,6 +24,8 @@ import { Cause, Duration, Effect, Exit, Fiber, Option, Schedule, Schema, Scope }
 import { EffectBridge } from "@/effect/bridge"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Database } from "@deepagent-code/core/database/database"
+import { TaskRunTable } from "@deepagent-code/core/session/sql"
+import { eq } from "drizzle-orm"
 import { Worktree } from "@/worktree"
 import { Git } from "@/git"
 import { DEFAULT_WORKER_IDENTITY } from "../agent/collaboration-identity"
@@ -53,6 +55,7 @@ import {
   markTaskResearchCompleted,
   renewTaskRunLease,
   settleTaskRun,
+  transitionToAdmitting,
   // L10 (subagent-control-plane-design.zh-CN.md §14 L10):
   // spawnTaskTakeover is already gated by takeoverLimit=0 when subagentControlPlane!="legacy" (L0).
   // When subagentControlPlane="durable" becomes the default, this import and its call sites
@@ -63,6 +66,7 @@ import {
   type ErrorData,
   type Run as DurableTaskRun,
 } from "./task-run"
+import { LegacyTaskInput } from "@/session/task-input"
 
 const taskLog = Log.create({ service: "tool.task" })
 
@@ -1155,6 +1159,8 @@ export const TaskTool = Tool.define(
         joinRunID: activeRun?.runID,
         request: params,
         deliveryMode: runInBackground ? "background" : "foreground",
+        // L3d: freeze the execution spec so prepare() can build the V1 message without re-reading params
+        executionSpec: { prompt: { text: params.prompt ?? params.description ?? "" } },
       }).pipe(Effect.provideService(Database.Service, database))
       const executionOwner =
         activeJob?.status === "running" &&
@@ -1191,16 +1197,99 @@ export const TaskTool = Tool.define(
       }
 
       // -----------------------------------------------------------------------
+      // L3a: Freeze mutation_capability at admission time (design §2.2.1)
+      // L3b: Workspace preflight — automatic writers must reject dirty workspaces (design §3.2, §15.3.3)
+      // -----------------------------------------------------------------------
+      const isReadOnly =
+        params.isolation !== "worktree" &&
+        !subagentIsWriteType(next)
+      if (admission.runCreated && flags.subagentControlPlane === "durable") {
+        // 6D: Freeze mutation_capability in the DB so the executor sees the correct value
+        const mutCap: "read_only" | "write" = isReadOnly ? "read_only" : "write"
+        yield* database.db
+          .update(TaskRunTable)
+          .set({ mutation_capability: mutCap, time_updated: Date.now() })
+          .where(eq(TaskRunTable.run_id, admission.run.runID))
+          .run()
+          .pipe(Effect.ignore)
+
+        // 6E: Preflight — automatic writers must not start in a dirty workspace
+        if (!isReadOnly && git) {
+          const gitStatus = yield* git.porcelainStatus(parent.directory)
+          const isDirty = gitStatus != null && !gitStatus.clean
+          if (isDirty) {
+            yield* settleTaskRun({
+              run: admission.run,
+              owner: executionOwner,
+              state: "error",
+              reason: "workspace_preflight_dirty: parent workspace has uncommitted changes",
+            }).pipe(
+              Effect.provideService(Database.Service, database),
+              Effect.ignore,
+            )
+            return yield* Effect.fail(
+              taskError({
+                code: "workspace_dirty",
+                message:
+                  "Task requires a clean workspace but the parent session has uncommitted changes. " +
+                  "Commit or stash changes before running an automatic writer task.",
+                sessionID: admission.run.childSessionID,
+                phase: "research",
+                attempts: 0,
+              }),
+            )
+          }
+        }
+      }
+
+      // -----------------------------------------------------------------------
       // L10: Durable control plane routing
       // Design: subagent-control-plane-design.zh-CN.md §13.3, §10.1, §10.2
       // -----------------------------------------------------------------------
-      if (flags.subagentControlPlane !== "legacy") {
+      // Only activate durable path when explicitly set to "durable".
+      // "shadow" intentionally routes through legacy path until §4 cutover protocol is complete.
+      if (flags.subagentControlPlane === "durable") {
         // Move admitted → queued so the dispatcher can pick it up
         if (admission.runCreated || admission.run.state === "admitted") {
-          yield* TaskDispatcher.enqueueRun({
-            runID: admission.run.runID,
-            runVersion: admission.run.version,
-          }).pipe(Effect.provideService(Database.Service, database), Effect.ignore)
+          // L3d: Input projection — only for newly created or admitted runs without input yet
+          if (admission.run.inputState !== "ready") {
+            // Step 1: CAS admitted → admitting (marks projection start; idempotent if already admitting)
+            const admittingRun = yield* transitionToAdmitting({
+              runID: admission.run.runID,
+              version: admission.run.version,
+            }).pipe(Effect.provideService(Database.Service, database))
+
+            if (admittingRun) {
+              // Step 2: build the V1 message envelope in memory (pure, no side effects)
+              const prepared = yield* LegacyTaskInput.prepare(admittingRun).pipe(Effect.orDie)
+
+              // Step 3: atomically write V1 message/parts and CAS input_state: admitting → ready
+              yield* LegacyTaskInput.projectExact({
+                prepared,
+                runID: admission.run.runID,
+                expectedRunVersion: admittingRun.version,
+              }).pipe(
+                Effect.provideService(Database.Service, database),
+                Effect.catchTag("LegacyTaskInput.InputProjectionConflict", (err) =>
+                  Effect.logWarning("durable: input projection conflict — settling as failed", {
+                    runID: admission.run.runID,
+                    reason: err.reason,
+                  }),
+                ),
+              )
+            }
+          }
+
+          // Step 4: re-read run for current version, then enqueue (ready → queued)
+          const currentRun = yield* getTaskRun(admission.run.runID).pipe(
+            Effect.provideService(Database.Service, database),
+          )
+          if (currentRun && (currentRun.inputState === "ready" || currentRun.inputState === "legacy")) {
+            yield* TaskDispatcher.enqueueRun({
+              runID: admission.run.runID,
+              runVersion: currentRun.version,
+            }).pipe(Effect.provideService(Database.Service, database))
+          }
         }
 
         if (runInBackground) {
@@ -1239,16 +1328,21 @@ export const TaskTool = Tool.define(
           if (i < maxPolls) yield* Effect.sleep(Duration.millis(pollMs))
         }
 
-        const terminalRun =
-          polledRun ??
-          (yield* getTaskRun(admission.run.runID).pipe(
-            Effect.provideService(Database.Service, database),
-            Effect.flatMap((r) =>
-              r
-                ? Effect.succeed(r)
-                : Effect.die(new Error(`Durable run ${admission.run.runID} vanished`)),
-            ),
-          ))
+        if (!polledRun) {
+          // Timed out waiting for durable run to complete
+          return yield* Effect.fail(
+            taskError({
+              code: "timeout",
+              message:
+                `Durable foreground task timed out after ${maxWaitMs}ms. ` +
+                `Call task_read({ task_id: "${admission.run.childSessionID}" }) to inspect state.`,
+              sessionID: admission.run.childSessionID,
+              phase: "research",
+              attempts: 1,
+            }),
+          )
+        }
+        const terminalRun = polledRun
 
         if (terminalRun.state === "completed") {
           return {
@@ -1282,12 +1376,7 @@ export const TaskTool = Tool.define(
           }),
         )
       }
-      // -----------------------------------------------------------------------
-      // End L10 — legacy path continues below
-      // -----------------------------------------------------------------------
-      // -----------------------------------------------------------------------
-      // End L10 durable routing — legacy path continues below
-      // -----------------------------------------------------------------------
+      // ── End durable routing — legacy path continues below ─────────────────
 
       const shouldProvision =
         admission.runCreated || (admission.exactRetry && ["admitted", "provisioning"].includes(admission.run.state))
@@ -1349,7 +1438,7 @@ export const TaskTool = Tool.define(
             }
           : undefined
       const ownsActiveRun = (run: DurableTaskRun) =>
-        (run.state === "researching" || run.state === "finalizing") &&
+        (run.state === "researching" || run.state === "running" || run.state === "finalizing") &&
         run.executionOwner === executionOwner &&
         run.leaseExpiresAt !== undefined &&
         run.leaseExpiresAt > Date.now()

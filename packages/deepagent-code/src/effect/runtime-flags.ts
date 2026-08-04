@@ -65,15 +65,23 @@ export class Service extends ConfigService.Service<Service>()("@deepagent-code/R
   //
   //  "legacy"  — preserve current task.ts behavior including automatic takeover on timeout/crash
   //              (default; no behavior change for existing deployments).
-  //  "shadow"  — durable coordinator records expected lifecycle events alongside the legacy helper;
-  //              takeover is disabled (zero takeover limit); execution still driven by legacy path.
+  //  "shadow"  — RESERVED for future use. Legacy lifecycle authority remains; durable coordinator
+  //              records non-authoritative comparison artifacts only. Currently routes identically
+  //              to "legacy". DO NOT use in production until §4 cutover protocol is implemented.
   //  "durable" — all lifecycle owned by the durable TaskCoordinator (L4+); takeover permanently
   //              removed; SessionPrompt driven through LegacySubagentExecutor.
+  //              REQUIRES: L1 migration applied, L3 provisioner wired, start/settle fences complete.
   //
-  // Automatic takeover is permanently disabled for any value other than "legacy". Once set to
-  // "durable" it MUST NOT be rolled back to re-enable takeover (design §13.4).
+  // Unknown values fail closed to "legacy". Once set to "durable" it MUST NOT be rolled back to
+  // re-enable takeover (design §13.4). Mode is per-SQLite/Location — mixing modes across processes
+  // sharing the same database is prohibited (design §4.4).
   subagentControlPlane: Config.string("DEEPAGENT_CODE_SUBAGENT_CONTROL_PLANE").pipe(
     Config.withDefault("legacy"),
+    // Config.validate does not exist in this version of Effect; use Config.map and fail closed
+    // to "legacy" for any unrecognised value (design §13.4: unknown → legacy).
+    Config.map((value): "legacy" | "shadow" | "durable" =>
+      value === "legacy" || value === "shadow" || value === "durable" ? value : "legacy",
+    ),
   ),
   // Parent injection is bounded by default. The complete result remains durable in the child Session
   // and the truncated envelope carries the task_read recovery pointer.

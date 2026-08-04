@@ -690,6 +690,31 @@ export const routeManifest = [
     ],
   },
   {
+    // L0–L10 durable control plane session layer
+    // Covers all new TaskDispatcher / TaskExecutor / TaskDelivery / provisioner / fork / input / capability files
+    id: "durable-control-plane-session",
+    paths: [
+      "packages/deepagent-code/src/session/task-dispatcher.ts",
+      "packages/deepagent-code/src/session/task-executor.ts",
+      "packages/deepagent-code/src/session/task-delivery.ts",
+      "packages/deepagent-code/src/session/task-fork.ts",
+      "packages/deepagent-code/src/session/task-input.ts",
+      "packages/deepagent-code/src/session/tool-capability.ts",
+      "packages/deepagent-code/src/session/branch-provisioner.ts",
+      "packages/deepagent-code/src/session/goal-receipt-store.ts",
+      "packages/deepagent-code/src/session/goal-workspace-adapter.ts",
+    ],
+    checks: ["permission", "worktree-routing"],
+    runs: [
+      legacySubagent,
+      worktreeRouting,
+      multiAgentParallelWorktrees,
+      subagentResume,
+      interruptedSubagent,
+      backgroundSubagent,
+    ],
+  },
+  {
     id: "legacy-subagent-worktree-runtime",
     paths: ["packages/deepagent-code/src/project/instance-*.ts", "packages/deepagent-code/src/worktree/**"],
     checks: ["permission", "worktree-routing"],

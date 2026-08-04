@@ -19,7 +19,7 @@ import { Data, Effect } from "effect"
 import { Hash } from "@deepagent-code/core/util/hash"
 import { Database } from "@deepagent-code/core/database/database"
 import { MessageTable, PartTable } from "@deepagent-code/core/session/sql"
-import { eq, and } from "drizzle-orm"
+import { eq, and, asc } from "drizzle-orm"
 import { MessageID, PartID, SessionID } from "@/session/schema"
 import { Session } from "./session"
 
@@ -133,11 +133,12 @@ export function forkForTask(input: {
       .select({ id: MessageTable.id, data: MessageTable.data, time_created: MessageTable.time_created })
       .from(MessageTable)
       .where(eq(MessageTable.session_id, input.parentSessionID as any))
+      .orderBy(asc(MessageTable.time_created))
       .all()
       .pipe(Effect.orDie)
 
     const cutoffIndex = parentMessages.findIndex((m) => m.id === input.cutoffMessageID)
-    const messagesToClone = cutoffIndex >= 0 ? parentMessages.slice(0, cutoffIndex + 1) : []
+    const messagesToClone = cutoffIndex >= 0 ? parentMessages.slice(0, cutoffIndex) : []
 
     // Compute source history hash for crash recovery verification
     const sourceHistoryHash = Hash.sha256(
