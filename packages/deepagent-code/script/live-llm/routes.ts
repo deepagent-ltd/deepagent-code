@@ -44,6 +44,7 @@ export const modelSuites = [
   "expert-panel",
   "goal-grader-cli-entry",
   "intelligence-draft-confirmation",
+  "subagent-control-plane",
 ] as const
 
 export type ExecutionStack = (typeof executionStacks)[number]
@@ -112,6 +113,7 @@ const compactionRetention = modelRun("ext", "legacy-session", "compaction-retent
 const expertPanel = modelRun("ext", "legacy-session", "expert-panel")
 const goalGraderCliEntry = modelRun("ext", "cli-subprocess", "goal-grader-cli-entry")
 const intelligenceDraft = modelRun("ext", "legacy-session", "intelligence-draft-confirmation")
+const subagentControlPlane = modelRun("live", "legacy-session", "subagent-control-plane")
 const allHarnessRuns = [
   adapterProvider,
   cliHeadless,
@@ -146,6 +148,7 @@ const allHarnessRuns = [
   expertPanel,
   goalGraderCliEntry,
   intelligenceDraft,
+  subagentControlPlane,
 ]
 
 export const routeManifest = [
@@ -712,6 +715,7 @@ export const routeManifest = [
       subagentResume,
       interruptedSubagent,
       backgroundSubagent,
+      subagentControlPlane,
     ],
   },
   {
