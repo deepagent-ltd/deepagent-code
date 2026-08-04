@@ -1449,6 +1449,11 @@ export const TaskTool = Tool.define(
               })
             }
 
+            // The terminal projector is fenced by run_id/generation so an older run cannot overwrite
+            // a newer continuation. Initialize that identity before input admission for both newly
+            // created and exactly adopted child Sessions.
+            yield* projectSubagentRun(sessions, admission.run)
+
             // Step 1: CAS admitted → admitting (marks projection start; idempotent if already admitting)
             const admittingRun = yield* transitionToAdmitting({
               runID: admission.run.runID,

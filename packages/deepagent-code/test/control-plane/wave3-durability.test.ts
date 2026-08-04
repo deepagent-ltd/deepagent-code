@@ -6,7 +6,7 @@ import { Database } from "@deepagent-code/core/database/database"
 import { ProjectV2 } from "@deepagent-code/core/project"
 import { ProjectTable } from "@deepagent-code/core/project/sql"
 import { AbsolutePath } from "@deepagent-code/core/schema"
-import { SessionTable, TaskNotificationOutboxTable } from "@deepagent-code/core/session/sql"
+import { SessionTable, TaskNotificationOutboxTable, TaskRunTable } from "@deepagent-code/core/session/sql"
 import { Hash } from "@deepagent-code/core/util/hash"
 import { SessionV1 } from "@deepagent-code/core/v1/session"
 import {
@@ -16,7 +16,9 @@ import {
 } from "../../src/session/task-delivery"
 import { prepare } from "../../src/session/task-input"
 import { MessageID, SessionID } from "../../src/session/schema"
+import { Session } from "../../src/session/session"
 import { admitTaskRun } from "../../src/tool/task-run"
+import { projectDurableSettledRun } from "../../src/tool/task"
 import { testEffect } from "../lib/effect"
 
 const database = Layer.mergeAll(Database.layerFromPath(":memory:"), CrossSpawnSpawner.defaultLayer)
@@ -179,6 +181,72 @@ describe("wave-3 durable control-plane regressions", () => {
           now: 1_200,
         }),
       ).toBe(true)
+    }),
+  )
+
+  it.effect("projects a durable failed run into the matching child session metadata", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const admission = yield* admitTaskRun({
+        parentSessionID,
+        parentMessageID: MessageID.ascending("msg_wave3_projection_parent"),
+        toolCallID: "call_wave3_projection",
+        request: { description: "project terminal state" },
+        deliveryMode: "foreground",
+        now: 1_000,
+      })
+      const { db } = yield* Database.Service
+      yield* db
+        .update(TaskRunTable)
+        .set({ state: "failed", phase: "settled", reason: "provider_error", time_settled: 1_500 })
+        .where(eq(TaskRunTable.run_id, admission.run.runID))
+        .run()
+        .pipe(Effect.orDie)
+
+      const holder: { info: Session.Info } = {
+        info: {
+          id: admission.run.childSessionID,
+          slug: "wave3-child",
+          projectID: ProjectV2.ID.global,
+          directory,
+          parentID: parentSessionID,
+          title: "child",
+          version: "test",
+          metadata: {
+            deepagent: {
+              subagent: {
+                finished: false,
+                state: "researching",
+                phase: "research",
+                run_id: admission.run.runID,
+                generation: admission.run.generation,
+              },
+            },
+          },
+          time: { created: 1_000, updated: 1_000 },
+        },
+      }
+      const sessions = {
+        get: () => Effect.succeed(holder.info),
+        setMetadata: (input: { readonly metadata: Session.Info["metadata"] }) =>
+          Effect.sync(() => {
+            holder.info = { ...holder.info, metadata: input.metadata }
+          }),
+      } as unknown as Session.Interface
+
+      yield* projectDurableSettledRun(sessions, admission.run.childSessionID)
+
+      expect(holder.info.metadata?.deepagent).toEqual({
+        subagent: {
+          finished: true,
+          state: "error",
+          phase: "settled",
+          run_id: admission.run.runID,
+          generation: admission.run.generation,
+          settled_at: 1_500,
+          reason: "provider_error",
+        },
+      })
     }),
   )
 })
