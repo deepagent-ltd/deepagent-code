@@ -463,10 +463,15 @@ describe("HttpApi SDK", () => {
     { serverPath: "raw", git: false, setup: writeStandardFiles },
     ({ sdk, directory }) =>
       Effect.gen(function* () {
-        const runsDir = yield* tmpdirScoped({ git: false })
-        const previous = process.env.DEEPAGENT_RUNS_DIR
+        // gatewayConfig always reads Global.Path.agent.runs = path.join(dataPath(), "runs").
+        // Since DEEPAGENT_CODE_TEST_HOME is set by the test preload, setting DEEPAGENT_CODE_HOME
+        // redirects dataPath() to our temp dir, so the server reads our review fixture.
+        const fakeHome = yield* tmpdirScoped({ git: false })
+        const runsDir = path.join(fakeHome, "runs")
+        mkdirSync(runsDir, { recursive: true })
+        const previousHome = process.env.DEEPAGENT_CODE_HOME
         try {
-          process.env.DEEPAGENT_RUNS_DIR = runsDir
+          process.env.DEEPAGENT_CODE_HOME = fakeHome
           writeReviewRun(runsDir)
 
           const reviews = yield* call(() => sdk.deepagent.reviews({ directory }))
@@ -485,8 +490,8 @@ describe("HttpApi SDK", () => {
             ],
           })
         } finally {
-          if (previous === undefined) delete process.env.DEEPAGENT_RUNS_DIR
-          else process.env.DEEPAGENT_RUNS_DIR = previous
+          if (previousHome === undefined) delete process.env.DEEPAGENT_CODE_HOME
+          else process.env.DEEPAGENT_CODE_HOME = previousHome
         }
       }),
   )

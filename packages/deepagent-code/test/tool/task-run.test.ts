@@ -183,7 +183,7 @@ describe("TaskRun durable store", () => {
       const claimed = yield* claimTaskProvisioning({ run: first.run, owner: "worker-1", now: 100, leaseMs: 50 })
       expect(claimed?.state).toBe("provisioning")
       const running = yield* startTaskRun(claimed!, "worker-1", 101)
-      expect(running?.state).toBe("researching")
+      expect(running?.state).toBe("running")
       expect((yield* getActiveTaskRunByChild(childSessionID))?.runID).toBe(first.run.runID)
 
       const unjoined = yield* Effect.flip(
@@ -237,7 +237,7 @@ describe("TaskRun durable store", () => {
           ?.executionOwner,
       ).toBe("worker-b")
       expect(yield* startTaskRun(first!, "worker-a", 1_101)).toBeUndefined()
-      expect((yield* startTaskRun(admission.run, "worker-b", 1_102))?.state).toBe("researching")
+      expect((yield* startTaskRun(admission.run, "worker-b", 1_102))?.state).toBe("running")
     }),
   )
 
@@ -253,7 +253,7 @@ describe("TaskRun durable store", () => {
       expect(yield* recoverExpiredTaskRuns({ directory: "/project", now: 149 })).toEqual([])
       const recovered = yield* recoverExpiredTaskRuns({ directory: "/project", now: 150 })
       expect(recovered).toHaveLength(1)
-      expect(recovered[0].state).toBe("error")
+      expect(recovered[0].state).toBe("failed")
       expect(recovered[0].reason).toBe("execution_lease_expired")
       expect(yield* startTaskRun(claimed!, "worker", 151)).toBeUndefined()
 
@@ -321,7 +321,7 @@ describe("TaskRun durable store", () => {
         { concurrency: "unbounded" },
       )
       expect(recovered.flat()).toHaveLength(1)
-      expect(recovered.flat()[0].state).toBe("error")
+      expect(recovered.flat()[0].state).toBe("failed")
       expect(recovered.flat()[0].reason).toBe("execution_lease_expired")
       expect(
         (yield* settleTaskRun({

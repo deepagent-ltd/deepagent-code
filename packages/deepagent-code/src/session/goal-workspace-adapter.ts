@@ -67,6 +67,7 @@ export function ensure(input: {
       Effect.gen(function* () {
         const { db } = yield* Database.Service
         const git = yield* Git.Service
+        const flock = yield* EffectFlock.Service
         const now = input.now ?? Date.now()
 
         // 1. Read current workspace receipt
@@ -157,23 +158,29 @@ export function ensure(input: {
         )
 
         // 5. Create the worktree using Worktree.ensureExact
-        const worktree = yield* Worktree.Service
-        yield* worktree.ensureExact({
-          operationKey: input.goalID,
-          name: worktreeName,
-          worktreeBranch,
-          directory: worktreeDirectory,
-          baseCommit: headRef,
-        }).pipe(
-          Effect.catchTag("WorktreeExactConflictError", (e) =>
-            Effect.fail(new GoalWorkspaceConflictError({ goalID: input.goalID, reason: e.reason })),
-          ),
-          Effect.catchTag("WorktreeNotGitError", (e) =>
-            Effect.fail(new GoalWorkspaceUnavailableError({ goalID: input.goalID, reason: e.message })),
-          ),
-          Effect.catchTag("WorktreeCreateFailedError", (e) =>
-            Effect.fail(new GoalWorkspaceUnavailableError({ goalID: input.goalID, reason: e.message })),
-          ),
+        // Design §3.9.1: hold Goal lock THEN canonical repository EffectFlock
+        yield* flock.withLock(
+          Effect.gen(function* () {
+            const worktree = yield* Worktree.Service
+            yield* worktree.ensureExact({
+              operationKey: input.goalID,
+              name: worktreeName,
+              worktreeBranch,
+              directory: worktreeDirectory,
+              baseCommit: headRef,
+            }).pipe(
+              Effect.catchTag("WorktreeExactConflictError", (e) =>
+                Effect.fail(new GoalWorkspaceConflictError({ goalID: input.goalID, reason: e.reason })),
+              ),
+              Effect.catchTag("WorktreeNotGitError", (e) =>
+                Effect.fail(new GoalWorkspaceUnavailableError({ goalID: input.goalID, reason: e.message })),
+              ),
+              Effect.catchTag("WorktreeCreateFailedError", (e) =>
+                Effect.fail(new GoalWorkspaceUnavailableError({ goalID: input.goalID, reason: e.message })),
+              ),
+            )
+          }),
+          `goal-worktree:${repository.root}`,
         )
 
         // 6. Mark receipt as ready

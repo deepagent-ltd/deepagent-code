@@ -101,16 +101,22 @@ export const TaskStatusTool = Tool.define(
         const subagent = deepagent?.["subagent"] as Record<string, unknown> | undefined
         const liveJob = liveJobs.get(child.id)
 
-        // Determine durable state from metadata (written by markFinished).
-        const durableState = subagent
-          ? (subagent["state"] as string | undefined) ??
-            // compat: old rows used `finished: true` without state field
-            (subagent["finished"] === true ? "completed" : "unknown")
-          : "unknown"
+        // L10: durable task_run is the authoritative state source.
+        // Fall back to legacy session metadata for runs created before L1 migration.
+        const taskRun = runByChild.get(child.id)
+        const durableState = taskRun
+          ? taskRun.state  // authoritative durable state
+          : subagent
+            ? (subagent["state"] as string | undefined) ??
+              // compat: old rows used `finished: true` without state field
+              (subagent["finished"] === true ? "completed" : "unknown")
+            : "unknown"
 
-        // If a live job is running in the current process, override to "running".
+        // Live process overlay: if the run is actively running in this process, prefer that.
         const state =
-          liveJob && liveJob.status === "running" ? "running" : durableState
+          liveJob && liveJob.status === "running" && !["completed","failed","cancelled","interrupted","closed"].includes(durableState)
+            ? "running"
+            : durableState
 
         // Prefer live job elapsed time; fall back to metadata timestamp.
         const elapsedMs =
@@ -128,9 +134,9 @@ export const TaskStatusTool = Tool.define(
 
         // §4.6 recovery hint for interrupted tasks.
         const recoverHint =
-          state === "interrupted"
+          state === "interrupted" || state === "recovery_required"
             ? ` [partial work preserved — call task_read({ task_id: "${child.id}" }) to recover]`
-            : state === "error"
+            : state === "failed" || state === "error"
               ? ` [call task_read({ task_id: "${child.id}" }) to inspect partial work]`
               : ""
 

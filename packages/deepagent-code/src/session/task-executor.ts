@@ -49,54 +49,66 @@ export function startExecution(input: {
     const { db } = yield* Database.Service
     const now = input.now ?? Date.now()
 
-    const updated = yield* db
-      .update(TaskRunTable)
-      .set({
-        state: "running",
-        phase: "research",
-        execution_started_at: now,
-        lease_expires_at: now + (input.leaseMs ?? 30_000),
-        version: input.run.version + 1,
-        time_updated: now,
-      })
-      .where(
-        and(
-          eq(TaskRunTable.run_id, input.run.runID),
-          eq(TaskRunTable.version, input.run.version),
-          eq(TaskRunTable.state, "provisioning"),
-          eq(TaskRunTable.execution_owner, input.ownerToken),
-          eq(TaskRunTable.input_state, "ready"),
-          eq(TaskRunTable.control_state, "open"),
-        ),
-      )
-      .returning()
-      .get()
-      .pipe(Effect.orDie)
+    // CAS state transition and event insert must be co-transactional (design §1.3 #24).
+    // If the process dies between UPDATE and INSERT we lose the audit event but the state
+    // is still consistent. Wrapping in one IMMEDIATE transaction makes both atomic.
+    return yield* Effect.uninterruptible(
+      db.transaction(
+        (tx) =>
+          Effect.gen(function* () {
+            const updated = yield* tx
+              .update(TaskRunTable)
+              .set({
+                state: "running",
+                phase: "research",
+                execution_started_at: now,
+                lease_expires_at: now + (input.leaseMs ?? 30_000),
+                version: input.run.version + 1,
+                time_updated: now,
+              })
+              .where(
+                and(
+                  eq(TaskRunTable.run_id, input.run.runID),
+                  eq(TaskRunTable.version, input.run.version),
+                  eq(TaskRunTable.state, "provisioning"),
+                  eq(TaskRunTable.execution_owner, input.ownerToken),
+                  eq(TaskRunTable.claim_generation, input.run.claimGeneration),
+                  eq(TaskRunTable.input_state, "ready"),
+                  eq(TaskRunTable.control_state, "open"),
+                ),
+              )
+              .returning()
+              .get()
+              .pipe(Effect.orDie)
 
-    if (!updated) {
-      return yield* Effect.fail(
-        new ExecutorClaimLostError({
-          runID: input.run.runID,
-          reason: "CAS provisioning→running failed: claim expired, control changed, or input not ready",
-        }),
-      )
-    }
+            if (!updated) {
+              return yield* Effect.fail(
+                new ExecutorClaimLostError({
+                  runID: input.run.runID,
+                  reason: "CAS provisioning→running failed: claim expired, wrong generation, control changed, or input not ready",
+                }),
+              )
+            }
 
-    yield* db
-      .insert(TaskRunEventTable)
-      .values({
-        event_id: Identifier.ascending("event"),
-        run_id: input.run.runID,
-        version: updated.version,
-        type: "execution_started",
-        from_state: "provisioning",
-        to_state: "running",
-        time_created: now,
-      })
-      .run()
-      .pipe(Effect.orDie)
+            yield* tx
+              .insert(TaskRunEventTable)
+              .values({
+                event_id: Identifier.ascending("event"),
+                run_id: input.run.runID,
+                version: updated.version,
+                type: "execution_started",
+                from_state: "provisioning",
+                to_state: "running",
+                time_created: now,
+              })
+              .run()
+              .pipe(Effect.orDie)
 
-    return updated
+            return updated
+          }),
+        { behavior: "immediate" },
+      ),
+    )
   })
 }
 
@@ -268,6 +280,10 @@ export function settleRun(input: {
                 finalState === "completed"
                   ? `Background task completed. Call task_read({ task_id: "${input.runID}" }) to read the result.`
                   : `Background task ended with state: ${finalState}. Call task_read({ task_id: "${input.runID}" }) to inspect partial work.`
+              const payloadObj = { agent: input.agentType, text: payloadText }
+              const payloadJson = JSON.stringify(payloadObj)
+              const { createHash } = require("node:crypto") as typeof import("node:crypto")
+              const payloadHashVal = createHash("sha256").update(payloadJson).digest("hex")
               yield* tx
                 .insert(TaskNotificationOutboxTable)
                 .values({
@@ -278,8 +294,8 @@ export function settleRun(input: {
                   message_id: MessageID.ascending(),
                   parent_session_id: input.parentSessionID as any,
                   directory: input.directory,
-                  payload: { agent: input.agentType, text: payloadText },
-                  payload_hash: "",
+                  payload: payloadObj,
+                  payload_hash: payloadHashVal,
                   status: "pending",
                   attempts: 0,
                   available_at: now,
@@ -375,6 +391,7 @@ export function run(input: RunInput): Effect.Effect<void, never, Database.Servic
     // The process crashing here → classifyOnStartup sees execution_started_at IS NOT NULL
     // → recovery_required (§11.2). We never auto-replay after this point.
     let loopResultMessageID: string | undefined
+    let loopOutput: string | undefined
     let loopOk = false
     let loopError = "loop_error"
     yield* input
@@ -383,6 +400,7 @@ export function run(input: RunInput): Effect.Effect<void, never, Database.Servic
         Effect.map((msg) => {
           loopOk = true
           loopResultMessageID = (msg as any)?.info?.id as string | undefined
+          loopOutput = typeof msg === "string" ? msg : undefined
         }),
         Effect.catchCause((cause) => {
           loopError =
@@ -428,7 +446,7 @@ export function run(input: RunInput): Effect.Effect<void, never, Database.Servic
       agentType: input.agentType,
       state: settleState,
       reason: settleReason,
-      output: loopOk ? undefined : undefined, // transcript is in child session; not inlined
+      output: loopOk ? loopOutput : undefined,
       rawResultMessageID: loopResultMessageID,
       now: Date.now(),
     }).pipe(Effect.ignore)
@@ -513,7 +531,25 @@ export function runFromClaim(input: {
       .where(eq(SessionTable.id, row.parent_session_id))
       .get()
       .pipe(Effect.orDie)
-      .pipe(Effect.orElseSucceed(() => undefined as { directory: string } | undefined))
+
+    if (!parentRow) {
+      yield* Effect.logWarning("executor.runFromClaim: parent session not found, settling failed", {
+        runID: input.claim.runID,
+        parentSessionID: row.parent_session_id,
+      })
+      yield* settleRun({
+        runID: row.run_id,
+        parentSessionID: row.parent_session_id,
+        ownerToken: input.ownerToken,
+        claimGeneration: input.claim.claimGeneration,
+        deliveryMode: row.delivery_mode as any,
+        directory: "",
+        agentType: row.origin_kind === "goal_role" ? (row.goal_role ?? "worker") : "task",
+        state: "failed",
+        reason: "executor_startup_parent_session_missing",
+      }).pipe(Effect.ignore)
+      return
+    }
 
     yield* run({
       run: runData,
@@ -522,7 +558,7 @@ export function runFromClaim(input: {
       childSessionID: runData.childSessionID,
       parentSessionID: row.parent_session_id,
       deliveryMode: row.delivery_mode,
-      directory: parentRow?.directory ?? row.parent_session_id,
+      directory: parentRow.directory,
       agentType: row.origin_kind === "goal_role" ? (row.goal_role ?? "worker") : "task",
       leaseMs: input.leaseMs,
       loopFn: input.loopFn,

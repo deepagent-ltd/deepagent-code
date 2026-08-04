@@ -125,6 +125,7 @@ export type ClaimResult = {
  */
 export function claimRun(input: {
   readonly ownerToken: string
+  readonly directory: string
   readonly leaseMs?: number
   readonly maxPrestartAttempts?: number
   readonly now?: number
@@ -147,8 +148,10 @@ export function claimRun(input: {
         control_state: TaskRunTable.control_state,
       })
       .from(TaskRunTable)
+      .innerJoin(SessionTable, eq(SessionTable.id, TaskRunTable.parent_session_id))
       .where(
         and(
+          eq(SessionTable.directory, input.directory),
           eq(TaskRunTable.state, "queued"),
           eq(TaskRunTable.control_state, "open"),
           lte(TaskRunTable.available_at, now),
@@ -188,53 +191,64 @@ export function claimRun(input: {
           releaseRef = () => {} // permit is held by the outer withTaskSlot scope
 
           const newClaimGen = (candidate.claim_generation ?? 0) + 1
-          const updated = yield* db
-            .update(TaskRunTable)
-            .set({
-              state: "provisioning",
-              phase: "provision",
-              claim_generation: newClaimGen,
-              start_attempts: sql`${TaskRunTable.start_attempts} + 1`,
-              execution_owner: input.ownerToken,
-              lease_expires_at: now + leaseMs,
-              version: candidate.version + 1,
-              time_updated: now,
-            })
-            .where(
-              and(
-                eq(TaskRunTable.run_id, candidate.run_id),
-                eq(TaskRunTable.version, candidate.version),
-                eq(TaskRunTable.state, "queued"),
-                eq(TaskRunTable.control_state, "open"),
-              ),
-            )
-            .returning({
-              run_id: TaskRunTable.run_id,
-              version: TaskRunTable.version,
-              claim_generation: TaskRunTable.claim_generation,
-              lease_expires_at: TaskRunTable.lease_expires_at,
-              child_session_id: TaskRunTable.child_session_id,
-            })
-            .get()
-            .pipe(Effect.orDie)
 
-          if (!updated) return undefined
+          // Wrap CAS + event in one IMMEDIATE transaction so a crash between the two
+          // cannot leave the run in provisioning without an audit event (design §1.3 #24).
+          const result = yield* db.transaction(
+            (tx) =>
+              Effect.gen(function* () {
+                const updated = yield* tx
+                  .update(TaskRunTable)
+                  .set({
+                    state: "provisioning",
+                    phase: "provision",
+                    claim_generation: newClaimGen,
+                    start_attempts: sql`${TaskRunTable.start_attempts} + 1`,
+                    execution_owner: input.ownerToken,
+                    lease_expires_at: now + leaseMs,
+                    version: candidate.version + 1,
+                    time_updated: now,
+                  })
+                  .where(
+                    and(
+                      eq(TaskRunTable.run_id, candidate.run_id),
+                      eq(TaskRunTable.version, candidate.version),
+                      eq(TaskRunTable.state, "queued"),
+                      eq(TaskRunTable.control_state, "open"),
+                    ),
+                  )
+                  .returning({
+                    run_id: TaskRunTable.run_id,
+                    version: TaskRunTable.version,
+                    claim_generation: TaskRunTable.claim_generation,
+                    lease_expires_at: TaskRunTable.lease_expires_at,
+                    child_session_id: TaskRunTable.child_session_id,
+                  })
+                  .get()
+                  .pipe(Effect.orDie)
 
-          yield* db
-            .insert(TaskRunEventTable)
-            .values({
-              event_id: Identifier.ascending("event"),
-              run_id: candidate.run_id,
-              version: updated.version,
-              type: "run_claimed",
-              from_state: "queued",
-              to_state: "provisioning",
-              time_created: now,
-            })
-            .run()
-            .pipe(Effect.orDie)
+                if (!updated) return undefined
 
-          return updated
+                yield* tx
+                  .insert(TaskRunEventTable)
+                  .values({
+                    event_id: Identifier.ascending("event"),
+                    run_id: candidate.run_id,
+                    version: updated.version,
+                    type: "run_claimed",
+                    from_state: "queued",
+                    to_state: "provisioning",
+                    time_created: now,
+                  })
+                  .run()
+                  .pipe(Effect.orDie)
+
+                return updated
+              }),
+            { behavior: "immediate" },
+          )
+
+          return result
         }),
       }).pipe(Effect.orElseSucceed(() => undefined))
 
@@ -265,6 +279,7 @@ export function claimRun(input: {
  */
 export function startDispatchLoop(input: {
   readonly ownerToken: string
+  readonly directory: string
   readonly intervalMs?: number
   readonly maxPrestartAttempts?: number
   readonly onClaimed: (claim: ClaimResult) => Effect.Effect<void, never, never>
@@ -272,6 +287,7 @@ export function startDispatchLoop(input: {
   const tick = Effect.gen(function* () {
     const claim = yield* claimRun({
       ownerToken: input.ownerToken,
+      directory: input.directory,
       maxPrestartAttempts: input.maxPrestartAttempts,
     }).pipe(Effect.orElseSucceed(() => undefined as ClaimResult | undefined))
     if (claim) {
@@ -291,6 +307,11 @@ export function startDispatchLoop(input: {
 // ---------------------------------------------------------------------------
 
 /**
+ * @deprecated Use classifyOnStartup from task-run.ts instead.
+ * This function has identical semantics and is never called in production.
+ * Kept for reference during the L0-L10 transition; remove after test coverage
+ * confirms classifyOnStartup covers all recovery scenarios.
+ *
  * Called once at process startup before new admissions are accepted.
  * Classifies all provisioning/running/finalizing runs as recovery_required or re-queues them.
  */

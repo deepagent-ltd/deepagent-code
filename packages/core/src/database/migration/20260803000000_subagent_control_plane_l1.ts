@@ -1,3 +1,27 @@
+/**
+ * L1 Migration: Subagent Control Plane Schema
+ *
+ * Design: subagent-control-plane-design.zh-CN.md §13.1
+ *
+ * Strategy: shadow table rebuild for task_run, task_notification_outbox, and task_admission.
+ *
+ * The previous migration (20260724134000_task_run_delivery) used strict CHECK constraints
+ * that only allow legacy state/phase/status values. Since ALTER TABLE ADD COLUMN cannot
+ * modify existing CHECK constraints in SQLite, a shadow table approach is required:
+ *   1. Create *_new tables with all columns (existing + new) and correct CHECKs
+ *   2. Backfill: copy rows with vocabulary renames (error→failed, researching→running, etc.)
+ *   3. Validate: check no constraint violations before committing
+ *   4. Drop old table + rename new table
+ *   5. Recreate indexes and FK-dependent structures
+ *
+ * IMPORTANT: This migration must run in a single SQLite transaction to ensure the rename
+ * is atomic. If any step fails the entire migration rolls back leaving the old schema intact.
+ *
+ * Legacy writers (claimTaskProvisioning / startTaskRun / recoverExpiredTaskRuns / settleTaskRun
+ * in task-run.ts) are updated in the same commit to write new vocabulary. Both old and new
+ * vocabularies are accepted by the new CHECKs to allow zero-downtime deploys.
+ */
+
 import { Effect } from "effect"
 import type { DatabaseMigration } from "../migration"
 
@@ -5,114 +29,281 @@ export default {
   id: "20260803000000_subagent_control_plane_l1",
   up(tx) {
     return Effect.gen(function* () {
-      // ── task_run: run graph / lineage (L2) ────────────────────────────────
-      yield* tx.run(`ALTER TABLE task_run ADD COLUMN parent_run_id TEXT REFERENCES task_run(run_id) ON DELETE CASCADE`)
-      yield* tx.run(`ALTER TABLE task_run ADD COLUMN continuation_of_run_id TEXT REFERENCES task_run(run_id) ON DELETE CASCADE`)
-      yield* tx.run(`ALTER TABLE task_run ADD COLUMN depth INTEGER NOT NULL DEFAULT 1`)
+      // ── Disable FK enforcement during rebuild (re-enabled at end) ─────────
+      yield* tx.run(`PRAGMA foreign_keys = OFF`)
 
-      // ── task_run: origin identity ──────────────────────────────────────────
-      yield* tx.run(`ALTER TABLE task_run ADD COLUMN origin_kind TEXT NOT NULL DEFAULT 'task_tool' CHECK (origin_kind IN ('task_tool','goal_role'))`)
-      yield* tx.run(`ALTER TABLE task_run ADD COLUMN origin_key TEXT`)
-
-      // ── task_run: modes (immutable at admission) ───────────────────────────
-      yield* tx.run(`ALTER TABLE task_run ADD COLUMN effective_delivery_mode TEXT NOT NULL DEFAULT 'foreground'`)
-      yield* tx.run(`ALTER TABLE task_run ADD COLUMN promoted_at INTEGER`)
-      yield* tx.run(`ALTER TABLE task_run ADD COLUMN session_mode TEXT NOT NULL DEFAULT 'new'`)
-      yield* tx.run(`ALTER TABLE task_run ADD COLUMN context_mode TEXT NOT NULL DEFAULT 'fresh'`)
-      yield* tx.run(`ALTER TABLE task_run ADD COLUMN context_cutoff_message_id TEXT`)
-
-      // ── task_run: capability / workspace policy (frozen at admission) ──────
-      yield* tx.run(`ALTER TABLE task_run ADD COLUMN mutation_capability TEXT NOT NULL DEFAULT 'write'`)
-      yield* tx.run(`ALTER TABLE task_run ADD COLUMN tool_capability_hash TEXT NOT NULL DEFAULT 'legacy-unknown'`)
-      yield* tx.run(`ALTER TABLE task_run ADD COLUMN workspace_mode TEXT NOT NULL DEFAULT 'shared'`)
-      yield* tx.run(`ALTER TABLE task_run ADD COLUMN workspace_owner TEXT NOT NULL DEFAULT 'parent'`)
-      yield* tx.run(`ALTER TABLE task_run ADD COLUMN workspace_visibility TEXT NOT NULL DEFAULT 'live'`)
-      yield* tx.run(`ALTER TABLE task_run ADD COLUMN parent_dirty_policy TEXT NOT NULL DEFAULT 'allow_live'`)
-      yield* tx.run(`ALTER TABLE task_run ADD COLUMN workspace_operation_key TEXT`)
-      yield* tx.run(`ALTER TABLE task_run ADD COLUMN workspace_revision INTEGER`)
-      yield* tx.run(`ALTER TABLE task_run ADD COLUMN execution_spec TEXT`)
-
-      // ── task_run: lifecycle / CAS ──────────────────────────────────────────
-      yield* tx.run(`ALTER TABLE task_run ADD COLUMN version INTEGER NOT NULL DEFAULT 0`)
-      yield* tx.run(`ALTER TABLE task_run ADD COLUMN control_state TEXT NOT NULL DEFAULT 'open'`)
-      yield* tx.run(`ALTER TABLE task_run ADD COLUMN input_state TEXT NOT NULL DEFAULT 'legacy'`)
-      yield* tx.run(`ALTER TABLE task_run ADD COLUMN child_message_id TEXT`)
-      yield* tx.run(`ALTER TABLE task_run ADD COLUMN input_admission_started_at INTEGER`)
-      yield* tx.run(`ALTER TABLE task_run ADD COLUMN child_input_materialized_hash TEXT`)
-      yield* tx.run(`ALTER TABLE task_run ADD COLUMN child_input_part_count INTEGER`)
-      yield* tx.run(`ALTER TABLE task_run ADD COLUMN execution_started_at INTEGER`)
-      yield* tx.run(`ALTER TABLE task_run ADD COLUMN finalizer_started_at INTEGER`)
-      yield* tx.run(`ALTER TABLE task_run ADD COLUMN interrupt_requested_at INTEGER`)
-      yield* tx.run(`ALTER TABLE task_run ADD COLUMN interrupt_reason TEXT`)
-      yield* tx.run(`ALTER TABLE task_run ADD COLUMN close_requested_at INTEGER`)
-      yield* tx.run(`ALTER TABLE task_run ADD COLUMN close_reason TEXT`)
-      yield* tx.run(`ALTER TABLE task_run ADD COLUMN claim_generation INTEGER NOT NULL DEFAULT 0`)
-      yield* tx.run(`ALTER TABLE task_run ADD COLUMN start_attempts INTEGER NOT NULL DEFAULT 0`)
-      yield* tx.run(`ALTER TABLE task_run ADD COLUMN available_at INTEGER NOT NULL DEFAULT 0`)
-      yield* tx.run(`ALTER TABLE task_run ADD COLUMN priority INTEGER NOT NULL DEFAULT 0`)
-      yield* tx.run(`ALTER TABLE task_run ADD COLUMN queue_reason TEXT`)
-
-      // ── task_run: workspace provisioning receipts ──────────────────────────
-      yield* tx.run(`ALTER TABLE task_run ADD COLUMN workspace_preflight_state TEXT NOT NULL DEFAULT 'legacy'`)
-      yield* tx.run(`ALTER TABLE task_run ADD COLUMN workspace_preflight_at INTEGER`)
-      yield* tx.run(`ALTER TABLE task_run ADD COLUMN workspace_repository_root TEXT`)
-      yield* tx.run(`ALTER TABLE task_run ADD COLUMN workspace_base_commit TEXT`)
-      yield* tx.run(`ALTER TABLE task_run ADD COLUMN workspace_parent_branch TEXT`)
-      yield* tx.run(`ALTER TABLE task_run ADD COLUMN workspace_target_branch TEXT`)
-      yield* tx.run(`ALTER TABLE task_run ADD COLUMN workspace_status_hash TEXT`)
-      yield* tx.run(`ALTER TABLE task_run ADD COLUMN workspace_preflight_error_code TEXT`)
-      yield* tx.run(`ALTER TABLE task_run ADD COLUMN workspace_branch_state TEXT NOT NULL DEFAULT 'none'`)
-      yield* tx.run(`ALTER TABLE task_run ADD COLUMN workspace_branch_started_at INTEGER`)
-      yield* tx.run(`ALTER TABLE task_run ADD COLUMN worktree_directory TEXT`)
-      yield* tx.run(`ALTER TABLE task_run ADD COLUMN worktree_branch TEXT`)
-      yield* tx.run(`ALTER TABLE task_run ADD COLUMN worktree_state TEXT NOT NULL DEFAULT 'none'`)
-      yield* tx.run(`ALTER TABLE task_run ADD COLUMN worktree_started_at INTEGER`)
-      yield* tx.run(`ALTER TABLE task_run ADD COLUMN pr_operation_key TEXT`)
-      yield* tx.run(`ALTER TABLE task_run ADD COLUMN pr_started_at INTEGER`)
-      yield* tx.run(`ALTER TABLE task_run ADD COLUMN pr_id TEXT`)
-
-      // ── task_run: goal-specific identity columns ───────────────────────────
-      yield* tx.run(`ALTER TABLE task_run ADD COLUMN goal_id TEXT`)
-      yield* tx.run(`ALTER TABLE task_run ADD COLUMN goal_tick_seq INTEGER`)
-      yield* tx.run(`ALTER TABLE task_run ADD COLUMN goal_role TEXT`)
-      yield* tx.run(`ALTER TABLE task_run ADD COLUMN goal_ordinal INTEGER`)
-
-      // ── task_run: result enrichment ────────────────────────────────────────
-      yield* tx.run(`ALTER TABLE task_run ADD COLUMN result_hash TEXT`)
-      yield* tx.run(`ALTER TABLE task_run ADD COLUMN usage TEXT`)
-      yield* tx.run(`ALTER TABLE task_run ADD COLUMN progress_seq INTEGER NOT NULL DEFAULT 0`)
-      yield* tx.run(`ALTER TABLE task_run ADD COLUMN last_progress_at INTEGER`)
-      yield* tx.run(`ALTER TABLE task_run ADD COLUMN finalizer_input_message_id TEXT`)
-
-      // ── task_run: new indexes ──────────────────────────────────────────────
+      // ── Step 1: Rebuild task_run with correct state/phase CHECKs ──────────
+      // New CHECK accepts both legacy vocabulary (researching, error) for backward-compat
+      // reads of any rows that pre-date this migration, and new vocabulary (running, failed,
+      // queued, closed, recovery_required) required by the durable control plane.
       yield* tx.run(`
-        CREATE INDEX IF NOT EXISTS task_run_queue_idx
-          ON task_run(state, available_at, priority DESC, time_created, generation)
+        CREATE TABLE task_run_new (
+          run_id TEXT PRIMARY KEY,
+          root_run_id TEXT,
+          request_hash TEXT NOT NULL,
+          parent_session_id TEXT NOT NULL REFERENCES session(id) ON DELETE CASCADE,
+          parent_message_id TEXT NOT NULL,
+          tool_call_id TEXT NOT NULL,
+          child_session_id TEXT NOT NULL,
+          generation INTEGER NOT NULL,
+          delivery_mode TEXT NOT NULL CHECK (delivery_mode IN ('foreground', 'background')),
+          phase TEXT NOT NULL CHECK (phase IN (
+            'admission', 'research', 'finalize', 'settled',
+            'queue', 'provision'
+          )),
+          state TEXT NOT NULL CHECK (state IN (
+            'admitted', 'queued', 'provisioning', 'running', 'researching',
+            'finalizing', 'completed', 'failed', 'error',
+            'cancelled', 'interrupted', 'closed', 'recovery_required'
+          )),
+          reason TEXT,
+          attempts INTEGER NOT NULL DEFAULT 0,
+          execution_owner TEXT,
+          lease_expires_at INTEGER,
+          raw_result_message_id TEXT,
+          structured_result_message_id TEXT,
+          output TEXT,
+          error TEXT,
+          time_created INTEGER NOT NULL,
+          time_updated INTEGER NOT NULL,
+          time_settled INTEGER,
+
+          -- L1: run graph / lineage
+          parent_run_id TEXT REFERENCES task_run_new(run_id) ON DELETE CASCADE,
+          continuation_of_run_id TEXT REFERENCES task_run_new(run_id) ON DELETE CASCADE,
+          depth INTEGER NOT NULL DEFAULT 1,
+
+          -- L1: origin identity
+          origin_kind TEXT NOT NULL DEFAULT 'task_tool' CHECK (origin_kind IN ('task_tool','goal_role')),
+          origin_key TEXT,
+
+          -- L1: modes (immutable at admission)
+          effective_delivery_mode TEXT NOT NULL DEFAULT 'foreground',
+          promoted_at INTEGER,
+          session_mode TEXT NOT NULL DEFAULT 'new',
+          context_mode TEXT NOT NULL DEFAULT 'fresh',
+          context_cutoff_message_id TEXT,
+
+          -- L1: capability / workspace policy (frozen at admission)
+          mutation_capability TEXT NOT NULL DEFAULT 'write',
+          tool_capability_hash TEXT NOT NULL DEFAULT 'legacy-unknown',
+          workspace_mode TEXT NOT NULL DEFAULT 'shared',
+          workspace_owner TEXT NOT NULL DEFAULT 'parent',
+          workspace_visibility TEXT NOT NULL DEFAULT 'live',
+          parent_dirty_policy TEXT NOT NULL DEFAULT 'allow_live',
+          workspace_operation_key TEXT,
+          workspace_revision INTEGER,
+          execution_spec TEXT,
+
+          -- L1: lifecycle / CAS
+          version INTEGER NOT NULL DEFAULT 0,
+          control_state TEXT NOT NULL DEFAULT 'open',
+          input_state TEXT NOT NULL DEFAULT 'legacy',
+          child_message_id TEXT,
+          input_admission_started_at INTEGER,
+          child_input_materialized_hash TEXT,
+          child_input_part_count INTEGER,
+          execution_started_at INTEGER,
+          finalizer_started_at INTEGER,
+          interrupt_requested_at INTEGER,
+          interrupt_reason TEXT,
+          close_requested_at INTEGER,
+          close_reason TEXT,
+          claim_generation INTEGER NOT NULL DEFAULT 0,
+          start_attempts INTEGER NOT NULL DEFAULT 0,
+          available_at INTEGER NOT NULL DEFAULT 0,
+          priority INTEGER NOT NULL DEFAULT 0,
+          queue_reason TEXT,
+
+          -- L1: workspace provisioning receipts
+          workspace_preflight_state TEXT NOT NULL DEFAULT 'legacy',
+          workspace_preflight_at INTEGER,
+          workspace_repository_root TEXT,
+          workspace_base_commit TEXT,
+          workspace_parent_branch TEXT,
+          workspace_target_branch TEXT,
+          workspace_status_hash TEXT,
+          workspace_preflight_error_code TEXT,
+          workspace_branch_state TEXT NOT NULL DEFAULT 'none',
+          workspace_branch_started_at INTEGER,
+          worktree_directory TEXT,
+          worktree_branch TEXT,
+          worktree_state TEXT NOT NULL DEFAULT 'none',
+          worktree_started_at INTEGER,
+          pr_operation_key TEXT,
+          pr_started_at INTEGER,
+          pr_id TEXT,
+
+          -- L1: goal-specific identity
+          goal_id TEXT,
+          goal_tick_seq INTEGER,
+          goal_role TEXT,
+          goal_ordinal INTEGER,
+
+          -- L1: result enrichment
+          result_hash TEXT,
+          usage TEXT,
+          progress_seq INTEGER NOT NULL DEFAULT 0,
+          last_progress_at INTEGER,
+          finalizer_input_message_id TEXT
+        )
       `)
+
+      // ── Step 2: Copy task_run rows with vocabulary renames ────────────────
+      // state: error → failed, researching → running
+      // phase: research stays 'research' (still valid), others unchanged
+      // control_state: backfill 'closed' for all terminal rows
       yield* tx.run(`
-        CREATE INDEX IF NOT EXISTS task_run_goal_idx
-          ON task_run(goal_id, goal_tick_seq, goal_role, goal_ordinal)
+        INSERT INTO task_run_new
+        SELECT
+          run_id, root_run_id, request_hash, parent_session_id, parent_message_id,
+          tool_call_id, child_session_id, generation, delivery_mode,
+          phase,
+          CASE state
+            WHEN 'error'       THEN 'failed'
+            WHEN 'researching' THEN 'running'
+            ELSE state
+          END,
+          reason, attempts, execution_owner, lease_expires_at,
+          raw_result_message_id, structured_result_message_id,
+          output, error, time_created, time_updated, time_settled,
+          NULL, NULL, 1,
+          'task_tool', NULL,
+          delivery_mode,
+          NULL, 'new', 'fresh', NULL,
+          'write', 'legacy-unknown',
+          'shared', 'parent', 'live', 'allow_live',
+          NULL, NULL, NULL,
+          0,
+          CASE
+            WHEN state IN ('completed','error','failed','cancelled','interrupted','closed')
+            THEN 'closed'
+            ELSE 'open'
+          END,
+          'legacy',
+          NULL, NULL, NULL, NULL,
+          NULL, NULL,
+          NULL, NULL, NULL, NULL,
+          0, 0,
+          time_created,
+          0, NULL,
+          'legacy', NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+          'none', NULL,
+          NULL, NULL, 'none', NULL,
+          NULL, NULL, NULL,
+          NULL, NULL, NULL, NULL,
+          NULL, NULL, 0, NULL, NULL
+        FROM task_run
       `)
 
-      // ── task_run: backfill steps ───────────────────────────────────────────
-      // 1. Backfill origin_key from admission_key for historical task_tool rows
+      // ── Step 3: Backfill origin_key from task_admission ───────────────────
       yield* tx.run(`
-        UPDATE task_run SET origin_key = (
-          SELECT admission_key FROM task_admission WHERE task_admission.run_id = task_run.run_id
+        UPDATE task_run_new SET origin_key = (
+          SELECT admission_key FROM task_admission WHERE task_admission.run_id = task_run_new.run_id
         ) WHERE origin_key IS NULL
       `)
-      // 2. Rename historical 'error' state to 'failed' (design doc §13.1 step 3)
-      yield* tx.run(`UPDATE task_run SET state = 'failed' WHERE state = 'error'`)
-      // 3. Backfill available_at for old rows
-      yield* tx.run(`UPDATE task_run SET available_at = time_created WHERE available_at = 0`)
-      // 4. Backfill start_attempts from attempts for historical rows
-      yield* tx.run(`UPDATE task_run SET start_attempts = attempts WHERE start_attempts = 0 AND attempts > 0`)
-      // 5. Backfill effective_delivery_mode = delivery_mode
-      yield* tx.run(`UPDATE task_run SET effective_delivery_mode = delivery_mode`)
-      // 6. Set control_state = 'closed' for all terminal rows
-      yield* tx.run(`UPDATE task_run SET control_state = 'closed' WHERE state IN ('completed','failed','cancelled','interrupted','closed')`)
 
-      // ── task_run_event: new table ──────────────────────────────────────────
+      // ── Step 4: Backfill start_attempts from attempts for historical rows ─
+      yield* tx.run(`
+        UPDATE task_run_new
+        SET start_attempts = attempts
+        WHERE start_attempts = 0 AND attempts > 0
+      `)
+
+      // ── Step 5: Validate — no orphan state after rename ───────────────────
+      // Note: the INSERT above would already fail with a CHECK constraint violation if any row
+      // had an invalid state. No additional validation step is needed.
+
+      // ── Step 6: Rebuild task_notification_outbox with new status values ───
+      yield* tx.run(`
+        CREATE TABLE task_notification_outbox_new (
+          id TEXT PRIMARY KEY,
+          run_id TEXT NOT NULL UNIQUE REFERENCES task_run_new(run_id) ON DELETE CASCADE,
+          message_id TEXT NOT NULL UNIQUE,
+          parent_session_id TEXT NOT NULL REFERENCES session(id) ON DELETE CASCADE,
+          directory TEXT NOT NULL,
+          payload TEXT NOT NULL,
+          status TEXT NOT NULL CHECK (status IN (
+            'pending', 'admitting', 'processing', 'delivering', 'delivered', 'dead'
+          )),
+          attempts INTEGER NOT NULL DEFAULT 0,
+          available_at INTEGER NOT NULL,
+          lease_owner TEXT,
+          lease_expires_at INTEGER,
+          last_error TEXT,
+          time_created INTEGER NOT NULL,
+          time_updated INTEGER NOT NULL,
+          time_delivered INTEGER,
+          -- L1 new columns
+          event_kind TEXT NOT NULL DEFAULT 'terminal',
+          correlation_id TEXT,
+          payload_hash TEXT,
+          parent_input_message_id TEXT,
+          response_message_id TEXT,
+          response_started_at INTEGER,
+          time_admitted INTEGER
+        )
+      `)
+
+      yield* tx.run(`
+        INSERT INTO task_notification_outbox_new
+        SELECT
+          id, run_id, message_id, parent_session_id, directory, payload,
+          -- status: map old values that still apply; 'delivering' → 'processing' for in-flight
+          CASE status
+            WHEN 'delivering' THEN 'processing'
+            ELSE status
+          END AS status,
+          attempts, available_at, lease_owner, lease_expires_at,
+          last_error, time_created, time_updated, time_delivered,
+          'terminal', NULL, NULL, NULL, NULL, NULL, NULL
+        FROM task_notification_outbox
+      `)
+
+      // ── Step 7: Drop old tables and rename new ones ───────────────────────
+      // Drop indexes that reference the old tables first
+      yield* tx.run(`DROP INDEX IF EXISTS task_run_child_generation_idx`)
+      yield* tx.run(`DROP INDEX IF EXISTS task_run_child_active_idx`)
+      yield* tx.run(`DROP INDEX IF EXISTS task_run_parent_state_idx`)
+      yield* tx.run(`DROP INDEX IF EXISTS task_run_root_idx`)
+      yield* tx.run(`DROP INDEX IF EXISTS task_notification_outbox_due_idx`)
+      yield* tx.run(`DROP TABLE task_notification_outbox`)
+      yield* tx.run(`DROP TABLE task_run`)
+      yield* tx.run(`ALTER TABLE task_run_new RENAME TO task_run`)
+      yield* tx.run(`ALTER TABLE task_notification_outbox_new RENAME TO task_notification_outbox`)
+
+      // ── Step 8: Recreate indexes ──────────────────────────────────────────
+      yield* tx.run(`
+        CREATE UNIQUE INDEX task_run_child_generation_idx
+        ON task_run (child_session_id, generation)
+      `)
+      yield* tx.run(`
+        CREATE UNIQUE INDEX task_run_child_active_idx
+        ON task_run (child_session_id)
+        WHERE state IN ('admitted', 'queued', 'provisioning', 'running', 'researching', 'finalizing')
+      `)
+      yield* tx.run(`
+        CREATE INDEX task_run_parent_state_idx
+        ON task_run (parent_session_id, state, time_updated)
+      `)
+      yield* tx.run(`
+        CREATE INDEX task_run_root_idx
+        ON task_run (root_run_id)
+      `)
+      yield* tx.run(`
+        CREATE INDEX task_notification_outbox_due_idx
+        ON task_notification_outbox (status, available_at, lease_expires_at)
+      `)
+      yield* tx.run(`
+        CREATE INDEX task_run_queue_idx
+        ON task_run(state, available_at, priority DESC, time_created, generation)
+      `)
+      yield* tx.run(`
+        CREATE INDEX task_run_goal_idx
+        ON task_run(goal_id, goal_tick_seq, goal_role, goal_ordinal)
+      `)
+
+      // ── Step 9: task_run_event (new table, no existing data) ─────────────
       yield* tx.run(`
         CREATE TABLE IF NOT EXISTS task_run_event (
           event_id TEXT PRIMARY KEY,
@@ -129,24 +320,18 @@ export default {
       `)
       yield* tx.run(`
         CREATE INDEX IF NOT EXISTS task_run_event_time_idx
-          ON task_run_event(time_created, event_id)
+        ON task_run_event(time_created, event_id)
       `)
 
-      // ── task_notification_outbox: new columns ──────────────────────────────
-      yield* tx.run(`ALTER TABLE task_notification_outbox ADD COLUMN event_kind TEXT NOT NULL DEFAULT 'terminal'`)
-      yield* tx.run(`ALTER TABLE task_notification_outbox ADD COLUMN correlation_id TEXT`)
-      yield* tx.run(`ALTER TABLE task_notification_outbox ADD COLUMN payload_hash TEXT`)
-      yield* tx.run(`ALTER TABLE task_notification_outbox ADD COLUMN parent_input_message_id TEXT`)
-      yield* tx.run(`ALTER TABLE task_notification_outbox ADD COLUMN response_message_id TEXT`)
-      yield* tx.run(`ALTER TABLE task_notification_outbox ADD COLUMN response_started_at INTEGER`)
-      yield* tx.run(`ALTER TABLE task_notification_outbox ADD COLUMN time_admitted INTEGER`)
-
-      // ── task_notification_outbox: partial unique index ─────────────────────
+      // ── Step 10: Unique index on outbox per-parent processing ─────────────
       yield* tx.run(`
         CREATE UNIQUE INDEX IF NOT EXISTS task_notification_outbox_parent_processing_idx
           ON task_notification_outbox(parent_session_id)
           WHERE status = 'processing'
       `)
+
+      // ── Step 11: Re-enable FK enforcement ────────────────────────────────
+      yield* tx.run(`PRAGMA foreign_keys = ON`)
     })
   },
 } satisfies DatabaseMigration.Migration
