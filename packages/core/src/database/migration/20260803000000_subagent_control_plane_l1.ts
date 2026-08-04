@@ -330,6 +330,37 @@ export default {
           WHERE status = 'processing'
       `)
 
+      // ── task_admission: shadow table rebuild (add origin fields) ──────────
+      yield* tx.run(`
+        CREATE TABLE task_admission_new (
+          admission_key TEXT PRIMARY KEY,
+          request_hash TEXT NOT NULL,
+          run_id TEXT NOT NULL REFERENCES task_run(run_id) ON DELETE CASCADE,
+          parent_session_id TEXT NOT NULL REFERENCES session(id) ON DELETE CASCADE,
+          parent_message_id TEXT NOT NULL,
+          tool_call_id TEXT NOT NULL,
+          delivery_mode TEXT NOT NULL CHECK (delivery_mode IN ('foreground', 'background')),
+          time_created INTEGER NOT NULL,
+          -- L1: origin identity fields
+          origin_kind TEXT NOT NULL DEFAULT 'task_tool' CHECK (origin_kind IN ('task_tool','goal_role')),
+          origin_key TEXT
+        )
+      `)
+      yield* tx.run(`
+        INSERT INTO task_admission_new
+        SELECT
+          admission_key, request_hash, run_id, parent_session_id,
+          parent_message_id, tool_call_id, delivery_mode, time_created,
+          'task_tool', admission_key
+        FROM task_admission
+      `)
+      yield* tx.run(`DROP INDEX IF EXISTS task_admission_run_idx`)
+      yield* tx.run(`DROP TABLE task_admission`)
+      yield* tx.run(`ALTER TABLE task_admission_new RENAME TO task_admission`)
+      yield* tx.run(`
+        CREATE INDEX task_admission_run_idx ON task_admission (run_id)
+      `)
+
       // ── Step 11: Re-enable FK enforcement ────────────────────────────────
       yield* tx.run(`PRAGMA foreign_keys = ON`)
     })

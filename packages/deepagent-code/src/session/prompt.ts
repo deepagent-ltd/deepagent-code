@@ -3211,6 +3211,9 @@ export const layer = Layer.effect(
     const startNotificationWorker = registerInitializer((ctx) =>
       Effect.runPromise(
         Effect.gen(function* () {
+          // In durable mode, TaskDelivery.startDeliveryLoop is the authority for delivery.
+          // Running the legacy notification worker alongside creates a dual lifecycle writer (design §4.1).
+          if (flags.subagentControlPlane === "durable") return
           if (notificationWorkers.has(ctx.directory)) return
           const owner = `task-notification:${process.pid}:${randomUUID()}`
           const pump = recoverExpiredTaskRuns({ directory: ctx.directory }).pipe(
